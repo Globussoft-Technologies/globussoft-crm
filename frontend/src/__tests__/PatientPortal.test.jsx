@@ -8,10 +8,10 @@
  * Two top-level states: pre-login (<Login/>) and authenticated (<Dashboard/>).
  * Login is a two-stage phone → OTP flow gated on a `/portal/health` probe of
  * the tenant's SMS provider configuration. The Dashboard loads `/portal/me`
- * + `/portal/visits` + `/portal/prescriptions` in parallel and renders 4
- * tabs (My Visits / Prescriptions / Treatment Plan / Consent Forms).
+ * + `/portal/visits` + `/portal/prescriptions` in parallel, then gates the
+ * Prescriptions, Shop, and Consent Forms tabs from CUSTOMER permissions.
  *
- * Test cases (11):
+ * Test cases (12):
  *   1. Pre-login chrome: heading "Patient Portal" + intro copy + phone input
  *      render when no portal token is in localStorage. Health probe to
  *      /api/wellness/portal/health fires on mount.
@@ -40,7 +40,8 @@
  *      pre-815a8783.]
  *  10. Prescriptions tab renders Rx rows with drug bullets (parsed from the
  *      JSON-string `drugs` column) and the Download PDF button.
- *  11. Logout button clears the token + name from localStorage and returns
+ *  11. Consent Forms tab renders signed consent rows and View/PDF actions.
+ *  12. Logout button clears the token + name from localStorage and returns
  *      the surface to the Login screen.
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
@@ -48,8 +49,8 @@
  *     `globalThis.fetch` per-test rather than vi.mock the utils.
  *   - notifyObj is STABLE module-level (Wave 11 cfb5789 / Wave 12 f59e91d) —
  *     fresh-per-call objects flap useCallback / useEffect identity. Only the
- *     Dashboard's `downloadRx` actually invokes notify; nothing in the
- *     primary flows depends on it but we mock for safety.
+ *     Dashboard's PDF actions invoke notify on failures; primary happy paths
+ *     do not depend on it but we mock for safety.
  *   - vi.mock path is `../utils/notify` + `../utils/date` relative to the
  *     flat top-level `__tests__/` directory.
  *   - localStorage is reset in beforeEach so each test sees the pre-login
@@ -77,12 +78,9 @@
  *     `products.read`). Visits/appointments are fetched by the embedded
  *     <MyBookings/> via `/portal/appointments?bucket=<bucket>` — there is NO
  *     direct `/portal/visits` fetch anymore. The Treatment Plan + Consent
- *     Forms tabs are
- *     PLACEHOLDER pages ("Your treatment plan will appear here once your
- *     doctor shares one." / "Consent forms you've signed at the clinic will
- *     appear here.") — no backend endpoints, no data fetch. Tests verify
- *     the placeholder copy renders but do NOT assert fetches the SUT never
- *     makes.
+ *     Treatment Plan remains a placeholder. Consent Forms fetches the
+ *     signed, patient-scoped list when `consents.read` is granted and
+ *     exposes View/PDF actions through the patient-scoped PDF endpoint.
  *   - Prompt anticipated demo-OTP env-gated path. REALITY: that's a BACKEND
  *     concern (WELLNESS_DEMO_OTP env var gates the backend's verify-otp
  *     bypass); the frontend's OTP input + POST body shape is identical
@@ -149,13 +147,23 @@ const PRESCRIPTIONS_PAYLOAD = [
   },
 ];
 
+const CONSENTS_PAYLOAD = [
+  {
+    id: 8101,
+    templateName: 'Hair Transplant',
+    signedAt: '2026-08-28T14:33:00.000Z',
+    patientId: 501,
+    service: { id: 12, name: 'Hair Transplant' },
+  },
+];
+
 // Drift (refactor 815a8783): the Dashboard no longer fetches /portal/visits
 // directly. The "My Visits" tab now embeds the shared <MyBookings /> component
 // which fetches /portal/appointments?bucket=<bucket> for each of four buckets
 // (upcoming/pending/completed/cancelled) and renders appointment cards. The
 // portal also resolves /portal/me/permissions and gates the Prescriptions +
 // Shop tabs on those permissions. The Dashboard tests below mock both.
-const PORTAL_PERMISSIONS = ['my_prescriptions.read'];
+const PORTAL_PERMISSIONS = ['my_prescriptions.read', 'consents.read'];
 
 // Appointments keyed by MyBookings bucket. Only "upcoming" carries rows by
 // default so the default-bucket render shows cards; others are empty.
@@ -187,6 +195,7 @@ function installFetchMock({
   verifyOtpStatus = 200,
   verifyOtpError = 'Invalid or expired OTP',
   prescriptions = PRESCRIPTIONS_PAYLOAD,
+  consents = CONSENTS_PAYLOAD,
   permissions = PORTAL_PERMISSIONS,
   appointmentsByBucket = APPOINTMENTS_BY_BUCKET,
   // Default empty so existing tests see NO notifications tab change; the
@@ -273,6 +282,14 @@ function installFetchMock({
         status: 200,
         headers: new Map([['content-type', 'application/json']]),
         json: () => Promise.resolve(prescriptions),
+      });
+    }
+    if (url === '/api/wellness/portal/consents' && method === 'GET') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve(consents),
       });
     }
     return Promise.resolve({
@@ -717,21 +734,15 @@ describe('<PatientPortal /> — placeholder tabs', () => {
     ).toBeInTheDocument();
   });
 
-  it('Consent Forms tab → placeholder copy', async () => {
+  it('Consent Forms tab renders signed consent rows + PDF button', async () => {
     installFetchMock();
     render(<PatientPortal />);
     await screen.findByText('Hair PRP');
     fireEvent.click(screen.getByRole('button', { name: /Consent Forms/i }));
-    // SUT uses a curly apostrophe (U+2019) in "you've"; match flexibly.
-    // The regex matches ancestor wrappers too (div > main > parent), so use
-    // findAllByText to tolerate the chain and assert ≥1 match.
-    const matches = await screen.findAllByText((_t, el) => {
-      const text = el?.textContent || '';
-      return /Consent forms you.{0,2}ve signed at the clinic will appear here\./i.test(
-        text,
-      );
-    });
-    expect(matches.length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText('Hair Transplant')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: /^View$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^PDF$/i })).toBeInTheDocument();
+    expect(screen.queryByText(/will appear here/i)).toBeNull();
   });
 
   it('welcome chrome omits phone block when me.phone is null', async () => {
@@ -838,6 +849,71 @@ describe('<PatientPortal /> — PDF download', () => {
       expect(notifyError).toHaveBeenCalled();
     });
     expect(notifyError.mock.calls[0][0]).toMatch(/Could not download/i);
+  });
+
+  it('consent View and PDF actions use the patient-scoped consent PDF endpoint', async () => {
+    const baseFetch = installFetchMock();
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith('/api/wellness/portal/consents/') && url.endsWith('/pdf')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/pdf']]),
+          blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    const fetchStub = globalThis.fetch;
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Consent Forms/i }));
+    expect((await screen.findAllByText('Hair Transplant')).length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /^View$/i }));
+    expect(await screen.findByTitle('Consent form PDF')).toBeInTheDocument();
+    expect(fetchStub.mock.calls.some(([url]) => url === '/api/wellness/portal/consents/8101/pdf')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /^PDF$/i }));
+    await waitFor(() => {
+      const pdfCall = fetchStub.mock.calls.find(([url]) => url === '/api/wellness/portal/consents/8101/pdf');
+      expect(pdfCall).toBeTruthy();
+      expect(pdfCall[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
+  });
+
+  it('uses the synced e-signature PDF endpoint for a patient-linked signature', async () => {
+    const syncedConsent = {
+      id: 910,
+      signatureRequestId: 910,
+      source: 'signature',
+      templateName: 'Hair Transplant Consent',
+      signedAt: '2026-08-28T14:33:00.000Z',
+      patientId: 501,
+      visitId: 901,
+      service: { id: 12, name: 'Hair Transplant' },
+    };
+    const baseFetch = installFetchMock({ consents: [syncedConsent] });
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (typeof url === 'string' && url === '/api/wellness/portal/signatures/910/pdf') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/pdf']]),
+          blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    const fetchStub = globalThis.fetch;
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Consent Forms/i }));
+    await screen.findByText('Hair Transplant Consent');
+    fireEvent.click(screen.getByRole('button', { name: /^View$/i }));
+
+    expect(await screen.findByTitle('Consent form PDF')).toBeInTheDocument();
+    expect(fetchStub.mock.calls.some(([url]) => url === '/api/wellness/portal/signatures/910/pdf')).toBe(true);
   });
 });
 

@@ -762,6 +762,7 @@ async function main() {
   // /travel landing surface is non-empty out of the box. Idempotency
   // keyed on tripCode (TmcTrip.tripCode is @unique).
   await seedSampleTrips(tenant.id);
+  await seedTmcParentReviewDemo(tenant.id);
 
   // ── 9. TMC operational extras — rooming + payment plan + instalments +
   //         supplier credential + visa application ─────────────────────
@@ -1110,10 +1111,9 @@ async function seedSampleTrips(tenantId) {
   const pilgrimEmail = "ahmed.pilgrim@demo.test";
   // Seed a portal password so the travel customer can log into the
   // Customer Portal (/api/portal/login). Same convention as the rest
-  // of the demo: "password123". Idempotent — upsert with both
-  // create-time AND update-time portalPasswordHash so re-runs don't
-  // null-out a manually-changed password but DO populate it on first
-  // seed.
+  // of the demo: "password123". Idempotent — the default is set at
+  // create-time and backfilled only when the existing row has no hash, so
+  // re-runs never overwrite a manually-changed password.
   const pilgrimPortalHash = await bcrypt.hash("password123", 10);
   const pilgrim = await prisma.contact.upsert({
     where: { email_tenantId: { email: pilgrimEmail, tenantId } },
@@ -1396,6 +1396,132 @@ async function seedSampleTrips(tenantId) {
  *
  * Re-running seed-travel.js no-ops this section.
  */
+/**
+ * Seed the completed TMC parent-review demo used by the Teacher and Parent
+ * Portals. The parent/trip link mirrors the result of a parent registration
+ * through the shared parent-registration URL, so the review flow is usable
+ * immediately after a clean travel seed.
+ *
+ * Idempotent on the travel tenant, the teacher/parent emails, the trip code,
+ * and the (tenant, parent, trip) relation.
+ */
+async function seedTmcParentReviewDemo(tenantId) {
+  const passwordHash = await bcrypt.hash("password123", 10);
+  const school = await prisma.contact.upsert({
+    where: { email_tenantId: { email: "principal@bharatpublic.demo", tenantId } },
+    update: {},
+    create: {
+      name: "Bharat Public School",
+      email: "principal@bharatpublic.demo",
+      phone: "+919811111101",
+      subBrand: "tmc",
+      status: "Prospect",
+      tenantId,
+    },
+  });
+  const teacher = await prisma.contact.upsert({
+    where: { email_tenantId: { email: "teacher@getairmail.com", tenantId } },
+    // Do not overwrite a password chosen through the teacher registration
+    // flow when the idempotent demo seed is re-run. The create path below
+    // still provisions credentials for a brand-new demo contact.
+    update: { name: "Mr. Teacher", subBrand: "tmc", portalRole: "TEACHER" },
+    create: {
+      name: "Mr. Teacher",
+      email: "teacher@getairmail.com",
+      subBrand: "tmc",
+      portalRole: "TEACHER",
+      status: "Customer",
+      tenantId,
+      portalPasswordHash: passwordHash,
+    },
+  });
+  // Backfill only legacy teacher rows that pre-date portal credentials. A
+  // non-null hash belongs to the user and must survive future seed runs.
+  if (!teacher.portalPasswordHash) {
+    await prisma.contact.update({
+      where: { id: teacher.id },
+      data: { portalPasswordHash: passwordHash },
+    });
+  }
+  const parent = await prisma.contact.upsert({
+    where: { email_tenantId: { email: "parent@fivermail.com", tenantId } },
+    // Preserve a password supplied by a parent during registration. The
+    // default is only for the create path, never for an existing account.
+    update: { name: "Demo Parent", subBrand: "tmc", portalRole: "PARENT" },
+    create: {
+      name: "Demo Parent",
+      email: "parent@fivermail.com",
+      subBrand: "tmc",
+      portalRole: "PARENT",
+      status: "Customer",
+      tenantId,
+      portalPasswordHash: passwordHash,
+    },
+  });
+  // Backfill only a legacy contact with no portal password; never replace a
+  // password that the account owner has already chosen.
+  if (!parent.portalPasswordHash) {
+    await prisma.contact.update({
+      where: { id: parent.id },
+      data: { portalPasswordHash: passwordHash },
+    });
+  }
+  const trip = await prisma.tmcTrip.upsert({
+    where: { tenantId_tripCode: { tenantId, tripCode: "tmc-review-demo-2026" } },
+    update: {
+      schoolContactId: school.id,
+      destination: "Mysore Review Demo",
+      tripType: "day_trip",
+      departDate: new Date("2026-08-20T00:00:00.000Z"),
+      returnDate: new Date("2026-08-20T00:00:00.000Z"),
+      pricePerStudent: 22000,
+      legalEntity: "tmc_nexus",
+      status: "completed",
+      teacherContactId: teacher.id,
+    },
+    create: {
+      tenantId,
+      tripCode: "tmc-review-demo-2026",
+      schoolContactId: school.id,
+      destination: "Mysore Review Demo",
+      tripType: "day_trip",
+      departDate: new Date("2026-08-20T00:00:00.000Z"),
+      returnDate: new Date("2026-08-20T00:00:00.000Z"),
+      pricePerStudent: 22000,
+      legalEntity: "tmc_nexus",
+      status: "completed",
+      teacherContactId: teacher.id,
+    },
+  });
+
+  const participants = [
+    { fullName: "Aarav Demo", parentName: parent.name, parentEmail: parent.email, parentPhone: parent.phone },
+    { fullName: "Diya Demo", parentName: null, parentEmail: null, parentPhone: null },
+    { fullName: "Kabir Demo", parentName: null, parentEmail: null, parentPhone: null },
+  ];
+  for (const participant of participants) {
+    const existing = await prisma.tripParticipant.findFirst({
+      where: { tripId: trip.id, fullName: participant.fullName },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.tripParticipant.update({ where: { id: existing.id }, data: { ...participant, applicationStatus: "approved" } });
+    } else {
+      await prisma.tripParticipant.create({
+        data: { tripId: trip.id, ...participant, applicationStatus: "approved" },
+      });
+    }
+  }
+
+  await prisma.tmcParentTrip.upsert({
+    where: { tenantId_parentContactId_tripId: { tenantId, parentContactId: parent.id, tripId: trip.id } },
+    update: { teacherContactId: teacher.id },
+    create: { tenantId, parentContactId: parent.id, teacherContactId: teacher.id, tripId: trip.id },
+  });
+
+  console.log(`[seed-travel] TMC parent review demo: ${trip.tripCode} linked to ${parent.email}`);
+}
+
 async function seedTmcOperationalExtras(tenantId) {
   // 1. Find the anchor Bali trip + its participants.
   const baliTrip = await prisma.tmcTrip.findUnique({

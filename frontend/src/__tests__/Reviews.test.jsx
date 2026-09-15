@@ -64,6 +64,9 @@ function installFetchMock({ reviews = DEFAULT_REVIEWS } = {}) {
     if (typeof url === "string" && url === "/api/travel/reviews") {
       return Promise.resolve({ reviews });
     }
+    if (typeof url === "string" && url === "/api/travel/teacher-reviews") {
+      return Promise.resolve({ reports: [] });
+    }
     return Promise.resolve(null);
   });
 }
@@ -97,6 +100,43 @@ describe("<Reviews /> — page chrome", () => {
     expect(screen.getByRole("button", { name: /Refresh/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Review settings/i })).toBeInTheDocument();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/travel/reviews"));
+  });
+
+  it("opens the teacher tour reports view and loads submitted reports", async () => {
+    const report = {
+      id: 7,
+      tripId: 42,
+      teacherContactId: 9,
+      reportDate: "2026-09-01T00:00:00.000Z",
+      institution: "Greenfield School",
+      tourDestination: "Mysore",
+      coordinator: "Asha Teacher",
+      grade: "7",
+      travelRating: "excellent",
+      foodRating: "good",
+      activitiesRating: "good",
+      careSupportRating: "excellent",
+      overallRating: "good",
+      feedback: "Well organised.",
+      studentCount: 30,
+      staffCount: 3,
+      totalPassengers: 33,
+      signature: "Asha Teacher",
+      submittedAt: "2026-09-02T10:00:00.000Z",
+      trip: { tripCode: "TMC-42", destination: "Mysore", tripType: "day_trip" },
+      teacher: { name: "Asha Teacher", email: "asha@example.com" },
+    };
+    fetchApiMock.mockImplementation((url) => {
+      if (url === "/api/travel/reviews") return Promise.resolve({ reviews: DEFAULT_REVIEWS });
+      if (url === "/api/travel/teacher-reviews") return Promise.resolve({ reports: [report] });
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "Teacher tour reports" }));
+    expect(await screen.findByRole("heading", { name: /Teacher Tour Reports/i })).toBeInTheDocument();
+    expect(await screen.findByText(/Greenfield School/)).toBeInTheDocument();
+    expect(screen.getByText("Well organised.")).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith("/api/travel/teacher-reviews");
   });
 });
 
@@ -162,6 +202,22 @@ describe("<Reviews /> — loading + empty states", () => {
     installFetchMock({ reviews: [] });
     renderPage();
     await waitFor(() => expect(screen.getByText(/No reviews yet/i)).toBeInTheDocument());
+  });
+
+  it("renders a TMC parent experience in the shared admin review list", async () => {
+    const parentReview = makeReview({
+      id: 44,
+      overallRating: 5,
+      destination: "Darjeeling",
+      subBrand: "tmc",
+      contactName: "Arijit Singh",
+      answers: { parent_rating: 5, experience: "The trip was excellent and well organised." },
+    });
+    installFetchMock({ reviews: [parentReview] });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Darjeeling")).toBeInTheDocument());
+    expect(screen.getByText("Parent experience")).toBeInTheDocument();
+    expect(screen.getByText(/The trip was excellent and well organised/)).toBeInTheDocument();
   });
 });
 

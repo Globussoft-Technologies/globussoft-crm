@@ -332,6 +332,67 @@ describe('Omnibar (inline top-bar)', () => {
     expect(screen.getByText('Patients')).toBeInTheDocument();
   });
 
+  it('matches the travel Web Forms page at its current sidebar route', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            { path: '/travel/forms', label: 'Web Forms', description: 'Embedded travel lead capture forms', category: 'Travel Marketing' },
+            { path: '/travel/web-checkins', label: 'Web Check-ins', description: 'Airline web check-in tracking', category: 'Travel Operations' },
+          ],
+        });
+      }
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'web forms' } });
+    const row = await screen.findByRole('option', { name: /Web Forms/i }, { timeout: 2000 });
+    expect(row).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/travel/forms');
+  });
+
+  it('shows all matching travel sidebar pages instead of truncating the Pages section', async () => {
+    const searchablePages = [
+      { path: '/travel/diagnostics', label: 'Diagnostics', description: 'Travel diagnostics' },
+      { path: '/travel/trip-knowledge', label: 'Travel Knowledge', description: 'Travel knowledge' },
+      { path: '/travel/itineraries', label: 'Itineraries', description: 'Travel itineraries' },
+      { path: '/travel/web-checkins', label: 'Web Check-ins', description: 'Travel web check-ins' },
+      { path: '/travel/passport-verification', label: 'Passport', description: 'Travel passport' },
+      { path: '/travel/cost-master', label: 'Cost Master', description: 'Travel cost master' },
+      { path: '/travel/sightseeing', label: 'Sightseeing Master', description: 'Travel sightseeing' },
+      { path: '/travel/reports', label: 'Reports', description: 'Travel reports' },
+      { path: '/travel/reviews', label: 'Reviews', description: 'Travel reviews' },
+    ];
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: searchablePages });
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'travel' } });
+    for (const page of searchablePages) {
+      expect(await screen.findByRole('option', { name: new RegExp(page.label, 'i') }, { timeout: 2000 })).toBeInTheDocument();
+    }
+  });
+
   it('clicking a page row navigates to its path and keeps the query', async () => {
     await renderOmnibarAndWaitForPages();
     const input = screen.getByPlaceholderText(PLACEHOLDER);

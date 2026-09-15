@@ -64,6 +64,23 @@ describe('travelReviewExternal', () => {
     expect(out).toBeNull();
   });
 
+  test('does not redirect a positive experience rated below four stars', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'https://example.com/review' });
+    sentimentEngine.analyzeMessageDetailed.mockResolvedValue({
+      sentiment: 'positive', sentimentScore: 0.9, provider: 'gemini', trusted: true, usedFallback: false,
+    });
+
+    const out = await helper.buildExternalReviewCta({
+      tenantId: 1,
+      destination: 'Dubai',
+      overallRating: 3,
+      answers: { experience: 'The experience was good overall.' },
+    });
+
+    expect(out).toBeNull();
+    expect(sentimentEngine.analyzeMessageDetailed).not.toHaveBeenCalled();
+  });
+
   test('returns CTA when a trusted positive AI result is available', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'https://example.com/review' });
     sentimentEngine.analyzeMessageDetailed.mockResolvedValue({
@@ -78,7 +95,7 @@ describe('travelReviewExternal', () => {
       tenantId: 1,
       destination: 'Dubai',
       overallRating: 5,
-      answers: { loved_most: 'Everything was smooth.', highlight: 'The support team was excellent.' },
+      answers: { experience: 'Everything was smooth.', highlight: 'The support team was excellent.' },
     });
 
     expect(out).toMatchObject({
@@ -91,6 +108,7 @@ describe('travelReviewExternal', () => {
         trusted: true,
       },
     });
+    expect(sentimentEngine.analyzeMessageDetailed).toHaveBeenCalledWith(expect.stringContaining('Parent experience: Everything was smooth.'), 1);
     expect(out.suggestedReview).toMatch(/smooth/i);
   });
 });

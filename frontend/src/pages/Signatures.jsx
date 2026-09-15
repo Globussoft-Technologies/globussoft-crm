@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useMemo, useContext } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useContext, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { FileSignature, Plus, Send, Eye, X, Check, ChevronDown } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import { FileSignature, Plus, Send, Eye, X, Check, ChevronDown, Download } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
@@ -12,6 +12,7 @@ const STATUS_STYLES = {
   SIGNED: { bg: 'rgba(16,185,129,0.12)', color: '#10b981', border: 'rgba(16,185,129,0.3)' },
   DECLINED: { bg: 'rgba(239,68,68,0.12)', color: '#ef4444', border: 'rgba(239,68,68,0.3)' },
   EXPIRED: { bg: 'rgba(100,116,139,0.12)', color: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
+  CANCELLED: { bg: 'rgba(100,116,139,0.12)', color: '#64748b', border: 'rgba(100,116,139,0.3)' },
 };
 
 function StatusBadge({ status }) {
@@ -48,8 +49,11 @@ const ENDPOINT_FOR_TYPE = {
 
 export default function Signatures() {
   const notify = useNotify();
-  const { tenant } = useContext(AuthContext);
+  const { tenant, user } = useContext(AuthContext);
   const isWellness = tenant?.vertical === 'wellness';
+  const isCustomer =
+    String(user?.userType || '').toUpperCase() === 'CUSTOMER' ||
+    String(user?.role || '').toUpperCase() === 'CUSTOMER';
   const [requests, setRequests] = useState([]);
   const [docOptions, setDocOptions] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -57,6 +61,7 @@ export default function Signatures() {
   const [viewing, setViewing] = useState(null);
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [actionBusy, setActionBusy] = useState(null);
   const [signatureType, setSignatureType] = useState(isWellness ? 'Patient' : 'Estimate');
 const [patients, setPatients] = useState([]);
 const [selectedPatient, setSelectedPatient] = useState(null);
@@ -91,13 +96,17 @@ useEffect(() => {
     }
   };
 
-  if (isWellness) {
+  if (isWellness && !isCustomer) {
     fetchPatients();
     fetchServicesCatalog();
   }
-}, [isWellness]);
-  useEffect(() => { loadRequests(); }, []);
-  useEffect(() => { loadDocOptions(form.documentType); }, [form.documentType]);
+}, [isWellness, isCustomer]);
+  useEffect(() => {
+    if (!isCustomer) loadRequests();
+  }, [isCustomer]);
+  useEffect(() => {
+    if (!isCustomer) loadDocOptions(form.documentType);
+  }, [form.documentType, isCustomer]);
 
   const loadRequests = async () => {
     try {
@@ -230,21 +239,29 @@ useEffect(() => {
   };
 
   const resend = async (id) => {
+    setActionBusy(`resend-${id}`);
     try {
       await fetchApi(`/api/signatures/${id}/resend`, { method: 'POST' });
       notify.success('Reminder email sent');
+      await loadRequests();
     } catch (err) {
       notify.error('Failed to resend signature request');
+    } finally {
+      setActionBusy(null);
     }
   };
 
   const cancel = async (id) => {
-    if (!await notify.confirm('Cancel this signature request? This cannot be undone.')) return;
+    if (!await notify.confirm('Cancel this signature request? It will be kept in history but the signing link will stop working.')) return;
+    setActionBusy(`cancel-${id}`);
     try {
       await fetchApi(`/api/signatures/${id}`, { method: 'DELETE' });
-      loadRequests();
+      notify.success('Signature request cancelled');
+      await loadRequests();
     } catch (err) {
       notify.error('Failed to cancel request');
+    } finally {
+      setActionBusy(null);
     }
   };
 
@@ -257,12 +274,41 @@ useEffect(() => {
     } catch (err) { /* swallow */ }
   };
 
+  const downloadPatientPdf = async (req) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(`/api/signatures/${req.id}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.error || 'PDF download failed');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `consent-${req.id}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notify.error(`Could not download consent PDF: ${err.message}`);
+    }
+  };
+
   const counts = {
     pending: requests.filter(r => r.status === 'PENDING').length,
     signed: requests.filter(r => r.status === 'SIGNED').length,
     declined: requests.filter(r => r.status === 'DECLINED').length,
     expired: requests.filter(r => r.status === 'EXPIRED').length,
   };
+
+  // Customer accounts are allowed to read their own signed consent forms,
+  // but they must never see the staff signature-request workflow. The
+  // backend applies the same patient scope and `consents.read` permission;
+  // this branch only controls the customer-facing presentation.
+  if (isWellness && isCustomer) return <CustomerConsentForms />;
 
   return (
     <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
@@ -362,25 +408,43 @@ useEffect(() => {
                         </button>
                         {r.status === 'PENDING' && (
                           <button
+                            type="button"
                             onClick={() => resend(r.id)}
+                            disabled={actionBusy === `resend-${r.id}` || actionBusy === `cancel-${r.id}`}
                             style={{
                               padding: '0.35rem 0.65rem', fontSize: '0.75rem',
                               background: 'transparent', color: '#3b82f6',
                               border: '1px solid rgba(59,130,246,0.3)', borderRadius: '6px',
+                              cursor: actionBusy ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem',
+                            }}
+                          >
+                            <Send size={12} /> {actionBusy === `resend-${r.id}` ? 'Sending...' : 'Resend'}
+                          </button>
+                        )}
+                        {r.status === 'SIGNED' && r.documentType === 'Custom' && r.patientId && r.visitId && (
+                          <button
+                            type="button"
+                            onClick={() => downloadPatientPdf(r)}
+                            style={{
+                              padding: '0.35rem 0.65rem', fontSize: '0.75rem',
+                              background: 'transparent', color: 'var(--primary-color, var(--accent-color))',
+                              border: '1px solid var(--border-color)', borderRadius: '6px',
                               cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem',
                             }}
                           >
-                            <Send size={12} /> Resend
+                            <Download size={12} /> PDF
                           </button>
                         )}
-                        {r.status !== 'SIGNED' && (
+                        {r.status === 'PENDING' && (
                           <button
+                            type="button"
                             onClick={() => cancel(r.id)}
+                            disabled={actionBusy === `resend-${r.id}` || actionBusy === `cancel-${r.id}`}
                             style={{
                               padding: '0.35rem 0.65rem', fontSize: '0.75rem',
                               background: 'transparent', color: '#ef4444',
                               border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px',
-                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem',
+                              cursor: actionBusy ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem',
                             }}
                           >
                             <X size={12} /> Cancel
@@ -688,6 +752,23 @@ useEffect(() => {
             <Row k="Expires" v={viewing.expiresAt ? new Date(viewing.expiresAt).toLocaleString() : '—'} />
             <Row k="Signed" v={viewing.signedAt ? new Date(viewing.signedAt).toLocaleString() : '—'} />
 
+            {viewing.patientId && viewing.visitId && (
+              <>
+                <Row k="Patient" v={viewing.signerName} />
+                <Row k="Visit" v={`Visit #${viewing.visitId}`} />
+                <Row k="Service IDs" v={viewing.serviceIds || '—'} />
+                {viewing.status === 'SIGNED' && (
+                  <button
+                    type="button"
+                    onClick={() => downloadPatientPdf(viewing)}
+                    style={{ ...modalActionButtonStyle, alignSelf: 'flex-start' }}
+                  >
+                    <Download size={14} /> Download consent PDF
+                  </button>
+                )}
+              </>
+            )}
+
             {viewing.status === 'SIGNED' && (details?.signature || viewing.signature) && (
               <div style={{ marginTop: '1rem' }}>
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -715,6 +796,166 @@ useEffect(() => {
         .sig-modal-card .input-field { color: var(--text-primary); }
         .sig-modal-card .input-field::placeholder { color: var(--text-secondary); opacity: 1; }
         .sig-modal-card select.input-field option { background-color: var(--modal-bg); color: var(--text-primary); }`}</style>
+    </div>
+  );
+}
+
+function CustomerConsentForms() {
+  const notify = useNotify();
+  const [consents, setConsents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState(null);
+  const [viewing, setViewing] = useState(null);
+
+  const loadConsents = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const data = await fetchApi('/api/wellness/portal/consents');
+      setConsents(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setConsents([]);
+      setError(err?.message || 'Could not load consent forms');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConsents();
+  }, [loadConsents]);
+
+  const fetchConsentPdf = async (consentId) => {
+    const token = getAuthToken();
+    const path = consentId?.source === 'signature'
+      ? `/api/wellness/portal/signatures/${consentId.signatureRequestId || consentId.id}/pdf`
+      : `/api/wellness/portal/consents/${consentId.id || consentId}/pdf`;
+    const response = await fetch(path, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body?.error || 'PDF download failed');
+    }
+    return URL.createObjectURL(await response.blob());
+  };
+
+  const viewConsent = async (consent) => {
+    setBusyId(consent.id);
+    try {
+      const url = await fetchConsentPdf(consent);
+      setViewing({ consent, url });
+    } catch (err) {
+      notify.error(`Could not view consent form: ${err.message}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const downloadConsent = async (consent) => {
+    setBusyId(consent.id);
+    try {
+      const url = await fetchConsentPdf(consent);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `consent-${consent.id}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notify.error(`Could not download consent form: ${err.message}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const closeViewer = () => {
+    if (viewing?.url) URL.revokeObjectURL(viewing.url);
+    setViewing(null);
+  };
+
+  return (
+    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+      <header style={{ marginBottom: '2rem' }}>
+        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <FileSignature size={26} color="var(--accent-color)" /> Consent Forms
+        </h1>
+        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+          View and download consent forms signed at your clinic.
+        </p>
+      </header>
+
+      <div className="card" style={{ padding: '2rem' }}>
+        <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <FileSignature size={20} color="var(--accent-color)" /> Signed Consent Forms
+        </h3>
+
+        {loading && <p style={{ color: 'var(--text-secondary)' }}>Loading consent forms...</p>}
+        {!loading && error && <div role="alert" style={{ color: '#ef4444' }}>{error}</div>}
+        {!loading && !error && consents.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+            <FileSignature size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
+            <p style={{ color: 'var(--text-secondary)' }}>No signed consent forms yet.</p>
+          </div>
+        )}
+        {!loading && !error && consents.length > 0 && (
+          <TopScrollSync>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
+                  <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Consent form</th>
+                  <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Service</th>
+                  <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Signed</th>
+                  <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {consents.map((consent) => (
+                  <tr key={consent.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600' }}>{consent.templateName || `Consent #${consent.id}`}</td>
+                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)' }}>{consent.service?.name || '—'}</td>
+                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                      {consent.signedAt ? formatDate(consent.signedAt) : '—'}
+                    </td>
+                    <td style={{ padding: '0.85rem 0.5rem' }}>
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => viewConsent(consent)}
+                          disabled={busyId === consent.id}
+                          style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', background: 'transparent', color: 'var(--accent-color)', border: '1px solid var(--border-color)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                        >
+                          <Eye size={12} /> View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => downloadConsent(consent)}
+                          disabled={busyId === consent.id}
+                          style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', background: 'transparent', color: 'var(--accent-color)', border: '1px solid var(--border-color)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                        >
+                          <Download size={12} /> PDF
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TopScrollSync>
+        )}
+      </div>
+
+      {viewing && (
+        <Modal onClose={closeViewer} title={`Consent form — ${viewing.consent.templateName || `#${viewing.consent.id}`}`} icon={<Eye size={20} color="var(--accent-color)" />}>
+          <iframe
+            title="Consent form PDF"
+            src={viewing.url}
+            style={{ width: '100%', height: '65vh', minHeight: 420, border: '1px solid var(--border-color)', borderRadius: 8 }}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -925,6 +1166,12 @@ function ServicesMultiSelect({ options, value, onChange, disabled, loading, noPa
     </div>
   );
 }
+
+const modalActionButtonStyle = {
+  padding: '0.45rem 0.75rem', fontSize: '0.8rem', background: 'transparent',
+  color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--border-color)',
+  borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.35rem',
+};
 
 function Row({ k, v }) {
   return (

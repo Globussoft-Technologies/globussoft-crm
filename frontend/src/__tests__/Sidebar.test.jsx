@@ -523,6 +523,13 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/landing-pages');
     });
 
+    it('renders Web Forms at the travel-scoped route used by global search', () => {
+      renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['marketing.read'] });
+      const link = screen.getByText('Web Forms').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/forms');
+    });
+
     it('renders the Leads link under Sales', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       const leadsLink = document.querySelector('a[href="/leads"]');

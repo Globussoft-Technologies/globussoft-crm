@@ -490,6 +490,16 @@ describe('Vertical isolation — getCatalogForVertical', () => {
     expect(travelPages.length).toBeGreaterThan(0);
   });
 
+  it('travel catalog includes the Web Forms page used by the travel sidebar', () => {
+    const forms = getCatalogForVertical('travel').find((p) => p.path === '/travel/forms');
+    expect(forms).toMatchObject({
+      path: '/travel/forms',
+      label: 'Web Forms',
+      category: 'Travel Marketing',
+      requiredPermissions: [{ module: 'marketing', action: 'read' }],
+    });
+  });
+
   it('wellness catalog keeps /signatures (it is a wellness-only surface)', () => {
     const wellness = getCatalogForVertical('wellness');
     expect(wellness.find((p) => p.path === '/signatures')).toBeDefined();
@@ -534,6 +544,11 @@ describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
     expect(onTravel.find((p) => p.path === '/travel/itineraries')).toBeDefined();
     expect(onTravel.find((p) => p.path === '/travel/trip-knowledge')).toBeDefined();
     expect(onTravel.find((p) => p.path === '/travel/tally')).toBeDefined();
+  });
+
+  it('travel: surfaces Web Forms when marketing.read is granted', () => {
+    const onTravel = getAccessiblePages(new Set(['marketing.read']), { vertical: 'travel' });
+    expect(onTravel.find((p) => p.path === '/travel/forms')).toBeDefined();
   });
 
   it('wellness: hides /travel/* pages even when the role holds the matching perm', () => {

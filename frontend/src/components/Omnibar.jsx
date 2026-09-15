@@ -432,7 +432,9 @@ export default function Omnibar() {
   }, [query]);
 
   // Client-side page match. The catalog is small (~70 entries) so a linear
-  // scan + sort per keystroke is cheap.
+  // scan + sort per keystroke is cheap. Keep every matching sidebar page in
+  // the scrollable panel; an arbitrary eight-item cap made broad searches
+  // hide valid destinations.
   const visiblePagesIndex = useMemo(
     () => {
       const genericSidebarPages =
@@ -448,12 +450,14 @@ export default function Omnibar() {
       return filterSidebarPages(mergedPages, {
         vertical: tenant?.vertical || null,
         activeSubBrand,
+        subBrandAccess: user?.subBrandAccess,
       });
     },
     [
       pagesIndex,
       tenant?.vertical,
       activeSubBrand,
+      user?.subBrandAccess,
       isAdmin,
       isManager,
       permissionsReady,
@@ -469,7 +473,7 @@ export default function Omnibar() {
       if (score >= 0) scored.push({ page: p, score });
     }
     scored.sort((a, b) => a.score - b.score);
-    return scored.slice(0, 8).map((s) => s.page);
+    return scored.map((s) => s.page);
   }, [query, visiblePagesIndex]);
 
   // Merge pages (client) + backend results into a single resultSet that the

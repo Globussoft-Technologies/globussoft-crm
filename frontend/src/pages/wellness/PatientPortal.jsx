@@ -280,6 +280,8 @@ function Dashboard({ token, onLogout }) {
   const [tab, setTab] = useState('visits');
   const [me, setMe] = useState(null);
   const [prescriptions, setPrescriptions] = useState([]);
+  const [consents, setConsents] = useState([]);
+  const [consentViewing, setConsentViewing] = useState(null);
   const [products, setProducts] = useState([]);
   const [productCategories, setProductCategories] = useState([]);
   const [productCategoryFilter, setProductCategoryFilter] = useState('');
@@ -348,6 +350,20 @@ function Dashboard({ token, onLogout }) {
         }
       } else if (!signal?.aborted) {
         setPrescriptions([]);
+      }
+
+      // Signed consent forms are gated by the CUSTOMER role and remain
+      // patient-scoped in the portal endpoint.
+      if (permList.includes('consents.read')) {
+        try {
+          const c = await portalFetch('/api/wellness/portal/consents', token);
+          if (!signal?.aborted) setConsents(Array.isArray(c) ? c : []);
+        } catch (consentEx) {
+          if (signal?.aborted) return;
+          if (!/forbidden|denied/i.test(consentEx.message || '')) throw consentEx;
+        }
+      } else if (!signal?.aborted) {
+        setConsents([]);
       }
 
       // Shop catalogue — gated on products.read against the CUSTOMER role.
@@ -436,6 +452,51 @@ function Dashboard({ token, onLogout }) {
     }
   };
 
+  const fetchConsentPdf = async (consent) => {
+    const consentId = typeof consent === 'object' ? consent.id : consent;
+    const path = consent?.source === 'signature'
+      ? `/api/wellness/portal/signatures/${consent.signatureRequestId || consentId}/pdf`
+      : `/api/wellness/portal/consents/${consentId}/pdf`;
+    const r = await fetch(path, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || 'PDF download failed');
+    }
+    return URL.createObjectURL(await r.blob());
+  };
+
+  const downloadConsent = async (consent) => {
+    try {
+      const consentId = typeof consent === 'object' ? consent.id : consent;
+      const url = await fetchConsentPdf(consent);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `consent-${consentId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (ex) {
+      notify.error(`Could not download: ${ex.message}`);
+    }
+  };
+
+  const viewConsent = async (consent) => {
+    try {
+      const url = await fetchConsentPdf(consent);
+      setConsentViewing({ consent, url });
+    } catch (ex) {
+      notify.error(`Could not view consent form: ${ex.message}`);
+    }
+  };
+
+  const closeConsentViewer = () => {
+    if (consentViewing?.url) URL.revokeObjectURL(consentViewing.url);
+    setConsentViewing(null);
+  };
+
   // Tab list — each entry can declare a `permission` it depends on.
   // Filter out tabs the patient lacks permission for so the nav doesn't
   // show a link the backend will 403 on. `permissions === null` (still
@@ -460,7 +521,12 @@ function Dashboard({ token, onLogout }) {
         permission: 'products.read',
       },
       { key: 'plan', label: 'Treatment Plan', icon: ClipboardList },
-      { key: 'consent', label: 'Consent Forms', icon: ShieldCheck },
+      {
+        key: 'consent',
+        label: 'Consent Forms',
+        icon: ShieldCheck,
+        permission: 'consents.read',
+      },
     ];
     return allTabs.filter((t) => !t.permission || hasPerm(t.permission));
   }, [hasPerm]);
@@ -966,15 +1032,55 @@ function Dashboard({ token, onLogout }) {
         )}
 
         {!loading && tab === 'consent' && (
-          <div
-            className="glass"
-            style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}
-          >
-            <FileText size={28} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
-            <div>Consent forms you’ve signed at the clinic will appear here.</div>
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            {consents.length === 0 && (
+              <div className="glass" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                <FileText size={28} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
+                <div>No signed consent forms yet.</div>
+              </div>
+            )}
+            {consents.map((consent) => (
+              <div key={consent.id} className="glass" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <ShieldCheck size={15} /> {consent.templateName || `Consent #${consent.id}`}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                    {consent.service?.name || 'Clinic consent'}
+                    {consent.signedAt && ` · ${formatDate(consent.signedAt)}`}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <button type="button" onClick={() => viewConsent(consent)} style={portalActionStyle}>
+                    <FileText size={13} /> View
+                  </button>
+                  <button type="button" onClick={() => downloadConsent(consent)} style={portalActionStyle}>
+                    <Download size={13} /> PDF
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </main>
+
+      {consentViewing && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Consent form PDF"
+          onClick={closeConsentViewer}
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+        >
+          <div className="glass" onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 900, height: '90vh', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>Consent form — {consentViewing.consent.templateName || `#${consentViewing.consent.id}`}</strong>
+              <button type="button" onClick={closeConsentViewer} style={portalActionStyle}>Close</button>
+            </div>
+            <iframe title="Consent form PDF" src={consentViewing.url} style={{ flex: 1, width: '100%', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1016,6 +1122,19 @@ const btnStyle = {
   fontSize: '0.95rem',
   fontWeight: 600,
   cursor: 'pointer',
+};
+
+const portalActionStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '0.3rem',
+  padding: '0.4rem 0.8rem',
+  background: 'transparent',
+  color: 'var(--primary-color, var(--accent-color))',
+  border: '1px solid rgba(255,255,255,0.12)',
+  borderRadius: 6,
+  cursor: 'pointer',
+  fontSize: '0.8rem',
 };
 
 const errStyle = {

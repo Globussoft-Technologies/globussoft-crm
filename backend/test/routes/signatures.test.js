@@ -25,7 +25,7 @@
  *     4. GET    /                    — list (with status/documentType filters)
  *     5. POST   /                    — create + email signing link
  *     6. GET    /:id                 — single request (tenant scoped)
- *     7. DELETE /:id                 — cancel/delete request
+ *     7. DELETE /:id                 — cancel request (soft-cancel, no row deletion)
  *     8. POST   /:id/resend          — resend signing email reminder
  *
  * Cases (16 total)
@@ -39,7 +39,7 @@
  *   POST /                 — 400 missing fields; 400 invalid documentType;
  *                            happy 201 with default 7-day expiry (3)
  *   GET /:id               — 400 invalid id; 404 cross-tenant (2)
- *   DELETE /:id            — 404 cross-tenant; happy 200 (1)
+ *   DELETE /:id            — 404 cross-tenant; happy 200 without deleting row (1)
  *   POST /:id/resend       — 409 when request is already SIGNED (1)
  *
  * Test pattern
@@ -79,6 +79,11 @@ prisma.visit = prisma.visit || {};
 prisma.visit.findFirst = vi.fn();
 prisma.service = prisma.service || {};
 prisma.service.count = vi.fn();
+prisma.service.findMany = vi.fn();
+prisma.patient = prisma.patient || {};
+prisma.patient.findFirst = vi.fn();
+prisma.location = prisma.location || {};
+prisma.location.findFirst = vi.fn();
 
 // Document-lookup paths used by the optional Activity-log side-effect in
 // POST /sign/:token. Stub so the side-effect doesn't blow up when the
@@ -161,16 +166,46 @@ import request from 'supertest';
 
 const signaturesRouter = requireCJS('../../routes/signatures');
 
+describe('customer access guard', () => {
+  test('blocks customers from reading the staff signature-request queue', async () => {
+    const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
+      .get('/api/signatures');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('CUSTOMER_ACCESS_DENIED');
+    expect(prisma.signatureRequest.findMany).not.toHaveBeenCalled();
+  });
+
+  test('blocks customers from creating a signature request', async () => {
+    const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
+      .post('/api/signatures')
+      .send({ documentType: 'Custom', documentId: 1, signerName: 'Patient', signerEmail: 'patient@example.com' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('CUSTOMER_ACCESS_DENIED');
+    expect(prisma.signatureRequest.create).not.toHaveBeenCalled();
+  });
+
+  test('blocks legacy role-only CUSTOMER sessions too', async () => {
+    const res = await request(makeApp({ role: 'CUSTOMER' }))
+      .get('/api/signatures');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('CUSTOMER_ACCESS_DENIED');
+    expect(prisma.signatureRequest.findMany).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * Build an express app with a fake-auth middleware so the authenticated
  * routes see req.user populated. PUBLIC routes (/sign, /decline) ignore
  * req.user — they're keyed on the URL token only.
  */
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', userType } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role };
+    req.user = { userId, tenantId, role, ...(userType ? { userType } : {}) };
     next();
   });
   app.use('/api/signatures', signaturesRouter);
@@ -186,6 +221,9 @@ beforeEach(() => {
   prisma.signatureRequest.delete.mockReset();
   prisma.visit.findFirst.mockReset().mockResolvedValue(null);
   prisma.service.count.mockReset().mockResolvedValue(0);
+  prisma.service.findMany.mockReset().mockResolvedValue([]);
+  prisma.patient.findFirst.mockReset().mockResolvedValue(null);
+  prisma.location.findFirst.mockReset().mockResolvedValue(null);
 
   // Defaults — individual tests override.
   prisma.signatureRequest.findUnique.mockResolvedValue(null);
@@ -592,7 +630,7 @@ describe('POST / — create signature request', () => {
     expect(res.status).toBe(201);
     expect(prisma.visit.findFirst).toHaveBeenCalledWith({
       where: { id: 99, patientId: 7, tenantId: 42 },
-      select: { id: true },
+      select: { id: true, serviceId: true },
     });
     expect(prisma.service.count).toHaveBeenCalledWith({
       where: { id: { in: [11, 12] }, tenantId: 42 },
@@ -600,6 +638,97 @@ describe('POST / — create signature request', () => {
     expect(prisma.signatureRequest.create.mock.calls[0][0].data).toMatchObject({
       documentName: 'Consent Pack', patientId: 7, visitId: 99,
       serviceIds: '[11,12]', tenantId: 42,
+    });
+  });
+
+  test('patient-consent shape returns only signed linked request metadata', async () => {
+    prisma.signatureRequest.findMany.mockResolvedValue([
+      {
+        id: 101,
+        documentType: 'Custom',
+        documentId: 99,
+        documentName: 'Hair Transplant Consent',
+        signerName: 'Asha Patel',
+        status: 'SIGNED',
+        signedAt: new Date('2026-09-10T10:00:00.000Z'),
+        patientId: 7,
+        visitId: 99,
+        serviceIds: '[11]',
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/signatures?patientId=7&status=SIGNED&fields=patient-consent');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual(expect.objectContaining({
+      id: 101,
+      patientId: 7,
+      visitId: 99,
+      serviceIds: '[11]',
+    }));
+    expect(prisma.signatureRequest.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 42, status: 'SIGNED', patientId: 7 },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        documentType: true,
+        documentId: true,
+        documentName: true,
+        signerName: true,
+        status: true,
+        signedAt: true,
+        patientId: true,
+        visitId: true,
+        serviceIds: true,
+      },
+    });
+  });
+
+  test('linked signed patient request renders a downloadable PDF', async () => {
+    prisma.signatureRequest.findFirst.mockResolvedValue({
+      id: 102,
+      documentType: 'Custom',
+      documentId: 99,
+      documentName: 'Hair Transplant Consent',
+      signerName: 'Asha Patel',
+      signerEmail: 'asha@example.com',
+      status: 'SIGNED',
+      signedAt: new Date('2026-09-10T10:00:00.000Z'),
+      signature: 'data:image/png;base64,iVBOR',
+      patientId: 7,
+      visitId: 99,
+      serviceIds: '[11]',
+      tenantId: 42,
+    });
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 7,
+      name: 'Asha Patel',
+      email: 'asha@example.com',
+      phone: '+919999900000',
+    });
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 99,
+      visitDate: new Date('2026-09-10T09:00:00.000Z'),
+      status: 'completed',
+      serviceId: 11,
+      service: { id: 11, name: 'Hair Transplant' },
+    });
+    prisma.service.findMany.mockResolvedValue([{ id: 11, name: 'Hair Transplant' }]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/signatures/102/pdf');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(res.headers['content-disposition']).toContain('consent-102.pdf');
+    expect(prisma.patient.findFirst).toHaveBeenCalledWith({
+      where: { id: 7, tenantId: 42 },
+      select: { id: true, name: true, email: true, phone: true },
+    });
+    expect(prisma.visit.findFirst).toHaveBeenCalledWith({
+      where: { id: 99, patientId: 7, tenantId: 42 },
+      select: expect.objectContaining({ serviceId: true }),
     });
   });
 });
@@ -631,7 +760,7 @@ describe('GET /:id — single signature request', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// DELETE /:id — cancel/delete (tenant-scoped guard)
+// DELETE /:id — cancel without deleting (tenant-scoped guard)
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('DELETE /:id — cancel signature request', () => {
@@ -647,15 +776,30 @@ describe('DELETE /:id — cancel signature request', () => {
     expect(prisma.signatureRequest.delete).not.toHaveBeenCalled();
   });
 
-  test('200 happy path: deletes the row scoped by id', async () => {
-    prisma.signatureRequest.findFirst.mockResolvedValue({ id: 50, tenantId: 1 });
-    prisma.signatureRequest.delete.mockResolvedValue({ id: 50 });
+  test('200 happy path: soft-cancels the row and preserves it in the database', async () => {
+    prisma.signatureRequest.findFirst.mockResolvedValue({ id: 50, tenantId: 1, status: 'PENDING' });
+    prisma.signatureRequest.update.mockResolvedValue({ id: 50, status: 'CANCELLED' });
 
     const res = await request(makeApp()).delete('/api/signatures/50');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true });
-    expect(prisma.signatureRequest.delete).toHaveBeenCalledWith({ where: { id: 50 } });
+    expect(res.body).toEqual({ success: true, status: 'CANCELLED' });
+    expect(prisma.signatureRequest.update).toHaveBeenCalledWith({
+      where: { id: 50 },
+      data: { status: 'CANCELLED' },
+    });
+    expect(prisma.signatureRequest.delete).not.toHaveBeenCalled();
+  });
+
+  test('409 when trying to cancel a completed request', async () => {
+    prisma.signatureRequest.findFirst.mockResolvedValue({ id: 50, tenantId: 1, status: 'SIGNED' });
+
+    const res = await request(makeApp()).delete('/api/signatures/50');
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/cannot cancel.*SIGNED/i);
+    expect(prisma.signatureRequest.update).not.toHaveBeenCalled();
+    expect(prisma.signatureRequest.delete).not.toHaveBeenCalled();
   });
 });
 
@@ -664,6 +808,26 @@ describe('DELETE /:id — cancel signature request', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('POST /:id/resend — resend signing email', () => {
+  test('200 for a pending request sends the reminder without changing the request row', async () => {
+    prisma.signatureRequest.findFirst.mockResolvedValue({
+      id: 50,
+      tenantId: 1,
+      status: 'PENDING',
+      signToken: 'tok-pending',
+      documentType: 'Contract',
+      documentId: 100,
+      signerName: 'Asha Patel',
+      signerEmail: 'asha@example.com',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const res = await request(makeApp({ tenantId: 1 })).post('/api/signatures/50/resend').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, emailDelivered: false });
+    expect(prisma.signatureRequest.update).not.toHaveBeenCalled();
+  });
+
   test('409 when the request is already SIGNED (cannot resend a completed request)', async () => {
     prisma.signatureRequest.findFirst.mockResolvedValue({
       id: 50,
@@ -960,6 +1124,10 @@ describe('signing link — dynamic base URL + frontend route + branding', () => 
     savedKey = process.env.SENDGRID_API_KEY;
     process.env.SENDGRID_API_KEY = 'SG.test-key';
     captured = null;
+    prisma.tenant.findUnique.mockResolvedValue({
+      name: 'Enhanced Wellness',
+      logoUrl: '/uploads/branding/tenant-42/logo.png',
+    });
     globalThis.fetch = vi.fn(async (_url, opts) => {
       captured = JSON.parse(opts.body);
       return { ok: true, status: 202, headers: { get: () => 'msg-1' }, text: async () => '' };
@@ -1001,6 +1169,19 @@ describe('signing link — dynamic base URL + frontend route + branding', () => 
     // (c) branded with the tenant name from the DB (mocked 'Enhanced Wellness').
     expect(html).toContain('Enhanced Wellness');
     expect(text).toContain('Enhanced Wellness');
+    // Tenant.logoUrl is emitted as an absolute URL so the recipient's mail
+    // client can load the same logo configured in CRM.
+    expect(html).toContain('https://staging.example.com/uploads/branding/tenant-42/logo.png');
+    expect(html).toContain('alt="Enhanced Wellness logo"');
+    // The HTML mail is the branded, structured experience: header/wordmark,
+    // prominent CTA, copyable-link panel, security details, and footer.
+    expect(html).toContain('PEOPLE&nbsp;&nbsp;•&nbsp;&nbsp;WELLBEING');
+    expect(html).toContain('Review &amp; Sign Your Estimate');
+    expect(html).toContain('Or copy this link into your browser:');
+    expect(html).toContain('For your security, please do not');
+    expect(html).toContain('WELLNESS TODAY&nbsp;&nbsp;A BRIGHTER TOMORROW');
+    expect(text).toContain('Review & Sign Your Estimate:');
+    expect(text).toContain('For your security, please do not share this link with anyone.');
   });
 
   test('falls back to Host header (+ proto) when no Origin is present', async () => {

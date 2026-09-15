@@ -483,6 +483,8 @@ jobs:
             tests/wellness-consent-archive-api.spec.js \
             tests/travel-diagnostics-api.spec.js \
             tests/travel-tmc-diagnostic-api.spec.js \
+            tests/tmc-parent-reviews-api.spec.js \
+            tests/travel-tmc-parent-link-api.spec.js \
             tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
             tests/travel-itinerary-template-html-api.spec.js \

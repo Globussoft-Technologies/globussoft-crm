@@ -615,6 +615,39 @@ describe('POST /api/auth/customer/register', () => {
     }));
     expect(prisma.contact.update).not.toHaveBeenCalled();
   });
+
+  test('travel bridge never replaces a portal password selected by a teacher or parent', async () => {
+    const existingPortalHash = await bcrypt.hash('portal-selected-password', 10);
+    prisma.tenant.findUnique.mockResolvedValue({ id: 3, vertical: 'travel', name: 'Travel', slug: 'travel' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.patient.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 102,
+      email: 'portal-user@example.com',
+      name: 'Portal User',
+      tenantId: 3,
+      userType: 'CUSTOMER',
+      role: 'CUSTOMER',
+      sessionVersion: 0,
+      tenant: { id: 3, name: 'Travel', slug: 'travel', vertical: 'travel' },
+    });
+    // Simulate a portal registration winning the race after the duplicate
+    // preflight but before this compatibility bridge reaches Contact.
+    prisma.contact.upsert.mockResolvedValue({ id: 89, portalPasswordHash: existingPortalHash });
+
+    const res = await request(makeApp())
+      .post('/api/auth/customer/register')
+      .send({ email: 'portal-user@example.com', password: 'BridgePassword123', name: 'Portal User', registrationTenantId: 3 });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: {},
+      create: expect.objectContaining({ portalPasswordHash: expect.any(String) }),
+    }));
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(await bcrypt.compare('portal-selected-password', existingPortalHash)).toBe(true);
+  });
 });
 
 // ── POST /api/auth/check-email ───────────────────────────────────────

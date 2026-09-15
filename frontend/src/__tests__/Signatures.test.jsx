@@ -126,6 +126,16 @@ const sampleEstimates = [
   { id: 43, title: 'SOW — Beta Industries', estimateNum: 'EST-043' },
 ];
 
+const sampleConsents = [
+  {
+    id: 501,
+    templateName: 'Hair Transplant',
+    signedAt: '2026-08-28T14:33:00.000Z',
+    patientId: 77,
+    service: { id: 12, name: 'Hair Transplant' },
+  },
+];
+
 function defaultFetchMock(url, opts) {
   if (url === '/api/signatures' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleRequests);
@@ -133,6 +143,7 @@ function defaultFetchMock(url, opts) {
   if (url === '/api/contracts') return Promise.resolve(sampleContracts);
   if (url === '/api/estimates') return Promise.resolve(sampleEstimates);
   if (url === '/api/quotes') return Promise.resolve([]);
+  if (url === '/api/wellness/portal/consents') return Promise.resolve(sampleConsents);
   // GET /api/signatures/<id> — detail endpoint hit by view().
   if (/^\/api\/signatures\/\d+$/.test(url) && (!opts || !opts.method || opts.method === 'GET')) {
     const id = parseInt(url.split('/').pop(), 10);
@@ -142,10 +153,10 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve(null);
 }
 
-function renderSignatures(vertical = 'generic') {
+function renderSignatures(vertical = 'generic', user = null) {
   return render(
     <MemoryRouter>
-      <AuthContext.Provider value={{ tenant: { vertical } }}>
+      <AuthContext.Provider value={{ tenant: { vertical }, user }}>
         <Signatures />
       </AuthContext.Provider>
     </MemoryRouter>,
@@ -161,6 +172,91 @@ describe('<Signatures /> — page surface', () => {
     notifyInfo.mockReset();
     notifyConfirm.mockReset();
     notifyConfirm.mockImplementation(() => Promise.resolve(true));
+  });
+
+  it('wellness customer sees signed consent forms only, without signature-request controls', async () => {
+    renderSignatures('wellness', { userType: 'CUSTOMER', role: 'CUSTOMER' });
+
+    expect(await screen.findByRole('heading', { name: /^Consent Forms$/i })).toBeInTheDocument();
+    expect((await screen.findAllByText('Hair Transplant')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: /^View$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^PDF$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Request Signature/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Resend/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Cancel/i })).toBeNull();
+    expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/signatures')).toBe(false);
+  });
+
+  it('wellness customer can view and download a consent PDF', async () => {
+    const previousFetch = globalThis.fetch;
+    const previousCreateObjectURL = globalThis.URL.createObjectURL;
+    globalThis.fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Map([['content-type', 'application/pdf']]),
+      blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+    }));
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:consent-pdf');
+
+    try {
+      renderSignatures('wellness', { userType: 'CUSTOMER', role: 'CUSTOMER' });
+      await screen.findAllByText('Hair Transplant');
+      fireEvent.click(screen.getByRole('button', { name: /^View$/i }));
+      expect(await screen.findByTitle('Consent form PDF')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^PDF$/i }));
+      await waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+          '/api/wellness/portal/consents/501/pdf',
+          { headers: { Authorization: 'Bearer test-token' } },
+        );
+      });
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousCreateObjectURL) globalThis.URL.createObjectURL = previousCreateObjectURL;
+      else delete globalThis.URL.createObjectURL;
+    }
+  });
+
+  it('wellness customer can view a signed patient e-signature PDF from the synced list', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/wellness/portal/consents') {
+        return Promise.resolve([{
+          id: 910,
+          signatureRequestId: 910,
+          source: 'signature',
+          templateName: 'Hair Transplant Consent',
+          signedAt: '2026-08-28T14:33:00.000Z',
+          patientId: 77,
+          visitId: 901,
+          service: { id: 12, name: 'Hair Transplant' },
+        }]);
+      }
+      return defaultFetchMock(url);
+    });
+    const previousFetch = globalThis.fetch;
+    const previousCreateObjectURL = globalThis.URL.createObjectURL;
+    globalThis.fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+    }));
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:synced-consent-pdf');
+
+    try {
+      renderSignatures('wellness', { userType: 'CUSTOMER', role: 'CUSTOMER' });
+      await screen.findByText('Hair Transplant Consent');
+      fireEvent.click(screen.getByRole('button', { name: /^View$/i }));
+      expect(await screen.findByTitle('Consent form PDF')).toBeInTheDocument();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/wellness/portal/signatures/910/pdf',
+        { headers: { Authorization: 'Bearer test-token' } },
+      );
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousCreateObjectURL) globalThis.URL.createObjectURL = previousCreateObjectURL;
+      else delete globalThis.URL.createObjectURL;
+    }
   });
 
   it('renders the heading + descriptor + Request Signature CTA', async () => {
@@ -233,19 +329,84 @@ describe('<Signatures /> — page surface', () => {
     ).toBeInTheDocument();
   });
 
-  it('PENDING rows render Resend + Cancel; SIGNED rows render neither', async () => {
+  it('PENDING rows render Resend + Cancel; completed rows render neither', async () => {
     renderSignatures();
     await screen.findByText('Anita Sharma');
     // The PENDING row (Anita) renders both Resend and Cancel.
     // There's exactly 1 PENDING request in the seed, so one Resend button total.
     const resendBtns = screen.getAllByRole('button', { name: /^Resend$/ });
     expect(resendBtns.length).toBe(1);
-    // 2 Cancel buttons (PENDING + DECLINED — only SIGNED hides cancel).
+    // Only the PENDING row is cancellable; declined/signed requests are terminal.
     const cancelBtns = screen.getAllByRole('button', { name: /^Cancel$/ });
-    expect(cancelBtns.length).toBe(2);
+    expect(cancelBtns.length).toBe(1);
     // SIGNED row (Rohit) has no Resend on its row — implied by total count = 1.
     // 3 View buttons (one per row).
     expect(screen.getAllByRole('button', { name: /^View$/ }).length).toBe(3);
+  });
+
+  it('clicking Resend calls the pending-request reminder endpoint', async () => {
+    renderSignatures();
+    await screen.findByText('Anita Sharma');
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Resend$/ }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/signatures/1/resend',
+        { method: 'POST' },
+      );
+    });
+  });
+
+  it('signed patient requests expose a staff-side consent PDF download action', async () => {
+    const linkedRequest = {
+      id: 8,
+      documentType: 'Custom',
+      documentId: 99,
+      documentName: 'Hair Transplant Consent',
+      signerName: 'Asha Nair',
+      signerEmail: 'asha@example.com',
+      status: 'SIGNED',
+      createdAt: '2026-05-01T10:00:00.000Z',
+      signedAt: '2026-05-01T10:30:00.000Z',
+      expiresAt: '2026-05-08T10:00:00.000Z',
+      patientId: 7,
+      visitId: 99,
+      serviceIds: '[11]',
+    };
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/signatures') return Promise.resolve([linkedRequest]);
+      if (url === '/api/estimates') return Promise.resolve([]);
+      if (url === '/api/wellness/patients?limit=200') return Promise.resolve({ patients: [] });
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve(linkedRequest);
+    });
+
+    const previousFetch = globalThis.fetch;
+    const previousCreateObjectURL = globalThis.URL.createObjectURL;
+    globalThis.fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+    }));
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:linked-consent-pdf');
+
+    try {
+      renderSignatures('wellness');
+      await screen.findByText('Asha Nair');
+      fireEvent.click(screen.getByRole('button', { name: /^PDF$/i }));
+      await waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+          '/api/signatures/8/pdf',
+          { headers: { Authorization: 'Bearer test-token' } },
+        );
+      });
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousCreateObjectURL) globalThis.URL.createObjectURL = previousCreateObjectURL;
+      else delete globalThis.URL.createObjectURL;
+    }
   });
 
   it('clicking View opens the View modal and GETs /api/signatures/<id>', async () => {
@@ -276,7 +437,7 @@ describe('<Signatures /> — page surface', () => {
     expect(screen.getAllByText('Email').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('Cancel: confirm() false short-circuits; confirm() true fires DELETE /api/signatures/<id>', async () => {
+  it('Cancel: confirm() false short-circuits; confirm() true fires the cancel endpoint', async () => {
     renderSignatures();
     await screen.findByText('Anita Sharma');
 

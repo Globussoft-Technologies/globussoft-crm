@@ -20,15 +20,16 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/suppliers-admin', label: 'Suppliers' },
   { path: '/travel/commission-profiles', label: 'Commission Profiles' },
   { path: '/travel/quotes-admin', label: 'Quotes' },
-  { path: '/travel/flights/quote', label: 'Flight quick-quote' },
+  { path: '/travel/flights/quote', label: 'Flight Quick-quote' },
   { path: '/travel/quotes/builder', label: 'Quote Builder' },
   { path: '/travel/quote-templates', label: 'Quote Templates' },
   { path: '/travel/cancellation-policies', label: 'Cancellation Policies' },
-  { path: '/travel/suppliers', label: 'Supplier credentials' },
+  { path: '/travel/suppliers', label: 'Supplier Credentials' },
   { path: '/travel/religious-packets', label: 'Religious Packets', brand: 'rfu' },
   { path: '/travel/curriculum-mappings', label: 'Curriculum Mappings', brand: 'tmc' },
   { path: '/travel/school-terms', label: 'School Term Calendar', brand: 'tmc' },
   { path: '/travel/brochures', label: 'Brochure Engine' },
+  { path: '/travel/forms', label: 'Web Forms', description: 'Embedded travel lead capture forms' },
   { path: '/landing-pages', label: 'Landing Pages' },
   { path: '/inbox', label: 'Inbox' },
   { path: '/tasks', label: 'Tasks' },
@@ -38,7 +39,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/tally', label: 'Tally', description: 'Tally accounting, XML and CA exports' },
   { path: '/travel/milestones', label: 'Milestones' },
   { path: '/travel/payables', label: 'Payables' },
-  { path: '/payments', label: 'Payments received' },
+  { path: '/payments', label: 'Payments Received' },
   { path: '/expenses', label: 'Expense Management' },
   { path: '/staff', label: 'Staff' },
   { path: '/settings', label: 'Settings' },
@@ -47,8 +48,6 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/developer', label: 'Developer' },
   { path: '/privacy', label: 'Privacy' },
   { path: '/admin/brand-kits', label: 'Brand Kits' },
-  { path: '/travel-stall', label: 'Dashboard', brand: 'travelstall' },
-  { path: '/travel/visa', label: 'Dashboard', brand: 'visasure' },
   { path: '/travel/visa/applications', label: 'Applications', brand: 'visasure' },
   { path: '/travel/visa/checklists', label: 'Checklists', brand: 'visasure' },
   { path: '/travel/visa/embassy-rules', label: 'Embassy Rules', brand: 'visasure' },
@@ -127,9 +126,24 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/notification-settings', label: 'Notification Settings', description: 'Personal notification preferences', userOnly: true },
 ];
 
+// This allow-list intentionally mirrors renderTravelNav in Sidebar.jsx. It
+// keeps hidden routes (such as the retired travel dashboards) out of global
+// search while still letting the permission-filtered backend catalog supply
+// the actual accessible entries and descriptions.
 const TRAVEL_SIDEBAR_PAGE_MAP = new Map(
   TRAVEL_SIDEBAR_PAGE_SPECS.map((page) => [page.path, page]),
 );
+
+const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
+  '/travel/web-checkins',
+  '/travel/sightseeing',
+  '/travel/suppliers',
+  '/travel/quotes-admin',
+  '/travel/flights/quote',
+  '/travel/quotes/builder',
+  '/travel/quote-templates',
+  '/gmail',
+]);
 
 function canUseGenericSidebarPage(page, {
   isAdmin = false,
@@ -174,25 +188,42 @@ export function mergePagesByPath(...pageLists) {
   return Array.from(byPath.values());
 }
 
-export function filterSidebarPages(pages, { vertical = null, activeSubBrand = null } = {}) {
+function normalizeSubBrandAccess(value) {
+  if (value == null || value === '') return null;
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  return parsed;
+}
+
+export function filterSidebarPages(
+  pages,
+  { vertical = null, activeSubBrand = null, subBrandAccess = null } = {},
+) {
   if (!Array.isArray(pages)) return [];
   if (vertical !== 'travel') return pages.slice();
 
+  const normalizedSubBrandAccess = normalizeSubBrandAccess(subBrandAccess);
   const filtered = [];
   for (const page of pages) {
     const spec = TRAVEL_SIDEBAR_PAGE_MAP.get(page?.path);
     if (!spec) continue;
-    // TMC does not use Web Check-ins, Sightseeing Master, Supplier
-    // Credentials, or the Gmail page. Keep them searchable for the other
-    // sub-brands and for the All (4) view, but hide them when TMC is active.
+    // Mirror the travel sidebar's conditional links. TMC has no web
+    // check-ins, sightseeing, supplier credentials, quote-builder, or Gmail
+    // entry. These remain searchable for other sub-brands and in All mode.
+    if (activeSubBrand === 'tmc' && TMC_HIDDEN_TRAVEL_PAGE_PATHS.has(page?.path)) continue;
+    // The sidebar also narrows brand-scoped entries by the user's granted
+    // sub-brand access, even when the switcher is currently set to All.
     if (
-      activeSubBrand === 'tmc' &&
-      (
-        page?.path === '/travel/web-checkins' ||
-        page?.path === '/travel/sightseeing' ||
-        page?.path === '/travel/suppliers' ||
-        page?.path === '/gmail'
-      )
+      spec.brand &&
+      normalizedSubBrandAccess &&
+      !normalizedSubBrandAccess.includes(spec.brand)
     ) continue;
     if (spec.brand && activeSubBrand && spec.brand !== activeSubBrand) continue;
     filtered.push({

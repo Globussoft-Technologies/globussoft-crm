@@ -231,6 +231,26 @@ describe('POST /api/travel/passport/participants/:id/passport-upload', () => {
     expect(prisma.tripParticipant.update).not.toHaveBeenCalled();
   });
 
+  test('rejects passport uploads for a day trip before OCR or persistence', async () => {
+    prisma.tripParticipant.findFirst.mockResolvedValue({
+      ...baseParticipant,
+      trip: { ...baseParticipant.trip, tripType: 'day_trip' },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/passport/participants/55/passport-upload')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .attach('file', Buffer.from('synthetic-jpeg-bytes'), {
+        filename: 'jane-doe-passport.jpg',
+        contentType: 'image/jpeg',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'PASSPORT_NOT_REQUIRED' });
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.update).not.toHaveBeenCalled();
+  });
+
   test('returns 503 PASSPORT_OCR_NOT_YET_ENABLED when OCR client throws cred-blocked error', async () => {
     prisma.tripParticipant.findFirst.mockResolvedValue(baseParticipant);
     extractSpy.mockImplementation(() => {
@@ -326,7 +346,7 @@ describe('GET /api/travel/passport/verification-queue', () => {
         where: {
           passportExtractedAt: { not: null },
           passportVerifiedAt: null,
-          trip: { tenantId: 1 },
+          trip: { tenantId: 1, tripType: 'international' },
         },
       }),
     );

@@ -8,7 +8,7 @@ describe("TmcParentPortal", () => {
   beforeEach(() => {
     localStorage.clear();
     localStorage.setItem("tmcParentPortalToken", "parent-token");
-    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((url, options = {}) => {
       if (url === "/api/portal/tmc/parent/me") {
         return Promise.resolve({
           ok: true,
@@ -37,6 +37,38 @@ describe("TmcParentPortal", () => {
             registrations: [],
             participants: [],
           }),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/reviews") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            trips: [{
+              id: 7,
+              tripCode: "DARJ-2026",
+              destination: "Darjeeling",
+              departDate: "2026-08-01T00:00:00.000Z",
+              returnDate: "2026-08-07T00:00:00.000Z",
+              status: "completed",
+              review: null,
+              reviewSubmitted: false,
+            }, {
+              id: 8,
+              tripCode: "MYS-2026",
+              destination: "Mysore",
+              departDate: "2026-09-17T00:00:00.000Z",
+              returnDate: "2026-09-18T00:00:00.000Z",
+              status: "completed",
+              review: null,
+              reviewSubmitted: false,
+            }],
+          }),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/trips/7/review" && options.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true, overallRating: 5, externalReview: null }),
         });
       }
       if (url === "/api/portal/travel/bookings") {
@@ -140,5 +172,47 @@ describe("TmcParentPortal", () => {
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Mark all read" })).not.toBeInTheDocument());
     expect(fetchSpy).toHaveBeenCalledWith("/api/portal/travel/notifications/mark-all-read", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("shows the parent review option and lists completed trips", async () => {
+    render(<TmcParentPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Reviews" }));
+
+    expect(await screen.findByRole("heading", { name: "Reviews", level: 2 })).toBeInTheDocument();
+    expect(screen.getAllByText("Darjeeling").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Mysore").length).toBeGreaterThan(0);
+    expect(screen.getByRole("combobox", { name: "Select a trip to review" })).toHaveValue("");
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(screen.queryByRole("heading", { name: /Your experience of/i })).not.toBeInTheDocument();
+  });
+
+  it("opens the review form and submits a five-star parent experience", async () => {
+    render(<TmcParentPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Reviews" }));
+    const tripSelect = await screen.findByRole("combobox", { name: "Select a trip to review" });
+    fireEvent.change(tripSelect, { target: { value: "7" } });
+
+    expect(await screen.findByRole("heading", { name: /Your experience of Darjeeling/i })).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    fireEvent.change(tripSelect, { target: { value: "8" } });
+    expect(await screen.findByRole("heading", { name: /Your experience of Mysore/i })).toBeInTheDocument();
+    fireEvent.change(tripSelect, { target: { value: "7" } });
+    expect(screen.getByText("Overall rating")).toBeInTheDocument();
+    expect(screen.getByText("0/500")).toBeInTheDocument();
+    expect(screen.queryByText("Positive reviews rated 4 stars or above may be shared on our review page.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rate 5 out of 5 stars" }));
+    expect(screen.getByText("5 out of 5")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Tell us about your experience"), { target: { value: "The trip was excellent and very well organised." } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit review" }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/parent/trips/7/review",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ answers: { rating: 5, experience: "The trip was excellent and very well organised." } }) }),
+    ));
+    expect(await screen.findByText("Thank you for your review.")).toBeInTheDocument();
   });
 });

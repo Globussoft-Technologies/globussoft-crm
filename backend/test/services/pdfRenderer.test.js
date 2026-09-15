@@ -721,6 +721,32 @@ describe('renderConsentPdf', () => {
     expect(txt).toContain('Service:');
   });
 
+  test('maps a business document name to the matching consent wording', async () => {
+    const buf = await renderConsentPdf(
+      { templateName: 'Hair Transplant Consent' },
+      patientFixture(),
+      { name: 'Hair Transplant' },
+      clinicFixture(),
+      null,
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('hairtransplantprocedure');
+  });
+
+  test('renders the linked visit date when supplied', async () => {
+    const buf = await renderConsentPdf(
+      { templateName: 'general' },
+      patientFixture(),
+      null,
+      clinicFixture(),
+      null,
+      { visit: { visitDate: '2026-08-28T09:00:00Z' } },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Visit:');
+    expect(txt).toContain('Aug 2026');
+  });
+
   test('omits Service: line when service not provided', async () => {
     const buf = await renderConsentPdf(
       { templateName: 'general' },

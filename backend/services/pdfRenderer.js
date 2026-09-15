@@ -839,8 +839,15 @@ const CONSENT_TEMPLATES = {
 };
 
 function getConsentBody(templateName) {
-  const key = (templateName || "general").toLowerCase();
-  return CONSENT_TEMPLATES[key] || CONSENT_TEMPLATES.general;
+  const normalized = String(templateName || "general")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (CONSENT_TEMPLATES[normalized]) return CONSENT_TEMPLATES[normalized];
+  const matchingKey = Object.keys(CONSENT_TEMPLATES)
+    .find((key) => normalized.startsWith(`${key}-`));
+  return matchingKey ? CONSENT_TEMPLATES[matchingKey] : CONSENT_TEMPLATES.general;
 }
 
 // ── 1. Prescription PDF ────────────────────────────────────────────
@@ -1297,6 +1304,7 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica drops/mangles this in diagnostic PDFs
   const bufPromise = streamToBuffer(doc);
+  const linkedVisit = opts && opts.visit;
 
   // Travel-vertical consent: opt into the brand-kit header band when
   // opts.subBrand is supplied. Wellness path (no subBrand) is unchanged.
@@ -1357,6 +1365,11 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
 
   if (service?.name) {
     doc.font("Helvetica-Oblique").fontSize(10).fillColor("#555").text(`Service: ${service.name}`, { align: "center" });
+    doc.moveDown(0.6);
+  }
+  if (linkedVisit?.visitDate) {
+    doc.font("Helvetica-Oblique").fontSize(10).fillColor("#555")
+      .text(`Visit: ${formatDate(linkedVisit.visitDate)}`, { align: "center" });
     doc.moveDown(0.6);
   }
 

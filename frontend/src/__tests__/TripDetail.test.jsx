@@ -179,6 +179,7 @@ function installFetchMock({
   landingPageCreate = null, // override to return a created page on POST
   registrationDecide = null, // override per-test to assert approve/reject
   itinerarySuggest = null, // override to return a custom AI suggestion
+  parentLink = 'https://example.com/tmc/register/parent?token=abc',
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -187,6 +188,10 @@ function installFetchMock({
     if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
       if (trip instanceof Error) return Promise.reject(trip);
       return Promise.resolve(trip);
+    }
+    // Admin-only TMC parent registration link generation
+    if (method === 'POST' && /^\/api\/portal\/tmc\/staff\/trips\/\d+\/parent-link$/.test(url)) {
+      return Promise.resolve({ link: parentLink });
     }
     // GET /api/travel/trips/:id/rooming
     if (method === 'GET' && /^\/api\/travel\/trips\/\d+\/rooming$/.test(url)) {
@@ -290,7 +295,7 @@ function renderPage(tripId = 101, entryState = null) {
     }
   }
   const authValue = {
-    user: { tenant: { vertical: 'travel' } },
+    user: { role: 'ADMIN', tenant: { vertical: 'travel' } },
     tenant: { vertical: 'travel' },
     loading: false,
   };
@@ -438,6 +443,21 @@ describe('<TripDetail /> — tab strip', () => {
 });
 
 describe('<TripDetail /> — Overview tab', () => {
+  it('lets an admin generate the parent link after a teacher is assigned', async () => {
+    const parentLink = 'https://example.com/tmc/register/parent?token=abc';
+    installFetchMock({ trip: makeTrip({ teacherContactId: 42 }), parentLink });
+    renderPage();
+
+    const generateButton = await screen.findByRole('button', { name: 'Generate parent link' });
+    fireEvent.click(generateButton);
+
+    expect(await screen.findByDisplayValue(parentLink)).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/portal/tmc/staff/trips/101/parent-link',
+      { method: 'POST' },
+    );
+  });
+
   it('renders hero band + KPI cards + summary bands wired to the ops-dashboard surface', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
@@ -487,6 +507,23 @@ describe('<TripDetail /> — Participants tab', () => {
     expect(
       await screen.findByText((content) => content.includes('No participants yet')),
     ).toBeInTheDocument();
+  });
+
+  it('does not show passport status or upload controls for a day trip', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        tripType: 'day_trip',
+        documentRequirements: [{ id: 1, code: 'passport', required: true }],
+      }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma');
+
+    expect(screen.queryByText(/passport/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /upload passport/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sync passport/i })).not.toBeInTheDocument();
   });
 
   it('add-participant happy path: typing fullName + clicking Add POSTs the right endpoint + notify.success', async () => {
@@ -1255,16 +1292,15 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
   });
 
 
-  it('renders CRM portal link buttons per instalment and no participant Razorpay link generation', async () => {
+  it('removes the ambiguous plan-level payment-link column', async () => {
     installPaymentMock();
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Edit payment plan/i });
 
-    expect(screen.getByRole('button', { name: /Copy instalment 1 payment link/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Copy instalment 2 payment link/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Copy instalment 3 payment link/i })).toBeInTheDocument();
+    expect(screen.queryByText(/^Payment link$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Copy instalment \d+ payment link/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/Generate payment link/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/rzp\.io/i)).not.toBeInTheDocument();
   });

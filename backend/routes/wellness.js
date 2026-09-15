@@ -14351,6 +14351,350 @@ router.get(
   },
 );
 
+// GET /portal/consents — the patient's own signed consent forms.
+//
+// This endpoint intentionally accepts both kinds of patient-portal token
+// handled by verifyPatientToken: the phone+OTP token used by the public
+// wellness portal and the regular CUSTOMER session token used by the CRM
+// customer experience. The CUSTOMER role's `consents.read` grant is the
+// single permission switch for both surfaces.
+function parsePortalServiceIds(raw) {
+  if (Array.isArray(raw)) return raw.map(Number).filter(Number.isInteger);
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
+router.get(
+  "/portal/consents",
+  verifyPatientToken,
+  requirePortalPermission("consents", "read"),
+  async (req, res) => {
+    try {
+      const consents = await prisma.consentForm.findMany({
+        where: {
+          patientId: req.patient.id,
+          tenantId: req.patient.tenantId,
+        },
+        orderBy: { signedAt: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          templateName: true,
+          signedAt: true,
+          patientId: true,
+          serviceId: true,
+          hasPdfBlob: true,
+          service: { select: { id: true, name: true } },
+          // EXCLUDED: signatureSvg, contentSnapshot, signedPdfBlob
+        },
+      });
+
+      // Patient e-signatures are the source of truth for new consent PDFs.
+      // Keep legacy ConsentForm rows in the response and add signed, linked
+      // Custom requests without rewriting or migrating either record type.
+      let signatureRequests = [];
+      if (prisma.signatureRequest?.findMany) {
+        try {
+          signatureRequests = await prisma.signatureRequest.findMany({
+            where: {
+              patientId: req.patient.id,
+              tenantId: req.patient.tenantId,
+              documentType: "Custom",
+              status: "SIGNED",
+              visitId: { not: null },
+            },
+            orderBy: { signedAt: "desc" },
+            take: 50,
+            select: {
+              id: true,
+              documentName: true,
+              signedAt: true,
+              patientId: true,
+              visitId: true,
+              serviceIds: true,
+            },
+          });
+        } catch (signatureErr) {
+          // Legacy ConsentForm records must remain readable if an older
+          // deployment has not yet applied the additive signature context.
+          console.warn("[wellness] portal signature list unavailable:", signatureErr.message);
+        }
+      }
+      if (!Array.isArray(signatureRequests)) signatureRequests = [];
+      const signatureServiceIds = [...new Set(
+        signatureRequests.flatMap((request) => parsePortalServiceIds(request.serviceIds)),
+      )];
+      let signatureServices = [];
+      if (signatureServiceIds.length && prisma.service?.findMany) {
+        try {
+          signatureServices = await prisma.service.findMany({
+            where: { id: { in: signatureServiceIds }, tenantId: req.patient.tenantId },
+            select: { id: true, name: true },
+          });
+        } catch (serviceErr) {
+          console.warn("[wellness] portal signature services unavailable:", serviceErr.message);
+        }
+      }
+      const serviceById = new Map(signatureServices.map((service) => [service.id, service]));
+      const signatureConsents = signatureRequests.map((request) => {
+        const linkedServices = parsePortalServiceIds(request.serviceIds)
+          .map((id) => serviceById.get(id))
+          .filter(Boolean);
+        return {
+          id: request.id,
+          templateName: request.documentName || "Consent form",
+          documentName: request.documentName || null,
+          signedAt: request.signedAt,
+          patientId: request.patientId,
+          visitId: request.visitId,
+          serviceId: linkedServices[0]?.id || null,
+          service: linkedServices[0] || null,
+          serviceIds: request.serviceIds,
+          source: "signature",
+          signatureRequestId: request.id,
+        };
+      });
+      const combinedConsents = [
+        ...consents.map((consent) => ({ ...consent, source: "consent" })),
+        ...signatureConsents,
+      ]
+        .sort((a, b) => new Date(b.signedAt || 0) - new Date(a.signedAt || 0))
+        .slice(0, 50);
+
+      try {
+        await writeAudit(
+          "ConsentForm",
+          "PATIENT_LIST_READ",
+          null,
+          null,
+          req.patient.tenantId,
+          {
+            count: combinedConsents.length,
+            source: "portal/consents",
+            patientId: req.patient.id,
+          },
+          { actorType: "patient", patientId: req.patient.id },
+        );
+      } catch (auditErr) {
+        console.warn("[wellness] audit portal/consents failed:", auditErr.message);
+      }
+      res.json(combinedConsents);
+    } catch (e) {
+      console.error("[wellness] portal consents error:", e.message);
+      res.status(500).json({ error: "Failed to load consent forms" });
+    }
+  },
+);
+
+// GET /portal/consents/:id/pdf — patient self-view/download of a consent PDF.
+//
+// The consent lookup is hard-scoped by patientId as well as id. A valid
+// portal token therefore cannot be used to pull another patient's clinical
+// document, even when the caller knows its numeric id.
+// GET /portal/signatures/:id/pdf — patient self-view/download of a signed
+// e-signature linked to this patient, visit, and service selection.
+// This stays separate from legacy ConsentForm PDFs because the two tables
+// have independent numeric id sequences; the explicit source in the URL
+// avoids an id collision and preserves every existing record.
+router.get(
+  "/portal/signatures/:id/pdf",
+  verifyPatientToken,
+  requirePortalPermission("consents", "read"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({ error: "Invalid signature request id" });
+      }
+
+      const signatureRequest = await prisma.signatureRequest.findFirst({
+        where: {
+          id,
+          patientId: req.patient.id,
+          tenantId: req.patient.tenantId,
+          documentType: "Custom",
+          status: "SIGNED",
+          visitId: { not: null },
+        },
+        select: {
+          id: true,
+          patientId: true,
+          visitId: true,
+          serviceIds: true,
+          documentName: true,
+          signedAt: true,
+          signature: true,
+        },
+      });
+      if (!signatureRequest) {
+        return res.status(404).json({ error: "Signature request not found" });
+      }
+
+      const [patient, visit] = await Promise.all([
+        prisma.patient.findFirst({
+          where: { id: req.patient.id, tenantId: req.patient.tenantId },
+          select: { id: true, name: true, email: true, phone: true },
+        }),
+        prisma.visit.findFirst({
+          where: {
+            id: signatureRequest.visitId,
+            patientId: req.patient.id,
+            tenantId: req.patient.tenantId,
+          },
+          select: {
+            id: true,
+            visitDate: true,
+            serviceId: true,
+            service: { select: { id: true, name: true } },
+          },
+        }),
+      ]);
+      if (!patient || !visit) return res.status(404).json({ error: "Linked patient visit not found" });
+
+      const serviceIds = [...new Set(
+        [...parsePortalServiceIds(signatureRequest.serviceIds), Number(visit.serviceId)]
+          .filter((serviceId) => Number.isInteger(serviceId) && serviceId > 0),
+      )];
+      const services = serviceIds.length && prisma.service?.findMany
+        ? await prisma.service.findMany({
+          where: { id: { in: serviceIds }, tenantId: req.patient.tenantId },
+          select: { id: true, name: true },
+        })
+        : [];
+      if (visit.service && !services.some((service) => service.id === visit.service.id)) {
+        services.push(visit.service);
+      }
+      const service = services.length > 1
+        ? { name: services.map((item) => item.name).join(", ") }
+        : services[0] || visit.service || null;
+      const clinic = await primaryClinic(req.patient.tenantId);
+      const buf = await renderConsentPdf(
+        {
+          templateName: signatureRequest.documentName || "general",
+          signedAt: signatureRequest.signedAt,
+        },
+        patient,
+        service,
+        clinic,
+        signatureRequest.signature,
+        { visit, services },
+      );
+
+      try {
+        await writeAudit(
+          "SignatureRequest",
+          "SIGNATURE_PDF_DOWNLOAD",
+          signatureRequest.id,
+          null,
+          req.patient.tenantId,
+          {
+            signatureRequestId: signatureRequest.id,
+            patientId: signatureRequest.patientId,
+            visitId: signatureRequest.visitId,
+            serviceIds,
+            source: "portal",
+          },
+          { actorType: "patient", patientId: req.patient.id },
+        );
+      } catch (auditErr) {
+        console.warn("[wellness] audit portal signature PDF failed:", auditErr.message);
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.send(buf);
+    } catch (e) {
+      console.error("[wellness] portal signature PDF error:", e.message);
+      res.status(500).json({ error: "Failed to render consent PDF" });
+    }
+  },
+);
+
+router.get(
+  "/portal/consents/:id/pdf",
+  verifyPatientToken,
+  requirePortalPermission("consents", "read"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "Invalid consent id" });
+      }
+
+      const consent = await prisma.consentForm.findFirst({
+        where: { id, patientId: req.patient.id, tenantId: req.patient.tenantId },
+        include: { patient: true, service: true },
+      });
+      if (!consent) return res.status(404).json({ error: "Consent not found" });
+
+      let buf;
+      let servedFromBlob = false;
+      if (consent.signedPdfBlob && consent.signedPdfBlob.length > 0) {
+        buf = Buffer.isBuffer(consent.signedPdfBlob)
+          ? consent.signedPdfBlob
+          : Buffer.from(consent.signedPdfBlob);
+        servedFromBlob = true;
+      } else {
+        const clinic = await primaryClinic(consent.tenantId);
+        buf = await renderConsentPdf(
+          consent,
+          consent.patient,
+          consent.service,
+          clinic,
+          consent.signatureSvg,
+        );
+      }
+
+      try {
+        await writeAudit(
+          "ConsentForm",
+          "CONSENT_PDF_DOWNLOAD",
+          consent.id,
+          null,
+          consent.tenantId,
+          {
+            consentId: consent.id,
+            patientId: consent.patientId,
+            serviceId: consent.serviceId,
+            templateName: consent.templateName,
+            servedFromBlob,
+            source: "portal",
+          },
+          { actorType: "patient", patientId: req.patient.id },
+        );
+      } catch (auditErr) {
+        console.warn(
+          "[wellness] audit portal CONSENT_PDF_DOWNLOAD failed:",
+          auditErr.message,
+        );
+      }
+
+      res.setHeader("Content-Type", consent.signedPdfMime || "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="consent-${id}.pdf"`,
+      );
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.send(buf);
+    } catch (e) {
+      console.error("[wellness] portal consent pdf error:", e.message);
+      res.status(500).json({ error: "Failed to render consent PDF" });
+    }
+  },
+);
+
 // POST /portal/export  patient self-DSAR (DPDP Act 15 / GDPR Article 15).
 // Closes v3.4.8 carry-over #2: prior to this endpoint, wellness-portal
 // patients had NO mechanism to obtain a copy of their own data  they

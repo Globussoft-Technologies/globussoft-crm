@@ -7,7 +7,7 @@
 //   Payment plan — upsert plan + materialised per-participant instalments
 //   Microsite — preview + admin link + publicUuid copy
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useContext, useEffect, useRef, useState, useCallback } from "react";
 import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
@@ -18,7 +18,9 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { tripRequiresPassport } from "../../utils/travelDocumentPolicy";
 import TripFinancialSummary from "./TripFinancialSummary";
+import { AuthContext } from "../../App";
 
 const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
 
@@ -202,6 +204,8 @@ export default function TripDetail() {
 // labels. Cards are clickable — clicking jumps to the relevant tab.
 
 function OverviewTab({ trip, onJump, notify }) {
+  const auth = useContext(AuthContext);
+  const isAdmin = auth?.user?.role === "ADMIN";
   const [ops, setOps] = useState(null);
 
   // silent:true — ops-dashboard is an enhancement, not a requirement.
@@ -215,7 +219,10 @@ function OverviewTab({ trip, onJump, notify }) {
 
   const participants = trip.participants || [];
   const partCount = participants.length;
-  const docCount = (trip.documentRequirements || []).length;
+  const docCount = (trip.documentRequirements || []).filter((doc) => (
+    tripRequiresPassport(trip.tripType)
+      || ![doc.docType, doc.code, doc.name].some((value) => String(value || "").toLowerCase().includes("passport"))
+  )).length;
   const score = ops?.departureReadiness?.score;
   const comp = ops?.departureReadiness?.components || {};
   const pay = ops?.payments;
@@ -223,7 +230,7 @@ function OverviewTab({ trip, onJump, notify }) {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <TeacherAssignment trip={trip} notify={notify} />
+      <TeacherAssignment trip={trip} notify={notify} isAdmin={isAdmin} />
       {/* Hero band — destination + dates + readiness gauge */}
       <div style={{
         background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
@@ -343,11 +350,14 @@ function OverviewTab({ trip, onJump, notify }) {
   );
 }
 
-function TeacherAssignment({ trip, notify }) {
+function TeacherAssignment({ trip, notify, isAdmin }) {
   const [teachers, setTeachers] = useState([]);
   const [teacherId, setTeacherId] = useState(trip.teacherContactId ? String(trip.teacherContactId) : "");
+  const [savedTeacherId, setSavedTeacherId] = useState(trip.teacherContactId ? String(trip.teacherContactId) : "");
+  const [parentLink, setParentLink] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [generatingLink, setGeneratingLink] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -366,6 +376,8 @@ function TeacherAssignment({ trip, notify }) {
 
   useEffect(() => {
     setTeacherId(trip.teacherContactId ? String(trip.teacherContactId) : "");
+    setSavedTeacherId(trip.teacherContactId ? String(trip.teacherContactId) : "");
+    setParentLink("");
   }, [trip.teacherContactId]);
 
   const save = async () => {
@@ -375,6 +387,8 @@ function TeacherAssignment({ trip, notify }) {
         method: "PATCH",
         body: JSON.stringify({ teacherContactId: teacherId ? Number(teacherId) : null }),
       });
+      setSavedTeacherId(teacherId);
+      setParentLink("");
       notify.success(teacherId ? "Teacher assigned to this trip" : "Teacher assignment removed");
     } catch (error) {
       notify.error(error?.body?.error || "Could not update the teacher assignment");
@@ -383,13 +397,39 @@ function TeacherAssignment({ trip, notify }) {
     }
   };
 
+  const generateParentLink = async () => {
+    if (!isAdmin || !teacherId || teacherId !== savedTeacherId) return;
+    setGeneratingLink(true);
+    try {
+      const result = await fetchApi(`/api/portal/tmc/staff/trips/${trip.id}/parent-link`, { method: "POST" });
+      setParentLink(result?.link || "");
+      notify.success("Parent registration link generated");
+    } catch (error) {
+      notify.error(error?.body?.error || "Could not generate the parent registration link");
+    } finally {
+      setGeneratingLink(false);
+    }
+  };
+
+  const copyParentLink = async () => {
+    if (!parentLink) return;
+    try {
+      await navigator.clipboard.writeText(parentLink);
+      notify.success("Parent registration link copied");
+    } catch {
+      notify.error("Copy was not available. Select and copy the link manually.");
+    }
+  };
+
+  const assignmentSaved = teacherId === savedTeacherId;
+
   return (
     <section style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 10, padding: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Teacher portal access</div>
           <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
-            Assign the teacher who finalized this trip. They will see it in their Teacher Portal.
+            Assign the teacher who finalized this trip. They will see it in their Teacher Portal. Parent registration links are generated and shared by an admin.
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -401,6 +441,29 @@ function TeacherAssignment({ trip, notify }) {
         </div>
       </div>
       {!loading && teachers.length === 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>No TMC teachers have registered yet. Generate the teacher link from Roles &amp; permissions first.</div>}
+      {isAdmin && teacherId && assignmentSaved && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border-color)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Parent registration</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 3 }}>
+                Generate the trip-specific link to share with parents.
+              </div>
+            </div>
+            <button type="button" className="btn-secondary" onClick={generateParentLink} disabled={generatingLink} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Link2 size={14} /> {generatingLink ? "Generating..." : "Generate parent link"}
+            </button>
+          </div>
+          {parentLink && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+              <input aria-label="Parent registration link" readOnly value={parentLink} onFocus={(event) => event.target.select()} style={{ flex: "1 1 300px", minWidth: 0, width: "auto", boxSizing: "border-box", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--input-bg)", color: "var(--text-secondary)", fontSize: 12 }} />
+              <button type="button" className="btn-secondary" onClick={copyParentLink} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Copy size={14} /> Copy link</button>
+              <a href={parentLink} target="_blank" rel="noreferrer" className="btn-secondary" aria-label="Open parent registration link" style={{ display: "inline-flex", alignItems: "center", padding: "8px 10px" }}><ExternalLink size={14} /></a>
+            </div>
+          )}
+        </div>
+      )}
+      {isAdmin && teacherId && !assignmentSaved && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>Save the teacher assignment before generating the parent registration link.</div>}
     </section>
   );
 }
@@ -645,6 +708,7 @@ function StatusPill() {
 }
 
 function ParticipantsTab({ trip, onChange, notify }) {
+  const requiresPassport = tripRequiresPassport(trip.tripType);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ fullName: "", parentName: "", parentPhone: "" });
   const [decidingId, setDecidingId] = useState(null);
@@ -1047,7 +1111,6 @@ function ParticipantsTab({ trip, onChange, notify }) {
             const hasAadhaar = !!regDocs.aadhaar;
             const hasParentConsent = !!(regDocs.parentConsent || regDocs.consentLetter);
             const hasMedicalConsent = !!regDocs.medicalConsent;
-            const requiresPassport = String(trip.tripType || "international").toLowerCase() === "international";
             const docBtnBase = {
               display: "inline-flex", alignItems: "center", gap: 3,
               fontSize: 12, fontWeight: 600, border: "1px solid transparent",
@@ -1231,7 +1294,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                       <AlertCircle size={13} aria-hidden /> Reject
                     </button>
                   )}
-                  <PassportCell participant={p} notify={notify} onChange={onChange} />
+                  {requiresPassport && <PassportCell participant={p} notify={notify} onChange={onChange} />}
                   <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
                     <Trash2 size={14} />
                   </button>
@@ -2078,14 +2141,6 @@ function PaymentTab({ trip, notify }) {
       : null;
   };
 
-  // A trip can have several participants with the same payment-plan index.
-  // Only expose a plan-level link when that index maps to exactly one ledger
-  // row; participant-level rows below provide unambiguous links for groups.
-  const getUniquePlanInstalment = (index) => {
-    const matches = instalments.filter((item) => Number(item.instalmentIndex) === Number(index));
-    return matches.length === 1 ? matches[0] : null;
-  };
-
   const onCopyPortalLink = (url) => {
     navigator.clipboard?.writeText(url)
       .then(() => notify.success("Payment portal link copied"))
@@ -2253,7 +2308,7 @@ function PaymentTab({ trip, notify }) {
               {/* Column header row — only shown when instalments exist. */}
               <div style={{
                 display: "grid",
-                gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 84px 90px",
+                gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 90px",
                 gap: 8,
                 padding: "8px 14px",
                 fontSize: 10,
@@ -2267,15 +2322,12 @@ function PaymentTab({ trip, notify }) {
                 <span>Due date</span>
                 <span>Amount (₹)</span>
                 <span>Reminder (days)</span>
-                <span style={{ textAlign: "center" }}>Payment link</span>
                 <span style={{ textAlign: "right" }}>Actions</span>
               </div>
               {editInstalments.map((ins, idx) => {
-                const planInstalment = getUniquePlanInstalment(idx);
-                const portalUrl = buildInstalmentPortalUrl(planInstalment?.id);
                 return <div key={idx} style={{
                   display: "grid",
-                  gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 84px 90px",
+                  gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 90px",
                   gap: 8,
                   padding: "10px 14px",
                   alignItems: "center",
@@ -2309,18 +2361,6 @@ function PaymentTab({ trip, notify }) {
                     aria-label={`Instalment ${idx + 1} reminder days before due`}
                     title="Days before dueDate to fire reminder (blank = no reminder)"
                   />
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0 }}>
-                    <button
-                      type="button"
-                      onClick={() => portalUrl && onCopyPortalLink(portalUrl)}
-                      disabled={!portalUrl}
-                      style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11, flexShrink: 0, minWidth: 58, justifyContent: "center", opacity: portalUrl ? 1 : 0.45, cursor: portalUrl ? "pointer" : "not-allowed" }}
-                      title={portalUrl || "Generate per-participant instalments to create a payment link"}
-                      aria-label={`Copy instalment ${idx + 1} payment link`}
-                    >
-                      <Link2 size={12} aria-hidden /> Link
-                    </button>
-                  </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
                     <button
                       type="button"

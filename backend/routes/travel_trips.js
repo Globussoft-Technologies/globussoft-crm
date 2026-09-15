@@ -53,6 +53,7 @@ const {
 const digilockerClient = require("../services/digilockerClient");
 const googleDriveClient = require("../services/googleDriveClient");
 const visaDocStore = require("../lib/visaDocStore");
+const { normalizeTripType, tripRequiresPassport } = require("../lib/travelDocumentPolicy");
 const passportOcrClient = require("../services/passportOcrClient");
 const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
@@ -1225,6 +1226,10 @@ router.get(
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
+      if (!tripRequiresPassport(trip.tripType)) {
+        trip.documentRequirements = (trip.documentRequirements || [])
+          .filter((doc) => String(doc.docType || "").toLowerCase() !== "passport");
+      }
       res.json(trip);
     } catch (e) {
       console.error("[travel-trips] get error:", e.message);
@@ -1290,6 +1295,7 @@ router.get(
           returnDate: true,
           status: true,
           legalEntity: true,
+          tripType: true,
           pricePerStudent: true,
         },
       });
@@ -1316,7 +1322,7 @@ router.get(
         }),
         prisma.tripDocumentRequirement.findMany({
           where: { tripId: trip.id },
-          select: { required: true },
+          select: { docType: true, required: true },
         }),
         prisma.roomingAssignment.findMany({
           where: { tripId: trip.id },
@@ -1391,7 +1397,9 @@ router.get(
       // so submittedCount = 0 / missingCount = requirementCount. When
       // a submission tracking column lands, flip this to count rows
       // whose status is the most-restrictive "actually-done" bucket.
-      const requirementCount = docs.filter((d) => d.required).length;
+      const requirementCount = docs.filter((d) => (
+        d.required && (tripRequiresPassport(trip.tripType) || String(d.docType || "").toLowerCase() !== "passport")
+      )).length;
       const submittedCount = 0;
       const missingCount = requirementCount - submittedCount;
 
@@ -1458,6 +1466,7 @@ router.get(
           returnDate: trip.returnDate,
           status: trip.status,
           legalEntity: trip.legalEntity,
+          tripType: trip.tripType,
           pricePerStudent:
             trip.pricePerStudent != null ? Number(trip.pricePerStudent) : null,
         },
@@ -1890,6 +1899,7 @@ async function loadTripWithLandingPage(req) {
       departDate: true,
       returnDate: true,
       legalEntity: true,
+      tripType: true,
       landingPage: true,
     },
   });
@@ -1907,6 +1917,8 @@ async function loadTripWithLandingPage(req) {
 // first edit fills in real content; the seed just needs to be a valid
 // JSON envelope so /p/:slug returns 200 immediately.
 function defaultWanderluxConfig(trip) {
+  const tripType = normalizeTripType(trip.tripType);
+  const requiresPassport = tripRequiresPassport(tripType);
   return {
     theme: {
       primary: "#265855",
@@ -1926,13 +1938,15 @@ function defaultWanderluxConfig(trip) {
       title: "Register your child for this trip",
       subtitle: "Three quick steps — Student, Parent, Passport.",
       mode: "registration-draft",
+      tripType,
       submitText: "Submit registration",
       thankYouMessage: "Thank you — we'll redirect you to verify your phone.",
       steps: [
         { id: "student", title: "Student Information" },
         { id: "parent", title: "Parent Information" },
-        { id: "passport", title: "Passport Information" },
+        ...(requiresPassport ? [{ id: "passport", title: "Passport Information" }] : []),
       ],
+      ...(requiresPassport ? {} : { subtitle: "Two quick steps - Student and Parent." }),
     },
   };
 }
@@ -2090,7 +2104,7 @@ async function loadTrip(req) {
   }
   const trip = await prisma.tmcTrip.findFirst({
     where: { id, tenantId: req.travelTenant.id },
-    select: { id: true },
+    select: { id: true, tripType: true },
   });
   if (!trip) {
     const err = new Error("Trip not found");
@@ -2168,6 +2182,11 @@ router.post(
           );
           skipped += 1;
           continue;
+        }
+        if (!tripRequiresPassport(trip.tripType)) {
+          delete parsedRow.data.passportNumber;
+          delete parsedRow.data.passportExpiry;
+          delete parsedRow.data.passportDocId;
         }
         if (seen.has(parsedRow.naturalKey)) {
           errors.push({
@@ -2324,13 +2343,16 @@ router.post(
       }
 
       const result = await prisma.$transaction(async (tx) => {
+        const passportData = tripRequiresPassport(trip.tripType) ? {
+          passportNumber: passportNumber || null,
+          passportExpiry: passportExpiry ? new Date(passportExpiry) : null,
+          passportDocId: passportDocId ? parseInt(passportDocId, 10) : null,
+        } : {};
         const participant = await tx.tripParticipant.create({
           data: {
             tripId: trip.id,
             fullName: String(fullName),
-            passportNumber: passportNumber || null,
-            passportExpiry: passportExpiry ? new Date(passportExpiry) : null,
-            passportDocId: passportDocId ? parseInt(passportDocId, 10) : null,
+            ...passportData,
             aadhaarLast4: aadhaarLast4 || null,
             aadhaarTokenId: aadhaarTokenId || null,
             parentName: parentName || null,
@@ -2410,7 +2432,7 @@ router.patch(
         "parentEmail",
         "medicalNotes",
         "consentCapturedAt",
-      ];
+      ].filter((key) => tripRequiresPassport(trip.tripType) || !key.startsWith("passport"));
       for (const k of allowed) {
         if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) {
           const v = req.body[k];
@@ -2717,7 +2739,7 @@ router.get(
   verifyRole(["ADMIN", "MANAGER", "USER"]),
   async (req, res) => {
     try {
-      const { draft } = await loadPendingRegistration(req);
+      const { trip, draft } = await loadPendingRegistration(req);
       const { docType } = req.params;
       if (
         ![
@@ -2734,6 +2756,9 @@ router.get(
             error: "Invalid registration document type",
             code: "INVALID_DOC_TYPE",
           });
+      }
+      if (docType === "passport" && !tripRequiresPassport(trip.tripType)) {
+        return res.status(404).json({ error: "This trip does not require passport documents", code: "PASSPORT_NOT_REQUIRED" });
       }
       let extras = {};
       if (draft.extrasJson) {
@@ -2841,6 +2866,7 @@ router.post(
         draftExtras.documents && typeof draftExtras.documents === "object"
           ? draftExtras.documents
           : {};
+      const requiresPassport = tripRequiresPassport(trip.tripType);
 
       // Atomic conversion. One transaction so we never end up with a
       // half-converted draft (participant created but draft not
@@ -2856,8 +2882,10 @@ router.post(
               parentName: draft.parentName,
               parentEmail: draft.parentEmail,
               parentPhone: draft.parentPhone,
-              passportNumber: draft.passportNumber,
-              passportExpiry: draft.passportExpiry,
+              ...(requiresPassport ? {
+                passportNumber: draft.passportNumber,
+                passportExpiry: draft.passportExpiry,
+              } : {}),
               consentCapturedAt: draft.otpVerifiedAt,
               applicationStatus: "approved",
               reviewedAt: new Date(),
@@ -2911,7 +2939,7 @@ router.post(
       // PassportVerificationQueue without blocking the conversion response.
       // Failures are logged and silently swallowed — the operator can always
       // trigger a re-upload via the verification queue's "Clear (re-upload)" action.
-      if (draftDocs.passport?.key) {
+      if (requiresPassport && draftDocs.passport?.key) {
         setImmediate(async () => {
           try {
             const passportDescriptor = draftDocs.passport;
@@ -2927,7 +2955,8 @@ router.post(
               .pop()
               .toLowerCase();
             const mimeType = extMap[ext] || "image/jpeg";
-            // Use travelTenant.id — trip is loaded with select:{id:true} so trip.tenantId is undefined.
+            // Use travelTenant.id because this route's tenant guard is the
+            // authoritative tenant scope for the OCR handoff.
             const tenantId = req.travelTenant?.id;
             let envelope;
             if (buffer) {
@@ -3244,7 +3273,11 @@ router.get(
         where: { tripId: trip.id },
         orderBy: { id: "asc" },
       });
-      res.json({ documents: rows });
+      res.json({
+        documents: tripRequiresPassport(trip.tripType)
+          ? rows
+          : rows.filter((doc) => String(doc.docType || "").toLowerCase() !== "passport"),
+      });
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -3267,6 +3300,9 @@ router.post(
         return res
           .status(400)
           .json({ error: "docType required", code: "MISSING_FIELDS" });
+      }
+      if (String(docType).trim().toLowerCase() === "passport" && !tripRequiresPassport(trip.tripType)) {
+        return res.status(400).json({ error: "Passport is not required for this trip", code: "PASSPORT_NOT_REQUIRED" });
       }
       const created = await prisma.tripDocumentRequirement.create({
         data: {

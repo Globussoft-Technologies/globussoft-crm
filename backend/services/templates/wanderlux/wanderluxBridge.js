@@ -28,6 +28,7 @@
 'use strict';
 
 const { resolveWanderluxThemePreset, mergeWanderluxThemeOverrides } = require('./themePresets');
+const { tripRequiresPassport } = require('../../../lib/travelDocumentPolicy');
 
 // Per-sub-brand theme palettes. The LLM doesn't emit a theme today; we
 // pick one based on subBrand + destination family so each tour ships with
@@ -257,8 +258,8 @@ function defaultCountdownIso(durationDays) {
 /**
  * Detect whether the configured audience describes a STUDENT / school
  * programme — in which case the registration flow needs to capture
- * student details, parent details, and passport-status separately
- * across 3 steps (matches the educational-trip reference). For every
+ * student details and parent details separately. International trips
+ * add passport status as a final step. For every
  * other audience (Travellers / Pilgrims / Families / Honeymooners / …)
  * a single Traveller step suffices.
  *
@@ -274,17 +275,18 @@ function isStudentAudience(audience) {
 /**
  * Build the registration steps for a given audience.
  *
- * Every audience gets a Passport Status step at the end — international
- * tours require visa-eligible passports, and capturing the status up
- * front lets the sales team flag passport issues during the first call
- * instead of weeks before departure.
+ * International audiences get a Passport Status step at the end — those
+ * tours require visa-eligible passports, and capturing the status up front
+ * lets the sales team flag passport issues during the first call instead of
+ * weeks before departure. Domestic and day trips do not collect passport
+ * status.
  *
- * STUDENT audience → 3 steps:
+ * STUDENT audience → 2 steps for domestic/day trips, 3 for international:
  *   1. Student info  (name, grade, school)
  *   2. Parent info   (name, email, phone)
  *   3. Passport info (select: valid / expires / not obtained)
  *
- * Everything else → 2 steps:
+ * Everything else → 1 step for domestic/day trips, 2 for international:
  *   1. Traveller   (name, email, phone)
  *   2. Passport    (select: valid / expires / not obtained)
  *
@@ -293,10 +295,9 @@ function isStudentAudience(audience) {
  */
 function buildRegisterFlow(audience, tripType = 'international') {
   const isStudent = isStudentAudience(audience);
-  const normalizedTripType = String(tripType).toLowerCase().trim().replace(/[- ]/g, '_');
-  const isDomestic = normalizedTripType === 'domestic' || normalizedTripType === 'day_trip';
+  const isDomestic = !tripRequiresPassport(tripType);
 
-  // Universal Passport step — same shape for every audience. The
+  // International-only Passport step — same shape for every audience. The
   // question wording shifts subtly (child vs traveller) but the field
   // name + option set are identical so server-side analytics aggregate
   // cleanly across audiences.
@@ -709,10 +710,9 @@ function mapBlocksToWanderluxConfig(blocks, input) {
       note: 'A detailed cost sheet is shared on enquiry.',
     } : null,
     register: (() => {
-      // Audience-aware registration flow. School / student programmes
-      // get a 3-step form (student info → parent info → passport status);
-      // every other audience gets the single Traveller step. See
-      // buildRegisterFlow for the keyword list.
+      // Audience-aware registration flow. School / student programmes get
+      // student + parent steps, with passport status added only for
+      // international trips. See buildRegisterFlow for the keyword list.
       const flow = buildRegisterFlow(audience, input.tripType);
       return {
       eyebrow: 'Reserve Your Seat',

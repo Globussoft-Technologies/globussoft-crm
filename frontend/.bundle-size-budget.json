@@ -3,11 +3,11 @@
   "//generated-on": "2026-05-02 — initial baseline + 30-50% headroom for organic growth",
   "//baseline": {
     "vendor-charts": "415 KB",
-    "vendor-react":  "175 KB",
-    "index":         "132 KB",
-    "vendor-flow":   "132 KB",
-    "vendor-icons":   "68 KB",
-    "all-js-total":  "~2 MB",
+    "vendor-react": "175 KB",
+    "index": "132 KB",
+    "vendor-flow": "132 KB",
+    "vendor-icons": "68 KB",
+    "all-js-total": "~2 MB",
     "all-css-total": "varies; ~150 KB"
   },
 

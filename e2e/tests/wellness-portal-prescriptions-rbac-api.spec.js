@@ -1,13 +1,17 @@
 // @ts-check
 /**
- * Wellness patient-portal prescription RBAC — pins the `my_prescriptions.read`
- * permission contract introduced in v3.8.x.
+ * Wellness patient-portal prescription + consent RBAC — pins the
+ * `my_prescriptions.read` and read-only `consents.read` contracts.
  *
  * Surface under test:
  *   GET /api/wellness/portal/me/permissions  — patient-token gated, returns
  *                                              tenant's CUSTOMER role grants
  *   GET /api/wellness/portal/prescriptions       — gated on my_prescriptions.read
  *   GET /api/wellness/portal/prescriptions/:id/pdf — same gate
+ *   GET /api/wellness/portal/consents             — gated on consents.read
+ *   GET /api/wellness/portal/consents/:id/pdf     — same gate + patient scope
+ *   GET /api/wellness/portal/signatures/:id/pdf   — synced signed e-sign PDF
+ *   GET /api/signatures/:id/pdf                  — staff PDF for same request
  *
  * Why a dedicated permission: pre-fix the patient portal endpoints were
  * gated only on `verifyPatientToken` (any valid patient JWT got every
@@ -29,6 +33,10 @@
  *   5. Toggle: ADMIN revokes my_prescriptions.read from the CUSTOMER role,
  *      portal Rx endpoint returns 403 PORTAL_RBAC_DENIED, ADMIN re-grants,
  *      endpoint returns 200 again.
+ *   6. With consents.read: consent list returns only signed rows for the
+ *      requesting patient.
+ *   7. With consents.read: the requesting patient can fetch the PDF.
+ *   8. A foreign consent PDF returns 404.
  *
  * Demo environment:
  *   - WELLNESS_DEMO_OTP=1234 + WELLNESS_DEMO_OTP_PHONES allowlist (#238/#292)
@@ -65,6 +73,8 @@ let demoPatientId = 0;
 let seededRxId = 0;
 let otherPatientId = 0;
 let otherRxId = 0;
+let seededConsentId = 0;
+let otherConsentId = 0;
 let customerRoleId = 0;
 
 const staffAuth = () => ({ Authorization: `Bearer ${staffToken}` });
@@ -143,6 +153,20 @@ test.beforeAll(async ({ request }) => {
     }
   }
 
+  // Seed a signed consent for the portal patient's consent-list/PDF tests.
+  const consent = await request.post(`${API}/wellness/consents`, {
+    headers: { ...staffAuth(), 'Content-Type': 'application/json' },
+    data: {
+      patientId: demoPatientId,
+      templateName: 'general',
+      signatureSvg: `data:image/png;base64,${'A'.repeat(900)}`,
+    },
+  });
+  if (consent.ok()) {
+    const consentBody = await safeJson(consent);
+    if (consentBody && consentBody.id) seededConsentId = consentBody.id;
+  }
+
   // Seed a SECOND patient + Rx for the cross-patient test.
   const otherCreate = await request.post(`${API}/wellness/patients`, {
     headers: { ...staffAuth(), 'Content-Type': 'application/json' },
@@ -183,6 +207,19 @@ test.beforeAll(async ({ request }) => {
           }
         }
       }
+    }
+
+    const otherConsent = await request.post(`${API}/wellness/consents`, {
+      headers: { ...staffAuth(), 'Content-Type': 'application/json' },
+      data: {
+        patientId: otherPatientId,
+        templateName: 'general',
+        signatureSvg: `data:image/png;base64,${'B'.repeat(900)}`,
+      },
+    });
+    if (otherConsent.ok()) {
+      const otherConsentBody = await safeJson(otherConsent);
+      if (otherConsentBody && otherConsentBody.id) otherConsentId = otherConsentBody.id;
     }
   }
 
@@ -280,6 +317,83 @@ test.describe('GET /api/wellness/portal/prescriptions/:id/pdf — RBAC + cross-p
     );
     // Hardcoded handler scope: `where: { id, patientId: req.patient.id }`.
     // Foreign Rx → findFirst returns null → 404, NOT 200, NOT 500.
+    expect(res.status()).toBe(404);
+  });
+});
+
+test.describe('GET /api/wellness/portal/consents — read-only patient access', () => {
+  async function requireConsentRead(request) {
+    const permsRes = await request.get(`${API}/wellness/portal/me/permissions`, {
+      headers: portalAuth(),
+    });
+    const permsBody = await permsRes.json();
+    test.skip(
+      !(permsBody.permissions || []).includes('consents.read'),
+      'consents.read not yet granted to CUSTOMER on this tenant',
+    );
+  }
+
+  test('returns only the requesting patient\'s signed consents', async ({ request }) => {
+    test.skip(!portalToken, 'portal token unavailable');
+    test.skip(!seededConsentId, 'seeded consent unavailable');
+    await requireConsentRead(request);
+
+    const res = await request.get(`${API}/wellness/portal/consents`, {
+      headers: portalAuth(),
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.some((consent) => consent.id === seededConsentId)).toBeTruthy();
+    for (const consentRow of body) expect(consentRow.patientId).toBe(demoPatientId);
+  });
+
+  test('returns application/pdf for a consent belonging to the requesting patient', async ({ request }) => {
+    test.skip(!portalToken, 'portal token unavailable');
+    test.skip(!seededConsentId, 'seeded consent unavailable');
+    await requireConsentRead(request);
+
+    const res = await request.get(`${API}/wellness/portal/consents/${seededConsentId}/pdf`, {
+      headers: portalAuth(),
+    });
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toMatch(/application\/pdf/);
+  });
+
+  test('returns a PDF for a synced signed patient e-signature', async ({ request }) => {
+    test.skip(!portalToken, 'portal token unavailable');
+    await requireConsentRead(request);
+
+    const list = await request.get(`${API}/wellness/portal/consents`, {
+      headers: portalAuth(),
+    });
+    expect(list.status()).toBe(200);
+    const synced = (await list.json()).find((consent) => consent.source === 'signature');
+    test.skip(!synced, 'no signed patient e-signature is available in the demo fixture');
+
+    const portalPdf = await request.get(
+      `${API}/wellness/portal/signatures/${synced.signatureRequestId}/pdf`,
+      { headers: portalAuth() },
+    );
+    expect(portalPdf.status()).toBe(200);
+    expect(portalPdf.headers()['content-type']).toMatch(/application\/pdf/);
+
+    const staffPdf = await request.get(
+      `${API}/signatures/${synced.signatureRequestId}/pdf`,
+      { headers: staffAuth() },
+    );
+    expect(staffPdf.status()).toBe(200);
+    expect(staffPdf.headers()['content-type']).toMatch(/application\/pdf/);
+  });
+
+  test('returns 404 for a consent belonging to a different patient', async ({ request }) => {
+    test.skip(!portalToken, 'portal token unavailable');
+    test.skip(!otherConsentId, 'other patient consent unavailable');
+    await requireConsentRead(request);
+
+    const res = await request.get(`${API}/wellness/portal/consents/${otherConsentId}/pdf`, {
+      headers: portalAuth(),
+    });
     expect(res.status()).toBe(404);
   });
 });

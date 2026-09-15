@@ -47,15 +47,7 @@ router.use(async (req, res, next) => {
 
 const VALID_TABLE_KEYS = new Set(["leads", "contacts"]);
 function normalizeVisibleColumnsForTable(tableKey, visible) {
-  const next = Array.isArray(visible) ? [...visible] : [];
-  // Tags has historically been a default Leads column. Preserve it when
-  // reading preferences saved before the column was introduced.
-  if (tableKey === "leads" && !next.includes("tags")) {
-    const sourceIndex = next.indexOf("source");
-    const insertAt = sourceIndex >= 0 ? sourceIndex + 1 : next.length;
-    next.splice(insertAt, 0, "tags");
-  }
-  return next;
+  return Array.isArray(visible) ? [...visible] : [];
 }
 // Built-in columns per table — key + label. Kept in one place so the
 // frontend doesn't need to hardcode its own copy; the API is the source of

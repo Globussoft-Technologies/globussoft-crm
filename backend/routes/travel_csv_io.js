@@ -841,7 +841,7 @@ router.get("/seasons/export.csv", verifyToken, requireTravelTenant, async (req, 
 
     const rows = await prisma.travelSeasonCalendar.findMany({
       where,
-      orderBy: [{ subBrand: "asc" }, { startDate: "asc" }],
+      orderBy: [{ subBrand: "asc" }, { startDate: "asc" }, { id: "asc" }],
       take: 5000,
     });
     const csv = serializeRows(SEASON_COLS, rows);
@@ -1071,7 +1071,7 @@ router.get("/markup-rules/export.csv", verifyToken, requireTravelTenant, async (
 
     const rows = await prisma.travelMarkupRule.findMany({
       where,
-      orderBy: [{ subBrand: "asc" }, { priority: "asc" }],
+      orderBy: [{ subBrand: "asc" }, { priority: "asc" }, { id: "asc" }],
       take: 5000,
     });
     const csv = serializeRows(MARKUP_RULE_COLS, rows);

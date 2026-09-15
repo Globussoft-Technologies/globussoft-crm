@@ -375,6 +375,7 @@ const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const { quote: composeQuote } = require("../lib/travelPricing");
 const listProjection = require("../lib/listProjection");
 const { writeAudit } = require("../lib/audit");
+const { createTravelInvoiceWithNumber } = require("../lib/travelInvoiceNumber");
 // G124 (Master PRD A3 residual) — per-document view/download/share audit
 // helper. Drops a discrete DOCUMENT_VIEW / DOCUMENT_DOWNLOAD / DOCUMENT_SHARE
 // row alongside the entity-shaped writeAudit rows so the audit-viewer can
@@ -536,21 +537,6 @@ async function notifyCustomerPaymentConfirmation(itin, paidMajor, balanceDue, po
   }
 }
 
-// Per-tenant sequential invoice number — TINV-YYYY-NNNN. Mirrors
-// routes/travel_invoices.js nextInvoiceNum so the public-payment invoices share
-// the same series/format as operator-created ones (4-digit zero-pad keeps the
-// invoiceNum-desc ordering correct).
-async function nextTravelInvoiceNum(tenantId) {
-  const year = new Date().getFullYear();
-  const latest = await prisma.travelInvoice.findFirst({
-    where: { tenantId, invoiceNum: { startsWith: `TINV-${year}-` } },
-    orderBy: { invoiceNum: "desc" },
-    select: { invoiceNum: true },
-  });
-  const latestSerial = latest ? parseInt(String(latest.invoiceNum).split("-")[2], 10) || 0 : 0;
-  return `TINV-${year}-${String(latestSerial + 1).padStart(4, "0")}`;
-}
-
 // Create / refresh the Invoices-ledger record for an itinerary payment — ONE
 // evolving invoice per itinerary (found via the itineraryId link):
 //   - first payment → creates a TravelInvoice (status Partial when a balance
@@ -589,32 +575,23 @@ async function upsertPaymentInvoice(itin, paidMajor, balanceDue) {
       return;
     }
 
-    // First payment → mint a new invoice. Retry on the (rare) invoiceNum race.
-    let invoice = null;
-    for (let attempt = 0; attempt < 4 && !invoice; attempt += 1) {
-      const invoiceNum = await nextTravelInvoiceNum(itin.tenantId);
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        invoice = await prisma.travelInvoice.create({
-          data: {
-            tenantId: itin.tenantId,
-            subBrand: itin.subBrand,
-            contactId: itin.contactId,
-            itineraryId: itin.id,
-            invoiceNum,
-            status: fullyPaid ? "Paid" : "Partial",
-            totalAmount: total,
-            currency: cur,
-            docType: "TaxInvoice",
-            dueDate: fullyPaid ? null : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-            paidAt: fullyPaid ? now : null,
-          },
-        });
-      } catch (e) {
-        if (e.code !== "P2002") throw e; // not a dup-invoiceNum race → bubble to outer catch
-      }
-    }
-    if (!invoice) return;
+    // First payment → mint a new invoice from the same atomic tenant/year
+    // sequence used by operator-created and quote-created invoices.
+    const invoice = await createTravelInvoiceWithNumber(
+      prisma,
+      itin.tenantId,
+      {
+        subBrand: itin.subBrand,
+        contactId: itin.contactId,
+        itineraryId: itin.id,
+        status: fullyPaid ? "Paid" : "Partial",
+        totalAmount: total,
+        currency: cur,
+        docType: "TaxInvoice",
+        dueDate: fullyPaid ? null : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        paidAt: fullyPaid ? now : null,
+      },
+    );
 
     // One line describing what was booked (the chosen flight / trip).
     const items = await prisma.itineraryItem.findMany({ where: { itineraryId: itin.id } }).catch(() => []);

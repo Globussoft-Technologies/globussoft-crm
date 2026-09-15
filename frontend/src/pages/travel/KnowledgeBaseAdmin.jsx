@@ -63,6 +63,7 @@ export default function KnowledgeBaseAdmin() {
   const [filesPage, setFilesPage] = useState(1);
   const [filesPageSize, setFilesPageSize] = useState(DEFAULT_FILES_PAGE_SIZE);
   const filesPageSizeRef = useRef(DEFAULT_FILES_PAGE_SIZE);
+  const filesRequestRef = useRef({ id: 0, key: null });
   const [filesLoadingPage, setFilesLoadingPage] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -231,17 +232,27 @@ export default function KnowledgeBaseAdmin() {
   };
 
   const loadFilesPage = async (page, pageSize = filesPageSizeRef.current) => {
+    const requestKey = `${page}:${pageSize}`;
+    if (filesRequestRef.current.key === requestKey) return;
+    const requestId = filesRequestRef.current.id + 1;
+    filesRequestRef.current = { id: requestId, key: requestKey };
     setFilesLoadingPage(true);
     try {
       const res = await fetchApi(`/api/travel/knowledge-base/files?limit=${pageSize}&offset=${(page - 1) * pageSize}`, { silent: true });
-      setFiles(res?.files || []);
-      setFilesTotal(res?.total || filesTotal);
+      if (filesRequestRef.current.id !== requestId) return;
+      setFiles(res?.files ?? []);
+      setFilesTotal(res?.total ?? 0);
       setFilesPage(page);
       setSelectedFileIds(new Set());
     } catch (e) {
-      notify.error(e.message || 'Failed to load files');
+      if (filesRequestRef.current.id === requestId) {
+        notify.error(e.message || 'Failed to load files');
+      }
     } finally {
-      setFilesLoadingPage(false);
+      if (filesRequestRef.current.id === requestId) {
+        filesRequestRef.current = { id: requestId, key: null };
+        setFilesLoadingPage(false);
+      }
     }
   };
 

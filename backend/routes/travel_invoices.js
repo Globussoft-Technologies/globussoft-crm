@@ -100,10 +100,7 @@ const {
 } = require("../lib/travelInvoiceReconciliation");
 // Sub-brand → legal-entity / GSTIN resolution (Q21 config blob on Tenant).
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
-const {
-  createTravelInvoiceWithNumber,
-  nextTravelInvoiceNum,
-} = require("../lib/travelInvoiceNumber");
+const { createTravelInvoiceWithNumber } = require("../lib/travelInvoiceNumber");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 const invoiceReconcileUpload = multer({
@@ -353,20 +350,6 @@ function parseDueDate(input) {
 }
 
 /**
- * Atomic per-tenant invoice-number generator. Format: TINV-YYYY-NNNN.
- * The serial resets each calendar year; lookup is scoped to (tenantId,
- * invoiceNum LIKE "TINV-YYYY-%") so cross-year reuse never collides.
- *
- * Race safety: wrapped in $transaction so two concurrent POSTs read the
- * same "latest" and assign distinct serials. The @@unique on the schema
- * is the second-line backstop if the transaction's isolation level
- * permits a phantom read on a particular MySQL config.
- */
-async function nextInvoiceNum(tenantId) {
-  return nextTravelInvoiceNum(prisma, tenantId);
-}
-
-/**
  * #901 slice 5 — Per-sub-brand per-fiscal-year invoice serial helper.
  *
  * Coexists with nextInvoiceNum (which keeps the create-time TINV-YYYY-NNNN
@@ -548,7 +531,7 @@ router.get(
       const isSummary = req.query.fields === "summary";
       const findManyArgs = {
         where,
-        orderBy: [{ createdAt: "desc" }],
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take,
         skip,
       };
@@ -9069,11 +9052,6 @@ router.post(
           ? parsedOverride
           : new Date(Date.now() + 30 * 86_400_000);
 
-      // Fresh invoice number — slice-5 per-sub-brand serial only applies
-      // at Draft→Issued; the clone is born Draft so we use the legacy
-      // nextInvoiceNum (TINV-YYYY-NNNN scheme).
-      const newInvoiceNum = await nextInvoiceNum(req.travelTenant.id);
-
       // Load source lines BEFORE creating the new invoice — minimises
       // the window where a half-cloned invoice could exist if the
       // line duplication fails.
@@ -9083,10 +9061,8 @@ router.post(
       });
 
       const newInvoiceData = {
-        tenantId: req.travelTenant.id,
         subBrand: source.subBrand,
         contactId: source.contactId,
-        invoiceNum: newInvoiceNum,
         status: "Draft",
         totalAmount: source.totalAmount,
         currency: source.currency,
@@ -9113,7 +9089,11 @@ router.post(
         newInvoiceData.tcsAppliedAt = source.tcsAppliedAt;
       }
 
-      const created = await prisma.travelInvoice.create({ data: newInvoiceData });
+      const created = await createTravelInvoiceWithNumber(
+        prisma,
+        req.travelTenant.id,
+        newInvoiceData,
+      );
 
       // Clone lines via createMany — preserves all per-line fields
       // (lineType, description, qty, unitPrice, amount, currency,

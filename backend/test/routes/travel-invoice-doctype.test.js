@@ -55,6 +55,10 @@ prisma.travelInvoice = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.travelInvoiceSequence = {
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
 prisma.travelInvoiceLine = {
   findMany: vi.fn().mockResolvedValue([]),
   findFirst: vi.fn(),
@@ -136,11 +140,16 @@ function sourceInvoice(overrides = {}) {
 }
 
 beforeEach(() => {
+  let sequenceSerial = 0;
   prisma.travelInvoice.findFirst.mockReset();
   prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.count.mockReset().mockResolvedValue(0);
   prisma.travelInvoice.create.mockReset();
   prisma.travelInvoice.update.mockReset();
+  prisma.travelInvoiceSequence.findUnique.mockReset().mockResolvedValue({ lastSerial: 0 });
+  prisma.travelInvoiceSequence.upsert.mockReset().mockImplementation(async () => ({
+    lastSerial: ++sequenceSerial,
+  }));
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });

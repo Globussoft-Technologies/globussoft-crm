@@ -151,6 +151,7 @@ describe('GET /api/travel/seasons', () => {
     expect(prisma.travelSeasonCalendar.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { tenantId: 1 },
+        orderBy: [{ subBrand: 'asc' }, { startDate: 'asc' }, { id: 'asc' }],
         take: 200,
       }),
     );
@@ -334,6 +335,7 @@ describe('GET /api/travel/markup-rules', () => {
         where: expect.objectContaining({
           tenantId: 1, scope: 'hotel', isActive: true,
         }),
+        orderBy: [{ subBrand: 'asc' }, { priority: 'asc' }, { id: 'asc' }],
       }),
     );
   });

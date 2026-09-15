@@ -5,47 +5,57 @@ function serialFromInvoiceNum(invoiceNum, year) {
   return Number.isSafeInteger(serial) ? serial : null;
 }
 
-async function nextTravelInvoiceNum(prisma, tenantId, date = new Date()) {
-  const year = date.getFullYear();
-  const prefix = `TINV-${year}-`;
+async function highestCanonicalSerial(prisma, tenantId, year) {
   const rows = await prisma.travelInvoice.findMany({
-    where: { tenantId, invoiceNum: { startsWith: prefix } },
+    where: { tenantId, invoiceNum: { startsWith: `TINV-${year}-` } },
     select: { invoiceNum: true },
   });
-  const highestSerial = rows.reduce((highest, row) => {
+  return rows.reduce((highest, row) => {
     const serial = serialFromInvoiceNum(row.invoiceNum, year);
     return serial == null ? highest : Math.max(highest, serial);
   }, 0);
-  return `${prefix}${String(highestSerial + 1).padStart(4, "0")}`;
 }
 
-function isInvoiceNumberConflict(error) {
-  if (error?.code !== "P2002") return false;
-  const target = Array.isArray(error?.meta?.target)
-    ? error.meta.target.join(",")
-    : String(error?.meta?.target || error?.message || "");
-  return target.includes("invoiceNum") || target.includes("TravelInvoice_tenantId_invoiceNum_key");
+async function nextTravelInvoiceNum(prisma, tenantId, date = new Date()) {
+  const year = date.getUTCFullYear();
+  const prefix = `TINV-${year}-`;
+  const sequence = await prisma.travelInvoiceSequence.findUnique({
+    where: { tenantId_year: { tenantId, year } },
+    select: { lastSerial: true },
+  });
+  const lastSerial = sequence?.lastSerial ?? await highestCanonicalSerial(prisma, tenantId, year);
+  return `${prefix}${String(lastSerial + 1).padStart(4, "0")}`;
 }
 
 async function createTravelInvoiceWithNumber(prisma, tenantId, data, options = {}) {
-  const maxAttempts = options.maxAttempts || 5;
-  let lastError;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const invoiceNum = await nextTravelInvoiceNum(prisma, tenantId, options.date);
-    try {
-      return await prisma.travelInvoice.create({
-        data: { ...data, tenantId, invoiceNum },
-      });
-    } catch (error) {
-      if (!isInvoiceNumberConflict(error)) throw error;
-      lastError = error;
-    }
-  }
-  throw lastError;
+  const year = (options.date || new Date()).getUTCFullYear();
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.travelInvoiceSequence.findUnique({
+      where: { tenantId_year: { tenantId, year } },
+      select: { lastSerial: true },
+    });
+    // Production currently applies additive schema changes with `prisma db
+    // push`, which creates the sequence table but does not execute migration
+    // seed SQL. Bootstrap once from canonical legacy numbers when needed.
+    const legacySerial = existing
+      ? 0
+      : await highestCanonicalSerial(tx, tenantId, year);
+    const sequence = await tx.travelInvoiceSequence.upsert({
+      where: { tenantId_year: { tenantId, year } },
+      create: { tenantId, year, lastSerial: legacySerial + 1 },
+      update: { lastSerial: { increment: 1 } },
+      select: { lastSerial: true },
+    });
+    const invoiceNum = `TINV-${year}-${String(sequence.lastSerial).padStart(4, "0")}`;
+    return tx.travelInvoice.create({
+      data: { ...data, tenantId, invoiceNum },
+    });
+  });
 }
 
 module.exports = {
   createTravelInvoiceWithNumber,
+  highestCanonicalSerial,
   nextTravelInvoiceNum,
   serialFromInvoiceNum,
 };

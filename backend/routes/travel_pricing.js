@@ -101,7 +101,7 @@ router.get("/seasons", verifyToken, requireTravelTenant, async (req, res) => {
     if (toExclusive) where.startDate = { lt: toExclusive };
     const rows = await prisma.travelSeasonCalendar.findMany({
       where,
-      orderBy: [{ subBrand: "asc" }, { startDate: "asc" }],
+      orderBy: [{ subBrand: "asc" }, { startDate: "asc" }, { id: "asc" }],
       take: parseListLimit(req.query.limit),
       skip: parseListOffset(req.query.offset),
     });
@@ -288,7 +288,7 @@ router.get("/markup-rules", verifyToken, requireTravelTenant, async (req, res) =
 
     const rows = await prisma.travelMarkupRule.findMany({
       where,
-      orderBy: [{ subBrand: "asc" }, { priority: "asc" }],
+      orderBy: [{ subBrand: "asc" }, { priority: "asc" }, { id: "asc" }],
       take: parseListLimit(req.query.limit),
       skip: parseListOffset(req.query.offset),
     });

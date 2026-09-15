@@ -461,7 +461,7 @@ router.get("/files", verifyToken, requireTravelTenant, async (req, res) => {
     const [files, total] = await Promise.all([
       prisma.travelKnowledgeBaseFile.findMany({
         where,
-        orderBy: { indexedAt: "desc" },
+        orderBy: [{ indexedAt: "desc" }, { id: "desc" }],
         take,
         skip,
       }),

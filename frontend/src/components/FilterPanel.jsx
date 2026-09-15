@@ -20,6 +20,15 @@ import CalendarRangePicker from "./CalendarRangePicker";
 // own; "Add filter" re-opens the field-picker screen. `onChange` receives
 // the full filters array — `[{field, operator, values, label, valueLabels}]`
 // — on every add/remove so the host page can refetch immediately.
+//
+// When the drawer is opened while filters already exist it lands directly
+// on the applied fields' full option lists (one field → that field's
+// options screen; several → a stacked summary of every applied field)
+// with the checked values preserved. Back returns to the field list.
+// Sentinel `activeField` value for the stacked "all applied filters" view.
+// Never a real field key — `fieldsUrl`/`valuesUrl` are never called with it.
+const SUMMARY_VIEW = "__applied_filters__";
+
 export default function FilterPanel({
   fieldsUrl,
   valuesUrl,
@@ -56,6 +65,8 @@ export default function FilterPanel({
   const [fieldSearch, setFieldSearch] = useState(""); // filters the field-picker list
   const [valueSearch, setValueSearch] = useState(""); // filters the checkbox-value list
   const [dateRange, setDateRange] = useState({ from: "", to: "" }); // date-kind fields only
+  const [summaryDrafts, setSummaryDrafts] = useState({}); // stacked view: { [field]: { label, kind, operator, checked, dateRange } }
+  const [summaryValueSearch, setSummaryValueSearch] = useState(""); // shared option search for the stacked view
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const panelRef = useRef(null);
@@ -64,23 +75,13 @@ export default function FilterPanel({
   const closePanel = useCallback(() => {
     setOpen(false);
     setActiveField(null);
+    setSummaryDrafts({});
+    setSummaryValueSearch("");
     onClose?.();
   }, [onClose]);
 
-  const chooseField = useCallback(
-    async (field, meta = {}) => {
-      const chosenKind =
-        meta.kind || fields.find((f) => f.field === field)?.kind || "text";
-      setActiveField(field);
-      // A date field is picked on a calendar, so it opens on `between` rather
-      // than the substring/checkbox operators the other kinds default to.
-      setOperator(chosenKind === "date" ? "between" : "contains");
-      setChecked([]);
-      setValueSearch("");
-      setDateRange({ from: "", to: "" });
-      // Date fields never show a value list â€” there is nothing to fetch.
-      if (chosenKind === "date") return;
-      if (valuesByField[field]) return;
+  const fetchValuesFor = useCallback(
+    async (field) => {
       setValuesLoading(true);
       try {
         const data = await fetchApi(valuesUrl(field), { silent: true });
@@ -91,8 +92,89 @@ export default function FilterPanel({
         setValuesLoading(false);
       }
     },
-    [fields, valuesByField, valuesUrl],
+    [valuesUrl],
   );
+
+  const chooseField = useCallback(
+    async (field, meta = {}) => {
+      const chosenKind =
+        meta.kind || fields.find((f) => f.field === field)?.kind || "text";
+      setActiveField(field);
+      const existing = (filters || []).find((f) => f.field === field);
+      // Restore the applied filter so the selection persists across
+      // close/reopen until the user explicitly removes or replaces it.
+      if (existing) {
+        setOperator(
+          existing.operator || (chosenKind === "date" ? "between" : "contains"),
+        );
+        setChecked(
+          Array.isArray(existing.values) &&
+            (existing.operator === "contains" ||
+              existing.operator === "not_contains")
+            ? [...existing.values]
+            : [],
+        );
+        setDateRange(
+          existing.operator === "between" && Array.isArray(existing.values)
+            ? {
+                from: existing.values[0] || "",
+                to: existing.values[1] || "",
+              }
+            : { from: "", to: "" },
+        );
+      } else {
+        // A date field is picked on a calendar, so it opens on `between` rather
+        // than the substring/checkbox operators the other kinds default to.
+        setOperator(chosenKind === "date" ? "between" : "contains");
+        setChecked([]);
+        setDateRange({ from: "", to: "" });
+      }
+      setValueSearch("");
+      // Date fields never show a value list — there is nothing to fetch.
+      if (chosenKind === "date") return;
+      // Smart-open paths pass `force` because the open-effect clears the
+      // value cache on every open — a stale closure hit would skip the
+      // fetch and leave the options list empty.
+      if (!meta.force && valuesByField[field]) return;
+      await fetchValuesFor(field);
+    },
+    [fields, filters, valuesByField, fetchValuesFor],
+  );
+
+  // Stacked view for several applied filters: one draft per field, each
+  // seeded from its applied filter so every option list opens with the
+  // previously selected values still checked.
+  const openSummary = useCallback(() => {
+    const list = filters || [];
+    const drafts = {};
+    for (const f of list) {
+      const op = f.operator || (f.kind === "date" ? "between" : "contains");
+      drafts[f.field] = {
+        label: f.label || f.field,
+        kind: f.kind || "text",
+        operator: op,
+        checked:
+          Array.isArray(f.values) &&
+          (op === "contains" || op === "not_contains")
+            ? [...f.values]
+            : [],
+        dateRange:
+          op === "between" && Array.isArray(f.values)
+            ? { from: f.values[0] || "", to: f.values[1] || "" }
+            : { from: "", to: "" },
+      };
+    }
+    setSummaryDrafts(drafts);
+    setSummaryValueSearch("");
+    setActiveField(SUMMARY_VIEW);
+    setFieldSearch("");
+    // Always refetch — the open-effect wipes the value cache, so a
+    // closure-cache hit here would render an empty options list.
+    for (const f of list) {
+      if ((f.kind || "text") === "date") continue;
+      fetchValuesFor(f.field);
+    }
+  }, [filters, fetchValuesFor]);
 
   const openFieldPicker = useCallback(() => {
     setOpen(true);
@@ -100,9 +182,29 @@ export default function FilterPanel({
       chooseField(fieldKey, { kind: fieldKind });
       return;
     }
+    const list = filters || [];
+    // Reopening with filters lands directly on the applied fields'
+    // complete option lists instead of the field picker.
+    if (list.length === 1) {
+      setFieldSearch("");
+      chooseField(list[0].field, { kind: list[0].kind, force: true });
+      return;
+    }
+    if (list.length > 1) {
+      openSummary();
+      return;
+    }
+    setActiveField(null);
+    setSummaryDrafts({});
+    setFieldSearch("");
+  }, [chooseField, fieldKey, fieldKind, filters, isSingleFieldMode, openSummary]);
+
+  // "Add filter" always starts from the full field list.
+  const openFieldList = useCallback(() => {
+    setOpen(true);
     setActiveField(null);
     setFieldSearch("");
-  }, [chooseField, fieldKey, fieldKind, isSingleFieldMode]);
+  }, []);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -178,17 +280,33 @@ export default function FilterPanel({
     !isDateField && (operator === "contains" || operator === "not_contains");
   const needsRange = operator === "between";
 
+  const existingFilter = activeField
+    ? (filters || []).find((f) => f.field === activeField)
+    : null;
   // Apply stays disabled until the chosen operator actually has an input:
   // checkbox operators need a tick, `between` needs at least one end of the
-  // range. The empty/not-empty operators need neither.
+  // range. The empty/not-empty operators need neither. When the field already
+  // has an applied filter, Apply stays enabled with empty input so unticking
+  // everything removes that filter instead of dead-ending on a disabled button.
   const applyDisabled =
-    (needsValues && checked.length === 0) ||
-    (needsRange && !dateRange.from && !dateRange.to);
+    ((needsValues && checked.length === 0) ||
+      (needsRange && !dateRange.from && !dateRange.to)) &&
+    !existingFilter;
 
   const applyFilter = () => {
     if (!activeField) return;
-    if (needsValues && checked.length === 0) return;
-    if (needsRange && !dateRange.from && !dateRange.to) return;
+    if (
+      (needsValues && checked.length === 0) ||
+      (needsRange && !dateRange.from && !dateRange.to)
+    ) {
+      if (existingFilter) {
+        onChange(filters.filter((f) => f.field !== activeField));
+        setOpen(false);
+        setActiveField(null);
+        onClose?.();
+      }
+      return;
+    }
     const fieldMeta =
       currentFieldMeta || fields.find((f) => f.field === activeField);
     const options = valuesByField[activeField] || [];
@@ -224,6 +342,94 @@ export default function FilterPanel({
 
   const removeFilter = (field) =>
     onChange(filters.filter((f) => f.field !== field));
+
+  const toggleSummaryValue = (field, value) => {
+    setSummaryDrafts((prev) => {
+      const d = prev[field];
+      if (!d) return prev;
+      const has = d.checked.includes(value);
+      return {
+        ...prev,
+        [field]: {
+          ...d,
+          checked: has
+            ? d.checked.filter((v) => v !== value)
+            : [...d.checked, value],
+        },
+      };
+    });
+  };
+
+  const setSummaryOperator = (field, op) => {
+    setSummaryDrafts((prev) =>
+      prev[field] ? { ...prev, [field]: { ...prev[field], operator: op } } : prev,
+    );
+  };
+
+  const setSummaryRange = (field, range) => {
+    setSummaryDrafts((prev) =>
+      prev[field]
+        ? {
+            ...prev,
+            [field]: {
+              ...prev[field],
+              dateRange: { from: range?.from || "", to: range?.to || "" },
+            },
+          }
+        : prev,
+    );
+  };
+
+  const removeSummaryFilter = (field) => {
+    onChange((filters || []).filter((f) => f.field !== field));
+    setSummaryDrafts((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  // Applies every stacked draft at once. A draft cleared to no input is
+  // dropped (same deselect-removes contract as the single-field Apply),
+  // so unticking everything removes that filter.
+  const applySummary = () => {
+    const next = [];
+    for (const [field, d] of Object.entries(summaryDrafts)) {
+      const needsV =
+        d.kind !== "date" &&
+        (d.operator === "contains" || d.operator === "not_contains");
+      const needsR = d.operator === "between";
+      if (needsV && d.checked.length === 0) continue;
+      if (needsR && !d.dateRange.from && !d.dateRange.to) continue;
+      const options = valuesByField[field] || [];
+      let values = [];
+      let labels = [];
+      if (needsR) {
+        values = [d.dateRange.from || "", d.dateRange.to || ""];
+        labels = [[d.dateRange.from, d.dateRange.to].filter(Boolean).join(" → ")];
+      } else if (needsV) {
+        values = d.checked;
+        labels = d.checked.map(
+          (v) => options.find((o) => o.value === v)?.label || v,
+        );
+      }
+      next.push({
+        field,
+        label: d.label || field,
+        kind: d.kind || "text",
+        operator: d.operator,
+        values,
+        valueLabels: labels,
+      });
+    }
+    onChange(next);
+    setOpen(false);
+    setActiveField(null);
+    setSummaryDrafts({});
+    setSummaryValueSearch("");
+    onClose?.();
+  };
 
   const backToFieldList = () => setActiveField(null);
 
@@ -362,7 +568,290 @@ export default function FilterPanel({
                   overflow: "hidden",
                 }}
               >
-                {!isSingleFieldMode && activeField === null ? (
+                {!isSingleFieldMode && activeField === SUMMARY_VIEW ? (
+                  <>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                        padding: "0.7rem 0.9rem",
+                        borderBottom:
+                          "1px solid var(--border-color, rgba(0,0,0,0.1))",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={backToFieldList}
+                        aria-label="Back to field list"
+                        style={{
+                          background: "none",
+                          border: "none",
+                          cursor: "pointer",
+                          color: "var(--text-secondary)",
+                          display: "flex",
+                        }}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <strong style={{ fontSize: "1rem", flex: 1 }}>
+                        Filters
+                      </strong>
+                      <button
+                        type="button"
+                        onClick={closePanel}
+                        aria-label="Close filters"
+                        style={{
+                          background: "none",
+                          border: "none",
+                          cursor: "pointer",
+                          color: "var(--text-secondary)",
+                          display: "flex",
+                        }}
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                    <div
+                      style={{
+                        padding: "0.6rem 0.9rem",
+                        borderBottom:
+                          "1px solid var(--border-color, rgba(0,0,0,0.08))",
+                        position: "relative",
+                      }}
+                    >
+                      <Search
+                        size={14}
+                        style={{
+                          position: "absolute",
+                          left: "1.4rem",
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          color: "var(--text-secondary)",
+                        }}
+                      />
+                      <input
+                        value={summaryValueSearch}
+                        onChange={(e) => setSummaryValueSearch(e.target.value)}
+                        placeholder="Search values…"
+                        aria-label="Search values"
+                        style={{
+                          width: "100%",
+                          padding: "0.45rem 0.6rem 0.45rem 2rem",
+                          boxSizing: "border-box",
+                          border:
+                            "1px solid var(--border-color, rgba(0,0,0,0.12))",
+                          borderRadius: 6,
+                          background: "var(--surface-color, #fff)",
+                          color: "var(--text-primary)",
+                          fontSize: "0.85rem",
+                          outline: "none",
+                        }}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        overflowY: "auto",
+                        flex: 1,
+                        minHeight: 0,
+                      }}
+                    >
+                      {Object.entries(summaryDrafts).map(([field, d]) => {
+                        const labels = operatorLabelsFor(d.kind);
+                        const isDate = d.kind === "date";
+                        const showChecks =
+                          !isDate &&
+                          (d.operator === "contains" ||
+                            d.operator === "not_contains");
+                        const showRange = d.operator === "between";
+                        const term = summaryValueSearch.trim().toLowerCase();
+                        const options = valuesByField[field] || [];
+                        const visibleOptions = term
+                          ? options.filter((o) =>
+                              o.label.toLowerCase().includes(term),
+                            )
+                          : options;
+                        return (
+                          <div
+                            key={field}
+                            style={{
+                              padding: "0.7rem 0.9rem",
+                              borderBottom:
+                                "1px solid var(--border-color, rgba(0,0,0,0.08))",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0.4rem",
+                                marginBottom:
+                                  showChecks || showRange ? "0.5rem" : 0,
+                              }}
+                            >
+                              <strong
+                                style={{ fontSize: "0.87rem", flex: 1 }}
+                              >
+                                {d.label}
+                              </strong>
+                              <select
+                                value={d.operator}
+                                onChange={(e) =>
+                                  setSummaryOperator(field, e.target.value)
+                                }
+                                aria-label={`${d.label} operator`}
+                                style={{
+                                  padding: "0.3rem 0.5rem",
+                                  borderRadius: 6,
+                                  border:
+                                    "1px solid var(--border-color, rgba(0,0,0,0.12))",
+                                  background: "var(--surface-color, #fff)",
+                                  color: "var(--accent-color)",
+                                  fontSize: "0.82rem",
+                                }}
+                              >
+                                {isDate ? (
+                                  <option value="between">is between</option>
+                                ) : (
+                                  <>
+                                    <option value="contains">
+                                      {labels.contains}
+                                    </option>
+                                    <option value="not_contains">
+                                      {labels.not_contains}
+                                    </option>
+                                  </>
+                                )}
+                                <option value="is_not_empty">
+                                  {labels.is_not_empty} (has any value)
+                                </option>
+                                <option value="is_empty">
+                                  {labels.is_empty}
+                                </option>
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => removeSummaryFilter(field)}
+                                aria-label={`Remove ${d.label} filter`}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  cursor: "pointer",
+                                  color: "var(--text-secondary)",
+                                  display: "flex",
+                                  padding: 0,
+                                }}
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                            {showRange && (
+                              <CalendarRangePicker
+                                value={d.dateRange}
+                                onChange={(range) =>
+                                  setSummaryRange(field, range)
+                                }
+                              />
+                            )}
+                            {showChecks && (
+                              <>
+                                {valuesLoading && options.length === 0 && (
+                                  <div
+                                    style={{
+                                      padding: "0.4rem 0",
+                                      fontSize: "0.85rem",
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    Loading values…
+                                  </div>
+                                )}
+                                {!valuesLoading && options.length === 0 && (
+                                  <div
+                                    style={{
+                                      padding: "0.4rem 0",
+                                      fontSize: "0.85rem",
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    No values found.
+                                  </div>
+                                )}
+                                {options.length > 0 &&
+                                  visibleOptions.length === 0 && (
+                                    <div
+                                      style={{
+                                        padding: "0.4rem 0",
+                                        fontSize: "0.85rem",
+                                        color: "var(--text-secondary)",
+                                      }}
+                                    >
+                                      No matching values.
+                                    </div>
+                                  )}
+                                {visibleOptions.map((opt) => (
+                                  <label
+                                    key={opt.value}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "0.55rem",
+                                      padding: "0.45rem 0",
+                                      cursor: "pointer",
+                                      fontSize: "0.87rem",
+                                      color: "var(--text-primary)",
+                                      background: d.checked.includes(opt.value)
+                                        ? "var(--subtle-bg, rgba(0,0,0,0.04))"
+                                        : "transparent",
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={d.checked.includes(opt.value)}
+                                      onChange={() =>
+                                        toggleSummaryValue(field, opt.value)
+                                      }
+                                    />
+                                    <span
+                                      style={{
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      {opt.label}
+                                    </span>
+                                  </label>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div
+                      style={{
+                        padding: "0.6rem 0.9rem",
+                        borderTop:
+                          "1px solid var(--border-color, rgba(0,0,0,0.1))",
+                        display: "flex",
+                        justifyContent: "flex-end",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={applySummary}
+                        style={{
+                          fontSize: "0.85rem",
+                          padding: "0.4rem 0.9rem",
+                        }}
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </>
+                ) : !isSingleFieldMode && activeField === null ? (
                   <>
                     <div
                       style={{
@@ -812,9 +1301,9 @@ export default function FilterPanel({
         ))}
 
       {renderSelectedFilters && filters.length > 0 && (
-        <button
-          type="button"
-          onClick={openFieldPicker}
+          <button
+            type="button"
+            onClick={openFieldList}
           style={{
             display: "inline-flex",
             alignItems: "center",

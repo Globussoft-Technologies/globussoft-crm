@@ -126,4 +126,27 @@ describe('GET /api/deals — page/limit/offset pagination', () => {
     expect(args.take).toBe(10);
     expect(args.skip).toBe(10);
   });
+
+  test('server-side search is tenant-scoped and applies to both rows and count', async () => {
+    const res = await request(makeApp()).get('/api/deals?page=1&limit=25&search=Acme');
+
+    expect(res.status).toBe(200);
+    const listWhere = prisma.deal.findMany.mock.calls[0][0].where;
+    const countWhere = prisma.deal.count.mock.calls[0][0].where;
+    expect(listWhere).toEqual(countWhere);
+    expect(listWhere.tenantId).toBe(TENANT_ID);
+    expect(listWhere.AND[0].OR).toEqual(expect.arrayContaining([
+      { title: { contains: 'Acme' } },
+      { company: { contains: 'Acme' } },
+    ]));
+  });
+
+  test('uses a unique id tie-breaker for stable offset pages', async () => {
+    await request(makeApp()).get('/api/deals?page=2&limit=10');
+
+    expect(prisma.deal.findMany.mock.calls[0][0].orderBy).toEqual([
+      { createdAt: 'desc' },
+      { id: 'desc' },
+    ]);
+  });
 });

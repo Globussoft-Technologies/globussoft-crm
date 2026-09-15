@@ -797,6 +797,11 @@ model Contact {
   companySize    String?
   linkedin       String?
   website        String?
+  // Social profile links (2026-09-08) — nullable URLs rendered as icons in
+  // the contact-profile header. A missing link renders blurred until added.
+  facebookUrl    String?
+  githubUrl      String?
+  twitterUrl     String?
   lastEnrichedAt DateTime?
 
   // Marketing attribution

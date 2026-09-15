@@ -83,6 +83,7 @@ const ContactDetail = lazy(() => import("./pages/ContactDetail"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
 const Workflows = lazy(() => import("./pages/Workflows"));
 const Inbox = lazy(() => import("./pages/Inbox"));
+const EmailCompose = lazy(() => import("./pages/EmailCompose"));
 const Marketing = lazy(() => import("./pages/Marketing"));
 const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
@@ -2514,6 +2515,7 @@ export default function App() {
                         element={<Navigate to="/invoices" replace />}
                       />
                       <Route path="contacts" element={<Contacts />} />
+                      <Route path="leads/:id" element={<ContactDetail />} />
                       <Route path="contacts/:id" element={<ContactDetail />} />
                       <Route
                         path="pipeline"
@@ -2524,6 +2526,7 @@ export default function App() {
                         }
                       />
                       <Route path="inbox" element={<Inbox />} />
+                      <Route path="email/compose" element={<EmailCompose />} />
                       <Route
                         path="marketing"
                         element={

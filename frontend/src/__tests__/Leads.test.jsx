@@ -419,10 +419,10 @@ describe('Leads Freshsales-style list UI affordances', () => {
     renderLeads(authValue);
 
     const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
-    expect(aliceLink).toHaveAttribute('href', '/contacts/101');
+    expect(aliceLink).toHaveAttribute('href', '/leads/101');
 
     fireEvent.click(aliceLink);
-    expect(navigateMock).toHaveBeenCalledWith('/contacts/101');
+    expect(navigateMock).toHaveBeenCalledWith('/leads/101');
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
   });
 

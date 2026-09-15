@@ -1,0 +1,4 @@
+ALTER TABLE `Contact`
+  ADD COLUMN `facebookUrl` VARCHAR(191) NULL,
+  ADD COLUMN `githubUrl` VARCHAR(191) NULL,
+  ADD COLUMN `twitterUrl` VARCHAR(191) NULL;

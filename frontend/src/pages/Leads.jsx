@@ -142,8 +142,7 @@ const FIELD_LIMITS = {
   treatmentOfInterest: 191,
   gst: 15,
 };
-const LEADS_PAGE_SIZE_OPTIONS = [ 10, 25, 50, 100];
-const LEADS_AUTO_REFRESH_MS = 15000;
+const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
@@ -1771,41 +1770,6 @@ const Leads = () => {
         .then((res) => setTmcPaidByEmail(res?.byEmail || {}))
         .catch(() => setTmcPaidByEmail({}));
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    let stopped = false;
-    let inFlight = false;
-
-    const refreshVisibleLeads = async () => {
-      if (stopped || inFlight) return;
-      if (
-        typeof document !== "undefined" &&
-        document.visibilityState === "hidden"
-      )
-        return;
-      inFlight = true;
-      try {
-        await fetchLeads({ background: true });
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    const intervalId = window.setInterval(
-      refreshVisibleLeads,
-      LEADS_AUTO_REFRESH_MS,
-    );
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshVisibleLeads();
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      stopped = true;
-      window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refetch (server-side) whenever the FilterPanel's filter set changes.
@@ -3503,7 +3467,8 @@ const Leads = () => {
 
   const leadDetailPath = (lead) => {
     if (isTravel) return `/travel/leads/${lead.id}`;
-    return `/contacts/${lead.id}`;
+    if (!isGeneric) return `/contacts/${lead.id}`;
+    return `/leads/${lead.id}`;
   };
 
   const leadTagOptions = Array.from(
@@ -4594,11 +4559,23 @@ const Leads = () => {
           treatmentOfInterest: "Treatment Of Interest",
           gst: "GSTIN",
         };
+        const noteActivity = column.key === "description"
+          ? (lead.activities || [])
+            .filter((activity) => activity.type === "Note" && activity.description)
+            .reduce((latest, activity) => (
+              !latest || new Date(activity.createdAt) > new Date(latest.createdAt)
+                ? activity
+                : latest
+            ), null)
+          : null;
+        const displayValue = column.key === "description"
+          ? (noteActivity?.description || lead.description)
+          : lead[column.key];
         return renderBuiltInLeadCell({
           lead,
           field: column.key,
           label: scalarLabels[column.key] || column.label,
-          value: lead[column.key],
+          value: displayValue,
           extraStyle: { color: "var(--text-secondary)" },
           renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
         });

@@ -1587,7 +1587,7 @@ router.post('/', async (req, res) => {
     // String? columns reject "" where they expect null / a valid shape, so
     // normalize empty strings to null before validation. This keeps the route
     // resilient to any frontend/client that sends "" for optional fields.
-    for (const key of ["preferredLocationId", "preferredPractitionerId", "birthDate", "anniversary", "treatmentOfInterest", "gst", "stateCode", "billingStateCode", "callifiedCampaignId"]) {
+    for (const key of ["preferredLocationId", "preferredPractitionerId", "birthDate", "anniversary", "treatmentOfInterest", "gst", "stateCode", "billingStateCode", "callifiedCampaignId", "facebookUrl", "githubUrl", "twitterUrl"]) {
       if (req.body[key] === "") req.body[key] = null;
     }
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
@@ -1890,6 +1890,40 @@ router.delete('/bulk-delete', verifyRole(['ADMIN']), async (req, res) => {
   }
 });
 
+router.get('/:id/activities', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid contact ID', code: 'INVALID_ID' });
+    const contact = await prisma.contact.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true, status: true, assignedToId: true },
+    });
+    if (!contact || !canAccessLead(req, contact)) return res.status(404).json({ error: 'Contact not found' });
+
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const where = { contactId: id, tenantId: req.user.tenantId };
+    const [data, total] = await Promise.all([
+      prisma.activity.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit,
+        skip: (page - 1) * limit,
+      }),
+      prisma.activity.count({ where }),
+    ]);
+    res.json({
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(Math.ceil(total / limit), 1),
+    });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch activities' });
+  }
+});
+
 router.post('/:id/activities', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
@@ -2000,6 +2034,9 @@ const updateContactById = async (req, res) => {
     if (tagsResult.error) return res.status(tagsResult.error.status).json(tagsResult.error);
     // Normalize empty-string optional ids to null (mirrors POST handler).
     if (req.body.callifiedCampaignId === "") req.body.callifiedCampaignId = null;
+    for (const key of ["facebookUrl", "githubUrl", "twitterUrl"]) {
+      if (req.body[key] === "") req.body[key] = null;
+    }
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
@@ -2029,7 +2066,26 @@ const updateContactById = async (req, res) => {
     if (typeof updateData.birthDate === "string" && updateData.birthDate !== "") {
       updateData.birthDate = new Date(updateData.birthDate);
     }
-    const contact = await prisma.contact.update({ where: { id: existing.id }, data: updateData });
+    // Keep the contact mutation and its lifecycle history atomic. Previously
+    // the Contact update committed first; an Activity failure then returned a
+    // 500 even though the status had changed, inviting a misleading retry.
+    const statusWillChange = Object.prototype.hasOwnProperty.call(updateData, 'status')
+      && existing.status !== updateData.status;
+    const contact = statusWillChange
+      ? await prisma.$transaction(async (tx) => {
+        const updated = await tx.contact.update({ where: { id: existing.id }, data: updateData });
+        await tx.activity.create({
+          data: {
+            type: "Lead Status updated",
+            description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}`,
+            contactId: updated.id,
+            userId: req.user.userId,
+            tenantId: req.user.tenantId,
+          },
+        });
+        return updated;
+      })
+      : await prisma.contact.update({ where: { id: existing.id }, data: updateData });
     // Generic-vertical-only Lead custom fields — best-effort, after the
     // primary update already succeeded.
     await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);

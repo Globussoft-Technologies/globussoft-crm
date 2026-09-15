@@ -297,7 +297,7 @@ describe('Sidebar — load-bearing render surface', () => {
       // Core links visible to all roles — pin a representative few.
       expect(screen.getByText('Dashboard')).toBeTruthy();
       expect(screen.getByText('Contacts')).toBeTruthy();
-      expect(screen.getByText('Pipeline')).toBeTruthy();
+      expect(screen.getByText('Deals and Pipeline')).toBeTruthy();
       // "Leads" label appears as both the nav label and possibly badge text;
       // accept either by checking we have at least one match.
       expect(screen.getAllByText('Leads').length).toBeGreaterThanOrEqual(1);

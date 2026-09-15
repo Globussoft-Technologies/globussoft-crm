@@ -47,7 +47,15 @@ router.use(async (req, res, next) => {
 
 const VALID_TABLE_KEYS = new Set(["leads", "contacts"]);
 function normalizeVisibleColumnsForTable(tableKey, visible) {
-  return Array.isArray(visible) ? [...visible] : [];
+  const next = Array.isArray(visible) ? [...visible] : [];
+  // Tags has historically been a default Leads column. Preserve it when
+  // reading preferences saved before the column was introduced.
+  if (tableKey === "leads" && !next.includes("tags")) {
+    const sourceIndex = next.indexOf("source");
+    const insertAt = sourceIndex >= 0 ? sourceIndex + 1 : next.length;
+    next.splice(insertAt, 0, "tags");
+  }
+  return next;
 }
 // Built-in columns per table — key + label. Kept in one place so the
 // frontend doesn't need to hardcode its own copy; the API is the source of
@@ -168,7 +176,7 @@ router.get("/:tableKey", async (req, res) => {
       // column visible, no custom-field columns (opt-in, matches the
       // "columns not shown in table" bucket in the Freshsales reference UI).
       visible = tableKey === "leads"
-        ? ["name", "email", "phone", "webForm", "medium", "campaign", "callStatus", "callifiedAi", "callifiedScore", "source", "company", "aiScore", "assignedTo"]
+        ? ["name", "email", "company", "phone", "aiScore", "source", "webForm", "medium", "subBrand", "tags", "assignedTo", "createdAt", "campaign", "callStatus", "callifiedAi", "callifiedScore"]
         : (BUILTIN_COLUMNS[tableKey] || []).map((c) => c.key);
     }
 

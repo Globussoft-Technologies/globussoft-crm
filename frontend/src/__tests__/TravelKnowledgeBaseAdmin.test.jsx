@@ -96,7 +96,7 @@ describe('<KnowledgeBaseAdmin />', () => {
       if (url === '/api/travel/knowledge-base/jobs?limit=5') {
         return Promise.resolve({ jobs: JOBS });
       }
-      if (url === '/api/travel/knowledge-base/files?limit=50&offset=0') {
+      if (url === '/api/travel/knowledge-base/files?limit=20&offset=0') {
         return Promise.resolve({ files: FILES, total: 12 });
       }
       if (url === '/api/travel/knowledge-base/oauth/status') {
@@ -115,6 +115,8 @@ describe('<KnowledgeBaseAdmin />', () => {
     expect(await screen.findByRole('heading', { name: /Travel Brochure Library/i })).toBeInTheDocument();
     expect(screen.getByTitle('2 Total Library Updates')).toBeInTheDocument();
     expect(screen.getByTitle('12 Total Brochures In Library')).toBeInTheDocument();
-    expect(screen.queryByText(/Page 1 of 1|Load more files/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('knowledge-files-pager')).toBeInTheDocument();
+    expect(screen.getByText('1–12')).toBeInTheDocument();
+    expect(screen.getByLabelText('Files per page')).toHaveValue('20');
   });
 });

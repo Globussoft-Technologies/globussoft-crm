@@ -51,7 +51,7 @@ function mockKnowledgeApi() {
     if (url === '/api/travel/knowledge-base/jobs?limit=5') {
       return Promise.resolve({ jobs: [] });
     }
-    if (url === '/api/travel/knowledge-base/files?limit=50&offset=0') {
+    if (url === '/api/travel/knowledge-base/files?limit=20&offset=0') {
       return Promise.resolve({ files: [INDEXED_FILE], total: 1 });
     }
     if (url === '/api/travel/knowledge-base/oauth/status') {

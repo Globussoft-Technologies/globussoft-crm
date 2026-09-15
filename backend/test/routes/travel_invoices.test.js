@@ -49,6 +49,8 @@ prisma.travelInvoice = {
 };
 prisma.travelPaymentSchedule = prisma.travelPaymentSchedule || {};
 prisma.travelPaymentSchedule.findMany = vi.fn().mockResolvedValue([]);
+prisma.tripInstalmentPayment = prisma.tripInstalmentPayment || {};
+prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
 prisma.payment = prisma.payment || {};
 prisma.payment.findMany = vi.fn().mockResolvedValue([]);
 // $transaction is used by nextInvoiceNum — execute the callback against
@@ -125,13 +127,14 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  prisma.travelInvoice.findMany.mockReset();
+  prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findFirst.mockReset();
   prisma.travelInvoice.count.mockReset();
   prisma.travelInvoice.create.mockReset();
   prisma.travelInvoice.update.mockReset();
   prisma.travelInvoice.delete.mockReset();
   prisma.travelPaymentSchedule.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.findMany.mockReset().mockResolvedValue([]);
   createInvoicePaymentLinkMock.mockReset().mockResolvedValue({
     url: 'https://rzp.io/l/travel-outstanding',
@@ -180,6 +183,34 @@ describe('GET /api/travel/invoices (trip filter)', () => {
     expect(res.body).toMatchObject({ code: 'INVALID_TRIP_ID' });
     expect(prisma.travelInvoice.findMany).not.toHaveBeenCalled();
     expect(prisma.travelInvoice.count).not.toHaveBeenCalled();
+  });
+
+  test('returns the latest payment date for a Partial invoice without changing paidAt', async () => {
+    prisma.travelInvoice.findMany.mockResolvedValue([{
+      id: 81,
+      tenantId: 1,
+      status: 'Partial',
+      paidAt: null,
+    }]);
+    prisma.travelInvoice.count.mockResolvedValue(1);
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([
+      { invoiceId: 81, paidAt: new Date('2026-08-10T00:00:00.000Z') },
+    ]);
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { invoiceId: 81, paidAt: new Date('2026-08-12T00:00:00.000Z') },
+    ]);
+    prisma.payment.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.invoices[0]).toMatchObject({
+      status: 'Partial',
+      paidAt: null,
+      lastPaymentAt: '2026-08-12T00:00:00.000Z',
+    });
   });
 });
 
@@ -330,9 +361,7 @@ describe('POST /api/travel/invoices', () => {
   test('sequential POSTs return TINV-YYYY-NNNN with serial incremented', async () => {
     // First POST — dedup check returns null (no recent dup), then
     // nextInvoiceNum's findFirst returns null (no prior invoice, serial = 1).
-    prisma.travelInvoice.findFirst
-      .mockResolvedValueOnce(null) // #996 dedup pre-check
-      .mockResolvedValueOnce(null); // nextInvoiceNum latest-serial lookup
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(null); // #996 dedup pre-check
     prisma.travelInvoice.create.mockImplementationOnce(async ({ data }) => ({
       id: 1, createdAt: new Date(), updatedAt: new Date(), paidAt: null, ...data,
     }));
@@ -349,11 +378,10 @@ describe('POST /api/travel/invoices', () => {
 
     // Second POST — different totalAmount so dedup pre-check returns null
     // (no match); nextInvoiceNum's findFirst returns the previous serial.
-    prisma.travelInvoice.findFirst
-      .mockResolvedValueOnce(null) // #996 dedup pre-check
-      .mockResolvedValueOnce({
-        invoiceNum: `TINV-${CURRENT_YEAR}-0001`,
-      });
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(null); // #996 dedup pre-check
+    prisma.travelInvoice.findMany.mockResolvedValueOnce([
+      { invoiceNum: `TINV-${CURRENT_YEAR}-0001` },
+    ]);
     prisma.travelInvoice.create.mockImplementationOnce(async ({ data }) => ({
       id: 2, createdAt: new Date(), updatedAt: new Date(), paidAt: null, ...data,
     }));
@@ -367,6 +395,28 @@ describe('POST /api/travel/invoices', () => {
       });
     expect(r2.status).toBe(201);
     expect(r2.body.invoiceNum).toBe(`TINV-${CURRENT_YEAR}-0002`);
+  });
+
+  test('ignores custom-format invoice numbers when choosing the next numeric serial', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(null);
+    prisma.travelInvoice.findMany.mockResolvedValueOnce([
+      { invoiceNum: `TINV-${CURRENT_YEAR}-0007` },
+      { invoiceNum: `TINV-${CURRENT_YEAR}-T1018-P4` },
+    ]);
+    prisma.travelInvoice.create.mockImplementationOnce(async ({ data }) => ({
+      id: 8, createdAt: new Date(), updatedAt: new Date(), paidAt: null, ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99, totalAmount: '800.00', currency: 'INR',
+        subBrand: 'tmc', dueDate: tomorrowIso,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.invoiceNum).toBe(`TINV-${CURRENT_YEAR}-0008`);
   });
 
   test('POST /invoices/reconcile/excel-software returns mismatch summary without mutating DB', async () => {
@@ -507,7 +557,6 @@ describe('POST /api/travel/invoices', () => {
     // No dedup mock queued. If the route fires the pre-check we'd error
     // (the dedup result would leak into nextInvoiceNum's lookup). Confirm
     // the route skipped it by checking findFirst was called exactly once.
-    prisma.travelInvoice.findFirst.mockResolvedValueOnce(null); // nextInvoiceNum
     prisma.travelInvoice.create.mockImplementationOnce(async ({ data }) => ({
       id: 100, createdAt: new Date(), updatedAt: new Date(), paidAt: null, ...data,
     }));
@@ -523,7 +572,7 @@ describe('POST /api/travel/invoices', () => {
         status: 'Issued',
       });
     expect(res.status).toBe(201);
-    expect(prisma.travelInvoice.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.travelInvoice.findFirst).not.toHaveBeenCalled();
   });
 });
 

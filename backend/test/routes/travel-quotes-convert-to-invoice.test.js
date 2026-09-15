@@ -57,6 +57,7 @@ prisma.travelQuoteLine = {
   delete: vi.fn(),
 };
 prisma.travelInvoice = {
+  findMany: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
 };
@@ -112,6 +113,7 @@ beforeEach(() => {
   prisma.travelQuote.findFirst.mockReset();
   prisma.travelQuoteLine.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findFirst.mockReset();
+  prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.create.mockReset();
   prisma.travelInvoiceLine.createMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.$transaction.mockReset();

@@ -225,7 +225,8 @@ export default function InvoicesAdmin() {
   // #1051 — resolve contactId -> { name, email } so the CONTACT column renders
   // a human-readable name instead of "#<id>". Backend list-GET doesn't include
   // the contact relation, so we batch-fetch unique IDs after the invoices land.
-  // Resolved-but-unknown IDs are cached with name=null so we don't re-request.
+  // Resolved-but-unknown IDs are cached with name=null so we can render a
+  // stable "Deleted account" label and avoid re-requesting the missing row.
   const [contactsById, setContactsById] = useState({});
   // Customer dropdown for the create/edit form — replaces the raw Contact-ID
   // input so operators pick a contact by name instead of memorising IDs.
@@ -641,7 +642,7 @@ export default function InvoicesAdmin() {
 
   const visibleInvoices = [...invoices].sort((a, b) => {
     if (!sortKey) return 0;
-    const value = (row) => sortKey === "contact" ? contactsById[row.contactId]?.name || `#${row.contactId}` : sortKey === "totalAmount" ? Number(row.totalAmount || 0) : row[sortKey] || "";
+    const value = (row) => sortKey === "contact" ? contactsById[row.contactId]?.name || "Deleted account" : sortKey === "totalAmount" ? Number(row.totalAmount || 0) : sortKey === "paidAt" ? row.paidAt || row.lastPaymentAt || "" : row[sortKey] || "";
     const left = value(a); const right = value(b);
     const result = typeof left === "number" ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
     return sortDirection === "desc" ? -result : result;
@@ -1309,7 +1310,9 @@ export default function InvoicesAdmin() {
             {form.contactId &&
               !customers.some((c) => String(c.id) === String(form.contactId)) && (
                 <option value={form.contactId}>
-                  {contactsById[form.contactId]?.name || `Contact #${form.contactId}`}
+                  {Object.prototype.hasOwnProperty.call(contactsById, form.contactId)
+                    ? contactsById[form.contactId]?.name || "Deleted account"
+                    : "Loading contact..."}
                 </option>
               )}
             {customers.map((c) => (
@@ -1453,18 +1456,18 @@ export default function InvoicesAdmin() {
         {loading && invoices.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
-          <table style={{ width: "100%", minWidth: 1500, borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <table style={{ width: "100%", minWidth: 1560, borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "21%" }} />
-              <col style={{ width: "16%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "8%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "15%" }} />
-              {canWrite && <col style={{ width: "20%" }} />}
+              <col style={{ width: 250 }} />
+              <col style={{ width: 230 }} />
+              <col style={{ width: 170 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 120 }} />
+              {canWrite && <col style={{ width: 210 }} />}
             </colgroup>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1495,7 +1498,17 @@ export default function InvoicesAdmin() {
                       opacity: isVoided ? 0.7 : 1,
                     }}
                   >
-                    <td style={{ ...td, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "nowrap" }}>
+                    <td
+                      title={inv.invoiceNum || undefined}
+                      style={{
+                        ...td,
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                        fontSize: 13,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
                       {inv.invoiceNum || "—"}
                     </td>
                     <td style={{ ...td, whiteSpace: "nowrap" }}>
@@ -1503,13 +1516,35 @@ export default function InvoicesAdmin() {
                         const c = contactsById[inv.contactId];
                         const name = c?.name;
                         const tooltip = `Contact #${inv.contactId}${c?.email ? ` · ${c.email}` : ""}`;
+                        const contactResolved = Object.prototype.hasOwnProperty.call(contactsById, inv.contactId);
+                        if (!contactResolved) {
+                          return <span style={{ color: "var(--text-secondary)" }}>Loading&hellip;</span>;
+                        }
+                        if (!name) {
+                          return (
+                            <span
+                              title="The contact linked to this invoice has been deleted"
+                              style={{ color: "var(--text-secondary)", fontStyle: "italic", fontWeight: 500 }}
+                            >
+                              Deleted account
+                            </span>
+                          );
+                        }
                         return (
                           <Link
                             to={`/contacts/${inv.contactId}`}
                             title={tooltip}
-                            style={{ color: "var(--text-primary)", textDecoration: "none", fontWeight: 500 }}
+                            style={{
+                              display: "block",
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              color: "var(--text-primary)",
+                              textDecoration: "none",
+                              fontWeight: 500,
+                            }}
                           >
-                            {name || `#${inv.contactId}`}
+                            {name}
                           </Link>
                         );
                       })()}
@@ -1544,7 +1579,7 @@ export default function InvoicesAdmin() {
                         {inv.subBrand || "—"}
                       </span>
                     </td>
-                    <td style={td}>{formatDate(inv.paidAt)}</td>
+                    <td style={td}>{formatDate(inv.paidAt || inv.lastPaymentAt)}</td>
                     {canWrite && (
                       <td style={td}>
                         <button

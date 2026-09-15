@@ -112,6 +112,35 @@ function writeImportAudit(req, entity, summary) {
   });
 }
 
+function parseExportDateRange(query) {
+  const parseDateOnly = (value, field) => {
+    if (!value) return null;
+    const raw = String(value);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+      ? new Date(`${raw}T00:00:00.000Z`)
+      : null;
+    if (!date || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== raw) {
+      const err = new Error(`${field} must be a valid date (YYYY-MM-DD)`);
+      err.status = 400;
+      err.code = "INVALID_DATE_RANGE";
+      throw err;
+    }
+    return date;
+  };
+  const from = parseDateOnly(query.from, "from");
+  const to = parseDateOnly(query.to, "to");
+  if (from && to && from > to) {
+    const err = new Error("from must be on or before to");
+    err.status = 400;
+    err.code = "INVALID_DATE_RANGE";
+    throw err;
+  }
+  return {
+    from,
+    toExclusive: to ? new Date(to.getTime() + 86_400_000) : null,
+  };
+}
+
 // ── Cost master ────────────────────────────────────────────────────
 
 const COST_MASTER_COLS = [
@@ -804,6 +833,9 @@ router.get("/seasons/export.csv", verifyToken, requireTravelTenant, async (req, 
       assertValidSubBrand(String(req.query.subBrand));
       where.subBrand = String(req.query.subBrand);
     }
+    const { from, toExclusive } = parseExportDateRange(req.query);
+    if (from) where.endDate = { gte: from };
+    if (toExclusive) where.startDate = { lt: toExclusive };
     const allowed = await getSubBrandAccessSet(req.user.userId);
     narrowWhereBySubBrand(where, allowed);
 
@@ -1027,6 +1059,12 @@ router.get("/markup-rules/export.csv", verifyToken, requireTravelTenant, async (
         });
       }
       where.scope = String(req.query.scope);
+    }
+    const { from, toExclusive } = parseExportDateRange(req.query);
+    if (from || toExclusive) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = from;
+      if (toExclusive) where.createdAt.lt = toExclusive;
     }
     const allowed = await getSubBrandAccessSet(req.user.userId);
     narrowWhereBySubBrand(where, allowed);

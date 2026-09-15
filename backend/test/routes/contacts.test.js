@@ -1439,3 +1439,22 @@ describe('DELETE /api/contacts/tags', () => {
     });
   });
 });
+
+describe('GET /api/contacts/duplicates/find', () => {
+  test('handles contacts without email and still detects phone duplicates', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      { ...SAMPLE_CONTACT, id: 29, email: null, phone: '9876543210' },
+      { ...SAMPLE_CONTACT, id: 30, email: null, phone: '+91 98765 43210' },
+    ]);
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      primary: { id: 29 },
+      duplicates: [{ id: 30 }],
+      reason: 'Same phone',
+    });
+  });
+});

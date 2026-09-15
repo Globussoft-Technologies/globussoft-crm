@@ -167,6 +167,32 @@ describe('GET /api/travel/seasons', () => {
       }),
     );
   });
+
+  test('?from/to filters seasons whose active periods overlap the inclusive range', async () => {
+    prisma.travelSeasonCalendar.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/travel/seasons?from=2026-03-01&to=2026-03-31')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(prisma.travelSeasonCalendar.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: 1,
+          endDate: { gte: new Date('2026-03-01T00:00:00.000Z') },
+          startDate: { lt: new Date('2026-04-01T00:00:00.000Z') },
+        },
+      }),
+    );
+  });
+
+  test('rejects an inverted season list date range', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/seasons?from=2026-04-01&to=2026-03-01')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_DATE_RANGE' });
+    expect(prisma.travelSeasonCalendar.findMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/travel/seasons', () => {
@@ -308,6 +334,25 @@ describe('GET /api/travel/markup-rules', () => {
         where: expect.objectContaining({
           tenantId: 1, scope: 'hotel', isActive: true,
         }),
+      }),
+    );
+  });
+
+  test('?from/to filters markup rules by their inclusive created date', async () => {
+    prisma.travelMarkupRule.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/travel/markup-rules?from=2026-05-01&to=2026-05-31')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(prisma.travelMarkupRule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: 1,
+          createdAt: {
+            gte: new Date('2026-05-01T00:00:00.000Z'),
+            lt: new Date('2026-06-01T00:00:00.000Z'),
+          },
+        },
       }),
     );
   });

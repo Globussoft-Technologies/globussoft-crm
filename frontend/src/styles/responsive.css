@@ -334,6 +334,20 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Travel Knowledge already owns a dedicated scroll region immediately around
+   each table. Keep its outer card clipped so the shared card shimmer
+   pseudo-element cannot enlarge the card's scrollable area and create a
+   second, false horizontal scrollbar. */
+[data-vertical="travel"] .travel-content-frame .card.knowledge-table-card {
+  overflow: hidden;
+}
+
+[data-vertical="travel"] .travel-content-frame .knowledge-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 [data-vertical="travel"] .travel-content-frame table th,
 [data-vertical="travel"] .travel-content-frame table td {
   white-space: nowrap;

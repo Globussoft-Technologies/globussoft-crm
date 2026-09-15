@@ -1026,6 +1026,7 @@ const Contacts = () => {
   });
   const renderContactsHeaderCell = (column, extra = {}, cellProps = {}, leadingControls = null) => {
     const { key, label, sortable = true, resizable = true, align = 'left' } = column;
+    const { key: cellKey, ...headerProps } = cellProps;
     const active = sortConfig.key === key && sortConfig.direction;
     const ariaSort = active
       ? sortConfig.direction === 'asc'
@@ -1094,7 +1095,8 @@ const Contacts = () => {
 
     return (
       <th
-        {...cellProps}
+        key={cellKey ?? key}
+        {...headerProps}
         style={getContactHeaderCellStyle({
           textAlign: align,
           ...extra,

@@ -1710,14 +1710,16 @@ body[data-vertical="travel"] .travel-sidebar-collapse {
   margin-left: auto;
   border: 0;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, white);
+  /* Mix the brand colour into the current theme surface. Using a literal
+     white base made this control look like a bright patch in dark mode. */
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, var(--surface-color));
   color: var(--text-primary);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 body[data-vertical="travel"] .travel-sidebar-collapse:hover {
-  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, white);
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 22%, var(--surface-color));
   color: var(--primary-color, var(--accent-color));
 }
 

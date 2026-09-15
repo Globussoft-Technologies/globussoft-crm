@@ -100,6 +100,10 @@ const {
 } = require("../lib/travelInvoiceReconciliation");
 // Sub-brand → legal-entity / GSTIN resolution (Q21 config blob on Tenant).
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const {
+  createTravelInvoiceWithNumber,
+  nextTravelInvoiceNum,
+} = require("../lib/travelInvoiceNumber");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 const invoiceReconcileUpload = multer({
@@ -359,19 +363,7 @@ function parseDueDate(input) {
  * permits a phantom read on a particular MySQL config.
  */
 async function nextInvoiceNum(tenantId) {
-  const year = new Date().getFullYear();
-  return await prisma.$transaction(async (tx) => {
-    const latest = await tx.travelInvoice.findFirst({
-      where: { tenantId, invoiceNum: { startsWith: `TINV-${year}-` } },
-      orderBy: { invoiceNum: "desc" },
-      select: { invoiceNum: true },
-    });
-    const latestSerial = latest
-      ? parseInt(latest.invoiceNum.split("-")[2], 10)
-      : 0;
-    const next = String(latestSerial + 1).padStart(4, "0");
-    return `TINV-${year}-${next}`;
-  });
+  return nextTravelInvoiceNum(prisma, tenantId);
 }
 
 /**
@@ -404,6 +396,78 @@ async function nextSubBrandInvoiceNum(tenantId, subBrand, date = new Date()) {
       ? parseInt(latest.invoiceNum.split("/").pop(), 10) || 0
       : 0;
     return `${prefix}/${String(lastSerial + 1).padStart(4, "0")}`;
+  });
+}
+
+// Decorate Partial invoice rows with their latest successful receipt date.
+// TravelInvoice.paidAt intentionally remains the final-settlement timestamp;
+// partial receipts live in one of the three payment stores below.
+async function attachLastPaymentDates(invoices, tenantId) {
+  const partialIds = invoices
+    .filter((invoice) => String(invoice.status || "").toLowerCase() === "partial")
+    .map((invoice) => invoice.id)
+    .filter(Number.isFinite);
+  if (partialIds.length === 0) return;
+
+  const paymentLinkPredicates = partialIds.map((invoiceId) => ({
+    metadata: { contains: `"travelInvoiceId":${invoiceId}` },
+  }));
+  const results = await Promise.allSettled([
+    prisma.travelPaymentSchedule.findMany({
+      where: { tenantId, invoiceId: { in: partialIds }, paidAt: { not: null } },
+      select: { invoiceId: true, paidAt: true },
+    }),
+    // TripInstalmentPayment has no tenantId column; its invoiceId values come
+    // only from the tenant-scoped TravelInvoice result above.
+    // The query is therefore tenant-safe despite lacking a tenantId field.
+    prisma.tripInstalmentPayment.findMany({
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+      where: { invoiceId: { in: partialIds }, paidAt: { not: null } },
+      select: { invoiceId: true, paidAt: true },
+    }),
+    prisma.payment.findMany({
+      where: {
+        tenantId,
+        OR: [{ invoiceId: { in: partialIds } }, ...paymentLinkPredicates],
+      },
+      select: {
+        invoiceId: true,
+        status: true,
+        paidAt: true,
+        createdAt: true,
+        metadata: true,
+      },
+    }),
+  ]);
+
+  const latestByInvoice = new Map();
+  const remember = (invoiceId, value) => {
+    if (!partialIds.includes(invoiceId) || !value) return;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return;
+    const current = latestByInvoice.get(invoiceId);
+    if (!current || date > current) latestByInvoice.set(invoiceId, date);
+  };
+
+  for (const result of results.slice(0, 2)) {
+    if (result.status !== "fulfilled") continue;
+    result.value.forEach((row) => remember(row.invoiceId, row.paidAt));
+  }
+  if (results[2].status === "fulfilled") {
+    results[2].value.forEach((payment) => {
+      const metadata = parsePaymentMetadata(payment.metadata);
+      const invoiceId = partialIds.find((id) =>
+        isPaymentLinkedToTravelInvoice(payment, metadata, id),
+      );
+      if (invoiceId && isSuccessfulPaymentStatus(payment.status)) {
+        remember(invoiceId, payment.paidAt || payment.createdAt);
+      }
+    });
+  }
+
+  invoices.forEach((invoice) => {
+    const lastPaymentAt = latestByInvoice.get(invoice.id);
+    if (lastPaymentAt) invoice.lastPaymentAt = lastPaymentAt;
   });
 }
 
@@ -512,6 +576,7 @@ router.get(
           return repaired;
         }));
       }
+      await attachLastPaymentDates(invoices, req.travelTenant.id);
       res.json({ invoices, total, limit: take, offset: skip });
     } catch (e) {
       if (e.status) {
@@ -4722,15 +4787,11 @@ router.post(
         }
       }
 
-      const invoiceNum = await nextInvoiceNum(req.travelTenant.id);
-
       const createData = {
-        tenantId: req.travelTenant.id,
         subBrand: targetSubBrand,
         contactId: contactIdInt,
         quoteId: quoteIdInt,
         tripId: tripIdInt,
-        invoiceNum,
         status: status || "Draft",
         totalAmount: totalAmount,
         currency: String(currency),
@@ -4741,9 +4802,11 @@ router.post(
       if (docType !== undefined && docType !== "") {
         createData.docType = docType;
       }
-      const created = await prisma.travelInvoice.create({
-        data: createData,
-      });
+      const created = await createTravelInvoiceWithNumber(
+        prisma,
+        req.travelTenant.id,
+        createData,
+      );
 
       try {
         await enqueueTransaction({

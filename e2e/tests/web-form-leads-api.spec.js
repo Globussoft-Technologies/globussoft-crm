@@ -8,6 +8,7 @@ test('web form leads stay scoped during search and pagination', async ({ request
   const headers = { Authorization: `Bearer ${token}` };
   const ids = [];
   const tag = `E2E_FORM_LEADS_${Date.now()}_${process.pid}_${test.info().workerIndex}`;
+  const leadNames = ['Priya Sharma Alpha', 'Priya Sharma Beta'];
   try {
     for (let i = 0; i < 2; i++) {
       const created = await request.post(`${BASE_URL}/api/forms`, { headers, data: { name: `${tag}_${i}`, fields: [
@@ -17,14 +18,14 @@ test('web form leads stay scoped during search and pagination', async ({ request
       expect(created.status()).toBe(201);
       const form = await created.json();
       ids.push(form.id);
-      const submitted = await request.post(`${BASE_URL}/api/forms/public/${form.slug}/submit`, { data: { name: `Priya Sharma ${tag}_${i}`, email: `${tag}_${i}@example.com` } });
-      expect(submitted.ok()).toBeTruthy();
+      const submitted = await request.post(`${BASE_URL}/api/forms/public/${form.slug}/submit`, { data: { name: leadNames[i], email: `${tag}_${i}@example.com` } });
+      expect(submitted.status(), await submitted.text()).toBe(201);
     }
     const response = await request.get(`${BASE_URL}/api/forms/${ids[0]}/leads?limit=1&search=${tag}`, { headers });
     expect(response.ok()).toBeTruthy();
     const data = await response.json();
     expect(data.total).toBe(1);
-    expect(data.leads[0].values[0]).toBe(`Priya Sharma ${tag}_0`);
+    expect(data.leads[0].values[0]).toBe(leadNames[0]);
     expect(data.leads[0].createdAt).toBeTruthy();
     expect(data.leads[0].updatedAt).toBeTruthy();
     const excluded = await request.get(`${BASE_URL}/api/forms/${ids[0]}/leads?search=${tag}_1`, { headers });

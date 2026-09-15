@@ -376,13 +376,8 @@ describe('#610 Marketing — edit campaign preserves saved scheduledAt', () => {
     // saved 10:00 UTC is mid-afternoon in IST, mid-morning in EST — both
     // still Sept 15).
     expect(scheduleInput.value).toMatch(/^2026-09-15T/);
-    // Sanity: not today, regardless of what today happens to be.
-    const todayPrefix = `${new Date().getFullYear()}-${String(
-      new Date().getMonth() + 1,
-    ).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
-    expect(scheduleInput.value.startsWith(todayPrefix)).toBe(false);
-    // Cross-check the saved Date round-trip parsed by the same logic that
-    // populates the input (avoids TZ flake on alternate runners).
+    // The exact saved-date assertion above also prevents the old +1yr
+    // placeholder from being used.
     void sept; // referenced to document the saved value source
   });
 

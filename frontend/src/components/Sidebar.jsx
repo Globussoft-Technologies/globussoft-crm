@@ -2668,7 +2668,7 @@ function renderGenericNav({
         managerOnly
       />
       <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly />
-      <Link to="/territories" icon={Network} label="Territories" managerOnly />
+      <GenericTeamTerritoriesNav Link={Link} isManager={isManager} />
 
       <Link to="/marketing" icon={Send} label="Marketing" managerOnly />
       <Link to="/sequences" icon={Network} label="Sequences" managerOnly />
@@ -2835,6 +2835,24 @@ function renderGenericNav({
         </div>
       )}
     </>
+  );
+}
+
+function GenericTeamTerritoriesNav({ Link, isManager }) {
+  const [openGroup, setOpenGroup] = useState(null);
+  if (!isManager) return null;
+  return (
+    <WellnessNavGroup
+      label="Team & Territories"
+      paths={["/sales-teams", "/staff", "/settings/roles", "/territories"]}
+      activeGroup={openGroup}
+      onActivate={setOpenGroup}
+    >
+      <Link to="/sales-teams" icon={Users} label="Sales Teams" />
+      <Link to="/users" icon={Users} label="Users" />
+      <Link to="/settings/roles" icon={ShieldCheck} label="Roles" />
+      <Link to="/territories" icon={Network} label="Territories" />
+    </WellnessNavGroup>
   );
 }
 

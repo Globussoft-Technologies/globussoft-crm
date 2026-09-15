@@ -18,7 +18,6 @@ import TravelKeyboardShortcuts, {
 import SupportChatWidget from "./SupportChatWidget";
 import NotificationBell from "./NotificationBell";
 import Avatar from "./Avatar";
-import TrialBanner from "./TrialBanner";
 // SubscriptionExpiryModal removed — its dismissible "Remind Later" escape
 // violated the hard-paywall contract. Once the trial / subscription is
 // actually expired the new SubscriptionGate component takes over and the
@@ -268,8 +267,6 @@ const Layout = () => {
   useEffect(() => {
     if (!isMobileViewport && sidebarOpen) setSidebarOpen(false);
   }, [isMobileViewport, sidebarOpen]);
-
-  const [daysRemaining, setDaysRemaining] = useState(null);
   // trialEndsAt state was consumed by the old SubscriptionExpiryModal —
   // removed alongside the move to the hard SubscriptionGate paywall.
 
@@ -283,26 +280,6 @@ const Layout = () => {
   useEffect(() => {
     document.title = tenant?.name ? `${tenant.name} — CRM` : "Globussoft CRM";
   }, [tenant?.name]);
-
-  // Fetch subscription status to show trial banner and modal
-  useEffect(() => {
-    const fetchSubStatus = async () => {
-      try {
-        const data = await fetchApi("/api/subscriptions/status", {
-          silent: true,
-        });
-        if (data) {
-          setDaysRemaining(data.daysRemaining);
-        }
-      } catch {
-        // silently fail
-      }
-    };
-
-    if (user) {
-      fetchSubStatus();
-    }
-  }, [user]);
 
   const handleLogout = async () => {
     const confirmed = await notify.confirm({
@@ -578,15 +555,6 @@ const Layout = () => {
             <LogOut size={16} />
           </button>
         </header>
-        {/* #730 — guard with `> 0`, NOT bare `daysRemaining`. The native
-            `&&` short-circuit renders the falsy left-hand operand when it's a
-            number — so `daysRemaining === 0` (last day of trial / expired)
-            previously rendered a literal "0" text node between the header and
-            main, visible on every authenticated page. `daysRemaining > 0`
-            short-circuits to `false`, which React correctly renders as nothing.
-            The reverse intent here is "only render the banner when there's a
-            countdown to show" — a zero-day banner would also be useless. */}
-        {daysRemaining > 0 && <TrialBanner daysRemaining={daysRemaining} />}
         <main
           className="page-fade-in"
           style={{

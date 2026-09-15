@@ -127,6 +127,7 @@ const SuperAdminApiKeyManagement = lazy(
 const SuperAdminTenantManagement = lazy(
   () => import("./pages/superadmin/SuperAdminTenantManagement"),
 );
+const SuperAdminLandingForm = lazy(() => import("./pages/superadmin/SuperAdminLandingForm"));
 const SuperAdminRevenue = lazy(
   () => import("./pages/superadmin/SuperAdminRevenue"),
 );
@@ -209,6 +210,8 @@ const Tasks = lazy(() => import("./pages/Tasks"));
 const CallifiedData = lazy(() => import("./pages/CallifiedData"));
 const Tickets = lazy(() => import("./pages/Tickets"));
 const Staff = lazy(() => import("./pages/Staff"));
+const SalesTeams = lazy(() => import("./pages/SalesTeams"));
+const Users = lazy(() => import("./pages/Users"));
 const Invoices = lazy(() => import("./pages/Invoices"));
 const LeadScoring = lazy(() => import("./pages/LeadScoring"));
 const Leads = lazy(() => import("./pages/Leads"));
@@ -1602,6 +1605,7 @@ export default function App() {
                     <Route path="ai-management/:tenantId" element={<SuperAdminAiManagement />} />
                     <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
                     <Route path="tenant-management/:tenantId" element={<SuperAdminTenantManagement />} />
+                    <Route path="landing-form" element={<SuperAdminLandingForm />} />
                     <Route path="revenue" element={<SuperAdminRevenue />} />
                   </Route>
                   {/* Travel customer portal — end-user (Contact) login + dashboard
@@ -2715,6 +2719,7 @@ export default function App() {
                       <Route path="projects" element={<Projects />} />
                       <Route path="clients" element={<Clients />} />
                       <Route path="leads" element={<Leads />} />
+                      <Route path="sales-teams" element={<RoleGuard allow={["ADMIN", "MANAGER"]} message="Sales Teams requires manager access."><SalesTeams /></RoleGuard>} />
                       <Route
                         path="converted-leads"
                         element={<ConvertedLeads />}
@@ -2731,6 +2736,14 @@ export default function App() {
                             message="Staff requires admin access."
                           >
                             <Staff />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
+                        path="users"
+                        element={
+                          <RoleGuard allow={["ADMIN"]} message="Users requires admin access.">
+                            <Users />
                           </RoleGuard>
                         }
                       />

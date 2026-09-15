@@ -83,6 +83,7 @@ prisma.user.findFirst = vi.fn();
 
 
 const webFormsRouter = requireCJS('../../routes/web_forms');
+prisma.webFormSubmission.count = vi.fn();
 
 
 const TENANT_ID = 11;
@@ -941,7 +942,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
         title: 'Sales Manager',
         company: 'Acme Corp',
         companySize: '51-200',
-        source: 'Referral',
+        source: 'website-form',
+        medium: 'Referral',
       }),
     }));
     // Nothing left for the custom-field writer — no definitions needed.
@@ -949,4 +951,36 @@ describe('POST /api/forms/public/:slug/submit', () => {
   });
 
 
+});
+
+describe('Generic web form leads popup API', () => {
+  test('scopes pagination and search to the form and tenant, preserving submitted values', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({ id: 7, fieldsJson: JSON.stringify([
+      { id: 's', sourceKind: 'contact', sourceKey: 'source', label: 'Source' },
+      { id: 'm', sourceKind: 'lead_custom', sourceKey: 'medium', label: 'Medium' },
+      { id: 'x', sourceKind: 'custom', sourceKey: 'message', label: 'Message' },
+    ]) });
+    prisma.webFormSubmission.count.mockResolvedValue(26);
+    prisma.webFormSubmission.findMany.mockResolvedValue([{ id: 9,
+      payloadJson: JSON.stringify({ source: 'Website', medium: 'Google', 'custom:message': '  hello  ' }),
+      filesJson: null, contact: { id: 3, createdAt: '2026-01-01', updatedAt: '2026-02-01' },
+    }]);
+    const res = await request(makeApp()).get('/api/forms/7/leads?page=2&limit=25&search=Google');
+    expect(res.status).toBe(200);
+    expect(res.body.leads[0]).toMatchObject({ values: ['Website', 'Google', '  hello  '], createdAt: '2026-01-01', updatedAt: '2026-02-01' });
+    expect(prisma.webForm.findFirst).toHaveBeenCalledWith({ where: { id: 7, tenantId: TENANT_ID, scope: 'generic' } });
+    const query = prisma.webFormSubmission.findMany.mock.calls[0][0];
+    expect(query).toMatchObject({ skip: 25, take: 25, where: { webFormId: 7, tenantId: TENANT_ID, scope: 'generic', contact: { is: { tenantId: TENANT_ID } } } });
+    expect(query.where.OR).toContainEqual({ payloadJson: { contains: 'Google' } });
+    expect(prisma.webFormSubmission.count).toHaveBeenCalledWith({ where: query.where });
+  });
+  test.each(['wellness', 'travel'])('denies %s access', async (vertical) => {
+    expect((await request(makeApp(vertical)).get('/api/forms/7/leads')).status).toBe(403);
+    expect(prisma.webFormSubmission.findMany).not.toHaveBeenCalled();
+  });
+  test('rejects invalid and inaccessible forms', async () => {
+    expect((await request(makeApp()).get('/api/forms/no/leads')).status).toBe(400);
+    expect((await request(makeApp()).get('/api/forms/7/leads')).status).toBe(404);
+    expect(prisma.webFormSubmission.findMany).not.toHaveBeenCalled();
+  });
 });

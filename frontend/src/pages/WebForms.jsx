@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import WebFormLeadsModal from "../components/WebFormLeadsModal";
 import { createPortal } from "react-dom";
 import { Navigate } from "react-router-dom";
 
@@ -23,7 +24,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowDown, ArrowUp, ChevronDown, Code2, Copy, Eye, GripVertical, Hash,
   Link2, ListChecks, Paperclip, Plus, Save, Search, Trash2, Type,
-  Upload, Info, X,
+  Upload, Info, X, CheckCircle2,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -6440,6 +6441,9 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
 export default function WebForms({ scope = "generic" }) {
+  const auth = useContext(AuthContext);
+  const [leadsForm, setLeadsForm] = useState(null);
+  const canViewFormLeads = scope === "generic" && (auth?.tenant?.vertical || auth?.user?.vertical || "generic") === "generic";
 
 
 
@@ -7250,8 +7254,7 @@ export default function WebForms({ scope = "generic" }) {
       .catch(() => {
         if (!cancelled) setCanManageLandingForm(false);
       });
-    fetch("/api/landing-form-config", { headers: { Accept: "application/json" } })
-      .then((res) => (res.ok ? res.json() : null))
+    fetchApi("/api/landing-form-config/mine", { silent: true })
       .then((data) => {
         if (cancelled) return;
         const id = Number.parseInt(data && data.webFormId, 10);
@@ -17379,9 +17382,12 @@ export default function WebForms({ scope = "generic" }) {
                     <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowEmbed(true); }}>Embed</button>
                     <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowPreview(true); }}>Preview</button>
                     <button type="button" className="btn-secondary wf-danger-action" onClick={() => deleteForm(form)}><Trash2 size={15} style={{ marginRight: 6, verticalAlign: "middle" }} />Delete</button>
+                    {canViewFormLeads && <button type="button" className="btn-secondary" onClick={() => setLeadsForm(form)}>View All Leads</button>}
                     {isGenericScope && canManageLandingForm ? (
                       String(landingFormId) === String(form.id) ? (
-                        <span className="wf-status-pill active wf-tip" data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">On landing page</span>
+                        <span className="wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 8 }} data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">
+                          <span>Landing Page</span><CheckCircle2 size={20} aria-hidden="true" style={{ color: "var(--success-color)", flexShrink: 0 }} />
+                        </span>
                       ) : (
                         <label className="wf-landing-checkbox wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} data-tip={`Use ${form.name} as the public landing page form`} title={`Use this form in landing page: ${form.name}`}>
                           <input type="checkbox" checked={String(landingFormId) === String(form.id)} disabled={settingLandingFormId === form.id} onChange={() => setAsLandingForm(form)} aria-label={`Use this form in landing page: ${form.name}`} />
@@ -17397,6 +17403,7 @@ export default function WebForms({ scope = "generic" }) {
         </section>
       ) : null}
 
+      {canViewFormLeads && leadsForm && <WebFormLeadsModal key={leadsForm.id} form={leadsForm} onClose={() => setLeadsForm(null)} />}
       {builderOpen ? (
         <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
   <main style={{ display: "grid", gap: 16, minWidth: 0 }}>

@@ -41,6 +41,8 @@ prisma.user.findUnique = vi.fn();
 prisma.tenant.findFirst = vi.fn();
 prisma.webForm.findFirst = vi.fn();
 prisma.tenantSetting.findUnique = vi.fn();
+prisma.tenantSetting.findFirst = vi.fn();
+prisma.tenantSetting.updateMany = vi.fn();
 prisma.tenantSetting.upsert = vi.fn();
 
 const landingRouter = requireCJS('../../routes/landing_form_config');
@@ -75,6 +77,8 @@ beforeEach(() => {
   prisma.tenant.findFirst.mockReset().mockResolvedValue({ id: TENANT_ID });
   prisma.webForm.findFirst.mockReset();
   prisma.tenantSetting.findUnique.mockReset();
+  prisma.tenantSetting.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tenantSetting.upsert.mockReset().mockResolvedValue({ id: 1 });
 });
 

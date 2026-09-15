@@ -18,7 +18,9 @@ import {
   ReceiptText,
   RefreshCw,
   Search,
+  Send,
   Sun,
+  Star,
   UserRound,
   WalletCards,
 } from "lucide-react";
@@ -165,6 +167,22 @@ const portalInteractionStyles = `
   }
 
   @media (max-width: 520px) {
+    [data-tmc-parent-portal="true"] [data-tmc-review-trip-select="true"],
+    [data-tmc-parent-portal="true"] [data-tmc-review-trip-select="true"] select {
+      width: 100%;
+      min-width: 0;
+    }
+
+    [data-tmc-parent-portal="true"] [data-tmc-review-rating="true"] {
+      grid-template-columns: minmax(130px, 1fr) max-content !important;
+      gap: 8px;
+    }
+
+    [data-tmc-parent-portal="true"] [data-tmc-review-rating="true"] [data-tmc-review-rating-label="true"] {
+      grid-column: 1 / -1;
+      margin: 0;
+    }
+
     [data-tmc-parent-portal="true"] [data-tmc-installment="true"] {
       grid-template-columns: 1fr !important;
     }
@@ -230,6 +248,7 @@ export default function TmcParentPortal() {
     parentLinks: [],
     registrations: [],
     participants: [],
+    reviewTrips: [],
   });
   const [bookings, setBookings] = useState([]);
   const [activeView, setActiveView] = useState("dashboard");
@@ -250,7 +269,7 @@ export default function TmcParentPortal() {
     localStorage.removeItem(TOKEN_KEY);
     setToken("");
     setContact(null);
-    setPortalData({ trips: [], parentLinks: [], registrations: [], participants: [] });
+    setPortalData({ trips: [], parentLinks: [], registrations: [], participants: [], reviewTrips: [] });
     setBookings([]);
     setSelectedBookingId(null);
     setActiveView("dashboard");
@@ -263,10 +282,11 @@ export default function TmcParentPortal() {
     if (!silent) setLoading(true);
     setError("");
     try {
-      const [meResult, tripsResult, bookingsResult] = await Promise.all([
+      const [meResult, tripsResult, bookingsResult, reviewsResult] = await Promise.all([
         api("/parent/me", token),
         api("/parent/trips", token),
         travelApi("/travel/bookings", token),
+        api("/parent/reviews", token),
       ]);
       setContact(meResult.contact || null);
       setPortalData({
@@ -274,6 +294,7 @@ export default function TmcParentPortal() {
         parentLinks: Array.isArray(tripsResult.parentLinks) ? tripsResult.parentLinks : [],
         registrations: Array.isArray(tripsResult.registrations) ? tripsResult.registrations : [],
         participants: Array.isArray(tripsResult.participants) ? tripsResult.participants : [],
+        reviewTrips: Array.isArray(reviewsResult.trips) ? reviewsResult.trips : [],
       });
       setBookings(Array.isArray(bookingsResult) ? bookingsResult : []);
     } catch (err) {
@@ -409,6 +430,8 @@ export default function TmcParentPortal() {
       ? "Trips"
       : activeView === "bookings"
         ? "My Bookings"
+        : activeView === "reviews"
+          ? "Reviews"
         : "My Profile";
 
   return (
@@ -424,6 +447,7 @@ export default function TmcParentPortal() {
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => setActiveView("dashboard")} />
           <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => setActiveView("trips")} />
           <PortalNavButton icon={ReceiptText} label="My Bookings" count={bookings.length} active={activeView === "bookings"} onClick={() => setActiveView("bookings")} />
+          <PortalNavButton icon={Star} label="Reviews" active={activeView === "reviews"} onClick={() => setActiveView("reviews")} />
         </nav>
         <div style={styles.sidebarFooter}>Use this portal to explore school trips, complete registrations, and keep track of payments.</div>
       </aside>
@@ -448,6 +472,7 @@ export default function TmcParentPortal() {
           {activeView === "dashboard" && <DashboardView contact={contact} trips={trips} bookings={bookings} registrations={portalData.registrations} onNavigate={setActiveView} onOpenBooking={(id) => { setActiveView("bookings"); setSelectedBookingId(id); }} />}
           {activeView === "trips" && <TripsView trips={trips} loading={loading} />}
           {activeView === "bookings" && (selectedBooking ? <BookingDetail booking={selectedBooking} onBack={() => setSelectedBookingId(null)} /> : <BookingsView bookings={bookings} loading={loading} onSelect={setSelectedBookingId} />)}
+          {activeView === "reviews" && <ParentReviewsView trips={portalData.reviewTrips} loading={loading} token={token} onRefresh={load} />}
           {activeView === "profile" && <ParentProfileView contact={contact} />}
         </main>
       </div>
@@ -519,7 +544,7 @@ function ParentNotificationBell({ token, onNavigate }) {
   const openNotification = (notification) => {
     markRead(notification);
     setOpen(false);
-    if (["dashboard", "trips", "bookings", "profile"].includes(notification.link)) {
+    if (["dashboard", "trips", "bookings", "reviews", "profile"].includes(notification.link)) {
       onNavigate(notification.link);
     }
   };
@@ -685,6 +710,182 @@ function TripCard({ row }) {
       <div style={styles.tripCardIcon}><Plane size={22} /></div>
       <div style={styles.tripCardContent}><div style={styles.tripCardTop}><div><h3 style={styles.tripTitle}>{trip.destination || trip.tripCode || "School trip"}</h3><span style={styles.muted}>{trip.tripCode || "TMC trip"}</span></div></div><div style={styles.tripMeta}><span style={styles.tripMetaItem}><CalendarDays size={14} /> {formatDateRange(trip.departDate, trip.returnDate)}</span>{row.teacher?.name && <span style={styles.tripMetaItem}>Teacher: {row.teacher.name}</span>}</div></div>
       {landingUrl ? <a href={landingUrl} style={styles.tripAction}><span>View trip & register</span><ExternalLink size={15} /></a> : <span style={styles.unavailable}>Registration page unavailable</span>}
+    </div>
+  );
+}
+
+function ParentReviewsView({ trips, loading, token, onRefresh }) {
+  const [selectedTripId, setSelectedTripId] = useState(null);
+  const [rating, setRating] = useState(0);
+  const [experience, setExperience] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [reviewError, setReviewError] = useState("");
+  const [submittedReviews, setSubmittedReviews] = useState({});
+
+  const selectedTrip = trips.find((trip) => String(trip.id) === String(selectedTripId)) || null;
+  const selectedReview = selectedTrip
+    ? submittedReviews[selectedTrip.id] || selectedTrip.review
+    : null;
+
+  useEffect(() => {
+    setSelectedTripId((currentId) => {
+      const currentTripStillExists = currentId != null && trips.some((trip) => String(trip.id) === String(currentId));
+      return currentTripStillExists ? currentId : null;
+    });
+  }, [trips]);
+
+  useEffect(() => {
+    if (!selectedTrip) return;
+    setRating(Number(selectedReview?.overallRating) || 0);
+    setExperience(selectedReview?.answers?.experience || "");
+    setMessage("");
+    setReviewError("");
+  }, [selectedTrip, selectedReview]);
+
+  const submitReview = async (event) => {
+    event.preventDefault();
+    setReviewError("");
+    setMessage("");
+    if (!rating || !experience.trim()) {
+      setReviewError("Please choose a star rating and tell us about your experience.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await api(`/parent/trips/${selectedTrip.id}/review`, token, {
+        method: "POST",
+        body: { answers: { rating, experience: experience.trim() } },
+      });
+      const saved = {
+        status: "submitted",
+        overallRating: result.overallRating || rating,
+        answers: { parent_rating: rating, experience: experience.trim() },
+        submittedAt: new Date().toISOString(),
+      };
+      setSubmittedReviews((current) => ({ ...current, [selectedTrip.id]: saved }));
+      setMessage("Thank you for sharing your experience.");
+      if (result.externalReview?.url) {
+        window.location.assign(result.externalReview.url);
+      }
+      onRefresh({ silent: true });
+    } catch (err) {
+      setReviewError(err.message || "Unable to submit your review.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={styles.contentStack}>
+      <section style={styles.pageIntro}>
+        <div>
+          <h2 style={styles.pageTitle}>Reviews</h2>
+          <p style={styles.muted}>Share your experience after a completed school trip.</p>
+        </div>
+        <span style={styles.countPill}>{trips.length} {trips.length === 1 ? "completed trip" : "completed trips"}</span>
+      </section>
+
+      <section style={styles.card} aria-labelledby="parent-review-trips-heading">
+        <div style={styles.cardHeader}>
+          <div>
+            <h2 id="parent-review-trips-heading" style={styles.cardTitle}>Choose a trip to review</h2>
+            <p style={styles.muted}>Reviews are available once your trip is marked completed.</p>
+          </div>
+          {trips.length > 0 && (
+            <label data-tmc-review-trip-select="true" style={styles.reviewTripSelectWrap}>
+              <span style={styles.reviewTripSelectLabel}>Select trip</span>
+              <select
+                aria-label="Select a trip to review"
+                value={selectedTripId == null ? "" : String(selectedTripId)}
+                onChange={(event) => setSelectedTripId(event.target.value)}
+                style={styles.reviewTripSelect}
+              >
+                <option value="" disabled>Select a completed trip</option>
+                {trips.map((trip) => <option key={trip.id} value={String(trip.id)}>{trip.destination || trip.tripCode || "School trip"}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        {loading && trips.length === 0 ? <LoadingState /> : trips.length === 0 ? (
+          <EmptyState icon={Star} title="No completed trips yet" text="Your completed school trips will appear here when they are ready for feedback." />
+        ) : selectedTrip ? (
+          <div style={styles.reviewTripList}>
+            <div style={{ ...styles.reviewTripButton, ...styles.reviewTripButtonActive }}>
+              <span style={styles.reviewTripMain}>
+                <span style={styles.reviewTripCopy}>
+                  <strong>{selectedTrip.destination || selectedTrip.tripCode || "School trip"}</strong>
+                  <span style={styles.reviewTripMeta}><CalendarDays size={14} /> {formatDateRange(selectedTrip.departDate, selectedTrip.returnDate)}</span>
+                </span>
+              </span>
+              <span style={styles.reviewTripStatusGroup}>
+                <span style={selectedReview ? styles.reviewSubmittedPill : styles.reviewCompletedPill}>
+                  <CheckCircle2 size={14} aria-hidden="true" /> {selectedReview ? "Reviewed" : "Completed"}
+                </span>
+                <span style={styles.reviewTripSelectedText}>Selected</span>
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div style={styles.reviewTripPrompt} role="status">Select a completed trip above to start your review.</div>
+        )}
+      </section>
+
+      {selectedTrip && (
+        <section style={styles.card} aria-labelledby="parent-review-form-heading">
+          <div style={styles.cardHeader}>
+            <div>
+              <h2 id="parent-review-form-heading" style={styles.cardTitle}>Your experience of {selectedTrip.destination || "this trip"}</h2>
+              <p style={styles.muted}>Your feedback helps us make future school trips better.</p>
+            </div>
+            {selectedReview && <span style={styles.reviewSubmittedPill}>Submitted</span>}
+          </div>
+
+          {selectedReview ? (
+            <div style={styles.reviewThankYou} role="status">
+              <CheckCircle2 size={20} />
+              <div><strong>Thank you for your review.</strong><p style={styles.muted}>You rated this trip {selectedReview.overallRating}/5.</p></div>
+            </div>
+          ) : (
+            <form onSubmit={submitReview} style={styles.reviewForm}>
+              <div data-tmc-review-rating="true" role="group" aria-labelledby="parent-review-rating-label" style={styles.reviewRatingRow}>
+                <span data-tmc-review-rating-label="true" id="parent-review-rating-label" style={styles.reviewRatingLabel}>Overall rating <span style={styles.requiredMark} aria-hidden="true">*</span></span>
+                <div style={styles.reviewRatingControl}>
+                  <div style={styles.starPicker} aria-label="Trip rating out of 5 stars">
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setRating(value)}
+                        aria-label={`Rate ${value} out of 5 stars`}
+                        aria-pressed={rating === value}
+                        style={styles.starButton}
+                      >
+                        <Star size={30} fill={value <= rating ? "#F5B301" : "none"} color={value <= rating ? "#F5B301" : "var(--tmc-parent-muted)"} />
+                      </button>
+                    ))}
+                  </div>
+                  <span style={styles.ratingHint}>Select a rating</span>
+                </div>
+                {rating > 0 && <span style={styles.ratingScore}>{rating} out of 5</span>}
+              </div>
+              <div style={styles.reviewDivider} />
+              <div style={styles.experienceField}>
+                <label htmlFor="parent-review-experience" style={styles.label}><span style={styles.labelText}>Tell us about your experience <span style={styles.requiredMark} aria-hidden="true">*</span></span></label>
+                <div style={styles.textareaWrap}>
+                  <textarea id="parent-review-experience" aria-label="Tell us about your experience" value={experience} onChange={(event) => setExperience(event.target.value)} maxLength={500} rows={4} placeholder="What did your family enjoy about the trip? Share your thoughts, highlights or suggestions..." style={styles.textarea} required />
+                  <span style={styles.characterCount} aria-live="polite">{experience.length}/500</span>
+                </div>
+              </div>
+              {reviewError && <div role="alert" style={styles.error}>{reviewError}</div>}
+              {message && <div role="status" style={styles.successMessage}>{message}</div>}
+              <div style={styles.reviewFormFooter}>
+                <button type="submit" disabled={saving} style={{ ...styles.primary, ...styles.reviewSubmitButton }}><Send size={15} aria-hidden="true" /> {saving ? "Submitting..." : "Submit review"}</button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
     </div>
   );
 }
@@ -885,6 +1086,38 @@ const styles = {
   searchWrap: { display: "flex", alignItems: "center", gap: 9, padding: "0 12px", border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-muted)" },
   searchInput: { flex: 1, minWidth: 0, padding: "10px 0", border: 0, outline: 0, background: "transparent", color: "var(--tmc-parent-text)", fontSize: 14 },
   list: { display: "grid", gap: 11 },
+  reviewTripList: { display: "grid", gap: 10 },
+  reviewTripButton: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, minWidth: 0, padding: "12px 14px", border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "default", textAlign: "left" },
+  reviewTripButtonActive: { borderColor: "var(--tmc-parent-primary)", boxShadow: "0 0 0 2px var(--tmc-parent-profile-bg)" },
+  reviewTripMain: { display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 },
+  reviewTripCopy: { display: "grid", gap: 6, minWidth: 0, overflow: "hidden", color: "var(--tmc-parent-heading)" },
+  reviewTripMeta: { display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0, color: "var(--tmc-parent-muted)", fontSize: 12, fontWeight: 500 },
+  reviewTripSelectWrap: { display: "grid", gap: 4, flex: "0 0 auto", color: "var(--tmc-parent-subtle)", fontSize: 11, fontWeight: 700 },
+  reviewTripSelectLabel: { paddingLeft: 2 },
+  reviewTripSelect: { minWidth: 190, padding: "8px 30px 8px 10px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-heading)", cursor: "pointer", fontSize: 12, fontWeight: 700 },
+  reviewTripStatusGroup: { display: "inline-flex", alignItems: "center", gap: 12, flex: "0 0 auto", color: "var(--tmc-parent-primary)" },
+  reviewSubmittedPill: { display: "inline-flex", alignItems: "center", gap: 5, flex: "0 0 auto", padding: "6px 10px", borderRadius: 999, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 11, fontWeight: 750 },
+  reviewCompletedPill: { display: "inline-flex", alignItems: "center", gap: 5, flex: "0 0 auto", padding: "6px 10px", borderRadius: 999, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 11, fontWeight: 750 },
+  reviewTripSelectedText: { color: "var(--tmc-parent-primary)", fontSize: 12, fontWeight: 750, whiteSpace: "nowrap" },
+  reviewTripPrompt: { padding: "18px 14px", border: "1px dashed var(--tmc-parent-border-strong)", borderRadius: 10, color: "var(--tmc-parent-muted)", fontSize: 13, textAlign: "center" },
+  reviewForm: { display: "grid", gap: 16 },
+  reviewRatingRow: { display: "grid", gridTemplateColumns: "150px max-content max-content", alignItems: "start", columnGap: 28, rowGap: 2, minWidth: 0 },
+  reviewRatingLabel: { display: "inline-flex", alignItems: "center", gap: 3, margin: "7px 0 0", padding: 0, color: "var(--tmc-parent-subtle)", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" },
+  reviewRatingControl: { display: "grid", gap: 2 },
+  starPicker: { display: "flex", alignItems: "center", gap: 3 },
+  starButton: { display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 1, border: 0, borderRadius: 6, background: "transparent", cursor: "pointer" },
+  ratingHint: { color: "var(--tmc-parent-muted)", fontSize: 12 },
+  ratingScore: { display: "inline-flex", alignItems: "center", alignSelf: "start", marginTop: 2, padding: "7px 10px", borderRadius: 6, background: "var(--tmc-parent-surface-soft)", color: "var(--tmc-parent-muted)", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" },
+  requiredMark: { color: "#dc4b4b" },
+  reviewDivider: { height: 1, background: "var(--tmc-parent-border-light)" },
+  experienceField: { display: "grid", gap: 7 },
+  textareaWrap: { position: "relative" },
+  textarea: { width: "100%", minHeight: 96, boxSizing: "border-box", padding: "12px 13px 28px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)", fontSize: 14, lineHeight: 1.45, resize: "vertical", fontFamily: "inherit" },
+  characterCount: { position: "absolute", right: 12, bottom: 8, color: "var(--tmc-parent-muted)", fontSize: 11 },
+  reviewFormFooter: { display: "flex", alignItems: "stretch", justifyContent: "flex-end", gap: 14, flexWrap: "wrap" },
+  reviewSubmitButton: { minWidth: 150, padding: "11px 17px", whiteSpace: "nowrap" },
+  successMessage: { padding: "10px 13px", border: "1px solid var(--tmc-parent-success)", borderRadius: 9, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 13 },
+  reviewThankYou: { display: "flex", alignItems: "flex-start", gap: 10, padding: 14, borderRadius: 10, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)" },
   tripCard: { display: "flex", alignItems: "center", gap: 14, minWidth: 0, padding: 15, border: "1px solid var(--tmc-parent-border)", borderRadius: 12, background: "var(--tmc-parent-surface)" },
   tripCardIcon: { flex: "0 0 auto", width: 44, height: 44, display: "grid", placeItems: "center", borderRadius: "50%", background: "var(--tmc-parent-primary)", color: "var(--tmc-parent-accent)" },
   tripCardContent: { flex: 1, minWidth: 0 },
@@ -940,6 +1173,7 @@ const styles = {
   secondary: { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-primary)", cursor: "pointer", fontSize: 12, fontWeight: 700 },
   iconButton: { position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 35, height: 35, border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-heading)", cursor: "pointer" },
   label: { display: "grid", gap: 4, color: "var(--tmc-parent-subtle)", fontSize: 13, fontWeight: 700 },
+  labelText: { display: "inline-flex", alignItems: "center", gap: 3, lineHeight: 1.2 },
   input: { width: "100%", boxSizing: "border-box", padding: "10px 12px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)", fontSize: 14 },
   authPage: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 24, boxSizing: "border-box", background: "var(--tmc-parent-bg)", color: "var(--tmc-parent-text)" },
   authCard: { width: "min(100%, 420px)", display: "grid", gap: 17, padding: 30, border: "1px solid var(--tmc-parent-border)", borderRadius: 16, background: "var(--tmc-parent-surface)", boxShadow: "var(--tmc-parent-shadow)" },

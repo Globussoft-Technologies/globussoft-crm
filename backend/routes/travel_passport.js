@@ -63,6 +63,7 @@ const { writeAudit } = require("../lib/audit");
 const passportFileStore = require("../lib/passportFileStore");
 const { removeScanFromEnvelopeJson } = passportFileStore;
 const visaDocStore = require("../lib/visaDocStore");
+const { tripRequiresPassport } = require("../lib/travelDocumentPolicy");
 const { findPassportIdentityCandidates, persistPassportIdentity } = require("../lib/passportIdentityLinker");
 
 async function safeFindPassportIdentityCandidates(args, context = "travel-passport") {
@@ -197,7 +198,7 @@ async function buildPassportListRows(tenantId, opts = {}) {
   const [tripRows, customerRows] = await Promise.all([
     prisma.tripParticipant.findMany({
       where: {
-        trip: { tenantId },
+        trip: { tenantId, tripType: "international" },
         OR: [
           { passportExtractedAt: { not: null } },
           { passportVerifiedAt: { not: null } },
@@ -205,7 +206,7 @@ async function buildPassportListRows(tenantId, opts = {}) {
         ],
       },
       include: {
-        trip: { select: { id: true, tripCode: true, destination: true } },
+        trip: { select: { id: true, tripCode: true, destination: true, tripType: true } },
       },
       orderBy: { updatedAt: "desc" },
       take: 5000,
@@ -344,8 +345,8 @@ async function buildPassportListRows(tenantId, opts = {}) {
 async function loadBulkMatchCandidates(tenantId) {
   const [tripRows, customerRows] = await Promise.all([
     prisma.tripParticipant.findMany({
-      where: { trip: { tenantId } },
-      include: { trip: { select: { id: true, tripCode: true, destination: true } } },
+      where: { trip: { tenantId, tripType: "international" } },
+      include: { trip: { select: { id: true, tripCode: true, destination: true, tripType: true } } },
       take: 5000,
     }),
     prisma.customerTraveller.findMany({
@@ -608,12 +609,21 @@ async function loadParticipant(req) {
       id: pid,
       trip: { tenantId: req.travelTenant.id },
     },
-    include: { trip: { select: { id: true, tenantId: true, tripCode: true, destination: true } } },
+    include: { trip: { select: { id: true, tenantId: true, tripCode: true, destination: true, tripType: true } } },
   });
   if (!participant) {
     const err = new Error("Participant not found"); err.status = 404; err.code = "PARTICIPANT_NOT_FOUND"; throw err;
   }
   return participant;
+}
+
+function requirePassportForTrip(participant) {
+  if (!tripRequiresPassport(participant?.trip?.tripType)) {
+    const err = new Error("Passport is not required for this trip");
+    err.status = 400;
+    err.code = "PASSPORT_NOT_REQUIRED";
+    throw err;
+  }
 }
 
 // ─── POST /participants/:id/passport-upload ───────────────────────────
@@ -631,6 +641,13 @@ router.post(
         participant = await loadParticipant(req);
       } catch (e) {
         // loadParticipant runs AFTER multer wrote the file — clean it up.
+        unlinkUploadedScan(req);
+        throw e;
+      }
+
+      try {
+        requirePassportForTrip(participant);
+      } catch (e) {
         unlinkUploadedScan(req);
         throw e;
       }
@@ -922,10 +939,10 @@ router.get(
           where: {
             passportExtractedAt: { not: null },
             passportVerifiedAt: null,
-            trip: { tenantId: req.travelTenant.id },
+            trip: { tenantId: req.travelTenant.id, tripType: "international" },
           },
           include: {
-            trip: { select: { id: true, tripCode: true, destination: true } },
+            trip: { select: { id: true, tripCode: true, destination: true, tripType: true } },
           },
           orderBy: { passportExtractedAt: "asc" },
           take: 200,
@@ -1014,6 +1031,7 @@ router.post(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
 
       if (participant.passportExtractedAt) {
         return res.status(409).json({
@@ -1149,6 +1167,7 @@ router.post(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
 
       if (!participant.passportExtractedAt) {
         return res.status(409).json({
@@ -1304,6 +1323,7 @@ router.delete(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
       await prisma.tripParticipant.update({
         where: { id: participant.id },
         data: {
@@ -1384,6 +1404,7 @@ router.get(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
       return respondWithPassportViewUrl(res, participant);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

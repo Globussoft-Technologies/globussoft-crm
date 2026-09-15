@@ -268,6 +268,52 @@ describe("<PublicTripMicrosite /> - document upload", () => {
     });
   });
 
+  it('does not show or submit a passport for a domestic day trip', async () => {
+    infoResponse.body.trip = {
+      destination: 'Mysore',
+      tripType: 'day_trip',
+      departDate: '2026-10-17',
+      returnDate: '2026-10-18',
+      documentRequirements: [{ docType: 'passport', required: true }, { docType: 'aadhaar', required: true }],
+    };
+    installDocMock({
+      draftSummary: {
+        id: 7001, status: 'DRAFT', hasPassport: true, hasPassportDoc: false,
+        hasAadhaarDoc: false, hasConsentLetterDoc: false, consentGiven: false,
+      },
+      uploadResponse: jsonResponse(200, {
+        ok: true,
+        documents: { passport: false, aadhaar: true, consentLetter: true },
+      }),
+    });
+
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      expect(await screen.findByTestId('microsite-upload-docs-btn')).toBeInTheDocument();
+      expect(screen.queryByText(/Passport/i)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('microsite-upload-docs-btn'));
+      expect(await screen.findByTestId('microsite-doc-modal')).toBeInTheDocument();
+      expect(screen.queryByTestId('microsite-doc-passport')).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByTestId('microsite-doc-aadhaar'), {
+        target: { files: [makeFile('aadhaar.png', 'image/png')] },
+      });
+      fireEvent.change(screen.getByTestId('microsite-doc-consent-letter'), {
+        target: { files: [makeFile('consent.pdf', 'application/pdf')] },
+      });
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('microsite-doc-submit'));
+
+      expect(await screen.findByTestId('microsite-doc-modal-done')).toBeInTheDocument();
+      const post = global.fetch.mock.calls.find(
+        ([u, o]) => u === `${BASE}/documents` && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(post[1].body.get('passport')).toBeNull();
+      expect(post[1].body.get('aadhaar')).toBeInstanceOf(File);
+    });
+  });
+
   it("does not render the phone-OTP registration panel even when a draftToken is present", async () => {
     installDocMock();
     await withDraftToken("abc123", async () => {

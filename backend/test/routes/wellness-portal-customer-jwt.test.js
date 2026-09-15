@@ -59,6 +59,20 @@ prisma.user.findUnique = vi.fn();
 
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
+prisma.visit.findFirst = vi.fn();
+
+prisma.consentForm = prisma.consentForm || {};
+prisma.consentForm.findMany = vi.fn();
+prisma.consentForm.findFirst = vi.fn();
+prisma.signatureRequest = prisma.signatureRequest || {};
+prisma.signatureRequest.findMany = vi.fn();
+prisma.signatureRequest.findFirst = vi.fn();
+prisma.service = prisma.service || {};
+prisma.service.findMany = vi.fn();
+prisma.location = prisma.location || {};
+prisma.location.findFirst = vi.fn();
+prisma.role = prisma.role || {};
+prisma.role.findFirst = vi.fn();
 
 // writeAudit calls go through auditLog — make them no-op so the handler's
 // try/catch around the audit write is exercised in success-mode.
@@ -73,6 +87,7 @@ import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 const wellnessRouter = requireCJS('../../routes/wellness');
+const { clearCustomerRoleCache } = requireCJS('../../lib/portalPermissions');
 
 const { JWT_SECRET } = process.env;
 
@@ -110,11 +125,27 @@ beforeEach(() => {
   prisma.patient.create.mockReset();
   prisma.user.findUnique.mockReset();
   prisma.visit.findMany.mockReset();
+  prisma.visit.findFirst.mockReset();
+  prisma.consentForm.findMany.mockReset();
+  prisma.consentForm.findFirst.mockReset();
+  prisma.signatureRequest.findMany.mockReset();
+  prisma.signatureRequest.findFirst.mockReset();
+  prisma.service.findMany.mockReset();
+  prisma.location.findFirst.mockReset();
+  prisma.role.findFirst.mockReset();
+  clearCustomerRoleCache();
 
   // Sensible defaults — empty result set so the handler's body returns [].
   prisma.visit.findMany.mockResolvedValue([]);
+  prisma.visit.findFirst.mockResolvedValue(null);
   // Path A default: patient exists so portal tokens resolve.
   prisma.patient.findUnique.mockResolvedValue({ id: 50, tenantId: 7 });
+  prisma.consentForm.findMany.mockResolvedValue([]);
+  prisma.consentForm.findFirst.mockResolvedValue(null);
+  prisma.signatureRequest.findMany.mockResolvedValue([]);
+  prisma.signatureRequest.findFirst.mockResolvedValue(null);
+  prisma.service.findMany.mockResolvedValue([]);
+  prisma.location.findFirst.mockResolvedValue(null);
 });
 
 describe('verifyPatientToken — Path A (patient-portal token)', () => {
@@ -312,5 +343,177 @@ describe('verifyPatientToken — auth-gate negatives', () => {
       .get('/api/wellness/portal/visits')
       .set('Authorization', 'Bearer not.a.real.jwt');
     expect(res.status).toBe(401);
+  });
+});
+describe('portal consent read scope', () => {
+  beforeEach(() => {
+    prisma.role.findFirst.mockResolvedValue({
+      id: 7,
+      permissions: [{ module: 'consents', action: 'read' }],
+    });
+  });
+
+  test('lists only signed consent forms belonging to the portal patient', async () => {
+    const rows = [{
+      id: 801,
+      templateName: 'Hair Transplant',
+      signedAt: new Date('2026-08-28T14:33:00.000Z'),
+      patientId: 50,
+      serviceId: 12,
+      hasPdfBlob: true,
+      service: { id: 12, name: 'Hair Transplant' },
+    }];
+    prisma.consentForm.findMany.mockResolvedValue(rows);
+
+    const token = signPortalJwt({ patientId: 50 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/consents')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 801, patientId: 50 }),
+    ]));
+    expect(prisma.role.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, key: 'CUSTOMER' },
+    }));
+    expect(prisma.consentForm.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { patientId: 50, tenantId: 7 },
+    }));
+  });
+
+  test('denies list access when CUSTOMER role lacks consents.read', async () => {
+    prisma.role.findFirst.mockResolvedValue({ id: 7, permissions: [] });
+
+    const token = signPortalJwt({ patientId: 50 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/consents')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('PORTAL_RBAC_DENIED');
+    expect(prisma.consentForm.findMany).not.toHaveBeenCalled();
+  });
+
+  test('includes signed patient e-signatures in the consent list without replacing legacy rows', async () => {
+    prisma.consentForm.findMany.mockResolvedValueOnce([{
+      id: 802,
+      templateName: 'Legacy consent',
+      patientId: 50,
+      signedAt: new Date('2026-08-01T10:00:00.000Z'),
+      serviceId: 12,
+      service: { id: 12, name: 'Legacy service' },
+    }]);
+    prisma.signatureRequest.findMany.mockResolvedValueOnce([{
+      id: 910,
+      documentName: 'Hair Transplant Consent',
+      signedAt: new Date('2026-08-28T10:00:00.000Z'),
+      patientId: 50,
+      visitId: 901,
+      serviceIds: '[12]',
+    }]);
+    prisma.service.findMany.mockResolvedValueOnce([{ id: 12, name: 'Hair Transplant' }]);
+
+    const token = signPortalJwt({ patientId: 50 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/consents')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 802, source: 'consent' }),
+      expect.objectContaining({ id: 910, source: 'signature', signatureRequestId: 910, visitId: 901 }),
+    ]));
+    expect(prisma.signatureRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ patientId: 50, tenantId: 7, status: 'SIGNED', documentType: 'Custom' }),
+    }));
+  });
+
+  test('regular CUSTOMER session token can list its linked consent forms', async () => {
+    prisma.patient.findFirst.mockResolvedValueOnce({ id: 50, phone: '+919123456789', tenantId: 7 });
+    prisma.consentForm.findMany.mockResolvedValueOnce([
+      { id: 802, templateName: 'General', patientId: 50, signedAt: new Date() },
+    ]);
+
+    const token = signCustomerJwt({ userId: 100, tenantId: 7 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/consents')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual(expect.objectContaining({ id: 802, patientId: 50 }));
+    expect(prisma.patient.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 100, tenantId: 7, deletedAt: null },
+    }));
+  });
+
+  test('returns a scoped consent PDF for the portal patient', async () => {
+    prisma.consentForm.findFirst.mockResolvedValue({
+      id: 801,
+      tenantId: 7,
+      patientId: 50,
+      serviceId: 12,
+      templateName: 'Hair Transplant',
+      signedPdfBlob: Buffer.from('%PDF-1.4 test'),
+      signedPdfMime: 'application/pdf',
+      patient: { id: 50, name: 'Patient' },
+      service: { id: 12, name: 'Hair Transplant' },
+    });
+
+    const token = signPortalJwt({ patientId: 50 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/consents/801/pdf')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(prisma.consentForm.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 801, patientId: 50, tenantId: 7 },
+    }));
+  });
+
+  test('does not return a consent PDF belonging to another patient', async () => {
+    prisma.consentForm.findFirst.mockResolvedValue(null);
+
+    const token = signPortalJwt({ patientId: 50 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/consents/999/pdf')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(404);
+    expect(prisma.consentForm.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 999, patientId: 50, tenantId: 7 },
+    }));
+  });
+
+  test('returns a scoped PDF for a signed patient e-signature', async () => {
+    prisma.signatureRequest.findFirst.mockResolvedValueOnce({
+      id: 910,
+      patientId: 50,
+      visitId: 901,
+      serviceIds: '[12]',
+      documentName: 'Hair Transplant Consent',
+      signedAt: new Date('2026-08-28T10:00:00.000Z'),
+      signature: null,
+    });
+    prisma.patient.findFirst.mockResolvedValueOnce({ id: 50, name: 'Patient', email: 'patient@example.com', phone: '+919123456789' });
+    prisma.visit.findFirst.mockResolvedValueOnce({
+      id: 901,
+      visitDate: new Date('2026-08-28T09:00:00.000Z'),
+      serviceId: 12,
+      service: { id: 12, name: 'Hair Transplant' },
+    });
+    prisma.service.findMany.mockResolvedValueOnce([{ id: 12, name: 'Hair Transplant' }]);
+
+    const token = signPortalJwt({ patientId: 50 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/signatures/910/pdf')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/pdf/);
+    expect(prisma.signatureRequest.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 910, patientId: 50, tenantId: 7, status: 'SIGNED' }),
+    }));
   });
 });

@@ -1076,6 +1076,13 @@ const PAGE_CATALOG = [
     category: 'Travel Marketing',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
+  {
+    path: '/travel/forms',
+    label: 'Web Forms',
+    description: 'Embedded travel lead capture forms',
+    category: 'Travel Marketing',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
 
   //  Sales & Pipeline (missing generic CRM routes) 
   {

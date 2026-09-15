@@ -677,7 +677,7 @@ describe('TMC teacher registration roster', () => {
     expect(await screen.findByText('Asha Rao')).toBeInTheDocument();
     expect(screen.getByText('asha@example.com')).toBeInTheDocument();
     expect(screen.getByText('Vikram Shah')).toBeInTheDocument();
-    expect(screen.getByText('Phone not provided')).toBeInTheDocument();
+    expect(screen.queryByText('Phone not provided')).toBeNull();
   });
 
   it('opens a teacher workspace with assigned trips, parent link, and participants', async () => {

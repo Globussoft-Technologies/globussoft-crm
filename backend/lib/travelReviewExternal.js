@@ -32,6 +32,7 @@ function buildAnalysisText({ destination, overallRating, answers }) {
   pushLine(lines, "Would recommend", a.recommend);
   pushLine(lines, "Would book again", a.rebook);
   pushLine(lines, "Loved most", a.loved_most);
+  pushLine(lines, "Parent experience", a.experience);
   pushLine(lines, "Could do better", a.improve);
   pushLine(lines, "Memorable moment", a.highlight);
   return lines.join("\n");
@@ -40,6 +41,7 @@ function buildAnalysisText({ destination, overallRating, answers }) {
 function buildSuggestedReview({ destination, answers }) {
   const a = answers || {};
   const parts = [];
+  if (a.experience) parts.push(String(a.experience).trim());
   if (a.loved_most) parts.push(String(a.loved_most).trim());
   if (a.highlight) parts.push(String(a.highlight).trim());
   const summary = parts.filter(Boolean).join(" ");
@@ -49,6 +51,9 @@ function buildSuggestedReview({ destination, answers }) {
 }
 
 async function buildExternalReviewCta({ tenantId, destination, overallRating, answers }) {
+  const numericRating = Number(overallRating);
+  if (!Number.isFinite(numericRating) || numericRating < 4) return null;
+
   const configuredUrl = normalizeUrl(
     await getSetting(tenantId, KEYS.TRAVEL_EXTERNAL_REVIEW_URL, {
       coerce: (value) => String(value || ""),
@@ -59,6 +64,7 @@ async function buildExternalReviewCta({ tenantId, destination, overallRating, an
 
   const analysis = await analyzeMessageDetailed(
     buildAnalysisText({ destination, overallRating, answers }),
+    tenantId,
   );
 
   if (!analysis || !analysis.trusted || analysis.usedFallback) return null;

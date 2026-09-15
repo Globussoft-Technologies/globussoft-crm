@@ -37,6 +37,7 @@ const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/tra
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const digilockerClient = require("../services/digilockerClient");
 const visaDocStore = require("../lib/visaDocStore");
+const { tripRequiresPassport } = require("../lib/travelDocumentPolicy");
 // const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
 const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
@@ -199,7 +200,8 @@ function uploadImageOrReject(req, res, next) {
   });
 }
 
-// Document upload for the PUBLIC microsite (passport + Aadhaar). These are
+// Document upload for the PUBLIC microsite. International trips collect a
+// passport plus Aadhaar; domestic/day trips collect Aadhaar only. These are
 // PII scans, NOT editor images — they never land on the public /uploads
 // static mount. We use MEMORY storage so the buffer can be handed to
 // visaDocStore (S3 when configured, gated-disk fallback otherwise), which
@@ -276,6 +278,7 @@ const PUBLIC_SELECT = {
       legalEntity: true,
       pricePerStudent: true,
       status: true,
+      tripType: true,
       documentRequirements: {
         select: { docType: true, required: true },
         orderBy: { id: "asc" },
@@ -1213,6 +1216,10 @@ router.get("/microsites/public/:publicUuid", async (req, res) => {
     // Strip the internal tenantId before responding — it was selected
     // ONLY to resolve the brand kit above. Public response shape stays
     // identical to pre-G095 except for the additive `brandKit` field.
+    if (ms.trip && !tripRequiresPassport(ms.trip.tripType)) {
+      ms.trip.documentRequirements = (ms.trip.documentRequirements || [])
+        .filter((doc) => String(doc.docType || "").toLowerCase() !== "passport");
+    }
     const { tenantId: _tid, ...publicShape } = ms;
     res.json({ ...publicShape, brandKit });
   } catch (e) {
@@ -1249,7 +1256,7 @@ router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
     }
     const ms = await prisma.tripMicrosite.findUnique({
       where: { publicUuid: uuid },
-      select: { id: true, tripId: true },
+      select: { id: true, tripId: true, trip: { select: { tripType: true } } },
     });
     if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
 
@@ -1322,6 +1329,7 @@ router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
       } catch { /* malformed extras → treat as no documents */ }
     }
 
+    const requiresPassport = tripRequiresPassport(ms.trip?.tripType);
     res.json({
       id: draft.id,
       status: draft.status,
@@ -1333,9 +1341,9 @@ router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
       parentEmailMasked: maskEmail(draft.parentEmail),
       parentPhoneMasked: maskPhone(draft.parentPhone),
       parentPhoneLast4: draft.parentPhone ? String(draft.parentPhone).slice(-4) : null,
-      hasPassport: !!draft.passportNumber,
+      hasPassport: requiresPassport && !!draft.passportNumber,
       // Document-upload status (booleans + consent timestamp only)
-      hasPassportDoc: !!docs.passport,
+      hasPassportDoc: requiresPassport && !!docs.passport,
       hasAadhaarDoc: !!docs.aadhaar,
       hasConsentLetterDoc: !!docs.consentLetter,
       consentGiven: !!docs.consentCapturedAt,
@@ -1785,19 +1793,24 @@ router.get("/microsites/public/:publicUuid/full", async (req, res) => {
       where: { id: ms.tripId },
       select: {
         id: true, tripCode: true, destination: true,
-        departDate: true, returnDate: true, status: true,
+        departDate: true, returnDate: true, status: true, tripType: true,
       },
     });
 
     // Purpose-narrowed reveal — only the data the OTP was issued for.
     const reveal = { microsite: ms, trip };
     if (claims.purpose === "registration" || claims.purpose === "teacher-access") {
+      const participantSelect = {
+        id: true,
+        fullName: true,
+        dob: true,
+        ...(tripRequiresPassport(trip?.tripType)
+          ? { passportNumber: true, passportExpiry: true }
+          : {}),
+      };
       reveal.participants = await prisma.tripParticipant.findMany({
         where: { tripId: ms.tripId },
-        select: {
-          id: true, fullName: true, passportNumber: true,
-          passportExpiry: true, dob: true,
-        },
+        select: participantSelect,
       });
     }
     // Phase 4 — when an OTP token was minted with purpose=registration
@@ -1820,7 +1833,9 @@ router.get("/microsites/public/:publicUuid/full", async (req, res) => {
           otpVerifiedAt: true, draftTokenExpiresAt: true,
           studentName: true, studentSchool: true, studentClass: true,
           parentName: true, parentEmail: true, parentPhone: true,
-          passportNumber: true, passportExpiry: true,
+          ...(tripRequiresPassport(trip?.tripType)
+            ? { passportNumber: true, passportExpiry: true }
+            : {}),
           createdAt: true,
         },
       });
@@ -1860,9 +1875,12 @@ router.get("/microsites/public/:publicUuid/full", async (req, res) => {
       });
     }
     if (claims.purpose === "document-checklist") {
-      reveal.documentRequirements = await prisma.tripDocumentRequirement.findMany({
+      const rows = await prisma.tripDocumentRequirement.findMany({
         where: { tripId: ms.tripId },
       });
+      reveal.documentRequirements = tripRequiresPassport(trip?.tripType)
+        ? rows
+        : rows.filter((doc) => String(doc.docType || "").toLowerCase() !== "passport");
     }
 
     res.json(reveal);
@@ -1907,7 +1925,13 @@ async function loadPublicMicrosite(uuid) {
   }
   const ms = await prisma.tripMicrosite.findUnique({
     where: { publicUuid: uuid },
-    select: { id: true, tripId: true, tenantId: true, expiresAt: true },
+    select: {
+      id: true,
+      tripId: true,
+      tenantId: true,
+      expiresAt: true,
+      trip: { select: { tripType: true } },
+    },
   });
   if (!ms) {
     const err = new Error("Microsite not found"); err.status = 404; err.code = "NOT_FOUND"; throw err;
@@ -2073,7 +2097,7 @@ router.post("/microsites/public/:publicUuid/verify/aadhaar/callback", async (req
   }
 });
 
-// ─── PUBLIC document upload (Passport + Aadhaar + parent consent) ─────
+// ─── PUBLIC document upload (trip-type-aware documents + parent consent) ─
 //
 // POST /api/travel/microsites/public/:publicUuid/documents
 //
@@ -2093,7 +2117,7 @@ router.post("/microsites/public/:publicUuid/verify/aadhaar/callback", async (req
 // multipart/form-data fields:
 //   draftToken     (text, required)
 //   consent        (text "true", required)
-//   passport       (file, required unless already uploaded on the draft)
+//   passport       (file, required for international trips unless already uploaded)
 //   aadhaar        (file, required unless already uploaded on the draft)
 //   consentLetter  (file, required unless already uploaded on the draft — Word/PDF)
 router.post(
@@ -2140,7 +2164,8 @@ router.post(
       }
       const existingDocs = (extras.documents && typeof extras.documents === "object") ? extras.documents : {};
 
-      const passportFile = req.files?.passport?.[0] || null;
+      const requiresPassport = tripRequiresPassport(ms.trip?.tripType);
+      const passportFile = requiresPassport ? (req.files?.passport?.[0] || null) : null;
       const aadhaarFile = req.files?.aadhaar?.[0] || null;
       const consentLetterFile = req.files?.consentLetter?.[0] || null;
 
@@ -2148,12 +2173,12 @@ router.post(
       // stored on the draft satisfies the requirement even without a fresh
       // file this time (so a parent can re-upload just one). Neither present
       // and none stored → reject.
-      const willHavePassport = !!passportFile || !!existingDocs.passport;
+      const willHavePassport = !requiresPassport || !!passportFile || !!existingDocs.passport;
       const willHaveAadhaar = !!aadhaarFile || !!existingDocs.aadhaar;
       const willHaveConsentLetter = !!consentLetterFile || !!existingDocs.consentLetter;
       if (!willHavePassport || !willHaveAadhaar) {
         return res.status(400).json({
-          error: "Both Passport and Aadhaar documents are required",
+          error: requiresPassport ? "Both Passport and Aadhaar documents are required" : "Aadhaar document is required",
           code: "MISSING_FILES",
         });
       }
@@ -2192,7 +2217,7 @@ router.post(
       res.status(200).json({
         ok: true,
         documents: {
-          passport: !!nextDocs.passport,
+          passport: requiresPassport && !!nextDocs.passport,
           aadhaar: !!nextDocs.aadhaar,
           consentLetter: !!nextDocs.consentLetter,
           consentCapturedAt: nextDocs.consentCapturedAt,

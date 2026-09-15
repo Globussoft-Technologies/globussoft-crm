@@ -33,6 +33,7 @@ import {
   Upload, X,
 } from "lucide-react";
 import { DestinationHero, DestinationSideRails } from "../../components/DestinationVisuals";
+import { tripRequiresPassport } from "../../utils/travelDocumentPolicy";
 
 /** Lightweight client-side HTML sanitiser — strips scripts, event handlers,
  *  and javascript: URLs as defence-in-depth even though the server already
@@ -129,10 +130,11 @@ function parseItineraryDays(raw) {
 }
 
 const DEFAULT_DOCUMENTS = [
-  { docType: "passport", required: true },
   { docType: "aadhaar", required: true },
   { docType: "consent-letter", required: true },
 ];
+
+const DEFAULT_PASSPORT_DOCUMENT = { docType: "passport", required: true };
 
 function docLabel(docType) {
   const labels = {
@@ -244,8 +246,13 @@ export default function PublicTripMicrosite() {
   }
 
   const trip = info?.trip || {};
+  const requiresPassport = tripRequiresPassport(trip.tripType);
   const itineraryDays = parseItineraryDays(info?.itineraryHtml);
-  const docs = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
+  const docs = (Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [])
+    .filter((doc) => requiresPassport || String(doc.docType || "").toLowerCase() !== "passport");
+  const displayedDocs = docs.length
+    ? docs
+    : (requiresPassport ? [DEFAULT_PASSPORT_DOCUMENT, ...DEFAULT_DOCUMENTS] : DEFAULT_DOCUMENTS);
   const instalments = parseInstalments(trip.paymentPlan?.instalmentsJson);
   const durationDays = tripDurationDays(trip);
   const studentCount = trip?._count?.participants || 0;
@@ -359,12 +366,12 @@ export default function PublicTripMicrosite() {
                 data-testid="microsite-upload-docs-btn"
               >
                 <Upload size={15} aria-hidden />
-                {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc && docStatus?.hasConsentLetterDoc ? "Update documents" : "Upload documents"}
+                {(!requiresPassport || docStatus?.hasPassportDoc) && docStatus?.hasAadhaarDoc && docStatus?.hasConsentLetterDoc ? "Update documents" : "Upload documents"}
               </button>
             )}
           </div>
           <div style={S.docGrid}>
-            {(docs.length ? docs : DEFAULT_DOCUMENTS).map((doc) => (
+            {displayedDocs.map((doc) => (
               <div key={doc.docType} style={S.docItem}>
                 <CheckCircle2 size={15} aria-hidden />
                 <span>{docLabel(doc.docType)}{doc.required === false ? " (optional)" : ""}</span>
@@ -373,9 +380,9 @@ export default function PublicTripMicrosite() {
           </div>
           {draftToken ? (
             <p style={{ ...S.help, marginTop: 12, marginBottom: 0 }}>
-              {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc && docStatus?.hasConsentLetterDoc
+              {(!requiresPassport || docStatus?.hasPassportDoc) && docStatus?.hasAadhaarDoc && docStatus?.hasConsentLetterDoc
                 ? "Your documents have been received. You can re-upload above if anything needs to change."
-                : "Upload your Passport, Aadhaar and Parent consent letter using the button above."}
+                : `Upload your ${requiresPassport ? "Passport, " : ""}Aadhaar and Parent consent letter using the button above.`}
             </p>
           ) : (
             <p style={{ ...S.help, marginTop: 12, marginBottom: 0 }}>
@@ -417,6 +424,7 @@ export default function PublicTripMicrosite() {
           publicUuid={publicUuid}
           draftToken={draftToken}
           status={docStatus}
+          requiresPassport={requiresPassport}
           accentBg={palette.headerBg}
           onClose={() => setDocModalOpen(false)}
           onUploaded={refreshDocStatus}
@@ -460,11 +468,11 @@ function fmtDate(d) {
 // Parent-facing document capture, opened from the "Documents to keep
 // ready" section. Because this is a PUBLIC page, the modal is scoped
 // entirely to THIS registrant via the draftToken — it never lists or
-// touches other travellers. Requires Passport + Aadhaar (a doc already
-// stored on the draft counts, so a re-upload of just one is allowed) and
-// a mandatory parent-consent checkbox. Posts multipart/form-data to the
-// public /documents endpoint.
-function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose, onUploaded, portalRedirect }) {
+// touches other travellers. International trips require Passport + Aadhaar;
+// domestic and day trips require Aadhaar only. A doc already stored on the
+// draft counts, so a re-upload of just one is allowed. All flows also require
+// the parent-consent checkbox. Posts multipart/form-data to /documents.
+function DocumentUploadModal({ publicUuid, draftToken, status, requiresPassport, accentBg, onClose, onUploaded, portalRedirect }) {
   const [passport, setPassport] = useState(null);
   const [aadhaar, setAadhaar] = useState(null);
   const [consentLetter, setConsentLetter] = useState(null);
@@ -509,8 +517,8 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
     }
     // All docs must exist after this submit — a freshly-chosen file OR one
     // already stored on the draft satisfies each requirement.
-    if ((!passport && !hasPassportDoc) || (!aadhaar && !hasAadhaarDoc)) {
-      setError("Both Passport and Aadhaar documents are required.");
+    if ((requiresPassport && !passport && !hasPassportDoc) || (!aadhaar && !hasAadhaarDoc)) {
+      setError(`${requiresPassport ? "Passport and " : ""}Aadhaar document${requiresPassport ? "s are" : " is"} required.`);
       return;
     }
     if (!consentLetter && !hasConsentLetterDoc) {
@@ -522,7 +530,7 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
       const fd = new FormData();
       fd.append("draftToken", draftToken);
       fd.append("consent", "true");
-      if (passport) fd.append("passport", passport);
+      if (requiresPassport && passport) fd.append("passport", passport);
       if (aadhaar) fd.append("aadhaar", aadhaar);
       if (consentLetter) fd.append("consentLetter", consentLetter);
       const res = await fetch(`/api/travel/microsites/public/${publicUuid}/documents`, {
@@ -579,14 +587,16 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
               These are shared securely with the trip coordinator only.
             </p>
 
-            <FileField
-              label="Passport"
-              testid="microsite-doc-passport"
-              file={passport}
-              alreadyUploaded={hasPassportDoc}
-              accept={ACCEPT}
-              onChange={pickFile(setPassport)}
-            />
+            {requiresPassport && (
+              <FileField
+                label="Passport"
+                testid="microsite-doc-passport"
+                file={passport}
+                alreadyUploaded={hasPassportDoc}
+                accept={ACCEPT}
+                onChange={pickFile(setPassport)}
+              />
+            )}
             <FileField
               label="Aadhaar"
               testid="microsite-doc-aadhaar"

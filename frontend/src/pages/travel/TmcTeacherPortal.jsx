@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Bell,
   ChevronDown,
+  CheckCircle2,
   Clipboard,
   ClipboardCheck,
   ExternalLink,
@@ -186,8 +187,9 @@ export default function TmcTeacherPortal() {
   const [landingPage, setLandingPage] = useState(null);
   const [landingPageLoading, setLandingPageLoading] = useState(false);
   const [landingPageError, setLandingPageError] = useState("");
-  const [generatedLinks, setGeneratedLinks] = useState({});
   const [diagnosticReports, setDiagnosticReports] = useState([]);
+  const [teacherReviews, setTeacherReviews] = useState([]);
+  const [reviewSaving, setReviewSaving] = useState(false);
   const [activeView, setActiveView] = useState("dashboard");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -218,8 +220,9 @@ export default function TmcTeacherPortal() {
     setLandingPage(null);
     setLandingPageLoading(false);
     setLandingPageError("");
-    setGeneratedLinks({});
     setDiagnosticReports([]);
+    setTeacherReviews([]);
+    setReviewSaving(false);
     setActiveView("dashboard");
     setError(message);
   }, []);
@@ -228,15 +231,17 @@ export default function TmcTeacherPortal() {
     setLoading(true);
     setError("");
     try {
-      const [me, result] = await Promise.all([
+      const [me, result, reviewResult] = await Promise.all([
         api("/teacher/me", { token: activeToken }),
         api("/teacher/trips", { token: activeToken }),
+        api("/teacher/reviews", { token: activeToken }),
       ]);
       const diagnosticResult = await api("/teacher/diagnostics", { token: activeToken });
       setContact(me.contact);
       setTenant(me.tenant || null);
       setTrips(result.trips || []);
       setDiagnosticReports(diagnosticResult.diagnostics || []);
+      setTeacherReviews(reviewResult.trips || []);
     } catch (err) {
       if (err.status === 401 || err.status === 403 || err.status === 404) {
         logout(err.status === 404
@@ -290,15 +295,26 @@ export default function TmcTeacherPortal() {
     }
   };
 
-  const generateParentLink = async (trip) => {
-    if (!trip) return;
+  const submitTeacherReview = async (tripId, reviewData) => {
+    setReviewSaving(true);
     setError("");
     try {
-      const result = await api(`/teacher/trips/${trip.id}/parent-link`, { token, method: "POST" });
-      setGeneratedLinks((current) => ({ ...current, [trip.id]: result.link || "" }));
-      try { await navigator.clipboard.writeText(result.link); } catch { /* clipboard permission is optional */ }
+      const result = await api(`/teacher/trips/${tripId}/review`, {
+        token,
+        method: "PUT",
+        body: reviewData,
+      });
+      setTeacherReviews((current) => current.map((item) => (
+        item.id === Number(tripId)
+          ? { ...item, review: result.review, reviewSubmitted: true }
+          : item
+      )));
+      return result.review;
     } catch (err) {
       setError(err.message);
+      throw err;
+    } finally {
+      setReviewSaving(false);
     }
   };
 
@@ -327,7 +343,7 @@ export default function TmcTeacherPortal() {
     return (
       <TmcAuthCard
         title="TMC Teacher Portal"
-        subtitle="Complete your diagnostic, view finalized trips, and share parent registration links."
+        subtitle="Complete your diagnostic and view finalized trips shared with your travel team."
         login={login}
         setLogin={setLogin}
         loading={loading}
@@ -344,6 +360,8 @@ export default function TmcTeacherPortal() {
       ? "Complete diagnostic"
       : activeView === "trips"
         ? "Your trips"
+        : activeView === "reviews"
+          ? "Trip review"
         : "My Profile";
 
   return (
@@ -363,8 +381,9 @@ export default function TmcTeacherPortal() {
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => setActiveView("dashboard")} />
           <PortalNavButton icon={ClipboardCheck} label="Diagnostic" active={activeView === "diagnostic"} onClick={() => setActiveView("diagnostic")} />
           <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => setActiveView("trips")} />
+          <PortalNavButton icon={Clipboard} label="Trip review" active={activeView === "reviews"} onClick={() => setActiveView("reviews")} />
         </nav>
-        <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, manage assigned trips, and share parent registration links.</div>
+        <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, view assigned trips, submit trip reports, and review trip landing pages.</div>
       </aside>
 
       <div style={styles.shell}>
@@ -397,9 +416,11 @@ export default function TmcTeacherPortal() {
               contact={contact}
               trips={trips}
               diagnosticReports={diagnosticReports}
+              teacherReviews={teacherReviews}
               loading={loading}
               onOpenDiagnostic={() => setActiveView("diagnostic")}
               onOpenTrips={() => setActiveView("trips")}
+              onOpenReviews={() => setActiveView("reviews")}
               onOpenTrip={(trip) => { setActiveView("trips"); openTrip(trip); }}
             />}
             {activeView === "diagnostic" && <TmcTeacherDiagnostics token={token} tenantSlug={tenant?.slug} contact={contact} onSessionExpired={(message) => logout(message || "Your teacher session is no longer available. Please sign in again.")} />}
@@ -409,7 +430,6 @@ export default function TmcTeacherPortal() {
               selectedTrip={selectedTrip}
               tripTab={tripTab}
               participants={participants}
-              generatedLinks={generatedLinks}
               landingPage={landingPage}
               landingPageLoading={landingPageLoading}
               landingPageError={landingPageError}
@@ -417,7 +437,14 @@ export default function TmcTeacherPortal() {
               onOpenTrip={openTrip}
               onOpenLandingPage={openLandingPage}
               onSelectTripTab={setTripTab}
-              onGenerateParentLink={generateParentLink}
+              onOpenReviews={() => setActiveView("reviews")}
+            />}
+            {activeView === "reviews" && <TeacherReviewView
+              reviewTrips={teacherReviews}
+              loading={loading}
+              saving={reviewSaving}
+              onRefresh={() => loadTrips()}
+              onSubmit={submitTeacherReview}
             />}
             {activeView === "profile" && <TeacherProfileView contact={contact} />}
           </div>
@@ -485,7 +512,7 @@ function TeacherNotificationBell({ token, onNavigate }) {
   const openNotification = (notification) => {
     markRead(notification);
     setOpen(false);
-    if (["dashboard", "diagnostic", "trips", "profile"].includes(notification.link)) {
+    if (["dashboard", "diagnostic", "trips", "reviews", "profile"].includes(notification.link)) {
       onNavigate(notification.link);
     }
   };
@@ -572,9 +599,10 @@ function TeacherProfileView({ contact }) {
   );
 }
 
-function TeacherDashboard({ contact, trips, diagnosticReports, loading, onOpenDiagnostic, onOpenTrips, onOpenTrip }) {
+function TeacherDashboard({ contact, trips, diagnosticReports, teacherReviews, loading, onOpenDiagnostic, onOpenTrips, onOpenReviews, onOpenTrip }) {
   const studentCount = trips.reduce((total, trip) => total + (trip._count?.participants || 0), 0);
   const latestReports = diagnosticReports.slice(0, 3);
+  const submittedReviewCount = teacherReviews.filter((trip) => trip.reviewSubmitted).length;
 
   return <div style={styles.dashboard}>
     <section style={styles.dashboardHero}>
@@ -590,12 +618,13 @@ function TeacherDashboard({ contact, trips, diagnosticReports, loading, onOpenDi
       <MetricCard icon={Map} label="Assigned trips" value={trips.length} detail="Finalized trips" />
       <MetricCard icon={Users} label="Participants" value={studentCount} detail="Currently registered" />
       <MetricCard icon={FileText} label="Diagnostic reports" value={diagnosticReports.length} detail={diagnosticReports.length ? "Reports available" : "Not completed yet"} />
-      <MetricCard icon={Link2} label="Parent link actions" value={trips.length} detail="Available for each trip" />
+      <MetricCard icon={Clipboard} label="Trip reports" value={submittedReviewCount} detail={`${teacherReviews.length} completed trip${teacherReviews.length === 1 ? "" : "s"} eligible`} />
     </section>
 
     <section style={styles.actionGrid} aria-label="Teacher actions">
       <QuickAction icon={ClipboardCheck} title="Complete your diagnostic" description={diagnosticReports.length ? "Review your latest readiness report or submit another diagnostic." : "Answer the school-readiness questions and receive your report."} action="Open diagnostic" onClick={onOpenDiagnostic} />
-      <QuickAction icon={Link2} title="Share parent registration" description="Open a finalized trip to create the registration link for parents." action="Open trips" onClick={onOpenTrips} />
+      <QuickAction icon={Link2} title="Review parent registration" description="Open a finalized trip to review its participants and landing page. Parent links are generated by your administrator." action="Open trips" onClick={onOpenTrips} />
+      <QuickAction icon={Clipboard} title="Submit a trip report" description={teacherReviews.length ? "Share feedback for a completed trip with the travel team." : "Your completed trips will appear here when they are ready for feedback."} action="Open trip review" onClick={onOpenReviews} />
     </section>
 
     <div style={styles.dashboardGrid}>
@@ -612,7 +641,7 @@ function TeacherDashboard({ contact, trips, diagnosticReports, loading, onOpenDi
           <div><h2 id="teacher-dashboard-reports" style={styles.sectionTitle}>Diagnostic reports</h2><p style={styles.muted}>Your school-readiness results.</p></div>
           <button type="button" onClick={onOpenDiagnostic} style={styles.textButton}>Open <ArrowRight size={15} /></button>
         </div>
-        {latestReports.length === 0 ? <div style={styles.empty}>Complete the diagnostic to create your first report.</div> : <div style={styles.dashboardList}>{latestReports.map((report) => <div key={report.id} style={styles.reportSummary}><div><strong>Readiness report #{report.id}</strong><div style={styles.muted}>{formatDate(report.createdAt)}</div></div><a href={report.reportUrl} style={styles.reportLink}>View report</a></div>)}</div>}
+        {latestReports.length === 0 ? <div style={styles.empty}>Complete the diagnostic to create your first report.</div> : <div style={styles.dashboardList}>{latestReports.map((report) => <div key={report.id} style={styles.reportSummary}><div><strong>Readiness report #{report.id}</strong><div style={styles.muted}>{formatDate(report.createdAt)}</div></div><button type="button" onClick={onOpenDiagnostic} style={styles.reportLink}>Open diagnostic</button></div>)}</div>}
       </section>
     </div>
   </div>;
@@ -626,7 +655,197 @@ function QuickAction({ icon: Icon, title, description, action, onClick }) {
   return <article data-tmc-hover-card="true" style={styles.quickAction}><div style={styles.quickActionIcon}><Icon size={19} /></div><div style={styles.quickActionBody}><h3 style={styles.quickActionTitle}>{title}</h3><p style={{ ...styles.muted, ...styles.quickActionDescription }}>{description}</p><button type="button" onClick={onClick} style={{ ...styles.secondary, ...styles.quickActionButton }}>{action} <ArrowRight size={15} /></button></div></article>;
 }
 
-function TripsView({ trips, loading, selectedTrip, tripTab, participants, generatedLinks, landingPage, landingPageLoading, landingPageError, onRefresh, onOpenTrip, onOpenLandingPage, onSelectTripTab, onGenerateParentLink }) {
+const TEACHER_REVIEW_RATING_OPTIONS = [
+  { value: "excellent", label: "Excellent" },
+  { value: "good", label: "Good" },
+  { value: "fair", label: "Fair" },
+  { value: "poor", label: "Poor" },
+];
+
+const TEACHER_REVIEW_RATING_ROWS = [
+  { field: "travelRating", label: "Travel" },
+  { field: "foodRating", label: "Food" },
+  { field: "activitiesRating", label: "Activities" },
+  { field: "careSupportRating", label: "Care & support" },
+  { field: "overallRating", label: "Overall" },
+];
+
+function dateInputValue(value) {
+  if (!value) return "";
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+}
+
+function buildTeacherReviewForm(trip, review) {
+  return {
+    reportDate: dateInputValue(review?.reportDate || trip?.returnDate),
+    institution: review?.institution || "",
+    tourDestination: review?.tourDestination || trip?.destination || "",
+    coordinator: review?.coordinator || "",
+    grade: review?.grade || "",
+    travelRating: review?.travelRating || "",
+    foodRating: review?.foodRating || "",
+    activitiesRating: review?.activitiesRating || "",
+    careSupportRating: review?.careSupportRating || "",
+    overallRating: review?.overallRating || "",
+    feedback: review?.feedback || "",
+    studentCount: review?.studentCount == null ? "" : String(review.studentCount),
+    staffCount: review?.staffCount == null ? "" : String(review.staffCount),
+    totalPassengers: review?.totalPassengers == null ? "" : String(review.totalPassengers),
+    signature: review?.signature || "",
+  };
+}
+
+function TeacherReviewView({ reviewTrips, loading, saving, onRefresh, onSubmit }) {
+  const [selectedTripId, setSelectedTripId] = useState("");
+  const [tripSearch, setTripSearch] = useState("");
+  const [form, setForm] = useState(() => buildTeacherReviewForm(null, null));
+  const [message, setMessage] = useState("");
+  const selectedTrip = reviewTrips.find((trip) => String(trip.id) === String(selectedTripId));
+  const normalizedTripSearch = tripSearch.trim().toLowerCase();
+  const filteredTrips = normalizedTripSearch
+    ? reviewTrips.filter((trip) => (
+      [trip.destination, trip.tripCode, trip.tripType]
+        .some((value) => String(value || "").toLowerCase().includes(normalizedTripSearch))
+    ))
+    : reviewTrips;
+
+  useEffect(() => {
+    setSelectedTripId((current) => (
+      reviewTrips.some((trip) => String(trip.id) === String(current))
+        ? current
+        : ""
+    ));
+  }, [reviewTrips]);
+
+  useEffect(() => {
+    setForm(buildTeacherReviewForm(selectedTrip, selectedTrip?.review));
+  }, [selectedTrip]);
+
+  useEffect(() => {
+    setMessage("");
+  }, [selectedTripId]);
+
+  useEffect(() => {
+    if (!message) return undefined;
+    const timeoutId = window.setTimeout(() => setMessage(""), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [message]);
+
+  const updateField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!selectedTrip) return;
+    const isUpdate = Boolean(selectedTrip.reviewSubmitted);
+    try {
+      await onSubmit(selectedTrip.id, form);
+      setMessage(isUpdate
+        ? "Your trip report has been updated successfully."
+        : "Your trip report has been submitted successfully.");
+    } catch {
+      // The parent displays the API error in the shared portal alert.
+    }
+  };
+
+  return <div style={styles.reviewPage}>
+    {message && <div role="status" aria-live="polite" aria-atomic="true" style={styles.toast}>
+      <CheckCircle2 size={18} aria-hidden />
+      <span>{message}</span>
+    </div>}
+    <div style={styles.titleRow}>
+      <div>
+        <h2 style={styles.title}>Trip review</h2>
+        <p style={styles.muted}>Submit a tour report for a completed trip. The travel team can review your feedback from the admin portal.</p>
+      </div>
+      <button type="button" onClick={onRefresh} disabled={loading} style={styles.secondary}><RefreshCw size={15} /> Refresh</button>
+    </div>
+
+    {loading ? <div style={{ ...styles.card, ...styles.empty }}><Loader2 size={18} style={styles.spin} /> Loading completed trips...</div> : reviewTrips.length === 0 ? (
+      <section style={styles.card} aria-label="Completed trips for review">
+        <div style={styles.empty}>No completed trips are ready for a review yet. A report becomes available after your assigned trip is marked completed.</div>
+      </section>
+    ) : <>
+      <section style={styles.reviewSelectCard} aria-labelledby="teacher-review-trip-heading">
+        <div>
+          <span style={styles.eyebrow}>Completed trips</span>
+          <h3 id="teacher-review-trip-heading" style={styles.sectionTitle}>Choose a trip to review</h3>
+          <p style={styles.reviewSelectHint}>Select the completed tour you are reporting on.</p>
+        </div>
+        <div style={styles.reviewSelectControls}>
+          {reviewTrips.length > 1 && <label style={styles.reviewSelectField}>
+            <span style={styles.fieldLabel}>Search trips</span>
+            <input
+              type="search"
+              aria-label="Search trips"
+              placeholder="Search destination or trip code"
+              value={tripSearch}
+              onChange={(event) => setTripSearch(event.target.value)}
+              style={styles.input}
+            />
+          </label>}
+          <label style={styles.reviewSelectField}>
+            <span style={styles.fieldLabel}>Trip</span>
+            <select aria-label="Select completed trip" value={selectedTripId} onChange={(event) => setSelectedTripId(event.target.value)} style={styles.input}>
+              <option value="">Select a trip to review</option>
+              {filteredTrips.map((trip) => <option key={trip.id} value={trip.id}>{trip.destination || trip.tripCode} · {trip.tripCode}</option>)}
+            </select>
+            {normalizedTripSearch && filteredTrips.length === 0 && <span style={styles.reviewSearchEmpty}>No completed trips match your search.</span>}
+          </label>
+        </div>
+        {selectedTrip?.reviewSubmitted && <span style={styles.reviewBadge}>Report submitted — you can update it below</span>}
+      </section>
+
+      {selectedTrip && <form onSubmit={submit} style={styles.reviewForm}>
+        <section style={styles.card} aria-labelledby="teacher-review-details-heading">
+          <div style={styles.cardHeading}><Clipboard size={18} color="var(--tmc-primary)" /><h3 id="teacher-review-details-heading" style={styles.sectionTitle}>Tour details</h3></div>
+          <div style={styles.reviewFieldGrid}>
+            <label style={styles.label}>Date<input type="date" required value={form.reportDate} onChange={(event) => updateField("reportDate", event.target.value)} style={styles.input} /></label>
+            <label style={styles.label}>Institution<input type="text" required value={form.institution} onChange={(event) => updateField("institution", event.target.value)} style={styles.input} /></label>
+            <label style={styles.label}>Tour destination<input type="text" required value={form.tourDestination} onChange={(event) => updateField("tourDestination", event.target.value)} style={styles.input} /></label>
+            <label style={styles.label}>Coordinator<input type="text" required value={form.coordinator} onChange={(event) => updateField("coordinator", event.target.value)} style={styles.input} /></label>
+            <label style={styles.label}>Grade<input type="text" required value={form.grade} onChange={(event) => updateField("grade", event.target.value)} style={styles.input} /></label>
+          </div>
+        </section>
+
+        <section style={styles.card} aria-labelledby="teacher-review-ratings-heading">
+          <div style={styles.cardHeading}><ClipboardCheck size={18} color="var(--tmc-primary)" /><h3 id="teacher-review-ratings-heading" style={styles.sectionTitle}>Rate the tour</h3></div>
+          <div style={styles.ratingMatrix}>
+            <div style={styles.ratingHeader}><span style={styles.ratingHeaderArea}>Area</span>{TEACHER_REVIEW_RATING_OPTIONS.map((option) => <span key={option.value}>{option.label}</span>)}</div>
+            {TEACHER_REVIEW_RATING_ROWS.map((row) => <fieldset key={row.field} style={styles.ratingRow}>
+              <legend style={styles.visuallyHidden}>{row.label}</legend>
+              <div style={styles.ratingRowInner}>
+                <span style={styles.ratingArea}>{row.label}</span>
+                {TEACHER_REVIEW_RATING_OPTIONS.map((option) => <label key={option.value} style={{ ...styles.ratingOption, ...(form[row.field] === option.value ? styles.ratingOptionSelected : {}) }}>
+                  <input type="radio" name={row.field} value={option.value} required checked={form[row.field] === option.value} onChange={(event) => updateField(row.field, event.target.value)} style={styles.ratingInput} />
+                  <span>{option.label}</span>
+                </label>)}
+              </div>
+            </fieldset>)}
+          </div>
+        </section>
+
+        <section style={styles.card} aria-labelledby="teacher-review-feedback-heading">
+          <div style={styles.cardHeading}><FileText size={18} color="var(--tmc-primary)" /><h3 id="teacher-review-feedback-heading" style={styles.sectionTitle}>Feedback & suggestion</h3></div>
+          <label style={styles.label}><span style={styles.fieldLabel}>Comments and suggestions <span style={styles.optional}>(Optional)</span></span><textarea value={form.feedback} onChange={(event) => updateField("feedback", event.target.value)} placeholder="Share what went well and what could be improved..." style={styles.reviewTextArea} rows={5} /></label>
+          <div style={{ ...styles.reviewFieldGrid, ...styles.reviewFeedbackFields }}>
+            <label style={styles.label}>No. of students<input type="number" min="0" required value={form.studentCount} onChange={(event) => updateField("studentCount", event.target.value)} style={styles.input} /></label>
+            <label style={styles.label}>No. of staff<input type="number" min="0" required value={form.staffCount} onChange={(event) => updateField("staffCount", event.target.value)} style={styles.input} /></label>
+            <label style={styles.label}>Total passengers<input type="number" min="0" required value={form.totalPassengers} onChange={(event) => updateField("totalPassengers", event.target.value)} style={styles.input} /></label>
+            <label style={styles.label}>Signature (type your full name)<input type="text" required value={form.signature} onChange={(event) => updateField("signature", event.target.value)} style={styles.input} /></label>
+          </div>
+          <div style={styles.reviewFooter}>
+            <button type="submit" disabled={saving} style={styles.primary}>{saving ? "Submitting..." : selectedTrip.reviewSubmitted ? "Update report" : "Submit report"}</button>
+          </div>
+        </section>
+      </form>}
+    </>}
+  </div>;
+}
+
+function TripsView({ trips, loading, selectedTrip, tripTab, participants, landingPage, landingPageLoading, landingPageError, onRefresh, onOpenTrip, onOpenLandingPage, onSelectTripTab, onOpenReviews }) {
   const [tripSearch, setTripSearch] = useState("");
   const normalizedTripSearch = tripSearch.trim().toLowerCase();
   const filteredTrips = normalizedTripSearch
@@ -636,7 +855,10 @@ function TripsView({ trips, loading, selectedTrip, tripTab, participants, genera
   return <>
     <div style={styles.titleRow}>
       <div><h2 style={styles.title}>Trips finalized with your travel team</h2><p style={styles.muted}>Open a trip to view its participants and landing page.</p></div>
-      <button type="button" onClick={onRefresh} style={styles.secondary}><RefreshCw size={15} /> Refresh</button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" onClick={onOpenReviews} style={styles.secondary}><Clipboard size={15} /> Review a completed trip</button>
+        <button type="button" onClick={onRefresh} style={styles.secondary}><RefreshCw size={15} /> Refresh</button>
+      </div>
     </div>
     <div style={styles.grid}>
       <section style={styles.card} aria-label="Assigned trips">
@@ -653,16 +875,31 @@ function TripsView({ trips, loading, selectedTrip, tripTab, participants, genera
         ))}
       </section>
       <section style={styles.card} aria-label="Trip students">
-        {!selectedTrip ? <div style={styles.empty}>Select a trip to view students and create its parent portal link.</div> : <>
-          <div style={styles.sectionHeader}><div><h3 style={styles.sectionTitle}>{selectedTrip.destination || selectedTrip.tripCode}</h3><div style={styles.muted}>{formatDate(selectedTrip.departDate)} - {formatDate(selectedTrip.returnDate)}</div></div><button type="button" onClick={() => onGenerateParentLink(selectedTrip)} style={styles.primary}><Link2 size={15} /> Create parent link</button></div>
-          {generatedLinks[selectedTrip.id] && <LinkPreview link={generatedLinks[selectedTrip.id]} />}
+        {!selectedTrip ? <div style={styles.empty}>Select a trip to view its students and landing page.</div> : <>
+          <div style={styles.sectionHeader}><div><h3 style={styles.sectionTitle}>{selectedTrip.destination || selectedTrip.tripCode}</h3><div style={styles.muted}>{formatDate(selectedTrip.departDate)} - {formatDate(selectedTrip.returnDate)}</div></div></div>
           <div style={styles.tripTabs} role="tablist" aria-label="Trip information">
             <button type="button" role="tab" aria-selected={tripTab === "students"} onClick={() => onSelectTripTab("students")} style={{ ...styles.tripTab, ...(tripTab === "students" ? styles.tripTabActive : {}) }}><Users size={15} /> Participants</button>
             <button type="button" role="tab" aria-selected={tripTab === "landing"} onClick={() => onOpenLandingPage(selectedTrip)} style={{ ...styles.tripTab, ...(tripTab === "landing" ? styles.tripTabActive : {}) }}><ExternalLink size={15} /> Landing page</button>
           </div>
           {tripTab === "landing" ? <TripLandingPageView landingPage={landingPage} loading={landingPageLoading} error={landingPageError} /> : <>
             <h4 style={styles.subheading}>Participants</h4>
-            {participants.length === 0 ? <div style={styles.muted}>No participants have registered yet.</div> : <div style={styles.list}>{participants.map((row) => <div key={`p-${row.id}`} style={styles.listRow}><div><strong>{row.fullName}</strong><div style={styles.muted}>{row.parentName || row.parentEmail || "Parent details pending"}</div></div><span style={styles.badge}>Participant</span></div>)}</div>}
+            {participants.length === 0 ? <div style={styles.muted}>No participants have registered yet.</div> : <div style={styles.list}>{participants.map((row) => <div key={`p-${row.id}`} style={styles.listRow}>
+              <div style={styles.participantPeople}>
+                <div style={styles.personBlock}>
+                  <span style={styles.personLabel}>Child / student</span>
+                  <strong>{row.fullName || "Name not provided"}</strong>
+                </div>
+                <div style={styles.personBlock}>
+                  <span style={styles.personLabel}>Parent / guardian</span>
+                  <strong>{row.parentName || "Name not provided"}</strong>
+                  {(row.parentEmail || row.parentPhone) && <div style={styles.personContact}>
+                    {row.parentEmail && <span>{row.parentEmail}</span>}
+                    {row.parentPhone && <span>{row.parentPhone}</span>}
+                  </div>}
+                </div>
+              </div>
+              <span style={styles.badge}>Participant</span>
+            </div>)}</div>}
           </>}
         </>}
       </section>
@@ -693,23 +930,6 @@ function TripLandingPageView({ landingPage, loading, error }) {
       />
     </div>
   </div>;
-}
-
-function LinkPreview({ link }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = async () => {
-    if (!navigator.clipboard?.writeText) return;
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  };
-
-  return <div style={styles.linkBox}><div style={styles.muted}>Parent registration link</div><code style={styles.link}>{link}</code><button type="button" onClick={copy} style={styles.secondary} aria-label={copied ? "Copied" : "Copy link"}>{copied ? <ClipboardCheck size={15} /> : <Clipboard size={15} />} {copied ? "Copied" : "Copy link"}</button></div>;
 }
 
 function TmcAuthCard({ title, subtitle, login, setLogin, loading, error, onSubmit, theme }) {
@@ -744,6 +964,28 @@ const styles = {
   main: { minWidth: 0, minHeight: 0, height: "100%", overflow: "hidden" },
   contentScroll: { width: "100%", minHeight: 0, height: "100%", boxSizing: "border-box", padding: 32, overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" },
   dashboard: { display: "grid", gap: 18 },
+  reviewPage: { display: "grid", gap: 18, width: "min(100%, 1180px)", maxWidth: 1180, margin: "0 auto", paddingBottom: 24, boxSizing: "border-box" },
+  reviewSelectCard: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, .9fr)", alignItems: "center", gap: "16px 24px", padding: 22, border: "1px solid var(--tmc-info-border)", borderRadius: 14, background: "linear-gradient(135deg, var(--tmc-info-bg) 0%, var(--tmc-surface) 72%)", boxShadow: "var(--tmc-question-shadow)" },
+  reviewSelectHint: { margin: "6px 0 0", color: "var(--tmc-muted)", fontSize: 13, lineHeight: 1.5 },
+  reviewSelectControls: { display: "grid", gap: 10, minWidth: 0 },
+  reviewSelectField: { display: "grid", gap: 7, minWidth: 0 },
+  reviewSearchEmpty: { color: "var(--tmc-muted)", fontSize: 11 },
+  reviewBadge: { gridColumn: "1 / -1", justifySelf: "start", padding: "7px 10px", borderRadius: 999, background: "var(--tmc-success-bg)", color: "var(--tmc-success-text)", fontSize: 11, fontWeight: 700 },
+  reviewForm: { display: "grid", gap: 18 },
+  reviewFieldGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 16 },
+  reviewFeedbackFields: { marginTop: 22 },
+  reviewTextArea: { width: "100%", boxSizing: "border-box", minHeight: 125, resize: "vertical", padding: "10px 11px", border: "1px solid var(--tmc-border-strong)", borderRadius: 8, fontFamily: "inherit", fontSize: 14, lineHeight: 1.5, background: "var(--tmc-input-bg)", color: "var(--tmc-text)" },
+  ratingMatrix: { display: "grid", overflowX: "auto", border: "1px solid var(--tmc-border)", borderRadius: 12, background: "var(--tmc-surface)" },
+  ratingHeader: { display: "grid", gridTemplateColumns: "minmax(170px, 1.25fr) repeat(4, minmax(100px, 1fr))", gap: 8, minWidth: 620, padding: "12px 14px", color: "var(--tmc-muted)", fontSize: 11, fontWeight: 700, textAlign: "center", letterSpacing: "0.02em" },
+  ratingHeaderArea: { textAlign: "left" },
+  ratingRow: { minWidth: 620, margin: 0, padding: "6px 14px", border: 0, borderTop: "1px solid var(--tmc-border-light)", background: "var(--tmc-surface-soft)" },
+  ratingRowInner: { display: "grid", gridTemplateColumns: "minmax(170px, 1.25fr) repeat(4, minmax(100px, 1fr))", gap: 8, alignItems: "center" },
+  ratingArea: { color: "var(--tmc-heading)", fontSize: 13, fontWeight: 700 },
+  ratingOption: { display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: 36, gap: 6, padding: "0 7px", borderRadius: 8, color: "var(--tmc-subtle-text)", fontSize: 12, cursor: "pointer", transition: "background 140ms ease, color 140ms ease, box-shadow 140ms ease" },
+  ratingOptionSelected: { background: "var(--tmc-selected-bg)", color: "var(--tmc-primary)", boxShadow: "inset 0 0 0 1px var(--tmc-info-border)", fontWeight: 700 },
+  ratingInput: { accentColor: "var(--tmc-primary)", margin: 0 },
+  reviewFooter: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 20, paddingTop: 18, borderTop: "1px solid var(--tmc-border-light)" },
+  toast: { position: "fixed", top: 88, right: 24, zIndex: 100, display: "flex", alignItems: "center", gap: 9, maxWidth: "min(420px, calc(100vw - 32px))", padding: "13px 16px", border: "1px solid var(--tmc-info-border)", borderRadius: 10, background: "var(--tmc-success-bg)", color: "var(--tmc-success-text)", boxShadow: "0 12px 28px rgba(23, 59, 80, 0.18)", fontSize: 13, fontWeight: 700, pointerEvents: "none" },
   dashboardHero: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18, padding: 24, border: "1px solid var(--tmc-border)", borderRadius: 14, background: "linear-gradient(135deg, var(--tmc-surface) 0%, var(--tmc-surface-soft) 100%)" },
   dashboardWelcome: { margin: "3px 0 5px", color: "var(--tmc-heading)", fontSize: 28 },
   dashboardSubtitle: { margin: 0, color: "var(--tmc-muted)", fontSize: 14 },
@@ -769,7 +1011,7 @@ const styles = {
   dashboardTrip: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, width: "100%", padding: "12px 0", border: 0, borderTop: "1px solid var(--tmc-border-light)", background: "transparent", color: "var(--tmc-text)", cursor: "pointer", textAlign: "left" },
   dashboardTripMeta: { display: "inline-flex", alignItems: "center", gap: 7, color: "var(--tmc-muted)", fontSize: 12, whiteSpace: "nowrap" },
   reportSummary: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 0", borderTop: "1px solid var(--tmc-border-light)" },
-  reportLink: { color: "var(--tmc-link)", fontSize: 12, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" },
+  reportLink: { color: "var(--tmc-link)", fontSize: 12, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap", border: 0, background: "transparent", padding: 0, cursor: "pointer", font: "inherit" },
   authPage: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 24, background: "var(--tmc-bg)" },
   authCard: { width: "min(100%, 430px)", display: "grid", gap: 14, padding: 32, borderRadius: 16, background: "var(--tmc-surface)", border: "1px solid var(--tmc-border)", boxShadow: "var(--tmc-shadow)" },
   authTitle: { margin: 0, color: "var(--tmc-heading)", fontSize: 27 },
@@ -789,7 +1031,10 @@ const styles = {
   primary: { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, border: 0, borderRadius: 8, padding: "10px 13px", background: "var(--tmc-primary)", color: "var(--tmc-primary-contrast)", cursor: "pointer", fontWeight: 600 },
   secondary: { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, border: "1px solid var(--tmc-border-strong)", borderRadius: 8, padding: "9px 12px", background: "var(--tmc-surface)", color: "var(--tmc-subtle-text)", cursor: "pointer", fontWeight: 600 },
   error: { padding: "11px 13px", marginBottom: 16, borderRadius: 8, background: "var(--tmc-error-bg)", color: "var(--tmc-error-text)", fontSize: 13 },
-  label: { display: "grid", gap: 6, color: "var(--tmc-subtle-text)", fontSize: 13, fontWeight: 600 },
+  label: { display: "grid", gap: 7, color: "var(--tmc-subtle-text)", fontSize: 13, fontWeight: 600 },
+  fieldLabel: { display: "inline-flex", alignItems: "center", gap: 5, color: "var(--tmc-subtle-text)", fontSize: 12, fontWeight: 700 },
+  optional: { color: "var(--tmc-muted)", fontSize: 11, fontWeight: 500 },
+  visuallyHidden: { position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 },
   input: { width: "100%", boxSizing: "border-box", padding: "10px 11px", border: "1px solid var(--tmc-border-strong)", borderRadius: 8, fontSize: 14, background: "var(--tmc-input-bg)", color: "var(--tmc-text)" },
   linkBox: { display: "grid", gap: 9, marginTop: 18, padding: 13, border: "1px solid var(--tmc-info-border)", borderRadius: 10, background: "var(--tmc-info-bg)" },
   link: { overflowWrap: "anywhere", color: "var(--tmc-link)", fontSize: 12 },
@@ -806,6 +1051,10 @@ const styles = {
   subheading: { margin: "24px 0 10px", color: "var(--tmc-heading)", fontSize: 15 },
   list: { display: "grid", gap: 8 },
   listRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderTop: "1px solid var(--tmc-border-light)" },
+  participantPeople: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "10px 24px", minWidth: 0, flex: 1 },
+  personBlock: { display: "grid", gap: 3, minWidth: 0 },
+  personLabel: { color: "var(--tmc-muted)", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" },
+  personContact: { display: "grid", gap: 2, color: "var(--tmc-muted)", fontSize: 11, overflowWrap: "anywhere" },
   badge: { padding: "4px 8px", borderRadius: 999, background: "var(--tmc-badge-bg)", color: "var(--tmc-link)", fontSize: 11, whiteSpace: "nowrap" },
   empty: { display: "flex", alignItems: "center", justifyContent: "center", flex: 1, gap: 8, minHeight: 88, padding: "24px 10px", color: "var(--tmc-muted)", fontSize: 14, lineHeight: 1.5, textAlign: "center", boxSizing: "border-box" },
   notificationWrap: { position: "relative", flex: "0 0 auto" },

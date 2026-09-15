@@ -942,6 +942,29 @@ describe('Participants', () => {
     );
   });
 
+  test('POST participant does not persist passport fields for a domestic trip', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, tripType: 'domestic' });
+    prisma.tripParticipant.create.mockResolvedValue({
+      id: 51, tripId: 100, fullName: 'Domestic Traveller',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/participants')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        fullName: 'Domestic Traveller',
+        passportNumber: 'P1234567',
+        passportExpiry: '2030-01-01',
+        passportDocId: 99,
+      });
+
+    expect(res.status).toBe(201);
+    const createData = prisma.tripParticipant.create.mock.calls[0][0].data;
+    expect(createData).not.toHaveProperty('passportNumber');
+    expect(createData).not.toHaveProperty('passportExpiry');
+    expect(createData).not.toHaveProperty('passportDocId');
+  });
+
   test('POST participant without fullName returns 400 MISSING_FIELDS', async () => {
     const res = await request(makeApp())
       .post('/api/travel/trips/100/participants')
@@ -1199,6 +1222,30 @@ describe('Document requirements', () => {
     );
   });
 
+  test('GET documents omits passport for a day trip and POST rejects it', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, tripType: 'day_trip' });
+    prisma.tripDocumentRequirement.findMany.mockResolvedValue([
+      { id: 1, tripId: 100, docType: 'passport', required: true },
+      { id: 2, tripId: 100, docType: 'aadhaar', required: true },
+    ]);
+
+    const listRes = await request(makeApp())
+      .get('/api/travel/trips/100/documents')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.documents).toEqual([
+      { id: 2, tripId: 100, docType: 'aadhaar', required: true },
+    ]);
+
+    const createRes = await request(makeApp())
+      .post('/api/travel/trips/100/documents')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ docType: 'passport', required: true });
+    expect(createRes.status).toBe(400);
+    expect(createRes.body).toMatchObject({ code: 'PASSPORT_NOT_REQUIRED' });
+    expect(prisma.tripDocumentRequirement.create).not.toHaveBeenCalled();
+  });
+
   test('POST document without docType returns 400 MISSING_FIELDS', async () => {
     const res = await request(makeApp())
       .post('/api/travel/trips/100/documents')
@@ -1367,6 +1414,29 @@ describe('POST /api/travel/trips/:id/landing-page', () => {
       expect.objectContaining({ id: 'parent' }),
       expect.objectContaining({ id: 'passport' }),
     ]);
+  });
+
+  test.each(['domestic', 'day_trip'])('does not add a passport step for %s trips', async (tripType) => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'mysore-oct-26', destination: 'Mysore', tripType,
+      departDate: new Date('2026-10-17'), returnDate: new Date('2026-10-18'),
+      legalEntity: 'tmc_nexus', landingPage: null,
+    });
+    prisma.landingPage.create.mockResolvedValue({
+      id: 77, slug: 'trip-mysore-oct-26', status: 'DRAFT', tripId: 100,
+      templateType: 'wanderlux-v1', tenantId: 1,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    const config = JSON.parse(prisma.landingPage.create.mock.calls[0][0].data.content);
+    expect(config.register.tripType).toBe(tripType);
+    expect(config.register.steps.map((step) => step.id)).toEqual(['student', 'parent']);
+    expect(config.register.subtitle).not.toMatch(/passport/i);
   });
 
   test('idempotent — returns existing page (200) when already linked, does not create', async () => {

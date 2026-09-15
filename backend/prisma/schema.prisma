@@ -212,6 +212,7 @@ model Tenant {
   travelMarkupRules                   TravelMarkupRule[]
   tmcTrips                            TmcTrip[]
   tmcParentTrips                      TmcParentTrip[]
+  tmcTripTeacherReviews               TmcTripTeacherReview[]
   webCheckins                         WebCheckin[]
   webCheckinAutomationRuns            WebCheckinAutomationRun[]
   travelTripReviews                   TravelTripReview[]
@@ -999,6 +1000,7 @@ model Contact {
   assignedTmcTrips          TmcTrip[] @relation("TmcTripTeacher")
   tmcParentTrips            TmcParentTrip[] @relation("TmcParentTripParent")
   tmcTeacherParentTrips     TmcParentTrip[] @relation("TmcParentTripTeacher")
+  tmcTeacherReviews         TmcTripTeacherReview[] @relation("TmcTripTeacherReviewTeacher")
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -3671,7 +3673,7 @@ model SignatureRequest {
   signerEmail  String
   signature    String?   @db.LongText // base64 data URL once signed
   signedAt     DateTime?
-  status       String    @default("PENDING") // PENDING, SIGNED, DECLINED, EXPIRED
+  status       String    @default("PENDING") // PENDING, SIGNED, DECLINED, EXPIRED, CANCELLED
   signToken    String    @unique // unique URL token for signer
   tenantId     Int       @default(1)
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -7468,6 +7470,7 @@ model TmcTrip {
   landingPage          LandingPage?
   pendingRegistrations PendingTripRegistration[]
   parentPortalLinks   TmcParentTrip[]
+  teacherReviews      TmcTripTeacherReview[]
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
@@ -7497,6 +7500,42 @@ model TmcParentTrip {
   @@unique([tenantId, parentContactId, tripId])
   @@index([tenantId, teacherContactId])
   @@index([tenantId, tripId])
+}
+
+/// Teacher tour report submitted after a TMC trip is completed. This is kept
+/// separate from TravelTripReview because the latter is the customer-facing
+/// star-review flow and has a different question set and lifecycle.
+model TmcTripTeacherReview {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  tripId           Int
+  teacherContactId Int
+  reportDate       DateTime
+  institution      String
+  tourDestination  String
+  coordinator      String
+  grade            String
+  travelRating     String // excellent | good | fair | poor
+  foodRating       String // excellent | good | fair | poor
+  activitiesRating String // excellent | good | fair | poor
+  careSupportRating String // excellent | good | fair | poor
+  overallRating    String // excellent | good | fair | poor
+  feedback         String?  @db.Text
+  studentCount     Int      @default(0)
+  staffCount       Int      @default(0)
+  totalPassengers  Int      @default(0)
+  signature        String
+  submittedAt      DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant           Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip             TmcTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  teacher          Contact @relation("TmcTripTeacherReviewTeacher", fields: [teacherContactId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, tripId, teacherContactId])
+  @@index([tenantId, submittedAt])
+  @@index([tenantId, tripId])
+  @@index([tenantId, teacherContactId])
 }
 
 model TripParticipant {
@@ -7885,7 +7924,11 @@ model WebCheckinAutomationRun {
 model TravelTripReview {
   id            Int       @id @default(autoincrement())
   tenantId      Int       @default(1)
-  itineraryId   Int       @unique // one review per trip
+  // Generic travel reviews point at an Itinerary. TMC parent reviews point at
+  // a TmcTrip instead; keeping both nullable lets the admin list use one
+  // review surface while preserving one review per parent per school trip.
+  itineraryId   Int?      @unique // one review per itinerary
+  tmcTripId     Int?      // TMC school trip review target
   contactId     Int
   token         String    @unique // public review-link slug
   status        String    @default("requested") // requested | submitted
@@ -7897,6 +7940,8 @@ model TravelTripReview {
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@unique([tenantId, tmcTripId, contactId])
+  @@index([tenantId, tmcTripId])
 }
 
 /// Travel customer-portal in-app notification inbox (2026-06-17). Contact-scoped

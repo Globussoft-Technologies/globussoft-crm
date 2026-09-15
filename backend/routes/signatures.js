@@ -8,6 +8,9 @@ const prisma = require("../lib/prisma");
 const { notify } = require("../lib/notificationService");
 const { fulfillSignedEstimate } = require("../lib/signatureFulfillment");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { blockCustomers } = require("../middleware/blockCustomers");
+const { renderConsentPdf } = require("../services/pdfRenderer");
+const { writeAudit } = require("../lib/audit");
 
 const router = express.Router();
 
@@ -164,38 +167,142 @@ async function fetchCompanyName(tenantId) {
   }
 }
 
-// Returns { text, html }. The html variant renders the signing URL as a
-// real clickable anchor (the plain-text fallback keeps the bare URL).
-function buildEmailBody({ signerName, documentType, signUrl, expiresAt, companyName }) {
+// Email needs the same tenant logo that the CRM stores, but email clients
+// cannot resolve a browser-relative `/uploads/...` path. Resolve only the
+// configured HTTP(S) URL or the CRM's own uploads path against the current
+// environment so demo/staging/prod emails never point at the wrong host.
+async function fetchCompanyBrand(tenantId) {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, logoUrl: true },
+    });
+    return {
+      name: tenant?.name || DEFAULT_COMPANY,
+      logoUrl: tenant?.logoUrl || null,
+    };
+  } catch (_err) {
+    return { name: DEFAULT_COMPANY, logoUrl: null };
+  }
+}
+
+function resolveEmailLogoUrl(req, logoUrl) {
+  if (typeof logoUrl !== "string" || !logoUrl.trim()) return null;
+  const raw = logoUrl.trim();
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!/^\/(?:api\/)?uploads\//i.test(raw)) return null;
+  try {
+    const absolute = new URL(raw, `${resolveBaseUrl(req)}/`);
+    return ["http:", "https:"].includes(absolute.protocol) ? absolute.toString() : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+// Returns { text, html }. The HTML variant is intentionally table-based and
+// uses inline styles so it renders consistently in Gmail, Outlook, and mobile
+// mail clients. Keep the plain-text version equally useful for clients that
+// strip HTML.
+function buildEmailBody({ signerName, documentType, signUrl, expiresAt, companyName, logoUrl }) {
   const company = companyName || DEFAULT_COMPANY;
+  const expiryText = expiresAt ? new Date(expiresAt).toLocaleString() : "Not specified";
+  const copyrightYear = new Date().getFullYear();
+  const logoMarkup = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(company)} logo" width="42" height="42" ` +
+      `style="display:block;width:42px;height:42px;border-radius:50%;object-fit:contain;background:#eee8ff;">`
+    : `<div style="width:42px;height:42px;border-radius:50%;background:#eee8ff;color:#6231dc;font-size:27px;line-height:42px;text-align:center;font-weight:bold;">❧</div>`;
   const expiryLine = expiresAt
-    ? `\n\nThis link will expire on ${new Date(expiresAt).toLocaleString()}.`
+    ? `\n\nThis link will expire on ${expiryText}.`
     : "";
   const text =
     `Hello ${signerName},\n\n` +
     `You have been requested to sign a ${documentType} via ${company}.\n\n` +
-    `Please click the secure link below to review and sign the document:\n\n` +
-    `${signUrl}${expiryLine}\n\n` +
+    `Please click the secure link below to review and sign the document.\n\n` +
+    `Review & Sign Your ${documentType}: ${signUrl}${expiryLine}\n\n` +
+    `For your security, please do not share this link with anyone.\n\n` +
     `If you did not expect this request, please ignore this email.\n\n` +
-    `— ${company}`;
+    `— ${company}\n\n` +
+    `© ${copyrightYear} ${company}. All rights reserved.`;
 
-  const expiryHtml = expiresAt
-    ? `<p style="color:#6b7280;font-size:13px;margin:12px 0;">This link will expire on ${escapeHtml(new Date(expiresAt).toLocaleString())}.</p>`
-    : "";
   const html =
-    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#1f2937;line-height:1.5;">` +
-    `<p>Hello ${escapeHtml(signerName)},</p>` +
-    `<p>You have been requested to sign a ${escapeHtml(documentType)} via <strong>${escapeHtml(company)}</strong>.</p>` +
-    `<p>Please click the secure link below to review and sign the document:</p>` +
-    `<p style="margin:16px 0;"><a href="${escapeHtml(signUrl)}" target="_blank" rel="noopener noreferrer" ` +
-    `style="display:inline-block;padding:10px 18px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;">` +
-    `Review &amp; sign your ${escapeHtml(documentType)}</a></p>` +
-    `<p style="font-size:12px;color:#6b7280;word-break:break-all;">Or paste this link into your browser:<br>` +
-    `<a href="${escapeHtml(signUrl)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;">${escapeHtml(signUrl)}</a></p>` +
-    expiryHtml +
-    `<p style="color:#6b7280;">If you did not expect this request, please ignore this email.</p>` +
-    `<p>— ${escapeHtml(company)}</p>` +
-    `</div>`;
+    `<!doctype html>` +
+    `<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">` +
+    `<meta name="viewport" content="width=device-width, initial-scale=1.0">` +
+    `<title>Signature request from ${escapeHtml(company)}</title>` +
+    `<style>` +
+    `@media only screen and (max-width:620px){` +
+    `.email-shell{width:100%!important;border-radius:0!important}` +
+    `.email-pad{padding-left:22px!important;padding-right:22px!important}` +
+    `.brand-tagline{display:none!important}` +
+    `.detail-cell{display:block!important;width:100%!important;border:0!important;padding:0 0 18px!important}` +
+    `.detail-cell:last-child{padding-bottom:0!important}` +
+    `}` +
+    `</style></head>` +
+    `<body style="margin:0;padding:0;background:#f5f6fb;font-family:Arial,Helvetica,sans-serif;color:#1d2344;">` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f5f6fb;">` +
+    `<tr><td align="center" style="padding:28px 12px;">` +
+    `<table role="presentation" class="email-shell" width="680" cellpadding="0" cellspacing="0" border="0" ` +
+    `style="width:680px;max-width:680px;background:#ffffff;border:1px solid #e6e8f2;border-radius:10px;overflow:hidden;">` +
+    `<tr><td class="email-pad" style="padding:28px 38px 20px;">` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">` +
+    `<tr>` +
+    `<td valign="middle" style="width:58%;">` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>` +
+    `<td valign="middle" style="padding-right:12px;">` +
+    logoMarkup +
+    `</td>` +
+    `<td valign="middle">` +
+    `<div style="font-size:23px;line-height:27px;font-weight:700;letter-spacing:-0.4px;color:#172044;">${escapeHtml(company)}</div>` +
+    `<div style="font-size:10px;line-height:15px;letter-spacing:2px;color:#8b90aa;">PEOPLE&nbsp;&nbsp;•&nbsp;&nbsp;WELLBEING&nbsp;&nbsp;•&nbsp;&nbsp;BRIGHTER TOMORROWS</div>` +
+    `</td></tr></table>` +
+    `</td>` +
+    `<td class="brand-tagline" align="right" valign="middle" style="width:42%;font-size:13px;line-height:18px;color:#8b90aa;">` +
+    `Healthier People<br>Stronger Workplaces<br>` +
+    `<span style="display:inline-block;width:40px;border-top:2px solid #7342e8;margin-top:10px;"></span>` +
+    `</td>` +
+    `</tr></table>` +
+    `</td></tr>` +
+    `<tr><td class="email-pad" style="padding:22px 38px 34px;">` +
+    `<p style="margin:0 0 14px;font-size:20px;line-height:29px;color:#1d2344;">Hello <strong style="color:#6430d9;">${escapeHtml(signerName)},</strong></p>` +
+    `<p style="margin:0 0 4px;font-size:17px;line-height:27px;color:#1d2344;">` +
+    `You have been requested to sign a <strong>${escapeHtml(documentType)}</strong> via <strong>${escapeHtml(company)}</strong>.</p>` +
+    `<p style="margin:0 0 22px;font-size:17px;line-height:27px;color:#1d2344;">Please click the secure link below to review and sign the document.</p>` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px;">` +
+    `<tr><td align="center" bgcolor="#6331df" style="border-radius:8px;background:#6331df;background-image:linear-gradient(105deg,#5b2bdd,#7643e9);">` +
+    `<a href="${escapeHtml(signUrl)}" target="_blank" rel="noopener noreferrer" ` +
+    `style="display:inline-block;padding:14px 22px;border-radius:8px;color:#ffffff;text-decoration:none;font-size:16px;line-height:22px;font-weight:700;">` +
+    `Review &amp; Sign Your ${escapeHtml(documentType)} <span style="font-size:22px;line-height:16px;vertical-align:-2px;padding-left:10px;">→</span></a>` +
+    `</td></tr></table>` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;background:#f7f4ff;border:1px solid #eee9ff;border-radius:10px;">` +
+    `<tr><td valign="top" style="padding:15px 13px 15px 15px;width:34px;">` +
+    `<div style="width:32px;height:32px;border-radius:50%;background:#e9e1ff;color:#6030dc;font-size:19px;line-height:32px;text-align:center;">↗</div>` +
+    `</td><td valign="middle" style="padding:13px 15px 13px 0;font-size:13px;line-height:20px;color:#6f7694;">` +
+    `<div style="margin-bottom:2px;">Or copy this link into your browser:</div>` +
+    `<a href="${escapeHtml(signUrl)}" target="_blank" rel="noopener noreferrer" style="color:#5130e5;text-decoration:none;word-break:break-all;">${escapeHtml(signUrl)}</a>` +
+    `</td></tr></table>` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;">` +
+    `<tr>` +
+    `<td class="detail-cell" valign="top" style="width:50%;padding:0 22px 0 0;border-right:1px solid #e3e5ef;font-size:13px;line-height:20px;color:#6f7694;">` +
+    `<div style="font-size:22px;line-height:26px;color:#6331df;margin-bottom:5px;">▣</div>` +
+    `This link will expire on<br><strong style="color:#1d2344;">${escapeHtml(expiryText)}</strong>` +
+    `</td>` +
+    `<td class="detail-cell" valign="top" style="width:50%;padding:0 0 0 22px;font-size:13px;line-height:20px;color:#6f7694;">` +
+    `<div style="font-size:22px;line-height:26px;color:#6331df;margin-bottom:5px;">◇</div>` +
+    `For your security, please do not<br>share this link with anyone.` +
+    `</td>` +
+    `</tr></table>` +
+    `<p style="margin:0 0 7px;font-size:14px;line-height:22px;color:#565d7b;">If you did not request this, please ignore this email.</p>` +
+    `<p style="margin:0;font-size:16px;line-height:24px;font-weight:700;color:#1d2344;">— ${escapeHtml(company)}</p>` +
+    `</td></tr>` +
+    `<tr><td class="email-pad" style="padding:20px 38px 24px;border-top:1px solid #e6e8f2;">` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>` +
+    `<td style="font-size:12px;line-height:18px;color:#9298ad;">© ${copyrightYear} ${escapeHtml(company)}. All rights reserved.</td>` +
+    `<td align="right" style="font-size:10px;line-height:16px;letter-spacing:1.5px;color:#9298ad;">WELLNESS TODAY&nbsp;&nbsp;A BRIGHTER TOMORROW<br>` +
+    `<span style="display:inline-block;width:38px;border-top:2px solid #7342e8;margin-top:7px;"></span></td>` +
+    `</tr></table>` +
+    `</td></tr>` +
+    `</table></td></tr></table>` +
+    `</body></html>`;
 
   return { text, html };
 }
@@ -247,6 +354,101 @@ async function fetchLinkedDocument(documentType, documentId, tenantId) {
   return null;
 }
 
+function parseServiceIds(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
+// Patient e-signatures deliberately use explicit scalar links instead of
+// Prisma relation includes: SignatureRequest predates the wellness schema
+// relations and its nullable patient/visit context must remain backwards
+// compatible with generic Contract/Estimate/Quote requests.
+async function fetchPatientSignatureContext(reqRow) {
+  const patientId = Number(reqRow?.patientId);
+  const visitId = Number(reqRow?.visitId);
+  if (!Number.isInteger(patientId) || !Number.isInteger(visitId)) return null;
+  if (!prisma.patient?.findFirst || !prisma.visit?.findFirst) return null;
+
+  const tenantId = Number(reqRow.tenantId);
+  const [patient, visit] = await Promise.all([
+    prisma.patient.findFirst({
+      where: { id: patientId, tenantId },
+      select: { id: true, name: true, email: true, phone: true },
+    }),
+    prisma.visit.findFirst({
+      where: { id: visitId, patientId, tenantId },
+      select: {
+        id: true,
+        visitDate: true,
+        status: true,
+        serviceId: true,
+        service: { select: { id: true, name: true } },
+      },
+    }),
+  ]);
+  if (!patient || !visit) return null;
+
+  const requestedServiceIds = parseServiceIds(reqRow.serviceIds)
+    .map(Number)
+    .filter(Number.isInteger);
+  const serviceIds = [...new Set(
+    [...requestedServiceIds, Number(visit.serviceId)]
+      .filter((id) => Number.isInteger(id) && id > 0),
+  )];
+
+  let services = [];
+  if (serviceIds.length && prisma.service?.findMany) {
+    services = await prisma.service.findMany({
+      where: { id: { in: serviceIds }, tenantId },
+      select: { id: true, name: true },
+    });
+  }
+  if (visit.service && !services.some((service) => service.id === visit.service.id)) {
+    services = [...services, visit.service];
+  }
+
+  return { patient, visit, services };
+}
+
+async function fetchPrimaryClinic(tenantId) {
+  if (!prisma.location?.findFirst) return null;
+  const where = { tenantId };
+  return (
+    (await prisma.location.findFirst({ where: { ...where, isActive: true }, orderBy: { id: "asc" } })) ||
+    (await prisma.location.findFirst({ where, orderBy: { id: "asc" } }))
+  );
+}
+
+async function renderPatientSignatureRequestPdf(reqRow, signatureDataUrl) {
+  const context = await fetchPatientSignatureContext(reqRow);
+  if (!context) return null;
+
+  const service = context.services.length === 1
+    ? context.services[0]
+    : context.services.length > 1
+      ? { name: context.services.map((item) => item.name).join(", ") }
+      : context.visit.service;
+  const clinic = await fetchPrimaryClinic(Number(reqRow.tenantId));
+
+  return renderConsentPdf(
+    {
+      templateName: reqRow.documentName || "general",
+      signedAt: reqRow.signedAt,
+    },
+    context.patient,
+    service,
+    clinic,
+    signatureDataUrl ?? reqRow.signature,
+    { visit: context.visit, services: context.services },
+  );
+}
+
 // ──────────────────────────────────────────────────────────────────
 // PUBLIC ROUTES (no auth — token-protected). Mounted before the
 // authenticated handlers because the global auth guard whitelists
@@ -260,6 +462,9 @@ router.get("/sign/:token", async (req, res) => {
       where: { signToken: req.params.token },
     });
     if (!reqRow) return res.status(404).json({ error: "Invalid or expired link" });
+    if (reqRow.status === "CANCELLED") {
+      return res.status(410).json({ error: "This signature request has been cancelled" });
+    }
 
     if (reqRow.expiresAt && new Date(reqRow.expiresAt) < new Date()) {
       if (reqRow.status === "PENDING") {
@@ -298,8 +503,27 @@ router.get("/sign/:token/pdf", async (req, res) => {
       where: { signToken: req.params.token },
     });
     if (!reqRow) return res.status(404).json({ error: "Invalid or expired link" });
+    if (reqRow.status === "CANCELLED") {
+      return res.status(410).json({ error: "This signature request has been cancelled" });
+    }
     if (reqRow.expiresAt && new Date(reqRow.expiresAt) < new Date()) {
       return res.status(410).json({ error: "This signature request has expired" });
+    }
+
+    // Patient requests use the same consent-form renderer as the wellness
+    // clinical surface, so the signer reviews the exact patient/visit/service
+    // context that the admin selected instead of a generic Custom document.
+    if (reqRow.documentType === "Custom" && reqRow.patientId && reqRow.visitId) {
+      const patientPdf = await renderPatientSignatureRequestPdf(reqRow);
+      if (patientPdf) {
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="consent-${reqRow.id}.pdf"`,
+        );
+        res.setHeader("Content-Length", patientPdf.length);
+        return res.send(patientPdf);
+      }
     }
 
     const tenant = await prisma.tenant.findUnique({
@@ -554,12 +778,21 @@ router.post("/decline/:token", async (req, res) => {
 // ──────────────────────────────────────────────────────────────────
 
 // GET /api/signatures — list with optional filters (and ?fields=summary)
+router.use(blockCustomers);
+
 router.get("/", async (req, res) => {
   try {
-    const { status, documentType } = req.query;
+    const { status, documentType, patientId } = req.query;
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
     if (documentType) where.documentType = documentType;
+    if (patientId !== undefined) {
+      const parsedPatientId = parseInt(patientId, 10);
+      if (!Number.isInteger(parsedPatientId) || parsedPatientId < 1) {
+        return res.status(400).json({ error: "patientId must be a valid integer" });
+      }
+      where.patientId = parsedPatientId;
+    }
 
     // #920 slice 39: ?fields=summary slim-shape opt-in. Mirrors slices 1-36.
     // SignatureRequest carries one heavy column (`signature @db.LongText` —
@@ -573,11 +806,28 @@ router.get("/", async (req, res) => {
     // value) get the full row shape unchanged so detail-view and resend
     // flows continue to receive signerEmail + signToken when they need it.
     const isSummary = req.query.fields === "summary";
+    const isPatientConsent = req.query.fields === "patient-consent";
     const findManyArgs = {
       where,
       orderBy: { createdAt: "desc" },
     };
-    if (isSummary) {
+    if (isPatientConsent) {
+      // PatientDetail's Consent tab only needs the immutable linkage and
+      // status metadata. Never expose signToken or the captured signature to
+      // this list response.
+      findManyArgs.select = {
+        id: true,
+        documentType: true,
+        documentId: true,
+        documentName: true,
+        signerName: true,
+        status: true,
+        signedAt: true,
+        patientId: true,
+        visitId: true,
+        serviceIds: true,
+      };
+    } else if (isSummary) {
       findManyArgs.select = {
         id: true,
         documentType: true,
@@ -594,6 +844,59 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("[Signatures] list error:", err);
     res.status(500).json({ error: "Failed to fetch signature requests" });
+  }
+});
+
+// GET /api/signatures/:id/pdf — signed PDF for a linked wellness patient
+// request. This route is staff-only; customer accounts use the scoped
+// /api/wellness/portal/consents/:id/pdf endpoint instead.
+router.get("/:id/pdf", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid id" });
+
+    const reqRow = await prisma.signatureRequest.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!reqRow) return res.status(404).json({ error: "Signature request not found" });
+    if (reqRow.status !== "SIGNED") {
+      return res.status(409).json({ error: "A PDF is available after the request is signed" });
+    }
+    if (reqRow.documentType !== "Custom" || !reqRow.patientId || !reqRow.visitId) {
+      return res.status(400).json({ error: "This request is not linked to a wellness patient visit" });
+    }
+
+    const buf = await renderPatientSignatureRequestPdf(reqRow);
+    if (!buf) return res.status(404).json({ error: "Linked patient visit not found" });
+
+    try {
+      await writeAudit(
+        "SignatureRequest",
+        "SIGNATURE_PDF_DOWNLOAD",
+        reqRow.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          signatureRequestId: reqRow.id,
+          patientId: reqRow.patientId,
+          visitId: reqRow.visitId,
+          serviceIds: parseServiceIds(reqRow.serviceIds),
+        },
+      );
+    } catch (auditErr) {
+      console.warn("[Signatures] audit PDF download failed:", auditErr.message);
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
+    res.setHeader("Content-Length", buf.length);
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.send(buf);
+  } catch (err) {
+    console.error("[Signatures] linked patient PDF error:", err);
+    res.status(500).json({ error: "Failed to render signature PDF" });
   }
 });
 
@@ -622,13 +925,22 @@ router.post("/", async (req, res) => {
       }
       const visit = await prisma.visit.findFirst({
         where: { id: linkedVisitId, patientId, tenantId: req.user.tenantId },
-        select: { id: true },
+        select: { id: true, serviceId: true },
       });
       if (!visit) return res.status(404).json({ error: "Patient visit not found" });
 
-      const normalizedServiceIds = Array.isArray(serviceIds)
+      let normalizedServiceIds = Array.isArray(serviceIds)
         ? [...new Set(serviceIds.map(Number).filter(Number.isInteger))]
         : [];
+      // A visit's service is the safe default when the caller did not send a
+      // separate service selection. Patient requests must always retain at
+      // least one service link so they can be found from Consent forms.
+      if (!normalizedServiceIds.length && Number.isInteger(visit.serviceId)) {
+        normalizedServiceIds = [visit.serviceId];
+      }
+      if (!normalizedServiceIds.length) {
+        return res.status(400).json({ error: "At least one service is required for a patient signature request" });
+      }
       if (normalizedServiceIds.length) {
         const serviceCount = await prisma.service.count({
           where: { id: { in: normalizedServiceIds }, tenantId: req.user.tenantId },
@@ -666,9 +978,16 @@ router.post("/", async (req, res) => {
     });
 
     const signUrl = `${resolveBaseUrl(req)}/sign/${signToken}`;
-    const companyName = await fetchCompanyName(req.user.tenantId);
+    const companyBrand = await fetchCompanyBrand(req.user.tenantId);
     const subject = `Signature requested: ${documentType} #${documentId}`;
-    const body = buildEmailBody({ signerName, documentType, signUrl, expiresAt, companyName });
+    const body = buildEmailBody({
+      signerName,
+      documentType,
+      signUrl,
+      expiresAt,
+      companyName: companyBrand.name,
+      logoUrl: resolveEmailLogoUrl(req, companyBrand.logoUrl),
+    });
     const mailResult = await sendSignatureEmail(signerEmail, subject, body);
 
     res.status(201).json({ ...created, emailDelivered: mailResult.sent });
@@ -695,7 +1014,10 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/signatures/:id — cancel/delete request
+// DELETE /api/signatures/:id — cancel request without deleting its audit trail.
+// Keep the DELETE method for backwards compatibility with the existing UI/API
+// contract, but soft-cancel the row so signature history and patient links are
+// never lost from the database.
 router.delete("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -705,9 +1027,15 @@ router.delete("/:id", async (req, res) => {
       where: { id, tenantId: req.user.tenantId },
     });
     if (!reqRow) return res.status(404).json({ error: "Signature request not found" });
+    if (reqRow.status !== "PENDING") {
+      return res.status(409).json({ error: `Cannot cancel — request is already ${reqRow.status}` });
+    }
 
-    await prisma.signatureRequest.delete({ where: { id } });
-    res.json({ success: true });
+    await prisma.signatureRequest.update({
+      where: { id },
+      data: { status: "CANCELLED" },
+    });
+    res.json({ success: true, status: "CANCELLED" });
   } catch (err) {
     console.error("[Signatures] delete error:", err);
     res.status(500).json({ error: "Failed to cancel signature request" });
@@ -729,14 +1057,15 @@ router.post("/:id/resend", async (req, res) => {
     }
 
     const signUrl = `${resolveBaseUrl(req)}/sign/${reqRow.signToken}`;
-    const companyName = await fetchCompanyName(req.user.tenantId);
+    const companyBrand = await fetchCompanyBrand(req.user.tenantId);
     const subject = `Reminder: signature requested for ${reqRow.documentType} #${reqRow.documentId}`;
     const body = buildEmailBody({
       signerName: reqRow.signerName,
       documentType: reqRow.documentType,
       signUrl,
       expiresAt: reqRow.expiresAt,
-      companyName,
+      companyName: companyBrand.name,
+      logoUrl: resolveEmailLogoUrl(req, companyBrand.logoUrl),
     });
     const mailResult = await sendSignatureEmail(reqRow.signerEmail, subject, body);
     res.json({ success: true, emailDelivered: mailResult.sent });

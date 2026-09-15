@@ -1037,6 +1037,61 @@ describe('GET /api/travel/microsites/public/:publicUuid/full (token-gated PII)',
     expect(prisma.tripInstalmentPayment.findMany).not.toHaveBeenCalled();
   });
 
+  test('domestic trip does not expose passport fields in the OTP reveal', async () => {
+    const okToken = jwt.sign(
+      { kind: 'microsite-otp', micrositeId: 7, phone: '+919876543210', purpose: 'registration' },
+      JWT_SECRET,
+      { expiresIn: '30m' },
+    );
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, subdomain: 'trip-mysore-2026', itineraryHtml: '<p>x</p>',
+      faqJson: null, publishedAt: new Date(), expiresAt: null,
+      publicUuid: TEST_UUID, tripId: 100,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({
+      id: 100, tripCode: 'mysore-2026', destination: 'Mysore',
+      departDate: new Date(), returnDate: new Date(), status: 'confirmed',
+      tripType: 'day_trip',
+    });
+    prisma.tripParticipant.findMany.mockResolvedValue([
+      { id: 1, fullName: 'Asha Iyer', passportNumber: 'P1234', passportExpiry: new Date('2031-01-01') },
+    ]);
+
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${okToken}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.tripParticipant.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { id: true, fullName: true, dob: true },
+      }),
+    );
+  });
+
+  test('domestic trip excludes passport from the document checklist reveal', async () => {
+    const okToken = jwt.sign(
+      { kind: 'microsite-otp', micrositeId: 7, phone: '+919876543210', purpose: 'document-checklist' },
+      JWT_SECRET,
+      { expiresIn: '30m' },
+    );
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({ id: 100, tripType: 'domestic' });
+    prisma.tripDocumentRequirement.findMany.mockResolvedValue([
+      { id: 1, docType: 'passport', required: true },
+      { id: 2, docType: 'aadhaar', required: true },
+    ]);
+
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${okToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.documentRequirements).toEqual([
+      { id: 2, docType: 'aadhaar', required: true },
+    ]);
+  });
+
   test('purpose=payment-plan reveals instalments but NOT participants/rooming', async () => {
     const okToken = jwt.sign(
       { kind: 'microsite-otp', micrositeId: 7, phone: '+919876543210', purpose: 'payment-plan' },
@@ -1296,6 +1351,35 @@ describe('Travel microsites API — document upload (public)', () => {
         }),
       }),
     );
+  });
+
+  test('domestic/day trips accept Aadhaar and consent without requiring or returning passport status', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+      trip: { tripType: 'day_trip' },
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 100,
+      draftTokenExpiresAt: new Date(Date.now() + 3600_000),
+      extrasJson: null,
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({ id: 10 });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .attach('aadhaar', Buffer.from('PNG\x89PNG\r\n...'), 'aadhaar.png')
+      .attach('consentLetter', Buffer.from('PDF%PDF-1.4 consent...'), 'consent.pdf');
+
+    expect(res.status).toBe(200);
+    expect(res.body.documents).toEqual(expect.objectContaining({
+      passport: false,
+      aadhaar: true,
+      consentLetter: true,
+    }));
+    const storedExtras = JSON.parse(prisma.pendingTripRegistration.update.mock.calls[0][0].data.extrasJson);
+    expect(storedExtras.documents.passport).toBeUndefined();
   });
 
   test('re-upload one file while others exist → happy path, all three present', async () => {

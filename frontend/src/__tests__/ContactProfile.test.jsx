@@ -68,12 +68,30 @@ describe('ContactDetail profile', () => {
     renderProfile();
     const panel = within(await screen.findByLabelText('Contact profile'));
     expect(panel.getByText('Ahmad Malik', { exact: true })).toBeTruthy();
-    for (const tab of ['Overview', 'Contact details', 'Conversation', 'Activities']) {
+    for (const tab of ['Overview', 'Contact details', 'Conversation', 'Activities', 'Accounts', 'Deals', 'AI insights', 'Files']) {
       expect(panel.getByRole('button', { name: new RegExp(tab) })).toBeTruthy();
     }
     expect(panel.getByText('Status')).toBeTruthy();
     expect(panel.getByText('Summary')).toBeTruthy();
     expect(panel.getByText('Starter plan')).toBeTruthy();
+  });
+
+  it('keeps the files workflow reachable from the profile navigation', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
+      if (url === '/api/contacts/7/attachments') {
+        return Promise.resolve([{ id: 91, filename: 'proposal.pdf', fileUrl: '/uploads/proposal.pdf', fileSize: 1024, createdAt: '2026-01-01T10:00:00.000Z' }]);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Files' }));
+
+    expect(await panel.findByText('proposal.pdf')).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7/attachments', { silent: true });
   });
 
   it('chevron dropdown option PATCHes the mapped status', async () => {

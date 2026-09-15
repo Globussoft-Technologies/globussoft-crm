@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, AlignJustify, Indent, Outdent, Image, Smile, Link2, RemoveFormatting, Paperclip, Send, Trash2, ChevronDown, Info, PackagePlus, Plus, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
@@ -10,6 +10,8 @@ import {
 } from './contactActions';
 import { ACTIVITY_TYPES, DEAL_STAGES } from './contactProfileConfig';
 import { FormRow, Modal } from './ProfileWidgets';
+import { AuthContext } from '../../appContexts';
+import { scopedStorageKey } from '../../utils/scopedStorage';
 
 function todayPlus(days) {
   const d = new Date();
@@ -29,6 +31,7 @@ function mailSize(n) {
 
 export function EmailModal({ contact, onClose, onDone }) {
   const notify = useNotify();
+  const auth = useContext(AuthContext) || {};
   const [toList, setToList] = useState(() => (contact?.email ? [contact.email] : []));
   const [toText, setToText] = useState('');
   const [ccList, setCcList] = useState([]);
@@ -49,7 +52,11 @@ export function EmailModal({ contact, onClose, onDone }) {
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   const editorRef = useRef(null);
   const fileRef = useRef(null);
-  const draftKey = `contact-email-draft-${contact?.id ?? 'new'}`;
+  const draftKey = scopedStorageKey('contact-email-draft-v2', {
+    tenantId: auth.tenant?.id ?? auth.user?.tenantId ?? contact?.tenantId,
+    userId: auth.user?.userId,
+    resourceId: contact?.id ?? 'new',
+  });
   const FONT_PX_TO_CMD = { 10: '1', 12: '2', 14: '3', 16: '4', 18: '5', 20: '6', 24: '6', 28: '7', 32: '7' };
   const commitMails = (raw, list, setList) => {
     const parts = String(raw).split(/[,\n;]/).map((s) => s.trim()).filter(Boolean);

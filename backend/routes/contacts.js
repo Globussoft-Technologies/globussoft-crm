@@ -1906,7 +1906,7 @@ router.get('/:id/activities', async (req, res) => {
     const [data, total] = await Promise.all([
       prisma.activity.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit,
         skip: (page - 1) * limit,
       }),
@@ -2066,22 +2066,26 @@ const updateContactById = async (req, res) => {
     if (typeof updateData.birthDate === "string" && updateData.birthDate !== "") {
       updateData.birthDate = new Date(updateData.birthDate);
     }
-    const contact = await prisma.contact.update({ where: { id: existing.id }, data: updateData });
-    // Persist lifecycle/status history in the existing Activity timeline. Only
-    // create an entry when the value actually changes; repeated submissions
-    // are ignored. This keeps the Activities tab useful for every transition,
-    // including Prospect → Customer and Customer → Churned.
-    if (existing.status !== contact.status) {
-      await prisma.activity.create({
-        data: {
-          type: "Lead Status updated",
-          description: `Updated from ${existing.status || "(empty)"} to ${contact.status || "(empty)"}`,
-          contactId: contact.id,
-          userId: req.user.userId,
-          tenantId: req.user.tenantId,
-        },
-      });
-    }
+    // Keep the contact mutation and its lifecycle history atomic. Previously
+    // the Contact update committed first; an Activity failure then returned a
+    // 500 even though the status had changed, inviting a misleading retry.
+    const statusWillChange = Object.prototype.hasOwnProperty.call(updateData, 'status')
+      && existing.status !== updateData.status;
+    const contact = statusWillChange
+      ? await prisma.$transaction(async (tx) => {
+        const updated = await tx.contact.update({ where: { id: existing.id }, data: updateData });
+        await tx.activity.create({
+          data: {
+            type: "Lead Status updated",
+            description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}`,
+            contactId: updated.id,
+            userId: req.user.userId,
+            tenantId: req.user.tenantId,
+          },
+        });
+        return updated;
+      })
+      : await prisma.contact.update({ where: { id: existing.id }, data: updateData });
     // Generic-vertical-only Lead custom fields — best-effort, after the
     // primary update already succeeded.
     await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);

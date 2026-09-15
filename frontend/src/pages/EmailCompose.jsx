@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Bold, Italic, Underline, Strikethrough, List, ListOrdered,
@@ -8,8 +8,9 @@ import {
 import { AuthContext } from "../appContexts";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
+import { scopedStorageKey } from "../utils/scopedStorage";
 
-const DRAFT_KEY = "email-compose-draft-v1";
+const LEGACY_DRAFT_KEY = "email-compose-draft-v1";
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -110,7 +111,7 @@ function ToolbarButton({ title, onRun, children, shortcut }) {
 }
 
 export default function EmailCompose() {
-  const { user } = useContext(AuthContext);
+  const { user, tenant } = useContext(AuthContext);
   const notify = useNotify();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -130,6 +131,10 @@ export default function EmailCompose() {
   const [restored, setRestored] = useState(false);
   const editorRef = useRef(null);
   const fileInputRef = useRef(null);
+  const draftKey = useMemo(() => scopedStorageKey("email-compose-draft-v2", {
+    tenantId: tenant?.id ?? user?.tenantId,
+    userId: user?.userId,
+  }), [tenant?.id, user?.tenantId, user?.userId]);
 
   useEffect(() => {
     const prefill = String(searchParams.get("to") || "").trim();
@@ -139,7 +144,11 @@ export default function EmailCompose() {
       return;
     }
     try {
-      const raw = localStorage.getItem(DRAFT_KEY);
+      // The v1 key was global and could expose one account's draft after a
+      // logout/login on the same browser. Never restore it; remove it during
+      // the first scoped-draft load instead.
+      localStorage.removeItem(LEGACY_DRAFT_KEY);
+      const raw = localStorage.getItem(draftKey);
       if (raw) {
         const d = JSON.parse(raw);
         if (Array.isArray(d.to)) setTo(d.to.filter((x) => EMAIL_RE.test(x)));
@@ -154,7 +163,7 @@ export default function EmailCompose() {
       }
     } catch { /* no usable draft */ }
     setRestored(true);
-  }, []);
+  }, [draftKey, searchParams]);
 
   useEffect(() => {
     if (!restored) return;
@@ -162,12 +171,12 @@ export default function EmailCompose() {
     if (!hasContent) return;
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({ to, cc, bcc, subject, bodyHtml, savedAt: new Date().toISOString() }));
+        localStorage.setItem(draftKey, JSON.stringify({ to, cc, bcc, subject, bodyHtml, savedAt: new Date().toISOString() }));
         setDraftAt(new Date().toLocaleTimeString());
       } catch { /* storage full — skip */ }
     }, 2000);
     return () => clearTimeout(t);
-  }, [to, cc, bcc, subject, bodyHtml, restored]);
+  }, [to, cc, bcc, subject, bodyHtml, restored, draftKey]);
 
   const exec = useCallback((cmd, value = null) => {
     editorRef.current?.focus();
@@ -252,7 +261,7 @@ export default function EmailCompose() {
       }
       await fetchApi("/api/communications/send-email", { method: "POST", body: payload });
       notify.success("Email sent successfully.");
-      try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+      try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
       navigate("/inbox");
     } catch (err) {
       notify.error(err?.message || "Failed to send email. Please try again.");
@@ -263,7 +272,7 @@ export default function EmailCompose() {
 
   const handleSaveDraft = () => {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ to, cc, bcc, subject, bodyHtml: editorRef.current?.innerHTML || bodyHtml, savedAt: new Date().toISOString() }));
+      localStorage.setItem(draftKey, JSON.stringify({ to, cc, bcc, subject, bodyHtml: editorRef.current?.innerHTML || bodyHtml, savedAt: new Date().toISOString() }));
       setDraftAt(new Date().toLocaleTimeString());
       notify.success("Draft saved.");
     } catch {
@@ -281,7 +290,7 @@ export default function EmailCompose() {
     setTo([]); setCc([]); setBcc([]); setSubject(""); setAttachments([]);
     if (editorRef.current) editorRef.current.innerHTML = "";
     setBodyHtml("");
-    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     navigate(-1);
   };
 

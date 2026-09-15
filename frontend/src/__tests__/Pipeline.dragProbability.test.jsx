@@ -12,7 +12,10 @@ const notifyObj = {
 };
 
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
-vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
+vi.mock('../utils/api', () => ({ fetchApi: vi.fn(), getAuthToken: () => 'test-token' }));
+vi.mock('socket.io-client', () => ({
+  io: () => ({ on: vi.fn(), emit: vi.fn(), disconnect: vi.fn() }),
+}));
 vi.mock('../utils/money', () => ({ formatMoney: (value) => `$${Number(value || 0).toLocaleString('en-US')}` }));
 vi.mock('../components/DealModal', () => ({ default: () => null }));
 vi.mock('../components/contact/ActionModals', () => ({ DealModal: () => null }));

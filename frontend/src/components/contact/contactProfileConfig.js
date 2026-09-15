@@ -3,6 +3,10 @@ import {
   UserRound,
   MessagesSquare,
   Activity,
+  Building2,
+  Handshake,
+  Sparkles,
+  Paperclip,
   Facebook,
   Github,
   Twitter,
@@ -13,6 +17,10 @@ export const PROFILE_TABS = [
   { key: 'details', label: 'Contact details', icon: UserRound },
   { key: 'conversations', label: 'Conversation', icon: MessagesSquare },
   { key: 'activities', label: 'Activities', icon: Activity },
+  { key: 'accounts', label: 'Accounts', icon: Building2 },
+  { key: 'deals', label: 'Deals', icon: Handshake },
+  { key: 'ai-insights', label: 'AI insights', icon: Sparkles },
+  { key: 'files', label: 'Files', icon: Paperclip },
 ];
 
 export const SOCIAL_NETWORKS = [

@@ -17386,7 +17386,7 @@ export default function WebForms({ scope = "generic" }) {
                     {isGenericScope && canManageLandingForm ? (
                       String(landingFormId) === String(form.id) ? (
                         <span className="wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 8 }} data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">
-                          <span>Landing Page</span><CheckCircle2 size={20} aria-hidden="true" style={{ color: "var(--success-color)", flexShrink: 0 }} />
+                          On landing page<CheckCircle2 size={20} aria-hidden="true" style={{ color: "var(--success-color)", flexShrink: 0 }} />
                         </span>
                       ) : (
                         <label className="wf-landing-checkbox wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} data-tip={`Use ${form.name} as the public landing page form`} title={`Use this form in landing page: ${form.name}`}>

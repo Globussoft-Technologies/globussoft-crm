@@ -64,7 +64,15 @@ function isMissingSchemaError(error) {
   return error?.code === "P2021" || error?.code === "P2022";
 }
 
-async function optionalDeleteMany(operation) {
+function isMissingOptionalFieldError(error, field) {
+  return Boolean(
+    field &&
+      error?.name === "PrismaClientValidationError" &&
+      String(error.message || "").includes(`Unknown argument \`${field}\``),
+  );
+}
+
+async function optionalDeleteMany(operation, missingField = null) {
   try {
     return await operation();
   } catch (error) {
@@ -72,7 +80,10 @@ async function optionalDeleteMany(operation) {
     // travel/TMC table or column has not reached the database yet. The final
     // Contact delete is still transactional and all available child tables
     // are removed; unrelated database errors still abort the transaction.
-    if (isMissingSchemaError(error)) return { count: 0 };
+    if (
+      isMissingSchemaError(error) ||
+      isMissingOptionalFieldError(error, missingField)
+    ) return { count: 0 };
     throw error;
   }
 }
@@ -80,18 +91,26 @@ async function optionalDeleteMany(operation) {
 async function deleteContactDependents(tx, contactId) {
   // TMC parent links have two required Contact foreign keys, so they need a
   // compound OR rather than the simple contactId loop below.
-  await optionalDeleteMany(() => tx.tmcParentTrip.deleteMany({
-    where: {
-      OR: [{ parentContactId: contactId }, { teacherContactId: contactId }],
-    },
-  }));
+  // These delegates/fields may not exist yet when the app is running with a
+  // Prisma client generated immediately before the optional TMC relations
+  // were added. Skip only that unavailable cleanup; scalar schoolContactId
+  // is not a Contact FK, so it does not block the final Contact delete.
+  if (tx.tmcParentTrip?.deleteMany) {
+    await optionalDeleteMany(() => tx.tmcParentTrip.deleteMany({
+      where: {
+        OR: [{ parentContactId: contactId }, { teacherContactId: contactId }],
+      },
+    }));
+  }
 
   // TMC trips are operational records owned by the travel team, not by the
   // teacher account. Detach the teacher instead of deleting the trip.
-  await optionalDeleteMany(() => tx.tmcTrip.updateMany({
-    where: { teacherContactId: contactId },
-    data: { teacherContactId: null },
-  }));
+  if (tx.tmcTrip?.updateMany) {
+    await optionalDeleteMany(() => tx.tmcTrip.updateMany({
+      where: { teacherContactId: contactId },
+      data: { teacherContactId: null },
+    }), "teacherContactId");
+  }
 
   // TravelInvoice must be removed before TravelQuote so its quote relation
   // and all invoice-owned line/schedule rows are gone first.

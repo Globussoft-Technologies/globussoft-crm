@@ -168,7 +168,7 @@ router.get("/:tableKey", async (req, res) => {
       // column visible, no custom-field columns (opt-in, matches the
       // "columns not shown in table" bucket in the Freshsales reference UI).
       visible = tableKey === "leads"
-        ? ["name", "email", "phone", "webForm", "medium", "campaign", "callStatus", "callifiedAi", "callifiedScore", "source", "company", "aiScore", "assignedTo"]
+        ? ["name", "email", "company", "phone", "aiScore", "source", "webForm", "medium", "subBrand", "tags", "assignedTo", "createdAt", "campaign", "callStatus", "callifiedAi", "callifiedScore"]
         : (BUILTIN_COLUMNS[tableKey] || []).map((c) => c.key);
     }
 

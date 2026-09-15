@@ -2461,16 +2461,23 @@ router.get('/duplicates/find', async (req, res) => {
 
     for (const c of normalizedContacts) {
       // Match by email domain + name similarity, or exact phone
-      const key = c.email.toLowerCase();
-      if (seen.has(key)) {
-        const existing = seen.get(key);
+      // Email is optional for imported/TMC contacts. A missing email must not
+      // crash duplicate detection or make every email-less contact look like
+      // the same person; use a per-contact internal key while still retaining
+      // that row for the phone and name/company comparisons below.
+      const emailKey = typeof c.email === 'string'
+        ? c.email.trim().toLowerCase()
+        : '';
+      const seenKey = emailKey || `__contact_${c.id}`;
+      if (emailKey && seen.has(emailKey)) {
+        const existing = seen.get(emailKey);
         if (!dupes.find(d => d.primary.id === existing.id)) {
           dupes.push({ primary: existing, duplicates: [c], reason: 'Same email' });
         } else {
           dupes.find(d => d.primary.id === existing.id).duplicates.push(c);
         }
       } else {
-        seen.set(key, c);
+        seen.set(seenKey, c);
       }
 
       // Phone match

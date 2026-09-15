@@ -99,7 +99,7 @@
  * Path: flat __tests__/ â€” DO NOT add a __tests__/travel/ subdir.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -181,8 +181,8 @@ function installFetchMock({
     policyApplied: null,
   },
   // Default contact book for the customer <select> in the create/edit modal.
-  // Intentionally does NOT include id 42 so the list-row fallback test still
-  // sees the raw "#42" placeholder while create-modal tests can opt-in a
+  // Intentionally does NOT include id 42 so the list-row fallback test sees
+  // the "Deleted account" tombstone while create-modal tests can opt-in a
   // matching contact when they need to submit the form.
   contacts = [{ id: 7, name: 'Seven', email: 'seven@example.com' }],
   trips = [{ id: 501, tripCode: 'TMC-0501', destination: 'Goa' }],
@@ -377,11 +377,13 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
     renderPage();
     // Row renders the verbatim TINV-YYYY-NNNN backend-assigned serial.
     expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
-    // #1051 â€” CONTACT column falls back to "#<id>" when the /api/contacts/:id
+    // #1051 â€” CONTACT column shows "Deleted account" when the /api/contacts/:id
     // lookup returns null (default mock); when it returns a Contact row the
     // cell renders `contact.name` instead. See the "#1051 â€” contact name
     // resolution" describe block below for the success path.
-    expect(screen.getByText('#42')).toBeInTheDocument();
+    expect(await screen.findByText('Deleted account')).toBeInTheDocument();
+    expect(screen.queryByText('#42')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Deleted account' })).toBeNull();
     // Initial list GET includes pager params.
     const gets = fetchApiMock.mock.calls.filter(
       ([url, opts]) =>
@@ -391,6 +393,22 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
     );
     expect(gets.length).toBeGreaterThanOrEqual(1);
     expect(gets.some(([url]) => /limit=20/.test(url) && /offset=0/.test(url))).toBe(true);
+  });
+
+  it('keeps long invoice numbers inside their table column', async () => {
+    const invoiceNum = 'TINV-2026-T727-P322-25692';
+    installFetchMock({
+      list: { invoices: [makeInvoice({ invoiceNum })], total: 1 },
+    });
+    renderPage();
+
+    const invoiceCell = (await screen.findByText(invoiceNum)).closest('td');
+    expect(invoiceCell).toHaveStyle({
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    });
+    expect(invoiceCell).toHaveAttribute('title', invoiceNum);
   });
 
   it('loading state shows "Loadingâ€¦" before the first GET resolves', async () => {
@@ -522,6 +540,23 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
 });
 
 describe('<InvoicesAdmin /> â€” row rendering', () => {
+  it('shows the latest payment date for a partially paid invoice', async () => {
+    installFetchMock({
+      list: {
+        invoices: [makeInvoice({
+          status: 'Partial',
+          paidAt: null,
+          lastPaymentAt: '2026-09-14T10:30:00.000Z',
+        })],
+        total: 1,
+      },
+    });
+    renderPage();
+
+    const invoiceNumber = await screen.findByText('TINV-2026-0001');
+    expect(within(invoiceNumber.closest('tr')).getByText('2026-09-14')).toBeInTheDocument();
+  });
+
   it('renders a linked trip code as a link to the trip detail page', async () => {
     installFetchMock({
       list: {

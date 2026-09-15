@@ -34,7 +34,7 @@
  *   9. Validation — fitScore=-5: surfaces an inline error and does
  *      NOT fire a POST.
  *  10. Edit flow: opens modal pre-filled + fires PUT on submit.
- *  11. Delete flow: window.confirm=true → DELETE fires; confirm=false →
+ *  11. Delete flow: in-page confirm=true → DELETE fires; confirm=false →
  *      NO DELETE fires.
  *  12. RBAC: role=USER hides the New Mapping CTA + per-row Edit/Delete
  *      buttons (the GET still fires for read-only visibility).
@@ -63,8 +63,8 @@
  *     Wave 12 f59e91d — fresh per-call objects flap state across renders).
  *   - AuthContext is wrapped via Provider — Default user role = ADMIN;
  *     one test mounts with role=USER to assert RBAC hide.
- *   - window.confirm is stubbed per-test (vi.spyOn) so we can drive the
- *     confirm=true / confirm=false branches of the delete flow.
+ *   - notify.confirm is mocked so we can drive the confirm=true /
+ *     confirm=false branches of the in-page delete popup.
  *   - All data-dependent assertions use await findBy / waitFor.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -523,22 +523,28 @@ describe('<CurriculumAdmin /> — edit + delete', () => {
     await waitFor(() => expect(notifySuccess).toHaveBeenCalled());
   });
 
-  it('delete flow: window.confirm=true → DELETE fires; confirm=false → NO DELETE fires', async () => {
+  it('delete flow: in-page confirm accepts → DELETE fires; cancel → NO DELETE fires', async () => {
     renderPage();
     const deleteBtn = await screen.findByTestId('curriculum-mapping-delete-501');
 
-    // First click: user cancels the confirm dialog.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    // First click: user cancels the in-page confirmation popup.
+    notifyConfirm.mockResolvedValueOnce(false);
     fetchApiMock.mockClear();
     fireEvent.click(deleteBtn);
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledWith({
+      title: 'Deactivate curriculum mapping?',
+      message: expect.stringContaining('CBSE / 9 / History'),
+      confirmText: 'Deactivate',
+      cancelText: 'Cancel',
+      destructive: true,
+    }));
     const cancelledDeletes = fetchApiMock.mock.calls.filter(
       ([u, o]) => u === '/api/travel-curriculum/501' && o?.method === 'DELETE',
     );
     expect(cancelledDeletes.length).toBe(0);
 
     // Second click: user confirms.
-    confirmSpy.mockReturnValue(true);
+    notifyConfirm.mockResolvedValueOnce(true);
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(deleteBtn);
@@ -549,7 +555,6 @@ describe('<CurriculumAdmin /> — edit + delete', () => {
       expect(deleteCall).toBeTruthy();
     });
     await waitFor(() => expect(notifySuccess).toHaveBeenCalled());
-    confirmSpy.mockRestore();
   });
 });
 
@@ -797,7 +802,7 @@ describe('<CurriculumAdmin /> — POST body normalisation + server errors', () =
     renderPage();
 
     const deleteBtn = await screen.findByTestId('curriculum-mapping-delete-501');
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    notifyConfirm.mockResolvedValueOnce(true);
     fetchApiMock.mockClear();
     installFetchMock({ del: err });
 
@@ -809,7 +814,6 @@ describe('<CurriculumAdmin /> — POST body normalisation + server errors', () =
     });
     // Notify.success was NOT invoked on the failure path.
     expect(notifySuccess).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 });
 

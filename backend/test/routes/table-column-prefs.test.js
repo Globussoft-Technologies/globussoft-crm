@@ -81,6 +81,18 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.body.visible).toContain('webForm');
   });
 
+  test('an existing preference can intentionally keep Tags hidden', async () => {
+    prisma.tableColumnPreference.findUnique.mockResolvedValueOnce({
+      visibleJson: JSON.stringify(['name', 'email', 'actions']),
+    });
+
+    const res = await request(makeApp()).get('/api/table-column-prefs/leads');
+
+    expect(res.status).toBe(200);
+    expect(res.body.visible).toEqual(['name', 'email', 'actions']);
+    expect(res.body.visible).not.toContain('tags');
+  });
+
   test('leads catalog exposes Medium right after Web Form, separate from Source', async () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 

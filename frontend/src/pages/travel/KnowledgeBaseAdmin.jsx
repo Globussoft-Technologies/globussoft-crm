@@ -1,10 +1,11 @@
-import { useCallback, useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
   Brain,
   CheckCircle,
+  ChevronLeft,
   ChevronRight,
   Cloud,
   Database,
@@ -38,6 +39,9 @@ const STEP = {
   SYNC: 3,
 };
 
+const DEFAULT_FILES_PAGE_SIZE = 20;
+const FILES_PAGE_SIZE_OPTIONS = [10, 20, 50];
+
 export default function KnowledgeBaseAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -57,7 +61,9 @@ export default function KnowledgeBaseAdmin() {
   const [files, setFiles] = useState([]);
   const [filesTotal, setFilesTotal] = useState(0);
   const [filesPage, setFilesPage] = useState(1);
-  const filesPageSize = 50;
+  const [filesPageSize, setFilesPageSize] = useState(DEFAULT_FILES_PAGE_SIZE);
+  const filesPageSizeRef = useRef(DEFAULT_FILES_PAGE_SIZE);
+  const filesRequestRef = useRef({ id: 0, key: null });
   const [filesLoadingPage, setFilesLoadingPage] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -139,7 +145,7 @@ export default function KnowledgeBaseAdmin() {
         fetchApi('/api/travel/knowledge-base/config', { silent: true }).catch(() => ({ rootFolderId: '' })),
         fetchApi('/api/travel/knowledge-base/status', { silent: true }).catch(() => ({ stats: [], lastJob: null })),
         fetchApi('/api/travel/knowledge-base/jobs?limit=5', { silent: true }).catch(() => ({ jobs: [] })),
-        fetchApi(`/api/travel/knowledge-base/files?limit=${filesPageSize}&offset=0`, { silent: true }).catch(() => ({ files: [], total: 0 })),
+        fetchApi(`/api/travel/knowledge-base/files?limit=${filesPageSizeRef.current}&offset=0`, { silent: true }).catch(() => ({ files: [], total: 0 })),
         fetchApi('/api/travel/knowledge-base/oauth/status', { silent: true }).catch(() => ({ configured: false, connected: false, userInfo: null, rootFolderId: '' })),
       ]);
       setConfig(cfg || { rootFolderId: '', qdrantEnabled: false, embedEnabled: false, embedProvider: null, embedModel: null, vectorSize: null });
@@ -225,20 +231,52 @@ export default function KnowledgeBaseAdmin() {
     }
   };
 
-  const loadFilesPage = async (page) => {
+  const loadFilesPage = async (page, pageSize = filesPageSizeRef.current) => {
+    const requestKey = `${page}:${pageSize}`;
+    if (filesRequestRef.current.key === requestKey) return;
+    const requestId = filesRequestRef.current.id + 1;
+    filesRequestRef.current = { id: requestId, key: requestKey };
     setFilesLoadingPage(true);
     try {
-      const res = await fetchApi(`/api/travel/knowledge-base/files?limit=${filesPageSize}&offset=${(page - 1) * filesPageSize}`, { silent: true });
-      setFiles(res?.files || []);
-      setFilesTotal(res?.total || filesTotal);
+      const res = await fetchApi(`/api/travel/knowledge-base/files?limit=${pageSize}&offset=${(page - 1) * pageSize}`, { silent: true });
+      if (filesRequestRef.current.id !== requestId) return;
+      setFiles(res?.files ?? []);
+      setFilesTotal(res?.total ?? 0);
       setFilesPage(page);
       setSelectedFileIds(new Set());
     } catch (e) {
-      notify.error(e.message || 'Failed to load files');
+      if (filesRequestRef.current.id === requestId) {
+        notify.error(e.message || 'Failed to load files');
+      }
     } finally {
-      setFilesLoadingPage(false);
+      if (filesRequestRef.current.id === requestId) {
+        filesRequestRef.current = { id: requestId, key: null };
+        setFilesLoadingPage(false);
+      }
     }
   };
+
+  const changeFilesPageSize = (nextPageSize) => {
+    filesPageSizeRef.current = nextPageSize;
+    setFilesPageSize(nextPageSize);
+    loadFilesPage(1, nextPageSize);
+  };
+
+  const filesPageCount = Math.max(1, Math.ceil((filesTotal || 0) / filesPageSize));
+  const safeFilesPage = Math.min(filesPage, filesPageCount);
+  const filesPageItems = useMemo(() => {
+    const visible = new Set([1, filesPageCount, safeFilesPage]);
+    for (let page = Math.max(2, safeFilesPage - 2); page <= Math.min(filesPageCount - 1, safeFilesPage + 2); page += 1) {
+      visible.add(page);
+    }
+    const sorted = Array.from(visible).sort((left, right) => left - right);
+    const items = [];
+    sorted.forEach((page, index) => {
+      if (index > 0 && page - sorted[index - 1] > 1) items.push('...');
+      items.push(page);
+    });
+    return items;
+  }, [filesPageCount, safeFilesPage]);
 
   const loadFolders = async (parentId) => {
     if (!oauth.connected) return;
@@ -945,7 +983,7 @@ export default function KnowledgeBaseAdmin() {
 
       {/* Jobs table */}
       {jobs.length > 0 && (
-        <div className="card" style={{ padding: 24, marginTop: 20 }}>
+        <div className="card knowledge-table-card" style={{ padding: 24, marginTop: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0, fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
               Update history
@@ -971,7 +1009,7 @@ export default function KnowledgeBaseAdmin() {
               )}
             </div>
           </div>
-          <div style={{ overflowX: 'auto' }}>
+          <div className="knowledge-table-scroll" style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}>
@@ -1025,7 +1063,7 @@ export default function KnowledgeBaseAdmin() {
 
       {/* Files table */}
       {files.length > 0 && (
-        <div className="card" style={{ padding: 24, marginTop: 20 }}>
+        <div className="card knowledge-table-card" style={{ padding: 24, marginTop: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0, fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
               Brochures in library
@@ -1043,7 +1081,7 @@ export default function KnowledgeBaseAdmin() {
               </button>
             )}
           </div>
-          <div style={{ overflowX: 'auto' }}>
+          <div className="knowledge-table-scroll" style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}>
@@ -1104,31 +1142,80 @@ export default function KnowledgeBaseAdmin() {
               </tbody>
             </table>
           </div>
-          {filesTotal > filesPageSize && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, ...muted }}>
-                Showing {(filesPage - 1) * filesPageSize + 1}-{Math.min(filesPage * filesPageSize, filesTotal)} of {filesTotal} files
+          {filesTotal > 0 && (
+            <div
+              data-testid="knowledge-files-pager"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                marginTop: 16,
+                paddingTop: 14,
+                borderTop: '1px solid var(--border-color)',
+                flexWrap: 'wrap',
+                fontSize: 13,
+              }}
+            >
+              <span style={muted}>
+                Showing{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>
+                  {(safeFilesPage - 1) * filesPageSize + 1}&ndash;{Math.min(safeFilesPage * filesPageSize, filesTotal)}
+                </strong>{' '}
+                of <strong style={{ color: 'var(--text-primary)' }}>{filesTotal}</strong> files
               </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, ...muted }}>
+                  Per page:
+                  <select
+                    aria-label="Files per page"
+                    value={filesPageSize}
+                    onChange={(event) => changeFilesPageSize(Number(event.target.value))}
+                    disabled={filesLoadingPage}
+                    style={{
+                      height: 32,
+                      padding: '0 8px',
+                      borderRadius: 6,
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--surface-color)',
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    {FILES_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+                  </select>
+                </label>
                 <button
-                  className="btn-secondary"
-                  onClick={() => loadFilesPage(filesPage - 1)}
-                  disabled={filesPage === 1 || filesLoadingPage}
-                  style={{ padding: '7px 11px' }}
+                  type="button"
+                  aria-label="Previous page"
+                  onClick={() => loadFilesPage(safeFilesPage - 1)}
+                  disabled={safeFilesPage <= 1 || filesLoadingPage}
+                  style={pagerButtonStyle(false, safeFilesPage <= 1 || filesLoadingPage)}
                 >
-                  Previous
+                  <ChevronLeft size={14} />
                 </button>
-                <span style={{ minWidth: 82, textAlign: 'center', fontSize: 12, ...muted }}>
-                  Page {filesPage} of {Math.ceil(filesTotal / filesPageSize)}
-                </span>
+                {filesPageItems.map((page, index) => page === '...' ? (
+                  <span key={`files-gap-${index}`} style={{ color: 'var(--text-secondary)', padding: '0 3px' }}>&hellip;</span>
+                ) : (
+                  <button
+                    key={page}
+                    type="button"
+                    aria-label={`Page ${page}`}
+                    aria-current={page === safeFilesPage ? 'page' : undefined}
+                    onClick={() => loadFilesPage(page)}
+                    disabled={filesLoadingPage}
+                    style={pagerButtonStyle(page === safeFilesPage, filesLoadingPage)}
+                  >
+                    {page}
+                  </button>
+                ))}
                 <button
-                  className="btn-secondary"
-                  onClick={() => loadFilesPage(filesPage + 1)}
-                  disabled={filesPage >= Math.ceil(filesTotal / filesPageSize) || filesLoadingPage}
-                  style={{ padding: '7px 11px', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                  type="button"
+                  aria-label="Next page"
+                  onClick={() => loadFilesPage(safeFilesPage + 1)}
+                  disabled={safeFilesPage >= filesPageCount || filesLoadingPage}
+                  style={pagerButtonStyle(false, safeFilesPage >= filesPageCount || filesLoadingPage)}
                 >
-                  {filesLoadingPage && <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />}
-                  Next
+                  {filesLoadingPage ? <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <ChevronRight size={14} />}
                 </button>
               </div>
             </div>
@@ -1137,4 +1224,22 @@ export default function KnowledgeBaseAdmin() {
       )}
     </div>
   );
+}
+
+function pagerButtonStyle(active, disabled) {
+  return {
+    minWidth: 32,
+    height: 32,
+    padding: '0 8px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: '1px solid var(--border-color)',
+    borderRadius: 6,
+    background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
+    color: active ? '#fff' : 'var(--text-primary)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.4 : 1,
+    fontSize: 13,
+  };
 }

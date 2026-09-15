@@ -35,7 +35,21 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
   const loadedOnce = useRef(false);
-  const leadsDefaultColumns = ["name", "email", "phone", "webForm", "campaign", "callStatus", "callifiedAi", "callifiedScore", "source", "company", "aiScore", "assignedTo"];
+  // Reset is intentionally narrower than the first-load table fallback.
+  // Keep the established generic CRM column set stable so resetting does
+  // not unexpectedly opt users into campaign/scoring columns.
+  const leadsDefaultColumns = [
+    "name",
+    "phone",
+    "email",
+    "company",
+    "source",
+    "webForm",
+    "createdAt",
+    "lastUpdated",
+    "companySize",
+    "actions",
+  ];
 
   const load = async () => {
     setLoading(true);

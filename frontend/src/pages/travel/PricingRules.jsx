@@ -215,6 +215,8 @@ function SeasonsSection() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState(searchParams.get("seasonSubBrand") || activeSubBrand || "");
+  const [filterFrom, setFilterFrom] = useState(searchParams.get("seasonFrom") || "");
+  const [filterTo, setFilterTo] = useState(searchParams.get("seasonTo") || "");
   const [sortKey, setSortKey] = useState(searchParams.get("seasonSortKey") || null);
   const [sortDirection, setSortDirection] = useState(searchParams.get("seasonSortDirection") || null);
   const [adding, setAdding] = useState(false);
@@ -257,6 +259,8 @@ function SeasonsSection() {
     const requestId = ++loadRequestRef.current;
     const qs = new URLSearchParams();
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
+    if (filterFrom) qs.set("from", filterFrom);
+    if (filterTo) qs.set("to", filterTo);
     const startOffset = reset ? 0 : offsetRef.current;
     if (startOffset > 0) {
       qs.set("limit", String(PAGE_SIZE));
@@ -298,7 +302,7 @@ function SeasonsSection() {
         }
       });
   };
-  useEffect(() => { load({ reset: true }); }, [filterSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load({ reset: true }); }, [filterSubBrand, filterFrom, filterTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (location.pathname !== "/travel/pricing-rules") return;
@@ -324,9 +328,11 @@ function SeasonsSection() {
 
   const resetFilters = () => {
     setFilterSubBrand(activeSubBrand || "");
+    setFilterFrom("");
+    setFilterTo("");
     setSortKey(null);
     setSortDirection(null);
-    updateParams({ seasonSubBrand: null, seasonSortKey: null, seasonSortDirection: null });
+    updateParams({ seasonSubBrand: null, seasonFrom: null, seasonTo: null, seasonSortKey: null, seasonSortDirection: null });
   };
 
   const sortButton = (key, label) => {
@@ -403,6 +409,8 @@ function SeasonsSection() {
   const exportCsv = () => {
     const qs = new URLSearchParams();
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
+    if (filterFrom) qs.set("from", filterFrom);
+    if (filterTo) qs.set("to", filterTo);
     return downloadCsv(notify, `/api/travel/seasons/export.csv?${qs.toString()}`, "travel-seasons.csv");
   };
   const downloadSeasonTemplate = async (format) => {
@@ -481,6 +489,8 @@ function SeasonsSection() {
           <option value="all">All sub-brands</option>
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
+        <input type="date" value={filterFrom} max={filterTo || undefined} onChange={(e) => { setFilterFrom(e.target.value); updateParams({ seasonFrom: e.target.value }); }} {...pickerOnlyProps} style={dateFilterStyle} aria-label="Filter seasons from date" title="Show seasons that overlap this date or later" />
+        <input type="date" value={filterTo} min={filterFrom || undefined} onChange={(e) => { setFilterTo(e.target.value); updateParams({ seasonTo: e.target.value }); }} {...pickerOnlyProps} style={dateFilterStyle} aria-label="Filter seasons to date" title="Show seasons that overlap this date or earlier" />
         <button type="button" onClick={() => load({ reset: true })} style={secondaryBtn}>Refresh</button>
         <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
@@ -642,6 +652,8 @@ function MarkupRulesSection() {
   const [filterSubBrand, setFilterSubBrand] = useState(searchParams.get("subBrand") || activeSubBrand || "");
   const [filterScope, setFilterScope] = useState(searchParams.get("scope") || "");
   const [filterActive, setFilterActive] = useState(searchParams.get("active") || "");
+  const [filterFrom, setFilterFrom] = useState(searchParams.get("ruleFrom") || "");
+  const [filterTo, setFilterTo] = useState(searchParams.get("ruleTo") || "");
   const [sortKey, setSortKey] = useState(
     ["subBrand", "scope"].includes(searchParams.get("sortKey"))
       ? null
@@ -712,6 +724,8 @@ function MarkupRulesSection() {
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
     if (filterActive) qs.set("active", filterActive);
+    if (filterFrom) qs.set("from", filterFrom);
+    if (filterTo) qs.set("to", filterTo);
     const startOffset = reset ? 0 : offsetRef.current;
     if (startOffset > 0) {
       qs.set("limit", String(PAGE_SIZE));
@@ -753,7 +767,7 @@ function MarkupRulesSection() {
         }
       });
   };
-  useEffect(() => { load({ reset: true }); }, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load({ reset: true }); }, [filterSubBrand, filterScope, filterActive, filterFrom, filterTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (location.pathname !== "/travel/pricing-rules") return;
@@ -778,8 +792,8 @@ function MarkupRulesSection() {
   }, [rules, sortDirection, sortKey]);
 
   const resetFilters = () => {
-    setFilterSubBrand(activeSubBrand || ""); setFilterScope(""); setFilterActive(""); setSortKey(null); setSortDirection(null);
-    updateParams({ subBrand: activeSubBrand || null, scope: null, active: null, sortKey: null, sortDirection: null });
+    setFilterSubBrand(activeSubBrand || ""); setFilterScope(""); setFilterActive(""); setFilterFrom(""); setFilterTo(""); setSortKey(null); setSortDirection(null);
+    updateParams({ subBrand: activeSubBrand || null, scope: null, active: null, ruleFrom: null, ruleTo: null, sortKey: null, sortDirection: null });
   };
 
   const sortButton = (key, label) => {
@@ -925,6 +939,8 @@ function MarkupRulesSection() {
     const qs = new URLSearchParams();
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
+    if (filterFrom) qs.set("from", filterFrom);
+    if (filterTo) qs.set("to", filterTo);
     return downloadCsv(notify, `/api/travel/markup-rules/export.csv?${qs.toString()}`, "travel-markup-rules.csv");
   };
   const downloadMarkupTemplate = async (format) => {
@@ -1010,6 +1026,8 @@ function MarkupRulesSection() {
           <option value="true">Active only</option>
           <option value="false">Inactive only</option>
         </select>
+        <input type="date" value={filterFrom} max={filterTo || undefined} onChange={(e) => { setFilterFrom(e.target.value); updateParams({ ruleFrom: e.target.value }); }} {...pickerOnlyProps} style={dateFilterStyle} aria-label="Filter markup rules from date" title="Show rules created on or after this date" />
+        <input type="date" value={filterTo} min={filterFrom || undefined} onChange={(e) => { setFilterTo(e.target.value); updateParams({ ruleTo: e.target.value }); }} {...pickerOnlyProps} style={dateFilterStyle} aria-label="Filter markup rules to date" title="Show rules created on or before this date" />
         <button type="button" onClick={() => load({ reset: true })} style={secondaryBtn}>Refresh</button>
         <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
@@ -1237,6 +1255,12 @@ const selectStyle = {
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
   minWidth: 140, fontSize: 13,
+};
+const dateFilterStyle = {
+  ...selectStyle,
+  minWidth: 150,
+  cursor: "pointer",
+  colorScheme: "var(--color-scheme, normal)",
 };
 const input = {
   padding: "8px 10px", borderRadius: 6, width: "100%", boxSizing: "border-box",

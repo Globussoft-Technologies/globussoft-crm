@@ -238,6 +238,7 @@ model Tenant {
   travelQuoteLines                    TravelQuoteLine[]
   travelQuoteTemplates                TravelQuoteTemplate[]
   travelInvoices                      TravelInvoice[]
+  travelInvoiceSequences              TravelInvoiceSequence[]
   travelInvoiceLines                  TravelInvoiceLine[]
   travelPaymentSchedules              TravelPaymentSchedule[]
   travelSuppliers                     TravelSupplier[]
@@ -9083,6 +9084,20 @@ model TravelInvoice {
   // "all invoices for one contact" lookups that the UI hits on contact
   // detail pages.
   @@index([tenantId, contactId, status])
+}
+
+// Atomic allocator for canonical TINV-YYYY-NNNN numbers. One row per
+// tenant/year lets MySQL serialize concurrent increments without scanning the
+// TravelInvoice table or relying on a bounded unique-conflict retry loop.
+model TravelInvoiceSequence {
+  tenantId   Int
+  year       Int
+  lastSerial Int      @default(0)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([tenantId, year])
 }
 
 // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7.a cancellation-policy table.

@@ -473,6 +473,43 @@ describe('<PricingRules /> — filter behavior', () => {
       expect(call).toBeTruthy();
     });
   });
+
+  it('keeps the Seasons and Markup Rules date ranges independent', async () => {
+    renderPage();
+    await screen.findByText('ramadan-peak');
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.change(screen.getByLabelText(/Filter seasons from date/i), {
+      target: { value: '2026-03-01' },
+    });
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url === '/api/travel/seasons?from=2026-03-01',
+      )).toBe(true);
+    });
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string' && url.startsWith('/api/travel/markup-rules?'),
+    )).toBe(false);
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.change(screen.getByLabelText(/Filter markup rules to date/i), {
+      target: { value: '2026-05-31' },
+    });
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url === '/api/travel/markup-rules?to=2026-05-31',
+      )).toBe(true);
+    });
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string' && url.startsWith('/api/travel/seasons?'),
+    )).toBe(false);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Reset filters/i })[0]);
+    expect(screen.getByLabelText(/Filter seasons from date/i)).toHaveValue('');
+    expect(screen.getByLabelText(/Filter markup rules to date/i)).toHaveValue('2026-05-31');
+  });
 });
 
 describe('<PricingRules /> — row rendering', () => {

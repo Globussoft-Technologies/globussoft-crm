@@ -41,12 +41,45 @@ function resolvePublicLeadTenantSlug() {
 }
 
 async function readPublicConfig(prisma) {
-  const row = await prisma.tenantSetting.findFirst({ where: { key: PUBLIC_CONFIG_KEY }, select: { value: true } });
+  // TenantSetting is unique per tenant, not globally. Keep this lookup
+  // deterministic even while an older deployment has more than one copy.
+  // All writers below synchronize every copy to the same value.
+  const row = await prisma.tenantSetting.findFirst({
+    where: { key: PUBLIC_CONFIG_KEY },
+    orderBy: [{ updatedAt: "desc" }, { tenantId: "asc" }],
+    select: { value: true },
+  });
   if (!row) return null;
   try {
     const parsed = JSON.parse(String(row.value || ""));
     return parsed && Number.isInteger(Number(parsed.tenantId)) ? { tenantId: Number(parsed.tenantId), activeWebFormId: Number(parsed.activeWebFormId) || null, emails: Array.isArray(parsed.emails) ? parsed.emails : [] } : null;
   } catch { return null; }
+}
+
+async function writePublicConfig(prisma, { tenantId, activeWebFormId = null, emails = [] }) {
+  const normalizedTenantId = Number(tenantId);
+  if (!Number.isInteger(normalizedTenantId) || normalizedTenantId <= 0) {
+    throw new TypeError("A valid public landing tenant is required");
+  }
+  const value = JSON.stringify({
+    tenantId: normalizedTenantId,
+    activeWebFormId: Number(activeWebFormId) || null,
+    emails: [...new Set(emails.map((email) => String(email).trim().toLowerCase()).filter(Boolean))],
+  });
+
+  // The key is only unique within a tenant. Synchronize any historical rows
+  // first, then guarantee that the selected tenant owns a row. Consequently
+  // readPublicConfig cannot resolve different tenants based on row order.
+  await prisma.tenantSetting.updateMany({
+    where: { key: PUBLIC_CONFIG_KEY },
+    data: { value, category: "landing" },
+  });
+  await prisma.tenantSetting.upsert({
+    where: { tenantId_key: { tenantId: normalizedTenantId, key: PUBLIC_CONFIG_KEY } },
+    create: { tenantId: normalizedTenantId, key: PUBLIC_CONFIG_KEY, value, category: "landing" },
+    update: { value, category: "landing" },
+  });
+  return JSON.parse(value);
 }
 
 async function isPublicConfigAdmin(prisma, email) {
@@ -129,6 +162,7 @@ module.exports = {
   resolvePublicLeadTenantSlug,
   PUBLIC_CONFIG_KEY,
   readPublicConfig,
+  writePublicConfig,
   isPublicConfigAdmin,
   isSelectableLandingForm,
   readLandingFormSetting,

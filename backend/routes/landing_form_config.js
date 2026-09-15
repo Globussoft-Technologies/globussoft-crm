@@ -21,13 +21,19 @@ const router = express.Router();
 
 async function loadPublicForm() {
   const config = await landingFormConfig.readPublicConfig(prisma);
+  const tenantSlug = landingFormConfig.resolvePublicLeadTenantSlug();
+  if (!config && !tenantSlug) {
+    throw Object.assign(new Error("Public lead tenant is not configured"), { statusCode: 503, code: "LANDING_FORM_NOT_CONFIGURED" });
+  }
   const tenant = await prisma.tenant.findFirst({
-    where: config ? { id: config.tenantId, vertical: "generic", isActive: true } : { id: -1, vertical: "generic", isActive: true },
+    where: config
+      ? { id: config.tenantId, vertical: "generic", isActive: true }
+      : { slug: tenantSlug, vertical: "generic", isActive: true },
     select: { id: true },
   });
   if (!tenant) throw Object.assign(new Error("Public lead tenant is unavailable"), { statusCode: 503, code: "LANDING_FORM_NOT_CONFIGURED" });
   const tenantId = tenant.id;
-  const webFormId = config.activeWebFormId || await landingFormConfig.resolveLandingWebFormId(prisma, tenantId);
+  const webFormId = config?.activeWebFormId || await landingFormConfig.resolveLandingWebFormId(prisma, tenantId);
   if (!webFormId) {
     const err = new Error("No active web form available for the landing page");
     err.statusCode = 503;
@@ -35,10 +41,13 @@ async function loadPublicForm() {
     throw err;
   }
   const form = await prisma.webForm.findFirst({
-    where: { id: webFormId, scope: "generic", isActive: true },
+    where: { id: webFormId, tenantId, scope: "generic", isActive: true },
     select: { id: true, name: true },
   });
-  return { tenantId, webFormId, webFormName: form ? form.name : "" };
+  if (!form) {
+    throw Object.assign(new Error("The configured landing-page form is unavailable"), { statusCode: 503, code: "LANDING_FORM_UNAVAILABLE" });
+  }
+  return { tenantId, webFormId, webFormName: form.name };
 }
 
 // Resolve the caller's email from the DB and check the allowlist.
@@ -105,7 +114,7 @@ router.put("/", verifyToken, async (req, res) => {
       where: { id: webFormId, tenantId, scope: "generic", isActive: true },
       select: { id: true, name: true, tenantId: true, isActive: true, scope: true },
     });
-    if (!form) {
+    if (!landingFormConfig.isSelectableLandingForm(form, tenantId)) {
       return res.status(400).json({
         error: "Form must exist, be active, generic-scope, and belong to the public lead tenant",
         code: "INVALID_WEB_FORM",
@@ -113,19 +122,16 @@ router.put("/", verifyToken, async (req, res) => {
     }
     // Replace the single global active form configuration.
     const publicConfig = await landingFormConfig.readPublicConfig(prisma);
-    const publicConfigValue = JSON.stringify({ tenantId, activeWebFormId: form.id, emails: publicConfig?.emails || [] });
-    if (publicConfig) {
-      await prisma.tenantSetting.updateMany({
-        where: { key: landingFormConfig.PUBLIC_CONFIG_KEY },
-        data: { value: publicConfigValue },
-      });
-    } else {
-      await prisma.tenantSetting.upsert({
-        where: { tenantId_key: { tenantId, key: landingFormConfig.PUBLIC_CONFIG_KEY } },
-        create: { tenantId, key: landingFormConfig.PUBLIC_CONFIG_KEY, value: publicConfigValue, category: "landing" },
-        update: { value: publicConfigValue, category: "landing" },
-      });
-    }
+    await prisma.tenantSetting.upsert({
+      where: { tenantId_key: { tenantId, key: landingFormConfig.LANDING_FORM_SETTING_KEY } },
+      create: { tenantId, key: landingFormConfig.LANDING_FORM_SETTING_KEY, value: JSON.stringify({ webFormId: form.id, updatedByUserId: req.user.userId }), category: "landing" },
+      update: { value: JSON.stringify({ webFormId: form.id, updatedByUserId: req.user.userId }), category: "landing" },
+    });
+    await landingFormConfig.writePublicConfig(prisma, {
+      tenantId,
+      activeWebFormId: form.id,
+      emails: publicConfig?.emails || [...landingFormConfig.getLandingFormAdminEmails()],
+    });
     res.json({ webFormId: form.id, webFormName: form.name });
   } catch (err) {
     console.error("[landing-form-config] update failed:", err && err.message);

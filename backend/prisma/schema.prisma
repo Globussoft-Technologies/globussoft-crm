@@ -112,6 +112,7 @@ model Tenant {
 
   users                 User[]
   salesTeams            SalesTeam[]
+  salesTeamMembers      SalesTeamMember[]
   contacts              Contact[]
   activities            Activity[]
   deals                 Deal[]
@@ -10943,12 +10944,15 @@ model SalesTeam {
 
 model SalesTeamMember {
   id        Int       @id @default(autoincrement())
+  tenantId  Int       @default(1)
   teamId    Int
   userId    Int
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   team      SalesTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime  @default(now())
 
   @@unique([teamId, userId])
+  @@index([tenantId])
   @@index([userId])
 }

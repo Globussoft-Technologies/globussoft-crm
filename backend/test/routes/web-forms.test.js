@@ -942,7 +942,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
         title: 'Sales Manager',
         company: 'Acme Corp',
         companySize: '51-200',
-        source: 'Referral',
+        source: 'website-form',
+        medium: 'Referral',
       }),
     }));
     // Nothing left for the custom-field writer — no definitions needed.

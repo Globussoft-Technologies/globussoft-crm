@@ -1,9 +1,9 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 
-router.use(verifyToken);
+router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
 
 const includeTeam = { members: { include: { user: { select: { id: true, name: true, email: true, role: true } } } } };
 const tenantWhere = (req, id) => ({ id, tenantId: req.user.tenantId });
@@ -21,7 +21,7 @@ router.post("/", async (req, res) => {
   if (!name) return res.status(400).json({ error: "Team name is required", code: "TEAM_NAME_REQUIRED" });
   try {
     const users = await prisma.user.findMany({ where: { tenantId: req.user.tenantId, id: { in: memberIds } }, select: { id: true } });
-    const team = await prisma.salesTeam.create({ data: { name, tenantId: req.user.tenantId, members: { create: users.map(({ id }) => ({ userId: id })) } }, include: includeTeam });
+    const team = await prisma.salesTeam.create({ data: { name, tenantId: req.user.tenantId, members: { create: users.map(({ id }) => ({ userId: id, tenantId: req.user.tenantId })) } }, include: includeTeam });
     res.status(201).json(team);
   } catch (_err) { res.status(500).json({ error: "Failed to create team", code: "TEAM_CREATE_FAILED" }); }
 });
@@ -36,8 +36,8 @@ router.put("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Team not found", code: "TEAM_NOT_FOUND" });
     if (memberIds) {
       const users = await prisma.user.findMany({ where: { tenantId: req.user.tenantId, id: { in: memberIds } }, select: { id: true } });
-      await prisma.salesTeamMember.deleteMany({ where: { teamId: id } });
-      await prisma.salesTeamMember.createMany({ data: users.map(({ id: userId }) => ({ teamId: id, userId })) });
+      await prisma.salesTeamMember.deleteMany({ where: { teamId: id, tenantId: req.user.tenantId } });
+      await prisma.salesTeamMember.createMany({ data: users.map(({ id: userId }) => ({ teamId: id, userId, tenantId: req.user.tenantId })) });
     }
     res.json(await prisma.salesTeam.update({ where: { id }, data: { name }, include: includeTeam }));
   } catch (_err) { res.status(500).json({ error: "Failed to update team", code: "TEAM_UPDATE_FAILED" }); }
@@ -53,4 +53,3 @@ router.delete("/:id", async (req, res) => {
 });
 
 module.exports = router;
-

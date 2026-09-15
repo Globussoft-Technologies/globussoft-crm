@@ -51,12 +51,13 @@ router.put("/landing-form", async (req, res) => {
   try {
     const webFormId = Number.parseInt(req.body?.webFormId, 10);
     if (!Number.isInteger(webFormId) || webFormId <= 0) return res.status(400).json({ error: "Invalid web form id", code: "INVALID_WEB_FORM_ID" });
-    const tenant = await prisma.tenant.findFirst({ where: { id: Number(req.body?.tenantId), vertical: "generic", isActive: true }, select: { id: true } });
+    const siteTenantId = Number(req.body?.siteTenantId);
+    const tenant = await prisma.tenant.findFirst({ where: { id: siteTenantId, vertical: "generic", isActive: true }, select: { id: true } });
     const form = tenant && await prisma.webForm.findFirst({ where: { id: webFormId, tenantId: tenant.id, scope: "generic", isActive: true }, select: { id: true, name: true } });
     if (!tenant || !form) return res.status(400).json({ error: "Form must belong to the active public Generic tenant", code: "INVALID_WEB_FORM" });
     const emails = String(req.body?.emails || "").split(",").map((email) => email.trim().toLowerCase()).filter(Boolean);
     await prisma.tenantSetting.upsert({ where: { tenantId_key: { tenantId: tenant.id, key: landingFormConfig.LANDING_FORM_SETTING_KEY } }, create: { tenantId: tenant.id, key: landingFormConfig.LANDING_FORM_SETTING_KEY, value: JSON.stringify({ webFormId: form.id, updatedBySuperAdmin: req.superAdmin.username }), category: "landing" }, update: { value: JSON.stringify({ webFormId: form.id, updatedBySuperAdmin: req.superAdmin.username }), category: "landing" } });
-    await prisma.tenantSetting.upsert({ where: { tenantId_key: { tenantId: tenant.id, key: landingFormConfig.PUBLIC_CONFIG_KEY } }, create: { tenantId: tenant.id, key: landingFormConfig.PUBLIC_CONFIG_KEY, value: JSON.stringify({ tenantId: tenant.id, emails }), category: "landing" }, update: { value: JSON.stringify({ tenantId: tenant.id, emails }), category: "landing" } });
+    await landingFormConfig.writePublicConfig(prisma, { tenantId: tenant.id, activeWebFormId: form.id, emails });
     res.json({ webFormId: form.id, webFormName: form.name });
   } catch (err) { res.status(500).json({ error: err.message || "Failed to update landing form", code: "LANDING_FORM_ADMIN_UPDATE_FAILED" }); }
 });
@@ -77,7 +78,8 @@ router.put("/landing-form/emails", async (req, res) => {
       if (!firstForm) return res.status(400).json({ error: "No active Generic web form exists for this email's tenant", code: "LANDING_FORM_REQUIRED" });
       await prisma.tenantSetting.upsert({ where: { tenantId_key: { tenantId, key: landingFormConfig.LANDING_FORM_SETTING_KEY } }, create: { tenantId, key: landingFormConfig.LANDING_FORM_SETTING_KEY, value: JSON.stringify({ webFormId: firstForm.id, updatedBySuperAdmin: req.superAdmin.username }), category: "landing" }, update: { value: JSON.stringify({ webFormId: firstForm.id, updatedBySuperAdmin: req.superAdmin.username }), category: "landing" } });
     }
-    await prisma.tenantSetting.upsert({ where: { tenantId_key: { tenantId, key: landingFormConfig.PUBLIC_CONFIG_KEY } }, create: { tenantId, key: landingFormConfig.PUBLIC_CONFIG_KEY, value: JSON.stringify({ tenantId, emails }), category: "landing" }, update: { value: JSON.stringify({ tenantId, emails }), category: "landing" } });
+    const activeWebFormId = existing?.activeWebFormId || await landingFormConfig.resolveLandingWebFormId(prisma, tenantId);
+    await landingFormConfig.writePublicConfig(prisma, { tenantId, activeWebFormId, emails });
     res.json({ emails });
   } catch (err) { res.status(500).json({ error: err.message || "Failed to update landing form permissions", code: "LANDING_FORM_EMAILS_UPDATE_FAILED" }); }
 });

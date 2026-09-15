@@ -16,6 +16,7 @@ prisma.tenant = { ...(prisma.tenant || {}), findUnique: vi.fn() };
 prisma.user = { ...(prisma.user || {}), findUnique: vi.fn() };
 prisma.revokedToken = { ...(prisma.revokedToken || {}), findUnique: vi.fn() };
 prisma.travelTripReview = { ...(prisma.travelTripReview || {}), findMany: vi.fn() };
+prisma.tmcTripTeacherReview = { ...(prisma.tmcTripTeacherReview || {}), findMany: vi.fn() };
 prisma.itinerary = { ...(prisma.itinerary || {}), findMany: vi.fn() };
 prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn() };
 prisma.contact = { ...(prisma.contact || {}), findMany: vi.fn() };
@@ -29,8 +30,8 @@ function makeApp() {
   return app;
 }
 
-function token() {
-  return jwt.sign({ userId: 7, tenantId: 1, role: "ADMIN", email: "admin@example.com" }, JWT_SECRET, { expiresIn: "1h" });
+function token(role = "ADMIN") {
+  return jwt.sign({ userId: 7, tenantId: 1, role, email: "admin@example.com" }, JWT_SECRET, { expiresIn: "1h" });
 }
 
 beforeEach(() => {
@@ -38,6 +39,7 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ id: 7, role: "ADMIN", subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.travelTripReview.findMany.mockReset().mockResolvedValue([]);
+  prisma.tmcTripTeacherReview.findMany.mockReset().mockResolvedValue([]);
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcTrip.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
@@ -82,5 +84,41 @@ describe("GET /api/travel/reviews", () => {
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 1, id: { in: [7] } },
     }));
+  });
+});
+
+describe("GET /api/travel/teacher-reviews", () => {
+  test("allows staff with TMC sub-brand access", async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7,
+      role: "USER",
+      subBrandAccess: JSON.stringify(["tmc"]),
+    });
+
+    const response = await request(makeApp())
+      .get("/api/travel/teacher-reviews")
+      .set("Authorization", `Bearer ${token("USER")}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ reports: [], total: 0 });
+    expect(prisma.tmcTripTeacherReview.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { tenantId: 1 } }),
+    );
+  });
+
+  test("rejects staff restricted to another travel sub-brand", async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7,
+      role: "USER",
+      subBrandAccess: JSON.stringify(["rfu"]),
+    });
+
+    const response = await request(makeApp())
+      .get("/api/travel/teacher-reviews")
+      .set("Authorization", `Bearer ${token("USER")}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({ code: "SUB_BRAND_DENIED" });
+    expect(prisma.tmcTripTeacherReview.findMany).not.toHaveBeenCalled();
   });
 });

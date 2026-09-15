@@ -7471,6 +7471,7 @@ model TmcTrip {
   pendingRegistrations PendingTripRegistration[]
   parentPortalLinks   TmcParentTrip[]
   teacherReviews      TmcTripTeacherReview[]
+  parentReviews       TravelTripReview[]
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
@@ -7937,6 +7938,7 @@ model TravelTripReview {
   requestedAt   DateTime  @default(now())
   submittedAt   DateTime?
   tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tmcTrip       TmcTrip?   @relation(fields: [tmcTripId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])

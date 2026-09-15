@@ -11,3 +11,8 @@ CREATE UNIQUE INDEX `TravelTripReview_tenantId_tmcTripId_contactId_key`
 
 CREATE INDEX `TravelTripReview_tenantId_tmcTripId_idx`
   ON `TravelTripReview`(`tenantId`, `tmcTripId`);
+
+ALTER TABLE `TravelTripReview`
+  ADD CONSTRAINT `TravelTripReview_tmcTripId_fkey`
+  FOREIGN KEY (`tmcTripId`) REFERENCES `TmcTrip`(`id`)
+  ON DELETE CASCADE ON UPDATE CASCADE;

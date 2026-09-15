@@ -17,7 +17,7 @@ describe("TmcTeacherDiagnostics", () => {
               engineState: "strong_match",
               classificationLabel: "Routed by TMC Engine",
               recommendedTier: "engine",
-              reportPdfUrl: "/api/travel/diagnostics/42/readiness-report.pdf",
+              reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
               recommendations: [{
                 name: "Campus Overnight Adventure",
                 category: "domestic",
@@ -127,7 +127,7 @@ describe("TmcTeacherDiagnostics", () => {
     fireEvent.click(screen.getByRole("button", { name: /Complete diagnostic \(1\)/i }));
 
     await waitFor(() => expect(screen.getByText(/Trip choices saved/i)).toBeTruthy());
-    expect(screen.getByRole("link", { name: /Download report PDF/i }).getAttribute("href")).toBe("/api/travel/diagnostics/42/readiness-report.pdf");
+    expect(screen.getByRole("link", { name: /Download report PDF/i }).getAttribute("href")).toBe("/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf");
 
     const submitCall = fetchSpy.mock.calls.find(([url, options]) => url === "/api/portal/tmc/teacher/diagnostics" && options.method === "POST");
     expect(JSON.parse(submitCall[1].body)).toMatchObject({

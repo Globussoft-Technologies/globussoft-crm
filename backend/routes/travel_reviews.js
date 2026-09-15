@@ -19,6 +19,25 @@ const { requireTravelTenant, getSubBrandAccessSet, canAccessSubBrand } = require
 const { buildForm, validateSubmission } = require("../lib/travelReviewQuestions");
 const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 
+async function requireTmcStaffAccess(req, res, next) {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, "tmc")) {
+      return res.status(403).json({
+        error: "TMC sub-brand access required",
+        code: "SUB_BRAND_DENIED",
+      });
+    }
+    next();
+  } catch (error) {
+    console.error("[travel-reviews] TMC access check error:", error.message);
+    res.status(500).json({
+      error: "Access check failed",
+      code: "ACCESS_CHECK_FAILED",
+    });
+  }
+}
+
 // ── PUBLIC — fetch the form (by review token) ────────────────────────
 router.get("/reviews/public/:token", async (req, res) => {
   try {
@@ -99,7 +118,7 @@ router.post("/reviews/public/:token/submit", async (req, res) => {
 // Teacher reports are separate from customer reviews but live beside them in
 // the travel admin area. All joins remain tenant-scoped because the report
 // model intentionally stores only the stable trip/contact ids.
-router.get("/teacher-reviews", verifyToken, requireTravelTenant, async (req, res) => {
+router.get("/teacher-reviews", verifyToken, requireTravelTenant, requireTmcStaffAccess, async (req, res) => {
   try {
     const tenantId = req.travelTenant.id;
     const reports = await prisma.tmcTripTeacherReview.findMany({
@@ -217,6 +236,5 @@ router.get("/reviews", verifyToken, requireTravelTenant, async (req, res) => {
 });
 
 module.exports = router;
-
 
 

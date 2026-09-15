@@ -210,9 +210,7 @@ function reportFromResult(result) {
       ? result.recommendations
       : [],
     chosenInterests: result.chosenInterests || null,
-    reportPdfUrl:
-      result.reportPdfUrl ||
-      `/api/travel/diagnostics/${id}/readiness-report.pdf`,
+    reportPdfUrl: result.reportPdfUrl || null,
   };
 }
 
@@ -652,17 +650,16 @@ export default function TmcTeacherDiagnostics({
                     >
                       View trips
                     </button>
-                    <a
-                      href={
-                        report.reportPdfUrl ||
-                        `/api/travel/diagnostics/${report.id}/readiness-report.pdf`
-                      }
-                      target="_blank"
-                      rel="noreferrer"
-                      style={styles.textLink}
-                    >
-                      PDF
-                    </a>
+                    {report.reportPdfUrl && (
+                      <a
+                        href={report.reportPdfUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={styles.textLink}
+                      >
+                        PDF
+                      </a>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1126,7 +1123,7 @@ function NativeDiagnosticResult({
           </p>
         </div>
         <div style={styles.inlineActions}>
-          {interestsComplete && (
+          {interestsComplete && latest.reportPdfUrl && (
             <a
               href={latest.reportPdfUrl}
               target="_blank"

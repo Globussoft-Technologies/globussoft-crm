@@ -129,7 +129,7 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 1, vertical: "travel", slug: "tmc" });
   prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 55, name: "Asha Teacher", email: "asha@example.com", phone: null, subBrand: "tmc", portalRole: "TEACHER" });
   prisma.travelDiagnosticQuestionBank.findFirst.mockReset().mockResolvedValue(bank);
-  prisma.travelDiagnostic.findFirst.mockReset().mockResolvedValue({ id: 42, tenantId: 1, contactId: 55, subBrand: "tmc", engineState: "strong_match", createdAt: new Date("2026-09-11T00:00:00.000Z"), engineScoresJson: JSON.stringify({ survivors: [{ trip: catalogueTrip }] }), curriculumFitJson: "[]", reportPdfUrl: null });
+  prisma.travelDiagnostic.findFirst.mockReset().mockResolvedValue({ id: 42, tenantId: 1, contactId: 55, subBrand: "tmc", engineState: "strong_match", createdAt: new Date("2026-09-11T00:00:00.000Z"), engineScoresJson: JSON.stringify({ survivors: [{ trip: catalogueTrip }] }), curriculumFitJson: "[]", reportSlugToken: "0123456789abcdef" });
   prisma.travelDiagnostic.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnosticRagResult.findUnique.mockReset().mockResolvedValue(null);
   prisma.travelDiagnostic.create.mockReset().mockResolvedValue({ id: 42, createdAt: new Date("2026-09-11T00:00:00.000Z") });
@@ -177,11 +177,16 @@ describe("TMC teacher diagnostic flow", () => {
       diagnosticId: 42,
       classificationLabel: "Routed by TMC Engine",
       recommendedTier: "engine",
-      reportPdfUrl: "/api/travel/diagnostics/42/readiness-report.pdf",
+      reportPdfUrl: expect.stringMatching(/^\/api\/travel\/diagnostics\/public\/readiness-report\/42-[0-9a-f]{16}\.pdf$/),
     });
     expect(response.body.recommendations[0]).toMatchObject({ name: catalogueTrip.title, category: "domestic" });
     expect(prisma.travelDiagnostic.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ tenantId: 1, contactId: 55, source: "tmc_teacher_portal" }),
+      data: expect.objectContaining({
+        tenantId: 1,
+        contactId: 55,
+        source: "tmc_teacher_portal",
+        reportSlugToken: expect.stringMatching(/^[0-9a-f]{16}$/),
+      }),
     }));
   });
 
@@ -244,12 +249,33 @@ describe("TMC teacher diagnostic flow", () => {
     expect(response.body.diagnostic).toMatchObject({
       id: 42,
       classificationLabel: "Routed by TMC Engine",
-      reportPdfUrl: "/api/travel/diagnostics/42/readiness-report.pdf",
+      reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
     });
     expect(response.body.diagnostic.recommendations[0]).toMatchObject({ name: catalogueTrip.title });
     expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 42, tenantId: 1, contactId: 55, subBrand: "tmc" },
     }));
+  });
+
+  test("does not expose the staff-only numeric PDF route for legacy reports", async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValueOnce({
+      id: 42,
+      tenantId: 1,
+      contactId: 55,
+      subBrand: "tmc",
+      engineState: "strong_match",
+      createdAt: new Date("2026-09-11T00:00:00.000Z"),
+      engineScoresJson: JSON.stringify({ survivors: [{ trip: catalogueTrip }] }),
+      curriculumFitJson: "[]",
+      reportSlugToken: null,
+    });
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/teacher/diagnostics/42")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.diagnostic.reportPdfUrl).toBeNull();
   });
 
   test("saves chosen trips only for the authenticated teacher's report", async () => {

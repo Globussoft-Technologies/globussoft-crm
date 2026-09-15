@@ -138,6 +138,15 @@ function parentReviewShape(review) {
   };
 }
 
+function buildTeacherReportPdfUrl(diagnostic) {
+  const id = Number(diagnostic?.id);
+  const token = String(diagnostic?.reportSlugToken || "").trim();
+  if (!Number.isInteger(id) || id <= 0 || !/^[0-9a-f]{16}$/i.test(token)) {
+    return null;
+  }
+  return `/api/travel/diagnostics/public/readiness-report/${id}-${token.toLowerCase()}.pdf`;
+}
+
 async function loadParentReviewTrip(req, res) {
   const tripId = Number(req.params.tripId);
   if (!Number.isInteger(tripId) || tripId <= 0) {
@@ -1423,6 +1432,7 @@ router.post(
         flags.push("suspect");
       }
 
+      const reportSlugToken = crypto.randomBytes(8).toString("hex");
       const diag = await prisma.travelDiagnostic.create({
         data: {
           tenantId: Number(req.portal.tenantId),
@@ -1455,6 +1465,7 @@ router.post(
             : "v1",
           curriculumFitJson: JSON.stringify(engineOutput.curriculumFit || []),
           source: "tmc_teacher_portal",
+          reportSlugToken,
         },
       });
 
@@ -1507,7 +1518,10 @@ router.post(
           ...engineOutput,
           ragResult,
         }),
-        reportPdfUrl: `/api/travel/diagnostics/${diag.id}/readiness-report.pdf`,
+        reportPdfUrl: buildTeacherReportPdfUrl({
+          id: diag.id,
+          reportSlugToken,
+        }),
         createdAt: diag.createdAt,
         chosenInterests: null,
       });
@@ -1557,9 +1571,7 @@ router.get(
           id: diagnostic.id,
           engineState: diagnostic.engineState,
           createdAt: diagnostic.createdAt,
-          reportPdfUrl:
-            diagnostic.reportPdfUrl ||
-            `/api/travel/diagnostics/${diagnostic.id}/readiness-report.pdf`,
+          reportPdfUrl: buildTeacherReportPdfUrl(diagnostic),
           hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
         })),
       });
@@ -1601,6 +1613,7 @@ router.get(
           engineScoresJson: true,
           curriculumFitJson: true,
           reportPdfUrl: true,
+          reportSlugToken: true,
         },
       });
       if (!diagnostic)
@@ -1631,9 +1644,7 @@ router.get(
           classificationLabel: "Routed by TMC Engine",
           recommendedTier: "engine",
           createdAt: diagnostic.createdAt,
-          reportPdfUrl:
-            diagnostic.reportPdfUrl ||
-            `/api/travel/diagnostics/${diagnostic.id}/readiness-report.pdf`,
+          reportPdfUrl: buildTeacherReportPdfUrl(diagnostic),
           recommendations: recommendationPayloadFromDiagnostic(
             diagnostic,
             ragResult,

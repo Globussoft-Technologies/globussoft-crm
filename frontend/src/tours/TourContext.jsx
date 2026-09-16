@@ -319,6 +319,21 @@ export default function ProductTourProvider({ children }) {
     suppressModuleAutoPathRef.current = null;
   }, [tenantId, userId]);
 
+  useEffect(() => {
+    const content = document.querySelector('[data-tour="page-content"]');
+    const candidates = [content?.parentElement, content?.parentElement?.parentElement].filter(Boolean);
+    if (active) {
+      candidates.forEach((element) => {
+        element.setAttribute("inert", "");
+        element.setAttribute("aria-hidden", "true");
+      });
+    }
+    return () => candidates.forEach((element) => {
+      element.removeAttribute("inert");
+      element.removeAttribute("aria-hidden");
+    });
+  }, [active]);
+
   const pushRemote = useCallback(async (next) => {
     if (!isAvailable || !userId || !tenantId) return;
     return fetchApi("/api/tours/state", {
@@ -562,13 +577,13 @@ export default function ProductTourProvider({ children }) {
       stepRestorersRef.current.unshift(...actionResult.restorers);
 
       const requiredSelector = step.requiresRecords || step.waitFor || step.target;
-      const target = requiredSelector
-        ? await waitForTourTarget(requiredSelector, {
+      if (requiredSelector) {
+        await waitForTourTarget(requiredSelector, {
           timeoutMs: step.timeoutMs || 500,
           requireVisible: step.requireVisible !== false,
           signal: controller.signal,
         })
-        : null;
+      }
       if (!current || controller.signal.aborted) return;
       if (!actionResult.ok) {
         advanceRef.current?.();
@@ -602,7 +617,7 @@ export default function ProductTourProvider({ children }) {
     if (!remoteReady || !effectiveEnabled || active || !state.preferences.autoStart) return undefined;
     const saved = state.progress[WELCOME_TOUR_KEY];
     if (saved?.status === "COMPLETED" || saved?.status === "DISMISSED" || autoStartedRef.current.has(WELCOME_TOUR_KEY)) return undefined;
-    const timer = window.setTimeout(() => startTour(GENERIC_WELCOME_TOUR.id, { navigate: false }), 500);
+    const timer = window.setTimeout(() => startTour(GENERIC_WELCOME_TOUR.id, { navigate: false, continueSequence: false }), 500);
     return () => window.clearTimeout(timer);
   }, [active, effectiveEnabled, remoteReady, startTour, state.preferences.autoStart, state.progress]);
 

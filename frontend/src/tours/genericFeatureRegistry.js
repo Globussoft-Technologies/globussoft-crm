@@ -1,4 +1,4 @@
-import { GENERIC_NAVIGATION_OPTIONS } from "../utils/sidebarSearch";
+import { GENERIC_SIDEBAR_PAGE_SPECS } from "../utils/sidebarSearch";
 import { getGenericTourProfile } from "./genericTourProfiles";
 import { GENERIC_SECONDARY_WORKFLOW_TOURS } from "./secondaryWorkflowTours";
 
@@ -200,11 +200,17 @@ function buildSteps(feature) {
   return steps;
 }
 
-const catalogFeatures = GENERIC_NAVIGATION_OPTIONS.map((page) => ({
+// These manager-only Team & Territories links are exposed through the
+// navigation/search catalog, but are not standalone Product Tour modules.
+// Keep the historical tour registry stable while the navigation catalog stays
+// complete for search and future navigation discovery.
+const catalogFeatures = GENERIC_SIDEBAR_PAGE_SPECS
+  .filter((page) => !["/sales-teams", "/users"].includes(page.path))
+  .map((page) => ({
   ...page,
   id: page.id || featureIdFromPath(page.path),
   launcherTarget: page.launcherTarget || page.actionTarget,
-}));
+  }));
 
 const byId = new Map(catalogFeatures.map((feature) => [feature.id, feature]));
 

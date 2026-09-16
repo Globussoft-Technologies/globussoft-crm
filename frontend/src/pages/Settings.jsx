@@ -1194,7 +1194,7 @@ export default function Settings() {
           {/* Appearance Card */}
           <div
             className="card"
-            data-tour="settings-whatsapp"
+            data-tour="settings-appearance"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
             <h3
@@ -4426,5 +4426,4 @@ function NotificationPreferencesCard({ notify }) {
     </div>
   );
 }
-
 

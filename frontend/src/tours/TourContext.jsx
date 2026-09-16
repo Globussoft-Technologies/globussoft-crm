@@ -215,6 +215,7 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
       )}
       <section
         ref={dialogRef}
+        data-tour-surface="true"
         role="dialog"
         aria-modal="true"
         aria-labelledby="product-tour-title"
@@ -577,15 +578,15 @@ export default function ProductTourProvider({ children }) {
       stepRestorersRef.current.unshift(...actionResult.restorers);
 
       const requiredSelector = step.requiresRecords || step.waitFor || step.target;
-      if (requiredSelector) {
-        await waitForTourTarget(requiredSelector, {
-          timeoutMs: step.timeoutMs || 500,
+      const target = requiredSelector
+        ? await waitForTourTarget(requiredSelector, {
+          timeoutMs: step.timeoutMs || 4000,
           requireVisible: step.requireVisible !== false,
           signal: controller.signal,
         })
-      }
+        : null;
       if (!current || controller.signal.aborted) return;
-      if (!actionResult.ok) {
+      if (!actionResult.ok || (!target && (step.skipIfMissing || step.requiresRecords))) {
         advanceRef.current?.();
         return;
       }

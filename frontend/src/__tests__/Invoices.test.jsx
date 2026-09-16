@@ -10,7 +10,6 @@
  * the Create Invoice form — the form is always-visible in the left column
  * of a 2-column grid. Tests pin the actual inline-form behavior.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -55,10 +54,10 @@ import Invoices from '../pages/Invoices';
 
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
 
-function renderInvoices(user = ADMIN_USER) {
+function renderInvoices(user = ADMIN_USER, tenantOverrides = {}) {
   return render(
     <MemoryRouter>
-      <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, defaultCurrency: 'USD' }, loading: false }}>
+      <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, defaultCurrency: 'USD', ...tenantOverrides }, loading: false }}>
         <Invoices />
       </AuthContext.Provider>
     </MemoryRouter>
@@ -121,6 +120,59 @@ const samplePaymentConfig = {
   razorpay: { configured: false },
 };
 
+const samplePatients = [
+  {
+    id: 11,
+    name: 'Priya Sharma',
+    phone: '+919876543210',
+    email: 'priya@example.in',
+    gst: null,
+    contactId: null,
+  },
+  {
+    id: 12,
+    name: 'Arjun Mehta',
+    phone: '+919876543211',
+    email: 'arjun@example.in',
+    gst: null,
+    contactId: null,
+  },
+];
+
+const sampleVisit = {
+  id: 501,
+  visitDate: '2026-06-10',
+  status: 'completed',
+  service: { id: 21, name: 'Skin consultation' },
+};
+
+const sampleVisitConsumptions = [
+  { id: 601, productId: 31, productName: 'Aftercare kit', qty: 2, unitCost: 500 },
+];
+
+const sampleWellnessInvoices = [
+  {
+    ...sampleInvoices[0],
+    patientId: 11,
+    customerName: 'Priya Sharma',
+    customerPhone: '+919876543210',
+    customerEmail: 'priya@example.in',
+    paymentMode: 'upi',
+    lineItemsJson: JSON.stringify([
+      { type: 'service', itemId: 21, name: 'Skin consultation', quantity: 2, unitPrice: 1500, amount: 3000 },
+      { type: 'product', itemId: 31, name: 'Aftercare kit', quantity: 1, unitPrice: 500, amount: 500 },
+    ]),
+  },
+];
+
+const sampleServices = [
+  { id: 21, name: 'Skin consultation', basePrice: 1500, discountedPrice: null },
+];
+
+const sampleProducts = [
+  { id: 31, name: 'Aftercare kit', price: 500, discountedPrice: null },
+];
+
 function defaultFetchMock(url, opts) {
   if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleInvoices);
@@ -128,6 +180,15 @@ function defaultFetchMock(url, opts) {
   if (url === '/api/contacts') return Promise.resolve(sampleContacts);
   if (url === '/api/deals') return Promise.resolve(sampleDeals);
   if (url === '/api/payments/config') return Promise.resolve(samplePaymentConfig);
+  if (url === '/api/wellness/patients?limit=50&offset=0&fields=full') {
+    return Promise.resolve({ patients: samplePatients, total: samplePatients.length });
+  }
+  if (url === '/api/wellness/patients/11/visits') return Promise.resolve([sampleVisit]);
+  if (url === '/api/wellness/visits/501/consumptions') return Promise.resolve(sampleVisitConsumptions);
+  if (url === '/api/wellness/services') return Promise.resolve(sampleServices);
+  if (url === '/api/wellness/products?paginate=true&page=1&limit=100') {
+    return Promise.resolve({ items: sampleProducts, pagination: { total: sampleProducts.length } });
+  }
   return Promise.resolve(null);
 }
 
@@ -149,6 +210,9 @@ describe('<Invoices /> — page surface', () => {
     });
     expect(screen.queryByRole('heading', { name: /Create Invoice/i })).toBeNull();
     expect(screen.getByText(/Invoice Ledger/i)).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /^Contact$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: /Products \/ Services/i })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: /Payment Mode/i })).toBeNull();
     await openCreateInvoiceForm();
     expect(screen.getByRole('button', { name: /Issue Invoice/i })).toBeInTheDocument();
   });
@@ -169,6 +233,8 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getAllByText('Unpaid').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Paid').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Voided').length).toBeGreaterThanOrEqual(1);
+    const genericUnpaidBadge = screen.getAllByText('Unpaid').find((node) => node.closest('tr'));
+    expect(genericUnpaidBadge.getAttribute('style')).not.toMatch(/border:\s*none/i);
   });
 
   it('shows the empty-state message when /api/billing returns []', async () => {
@@ -295,7 +361,7 @@ describe('<Invoices /> — page surface', () => {
 
     // Due date input — labeled "Due date".
     const dateInput = screen.getByLabelText(/^Due date$/i);
-    fireEvent.change(dateInput, { target: { value: '2026-07-01' } });
+    fireEvent.change(dateInput, { target: { value: '2099-07-01' } });
 
     fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
 
@@ -307,8 +373,41 @@ describe('<Invoices /> — page surface', () => {
       const body = JSON.parse(call[1].body);
       expect(body.contactId).toBe('1');
       expect(body.amount).toBe('999.99');
-      expect(body.dueDate).toBe('2026-07-01');
+      expect(body.dueDate).toBe('2099-07-01');
     });
+  });
+
+  it('blocks previous due dates and keeps the create modal open', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    const dateInput = screen.getByLabelText(/^Due date$/i);
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    expect(dateInput).toHaveAttribute('min', today);
+
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '10.00' } });
+    fireEvent.change(dateInput, { target: { value: '2000-01-01' } });
+    fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
+
+    await waitFor(() => expect(notifyError).toHaveBeenCalledWith('Due date cannot be in the past'));
+    expect(fetchApiMock.mock.calls.some(([url, opts]) => url === '/api/billing' && opts?.method === 'POST')).toBe(false);
+    expect(screen.getByRole('dialog', { name: /Create Invoice/i })).toBeInTheDocument();
+  });
+
+  it('opens the native date picker when the due-date field itself is clicked', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    const dateInput = screen.getByLabelText(/^Due date$/i);
+    const showPicker = vi.fn();
+    Object.defineProperty(dateInput, 'showPicker', { configurable: true, value: showPicker });
+    fireEvent.click(dateInput);
+
+    expect(showPicker).toHaveBeenCalledTimes(1);
   });
 
   it('Outstanding pill renders a currency-formatted total from formatMoney', async () => {
@@ -360,7 +459,7 @@ describe('<Invoices /> — page surface', () => {
     await user.click(await screen.findByRole('option', { name: /Acme Corp \(billing@acme.test\)/i }));
     fireEvent.change(screen.getByLabelText(/Associated deal/i), { target: { value: '1' } });
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '250.00' } });
-    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-08-15' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2099-08-15' } });
 
     fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
 
@@ -389,7 +488,7 @@ describe('<Invoices /> — page surface', () => {
     await user.click(screen.getByLabelText(/^Contact$/i));
     await user.click(await screen.findByRole('option', { name: /Acme Corp \(billing@acme.test\)/i }));
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '10.00' } });
-    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-07-01' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2099-07-01' } });
     fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
 
     await waitFor(() => expect(notifyError).toHaveBeenCalled());
@@ -784,6 +883,184 @@ describe('<Invoices /> — page surface', () => {
     fireEvent.click(node);
 
     await waitFor(() => expect(screen.queryByRole('button', { name: /Close payment dialog/i })).toBeNull());
+  });
+});
+
+describe('<Invoices /> — wellness customer invoice form', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifyInfo.mockReset();
+    notifySuccess.mockReset();
+    notifyConfirm.mockReset();
+    notifyConfirm.mockResolvedValue(true);
+    fetchApiMock.mockImplementation(defaultFetchMock);
+  });
+
+  it('shows the wellness-only customer details and catalog sections without travel controls', async () => {
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+    await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    expect(screen.getByRole('heading', { name: /Customer Details/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Products & Services/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Customer or patient/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Patient visit/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Customer ID/i)).toBeNull();
+    expect(screen.getByLabelText(/Full name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Phone number/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Email address/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/GSTIN/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Billing address/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Shipping or service address/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Payment mode/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Filter invoices by sub-brand/i)).toBeNull();
+    expect(screen.queryByLabelText(/^Sub-brand$/i)).toBeNull();
+  });
+
+  it('uses a bounded backend search for wellness patients', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/wellness/patients?limit=50&offset=0&fields=full') {
+        return Promise.resolve({ patients: [samplePatients[0]], total: 1 });
+      }
+      if (url === '/api/wellness/patients?limit=50&offset=0&fields=full&q=Arjun') {
+        return Promise.resolve({ patients: [samplePatients[1]], total: 1 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+    await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    const patientPicker = screen.getByRole('combobox', { name: /Customer or patient/i });
+    fireEvent.focus(patientPicker);
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /Priya Sharma/ })).toBeInTheDocument();
+    });
+    fireEvent.change(patientPicker, { target: { value: 'Arjun' } });
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/wellness/patients?limit=50&offset=0&fields=full&q=Arjun',
+      );
+      expect(screen.getByRole('option', { name: /Arjun Mehta/ })).toBeInTheDocument();
+    });
+    expect(fetchApiMock.mock.calls.some(([url]) => String(url).includes('offset=50'))).toBe(false);
+  });
+
+  it('finds products beyond the first catalogue page through backend search', async () => {
+    const rareProduct = { id: 999, name: 'Rare treatment kit', price: 725, discountedPrice: null };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/wellness/products?paginate=true&page=1&limit=100&q=Rare') {
+        return Promise.resolve({ items: [rareProduct], pagination: { total: 1 } });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+    await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    fireEvent.change(screen.getByLabelText(/Line item 1 type/i), { target: { value: 'product' } });
+    const productPicker = screen.getByRole('combobox', { name: /Line item 1 product or service/i });
+    fireEvent.change(productPicker, { target: { value: 'Rare' } });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/wellness/products?paginate=true&page=1&limit=100&q=Rare',
+      );
+      expect(screen.getByRole('option', { name: 'Rare treatment kit' })).toBeInTheDocument();
+    });
+  });
+
+  it('keeps the create modal fixed while scrolling only its form content', async () => {
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+    await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    const dialog = screen.getByRole('dialog', { name: /Create Invoice/i });
+    const formScroller = dialog.querySelector('.invoice-create-form-scroll');
+    expect(dialog.style.position).toBe('fixed');
+    expect(dialog.style.overflow).toBe('hidden');
+    expect(formScroller.style.overflowY).toBe('auto');
+    expect(document.body.style.overflow).toBe('hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: /Close create invoice form/i }));
+    await waitFor(() => expect(document.body.style.overflow).toBe(''));
+  });
+
+  it('prefills a patient profile, calculates catalog totals, and POSTs wellness invoice details', async () => {
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+    await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    const patientPicker = screen.getByRole('combobox', { name: /Customer or patient/i });
+    fireEvent.focus(patientPicker);
+    fireEvent.click(screen.getByRole('option', { name: /Priya Sharma/i }));
+
+    expect(screen.getByLabelText(/Full name/i).value).toBe('Priya Sharma');
+    expect(screen.getByLabelText(/Phone number/i).value).toBe('+919876543210');
+    expect(screen.getByLabelText(/Email address/i).value).toBe('priya@example.in');
+
+    await waitFor(() => expect(screen.getByRole('option', { name: /Skin consultation/ })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Patient visit/i), { target: { value: '501' } });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Line item 1 product or service/i).value).toBe('21');
+      expect(screen.getByLabelText(/Line item 2 product or service/i).value).toBe('Aftercare kit');
+    });
+    expect(screen.getByText('$2500.00', { selector: 'strong' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Billing address/i), { target: { value: '12 Clinic Road, Ranchi' } });
+    fireEvent.change(screen.getByLabelText(/Shipping or service address/i), { target: { value: '12 Clinic Road, Ranchi' } });
+    fireEvent.change(screen.getByLabelText(/Due date/i), { target: { value: '2099-12-31' } });
+    fireEvent.change(screen.getByLabelText(/Payment mode/i), { target: { value: 'upi' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/billing' && opts?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.patientId).toBe('11');
+      expect(body.visitId).toBe('501');
+      expect(body.customerName).toBe('Priya Sharma');
+      expect(body.customerEmail).toBe('priya@example.in');
+      expect(body.billingAddress).toBe('12 Clinic Road, Ranchi');
+      expect(body.paymentMode).toBe('upi');
+      expect(body.amount).toBe(2500);
+      expect(body.lineItems).toEqual([
+        expect.objectContaining({ type: 'service', itemId: '21', quantity: 1, unitPrice: '1500' }),
+        expect.objectContaining({ type: 'product', itemId: '31', quantity: 2, unitPrice: '500' }),
+      ]);
+      expect(body.subBrand).toBeUndefined();
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Create Invoice/i })).toBeNull();
+      expect(notifySuccess).toHaveBeenCalledWith('Invoice created successfully');
+    });
+  });
+
+  it('shows wellness customer, product/service, quantity, and payment columns in the ledger', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleWellnessInvoices);
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    expect(screen.getByRole('columnheader', { name: /Customer \/ Patient/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Products \/ Services/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /^Qty$/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Payment Mode/i })).toBeInTheDocument();
+    expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Skin consultation')).toBeInTheDocument();
+    expect(screen.getByText('Aftercare kit')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '3' })).toBeInTheDocument();
+    expect(screen.getByText('UPI')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '2026-06-01' }).querySelector('svg')).toBeNull();
+    const wellnessUnpaidBadge = screen.getAllByText('Unpaid').find((node) => node.closest('tr'));
+    expect(wellnessUnpaidBadge.getAttribute('style')).toMatch(/border:\s*0px?\s+solid\s+transparent/i);
   });
 });
 

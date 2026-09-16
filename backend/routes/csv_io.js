@@ -331,11 +331,11 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           await hardDeleteContact(prisma, existing.id);
           existing = null;
         }
-        await prisma.contact.upsert({
-          where: { email_tenantId: { email, tenantId: req.user.tenantId } },
-          update: updateData,
-          create: { ...createData, tenantId: req.user.tenantId },
-        });
+        if (existing) {
+          await prisma.contact.update({ where: { id: existing.id }, data: updateData });
+        } else {
+          await prisma.contact.create({ data: { ...createData, tenantId: req.user.tenantId } });
+        }
         if (existing) updated++;
         else imported++;
       } catch (rowErr) {

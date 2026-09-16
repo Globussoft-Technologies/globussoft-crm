@@ -295,6 +295,61 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
+  it('offers a separate product lead when the email already belongs to a lead', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (opts?.method === 'POST' && url === '/api/contacts') {
+        return Promise.reject({
+          body: {
+            code: 'DUPLICATE_CONTACT',
+            matchedBy: 'email',
+            existingContactId: 42,
+            contact: {
+              id: 42,
+              name: 'Existing Lead',
+              email: 'alice@acme.test',
+              status: 'Lead',
+            },
+          },
+        });
+      }
+      if (opts?.method === 'POST' && url === '/api/contacts?force=true') {
+        return Promise.resolve({ id: 1000, name: 'Alice Smith' });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderLeads();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+    fillForm({ name: 'Alice Smith', email: 'alice@acme.test' });
+    submitForm();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/registering for another product/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /Create separate product lead/i }),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Create separate product lead/i }),
+    );
+
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([url, opts]) => url === '/api/contacts?force=true' && opts?.method === 'POST',
+        ),
+      ).toBe(true);
+      expect(notifySuccess).toHaveBeenCalledWith(
+        'Separate product lead created successfully',
+      );
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('input fields carry the correct maxLength attributes', async () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
@@ -746,10 +801,21 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
         expect(frozenHeader).toBeTruthy();
         expect(scrollHeader).toBeTruthy();
+        expect(frozenHeader).toHaveClass('leads-table-header-row');
+        expect(scrollHeader).toHaveClass('leads-table-header-row');
+        if (_label === 'travel') {
+          expect(frozenHeader.closest('table')).toHaveClass('leads-table--fit', 'leads-table--frozen');
+          expect(frozenHeader.firstElementChild.querySelector('div')).toHaveStyle({
+            gap: '0.8rem',
+          });
+        }
         expect(frozenHeader.style.height).toBe('66px');
         expect(scrollHeader.style.height).toBe('66px');
         expect(frozenRows.length).toBeGreaterThan(0);
         expect(frozenRows.length).toBe(scrollRows.length);
+        expect(frozenRows.map((row) => row.dataset.leadRowId)).toEqual(
+          scrollRows.map((row) => row.dataset.leadRowId),
+        );
         frozenRows.forEach((row) => {
           expect(row.style.height).toBe('66px');
         });
@@ -1090,6 +1156,32 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(sourceBadge.style.backgroundColor).toBe('var(--source-badge-bg, rgba(139, 92, 246, 0.16))');
     expect(sourceBadge.style.color).toBe('var(--source-badge-text, var(--text-primary))');
     expect(sourceBadge.style.border).toBe('1px solid var(--border-color)');
+  });
+
+  it('keeps source pills and assignment controls aligned inside their columns', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    const sourceBadge = screen
+      .getAllByText('Organic')
+      .map(node => node.closest('span'))
+      .find(node => node?.classList.contains('leads-source-badge'));
+    expect(sourceBadge).toBeInTheDocument();
+    expect(sourceBadge).toHaveStyle({
+      maxWidth: '100%',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    });
+    expect(sourceBadge).toHaveAttribute('title', 'Organic');
+
+    const assignment = screen.getByLabelText(/Assign Alice Smith to staff/i);
+    expect(assignment.parentElement).toHaveClass('leads-assignee-control');
+    expect(assignment).toHaveStyle({
+      width: '100%',
+      minWidth: '0px',
+      boxSizing: 'border-box',
+    });
   });
 
   it('opens the Source column menu and applies a source-only filter query', async () => {

@@ -252,6 +252,8 @@ prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findMany = vi.fn().mockResolvedValue([]);
 prisma.travelInvoice = prisma.travelInvoice || {};
 prisma.travelInvoice.findMany = vi.fn().mockResolvedValue([]);
+prisma.dismissedDuplicateGroup = prisma.dismissedDuplicateGroup || {};
+prisma.dismissedDuplicateGroup.findMany = vi.fn().mockResolvedValue([]);
 
 // Generic-vertical Lead custom fields (attachLeadCustomFields / Batch / write)
 prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
@@ -319,6 +321,7 @@ beforeEach(() => {
   prisma.tenantSetting.findUnique.mockReset();
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
+  prisma.dismissedDuplicateGroup.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldValue.upsert.mockReset().mockResolvedValue({});
@@ -591,6 +594,68 @@ describe('PUT /api/contacts/:id/assign - travel agent reassignment', () => {
     });
     expect(prisma.contact.update).not.toHaveBeenCalled();
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+describe('GET /api/contacts/duplicates/find — duplicate scan', () => {
+  test('skips contacts with missing email and still returns valid duplicate matches', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      {
+        id: 1,
+        name: 'Legacy Contact',
+        email: null,
+        phone: null,
+        company: 'Acme',
+        status: 'Lead',
+        aiScore: 0,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      {
+        id: 2,
+        name: 'Aarav Sharma',
+        email: 'aarav@example.com',
+        phone: null,
+        company: 'Acme',
+        status: 'Lead',
+        aiScore: 80,
+        createdAt: new Date('2026-01-02T00:00:00Z'),
+      },
+      {
+        id: 3,
+        name: 'Aarav S',
+        email: 'aarav@example.com',
+        phone: null,
+        company: 'Acme Logistics',
+        status: 'Lead',
+        aiScore: 70,
+        createdAt: new Date('2026-01-03T00:00:00Z'),
+      },
+    ]);
+    prisma.dismissedDuplicateGroup.findMany.mockResolvedValueOnce([]);
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      primary: { id: 2, email: 'aarav@example.com' },
+      duplicates: [{ id: 3, email: 'aarav@example.com' }],
+      reason: 'Same email',
+    });
+  });
+
+  test('returns a safe user-facing error when duplicate scanning fails', async () => {
+    prisma.contact.findMany.mockRejectedValueOnce(new Error('PrismaClientValidationError: internal field detail'));
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({
+      error: "We couldn't check for duplicate contacts right now. Please try again in a moment.",
+      code: 'DUPLICATE_SCAN_FAILED',
+    });
+    expect(JSON.stringify(res.body)).not.toMatch(/Prisma|internal field|database/i);
   });
 });
 
@@ -919,7 +984,7 @@ describe('POST /api/contacts — create', () => {
       deletedAt: null,
     };
     findDuplicateMock.mockResolvedValueOnce(null);
-    prisma.contact.findUnique.mockResolvedValueOnce(deletedContact);
+    prisma.contact.findFirst.mockResolvedValueOnce(deletedContact);
     prisma.contact.create.mockResolvedValueOnce(created);
 
     const res = await request(makeApp())
@@ -988,6 +1053,39 @@ describe('POST /api/contacts — create', () => {
     // CRUCIALLY: contact.create NEVER fires on a dedup hit (PRD §4.5).
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  test('force=true creates a separate product lead after a duplicate confirmation', async () => {
+    const created = {
+      ...SAMPLE_CONTACT,
+      id: 9002,
+      name: 'Amita Rao - New Product',
+      email: SAMPLE_CONTACT.email,
+    };
+    prisma.contact.create.mockResolvedValueOnce(created);
+    findDuplicateMock.mockResolvedValueOnce({
+      matchedBy: 'email',
+      contact: SAMPLE_CONTACT,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/contacts?force=true')
+      .send({
+        name: 'Amita Rao - New Product',
+        email: SAMPLE_CONTACT.email,
+        status: 'Lead',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 9002, email: SAMPLE_CONTACT.email });
+    expect(findDuplicateMock).not.toHaveBeenCalled();
+    expect(prisma.contact.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: TENANT_ID,
+        email: SAMPLE_CONTACT.email,
+        name: 'Amita Rao - New Product',
+      }),
+    });
   });
 });
 

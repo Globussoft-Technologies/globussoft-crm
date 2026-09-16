@@ -39,6 +39,12 @@ const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
 
 const TENANT_SLUG = "travel-stall";
 
+async function upsertContactByEmail({ email, tenantId, update, create }) {
+  const existing = await prisma.contact.findFirst({ where: { email, tenantId } });
+  if (existing) return prisma.contact.update({ where: { id: existing.id }, data: update });
+  return prisma.contact.create({ data: create });
+}
+
 async function main() {
   console.log("[seed-travel] starting…");
 
@@ -1095,8 +1101,9 @@ async function seedSampleTrips(tenantId) {
   // School contact (used as schoolContactId for TMC trips). Contact's
   // unique constraint is @@unique([email, tenantId]) — compound key.
   const schoolEmail = "principal@bharatpublic.demo";
-  const school = await prisma.contact.upsert({
-    where: { email_tenantId: { email: schoolEmail, tenantId } },
+  const school = await upsertContactByEmail({
+    email: schoolEmail,
+    tenantId,
     update: {},
     create: {
       name: "Bharat Public School",
@@ -1115,8 +1122,9 @@ async function seedSampleTrips(tenantId) {
   // create-time and backfilled only when the existing row has no hash, so
   // re-runs never overwrite a manually-changed password.
   const pilgrimPortalHash = await bcrypt.hash("password123", 10);
-  const pilgrim = await prisma.contact.upsert({
-    where: { email_tenantId: { email: pilgrimEmail, tenantId } },
+  const pilgrim = await upsertContactByEmail({
+    email: pilgrimEmail,
+    tenantId,
     update: {},
     create: {
       name: "Ahmed Khan",
@@ -1407,8 +1415,9 @@ async function seedSampleTrips(tenantId) {
  */
 async function seedTmcParentReviewDemo(tenantId) {
   const passwordHash = await bcrypt.hash("password123", 10);
-  const school = await prisma.contact.upsert({
-    where: { email_tenantId: { email: "principal@bharatpublic.demo", tenantId } },
+  const school = await upsertContactByEmail({
+    email: "principal@bharatpublic.demo",
+    tenantId,
     update: {},
     create: {
       name: "Bharat Public School",
@@ -1419,8 +1428,9 @@ async function seedTmcParentReviewDemo(tenantId) {
       tenantId,
     },
   });
-  const teacher = await prisma.contact.upsert({
-    where: { email_tenantId: { email: "teacher@getairmail.com", tenantId } },
+  const teacher = await upsertContactByEmail({
+    email: "teacher@getairmail.com",
+    tenantId,
     // Do not overwrite a password chosen through the teacher registration
     // flow when the idempotent demo seed is re-run. The create path below
     // still provisions credentials for a brand-new demo contact.
@@ -1443,8 +1453,9 @@ async function seedTmcParentReviewDemo(tenantId) {
       data: { portalPasswordHash: passwordHash },
     });
   }
-  const parent = await prisma.contact.upsert({
-    where: { email_tenantId: { email: "parent@fivermail.com", tenantId } },
+  const parent = await upsertContactByEmail({
+    email: "parent@fivermail.com",
+    tenantId,
     // Preserve a password supplied by a parent during registration. The
     // default is only for the create path, never for an existing account.
     update: { name: "Demo Parent", subBrand: "tmc", portalRole: "PARENT" },

@@ -1,6 +1,7 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const multer = require("multer");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { JWT_SECRET } = require("../config/secrets");
@@ -14,6 +15,7 @@ const tmcLeadQuality = require("../lib/tmcLeadQuality");
 const travelRag = require("../lib/travelRag");
 const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
 const diagnosticNotifications = require("../lib/diagnosticNotifications");
+const visaDocStore = require("../lib/visaDocStore");
 const {
   validateParentSubmission,
   buildParentForm,
@@ -115,6 +117,96 @@ function requireTeacher(req, res, next) {
 
 function requireParent(req, res, next) {
   return requirePortalPersona("PARENT", req, res, next);
+}
+
+const TMC_PARENT_DOCUMENT_TYPES = new Set([
+  "passport",
+  "birth-certificate",
+  "consent-form",
+  "medical-form",
+  "school-id",
+  "visa",
+  "other",
+]);
+
+const TMC_PARENT_DOCUMENT_MIME_EXT = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "application/pdf": ".pdf",
+};
+
+const tmcParentDocumentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (TMC_PARENT_DOCUMENT_MIME_EXT[(file.mimetype || "").toLowerCase()]) {
+      return cb(null, true);
+    }
+    return cb(new Error("UNSUPPORTED_MIME"));
+  },
+});
+
+const tmcParentDocumentUploadHandler = (req, res, next) => {
+  tmcParentDocumentUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "File too large (max 10 MB)", code: "FILE_TOO_LARGE" });
+      }
+      return res.status(400).json({ error: "Upload error", code: "UPLOAD_ERROR" });
+    }
+    if (err) {
+      return res.status(400).json({ error: "Only JPG, PNG, or PDF files are allowed", code: "UNSUPPORTED_MIME" });
+    }
+    return next();
+  });
+};
+
+async function getParentAccessibleTripIds(req) {
+  const tenantId = Number(req.portal.tenantId);
+  const parentContactId = Number(req.tmcContact.id);
+  const email = String(req.tmcContact.email || "").trim().toLowerCase();
+  const [parentLinks, participantRows] = await Promise.all([
+    prisma.tmcParentTrip.findMany({
+      where: { tenantId, parentContactId },
+      select: { tripId: true },
+    }),
+    email
+      ? prisma.tripParticipant.findMany({
+          where: { parentEmail: email, trip: { tenantId } },
+          select: { tripId: true },
+        })
+      : [],
+  ]);
+  return [
+    ...new Set([
+      ...parentLinks.map((row) => Number(row.tripId)),
+      ...participantRows.map((row) => Number(row.tripId)),
+    ].filter((id) => Number.isInteger(id) && id > 0)),
+  ];
+}
+
+function projectTmcParentDocument(document, trip = null) {
+  return {
+    id: document.id,
+    documentType: document.documentType,
+    filename: document.filename,
+    fileSize: document.fileSize,
+    mimeType: document.mimeType,
+    status: document.status,
+    notes: document.notes,
+    uploadedAt: document.uploadedAt,
+    createdAt: document.createdAt,
+    tripId: document.tripId,
+    trip: trip
+      ? {
+          id: trip.id,
+          tripCode: trip.tripCode,
+          destination: trip.destination,
+          departDate: trip.departDate,
+          returnDate: trip.returnDate,
+        }
+      : null,
+  };
 }
 
 function parseReviewAnswers(raw) {
@@ -2193,6 +2285,157 @@ router.get(
     } catch (err) {
       console.error("[tmc-portal][parent/trips]", err);
       res.status(500).json({ error: "Failed to load parent trips" });
+    }
+  },
+);
+
+// Parent travel documents. Files are stored through the private visa-document
+// store and are only exposed through an owner-scoped, short-lived view URL.
+router.get(
+  "/parent/documents",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireParent,
+  async (req, res) => {
+    try {
+      const tenantId = Number(req.portal.tenantId);
+      const parentContactId = Number(req.tmcContact.id);
+      const documents = await prisma.tmcParentDocument.findMany({
+        where: { tenantId, parentContactId },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: {
+          id: true,
+          documentType: true,
+          filename: true,
+          fileSize: true,
+          mimeType: true,
+          status: true,
+          notes: true,
+          uploadedAt: true,
+          createdAt: true,
+          tripId: true,
+        },
+      });
+      const tripIds = [...new Set(documents.map((document) => document.tripId).filter(Boolean))];
+      const trips = tripIds.length
+        ? await prisma.tmcTrip.findMany({
+            where: { tenantId, id: { in: tripIds } },
+            select: { id: true, tripCode: true, destination: true, departDate: true, returnDate: true },
+          })
+        : [];
+      const tripById = new Map(trips.map((trip) => [trip.id, trip]));
+      res.json({
+        documents: documents.map((document) => projectTmcParentDocument(document, tripById.get(document.tripId))),
+      });
+    } catch (err) {
+      console.error("[tmc-portal][parent/documents]", err);
+      res.status(500).json({ error: "Failed to load parent documents" });
+    }
+  },
+);
+
+router.post(
+  "/parent/documents",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireParent,
+  tmcParentDocumentUploadHandler,
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "Please choose a document to upload", code: "NO_FILE" });
+      }
+      const documentType = String(req.body?.documentType || "").trim().toLowerCase();
+      if (!TMC_PARENT_DOCUMENT_TYPES.has(documentType)) {
+        return res.status(400).json({ error: "Choose a valid document type", code: "INVALID_DOCUMENT_TYPE" });
+      }
+
+      let tripId = null;
+      if (req.body?.tripId !== undefined && String(req.body.tripId).trim() !== "") {
+        tripId = Number(req.body.tripId);
+        if (!Number.isInteger(tripId) || tripId <= 0) {
+          return res.status(400).json({ error: "tripId must be a positive integer", code: "INVALID_TRIP_ID" });
+        }
+        const accessibleTripIds = await getParentAccessibleTripIds(req);
+        if (!accessibleTripIds.includes(tripId)) {
+          return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
+        }
+      }
+
+      let stored;
+      try {
+        stored = await visaDocStore.storeDoc(req.file.buffer, req.file.mimetype);
+      } catch (err) {
+        console.error("[tmc-portal][parent/documents:upload] storage error:", err.message);
+        return res.status(502).json({ error: "Couldn't store the uploaded file. Please try again.", code: "STORAGE_FAILED" });
+      }
+
+      const document = await prisma.tmcParentDocument.create({
+        data: {
+          tenantId: Number(req.portal.tenantId),
+          parentContactId: Number(req.tmcContact.id),
+          tripId,
+          documentType,
+          filename: (req.file.originalname || "travel-document").slice(0, 255),
+          fileUrl: stored.url,
+          fileSize: req.file.size || null,
+          mimeType: req.file.mimetype || null,
+          storage: stored.storage,
+          storageKey: stored.key,
+          status: "in_review",
+          uploadedAt: new Date(),
+        },
+        select: {
+          id: true,
+          documentType: true,
+          filename: true,
+          fileSize: true,
+          mimeType: true,
+          status: true,
+          notes: true,
+          uploadedAt: true,
+          createdAt: true,
+          tripId: true,
+        },
+      });
+      return res.status(201).json({ document: projectTmcParentDocument(document) });
+    } catch (err) {
+      console.error("[tmc-portal][parent/documents:upload]", err);
+      return res.status(500).json({ error: "Failed to upload document" });
+    }
+  },
+);
+
+router.get(
+  "/parent/documents/:documentId/view-url",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireParent,
+  async (req, res) => {
+    try {
+      const documentId = Number(req.params.documentId);
+      if (!Number.isInteger(documentId) || documentId <= 0) {
+        return res.status(400).json({ error: "documentId must be a positive integer", code: "INVALID_DOCUMENT_ID" });
+      }
+      const document = await prisma.tmcParentDocument.findFirst({
+        where: {
+          id: documentId,
+          tenantId: Number(req.portal.tenantId),
+          parentContactId: Number(req.tmcContact.id),
+        },
+        select: { id: true, fileUrl: true, storage: true, storageKey: true },
+      });
+      if (!document) return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+      const url = await visaDocStore.resolveViewUrl({
+        attachmentUrl: document.fileUrl,
+        attachmentStorage: document.storage,
+        attachmentKey: document.storageKey,
+      });
+      if (!url) return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+      return res.json({ url, expiresIn: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+    } catch (err) {
+      console.error("[tmc-portal][parent/documents:view-url]", err);
+      return res.status(500).json({ error: "Failed to open document" });
     }
   },
 );

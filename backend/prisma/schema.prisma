@@ -216,6 +216,7 @@ model Tenant {
   travelMarkupRules                   TravelMarkupRule[]
   tmcTrips                            TmcTrip[]
   tmcParentTrips                      TmcParentTrip[]
+  tmcParentDocuments                  TmcParentDocument[]
   tmcTripTeacherReviews               TmcTripTeacherReview[]
   webCheckins                         WebCheckin[]
   webCheckinAutomationRuns            WebCheckinAutomationRun[]
@@ -774,7 +775,7 @@ model UserTourProgress {
 model Contact {
   id                    Int       @id @default(autoincrement())
   name                  String
-  email                 String? // nullable (2026-06-19): WhatsApp auto-leads land WITHOUT an email — it's asked for in the chat + filled later. All other creators still set it. @@unique([email, tenantId]) tolerates multiple NULLs in MySQL.
+  email                 String? // nullable: some inbound leads arrive without an email; duplicates are checked at the route level so product-specific leads can share an email.
   emailVerifiedAt       DateTime? // set when a self-registered portal customer verified their email via OTP
   phone                 String?
   company               String?
@@ -1034,8 +1035,11 @@ model Contact {
   tmcTeacherParentTrips     TmcParentTrip[] @relation("TmcParentTripTeacher")
   tmcTeacherReviews         TmcTripTeacherReview[] @relation("TmcTripTeacherReviewTeacher")
 
-  /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
-  @@unique([email, tenantId])
+  /// Email is indexed per tenant rather than database-unique so a person can
+  /// register separate product leads in the same CRM. The contact-creation
+  /// route still performs a duplicate preflight and requires explicit force
+  /// confirmation before creating a second lead.
+  @@index([tenantId, email])
   /// [GP-CRM integration] One Contact per externalId-per-tenant. NULL != NULL in
   /// MySQL unique indexes, so the many contacts with no externalId never collide;
   /// only partner-linked rows (e.g. GlobusPhone lead ULID) are deduplicated.
@@ -7532,6 +7536,34 @@ model TmcParentTrip {
 
   @@unique([tenantId, parentContactId, tripId])
   @@index([tenantId, teacherContactId])
+  @@index([tenantId, tripId])
+}
+
+// Private travel documents uploaded from the TMC parent portal. The parent
+// contact and trip ids intentionally remain scalar-only, matching the
+// CustomerTraveller pattern: every portal query must enforce tenant + parent
+// ownership explicitly instead of relying on relation traversal.
+model TmcParentDocument {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int      @default(1)
+  parentContactId Int
+  tripId          Int?
+  documentType    String   // passport | birth-certificate | consent-form | medical-form | school-id | visa | other
+  filename        String
+  fileUrl         String   @db.Text
+  fileSize        Int?
+  mimeType        String?
+  storage         String?  // s3 | ocs | disk
+  storageKey      String?
+  status          String   @default("in_review") // in_review | approved | rejected
+  notes           String?  @db.Text
+  uploadedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, parentContactId, createdAt])
   @@index([tenantId, tripId])
 }
 

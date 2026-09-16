@@ -258,7 +258,7 @@ describe('GET /api/csv/contacts/template.csv?format=xlsx', () => {
 describe('POST /api/csv/contacts/import.csv with XLSX', () => {
   test('imports a workbook uploaded as .xlsx and normalizes phone_number values', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
-    prisma.contact.upsert.mockResolvedValue({ id: 99 });
+    prisma.contact.create.mockResolvedValue({ id: 99 });
 
     const workbook = toXlsxBuffer(
       ['name', 'email', 'phone_number', 'company', 'title', 'status', 'source'],
@@ -286,10 +286,9 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
     expect(res.body.errors).toEqual([]);
-    expect(prisma.contact.upsert).toHaveBeenCalledWith(
+    expect(prisma.contact.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { email_tenantId: { email: 'jane@example.com', tenantId: 1 } },
-        create: expect.objectContaining({
+        data: expect.objectContaining({
           name: 'Jane Doe',
           email: 'jane@example.com',
           phone: '919560000000',
@@ -297,18 +296,14 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
           source: 'website',
           tenantId: 1,
         }),
-        update: expect.objectContaining({
-          email: 'jane@example.com',
-          phone: '919560000000',
-        }),
       }),
     );
-    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 
   test('updates an existing email instead of hitting the tenant email unique constraint', async () => {
     prisma.contact.findFirst.mockResolvedValue({ id: 77 });
-    prisma.contact.upsert.mockResolvedValue({ id: 77 });
+    prisma.contact.update.mockResolvedValue({ id: 77 });
 
     const workbook = toXlsxBuffer(
       ['name', 'email', 'phone_number', 'status'],
@@ -337,14 +332,14 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
       where: { email: 'shashankbankar23@gmail.com', tenantId: 1 },
       select: { id: true, deletedAt: true },
     });
-    expect(prisma.contact.upsert).toHaveBeenCalledWith(
+    expect(prisma.contact.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { email_tenantId: { email: 'shashankbankar23@gmail.com', tenantId: 1 } },
-        update: expect.objectContaining({
-          name: 'Shashank bankar',
-          email: 'shashankbankar23@gmail.com',
-          phone: '+919535148570',
-        }),
+        where: { id: 77 },
+        data: expect.objectContaining({
+            name: 'Shashank bankar',
+            email: 'shashankbankar23@gmail.com',
+            phone: '+919535148570',
+          }),
       }),
     );
     expect(prisma.contact.create).not.toHaveBeenCalled();

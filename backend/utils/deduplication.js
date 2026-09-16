@@ -63,17 +63,11 @@ function toE164(phone) {
  * Returns the matching Contact or null. Soft-deleted contacts (`deletedAt`
  * set) are skipped.
  *
- * Schema-correctness note: Contact's unique constraint is the COMPOUND
- * `@@unique([email, tenantId])` (since commit 7d84a75, 2026-04-16). The
- * email path uses the `email_tenantId` compound finder; a bare
- * `findUnique({ where: { email } })` is invalid Prisma input against the
- * current schema and throws PrismaClientValidationError at runtime. The
- * old signature `findDuplicateContact(email, phone)` masked this — its
- * sole caller (`routes/marketplace_leads.js`) post-filtered the result
- * by `existing.tenantId === req.user.tenantId`, which inadvertently
- * compensated for the cross-tenant bleed but never surfaced the
- * validation error in production because the email path is rarely hit
- * (operator-triggered marketplace imports).
+ * Email is an indexed, tenant-scoped lookup rather than a database unique
+ * key. This is intentional: one person may have separate product leads in
+ * the same tenant. Normal callers still use this helper for duplicate
+ * protection, while an explicit force confirmation can create a separate
+ * lead when that is the desired workflow.
  *
  * @param {string|null} email
  * @param {string|null} phone
@@ -86,10 +80,10 @@ async function findDuplicateContact(email, phone, tenantId) {
   }
 
   if (email) {
-    const byEmail = await prisma.contact.findUnique({
-      where: { email_tenantId: { email, tenantId } },
+    const byEmail = await prisma.contact.findFirst({
+      where: { email, tenantId, deletedAt: null },
     });
-    if (byEmail && !byEmail.deletedAt) return byEmail;
+    if (byEmail) return byEmail;
   }
 
   if (phone) {
@@ -230,14 +224,13 @@ async function findDuplicateContactFull({ email, phone, passportNumber, tenantId
   }
 
   if (email) {
-    // Contact uses `@@unique([email, tenantId])` — must use the compound
-    // finder name. (Bare `findUnique({ where: { email } })` is the legacy
-    // shape used by `findDuplicateContact` above; kept untouched for back-
-    // compat but unsafe against the current schema.)
-    const byEmail = await prisma.contact.findUnique({
-      where: { email_tenantId: { email, tenantId } },
+    // Email is indexed by tenant, but intentionally not unique: a person can
+    // have separate product leads. The preflight returns the first live match
+    // so normal creates remain protected from accidental duplicates.
+    const byEmail = await prisma.contact.findFirst({
+      where: { email, tenantId, deletedAt: null },
     });
-    if (byEmail && !byEmail.deletedAt) {
+    if (byEmail) {
       return { contact: byEmail, matchedBy: "email" };
     }
   }

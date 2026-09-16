@@ -804,20 +804,28 @@ router.post("/submit", async (req, res) => {
       console.error("[FormIngestion] lead SLA compute failed:", slaErr.message);
     }
 
-    const contact = await prisma.contact.upsert({
-      where: { email_tenantId: { email: contactEmail, tenantId: FORM_TENANT_ID } },
-      update: { source: "Embedded Web Form" },
-      create: {
-        name: contactName,
-        email: contactEmail,
-        company: contactCompany,
-        status: "Lead",
-        source: "Embedded Web Form",
-        aiScore: score,
-        firstResponseDueAt,
-        tenantId: FORM_TENANT_ID,
-      }
+    let contact = await prisma.contact.findFirst({
+      where: { email: contactEmail, tenantId: FORM_TENANT_ID, deletedAt: null },
     });
+    if (contact) {
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: { source: "Embedded Web Form" },
+      });
+    } else {
+      contact = await prisma.contact.create({
+        data: {
+          name: contactName,
+          email: contactEmail,
+          company: contactCompany,
+          status: "Lead",
+          source: "Embedded Web Form",
+          aiScore: score,
+          firstResponseDueAt,
+          tenantId: FORM_TENANT_ID,
+        },
+      });
+    }
 
     const deal = await prisma.deal.create({
       data: {

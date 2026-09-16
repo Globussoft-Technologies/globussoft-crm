@@ -37,6 +37,7 @@ describe("contactHardDelete", () => {
       data: { teacherContactId: null },
     });
     expect(tx.activity.deleteMany).toHaveBeenCalledWith({ where: { contactId: 42 } });
+    expect(tx.tmcParentDocument.deleteMany).toHaveBeenCalledWith({ where: { parentContactId: 42 } });
     expect(tx.contact.deleteMany).toHaveBeenNthCalledWith(1, { where: { id: 42 } });
     expect(tx.contact.deleteMany).toHaveBeenNthCalledWith(2, { where: { id: 43 } });
   });

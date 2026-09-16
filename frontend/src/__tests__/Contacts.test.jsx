@@ -154,8 +154,70 @@ describe('Contacts.jsx — top-level page contract', () => {
     expect(screen.getByRole('separator', { name: /Resize Name column/i })).toBeInTheDocument();
     expect(screen.getByRole('separator', { name: /Resize Email column/i })).toBeInTheDocument();
 
+    const actionsHeader = screen.getByText('Actions').closest('th');
+    expect(actionsHeader).toBeTruthy();
+    expect(actionsHeader).toHaveStyle({ textAlign: 'left' });
+    const actionCell = screen.getByRole('button', { name: /Edit contact Aarav Sharma/i }).closest('td');
+    expect(actionCell).toBeTruthy();
+    expect(actionCell).toHaveStyle({ textAlign: 'left' });
+    expect(actionCell.querySelector('div')).toHaveStyle({ justifyContent: 'flex-start' });
+
     const bottomScroll = document.querySelector('.contacts-table-scroll-pane .top-scroll-sync__bottom');
     expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+  });
+
+  it('places pagination in a responsive footer below the table', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    const pageCard = document.querySelector('.contacts-page-card');
+    const tableShell = document.querySelector('.contacts-split-table');
+    const pagination = screen.getByTestId('contacts-pagination');
+
+    expect(pageCard).toBeTruthy();
+    expect(tableShell).toBeTruthy();
+    expect(pagination).toBeTruthy();
+    expect(pagination.previousElementSibling).toBe(tableShell);
+    expect(pagination).toHaveTextContent(/Showing 1-3 of 3/i);
+    expect(screen.getByText('Rows')).toBeInTheDocument();
+    expect(screen.getByLabelText('Page number')).toHaveValue(1);
+  });
+
+  it('keeps the select-all checkbox aligned and sized consistently with row checkboxes', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    const headerCheckbox = screen.getByRole('checkbox', { name: 'Select all contacts' });
+    const rowCheckboxes = screen.getAllByRole('checkbox').filter((checkbox) => checkbox !== headerCheckbox);
+
+    expect(headerCheckbox).toHaveStyle({ width: '16px', height: '16px', minWidth: '16px', margin: '0px' });
+    const headerCell = headerCheckbox.closest('th');
+    expect(headerCell).toBeTruthy();
+    expect(headerCell).toHaveStyle({
+      width: '48px',
+      minWidth: '48px',
+      padding: '0px 8px',
+      overflow: 'visible',
+      textOverflow: 'clip',
+      whiteSpace: 'normal',
+      textAlign: 'center',
+    });
+    expect(headerCell.querySelector('div')).toHaveStyle({ justifyContent: 'center' });
+    expect(rowCheckboxes).toHaveLength(3);
+    rowCheckboxes.forEach((checkbox) => {
+      expect(checkbox).toHaveStyle({ width: '16px', height: '16px', minWidth: '16px', margin: '0px' });
+      const selectionCell = checkbox.closest('td');
+      expect(selectionCell).toBeTruthy();
+      expect(selectionCell).toHaveStyle({
+        width: '48px',
+        minWidth: '48px',
+        padding: '0px 8px',
+        overflow: 'visible',
+        textOverflow: 'clip',
+        whiteSpace: 'normal',
+        textAlign: 'center',
+      });
+    });
   });
 
   it('sorts contacts from the resizable header controls', async () => {
@@ -667,7 +729,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     renderContacts();
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
     // Initial render: searchTerm='' + statusFilter='All' → counter hidden.
-    expect(screen.queryByText(/Showing .* of .*/i)).not.toBeInTheDocument();
+    expect(document.querySelector('.contacts-filters-bar')).not.toHaveTextContent(/Showing .* of .*/i);
   });
 
   it('shows "Showing X of Y" counter when status filter is changed', async () => {
@@ -1004,11 +1066,13 @@ describe('Contacts.jsx — top-level page contract', () => {
     });
   });
 
-  it('Find Duplicates: GET /api/contacts/duplicates/find failure is silently absorbed (no toast, no dialog)', async () => {
+  it('Find Duplicates failure shows a clear retry message without backend details', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
-      if (url === '/api/contacts/duplicates/find') return Promise.reject(new Error('500'));
+      if (url === '/api/contacts/duplicates/find') {
+        return Promise.reject(new Error('PrismaClientValidationError: missing database field'));
+      }
       return Promise.resolve(null);
     });
     renderContacts();
@@ -1016,14 +1080,17 @@ describe('Contacts.jsx — top-level page contract', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Find Duplicates/i }));
     // Brief settle. The catch fires `setDupes([])` only — `setShowDupes(true)`
-    // sits INSIDE the try block, so the dialog does NOT open on failure.
     await new Promise(r => setTimeout(r, 30));
     expect(screen.queryByText(/Duplicate Contacts/i)).not.toBeInTheDocument();
     // notify.error should NOT have fired — the catch is silent.
-    expect(notifyObj.error).not.toHaveBeenCalled();
+    expect(notifyObj.error).toHaveBeenCalledWith(
+      "We couldn't check for duplicate contacts right now. Please try again in a moment. If the problem continues, contact support.",
+    );
+    expect(notifyObj.error.mock.calls[0][0]).not.toMatch(/Prisma|database|\/api\//i);
     // Verify the GET actually happened (so we know the click wired through).
     const findCall = fetchApiMock.mock.calls.find(([url]) => url === '/api/contacts/duplicates/find');
     expect(findCall).toBeTruthy();
+    expect(findCall[1]).toMatchObject({ silent: true });
   });
 
   it('#607: on-blur email validator surfaces inline error without submitting', async () => {

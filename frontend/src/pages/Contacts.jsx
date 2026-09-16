@@ -2,7 +2,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
-import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
+import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
@@ -99,9 +99,29 @@ const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
 const CONTACTS_COLUMN_LAYOUT_STORAGE_KEY = 'globuscrm.contacts.columnLayout.v1';
 const CONTACTS_COLUMN_MIN_WIDTH = 72;
 const CONTACTS_SELECT_COLUMN_WIDTH = 48;
+const DUPLICATE_CHECK_ERROR_MESSAGE = "We couldn't check for duplicate contacts right now. Please try again in a moment. If the problem continues, contact support.";
 const CONTACTS_NAME_COLUMN_MIN_WIDTH = 220;
 const CONTACTS_NAME_COLUMN_MAX_WIDTH = 380;
 const CONTACTS_ACTIONS_COLUMN_WIDTH = 120;
+const CONTACT_CHECKBOX_STYLE = {
+  width: '16px',
+  height: '16px',
+  minWidth: '16px',
+  margin: 0,
+  cursor: 'pointer',
+  verticalAlign: 'middle',
+};
+const CONTACT_SELECTION_CELL_STYLE = {
+  boxSizing: 'border-box',
+  width: `${CONTACTS_SELECT_COLUMN_WIDTH}px`,
+  minWidth: `${CONTACTS_SELECT_COLUMN_WIDTH}px`,
+  padding: '0 8px',
+  textAlign: 'center',
+  verticalAlign: 'middle',
+  overflow: 'visible',
+  textOverflow: 'clip',
+  whiteSpace: 'normal',
+};
 const CONTACTS_COLUMN_DEFAULT_WIDTHS = {
   select: CONTACTS_SELECT_COLUMN_WIDTH,
   name: 240,
@@ -148,6 +168,7 @@ const Contacts = () => {
   // mock) answers with the legacy plain array.
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [pageInput, setPageInput] = useState('1');
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const contactsRequestId = useRef(0);
@@ -315,10 +336,15 @@ const Contacts = () => {
 
   const handleFindDupes = async () => {
     try {
-      const data = await fetchApi('/api/contacts/duplicates/find');
+      // This action has a contextual fallback message, so avoid a second
+      // generic toast from fetchApi when the request fails.
+      const data = await fetchApi('/api/contacts/duplicates/find', { silent: true });
       setDupes(Array.isArray(data) ? data : []);
       setShowDupes(true);
-    } catch { setDupes([]); }
+    } catch {
+      setDupes([]);
+      notify.error(DUPLICATE_CHECK_ERROR_MESSAGE);
+    }
   };
 
   // #592 — Merge is destructive and irreversible from the UI; duplicate
@@ -536,6 +562,21 @@ const Contacts = () => {
   useEffect(() => {
     if (!loading && page > totalPages) setPage(totalPages);
   }, [loading, page, totalPages]);
+
+  useEffect(() => {
+    setPageInput(String(page));
+  }, [page]);
+
+  const goToContactsPage = () => {
+    const nextPage = Number(pageInput);
+    if (!Number.isFinite(nextPage) || nextPage < 1) {
+      setPageInput(String(page));
+      return;
+    }
+    const clampedPage = Math.min(Math.max(Math.trunc(nextPage), 1), totalPages);
+    setPage(clampedPage);
+    setPageInput(String(clampedPage));
+  };
 
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   // Own effect keyed on [isWellness, isTravel] (not the mount-only effect
@@ -810,6 +851,7 @@ const Contacts = () => {
               label: '',
               sortable: false,
               resizable: false,
+              align: 'center',
             },
           ]
         : []),
@@ -1107,7 +1149,12 @@ const Contacts = () => {
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+            justifyContent:
+              align === 'center'
+                ? 'center'
+                : align === 'right'
+                  ? 'flex-end'
+                  : 'flex-start',
             gap: '0.4rem',
             minWidth: 0,
             width: '100%',
@@ -1145,14 +1192,24 @@ const Contacts = () => {
       style={{ borderBottom: '1px solid var(--border-color)' }}
     >
       {isAdmin && (
-        <td style={getContactBodyCellStyle({ padding: '1rem' })}>
-          <input
-            type="checkbox"
-            checked={selectedContacts.includes(contact.id)}
-            onChange={() => toggleSelectContact(contact.id)}
-            style={{ cursor: 'pointer' }}
-            aria-label={`Select ${contact.name || contact.email || 'contact'}`}
-          />
+        <td style={CONTACT_SELECTION_CELL_STYLE}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '100%',
+              minHeight: '20px',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selectedContacts.includes(contact.id)}
+              onChange={() => toggleSelectContact(contact.id)}
+              style={CONTACT_CHECKBOX_STYLE}
+              aria-label={`Select ${contact.name || contact.email || 'contact'}`}
+            />
+          </div>
         </td>
       )}
       <td style={getContactBodyCellStyle({ padding: '1rem' })}>
@@ -1335,35 +1392,43 @@ const Contacts = () => {
         return (
           <td
             key={column.key}
-            style={getContactBodyCellStyle({ textAlign: 'right', whiteSpace: 'nowrap' })}
+            style={getContactBodyCellStyle({ textAlign: 'left', whiteSpace: 'nowrap' })}
           >
-            <button
-              onClick={() => setEditingContact(contact)}
-              aria-label={`Edit contact ${contact.name || contact.email || ''}`}
-              title="Edit contact"
+            <div
               style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                marginRight: '0.5rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                gap: '0.75rem',
               }}
             >
-              <Pencil size={16} />
-            </button>
-            <button
-              onClick={() => handleDelete(contact.id)}
-              aria-label={`Delete contact ${contact.name || contact.email || ''}`}
-              title="Delete contact"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#ef4444',
-                cursor: 'pointer',
-              }}
-            >
-              <Trash2 size={18} />
-            </button>
+              <button
+                onClick={() => setEditingContact(contact)}
+                aria-label={`Edit contact ${contact.name || contact.email || ''}`}
+                title="Edit contact"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                <Pencil size={16} />
+              </button>
+              <button
+                onClick={() => handleDelete(contact.id)}
+                aria-label={`Delete contact ${contact.name || contact.email || ''}`}
+                title="Delete contact"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#ef4444',
+                  cursor: 'pointer',
+                }}
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
           </td>
         );
       default:
@@ -1416,7 +1481,7 @@ const Contacts = () => {
   );
 
   return (
-    <div style={{ padding: '2rem' }}>
+    <div className="contacts-page" style={{ padding: 'clamp(1rem, 3vw, 2rem)' }}>
       {/* Renders only when this page was opened as a drill-down from a report. */}
       <ReturnToBanner />
       {/* #488: flex-wrap + gap so the action group wraps cleanly below the title
@@ -1628,8 +1693,8 @@ const Contacts = () => {
         </div>
       </header>
 
-      <div className="card" style={{ overflow: 'hidden' }}>
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="card contacts-page-card" style={{ overflow: 'hidden' }}>
+        <div className="contacts-filters-bar" style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input
@@ -1704,7 +1769,7 @@ const Contacts = () => {
 
         {/* Server-synced pagination (?limit=&offset=&page=) — compact pill
             above the table, right-aligned and sized to content. */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
+        <div className="contacts-pagination-legacy" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content', maxWidth: '100%' }}>
             <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
               {total === 0 ? 'No contacts' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()}`}
@@ -1753,7 +1818,7 @@ const Contacts = () => {
                     column.key === 'select'
                       ? renderContactsHeaderCell(
                           column,
-                          {},
+                          CONTACT_SELECTION_CELL_STYLE,
                           { key: column.key },
                           <input
                             type="checkbox"
@@ -1764,7 +1829,7 @@ const Contacts = () => {
                             onChange={toggleSelectAllContacts}
                             onClick={(e) => e.stopPropagation()}
                             aria-label="Select all contacts"
-                            style={{ cursor: 'pointer', margin: 0 }}
+                            style={CONTACT_CHECKBOX_STYLE}
                           />,
                         )
                       : renderContactsHeaderCell(
@@ -1781,7 +1846,11 @@ const Contacts = () => {
                     {contactsFrozenColumnDefs.map((column) => (
                       <td
                         key={column.key}
-                        style={getContactBodyCellStyle({ padding: '2rem' })}
+                        style={
+                          column.key === 'select'
+                            ? CONTACT_SELECTION_CELL_STYLE
+                            : getContactBodyCellStyle({ padding: '2rem' })
+                        }
                       />
                     ))}
                   </tr>
@@ -1790,7 +1859,11 @@ const Contacts = () => {
                     {contactsFrozenColumnDefs.map((column) => (
                       <td
                         key={column.key}
-                        style={getContactBodyCellStyle({ padding: '2rem' })}
+                        style={
+                          column.key === 'select'
+                            ? CONTACT_SELECTION_CELL_STYLE
+                            : getContactBodyCellStyle({ padding: '2rem' })
+                        }
                       />
                     ))}
                   </tr>
@@ -1833,9 +1906,7 @@ const Contacts = () => {
                     {contactsScrollableColumnDefs.map((column) =>
                       renderContactsHeaderCell(
                         column,
-                        column.key === 'actions'
-                          ? { textAlign: 'right', paddingRight: '2rem' }
-                          : { paddingRight: '2rem' },
+                        { paddingRight: '2rem' },
                         { key: column.key },
                       ),
                     )}
@@ -1877,6 +1948,68 @@ const Contacts = () => {
             </TopScrollSync>
           </div>
         </div>
+        {!loading && total > 0 && (
+          <div className="contacts-pagination-footer" data-testid="contacts-pagination">
+            <span className="contacts-pagination-summary">
+              Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total.toLocaleString()}
+            </span>
+            <div className="contacts-pagination-controls">
+              <label htmlFor="contacts-page-size">Rows</label>
+              <select
+                id="contacts-page-size"
+                className="input-field"
+                aria-label="Contacts per page"
+                value={pageSize}
+                onChange={e => {
+                  setPageSize(parseInt(e.target.value, 10) || 10);
+                  setPage(1);
+                }}
+              >
+                {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <button
+                type="button"
+                className="contacts-pagination-icon"
+                aria-label="Previous page"
+                title="Previous page"
+                disabled={page <= 1}
+                onClick={() => setPage(p => Math.max(p - 1, 1))}
+              >
+                <ChevronLeft size={16} aria-hidden />
+              </button>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  goToContactsPage();
+                }}
+                className="contacts-pagination-page-form"
+              >
+                <label htmlFor="contacts-page-number">Page</label>
+                <input
+                  id="contacts-page-number"
+                  type="number"
+                  min="1"
+                  max={totalPages}
+                  value={pageInput}
+                  onChange={e => setPageInput(e.target.value)}
+                  onBlur={goToContactsPage}
+                  aria-label="Page number"
+                />
+                <span>of {totalPages}</span>
+              </form>
+              <button
+                type="button"
+                className="contacts-pagination-icon"
+                aria-label="Next page"
+                title="Next page"
+                disabled={page >= totalPages}
+                onClick={() => setPage(p => Math.min(p + 1, totalPages))}
+              >
+                <ChevronRight size={16} aria-hidden />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       {showImportModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--catalogue-modal-backdrop)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>

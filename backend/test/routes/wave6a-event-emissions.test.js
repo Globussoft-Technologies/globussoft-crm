@@ -275,7 +275,9 @@ describe('billing.js — invoice.created event', () => {
       id: 101, invoiceNum: 'INV-ABCDEF', amount: 500, contactId: 5,
       dealId: null, dueDate: new Date(tomorrow), status: 'UNPAID',
     });
-    const app = makeApp(billingRouter, '/api/billing');
+    // This assertion pins the shared/generic invoice event contract. Wellness
+    // invoices intentionally require a patient and validated catalogue lines.
+    const app = makeApp(billingRouter, '/api/billing', { vertical: 'generic' });
     await withEmitSpy(async (emitSpy) => {
       const res = await request(app).post('/api/billing').send({ amount: 500, dueDate: tomorrow, contactId: 5 });
       expect(res.status).toBe(201);

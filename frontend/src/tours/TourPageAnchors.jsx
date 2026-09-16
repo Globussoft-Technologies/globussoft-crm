@@ -60,10 +60,28 @@ export default function TourPageAnchors() {
 
   useEffect(() => {
     const feature = findGenericFeatureForPath(location.pathname);
-    const root = document.querySelector('[data-tour="page-content"]');
-    if (!feature || !root) return undefined;
+    const root = document.querySelector('[data-tour="page-content"]')
+      || document.querySelector('main, [role="main"]');
+    if (!feature) return undefined;
 
     const marked = new Set();
+    const navTarget = Array.from(document.querySelectorAll("a[href], button"))
+      .find((element) => {
+        const href = element.getAttribute("href");
+        return href && (href === feature.path || href.startsWith(`${feature.path}/`));
+      });
+    mark(navTarget, `nav-${feature.path}`, marked);
+    if (navTarget && !navTarget.hasAttribute("data-tour-nav")) {
+      navTarget.setAttribute("data-tour-nav", feature.path);
+      navTarget.setAttribute("data-tour-generated-nav", "true");
+    }
+    if (feature.id === "leads") {
+      const leadsGroup = Array.from(document.querySelectorAll("button, [role='button']"))
+        .find((element) => /\bleads\b/i.test(textOf(element)) && element.hasAttribute("aria-expanded"));
+      mark(leadsGroup, "leads-group", marked);
+    }
+    if (!root) return undefined;
+    if (!root.hasAttribute("data-tour")) mark(root, "page-content", marked);
     let frame = null;
     const scan = () => {
       frame = null;
@@ -77,6 +95,10 @@ export default function TourPageAnchors() {
         mark(findHintTarget(root, hint), `${feature.id}-${hint.slot}`, marked);
       }
 
+      if (feature.id === "contacts") {
+        mark(firstMatching(controls, PRIMARY_ACTION), "contacts-create", marked);
+        mark(root.querySelector("input[placeholder*='search' i], [role='searchbox']"), "contacts-search", marked);
+      }
       mark(firstMatching(controls, PRIMARY_ACTION), `${feature.id}-primary`, marked);
       mark(firstMatching(controls, EDIT_ACTION), `${feature.id}-edit`, marked);
       mark(firstMatching(controls, EXPORT_ACTION), `${feature.id}-export`, marked);
@@ -115,6 +137,10 @@ export default function TourPageAnchors() {
         if (element.getAttribute("data-tour-generated") === "true") {
           element.removeAttribute("data-tour");
           element.removeAttribute("data-tour-generated");
+        }
+        if (element.getAttribute("data-tour-generated-nav") === "true") {
+          element.removeAttribute("data-tour-nav");
+          element.removeAttribute("data-tour-generated-nav");
         }
       });
     };

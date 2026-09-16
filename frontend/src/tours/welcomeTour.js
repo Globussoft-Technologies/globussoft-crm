@@ -6,7 +6,7 @@ export const GENERIC_WELCOME_TOUR = Object.freeze({
   category: "Administration",
   welcome: true,
   steps: [
-    { target: '[data-tour="welcome-sidebar"]', title: "Your workspace navigation", content: "Use the sidebar to move between the CRM areas your role permits. It does not start every feature tour automatically." },
+    { target: '[data-tour="welcome-sidebar"]', navigateTo: "/dashboard", title: "Your workspace navigation", content: "Use the sidebar to move between the CRM areas your role permits. It does not start every feature tour automatically." },
     { target: '[data-tour="welcome-global-search"]', title: "Search across the CRM", content: "Use global search—or press Ctrl/Cmd+K—to find pages and tenant records from anywhere." },
     { target: '[data-tour-nav="/dashboard"]', navigateTo: "/dashboard", waitFor: '[data-tour-nav="/dashboard"]', requireVisible: false, title: "Return to your dashboard", content: "The dashboard summarizes your role-specific work, KPIs, pipeline, and recent activity." },
     { target: '[data-tour="welcome-notifications"]', title: "Stay up to date", content: "Notifications collect assignments, reminders, approvals, and other changes that need your attention." },

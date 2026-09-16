@@ -78,8 +78,8 @@ const ENTITY_SECTIONS = [
     border: "rgba(168, 85, 247, 0.25)",
     render: (p) => ({
       primary: p.label,
-      secondary: p.description || p.category || p.path,
-      to: p.path,
+      secondary: p.description || (p.parent ? `${p.parent} · ${p.path}` : p.category || p.path),
+      to: p.path || p.route,
       actionTarget: p.actionTarget,
     }),
   },
@@ -294,15 +294,29 @@ const ENTITY_SECTIONS = [
 function scorePageMatch(page, q) {
   if (!page || !q) return -1;
   const needle = q.toLowerCase();
-  const fields = [page.label, page.description, page.category, page.path];
+  const fields = [
+    page.label,
+    page.title,
+    page.name,
+    page.description,
+    page.parent,
+    page.category,
+    page.path,
+    page.route,
+  ];
   let best = -1;
   for (const f of fields) {
     if (!f) continue;
     const idx = f.toLowerCase().indexOf(needle);
     if (idx === -1) continue;
     // Earlier match in label > later match in description.
-    const fieldWeight =
-      f === page.label ? 0 : f === page.description ? 100 : 200;
+    const fieldWeight = f === page.label || f === page.title || f === page.name
+      ? 0
+      : f === page.description
+        ? 100
+        : f === page.parent
+          ? 150
+          : 200;
     const candidate = fieldWeight + idx;
     if (best === -1 || candidate < best) best = candidate;
   }
@@ -360,6 +374,22 @@ export default function Omnibar() {
       window.removeEventListener("sidebar:pages-changed", onInvalidate);
     };
   }, []);
+
+  // Generic Pages are queried server-side as the user types. This keeps the
+  // API's permission-filtered page catalog as the search source while the
+  // existing local merge remains available for Generic sidebar-only links.
+  useEffect(() => {
+    if (tenant?.vertical !== "generic" || query.trim().length < 2) return undefined;
+    let cancelled = false;
+    fetchApi(`/api/pages/me?q=${encodeURIComponent(query.trim())}`, { silent: true })
+      .then((res) => {
+        if (!cancelled && Array.isArray(res?.pages)) setPagesIndex(res.pages);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [query, tenant?.vertical]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {

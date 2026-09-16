@@ -466,15 +466,20 @@ const Layout = () => {
               style={{
                 display: "flex",
                 alignItems: "center",
+                gap: 6,
                 background: "none",
-                border: "none",
+                border: "1px solid var(--border-color)",
                 cursor: "pointer",
-                color: "var(--text-secondary)",
-                padding: "6px 8px",
-                borderRadius: 6,
+                color: "var(--text-primary)",
+                padding: "8px 12px",
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
               }}
             >
               <CircleHelp size={17} />
+              <span>Tour this page</span>
             </button>
           )}
           <button

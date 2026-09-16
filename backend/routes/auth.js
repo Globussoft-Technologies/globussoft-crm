@@ -193,8 +193,12 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
     if (!name || !email || !phone || !company) {
       return res.status(400).json({ error: "Name, email, phone, and company are required" });
     }
-    if (!/^\S+@\S+\.\S+$/.test(email)) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.includes("..")) {
       return res.status(400).json({ error: "Enter a valid email address" });
+    }
+    const normalizedPhone = phone.replace(/[\s().-]/g, "");
+    if (!/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
+      return res.status(400).json({ error: "Enter a valid international phone number with country code, for example +919876543210", code: "INVALID_PHONE" });
     }
 
     const configuredTenantSlug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim().toLowerCase();
@@ -242,7 +246,7 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       return res.status(503).json({ error: "Lead capture is not configured" });
     }
 
-    const submissionPayload = JSON.stringify({ name, email, phone, company, companySize });
+    const submissionPayload = JSON.stringify({ name, email, phone: normalizedPhone, company, companySize });
     const existing = await prisma.contact.findFirst({
       where: { tenantId: tenant.id, email, deletedAt: null },
       select: { id: true },
@@ -264,7 +268,7 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       data: {
         name: name.slice(0, 191),
         email: email.slice(0, 191),
-        phone: phone.slice(0, 40),
+        phone: normalizedPhone.slice(0, 40),
         company: company.slice(0, 191),
         companySize: companySize.slice(0, 100) || null,
         status: "Lead",

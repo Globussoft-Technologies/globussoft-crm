@@ -67,6 +67,7 @@ const SOURCE_OPTIONS = [
   "Event",
   "Other",
 ];
+
 // Built-in lead columns available for auto-campaign assignment rules.
 const BUILTIN_RULE_COLUMNS = [
   { key: "source", label: "Source" },
@@ -1114,6 +1115,8 @@ const Leads = () => {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const leadRequestSequenceRef = useRef(0);
+  const previousGenericSearchRef = useRef("");
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
   const [pageInput, setPageInput] = useState("1");
@@ -1431,16 +1434,31 @@ const Leads = () => {
   });
 
   const fetchLeads = async ({ background = false } = {}) => {
+    const requestSequence = ++leadRequestSequenceRef.current;
     if (!background) setLoading(true);
     try {
       const filtersQs =
         advancedFilters.length > 0
           ? `&filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
           : "";
+      const genericSearchQs = isGeneric && searchTerm.trim()
+        ? `&q=${encodeURIComponent(searchTerm.trim())}`
+        : "";
+      const matchingCampaignIds = isGeneric && searchTerm.trim()
+        ? callifiedCampaigns
+          .filter((campaign) => String(campaign?.name || "").toLowerCase().includes(searchTerm.trim().toLowerCase()))
+          .map((campaign) => Number(campaign.id))
+          .filter((campaignId) => Number.isInteger(campaignId) && campaignId > 0)
+          .slice(0, 100)
+        : [];
+      const campaignSearchQs = matchingCampaignIds.length
+        ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
+        : "";
       const data = await fetchApi(
-        `/api/contacts?status=Lead&limit=500${filtersQs}`,
+        `/api/contacts?status=Lead&limit=500${genericSearchQs}${campaignSearchQs}${filtersQs}`,
       );
       const rows = Array.isArray(data) ? data : [];
+      if (requestSequence !== leadRequestSequenceRef.current) return rows;
       let mergedRows = rows;
       setLeads((previousRows) => {
         const previousById = new Map(previousRows.map((row) => [row.id, row]));
@@ -1464,10 +1482,14 @@ const Leads = () => {
       });
       return mergedRows;
     } catch {
-      if (!background) notify.error("Failed to load leads");
+      if (requestSequence === leadRequestSequenceRef.current && !background) {
+        notify.error("Failed to load leads");
+      }
       return [];
     } finally {
-      if (!background) setLoading(false);
+      if (requestSequence === leadRequestSequenceRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -1839,6 +1861,20 @@ const Leads = () => {
     }
     fetchLeads();
   }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Generic CRM lead search is server-backed. Keep the existing local
+  // filtering/rendering behavior intact while exposing the typed value as
+  // `q` in the contacts API request.
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    const normalizedSearch = searchTerm.trim();
+    if (normalizedSearch === previousGenericSearchRef.current) return undefined;
+    previousGenericSearchRef.current = normalizedSearch;
+    const timer = setTimeout(() => {
+      fetchLeads({ background: true });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [isGeneric, searchTerm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response

@@ -404,8 +404,10 @@ describe('GET /api/contacts — list', () => {
     expect(prisma.contact.count).not.toHaveBeenCalled();
   });
 
-  test('?q searches name/email/company server-side and composes with Customer count scope', async () => {
-    const res = await request(makeApp()).get('/api/contacts?status=Customer&q=Acme&count=1');
+  test('?q searches every Generic Leads row field and composes with Customer count scope', async () => {
+    const res = await request(makeApp()).get(
+      '/api/contacts?status=Customer&q=Acme&callifiedCampaignIds=41,42&count=1',
+    );
 
     expect(res.status).toBe(200);
     expect(prisma.contact.count).toHaveBeenCalledWith({
@@ -417,9 +419,48 @@ describe('GET /api/contacts — list', () => {
           { email: { contains: 'Acme' } },
           { company: { contains: 'Acme' } },
           { title: { contains: 'Acme' } },
+          { phone: { contains: 'Acme' } },
+          { source: { contains: 'Acme' } },
+          { firstTouchSource: { contains: 'Acme' } },
+          { tagsJson: { contains: 'Acme' } },
+          { callifiedLeadStatus: { contains: 'Acme' } },
+          {
+            assignedTo: {
+              is: {
+                tenantId: TENANT_ID,
+                OR: [
+                  { name: { contains: 'Acme' } },
+                  { email: { contains: 'Acme' } },
+                ],
+              },
+            },
+          },
+          { callifiedCampaignId: { in: [41, 42] } },
         ],
       }),
     });
+  });
+
+  test('?q keeps the narrower search contract for non-Generic tenants', async () => {
+    const res = await request(makeApp({ vertical: 'travel' }))
+      .get('/api/contacts?q=Acme&callifiedCampaignIds=41');
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany.mock.calls[0][0].where.OR).toEqual([
+      { name: { contains: 'Acme' } },
+      { email: { contains: 'Acme' } },
+      { company: { contains: 'Acme' } },
+      { title: { contains: 'Acme' } },
+    ]);
+  });
+
+  test('?q rejects malformed Generic Callified campaign ids', async () => {
+    const res = await request(makeApp())
+      .get('/api/contacts?q=Growth&callifiedCampaignIds=41,not-an-id');
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CAMPAIGN_IDS');
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
 
   test('score range and tenant-owned saved view are applied before count and pagination', async () => {

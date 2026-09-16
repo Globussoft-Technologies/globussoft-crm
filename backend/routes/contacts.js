@@ -1219,12 +1219,55 @@ router.get("/", async (req, res) => {
           field: "q",
         });
       }
-      where.OR = [
+      const searchFields = [
         { name: { contains: q } },
         { email: { contains: q } },
         { company: { contains: q } },
         { title: { contains: q } },
       ];
+      // The Generic Leads table advertises search across every value visible
+      // in its rows, not just the four identity fields above. Keep the wider
+      // predicate vertical-scoped so wellness/travel list contracts are not
+      // changed by this Generic CRM enhancement.
+      if ((req.user.vertical || "generic") === "generic") {
+        searchFields.push(
+          { phone: { contains: q } },
+          { source: { contains: q } },
+          { firstTouchSource: { contains: q } },
+          { tagsJson: { contains: q } },
+          { callifiedLeadStatus: { contains: q } },
+          {
+            assignedTo: {
+              is: {
+                tenantId: req.user.tenantId,
+                OR: [
+                  { name: { contains: q } },
+                  { email: { contains: q } },
+                ],
+              },
+            },
+          },
+        );
+
+        const campaignIdsText = typeof req.query.callifiedCampaignIds === "string"
+          ? req.query.callifiedCampaignIds.trim()
+          : "";
+        if (campaignIdsText) {
+          const campaignIds = campaignIdsText.split(",").map((value) => Number(value));
+          if (
+            campaignIds.length > 100 ||
+            campaignIds.some((value) => !Number.isInteger(value) || value < 1)
+          ) {
+            return res.status(400).json({
+              error: "callifiedCampaignIds must contain at most 100 positive integers",
+              code: "INVALID_CAMPAIGN_IDS",
+              field: "callifiedCampaignIds",
+            });
+          }
+          searchFields.push({ callifiedCampaignId: { in: campaignIds } });
+        }
+      }
+      where.OR = searchFields;
     }
     if (req.query.scoreMin !== undefined || req.query.scoreMax !== undefined) {
       const minText = String(req.query.scoreMin ?? "0");

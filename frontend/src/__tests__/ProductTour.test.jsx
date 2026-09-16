@@ -10,6 +10,7 @@ import { GENERIC_SECONDARY_WORKFLOW_TOURS } from "../tours/secondaryWorkflowTour
 import { mergeTourStates, readTourState, tourStorageKeyForTest } from "../tours/tourStorage";
 import { ProductTourContext } from "../tours/productTourContext";
 import ProductTourSettings from "../components/ProductTourSettings";
+import { waitForTourTarget } from "../tours/tourStepActions";
 
 const permissionState = {
   isOwner: false,
@@ -32,7 +33,9 @@ function Harness() {
       <output data-testid="tour-available">{String(tour.isAvailable)}</output>
       <output data-testid="tour-location">{location.pathname}</output>
       <output data-testid="available-tour-ids">{tour.availableTours.map((item) => item.id).join(",")}</output>
-      <a href="/dashboard" data-tour-nav="/dashboard">Dashboard</a>
+      <nav data-tour="welcome-sidebar">
+        <a href="/dashboard" data-tour-nav="/dashboard">Dashboard</a>
+      </nav>
       <main data-tour="page-content">Contacts content</main>
     </div>
   );
@@ -185,6 +188,7 @@ describe("generic product tours", () => {
     expect(view.container).toHaveAttribute("inert");
     expect(view.container).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByRole("status")).toHaveTextContent("Step 1 of 3: Add a contact");
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-tour-surface", "true");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("status")).toHaveTextContent("Step 2 of 3: Find the right contact");
     fireEvent.keyDown(document, { key: "Escape" });
@@ -192,6 +196,20 @@ describe("generic product tours", () => {
     await waitFor(() => expect(launcher).toHaveFocus());
     expect(view.container).not.toHaveAttribute("inert");
     expect(view.container).not.toHaveAttribute("aria-hidden");
+  });
+
+  it("waits long enough for an API-delayed tour target", async () => {
+    const targetPromise = waitForTourTarget('[data-testid="delayed-tour-target"]');
+    window.setTimeout(() => {
+      const target = document.createElement("button");
+      target.dataset.testid = "delayed-tour-target";
+      target.getClientRects = () => [{ width: 10, height: 10 }];
+      document.body.appendChild(target);
+    }, 650);
+
+    const target = await targetPromise;
+    expect(target).not.toBeNull();
+    target.remove();
   });
 
   it("uses reduced motion and keeps the card inside a high-zoom mobile viewport", () => {
@@ -288,6 +306,9 @@ describe("generic product tours", () => {
   });
 
   it("runs the short welcome tour once and does not immediately chain a module tour", async () => {
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
+      { top: 0, left: 0, right: 100, bottom: 20, width: 100, height: 20, x: 0, y: 0, toJSON: () => ({}) },
+    ]);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       status: 200,

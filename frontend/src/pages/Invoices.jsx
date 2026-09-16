@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useContext, useCallback } from "react";
+import { useState, useEffect, useMemo, useContext, useCallback, useRef } from "react";
 import {
   Receipt,
   Plus,
@@ -13,6 +13,8 @@ import {
   X,
   Filter,
   CalendarRange,
+  UserRound,
+  Package,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -28,7 +30,7 @@ const STATUS_CONFIG = {
   VOIDED: { color: "#6b7280", bg: "rgba(107,114,128,0.15)", label: "Voided" },
 };
 
-function StatusBadge({ status }) {
+function StatusBadge({ status, borderless = false }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.UNPAID;
   return (
     <span
@@ -39,7 +41,10 @@ function StatusBadge({ status }) {
         fontWeight: "bold",
         backgroundColor: cfg.bg,
         color: cfg.color,
-        border: `1px solid ${cfg.color}33`,
+        // Use a zero-width transparent border for Wellness so browsers do not
+        // add a visible status outline while the shared Generic/Travel badge
+        // keeps its existing colored border.
+        border: borderless ? "0 solid transparent" : `1px solid ${cfg.color}33`,
       }}
     >
       {cfg.label}
@@ -52,7 +57,93 @@ import { formatDate } from "../utils/date";
 const formatCurrency = (v) =>
   formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
+function getInvoiceLineItems(invoice) {
+  if (Array.isArray(invoice?.lineItems)) return invoice.lineItems;
+  if (typeof invoice?.lineItemsJson !== "string") return [];
+  try {
+    const parsed = JSON.parse(invoice.lineItemsJson);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatPaymentMode(mode) {
+  return WELLNESS_PAYMENT_MODES.find((option) => option.value === mode)?.label || mode || "—";
+}
+
+const WELLNESS_PAYMENT_MODES = [
+  { value: "cash", label: "Cash" },
+  { value: "upi", label: "UPI" },
+  { value: "card", label: "Card" },
+  { value: "bank_transfer", label: "Bank transfer" },
+  { value: "other", label: "Other" },
+];
+
+const createEmptyLineItem = () => ({
+  type: "service",
+  itemId: "",
+  quantity: 1,
+  unitPrice: "",
+});
+
+const createInvoiceForm = (subBrand = "") => ({
+  invoiceNum: "",
+  contactId: "",
+  dealId: "",
+  amount: "",
+  dueDate: "",
+  status: "UNPAID",
+  subBrand,
+  patientId: "",
+  visitId: "",
+  customerName: "",
+  customerPhone: "",
+  customerEmail: "",
+  customerAddress: "",
+  gstin: "",
+  billingAddress: "",
+  shippingAddress: "",
+  paymentMode: "cash",
+  lineItems: [createEmptyLineItem()],
+});
+
+async function fetchAllWellnessPatients() {
+  const pageSize = 200;
+  const allPatients = [];
+  let offset = 0;
+  let total = null;
+
+  while (true) {
+    const response = await fetchApi(
+      `/api/wellness/patients?limit=${pageSize}&offset=${offset}&fields=full`,
+    );
+    const page = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.patients)
+        ? response.patients
+        : [];
+    if (total === null && response && !Array.isArray(response)) {
+      const parsedTotal = Number(response.total);
+      total = Number.isFinite(parsedTotal) ? parsedTotal : null;
+    }
+    allPatients.push(...page);
+
+    if (
+      page.length === 0
+      || (total === null && page.length < pageSize)
+      || (total !== null && allPatients.length >= total)
+    ) {
+      break;
+    }
+    offset += page.length;
+  }
+
+  return allPatients;
+}
+
 const INVOICE_TABLE_MIN_WIDTH = 940;
+const WELLNESS_INVOICE_TABLE_MIN_WIDTH = 1490;
 
 /**
  * Date-range presets for the invoice ledger filter.
@@ -84,6 +175,10 @@ const DATE_FIELD_OPTIONS = [
 function toLocalDateInput(date) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function todayDateInput() {
+  return toLocalDateInput(new Date());
 }
 
 /**
@@ -124,23 +219,24 @@ export default function Invoices() {
   // AuthContext exposes `tenant` at the top level (same source the Sidebar uses
   // to switch to the travel nav); fall back to user.tenant for safety.
   const { user, tenant } = useContext(AuthContext) || {};
-  const isTravel = (tenant?.vertical || user?.tenant?.vertical) === "travel";
+  const vertical = tenant?.vertical || user?.tenant?.vertical || "generic";
+  const isTravel = vertical === "travel";
+  const isWellness = vertical === "wellness";
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand() || {};
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [patients, setPatients] = useState([]);
+  const [visits, setVisits] = useState([]);
+  const [services, setServices] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [isLoadingVisits, setIsLoadingVisits] = useState(false);
+  const [isLoadingVisitItems, setIsLoadingVisitItems] = useState(false);
+  const visitRequestRef = useRef(0);
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
   const [linkCopied, setLinkCopied] = useState(false);
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
-  const [newInvoice, setNewInvoice] = useState({
-    invoiceNum: "",
-    contactId: "",
-    dealId: "",
-    amount: "",
-    dueDate: "",
-    status: "UNPAID",
-    subBrand: "",
-  });
+  const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm());
   // #124: replace the old prompt() flow with a proper modal so the user can
   // pick frequency, see what they're about to activate, and stop recurring
   // explicitly instead of guessing the toggle.
@@ -157,6 +253,15 @@ export default function Invoices() {
   const [dateField, setDateField] = useState("issuedDate");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+
+  useEffect(() => {
+    if (!isCreateFormOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isCreateFormOpen]);
 
 
 
@@ -184,10 +289,43 @@ export default function Invoices() {
       setInvoices(Array.isArray(invs) ? invs : []);
       setContacts(Array.isArray(c) ? c : []);
       setDeals(Array.isArray(d) ? d : []);
+
+      if (isWellness) {
+        const [patientResult, serviceResult, productResult] = await Promise.allSettled([
+          // This page is admin/manager-gated by the billing route. The full
+          // patient shape supplies the profile fields used to prefill the
+          // invoice snapshot after a master-record selection.
+          fetchAllWellnessPatients(),
+          fetchApi("/api/wellness/services"),
+          fetchApi("/api/wellness/products"),
+        ]);
+        setPatients(patientResult.status === "fulfilled" ? patientResult.value : []);
+        setServices(
+          serviceResult.status === "fulfilled" && Array.isArray(serviceResult.value)
+            ? serviceResult.value
+            : [],
+        );
+        setProducts(
+          productResult.status === "fulfilled"
+            ? Array.isArray(productResult.value)
+              ? productResult.value
+              : Array.isArray(productResult.value?.items)
+                ? productResult.value.items
+                : []
+            : [],
+        );
+      } else {
+        // Do not retain vertical-specific catalog data if the same SPA session
+        // changes tenant context or a stale component render completes later.
+        setPatients([]);
+        setVisits([]);
+        setServices([]);
+        setProducts([]);
+      }
     } catch (_err) {
       // Network or auth error handled by fetchApi
     }
-  }, [activeSubBrand, isTravel, dateRange, dateField, customFrom, customTo]);
+  }, [activeSubBrand, isTravel, isWellness, dateRange, dateField, customFrom, customTo]);
 
   useEffect(() => {
     loadData();
@@ -252,35 +390,245 @@ export default function Invoices() {
     setNewInvoice((prev) => ({ ...prev, [field]: value }));
   };
 
+  const catalogForType = (type) => (type === "product" ? products : services);
+
+  const wellnessInvoiceTotal = useMemo(
+    () =>
+      (newInvoice.lineItems || []).reduce(
+        (total, item) =>
+          total + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
+        0,
+      ),
+    [newInvoice.lineItems],
+  );
+
+  const handlePatientChange = async (value) => {
+    const patient = patients.find((item) => String(item.id) === String(value));
+    const requestId = ++visitRequestRef.current;
+    setVisits([]);
+    setIsLoadingVisits(Boolean(value));
+    setNewInvoice((prev) => ({
+      ...prev,
+      patientId: value,
+      visitId: "",
+      contactId: patient?.contactId ? String(patient.contactId) : "",
+      customerName: patient?.name || "",
+      customerPhone: patient?.phone || "",
+      customerEmail: patient?.email || "",
+      customerAddress: patient?.address || "",
+      gstin: patient?.gst || "",
+      billingAddress: patient?.billingAddress || patient?.address || "",
+      shippingAddress: patient?.shippingAddress || "",
+      lineItems: [createEmptyLineItem()],
+    }));
+
+    if (!value) {
+      setIsLoadingVisits(false);
+      return;
+    }
+
+    try {
+      const response = await fetchApi(`/api/wellness/patients/${encodeURIComponent(value)}/visits`);
+      if (requestId !== visitRequestRef.current) return;
+      setVisits(Array.isArray(response) ? response : Array.isArray(response?.visits) ? response.visits : []);
+    } catch (_err) {
+      if (requestId === visitRequestRef.current) {
+        notify.error("Failed to load visits for this patient");
+      }
+    } finally {
+      if (requestId === visitRequestRef.current) setIsLoadingVisits(false);
+    }
+  };
+
+  const handleVisitChange = async (value) => {
+    const visit = visits.find((item) => String(item.id) === String(value));
+    const requestId = ++visitRequestRef.current;
+    setNewInvoice((prev) => ({ ...prev, visitId: value }));
+
+    if (!value) {
+      setIsLoadingVisitItems(false);
+      setNewInvoice((prev) => ({ ...prev, lineItems: [createEmptyLineItem()] }));
+      return;
+    }
+
+    setIsLoadingVisitItems(true);
+    try {
+      const response = await fetchApi(`/api/wellness/visits/${encodeURIComponent(value)}/consumptions`);
+      if (requestId !== visitRequestRef.current) return;
+      const consumptions = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.items)
+          ? response.items
+          : [];
+      const nextLineItems = [];
+      const skippedItems = [];
+
+      const visitService = visit?.service;
+      if (visitService?.id || visitService?.name) {
+        const service = services.find(
+          (item) =>
+            (visitService.id && String(item.id) === String(visitService.id))
+            || (visitService.name && item.name?.toLowerCase() === visitService.name.toLowerCase()),
+        );
+        if (service) {
+          const price = service.discountedPrice ?? service.basePrice;
+          nextLineItems.push({
+            type: "service",
+            itemId: String(service.id),
+            quantity: 1,
+            unitPrice: String(Number(price) || 0),
+          });
+        } else {
+          skippedItems.push(visitService.name || "Visit service");
+        }
+      }
+
+      consumptions.forEach((consumption) => {
+        const product = products.find(
+          (item) =>
+            (consumption.productId && String(item.id) === String(consumption.productId))
+            || (consumption.productName && item.name?.toLowerCase() === consumption.productName.toLowerCase()),
+        );
+        if (!product) {
+          skippedItems.push(consumption.productName || "Visit product");
+          return;
+        }
+        const price = product.discountedPrice ?? product.price;
+        const quantity = Number(consumption.qty);
+        nextLineItems.push({
+          type: "product",
+          itemId: String(product.id),
+          quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+          unitPrice: String(Number(price) || 0),
+        });
+      });
+
+      setNewInvoice((prev) => ({
+        ...prev,
+        lineItems: nextLineItems.length ? nextLineItems : [createEmptyLineItem()],
+      }));
+      if (skippedItems.length) {
+        notify.info(`${skippedItems.join(", ")} could not be matched to the active catalogue.`);
+      }
+      if (!nextLineItems.length) {
+        notify.info("No catalogue items were recorded for this visit. Add an item manually.");
+      }
+    } catch (_err) {
+      if (requestId === visitRequestRef.current) {
+        notify.error("Failed to load products and services for this visit");
+      }
+    } finally {
+      if (requestId === visitRequestRef.current) setIsLoadingVisitItems(false);
+    }
+  };
+
+  const handleLineItemChange = (index, field, value) => {
+    setNewInvoice((prev) => {
+      const lineItems = [...(prev.lineItems || [])];
+      const current = { ...lineItems[index], [field]: value };
+      if (field === "type") {
+        current.itemId = "";
+        current.unitPrice = "";
+      }
+      if (field === "itemId") {
+        const catalogItem = catalogForType(current.type).find(
+          (item) => String(item.id) === String(value),
+        );
+        const price = current.type === "service"
+          ? catalogItem?.discountedPrice ?? catalogItem?.basePrice
+          : catalogItem?.discountedPrice ?? catalogItem?.price;
+        current.unitPrice = catalogItem ? String(Number(price) || 0) : "";
+      }
+      lineItems[index] = current;
+      return { ...prev, lineItems };
+    });
+  };
+
+  const addLineItem = () => {
+    setNewInvoice((prev) => ({
+      ...prev,
+      lineItems: [...(prev.lineItems || []), createEmptyLineItem()],
+    }));
+  };
+
+  const removeLineItem = (index) => {
+    setNewInvoice((prev) => {
+      const remaining = (prev.lineItems || []).filter((_, i) => i !== index);
+      return {
+        ...prev,
+        lineItems: remaining.length ? remaining : [createEmptyLineItem()],
+      };
+    });
+  };
+
   const createInvoice = async (e) => {
     e.preventDefault();
+    const today = todayDateInput();
+    if (!newInvoice.dueDate) {
+      notify.error("Please select a due date");
+      return;
+    }
+    if (newInvoice.dueDate < today) {
+      notify.error("Due date cannot be in the past");
+      return;
+    }
     // Travel: sub-brand is required so every invoice is brand-attributed for
     // analytics (the whole point of this feature).
     if (isTravel && !newInvoice.subBrand) {
       notify.error("Please pick a sub-brand for this invoice");
       return;
     }
+    if (isWellness) {
+      if (!newInvoice.patientId) {
+        notify.error("Please select a customer or patient");
+        return;
+      }
+      if (!newInvoice.customerName.trim()) {
+        notify.error("Please enter the customer's full name");
+        return;
+      }
+      if (!newInvoice.lineItems.some((item) => item.itemId)) {
+        notify.error("Add at least one product or service");
+        return;
+      }
+      if (wellnessInvoiceTotal <= 0) {
+        notify.error("The invoice total must be greater than zero");
+        return;
+      }
+    }
     try {
       await fetchApi("/api/billing", {
         method: "POST",
         body: JSON.stringify({
-          amount: newInvoice.amount,
+          amount: isWellness ? wellnessInvoiceTotal : newInvoice.amount,
           dueDate: newInvoice.dueDate,
-          contactId: newInvoice.contactId,
+          contactId: newInvoice.contactId || undefined,
           dealId: newInvoice.dealId || undefined,
           subBrand: isTravel ? newInvoice.subBrand : undefined,
+          ...(isWellness
+            ? {
+                patientId: newInvoice.patientId,
+                visitId: newInvoice.visitId || undefined,
+                customerName: newInvoice.customerName,
+                customerPhone: newInvoice.customerPhone,
+                customerEmail: newInvoice.customerEmail,
+                customerAddress: newInvoice.customerAddress,
+                gstin: newInvoice.gstin,
+                billingAddress: newInvoice.billingAddress,
+                shippingAddress: newInvoice.shippingAddress,
+                paymentMode: newInvoice.paymentMode,
+                lineItems: newInvoice.lineItems.filter((item) => item.itemId),
+              }
+            : {}),
         }),
       });
-      setNewInvoice({
-        invoiceNum: "",
-        contactId: "",
-        dealId: "",
-        amount: "",
-        dueDate: "",
-        status: "UNPAID",
-        subBrand: isTravel ? activeSubBrand || "" : "",
-      });
-      loadData();
+      setNewInvoice(createInvoiceForm(isTravel ? activeSubBrand || "" : ""));
+      setVisits([]);
+      setIsLoadingVisits(false);
+      setIsLoadingVisitItems(false);
+      setIsCreateFormOpen(false);
+      notify.success("Invoice created successfully");
+      await loadData();
     } catch (_err) {
       notify.error("Failed to create invoice");
     }
@@ -768,7 +1116,9 @@ export default function Invoices() {
             whiteSpace: "nowrap",
             color: "#FFFFFF",
     opacity: 1,
-        background: "linear-gradient(135deg, #d99f7b 0%, #b98a4d 100%)",
+        background: isWellness
+          ? "var(--primary-color, var(--accent-color))"
+          : "linear-gradient(135deg, #d99f7b 0%, #b98a4d 100%)",
 
           }}
         >
@@ -792,24 +1142,26 @@ export default function Invoices() {
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             display: "flex",
-            alignItems: "flex-start",
+            alignItems: "center",
             justifyContent: "center",
-            padding: "2rem 1rem",
-            overflowY: "auto",
+            padding: "1rem",
+            overflow: "hidden",
           }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
               padding: "1.5rem",
-              width: "720px",
+              width: isWellness ? "960px" : "720px",
               maxWidth: "100%",
-              height: "max-content",
+              height: "min(92vh, 900px)",
               minHeight: 0,
-              maxHeight: "none",
-              overflowY: "visible",
-              margin: "auto 0",
+              maxHeight: "calc(100vh - 2rem)",
+              overflow: "hidden",
+              margin: 0,
               boxSizing: "border-box",
+              display: "flex",
+              flexDirection: "column",
               background: "var(--modal-bg, var(--bg-color))",
               backgroundColor: "var(--modal-bg, var(--bg-color))",
               borderRadius: "16px",
@@ -826,6 +1178,7 @@ export default function Invoices() {
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: "0.5rem",
+                flexShrink: 0,
               }}
             >
               <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -852,8 +1205,30 @@ export default function Invoices() {
             </h3>
             <form
               onSubmit={createInvoice}
-              style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "1.25rem",
+                minHeight: 0,
+                flex: 1,
+                overflow: "hidden",
+              }}
             >
+              <div
+                className="invoice-create-form-scroll"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "1.25rem",
+                  minHeight: 0,
+                  flex: 1,
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  paddingRight: "0.35rem",
+                  overscrollBehavior: "contain",
+                  scrollbarGutter: "stable",
+                }}
+              >
               {/* #314: Invoice # is server-generated and was being silently
                   overwritten on save, leaving the user confused about why their
                   custom number didn't stick. Make the field read-only and surface
@@ -892,29 +1267,264 @@ export default function Invoices() {
                 </span>
               </div>
 
-              <div>
-                <label
+              {isWellness ? (
+                <section
+                  aria-labelledby="invoice-customer-details-heading"
                   style={{
-                    display: "block",
-                    fontSize: "0.875rem",
-                    marginBottom: "0.5rem",
-                    color: "var(--text-secondary)",
+                    padding: "1rem",
+                    borderRadius: "12px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--subtle-bg-2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "1rem",
                   }}
                 >
-                  Contact
-                </label>
-               <SearchableSingleSelect 
-  value={newInvoice.contactId}
-  onChange={(value) => handleFieldChange("contactId", value)}
-  style={{ background: "var(--input-bg)" }}
-  options={(contacts || []).map((c) => ({
-    value: String(c.id),
-    label: `${c.name} (${c.email})`,
-  }))}
-  placeholder="Search contact..."
-  aria-label="Contact"
-/>
-              </div>
+                  <div>
+                    <h4
+                      id="invoice-customer-details-heading"
+                      style={{
+                        margin: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.45rem",
+                        fontSize: "1rem",
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      <UserRound size={18} color="var(--primary-color, var(--accent-color))" />
+                      Customer Details
+                    </h4>
+                    <p
+                      style={{
+                        margin: "0.35rem 0 0",
+                        color: "var(--text-secondary)",
+                        fontSize: "0.78rem",
+                      }}
+                    >
+                      Select a patient from the master database. The details below
+                      are saved as an invoice snapshot.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "0.875rem",
+                        marginBottom: "0.5rem",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      Customer / Patient
+                    </label>
+                    <SearchableSingleSelect
+                      value={newInvoice.patientId}
+                      onChange={handlePatientChange}
+                      options={patients.map((patient) => ({
+                        value: String(patient.id),
+                        label: `${patient.name || "Unnamed patient"}${patient.phone ? ` · ${patient.phone}` : ""}`,
+                      }))}
+                      placeholder="Search patient by name or phone..."
+                      aria-label="Customer or patient"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="invoice-patient-visit"
+                      style={{
+                        display: "block",
+                        fontSize: "0.78rem",
+                        marginBottom: "0.35rem",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      Visit (Optional)
+                    </label>
+                    <select
+                      id="invoice-patient-visit"
+                      className="input-field"
+                      value={newInvoice.visitId}
+                      onChange={(e) => handleVisitChange(e.target.value)}
+                      disabled={!newInvoice.patientId || isLoadingVisits}
+                      aria-label="Patient visit"
+                      style={{ background: "var(--input-bg)" }}
+                    >
+                      <option value="">
+                        {!newInvoice.patientId
+                          ? "Select a patient first"
+                          : isLoadingVisits
+                            ? "Loading visits..."
+                            : visits.length
+                              ? "-- Select a visit --"
+                              : "No visits found"}
+                      </option>
+                      {visits.map((visit) => (
+                        <option key={visit.id} value={visit.id}>
+                          {formatDate(visit.visitDate)} · {visit.service?.name || "Visit"} · {visit.status || "recorded"}
+                        </option>
+                      ))}
+                    </select>
+                    {isLoadingVisitItems && (
+                      <span style={{ display: "block", fontSize: "0.7rem", color: "var(--text-secondary)", marginTop: "0.3rem" }}>
+                        Loading items recorded for this visit...
+                      </span>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+                      gap: "0.85rem",
+                    }}
+                  >
+                    <div>
+                      <label
+                        style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.35rem", color: "var(--text-secondary)" }}
+                      >
+                        Full Name
+                      </label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        required
+                        value={newInvoice.customerName}
+                        onChange={(e) => handleFieldChange("customerName", e.target.value)}
+                        placeholder="Customer full name"
+                        aria-label="Full name"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.35rem", color: "var(--text-secondary)" }}
+                      >
+                        Phone Number
+                      </label>
+                      <input
+                        type="tel"
+                        className="input-field"
+                        value={newInvoice.customerPhone}
+                        onChange={(e) => handleFieldChange("customerPhone", e.target.value)}
+                        placeholder="Phone number"
+                        aria-label="Phone number"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.35rem", color: "var(--text-secondary)" }}
+                      >
+                        Email Address
+                      </label>
+                      <input
+                        type="email"
+                        className="input-field"
+                        value={newInvoice.customerEmail}
+                        onChange={(e) => handleFieldChange("customerEmail", e.target.value)}
+                        placeholder="name@example.com"
+                        aria-label="Email address"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.35rem", color: "var(--text-secondary)" }}
+                      >
+                        GSTIN <span style={{ fontWeight: 400 }}>(Optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        maxLength={15}
+                        value={newInvoice.gstin}
+                        onChange={(e) => handleFieldChange("gstin", e.target.value.toUpperCase())}
+                        placeholder="15-character GSTIN"
+                        aria-label="GSTIN"
+                      />
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))",
+                      gap: "0.85rem",
+                    }}
+                  >
+                    <div>
+                      <label
+                        style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.35rem", color: "var(--text-secondary)" }}
+                      >
+                        Address
+                      </label>
+                      <textarea
+                        className="input-field"
+                        rows={2}
+                        value={newInvoice.customerAddress}
+                        onChange={(e) => handleFieldChange("customerAddress", e.target.value)}
+                        placeholder="Customer address"
+                        aria-label="Address"
+                        style={{ resize: "vertical" }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.35rem", color: "var(--text-secondary)" }}
+                      >
+                        Billing Address
+                      </label>
+                      <textarea
+                        className="input-field"
+                        rows={2}
+                        value={newInvoice.billingAddress}
+                        onChange={(e) => handleFieldChange("billingAddress", e.target.value)}
+                        placeholder="Billing address"
+                        aria-label="Billing address"
+                        style={{ resize: "vertical" }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.35rem", color: "var(--text-secondary)" }}
+                      >
+                        Shipping / Service Address
+                      </label>
+                      <textarea
+                        className="input-field"
+                        rows={2}
+                        value={newInvoice.shippingAddress}
+                        onChange={(e) => handleFieldChange("shippingAddress", e.target.value)}
+                        placeholder="Where the service is delivered, if different"
+                        aria-label="Shipping or service address"
+                        style={{ resize: "vertical" }}
+                      />
+                    </div>
+                  </div>
+                </section>
+              ) : (
+                <div>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Contact
+                  </label>
+                  <SearchableSingleSelect
+                    value={newInvoice.contactId}
+                    onChange={(value) => handleFieldChange("contactId", value)}
+                    options={(contacts || []).map((c) => ({
+                      value: String(c.id),
+                      label: `${c.name} (${c.email})`,
+                    }))}
+                    placeholder="Search contact..."
+                    aria-label="Contact"
+                  />
+                </div>
+              )}
 
               {isTravel && (
                 <div>
@@ -948,7 +1558,8 @@ export default function Invoices() {
                 </div>
               )}
 
-              <div>
+              {!isWellness && (
+                <div>
                 <label
                   style={{
                     display: "block",
@@ -967,16 +1578,146 @@ export default function Invoices() {
                   aria-label="Associated deal"
                 >
                   <option value="">-- No Deal --</option>
-                  {deals.map((d) => (
+                    {deals.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.title} - {formatCurrency(d.amount)}
                     </option>
-                  ))}
-                </select>
-              </div>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {isWellness && (
+                <section
+                  aria-labelledby="invoice-products-services-heading"
+                  style={{
+                    padding: "1rem",
+                    borderRadius: "12px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--subtle-bg-2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.85rem",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem" }}>
+                    <h4
+                      id="invoice-products-services-heading"
+                      style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "1rem" }}
+                    >
+                      <Package size={18} color="var(--primary-color, var(--accent-color))" />
+                      Products &amp; Services
+                    </h4>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={addLineItem}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.45rem 0.65rem", fontSize: "0.78rem" }}
+                    >
+                      <Plus size={14} /> Add item
+                    </button>
+                  </div>
+
+                  <div className="invoice-line-items-list" style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+                    {newInvoice.lineItems.map((item, index) => {
+                      const options = catalogForType(item.type);
+                      const lineTotal = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+                      return (
+                        <div
+                          key={`invoice-line-${index}`}
+                          className="invoice-line-item-row"
+                        >
+                          <div>
+                            <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
+                              Type
+                            </label>
+                            <select
+                              className="input-field"
+                              value={item.type}
+                              onChange={(e) => handleLineItemChange(index, "type", e.target.value)}
+                              aria-label={`Line item ${index + 1} type`}
+                              style={{ background: "var(--input-bg)", padding: "0.55rem 0.45rem" }}
+                            >
+                              <option value="service">Service</option>
+                              <option value="product">Product</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
+                              Product / Service
+                            </label>
+                            <select
+                              className="input-field"
+                              required
+                              value={item.itemId}
+                              onChange={(e) => handleLineItemChange(index, "itemId", e.target.value)}
+                              aria-label={`Line item ${index + 1} product or service`}
+                              style={{ background: "var(--input-bg)", padding: "0.55rem 0.45rem" }}
+                            >
+                              <option value="">Select {item.type}</option>
+                              {options.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
+                              Qty
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              step="0.01"
+                              required
+                              className="input-field"
+                              value={item.quantity}
+                              onChange={(e) => handleLineItemChange(index, "quantity", e.target.value)}
+                              aria-label={`Line item ${index + 1} quantity`}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
+                              Unit price
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              required
+                              className="input-field"
+                              value={item.unitPrice}
+                              onChange={(e) => handleLineItemChange(index, "unitPrice", e.target.value)}
+                              aria-label={`Line item ${index + 1} unit price`}
+                            />
+                            <span style={{ display: "block", fontSize: "0.68rem", color: "var(--text-secondary)", marginTop: "0.2rem" }}>
+                              {formatCurrency(lineTotal)}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeLineItem(index)}
+                            aria-label={`Remove line item ${index + 1}`}
+                            style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.3)", color: "var(--text-secondary)", cursor: "pointer", padding: "0.55rem", borderRadius: "6px", display: "inline-flex", marginTop: "1.55rem", alignSelf: "start" }}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.6rem", borderTop: "1px solid var(--border-color)", paddingTop: "0.75rem" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Invoice total</span>
+                    <strong style={{ color: "var(--success-color)", fontSize: "1.1rem" }}>{formatCurrency(wellnessInvoiceTotal)}</strong>
+                  </div>
+                </section>
+              )}
 
               <div style={{ display: "flex", gap: "1rem" }}>
-                <div style={{ flex: 1 }}>
+                {!isWellness && (
+                  <div style={{ flex: 1 }}>
                   <label
                     style={{
                       display: "block",
@@ -998,7 +1739,8 @@ export default function Invoices() {
                     onChange={(e) => handleFieldChange("amount", e.target.value)}
                     aria-label="Invoice amount"
                   />
-                </div>
+                  </div>
+                )}
                 <div style={{ flex: 1 }}>
                   <label
                     style={{
@@ -1013,13 +1755,61 @@ export default function Invoices() {
                   <input
                     type="date"
                     required
+                    min={todayDateInput()}
                     className="input-field"
                     value={newInvoice.dueDate}
-                    onChange={(e) => handleFieldChange("dueDate", e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      handleFieldChange("dueDate", value);
+                      if (value && value < todayDateInput()) {
+                        notify.error("Due date cannot be in the past");
+                      }
+                    }}
+                    onClick={(e) => {
+                      // Native date inputs normally open from the calendar
+                      // icon. showPicker() also makes the text/placeholder
+                      // area open the same picker when the browser supports it.
+                      if (typeof e.currentTarget.showPicker === "function") {
+                        try {
+                          e.currentTarget.showPicker();
+                        } catch (_err) {
+                          // The browser may already have opened the picker via
+                          // its default action; no fallback is needed.
+                        }
+                      }
+                    }}
                     aria-label="Due date"
                   />
                 </div>
               </div>
+
+              {isWellness && (
+                <div>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Payment Mode
+                  </label>
+                  <select
+                    className="input-field"
+                    value={newInvoice.paymentMode}
+                    onChange={(e) => handleFieldChange("paymentMode", e.target.value)}
+                    style={{ background: "var(--input-bg)" }}
+                    aria-label="Payment mode"
+                  >
+                    {WELLNESS_PAYMENT_MODES.map((mode) => (
+                      <option key={mode.value} value={mode.value}>
+                        {mode.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label
@@ -1043,6 +1833,8 @@ export default function Invoices() {
                   <option value="PAID">Paid</option>
                   <option value="OVERDUE">Overdue</option>
                 </select>
+              </div>
+
               </div>
 
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
@@ -1129,16 +1921,18 @@ export default function Invoices() {
           </div>
         ) : (
           <div className="invoice-table-scroll">
-            <TopScrollSync scrollWidth={`${INVOICE_TABLE_MIN_WIDTH}px`}>
+            <TopScrollSync
+              scrollWidth={`${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`}
+            >
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
               <table
-                className="stable-table"
+                className={isWellness ? "stable-table wellness-invoice-table" : "stable-table"}
                 style={{
                   width: "100%",
-                  minWidth: `${INVOICE_TABLE_MIN_WIDTH}px`,
+                  minWidth: `${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`,
                   borderCollapse: "collapse",
                   fontSize: "0.875rem",
                   tableLayout: "fixed",
@@ -1147,13 +1941,17 @@ export default function Invoices() {
                 aria-label="Invoices table"
               >
                 <colgroup>
-                  <col style={{ width: "110px" }} />
-                  <col style={{ width: "104px" }} />
-                  <col style={{ width: "96px" }} />
-                  <col style={{ width: "108px" }} />
-                  <col style={{ width: "108px" }} />
-                  <col style={{ width: "170px" }} />
-                  <col style={{ width: "244px" }} />
+                  <col style={{ width: isWellness ? "160px" : "110px" }} />
+                  {isWellness && <col style={{ width: "190px" }} />}
+                  {isWellness && <col style={{ width: "180px" }} />}
+                  {isWellness && <col style={{ width: "70px" }} />}
+                  <col style={{ width: isWellness ? "105px" : "104px" }} />
+                  {isWellness && <col style={{ width: "125px" }} />}
+                  <col style={{ width: isWellness ? "100px" : "96px" }} />
+                  <col style={{ width: isWellness ? "105px" : "108px" }} />
+                  <col style={{ width: isWellness ? "105px" : "108px" }} />
+                  {!isWellness && <col style={{ width: "170px" }} />}
+                  <col style={{ width: isWellness ? "360px" : "244px" }} />
                 </colgroup>
                 <thead className="invoice-table-header">
                   <tr
@@ -1174,6 +1972,46 @@ export default function Invoices() {
                     >
                       Invoice #
                     </th>
+                    {isWellness && (
+                      <>
+                        <th
+                          style={{
+                            padding: "0.65rem 0.4rem",
+                            color: "var(--text-secondary)",
+                            fontWeight: "600",
+                            fontSize: "0.75rem",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          Customer / Patient
+                        </th>
+                        <th
+                          style={{
+                            padding: "0.65rem 0.4rem",
+                            color: "var(--text-secondary)",
+                            fontWeight: "600",
+                            fontSize: "0.75rem",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          Products / Services
+                        </th>
+                        <th
+                          style={{
+                            padding: "0.65rem 0.4rem",
+                            color: "var(--text-secondary)",
+                            fontWeight: "600",
+                            fontSize: "0.75rem",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          Qty
+                        </th>
+                      </>
+                    )}
                     <th
                       style={{
                         padding: "0.65rem 0.4rem",
@@ -1186,6 +2024,20 @@ export default function Invoices() {
                     >
                       Amount
                     </th>
+                    {isWellness && (
+                      <th
+                        style={{
+                          padding: "0.65rem 0.4rem",
+                          color: "var(--text-secondary)",
+                          fontWeight: "600",
+                          fontSize: "0.75rem",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Payment Mode
+                      </th>
+                    )}
                     <th
                       style={{
                         padding: "0.65rem 0.4rem",
@@ -1222,7 +2074,7 @@ export default function Invoices() {
                     >
                       Issued
                     </th>
-                    <th
+                    {!isWellness && <th
                       style={{
                         padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
@@ -1233,7 +2085,7 @@ export default function Invoices() {
                       }}
                     >
                       Contact
-                    </th>
+                    </th>}
                     {/* #119 polish: sticky right-edge so action buttons are always
                         visible regardless of horizontal scroll position. */}
                     <th
@@ -1253,7 +2105,15 @@ export default function Invoices() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleInvoices.map((inv) => (
+                  {visibleInvoices.map((inv) => {
+                    const wellnessLineItems = getInvoiceLineItems(inv);
+                    const wellnessQuantity = wellnessLineItems.reduce(
+                      (total, item) => total + (Number(item.quantity) || 0),
+                      0,
+                    );
+                    const customerName = inv.customerName || inv.contact?.name || "Unknown";
+                    const customerContact = inv.customerPhone || inv.customerEmail || "";
+                    return (
                     <tr
                       key={inv.id}
                       style={{
@@ -1276,6 +2136,53 @@ export default function Invoices() {
                       >
                         {inv.invoiceNum}
                       </td>
+                      {isWellness && (
+                        <td
+                          style={{
+                            padding: "0.75rem 0.4rem",
+                            color: "var(--text-secondary)",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          title={[customerName, customerContact].filter(Boolean).join(" · ")}
+                        >
+                          <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {customerName}
+                          </div>
+                          {customerContact && (
+                            <div style={{ fontSize: "0.72rem", marginTop: "0.2rem", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {customerContact}
+                            </div>
+                          )}
+                        </td>
+                      )}
+                      {isWellness && (
+                        <td
+                          style={{
+                            padding: "0.75rem 0.4rem",
+                            color: "var(--text-secondary)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          title={wellnessLineItems.map((item) => item.name).filter(Boolean).join(", ") || "No line items"}
+                        >
+                          {wellnessLineItems.length > 0 ? (
+                            wellnessLineItems.map((item, index) => (
+                              <div key={`${item.type || "item"}-${item.itemId || index}`} style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                                {item.name || "Unnamed item"}
+                              </div>
+                            ))
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      )}
+                      {isWellness && (
+                        <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
+                          {wellnessQuantity || "—"}
+                        </td>
+                      )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
                         {/* #242: removed the hardcoded $ IndianRupee icon — formatCurrency()
                             already prefixes the right symbol (₹ for INR tenants, $ for USD,
@@ -1289,8 +2196,13 @@ export default function Invoices() {
                           {formatCurrency(inv.amount)}
                         </span>
                       </td>
+                      {isWellness && (
+                        <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
+                          {formatPaymentMode(inv.paymentMode)}
+                        </td>
+                      )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
-                        <StatusBadge status={inv.status} />
+                        <StatusBadge status={inv.status} borderless={isWellness} />
                       </td>
                       <td
                         style={{
@@ -1298,16 +2210,20 @@ export default function Invoices() {
                           color: "var(--text-secondary)",
                         }}
                       >
-                        <span
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "0.25rem",
-                          }}
-                        >
-                          <Clock size={13} />
-                          {formatDate(inv.dueDate)}
-                        </span>
+                        {isWellness ? (
+                          formatDate(inv.dueDate)
+                        ) : (
+                          <span
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.25rem",
+                            }}
+                          >
+                            <Clock size={13} />
+                            {formatDate(inv.dueDate)}
+                          </span>
+                        )}
                       </td>
                       <td
                         style={{
@@ -1318,7 +2234,7 @@ export default function Invoices() {
                         {/* #111: Invoice schema uses issuedDate, not createdAt. */}
                         {inv.issuedDate ? formatDate(inv.issuedDate) : "—"}
                       </td>
-                      <td
+                      {!isWellness && <td
                         style={{
                           padding: "0.75rem 0.4rem",
                           color: "var(--text-secondary)",
@@ -1326,9 +2242,9 @@ export default function Invoices() {
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                         }}
-                        title={inv.contact?.name || "Unknown"}
-                      >
-                        {inv.contact?.name || "Unknown"}
+                         title={customerName}
+                       >
+                         {customerName}
                         {isTravel &&
                           (inv.subBrand || inv.contact?.subBrand) && (
                             <span
@@ -1351,12 +2267,12 @@ export default function Invoices() {
                               )}
                             </span>
                           )}
-                      </td>
+                      </td>}
                       <td
                         className="invoice-actions-cell"
                         style={{
                           padding: "0.75rem 0.4rem",
-                          textAlign: "right",
+                          textAlign: isWellness ? "left" : "right",
                         }}
                       >
                         {/* Keep the action controls on one line; horizontal
@@ -1364,7 +2280,7 @@ export default function Invoices() {
                         <div
                           style={{
                             display: "flex",
-                            justifyContent: "flex-end",
+                            justifyContent: isWellness ? "flex-start" : "flex-end",
                             gap: "0.35rem",
                             flexWrap: "wrap",
                             minWidth: 0,
@@ -1501,7 +2417,8 @@ export default function Invoices() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </TopScrollSync>
@@ -1811,6 +2728,40 @@ export default function Invoices() {
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .invoices-grid { display: grid; grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
         .invoices-grid > .card { align-self: start; }
+        .invoice-create-form-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: var(--border-color) transparent;
+        }
+        .invoice-create-form-scroll::-webkit-scrollbar {
+          width: 8px;
+        }
+        .invoice-create-form-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .invoice-create-form-scroll::-webkit-scrollbar-thumb {
+          background: var(--border-color);
+          border-radius: 999px;
+        }
+        .invoice-line-items-list {
+          min-width: 0;
+          overflow-x: auto;
+          padding-bottom: 0.15rem;
+        }
+        .invoice-line-item-row {
+          display: grid;
+          grid-template-columns: minmax(112px, 0.9fr) minmax(220px, 1.8fr) minmax(72px, 0.55fr) minmax(150px, 1fr) 40px;
+          gap: 0.75rem;
+          align-items: start;
+          min-width: 650px;
+        }
+        .invoice-line-item-row > * {
+          min-width: 0;
+        }
+        .invoice-line-item-row .input-field {
+          width: 100%;
+          min-width: 0;
+          box-sizing: border-box;
+        }
         .invoice-table-scroll .top-scroll-sync__bottom {
           max-height: none;
           min-height: 0;
@@ -1824,6 +2775,34 @@ export default function Invoices() {
           background-color: var(--bg-color, #15171c) !important;
           background-clip: border-box;
           box-shadow: inset 0 -1px 0 var(--border-color);
+        }
+        .wellness-invoice-table th,
+        .wellness-invoice-table td {
+          vertical-align: middle;
+          padding: 0.75rem !important;
+          line-height: 1.35;
+          box-sizing: border-box;
+          text-align: left;
+        }
+        .wellness-invoice-table th {
+          white-space: nowrap;
+        }
+        .wellness-invoice-table td:nth-child(1) {
+          overflow-wrap: anywhere;
+        }
+        .wellness-invoice-table td:nth-child(2) > div,
+        .wellness-invoice-table td:nth-child(3) > div {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .wellness-invoice-table .invoice-actions-cell > div {
+          display: flex;
+          align-items: center;
+          justify-content: flex-start;
+          flex-wrap: wrap;
+          column-gap: 0.35rem;
+          row-gap: 0.4rem;
         }
         .invoice-actions-cell {
           white-space: nowrap;

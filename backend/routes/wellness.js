@@ -34,7 +34,8 @@ const {
 const {
   renderPrescriptionPdf,
   renderConsentPdf,
-  renderBrandedInvoicePdf,
+  renderProfessionalWellnessInvoicePdf,
+  resolveProfessionalInvoiceLogo,
   renderPatientSummaryPdf,
   // -glyph fix for the route-level landscape report PDF below.
   applyRupeeCapableFonts,
@@ -12930,13 +12931,69 @@ const __logoCache = new Map();
  * the hit and the "this path doesn't exist" miss so repeated calls
  * are free.
  */
-async function loadTenantBrandAssets(tenantId) {
+async function loadTenantBrandAssets(tenantId, options = {}) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true, name: true, logoUrl: true },
+    select: {
+      id: true,
+      name: true,
+      logoUrl: true,
+      brandColor: true,
+      themeColor: true,
+      defaultCurrency: true,
+      locale: true,
+      ownerEmail: true,
+    },
   });
-  const logoBuffer = await resolveLogoBuffer(tenant?.logoUrl);
+  const logoBuffer = options.invoice
+    ? await resolveProfessionalInvoiceLogo(tenant?.logoUrl)
+    : await resolveLogoBuffer(tenant?.logoUrl);
   return { tenant, logoBuffer };
+}
+
+async function loadTenantInvoiceSettings(tenantId) {
+  try {
+    return await prisma.tenantSetting.findMany({
+      where: {
+        tenantId,
+        key: {
+          in: [
+            "invoice.brandName",
+            "invoice.brandColor",
+            "invoice.themeColor",
+            "invoice.tagline",
+            "invoice.companyAddress",
+            "invoice.address",
+            "invoice.companyPhone",
+            "invoice.companyEmail",
+            "invoice.companyWebsite",
+            "invoice.notes",
+            "branding.name",
+            "branding.color",
+            "branding.primaryColor",
+            "branding.themeColor",
+            "branding.tagline",
+            "branding.address",
+            "branding.phone",
+            "branding.email",
+            "branding.website",
+            "branding.invoiceNotes",
+            "company.name",
+            "company.address",
+            "company.phone",
+            "company.email",
+            "company.website",
+            "businessAddress",
+          ],
+        },
+      },
+      select: { key: true, value: true },
+    });
+  } catch (_e) {
+    // Tenant and clinic values remain valid fallbacks when optional settings
+    // have not been configured on this deployment.
+    return [];
+  }
 }
 
 function loadCachedLogo(candidatePaths) {
@@ -14863,7 +14920,20 @@ router.get("/invoices/:id/branded-pdf", async (req, res) => {
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
     const clinic = await primaryClinic(req.user.tenantId);
-    const buf = await renderBrandedInvoicePdf(invoice, invoice.contact, clinic);
+    const { tenant, logoBuffer } = await loadTenantBrandAssets(req.user.tenantId, { invoice: true });
+    const settings = await loadTenantInvoiceSettings(req.user.tenantId);
+    const buf = await renderProfessionalWellnessInvoicePdf(
+      invoice,
+      invoice.contact,
+      clinic,
+      {
+        tenant,
+        logoBuffer,
+        settings,
+        currency: tenant?.defaultCurrency || "INR",
+        locale: tenant?.locale || "en-IN",
+      },
+    );
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",

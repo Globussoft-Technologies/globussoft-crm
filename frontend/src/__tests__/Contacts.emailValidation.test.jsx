@@ -46,7 +46,9 @@ import Contacts from '../pages/Contacts';
 beforeEach(() => {
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
-    if (url === '/api/contacts') return Promise.resolve([]);
+    if (typeof url === 'string' && url.startsWith('/api/contacts?')) {
+      return Promise.resolve({ data: [], total: 0, page: 1, limit: 10, offset: 0, totalPages: 1 });
+    }
     if (url === '/api/staff') return Promise.resolve([]);
     return Promise.resolve(null);
   });

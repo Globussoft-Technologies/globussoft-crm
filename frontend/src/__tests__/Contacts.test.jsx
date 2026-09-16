@@ -74,8 +74,46 @@ const SEEDED_STAFF = [
   { id: 8, name: 'Vikram Sales', email: 'vikram@globussoft.com' },
 ];
 
+const isContactsListRequest = (url) =>
+  typeof url === 'string' && url.startsWith('/api/contacts?');
+const contactsEnvelope = (rows) => ({
+  data: rows,
+  total: rows.length,
+  page: 1,
+  limit: 10,
+  offset: 0,
+  totalPages: 1,
+});
+
 function defaultFetchImpl(url) {
-  if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+  if (isContactsListRequest(url)) {
+    const params = new URL(url, 'http://localhost').searchParams;
+    let rows = [...SEEDED_CONTACTS];
+    const q = (params.get('q') || '').toLowerCase();
+    if (q) {
+      rows = rows.filter((contact) =>
+        [contact.name, contact.email, contact.company, contact.title]
+          .some((value) => String(value || '').toLowerCase().includes(q)),
+      );
+    }
+    if (params.get('status')) {
+      rows = rows.filter(contact => contact.status === params.get('status'));
+    }
+    if (params.has('scoreMin') || params.has('scoreMax')) {
+      const min = Number(params.get('scoreMin') || 0);
+      const max = Number(params.get('scoreMax') || 100);
+      rows = rows.filter(contact => contact.aiScore >= min && contact.aiScore <= max);
+    }
+    const sortBy = params.get('sortBy');
+    const sortDirection = params.get('sortDirection') === 'desc' ? -1 : 1;
+    if (sortBy) {
+      rows.sort((a, b) => {
+        const key = sortBy === 'assignedTo' ? 'assignedToId' : sortBy;
+        return String(a[key] ?? '').localeCompare(String(b[key] ?? ''), undefined, { numeric: true }) * sortDirection;
+      });
+    }
+    return Promise.resolve(contactsEnvelope(rows));
+  }
   if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
   if (url === '/api/contacts/duplicates/find') return Promise.resolve([]);
   return Promise.resolve(null);
@@ -120,7 +158,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     // Defer the /api/contacts response so we can assert the loading row.
     let resolveContacts;
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return new Promise((res) => { resolveContacts = () => res(SEEDED_CONTACTS); });
+      if (isContactsListRequest(url)) return new Promise((res) => { resolveContacts = () => res(contactsEnvelope(SEEDED_CONTACTS)); });
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       return Promise.resolve(null);
     });
@@ -183,6 +221,18 @@ describe('Contacts.jsx — top-level page contract', () => {
     expect(screen.getByLabelText('Page number')).toHaveValue(1);
   });
 
+  it('loads contacts with one paginated request and does not issue the legacy duplicate probe', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    const listCalls = fetchApiMock.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.startsWith('/api/contacts'),
+    );
+    expect(listCalls).toHaveLength(1);
+    expect(listCalls[0][0]).toContain('page=1');
+    expect(listCalls[0][0]).not.toBe('/api/contacts');
+  });
+
   it('keeps the select-all checkbox aligned and sized consistently with row checkboxes', async () => {
     renderContacts();
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
@@ -230,11 +280,61 @@ describe('Contacts.jsx — top-level page contract', () => {
       const firstVisibleName = document.querySelector('.contacts-table-frozen-pane tbody tr .hover-underline');
       expect(firstVisibleName).toHaveTextContent('Rohan Mehta');
     });
+    expect(fetchApiMock.mock.calls.some(([url]) => {
+      if (!isContactsListRequest(url)) return false;
+      const params = new URL(url, 'http://localhost').searchParams;
+      return params.get('sortBy') === 'aiScore' && params.get('sortDirection') === 'asc';
+    })).toBe(true);
+  });
+
+  it('sends the selected score bucket to the server before pagination', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('Filter by lead score'), { target: { value: '51-75' } });
+
+    await waitFor(() => expect(screen.getByText('Priya Iyer')).toBeInTheDocument());
+    expect(screen.queryByText('Aarav Sharma')).not.toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => {
+      if (!isContactsListRequest(url)) return false;
+      const params = new URL(url, 'http://localhost').searchParams;
+      return params.get('scoreMin') === '51' && params.get('scoreMax') === '75';
+    })).toBe(true);
+  });
+
+  it('sends a selected saved view to the server and renders its global total', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contact-views') {
+        return Promise.resolve([{ id: 27, name: 'Priority', memberCount: 1, createdByName: 'Admin', canModify: false }]);
+      }
+      if (isContactsListRequest(url)) {
+        const params = new URL(url, 'http://localhost').searchParams;
+        return Promise.resolve(
+          params.get('viewId') === '27'
+            ? contactsEnvelope([SEEDED_CONTACTS[1]])
+            : contactsEnvelope(SEEDED_CONTACTS),
+        );
+      }
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      return Promise.resolve(null);
+    });
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /All Contacts/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Priority/i }));
+
+    await waitFor(() => expect(screen.getByText('Priya Iyer')).toBeInTheDocument());
+    expect(screen.queryByText('Aarav Sharma')).not.toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      isContactsListRequest(url) && new URL(url, 'http://localhost').searchParams.get('viewId') === '27',
+    )).toBe(true);
+    expect(screen.getByTestId('contacts-pagination')).toHaveTextContent(/Showing 1-1 of 1/i);
   });
 
   it('renders the empty-state copy when /api/contacts returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve([]);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope([]));
       if (url === '/api/staff') return Promise.resolve([]);
       return Promise.resolve(null);
     });
@@ -245,7 +345,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('renders a zero-state message and absorbs the error when /api/contacts rejects', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.reject(new Error('500 server'));
+      if (isContactsListRequest(url)) return Promise.reject(new Error('500 server'));
       if (url === '/api/staff') return Promise.resolve([]);
       return Promise.resolve(null);
     });
@@ -262,7 +362,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     });
   });
 
-  it('#461: typing in the search box filters rows client-side (name / email / company match)', async () => {
+  it('#461: typing in the search box requests a server-filtered page', async () => {
     renderContacts();
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
 
@@ -272,7 +372,8 @@ describe('Contacts.jsx — top-level page contract', () => {
       expect(screen.queryByText('Rohan Mehta')).not.toBeInTheDocument();
       expect(screen.getByText('Priya Iyer')).toBeInTheDocument();
     });
-    expect(screen.getByText(/Showing 1 of 3/i)).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => isContactsListRequest(url) && new URL(url, 'http://localhost').searchParams.get('q') === 'priya')).toBe(true);
+    expect(screen.getByText(/Showing 1 of 1/i)).toBeInTheDocument();
   });
 
   it('#461: status filter narrows to a single bucket', async () => {
@@ -356,7 +457,7 @@ describe('Contacts.jsx — top-level page contract', () => {
   it('AI Re-score button POSTs /api/ai_scoring/trigger and re-fetches /api/contacts', async () => {
     renderContacts();
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
-    const initialContactsFetches = fetchApiMock.mock.calls.filter(([u]) => u === '/api/contacts').length;
+    const initialContactsFetches = fetchApiMock.mock.calls.filter(([u]) => isContactsListRequest(u)).length;
 
     fireEvent.click(screen.getByRole('button', { name: /AI Re-score/i }));
 
@@ -366,7 +467,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     });
     // After the trigger resolves, the SUT re-fetches /api/contacts.
     await waitFor(() => {
-      const after = fetchApiMock.mock.calls.filter(([u]) => u === '/api/contacts').length;
+      const after = fetchApiMock.mock.calls.filter(([u]) => isContactsListRequest(u)).length;
       expect(after).toBeGreaterThan(initialContactsFetches);
     });
   });
@@ -410,7 +511,7 @@ describe('Contacts.jsx — top-level page contract', () => {
       { id: 8, name: 'Sahil Agent', email: 'sahil@travel.test', role: 'USER' },
     ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(travelContacts);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(travelContacts));
       if (url === '/api/staff') return Promise.resolve(travelStaff);
       return Promise.resolve(null);
     });
@@ -517,7 +618,7 @@ describe('Contacts.jsx — top-level page contract', () => {
       c.id === 2 ? { ...c, assignedTo: { name: 'Sneha Manager', email: 'sneha@globussoft.com' } } : c,
     );
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(contactsWithAssignee);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(contactsWithAssignee));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       return Promise.resolve(null);
     });
@@ -738,8 +839,8 @@ describe('Contacts.jsx — top-level page contract', () => {
     const statusSelect = screen.getByDisplayValue('All Statuses');
     fireEvent.change(statusSelect, { target: { value: 'Lead' } });
     await waitFor(() => {
-      // 2 Leads (Aarav + Rohan) of 3 total.
-      expect(screen.getByText(/Showing 2 of 3/i)).toBeInTheDocument();
+      // Both the rows and total describe the server-filtered result set.
+      expect(screen.getByText(/Showing 2 of 2/i)).toBeInTheDocument();
     });
   });
 
@@ -882,7 +983,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('Find Duplicates with zero groups renders the "database is clean" empty state', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') return Promise.resolve([]);
       return Promise.resolve(null);
@@ -919,7 +1020,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('Find Duplicates renders Primary + Dup rows + Match reason for each group', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
       return Promise.resolve(null);
@@ -944,7 +1045,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('#592: Merge confirm + POST /api/contacts/merge fires with {primaryId, secondaryIds}', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
       return Promise.resolve(null);
@@ -973,7 +1074,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('#592: Merge cancel via notify.confirm=false suppresses the POST', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
       return Promise.resolve(null);
@@ -998,7 +1099,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('#592: Merge failure surfaces notify.error("Merge failed")', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
       return Promise.resolve(null);
@@ -1019,7 +1120,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('#592: Dismiss confirm + POST /api/contacts/duplicates/dismiss fires with primaryId + secondaryIds', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
       return Promise.resolve(null);
@@ -1047,7 +1148,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('#592: Dismiss failure surfaces notify.error("Dismiss failed")', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') return Promise.resolve([DUP_GROUP]);
       return Promise.resolve(null);
@@ -1068,7 +1169,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('Find Duplicates failure shows a clear retry message without backend details', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
       if (url === '/api/contacts/duplicates/find') {
         return Promise.reject(new Error('PrismaClientValidationError: missing database field'));
@@ -1132,7 +1233,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
   it('absorbs a /api/staff fetch failure without breaking the page render', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts') return Promise.resolve(SEEDED_CONTACTS);
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(SEEDED_CONTACTS));
       if (url === '/api/staff') return Promise.reject(new Error('staff 500'));
       return Promise.resolve(null);
     });

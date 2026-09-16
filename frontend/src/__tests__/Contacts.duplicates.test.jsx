@@ -59,7 +59,9 @@ beforeEach(() => {
   errorMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/contacts/duplicates/find') return Promise.resolve(SEEDED_GROUPS);
-    if (url === '/api/contacts') return Promise.resolve([]);
+    if (typeof url === 'string' && url.startsWith('/api/contacts?')) {
+      return Promise.resolve({ data: [], total: 0, page: 1, limit: 10, offset: 0, totalPages: 1 });
+    }
     if (url === '/api/staff') return Promise.resolve([]);
     if (url === '/api/contacts/merge') return Promise.resolve({ success: true, merged: 1, primaryId: 1 });
     if (url === '/api/contacts/duplicates/dismiss') return Promise.resolve({ success: true, groupKey: 'abcdef0123456789' });

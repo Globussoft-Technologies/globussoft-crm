@@ -196,20 +196,10 @@ const Contacts = () => {
   const [bulkAgent, setBulkAgent] = useState('');
   const [contactsBulkActionsOpen, setContactsBulkActionsOpen] = useState(false);
   // Generic-vertical-only "Saved Views" — a named fixed list of contact IDs
-  // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts"
-  // (no filtering). activeViewMemberIds is the fetched membership of
-  // whichever view is currently selected.
+  // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts".
+  // Membership filtering is applied by the contacts API so it covers the
+  // entire view before limit/offset are applied.
   const [activeViewId, setActiveViewId] = useState(null);
-  const [activeViewMemberIds, setActiveViewMemberIds] = useState(null);
-  useEffect(() => {
-    if (isWellness || isTravel || activeViewId == null) {
-      setActiveViewMemberIds(null);
-      return;
-    }
-    fetchApi(`/api/contact-views/${activeViewId}/members`)
-      .then(d => setActiveViewMemberIds(new Set(Array.isArray(d.contactIds) ? d.contactIds : [])))
-      .catch(() => setActiveViewMemberIds(new Set()));
-  }, [activeViewId, isWellness, isTravel]);
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // Generic-vertical-only "Customize table" column-visibility picker
@@ -287,7 +277,10 @@ const Contacts = () => {
   // narrowing below stays instant on the raw `searchTerm`.
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearchTerm(searchTerm.trim()), 300);
+    const t = setTimeout(() => {
+      setPage(1);
+      setDebouncedSearchTerm(searchTerm.trim());
+    }, 300);
     return () => clearTimeout(t);
   }, [searchTerm]);
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
@@ -447,6 +440,7 @@ const Contacts = () => {
     window.addEventListener('mouseup', onUp);
   };
   const toggleContactSort = (key) => {
+    setPage(1);
     setSortConfig((prev) => {
       if (prev.key !== key) return { key, direction: 'asc' };
       if (prev.direction === 'asc') return { key, direction: 'desc' };
@@ -454,38 +448,12 @@ const Contacts = () => {
       return { key, direction: 'asc' };
     });
   };
-  const getContactSortValue = useCallback((contact, key) => {
-    if (key === 'name') return contact.name || '';
-    if (key === 'email') return contact.email || '';
-    if (key === 'phone') return contact.phone || '';
-    if (key === 'company') return contact.company || '';
-    if (key === 'aiScore') return Number.isFinite(Number(contact.aiScore)) ? Number(contact.aiScore) : null;
-    if (key === 'status') return contact.status || '';
-    if (key === 'assignedTo') return contact.assignedTo?.name || contact.assignedTo?.email || '';
-    if (key === 'createdAt') return contact.createdAt ? new Date(contact.createdAt).getTime() : null;
-    if (key.startsWith('cf_')) {
-      const fieldKey = key.slice(3);
-      const raw = contact.customFields?.[fieldKey];
-      if (Array.isArray(raw)) return raw.join(', ');
-      return raw ?? '';
-    }
-    return '';
-  }, []);
-
-  // Null until the server proves it speaks the paginated envelope — while
-  // unknown, every load also probes the legacy bare path in parallel so old
-  // servers (and exact-URL unit mocks) keep working. The probe fires
-  // synchronously inside the effect, which deferred-mock loading tests rely
-  // on. Once an envelope lands the probe stops (single request per load).
-  const serverSupportsPage = useRef(null);
   const fetchContacts = useCallback(() => {
     const myId = ++contactsRequestId.current;
     const isCurrent = () => myId === contactsRequestId.current;
     const offset = (page - 1) * pageSize;
-    // Server-side narrowing mirrors the client-side dropdowns so search /
-    // status / assignee work across ALL pages, not just the loaded one.
-    // Score buckets + saved views + sorting stay client-side (no server
-    // equivalent) and narrow the loaded page further below.
+    // Every narrowing/sort operation happens before pagination on the server,
+    // so totals and page boundaries describe the rows the user actually sees.
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(offset),
@@ -495,6 +463,18 @@ const Contacts = () => {
     if (statusFilter !== 'All') params.set('status', statusFilter);
     if (assignedToFilter === 'unassigned') params.set('unassigned', 'true');
     else if (assignedToFilter) params.set('assignedToId', assignedToFilter);
+    const scoreBucket = CONTACTS_SCORE_BUCKETS.find(bucket => bucket.value === scoreFilter);
+    if (scoreBucket) {
+      params.set('scoreMin', String(scoreBucket.min));
+      params.set('scoreMax', String(scoreBucket.max));
+    }
+    if (!isWellness && !isTravel && activeViewId != null) {
+      params.set('viewId', String(activeViewId));
+    }
+    if (sortConfig.key && sortConfig.direction) {
+      params.set('sortBy', sortConfig.key);
+      params.set('sortDirection', sortConfig.direction);
+    }
     if (advancedFilters.length > 0) params.set('filters', JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
     setLoading(true);
     const applyEnvelope = (env) => {
@@ -504,31 +484,16 @@ const Contacts = () => {
       setTotal(serverTotal);
       setTotalPages(typeof env.totalPages === 'number' && env.totalPages >= 1 ? env.totalPages : Math.max(1, Math.ceil(serverTotal / pageSize)));
     };
-    const applyLegacyList = (rows) => {
-      const list = Array.isArray(rows) ? rows : [];
-      setContacts(list);
-      setTotal(list.length);
-      setTotalPages(1);
-    };
-    const pagedReq = fetchApi(`/api/contacts?${params.toString()}`).catch(() => null);
-    const needProbe = serverSupportsPage.current !== true;
-    const legacyReq = needProbe ? fetchApi('/api/contacts').catch(() => null) : Promise.resolve(undefined);
-    Promise.all([pagedReq, legacyReq]).then(([paged, legacy]) => {
+    fetchApi(`/api/contacts?${params.toString()}`).then((paged) => {
       if (!isCurrent()) return;
       if (paged && Array.isArray(paged.data)) {
-        serverSupportsPage.current = true;
         applyEnvelope(paged);
-      } else if (Array.isArray(paged)) {
-        // Old server: honored limit/offset, answered the legacy array.
-        applyLegacyList(paged);
-      } else if (legacy && Array.isArray(legacy.data)) {
-        applyEnvelope(legacy);
       } else {
-        applyLegacyList(legacy);
+        throw new Error('Invalid contacts pagination response');
       }
       setLoading(false);
     }).catch(() => { if (isCurrent()) { setContacts([]); setTotal(0); setTotalPages(1); setLoading(false); } });
-  }, [advancedFilters, assignedToFilter, debouncedSearchTerm, page, pageSize, statusFilter]);
+  }, [activeViewId, advancedFilters, assignedToFilter, debouncedSearchTerm, isTravel, isWellness, page, pageSize, scoreFilter, sortConfig.direction, sortConfig.key, statusFilter]);
 
   const handleRescore = async () => {
     setRescoring(true);
@@ -550,12 +515,6 @@ const Contacts = () => {
   useEffect(() => {
     fetchApi('/api/staff').then(data => setStaff(Array.isArray(data) ? data : [])).catch(() => {});
   }, []);
-
-  // Any filter change restarts from page 1 (the refetch follows via the
-  // fetchContacts identity change above).
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedSearchTerm, statusFilter, assignedToFilter, scoreFilter, advancedFilters]);
 
   // If the total shrinks under the current page (records deleted elsewhere),
   // step back to the last valid page (mirrors Clients.jsx).
@@ -783,54 +742,16 @@ const Contacts = () => {
     fetchContacts();
   };
 
-  // #461: derive the visible rows from `contacts` + the filter inputs, then
-  // optionally apply the current header sort. Search matches name / email /
-  // company / title (case-insensitive). The dropdown supports the canonical
-  // statuses; 'All' disables status filtering. A selected Saved View
-  // additionally restricts to its fixed membership list first so
-  // search/status still narrow within the view.
-  const visibleContacts = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    return contacts.filter((c) => {
-      if (activeViewMemberIds && !activeViewMemberIds.has(c.id)) return false;
-      if (statusFilter !== 'All' && c.status !== statusFilter) return false;
-      if (assignedToFilter === 'unassigned' && c.assignedToId) return false;
-      if (assignedToFilter && assignedToFilter !== 'unassigned' && String(c.assignedToId || '') !== assignedToFilter) return false;
-      if (scoreFilter) {
-        const bucket = CONTACTS_SCORE_BUCKETS.find(b => b.value === scoreFilter);
-        if (bucket && (c.aiScore < bucket.min || c.aiScore > bucket.max)) return false;
-      }
-      if (!term) return true;
-      return (
-        (c.name || '').toLowerCase().includes(term) ||
-        (c.email || '').toLowerCase().includes(term) ||
-        (c.company || '').toLowerCase().includes(term) ||
-        (c.title || '').toLowerCase().includes(term)
-      );
-    });
-  }, [activeViewMemberIds, assignedToFilter, contacts, scoreFilter, searchTerm, statusFilter]);
-
-  const sortedContacts = useMemo(() => {
-    if (!sortConfig.key || !sortConfig.direction) return visibleContacts;
-    const direction = sortConfig.direction === 'desc' ? -1 : 1;
-    const collator = new Intl.Collator(undefined, {
-      numeric: true,
-      sensitivity: 'base',
-    });
-    return [...visibleContacts].sort((a, b) => {
-      const aValue = getContactSortValue(a, sortConfig.key);
-      const bValue = getContactSortValue(b, sortConfig.key);
-      const aNull = aValue === null || aValue === undefined || aValue === '';
-      const bNull = bValue === null || bValue === undefined || bValue === '';
-      if (aNull && bNull) return 0;
-      if (aNull) return 1;
-      if (bNull) return -1;
-      if (typeof aValue === 'number' && typeof bValue === 'number') {
-        return (aValue - bValue) * direction;
-      }
-      return collator.compare(String(aValue), String(bValue)) * direction;
-    });
-  }, [getContactSortValue, sortConfig.direction, sortConfig.key, visibleContacts]);
+  const visibleContacts = contacts;
+  const sortedContacts = contacts;
+  const hasActiveContactFilters = Boolean(
+    searchTerm ||
+    statusFilter !== 'All' ||
+    assignedToFilter ||
+    scoreFilter ||
+    activeViewId != null ||
+    advancedFilters.length > 0,
+  );
 
   const visibleCustomFieldDefs = useMemo(
     () =>
@@ -920,7 +841,9 @@ const Contacts = () => {
       ...visibleCustomFieldDefs.map((field) => ({
         key: `cf_${field.fieldKey}`,
         label: field.label,
-        sortable: true,
+        // Values live in a typed child table. Do not imply a current-page
+        // sort until a database-backed cross-page ordering is available.
+        sortable: false,
         resizable: true,
         field,
         customField: true,
@@ -1506,7 +1429,10 @@ const Contacts = () => {
           {!isWellness && !isTravel && (
             <SavedViewsBar
               activeViewId={activeViewId}
-              onSelectView={setActiveViewId}
+              onSelectView={(viewId) => {
+                setPage(1);
+                setActiveViewId(viewId);
+              }}
               selectedIds={selectedContacts}
               allContacts={contacts}
             />
@@ -1710,7 +1636,10 @@ const Contacts = () => {
           <select
             className="input-field"
             value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
+            onChange={e => {
+              setPage(1);
+              setStatusFilter(e.target.value);
+            }}
             style={{ width: '150px' }}
           >
             <option value="All">All Statuses</option>
@@ -1725,7 +1654,10 @@ const Contacts = () => {
               instead of the browser rendering every option at once. */}
           <ScrollableSelect
             value={assignedToFilter}
-            onChange={setAssignedToFilter}
+            onChange={(value) => {
+              setPage(1);
+              setAssignedToFilter(value);
+            }}
             width={170}
             ariaLabel="Filter by assigned to"
             options={[
@@ -1737,7 +1669,10 @@ const Contacts = () => {
           <select
             className="input-field"
             value={scoreFilter}
-            onChange={e => setScoreFilter(e.target.value)}
+            onChange={e => {
+              setPage(1);
+              setScoreFilter(e.target.value);
+            }}
             style={{ width: '150px' }}
             aria-label="Filter by lead score"
           >
@@ -1750,15 +1685,25 @@ const Contacts = () => {
             fieldsUrl="/api/contacts/filter-fields"
             valuesUrl={(field) => `/api/contacts/filter-values/${field}`}
             filters={advancedFilters}
-            onChange={setAdvancedFilters}
+            onChange={(filters) => {
+              setPage(1);
+              setAdvancedFilters(filters);
+            }}
           />
-          {(searchTerm || statusFilter !== 'All' || assignedToFilter || scoreFilter || activeViewId != null || advancedFilters.length > 0) && (
+          {hasActiveContactFilters && (
             <>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Showing {visibleContacts.length} of {(total || contacts.length).toLocaleString()}
               </span>
               <button
-                onClick={() => { setSearchTerm(''); setStatusFilter('All'); setAssignedToFilter(''); setScoreFilter(''); setAdvancedFilters([]); }}
+                onClick={() => {
+                  setPage(1);
+                  setSearchTerm('');
+                  setStatusFilter('All');
+                  setAssignedToFilter('');
+                  setScoreFilter('');
+                  setAdvancedFilters([]);
+                }}
                 style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.8rem' }}
               >
                 Clear filters
@@ -1935,7 +1880,7 @@ const Contacts = () => {
                           color: 'var(--text-secondary)',
                         }}
                       >
-                        {contacts.length === 0
+                        {!hasActiveContactFilters
                           ? 'No contacts yet. Click "Add Contact" or import a CSV.'
                           : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
                       </td>

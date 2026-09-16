@@ -56,6 +56,21 @@ const CONTACT_TAG_MAX_LENGTH = 80;
 // eslint-disable-next-line no-control-regex
 const CONTACT_TAG_CONTROL_RE = /[\x00-\x1F\x7F]/;
 
+// Contacts pagination must be ordered in the database. Sorting a single page
+// in the browser produces a different order on every page and can hide the
+// actual first/last result. Keep this allowlist explicit so a query parameter
+// can never become an arbitrary Prisma property.
+const CONTACT_LIST_SORTS = Object.freeze({
+  name: (direction) => ({ name: direction }),
+  email: (direction) => ({ email: direction }),
+  phone: (direction) => ({ phone: direction }),
+  company: (direction) => ({ company: direction }),
+  aiScore: (direction) => ({ aiScore: direction }),
+  status: (direction) => ({ status: direction }),
+  assignedTo: (direction) => ({ assignedTo: { name: direction } }),
+  createdAt: (direction) => ({ createdAt: direction }),
+});
+
 // Keep the deletedAt filter for backwards compatibility with old tombstone
 // rows. New deletes are hard deletes, so this only hides rows created before
 // the hard-delete policy was introduced.
@@ -1208,7 +1223,48 @@ router.get("/", async (req, res) => {
         { name: { contains: q } },
         { email: { contains: q } },
         { company: { contains: q } },
+        { title: { contains: q } },
       ];
+    }
+    if (req.query.scoreMin !== undefined || req.query.scoreMax !== undefined) {
+      const minText = String(req.query.scoreMin ?? "0");
+      const maxText = String(req.query.scoreMax ?? "100");
+      if (!/^\d{1,3}$/.test(minText) || !/^\d{1,3}$/.test(maxText)) {
+        return res.status(400).json({
+          error: "scoreMin and scoreMax must be integers between 0 and 100",
+          code: "INVALID_SCORE_RANGE",
+        });
+      }
+      const min = Number(minText);
+      const max = Number(maxText);
+      if (min < 0 || max > 100 || min > max) {
+        return res.status(400).json({
+          error: "scoreMin and scoreMax must define a range between 0 and 100",
+          code: "INVALID_SCORE_RANGE",
+        });
+      }
+      where.aiScore = { gte: min, lte: max };
+    }
+    if (req.query.viewId !== undefined) {
+      const viewIdText = String(req.query.viewId);
+      if (!/^\d+$/.test(viewIdText) || Number(viewIdText) < 1) {
+        return res.status(400).json({
+          error: "viewId must be a positive integer",
+          code: "INVALID_VIEW_ID",
+        });
+      }
+      const viewId = Number(viewIdText);
+      const view = await prisma.savedContactView.findFirst({
+        where: { id: viewId, tenantId: req.user.tenantId },
+        select: { id: true },
+      });
+      if (!view) {
+        return res.status(404).json({
+          error: "Saved view not found",
+          code: "VIEW_NOT_FOUND",
+        });
+      }
+      where.savedViewMemberships = { some: { viewId } };
     }
     // Arc 2 #904 slice 8 — ?source=<prefix> server-side filter. Replaces the
     // STUB client-side `source.startsWith('inbound:')` filter in
@@ -1380,11 +1436,32 @@ router.get("/", async (req, res) => {
     // shape (no-op for fields not present, full-effect for fields it
     // recognises) so the #464 field-permission layer keeps composing.
     const isSummary = req.query.fields === "summary";
+    const sortBy = req.query.sortBy === undefined ? null : String(req.query.sortBy);
+    const sortDirection = req.query.sortDirection === undefined
+      ? "asc"
+      : String(req.query.sortDirection).toLowerCase();
+    if (sortBy && !CONTACT_LIST_SORTS[sortBy]) {
+      return res.status(400).json({
+        error: "Unsupported contacts sort column",
+        code: "INVALID_SORT_FIELD",
+      });
+    }
+    if (sortBy && !["asc", "desc"].includes(sortDirection)) {
+      return res.status(400).json({
+        error: "sortDirection must be asc or desc",
+        code: "INVALID_SORT_DIRECTION",
+      });
+    }
+    // `id` is a unique tie-breaker: equal names/scores/timestamps cannot
+    // repeat or disappear while traversing offset-based pages.
+    const orderBy = sortBy
+      ? [CONTACT_LIST_SORTS[sortBy](sortDirection), { id: sortDirection }]
+      : [{ id: "desc" }];
     const findManyArgs = {
       where,
       take: limit,
       skip: offset,
-      orderBy: { id: "desc" },
+      orderBy,
     };
     if (isSummary) {
       findManyArgs.select = {

@@ -517,8 +517,8 @@ test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
       tripCode: code,
       schoolContactId,
       destination: `${RUN_TAG} Preserve Tour`,
-      departDate: "2026-09-15",
-      returnDate: "2026-09-22",
+      departDate: FUTURE_DEPART,
+      returnDate: FUTURE_RETURN,
       status: "cancelled",
       driveFolderId: explicitId,
     });

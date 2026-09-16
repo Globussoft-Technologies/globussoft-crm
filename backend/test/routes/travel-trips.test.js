@@ -355,13 +355,18 @@ describe('GET /api/travel/trips', () => {
 // -----------------------------------------------------------------------------
 
 describe('POST /api/travel/trips', () => {
-  const validBody = () => ({
-    tripCode: 'bali2026',
-    schoolContactId: 42,
-    destination: 'Bali, Indonesia',
-    departDate: '2026-09-15',
-    returnDate: '2026-09-22',
-  });
+  const validBody = () => {
+    const now = new Date();
+    const departDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30);
+    const returnDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 37);
+    return {
+      tripCode: 'bali2026',
+      schoolContactId: 42,
+      destination: 'Bali, Indonesia',
+      departDate: toLocalIsoDay(departDate),
+      returnDate: toLocalIsoDay(returnDate),
+    };
+  };
 
   test('happy path returns 201 + drive folder auto-created when status defaults to confirmed', async () => {
     driveCreateSpy.mockResolvedValue({
@@ -426,10 +431,11 @@ describe('POST /api/travel/trips', () => {
   });
 
   test('returnDate before departDate returns 400 INVERTED_DATES', async () => {
+    const body = validBody();
     const res = await request(makeApp())
       .post('/api/travel/trips')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ ...validBody(), departDate: '2026-09-22', returnDate: '2026-09-15' });
+      .send({ ...body, departDate: body.returnDate, returnDate: body.departDate });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVERTED_DATES' });
     expect(prisma.tmcTrip.create).not.toHaveBeenCalled();
@@ -1900,7 +1906,6 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
   });
 });
-
 
 
 

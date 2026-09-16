@@ -5,7 +5,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2, Sun, Moon, Monitor, Info } from "lucide-react";
+import { LogOut, Menu, Building2, Sun, Moon, Monitor, Info, CircleHelp } from "lucide-react";
 import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
@@ -28,6 +28,7 @@ import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
+import { useProductTour } from "../tours/useProductTour";
 
 // #555 (HI-06) — Option C: lock to single tenant per session. The chip is
 // read-only; clicking it does NOT dispatch a tenant switch. To switch
@@ -153,6 +154,7 @@ const Layout = () => {
   const notify = useNotify();
   const navigate = useNavigate();
   const location = useLocation();
+  const { isAvailable: toursAvailable, effectiveEnabled: toursEnabled, currentFeature, startCurrentTour } = useProductTour();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
@@ -454,6 +456,27 @@ const Layout = () => {
           </div>
           <TenantChip tenant={tenant} />
           <NotificationBell />
+          {toursAvailable && toursEnabled && currentFeature && (
+            <button
+              type="button"
+              onClick={startCurrentTour}
+              title={`Tour ${currentFeature.label}`}
+              aria-label={`Tour this page: ${currentFeature.label}`}
+              data-tour="tour-launcher"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "var(--text-secondary)",
+                padding: "6px 8px",
+                borderRadius: 6,
+              }}
+            >
+              <CircleHelp size={17} />
+            </button>
+          )}
           <button
             onClick={() => navigate("/profile")}
             style={{
@@ -556,6 +579,7 @@ const Layout = () => {
           </button>
         </header>
         <main
+          data-tour="page-content"
           className="page-fade-in"
           style={{
             flex: 1,

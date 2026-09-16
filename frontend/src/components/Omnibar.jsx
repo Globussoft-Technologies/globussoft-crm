@@ -80,6 +80,7 @@ const ENTITY_SECTIONS = [
       primary: p.label,
       secondary: p.description || p.category || p.path,
       to: p.path,
+      actionTarget: p.actionTarget,
     }),
   },
   {
@@ -507,8 +508,9 @@ export default function Omnibar() {
   }, [resultSet]);
 
   const handleRowClick = useCallback(
-    (to) => {
+    ({ to, actionTarget } = {}) => {
       if (to) navigate(to);
+      else if (actionTarget) document.querySelector(actionTarget)?.click();
       setIsFocused(false);
       inputRef.current?.blur();
     },
@@ -556,7 +558,7 @@ export default function Omnibar() {
     }
     if (e.key === "Enter" && activeIndex >= 0) {
       e.preventDefault();
-      handleRowClick(flatResults[activeIndex]?.rendered?.to);
+      handleRowClick(flatResults[activeIndex]?.rendered);
     }
   };
 
@@ -564,6 +566,7 @@ export default function Omnibar() {
     <div
       ref={containerRef}
       data-testid="omnibar-root"
+      data-tour="welcome-global-search"
       style={{
         position: "relative",
         // Left-aligned, fixed-but-comfortable width. Earlier shape was
@@ -748,7 +751,7 @@ export default function Omnibar() {
                           type="button"
                           role="option"
                           aria-selected={isActive}
-                          onClick={() => handleRowClick(r.to)}
+                          onClick={() => handleRowClick(r)}
                           style={{
                             display: "flex",
                             alignItems: "center",
@@ -884,5 +887,3 @@ export default function Omnibar() {
     </div>
   );
 }
-
-

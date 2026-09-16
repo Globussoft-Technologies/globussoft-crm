@@ -81,6 +81,7 @@ model Tenant {
   // may opt out for storage / compliance reasons; existing tenants
   // pre-flag default to true at first read of the column.
   emailRetention     Boolean   @default(true)
+  productToursEnabled Boolean  @default(true)
   isActive           Boolean   @default(true)
   ownerEmail         String?
   adsgptLogin        String? // AdsGPT aMember username or email for SSO
@@ -111,6 +112,7 @@ model Tenant {
   updatedAt          DateTime  @updatedAt
 
   users                 User[]
+  userTourProgress      UserTourProgress[]
   salesTeams            SalesTeam[]
   salesTeamMembers      SalesTeamMember[]
   contacts              Contact[]
@@ -720,6 +722,7 @@ model User {
 
   // Notification preferences
   notificationPreference NotificationPreference?
+  tourProgressRecords    UserTourProgress[]
 
   // Wave 3 — Staff availability blocks (breaks, leave, etc.)
   blockTimes BlockTime[] @relation("UserBlockTimes")
@@ -746,6 +749,26 @@ model User {
   // email field. Lets the same email register/log in across multiple orgs.
   @@unique([email, tenantId])
   @@index([tenantId, role])
+}
+
+// Generic CRM guided-tour preferences and per-tour completion state. The
+// composite key keeps progress isolated to one user inside one tenant.
+model UserTourProgress {
+  id              Int       @id @default(autoincrement())
+  tenantId        Int
+  userId          Int
+  preferencesJson String    @db.Text
+  progressJson    String    @db.LongText
+  progressResetAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+  @@index([userId])
 }
 
 model Contact {

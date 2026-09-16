@@ -113,7 +113,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/admin/status', label: 'Status', description: 'Platform status admin', adminOnly: true },
   { path: '/commission-profiles', label: 'Commission Profiles', description: 'Commission rule configuration', adminOnly: true },
   { path: '/commission-data', label: 'Commission Data', description: 'Commission analytics', adminOnly: true },
-  { path: '/revenue-goals', label: 'Revenue Goals', description: 'Revenue target configuration', adminOnly: true },
+  { path: '/revenue-goals', label: 'Revenue Goals', description: 'Revenue target configuration' },
   { path: '/channels', label: 'Channels', description: 'SMS, WhatsApp, and call channel config', adminOnly: true },
   { path: '/industry-templates', label: 'Industry Templates', description: 'Pre-built workflow templates', adminOnly: true },
   { path: '/sandbox', label: 'Sandbox', description: 'Testing + feature preview', adminOnly: true },
@@ -121,15 +121,45 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/currencies', label: 'Currencies', description: 'Multi-currency configuration', adminOnly: true },
   { path: '/zapier', label: 'Zapier', description: 'Third-party automation hub', adminOnly: true },
   { path: '/developer', label: 'Developers', description: 'API + webhook console', adminOnly: true },
-  { path: '/data-import-export', label: 'Import / Export', description: 'Bulk CSV operations', adminOnly: true },
+  { path: '/data-import-export', label: 'Import / Export', description: 'Bulk CSV operations', managerOnly: true },
   { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', adminOnly: true },
   { path: '/notification-settings', label: 'Notification Settings', description: 'Personal notification preferences', userOnly: true },
+  { id: 'adsgpt', label: 'AdsGPT', description: 'Open the connected AdsGPT marketing workspace', managerOnly: true, actionTarget: '[data-tour-feature="adsgpt"]' },
+  { id: 'callified', label: 'Callified', description: 'Open the connected Callified calling workspace', managerOnly: true, actionTarget: '[data-tour-feature="callified"]' },
+  { path: '/whatsapp', label: 'WhatsApp', description: 'Manage tenant-scoped WhatsApp conversations' },
+  { path: '/lead-reports', label: 'Lead Reports', description: 'Review lead productivity, quality, sources, and follow-ups', managerOnly: true },
+  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations' },
 ];
 
 // This allow-list intentionally mirrors renderTravelNav in Sidebar.jsx. It
 // keeps hidden routes (such as the retired travel dashboards) out of global
 // search while still letting the permission-filtered backend catalog supply
 // the actual accessible entries and descriptions.
+
+const GENERIC_PAGE_BY_PATH = new Map(
+  GENERIC_SIDEBAR_PAGE_SPECS.filter((page) => page.path).map((page) => [page.path, page]),
+);
+
+export function getGenericAccessByPath(path) {
+  return GENERIC_PAGE_BY_PATH.get(path) || null;
+}
+
+export function getGenericAccessForLocation(pathname) {
+  if (!pathname) return null;
+  return GENERIC_SIDEBAR_PAGE_SPECS
+    .filter((page) => page.path && (pathname === page.path || pathname.startsWith(`${page.path}/`)))
+    .sort((left, right) => right.path.length - left.path.length)[0] || null;
+}
+
+export function genericRoleGuardProps(path) {
+  const access = getGenericAccessByPath(path);
+  if (!access) return {};
+  if (access.adminOnly) return { allow: ['ADMIN'] };
+  if (access.managerOnly) return { allow: ['ADMIN', 'MANAGER'] };
+  if (access.userOnly) return { allow: ['USER'] };
+  if (access.requiredPermission) return { requiredPermission: access.requiredPermission };
+  return {};
+}
 const TRAVEL_SIDEBAR_PAGE_MAP = new Map(
   TRAVEL_SIDEBAR_PAGE_SPECS.map((page) => [page.path, page]),
 );
@@ -145,7 +175,7 @@ const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
   '/gmail',
 ]);
 
-function canUseGenericSidebarPage(page, {
+export function canUseGenericSidebarPage(page, {
   isAdmin = false,
   isManager = false,
   permissionsReady = false,
@@ -167,10 +197,15 @@ function canUseGenericSidebarPage(page, {
 export function getGenericSidebarPages(options = {}) {
   return GENERIC_SIDEBAR_PAGE_SPECS
     .filter((page) => canUseGenericSidebarPage(page, options))
-    .map(({ requiredPermission, adminOnly, managerOnly, hideForAdmin, userOnly, ...page }) => ({
-      ...page,
-      category: page.category || 'Navigation',
-    }));
+    .map((page) => {
+      const searchable = { ...page };
+      delete searchable.requiredPermission;
+      delete searchable.adminOnly;
+      delete searchable.managerOnly;
+      delete searchable.hideForAdmin;
+      delete searchable.userOnly;
+      return { ...searchable, category: searchable.category || 'Navigation' };
+    });
 }
 
 export function mergePagesByPath(...pageLists) {
@@ -178,9 +213,10 @@ export function mergePagesByPath(...pageLists) {
   for (const list of pageLists) {
     if (!Array.isArray(list)) continue;
     for (const page of list) {
-      if (!page?.path) continue;
-      byPath.set(page.path, {
-        ...(byPath.get(page.path) || {}),
+      const key = page?.path || (page?.actionTarget ? `action:${page.id}` : null);
+      if (!key) continue;
+      byPath.set(key, {
+        ...(byPath.get(key) || {}),
         ...page,
       });
     }
@@ -233,4 +269,3 @@ export function filterSidebarPages(
   }
   return filtered;
 }
-

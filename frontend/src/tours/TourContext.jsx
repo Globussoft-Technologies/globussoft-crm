@@ -612,4 +612,3 @@ export default function ProductTourProvider({ children }) {
     </ProductTourContext.Provider>
   );
 }
-

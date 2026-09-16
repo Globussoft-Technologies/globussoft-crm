@@ -67,6 +67,7 @@ const SOURCE_OPTIONS = [
   "Event",
   "Other",
 ];
+
 // Built-in lead columns available for auto-campaign assignment rules.
 const BUILTIN_RULE_COLUMNS = [
   { key: "source", label: "Source" },
@@ -1437,8 +1438,11 @@ const Leads = () => {
         advancedFilters.length > 0
           ? `&filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
           : "";
+      const genericSearchQs = isGeneric && searchTerm.trim()
+        ? `&q=${encodeURIComponent(searchTerm.trim())}`
+        : "";
       const data = await fetchApi(
-        `/api/contacts?status=Lead&limit=500${filtersQs}`,
+        `/api/contacts?status=Lead&limit=500${genericSearchQs}${filtersQs}`,
       );
       const rows = Array.isArray(data) ? data : [];
       let mergedRows = rows;
@@ -1839,6 +1843,17 @@ const Leads = () => {
     }
     fetchLeads();
   }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Generic CRM lead search is server-backed. Keep the existing local
+  // filtering/rendering behavior intact while exposing the typed value as
+  // `q` in the contacts API request.
+  useEffect(() => {
+    if (!isGeneric || !searchTerm.trim()) return undefined;
+    const timer = setTimeout(() => {
+      fetchLeads({ background: true });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [isGeneric, searchTerm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response

@@ -1478,8 +1478,7 @@ export default function App() {
           <NotifyProvider>
             <ActiveSubBrandProvider>
               <BrowserRouter>
-                <Suspense fallback={<div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", color: "var(--text-primary)" }}>Loading...</div>}>
-                  <ProductTourProvider>
+                <ProductTourProvider>
                   <RouteErrorBoundary>
                   <Suspense
                     fallback={
@@ -3898,8 +3897,7 @@ export default function App() {
                     </Routes>
                   </Suspense>
                   </RouteErrorBoundary>
-                  </ProductTourProvider>
-                </Suspense>
+                </ProductTourProvider>
               </BrowserRouter>
             </ActiveSubBrandProvider>
           </NotifyProvider>

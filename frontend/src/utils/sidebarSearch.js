@@ -90,7 +90,9 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/custom-reports', label: 'Custom Reports', description: 'Build custom data reports', managerOnly: true },
   { path: '/approvals', label: 'Approvals', description: 'Pending approvals queue', managerOnly: true },
   { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
-  { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true },
+  { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, parent: 'Team & Territories' },
+  { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, parent: 'Team & Territories' },
+  { path: '/users', label: 'Users', description: 'Manage CRM users and access', managerOnly: true, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing', description: 'One-shot marketing campaigns', managerOnly: true },
   { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true },
   { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true },
@@ -131,13 +133,37 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations' },
 ];
 
+// Keep consumers of the Generic navigation catalog independent from whether
+// a future navigation entry is represented as a flat item or as a nested
+// children/items/subItems collection. The sidebar and the tour both consume
+// the same source; no DOM expansion state is involved.
+export function flattenGenericNavigation(entries, parent = null) {
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const { children, items, subItems, ...page } = entry;
+    const current = page.path || page.id ? [{ ...page, parent }] : [];
+    const nested = flattenGenericNavigation(
+      [
+        ...(Array.isArray(children) ? children : []),
+        ...(Array.isArray(items) ? items : []),
+        ...(Array.isArray(subItems) ? subItems : []),
+      ],
+      page.label || parent,
+    );
+    return [...current, ...nested];
+  });
+}
+
+export const GENERIC_NAVIGATION_OPTIONS = flattenGenericNavigation(GENERIC_SIDEBAR_PAGE_SPECS);
+
 // This allow-list intentionally mirrors renderTravelNav in Sidebar.jsx. It
 // keeps hidden routes (such as the retired travel dashboards) out of global
 // search while still letting the permission-filtered backend catalog supply
 // the actual accessible entries and descriptions.
 
 const GENERIC_PAGE_BY_PATH = new Map(
-  GENERIC_SIDEBAR_PAGE_SPECS.filter((page) => page.path).map((page) => [page.path, page]),
+  GENERIC_NAVIGATION_OPTIONS.filter((page) => page.path).map((page) => [page.path, page]),
 );
 
 export function getGenericAccessByPath(path) {
@@ -146,7 +172,7 @@ export function getGenericAccessByPath(path) {
 
 export function getGenericAccessForLocation(pathname) {
   if (!pathname) return null;
-  return GENERIC_SIDEBAR_PAGE_SPECS
+  return GENERIC_NAVIGATION_OPTIONS
     .filter((page) => page.path && (pathname === page.path || pathname.startsWith(`${page.path}/`)))
     .sort((left, right) => right.path.length - left.path.length)[0] || null;
 }
@@ -195,7 +221,7 @@ export function canUseGenericSidebarPage(page, {
 }
 
 export function getGenericSidebarPages(options = {}) {
-  return GENERIC_SIDEBAR_PAGE_SPECS
+  return GENERIC_NAVIGATION_OPTIONS
     .filter((page) => canUseGenericSidebarPage(page, options))
     .map((page) => {
       const searchable = { ...page };

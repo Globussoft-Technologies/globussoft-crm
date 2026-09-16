@@ -2347,6 +2347,8 @@ table.stable-table td {
 .settings-grid {
   columns: 360px 2;
   column-gap: 1.5rem;
+  width: 100%;
+  min-width: 0;
   /* Tell the browser to balance column heights rather than fill column 1
      before column 2. */
   column-fill: balance;
@@ -2360,6 +2362,39 @@ table.stable-table td {
      inside the column context and the heading sits next to the previous
      card. Block restores the expected stacked-card behaviour. */
   display: block;
+  min-width: 0;
+}
+
+/* Tour dialogs must be opaque even though normal cards use glassmorphism. */
+[data-tour-surface="true"] {
+  background-color: #ffffff !important;
+}
+[data-theme="dark"] [data-tour-surface="true"],
+html[data-theme="dark"] [data-tour-surface="true"] {
+  background-color: #171a21 !important;
+}
+
+/* Keep tour dialog geometry stable while controls are hovered/focused. The
+   application-wide button hover lift is intentionally preserved elsewhere;
+   it must not make the walkthrough card jump or appear to resize. */
+[data-tour-surface="true"] {
+  box-sizing: border-box;
+  contain: layout;
+}
+[data-tour-surface="true"] .btn-primary:hover,
+[data-tour-surface="true"] .btn-primary:focus-visible,
+[data-tour-surface="true"] .btn-secondary:hover,
+[data-tour-surface="true"] .btn-secondary:focus-visible {
+  transform: none;
+}
+
+/* The multicolumn minimum is useful on desktop but overflows the app content
+   area in a local browser or narrow laptop window. Stack cards before the two
+   360px columns can force horizontal clipping. */
+@media (max-width: 900px) {
+  .settings-grid {
+    columns: 1;
+  }
 }
 
 /* Suggest Itinerary modal — force an opaque panel surface across themes.

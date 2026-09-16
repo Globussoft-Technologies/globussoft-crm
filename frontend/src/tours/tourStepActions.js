@@ -3,7 +3,7 @@ function visible(element) {
 }
 
 export function waitForTourTarget(selector, {
-  timeoutMs = 4000,
+  timeoutMs = 300,
   requireVisible = true,
   signal,
 } = {}) {
@@ -38,7 +38,7 @@ export function waitForTourTarget(selector, {
 
 async function resolveActionTarget(action, signal) {
   return waitForTourTarget(action.target, {
-    timeoutMs: action.timeoutMs || 4000,
+    timeoutMs: action.timeoutMs || 500,
     requireVisible: action.requireVisible !== false,
     signal,
   });
@@ -76,7 +76,7 @@ export async function performTourActions(actions = [], { signal } = {}) {
 
     if (action.waitFor) {
       const loaded = await waitForTourTarget(action.waitFor, {
-        timeoutMs: action.timeoutMs || 4000,
+        timeoutMs: action.timeoutMs || 500,
         requireVisible: action.requireVisible !== false,
         signal,
       });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import { useProductTour } from "../tours/useProductTour";
@@ -14,11 +14,20 @@ const STATUS_SYMBOL = {
 export default function TourCatalogue({ onClose }) {
   const { availableTours, effectiveEnabled, progress, startTour } = useProductTour();
   const location = useLocation();
+  const [query, setQuery] = useState("");
   const dialogRef = useRef(null);
+  const filteredTours = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return availableTours;
+    return availableTours.filter((tour) => {
+      const searchable = `${tour.label || ""} ${tour.id || ""} ${tour.path || ""} ${tour.parent || ""}`.toLowerCase();
+      return searchable.includes(normalizedQuery);
+    });
+  }, [availableTours, query]);
   const grouped = useMemo(() => TOUR_CATEGORIES.map((category) => ({
     category,
-    tours: availableTours.filter((tour) => categoryForTour(tour) === category),
-  })).filter((group) => group.tours.length), [availableTours]);
+    tours: filteredTours.filter((tour) => categoryForTour(tour) === category),
+  })).filter((group) => group.tours.length), [filteredTours]);
   const completed = availableTours.filter((tour) => tourStatus(tour, progress) === "Completed").length;
   const percentage = availableTours.length ? Math.round((completed / availableTours.length) * 100) : 0;
   const statusCounts = ["Available", "Completed", "In progress", "Skipped"].map((status) => ({
@@ -67,6 +76,17 @@ export default function TourCatalogue({ onClose }) {
           </div>
           <strong>{percentage}% · {completed}/{availableTours.length}</strong>
         </div>
+        <label style={{ display: "block", marginBottom: 16 }}>
+          <span style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Search navigation tours</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search sidebar and sub-sidebar pages..."
+            aria-label="Search sidebar and sub-sidebar tours"
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--surface-color, #fff)", color: "inherit" }}
+          />
+        </label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
           {statusCounts.map(({ status, count }) => <span key={status} style={{ padding: "6px 10px", border: "1px solid var(--border-color)", borderRadius: 999, fontSize: 13 }}><strong>{count}</strong> {status}</span>)}
         </div>
@@ -91,6 +111,7 @@ export default function TourCatalogue({ onClose }) {
             </div>
           </section>
         ))}
+        {!grouped.length && <p role="status" style={{ color: "var(--text-secondary)" }}>No matching navigation tours found.</p>}
       </section>
     </div>,
     document.body,

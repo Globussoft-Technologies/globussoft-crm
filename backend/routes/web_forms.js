@@ -1036,17 +1036,34 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     const emailValue = String(contactData.email || "").trim();
     const phoneValue = String(contactData.phone || "").trim();
     const companyValue = String(contactData.company || "").trim();
+    const isGenericForm = formScope === "generic";
     const fieldErrors = {};
     if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
       fieldErrors.name = "Enter a valid name using letters, spaces, hyphens, or apostrophes";
     }
-    if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailValue))) {
+    if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailValue) || (isGenericForm && emailValue.includes("..")))) {
       fieldErrors.email = "Enter a valid email address";
     }
     if (phoneValue) {
       const digits = phoneValue.replace(/\D/g, "");
-      if (!/^[+\d][\d\s().-]*$/.test(phoneValue) || digits.length < 7 || digits.length > 15) {
+      const normalizedPhone = phoneValue.replace(/[\s().-]/g, "");
+      const phoneIsValid = isGenericForm
+        ? /^\+[1-9]\d{7,14}$/.test(normalizedPhone)
+        : /^[+\d][\d\s().-]*$/.test(phoneValue) && digits.length >= 7 && digits.length <= 15;
+      if (!phoneIsValid) {
+        fieldErrors.phone = isGenericForm
+          ? "Enter a valid international phone number with country code, for example +919876543210"
+          : "Enter a valid phone number with 7-15 digits";
         fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
+      }
+    }
+    if (phoneValue && isGenericForm) {
+      const normalizedGenericPhone = phoneValue.replace(/[\s().-]/g, "");
+      if (/^\+[1-9]\d{7,14}$/.test(normalizedGenericPhone)) {
+        contactData.phone = normalizedGenericPhone;
+        delete fieldErrors.phone;
+      } else {
+        fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
       }
     }
     if (companyValue && (companyValue.length < 2 || companyValue.length > 150 || !/[\p{L}]/u.test(companyValue))) {

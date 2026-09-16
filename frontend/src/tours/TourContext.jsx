@@ -60,7 +60,6 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
       : false
   ));
   const dialogRef = useRef(null);
-  const overlayRootRef = useRef(null);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return undefined;
@@ -73,10 +72,31 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
   useLayoutEffect(() => {
     let frame = null;
     let observer = null;
+    let mutationObserver = null;
+    const resolveTarget = () => {
+      const direct = step?.target ? document.querySelector(step.target) : null;
+      if (direct) return direct;
+      const root = document.querySelector('[data-tour="page-content"]')
+        || document.querySelector('main, [role="main"]');
+      if (!root) return null;
+      const candidates = Array.from(root.querySelectorAll(
+        '[data-tour]:not([data-tour="page-content"]), .card, section, form, button, input, [role="button"], [role="tab"]',
+      )).filter((element) => {
+        if (!element.isConnected || element.hidden || element.closest('[aria-hidden="true"]')) return false;
+        const style = window.getComputedStyle?.(element);
+        return style?.display !== "none" && style?.visibility !== "hidden" && element.getClientRects().length > 0;
+      });
+      const terms = `${step?.title || ""} ${step?.content || ""}`.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) || [];
+      const match = candidates.map((element) => ({
+        element,
+        score: terms.reduce((score, term) => score + (element.textContent?.toLowerCase().includes(term) ? 1 : 0), 0),
+      })).sort((a, b) => b.score - a.score)[0];
+      return match?.score > 0 ? match.element : candidates[0] || root;
+    };
     const update = () => {
       if (frame) cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        const target = step?.target ? document.querySelector(step.target) : null;
+        const target = resolveTarget();
         if (!target || target.getClientRects().length === 0) {
           setRect(null);
           return;
@@ -85,7 +105,7 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
         setRect({ top: next.top, left: next.left, width: next.width, height: next.height });
       });
     };
-    const target = step?.target ? document.querySelector(step.target) : null;
+    const target = resolveTarget();
     target?.scrollIntoView?.({
       block: "nearest",
       inline: "nearest",
@@ -98,34 +118,19 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
       observer = new ResizeObserver(update);
       observer.observe(target);
     }
+    // Target-only steps can render before page-owned anchors are attached.
+    // Re-measure when the page finishes rendering instead of leaving the
+    // tour stuck on the full-page fallback overlay.
+    mutationObserver = new MutationObserver(update);
+    mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
     return () => {
       if (frame) cancelAnimationFrame(frame);
       observer?.disconnect();
+      mutationObserver?.disconnect();
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };
   }, [reducedMotion, step]);
-
-  useLayoutEffect(() => {
-    const overlayRoot = overlayRootRef.current;
-    if (!overlayRoot) return undefined;
-    const siblings = Array.from(document.body.children).filter((node) => node !== overlayRoot);
-    const previous = siblings.map((node) => ({
-      node,
-      inert: node.hasAttribute("inert"),
-      ariaHidden: node.getAttribute("aria-hidden"),
-    }));
-    siblings.forEach((node) => {
-      node.setAttribute("inert", "");
-      node.setAttribute("aria-hidden", "true");
-    });
-    return () => previous.forEach(({ node, inert, ariaHidden }) => {
-      if (!node.isConnected) return;
-      if (!inert) node.removeAttribute("inert");
-      if (ariaHidden === null) node.removeAttribute("aria-hidden");
-      else node.setAttribute("aria-hidden", ariaHidden);
-    });
-  }, []);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -155,22 +160,34 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
   const isCompact = viewportWidth < 600;
   const cardWidth = Math.min(380, Math.max(0, viewportWidth - 32));
   const centeredCardHeight = Math.min(280, Math.max(0, viewportHeight - 32));
-  const maxCardTop = Math.max(16, viewportHeight - Math.min(300, Math.max(0, viewportHeight - 32)) - 16);
+  const estimatedCardHeight = Math.min(300, Math.max(0, viewportHeight - 32));
+  const maxCardTop = Math.max(16, viewportHeight - estimatedCardHeight - 16);
   let cardPosition = {
     left: Math.max(16, (viewportWidth - cardWidth) / 2),
     top: Math.max(16, (viewportHeight - centeredCardHeight) / 2),
   };
   if (rect && step?.placement !== "center") {
-    const proposedLeft = rect.left + rect.width + 18;
-    cardPosition = {
-      left: Math.max(16, Math.min(Math.max(16, proposedLeft), viewportWidth - cardWidth - 16)),
-      top: Math.min(Math.max(16, rect.top), maxCardTop),
-    };
+    const gap = 18;
+    const belowTop = rect.top + rect.height + gap;
+    const aboveTop = rect.top - estimatedCardHeight - gap;
+    const canFitBelow = belowTop + estimatedCardHeight <= viewportHeight - 16;
+    const canFitAbove = aboveTop >= 16;
+    if (canFitBelow || canFitAbove) {
+      cardPosition = {
+        left: Math.max(16, Math.min(rect.left + rect.width / 2 - cardWidth / 2, viewportWidth - cardWidth - 16)),
+        top: canFitBelow ? belowTop : aboveTop,
+      };
+    } else {
+      const proposedLeft = rect.left + rect.width + gap;
+      cardPosition = {
+        left: Math.max(16, Math.min(proposedLeft, viewportWidth - cardWidth - 16)),
+        top: Math.min(Math.max(16, rect.top), maxCardTop),
+      };
+    }
   }
 
   return createPortal(
     <div
-      ref={overlayRootRef}
       data-testid="product-tour-overlay"
       data-tour-layout={isCompact ? "mobile" : "desktop"}
     >
@@ -205,9 +222,14 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
           position: "fixed",
           ...cardPosition,
           width: cardWidth,
+          height: Math.min(320, Math.max(0, viewportHeight - 32)),
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
           maxWidth: "calc(100vw - 32px)",
           maxHeight: "calc(100vh - 32px)",
           overflowY: "auto",
+          scrollbarGutter: "stable",
           padding: isCompact ? 16 : 20,
           borderRadius: 14,
           border: "1px solid var(--border-color)",
@@ -245,7 +267,7 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
         <p style={{ color: "var(--text-secondary)", lineHeight: 1.55, margin: "0 0 18px" }}>
           {step.content}
         </p>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", marginTop: "auto" }}>
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" className="btn-secondary" onClick={onSkip}>Skip tour</button>
             <button type="button" className="btn-secondary" onClick={onSkipAll}>Skip all</button>
@@ -412,7 +434,7 @@ export default function ProductTourProvider({ children }) {
     if (tour.welcome) suppressModuleAutoPathRef.current = location.pathname;
     const saved = state.progress[`${tour.id}:${tour.version}`];
     const stepIndex = options.restart ? 0 : Math.min(saved?.currentStep || 0, tour.steps.length - 1);
-    setActive({ tour, stepIndex, preparing: needsTourPreparation(tour.steps[stepIndex]) });
+    setActive({ tour, stepIndex, preparing: needsTourPreparation(tour.steps[stepIndex]), continueSequence: options.continueSequence !== false });
     return true;
   }, [availableTours, effectiveEnabled, location.hash, location.pathname, location.search, navigate, state.progress]);
 
@@ -468,16 +490,16 @@ export default function ProductTourProvider({ children }) {
     }
   }, [persist, restoreOriginalScreen]);
   const restartAllTours = useCallback(() => {
+    if (!isAvailable) return;
     const progressResetAt = new Date().toISOString();
     persist((current) => ({
       ...current,
-      progress: current.progress[WELCOME_TOUR_KEY]
-        ? { [WELCOME_TOUR_KEY]: { ...current.progress[WELCOME_TOUR_KEY], updatedAt: new Date(Date.parse(progressResetAt) + 1).toISOString() } }
-        : {},
+      progress: {},
       progressResetAt,
     }));
     autoStartedRef.current.clear();
-  }, [persist]);
+    startTour(GENERIC_WELCOME_TOUR.id, { restart: true, navigate: false });
+  }, [isAvailable, persist, startTour]);
   const setOrganizationEnabled = useCallback(async (enabled) => {
     if (!canManageOrganization || typeof enabled !== "boolean") return false;
     try {
@@ -498,13 +520,26 @@ export default function ProductTourProvider({ children }) {
     if (active.stepIndex >= active.tour.steps.length - 1) {
       record(active.tour, { status: "COMPLETED", currentStep: active.stepIndex, completedAt: new Date().toISOString() });
       setActive(null);
-      restoreOriginalScreen();
+      const currentIndex = availableTours.findIndex((tour) => tour.id === active.tour.id);
+      const nextTour = active.continueSequence !== false && currentIndex >= 0
+        ? availableTours[currentIndex + 1]
+        : null;
+      if (nextTour && isAvailable) {
+        for (const restore of stepRestorersRef.current.splice(0)) {
+          try { restore(); } catch { /* target may have unmounted */ }
+        }
+        originScreenRef.current = null;
+        launcherFocusRef.current = null;
+        startTour(nextTour.id, { restart: true });
+      } else {
+        restoreOriginalScreen();
+      }
       return;
     }
     const stepIndex = active.stepIndex + 1;
     record(active.tour, { status: "IN_PROGRESS", currentStep: stepIndex });
     setActive({ ...active, stepIndex, preparing: needsTourPreparation(active.tour.steps[stepIndex]) });
-  }, [active, record, restoreOriginalScreen]);
+  }, [active, availableTours, isAvailable, record, restoreOriginalScreen, startTour]);
   advanceRef.current = next;
 
   const activeTourId = active?.tour.id;
@@ -529,13 +564,13 @@ export default function ProductTourProvider({ children }) {
       const requiredSelector = step.requiresRecords || step.waitFor || step.target;
       const target = requiredSelector
         ? await waitForTourTarget(requiredSelector, {
-          timeoutMs: step.timeoutMs || 4000,
+          timeoutMs: step.timeoutMs || 500,
           requireVisible: step.requireVisible !== false,
           signal: controller.signal,
         })
         : null;
       if (!current || controller.signal.aborted) return;
-      if (!actionResult.ok || (!target && (step.skipIfMissing || step.requiresRecords))) {
+      if (!actionResult.ok) {
         advanceRef.current?.();
         return;
       }
@@ -582,7 +617,7 @@ export default function ProductTourProvider({ children }) {
     availableTours,
     activeTour: active,
     startTour,
-    startCurrentTour: () => currentFeature ? startTour(currentFeature.id, { restart: true, navigate: false }) : false,
+    startCurrentTour: () => currentFeature ? startTour(currentFeature.id, { restart: true, navigate: false, continueSequence: false }) : false,
     closeTour,
     skipTour,
     skipAllTours,

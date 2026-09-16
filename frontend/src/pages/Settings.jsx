@@ -929,7 +929,6 @@ export default function Settings() {
           </Link>
         )} */}
       </header>
-
       {/* Cards flow through a CSS multi-column container so heights balance
           automatically across the two columns instead of pooling into two
           fixed lists (which left a tall empty gutter on the right whenever
@@ -942,6 +941,7 @@ export default function Settings() {
           {/* Organization Card */}
           <div
             className="card"
+            data-tour="settings-organization"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
             <h3
@@ -1194,6 +1194,7 @@ export default function Settings() {
           {/* Appearance Card */}
           <div
             className="card"
+            data-tour="settings-whatsapp"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
             <h3

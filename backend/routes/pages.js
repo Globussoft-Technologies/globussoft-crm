@@ -19,6 +19,21 @@ const { verifyToken } = require('../middleware/auth');
 const { getCatalog, getCatalogForVertical, getAccessiblePages } = require('../lib/pageCatalog');
 const { getUserPermissions } = require('../middleware/requirePermission');
 
+function filterPageSearch(pages, rawQuery) {
+  const query = String(rawQuery || '').trim().toLowerCase();
+  if (!query) return pages;
+  return pages.filter((page) => [
+    page.label,
+    page.title,
+    page.name,
+    page.description,
+    page.category,
+    page.path,
+    page.route,
+    page.parent,
+  ].some((value) => String(value || '').toLowerCase().includes(query)));
+}
+
 // GET /api/pages/catalog — page catalog metadata.
 //
 // Vertical-aware (Phase 1, 2026-06-15): a travel tenant only sees travel
@@ -59,11 +74,12 @@ router.get('/me', verifyToken, async (req, res) => {
       console.error('[pages/me] tenant vertical lookup failed:', err && err.message);
     }
     if (req.user.isOwner) {
-      return res.json({ pages: getCatalogForVertical(vertical) });
+      const catalogPages = getCatalogForVertical(vertical);
+      return res.json({ pages: vertical === 'generic' ? filterPageSearch(catalogPages, req.query.q) : catalogPages });
     }
     const perms = await getUserPermissions(req.user.tenantId, req.user.userId);
     const pages = getAccessiblePages(perms, { isOwner: false, vertical });
-    res.json({ pages });
+    res.json({ pages: vertical === 'generic' ? filterPageSearch(pages, req.query.q) : pages });
   } catch (err) {
     console.error('[pages/me] error:', err);
     res.status(500).json({ error: 'Failed to load accessible pages' });

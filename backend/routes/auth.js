@@ -1016,21 +1016,25 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // here must never break the User registration above.
     if ((user.tenant?.vertical || tenant.vertical) === "travel") {
       try {
-        const portalContact = await prisma.contact.upsert({
-          where: { email_tenantId: { email, tenantId } },
-          // A Contact may already be a TMC teacher/parent account. The User
-          // registration bridge must not replace a password chosen through
-          // the portal registration flow.
-          update: {},
-          create: {
-            name: name || email.split("@")[0],
-            email,
-            subBrand: "travelstall",
-            status: "Lead",
-            tenantId,
-            portalPasswordHash: hashedPassword,
-          },
+        // A Contact may already be a TMC teacher/parent account. The User
+        // registration bridge must not replace a password chosen through
+        // the portal registration flow. Email is indexed, not unique, so
+        // only live portal identities are considered here.
+        let portalContact = await prisma.contact.findFirst({
+          where: { email, tenantId, deletedAt: null },
         });
+        if (!portalContact) {
+          portalContact = await prisma.contact.create({
+            data: {
+              name: name || email.split("@")[0],
+              email,
+              subBrand: "travelstall",
+              status: "Lead",
+              tenantId,
+              portalPasswordHash: hashedPassword,
+            },
+          });
+        }
         // Backfill only legacy contacts that have no portal credential yet.
         if (!portalContact.portalPasswordHash) {
           await prisma.contact.update({

@@ -641,9 +641,9 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     // surface).
     //
     // Secondary key (email): when phone absent or unmatched, look up
-    // by `email_tenantId` compound unique index. Skip when the email
-    // is the synthesized placeholder (`inbound-<channel>-<ts>@imported.local`)
-    // since that's a freshly-minted unique value with zero dedup signal.
+    // by a tenant-scoped email lookup. Skip when the email is the synthesized
+    // placeholder (`inbound-<channel>-<ts>@imported.local`) since that's a
+    // freshly-minted value with zero dedup signal.
     //
     // No match → fall through to create; touchpoint chain + AuditLog
     // hand-off lives in the eventual slice that ships the Touchpoint
@@ -681,8 +681,8 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     if (!existing && email && String(email).trim()) {
       // Only honor real, caller-supplied emails for the secondary key —
       // never a synthesized placeholder.
-      existing = await prisma.contact.findUnique({
-        where: { email_tenantId: { email: String(email).trim(), tenantId: tenant.id } },
+      existing = await prisma.contact.findFirst({
+        where: { email: String(email).trim(), tenantId: tenant.id, deletedAt: null },
         select: {
           id: true,
           phone: true,

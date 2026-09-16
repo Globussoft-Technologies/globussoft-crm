@@ -72,6 +72,20 @@ async function purgeLegacyContactTombstone(email, tenantId) {
   if (existing) await hardDeleteContact(prisma, existing.id);
 }
 
+// Email is an indexed lookup, not a unique Contact key. Landing-page
+// submissions must still update the existing person when they return through
+// the same page flow, so keep the old upsert semantics at the application
+// layer without relying on a database uniqueness constraint.
+async function upsertContactByEmail({ email, tenantId, update, create }) {
+  const existing = await prisma.contact.findFirst({
+    where: { email, tenantId, deletedAt: null },
+  });
+  if (existing) {
+    return prisma.contact.update({ where: { id: existing.id }, data: update });
+  }
+  return prisma.contact.create({ data: create });
+}
+
 
 
 function isGenericLandingSite(page) {
@@ -7237,9 +7251,10 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     const contactSource = "tmc_registration";
     await purgeLegacyContactTombstone(parentEmail, tenantId);
 
-    const contact = await prisma.contact.upsert({
+    const contact = await upsertContactByEmail({
 
-      where: { email_tenantId: { email: parentEmail, tenantId } },
+      email: parentEmail,
+      tenantId,
 
       update: { source: contactSource },
 
@@ -7666,9 +7681,10 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
     // Upsert contact with unique constraint on email + tenantId
     await purgeLegacyContactTombstone(contactEmail, tenantId);
 
-    const contact = await prisma.contact.upsert({
+    const contact = await upsertContactByEmail({
 
-      where: { email_tenantId: { email: contactEmail, tenantId } },
+      email: contactEmail,
+      tenantId,
 
       update: {
 
@@ -8044,9 +8060,10 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     await purgeLegacyContactTombstone(contactEmail, tenantId);
 
-    const contact = await prisma.contact.upsert({
+    const contact = await upsertContactByEmail({
 
-      where: { email_tenantId: { email: contactEmail, tenantId } },
+      email: contactEmail,
+      tenantId,
 
       update: {
 

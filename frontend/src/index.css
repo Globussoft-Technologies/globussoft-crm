@@ -229,6 +229,33 @@
   color: var(--text-primary);
 }
 
+/* Payables status chips use an explicit selected treatment. A transparent
+   active chip with white text is readable on the dark surface, but disappears
+   on the light surface. Keep the brand tint while switching to dark accent
+   text over a pale tint in light mode. */
+.payables-status-chip {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .payables-status-chip[aria-pressed="true"] {
+  background: color-mix(
+    in srgb,
+    var(--payables-chip-accent, var(--primary-color, var(--accent-color))) 12%,
+    var(--surface-color)
+  );
+  color: var(--payables-chip-accent, var(--primary-color, var(--accent-color)));
+}
+
+[data-theme="dark"] .payables-status-chip[aria-pressed="true"] {
+  background: color-mix(
+    in srgb,
+    var(--payables-chip-accent, var(--primary-color, var(--accent-color))) 26%,
+    var(--surface-color)
+  );
+  color: var(--text-primary);
+}
+
 [data-theme="light"] body {
   background-color: var(--bg-color);
   color: var(--text-primary);
@@ -3022,6 +3049,187 @@ table.leads-table tbody tr:hover td {
   overflow: visible;
 }
 
+/* Contacts follows the Leads page structure: filters at the top, a flexible
+   table viewport in the middle, and one readable pagination footer below it.
+   The old compact pill is kept out of the visual flow while the new footer
+   provides the same page controls on desktop and mobile. */
+.contacts-page {
+  width: 100%;
+  min-height: 100%;
+}
+
+.contacts-page-card {
+  display: flex;
+  flex-direction: column;
+  min-height: max(320px, calc(100vh - 10rem));
+  min-height: max(320px, calc(100dvh - 10rem));
+}
+
+.contacts-page-card > .contacts-filters-bar {
+  flex: 0 0 auto;
+}
+
+.contacts-page-card > .contacts-split-table {
+  flex: 1 1 auto;
+  min-height: 320px;
+  max-height: none;
+}
+
+.contacts-pagination-legacy {
+  display: none !important;
+}
+
+.contacts-pagination-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.contacts-pagination-summary {
+  white-space: nowrap;
+}
+
+.contacts-pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.contacts-pagination-controls > label,
+.contacts-pagination-page-form > label,
+.contacts-pagination-page-form > span {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.contacts-pagination-controls select,
+.contacts-pagination-page-form input {
+  box-sizing: border-box;
+  height: 2rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
+
+.contacts-pagination-controls select {
+  width: auto !important;
+  min-width: 4.5rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.contacts-pagination-page-form {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.contacts-pagination-page-form input {
+  width: 3.5rem;
+  padding: 0.35rem 0.4rem;
+  text-align: center;
+}
+
+.contacts-pagination-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.contacts-pagination-icon:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.contacts-pagination-icon:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+@media (max-width: 768px) {
+  .contacts-page-card {
+    min-height: max(360px, calc(100vh - 4rem));
+    min-height: max(360px, calc(100dvh - 4rem));
+  }
+
+  .contacts-filters-bar {
+    gap: 0.75rem !important;
+  }
+
+  .contacts-pagination-footer {
+    align-items: flex-start;
+  }
+
+  .contacts-pagination-summary,
+  .contacts-pagination-controls {
+    width: 100%;
+  }
+
+  .contacts-pagination-controls {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .contacts-page-card > .contacts-split-table {
+    min-height: 280px;
+  }
+
+  .contacts-pagination-controls {
+    gap: 0.35rem;
+  }
+}
+
+/* Remove native scrollbar arrow buttons from the split-table sync bars so
+   the track begins exactly at the frozen/scrollable pane boundary. */
+.leads-split-table .top-scroll-sync__top::-webkit-scrollbar-button,
+.leads-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button,
+.contacts-split-table .top-scroll-sync__top::-webkit-scrollbar-button,
+.contacts-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background: transparent !important;
+}
+
+/* Windows Chromium exposes the horizontal decrement/increment buttons as
+   directional pseudo-elements. Hide each explicit variant as well so the
+   thumb starts directly at the scroll pane edge instead of leaving a
+   misleading gap beside the frozen column. */
+.leads-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:decrement,
+.leads-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:increment,
+.leads-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:decrement,
+.leads-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:increment,
+.contacts-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:decrement,
+.contacts-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:increment,
+.contacts-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:decrement,
+.contacts-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:increment {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
 .contacts-split-table table.stable-table thead tr {
   height: 50px;
 }
@@ -3086,6 +3294,32 @@ table.leads-table--fit {
   width: 100%;
 }
 
+/* Travel Leads: give the column heading enough breathing room for the
+   label, select checkbox, and column-menu controls. The body remains
+   compact, while the split-table row synchronizer keeps both panes aligned. */
+.leads-split-table table.leads-table--fit thead tr {
+  height: 64px;
+}
+
+.leads-split-table table.leads-table--fit thead th {
+  padding: 1rem 0.75rem !important;
+  font-size: 0.875rem;
+  line-height: 1.3;
+}
+
+.leads-split-table table.leads-table--fit thead th > div {
+  min-height: 24px;
+}
+
+/* Keep the frozen Name heading and its rows on the same horizontal grid.
+   Header cells otherwise use 12px side padding while body cells use 8px,
+   which shifts the checkbox and label apart by four pixels. */
+.leads-split-table table.leads-table--fit.leads-table--frozen th:first-child,
+.leads-split-table table.leads-table--fit.leads-table--frozen td:first-child {
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
+}
+
 table.leads-table--fit th,
 table.leads-table--fit td {
   box-sizing: border-box;
@@ -3107,6 +3341,42 @@ table.leads-table--fit td:last-child {
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
+}
+
+/* Keep long source labels inside their pill instead of letting the nested
+   inline editor clip the pill at a hard edge. The full value remains
+   available on hover through the title attribute. */
+table.leads-table .leads-source-col > .inline-cell-editor-display {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+table.leads-table .leads-source-badge {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The assignment control follows the same left content edge as every other
+   cell and scales down with the column on smaller screens. */
+table.leads-table .leads-assignee-control {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+table.leads-table .leads-assignee-control > select.input-field {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* Generic Leads compact mode: trim horizontal padding so custom fields get

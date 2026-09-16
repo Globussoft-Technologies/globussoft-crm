@@ -150,7 +150,6 @@ export default function Payables() {
   const [supplierCategory, setSupplierCategory] = useState(initialSearchParams.get("supplierCategory") || "");
   const [dueFrom, setDueFrom] = useState(initialSearchParams.get("dueFrom") || "");
   const [dueTo, setDueTo] = useState(initialSearchParams.get("dueTo") || "");
-  const today = new Date().toISOString().slice(0, 10);
   const payablesRef = useRef([]);
   const offsetRef = useRef(0);
   const loadingRef = useRef(false);
@@ -376,13 +375,13 @@ export default function Payables() {
               <button
                 key={c.value || "all"}
                 type="button"
+                className="payables-status-chip"
                 onClick={() => { setStatus(c.value); updateListParam("status", c.value); }}
                 aria-pressed={active}
                 aria-label={`Filter by status: ${c.label}`}
                 style={{
                   ...chipStyle,
-                  background: "transparent",
-                  color: active ? "#fff" : "var(--text-primary)",
+                  "--payables-chip-accent": primaryTint,
                   borderColor: active ? primaryTint : "var(--border-color)",
                 }}
               >

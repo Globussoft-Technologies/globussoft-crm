@@ -2,7 +2,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
-import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
+import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
@@ -99,9 +99,29 @@ const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
 const CONTACTS_COLUMN_LAYOUT_STORAGE_KEY = 'globuscrm.contacts.columnLayout.v1';
 const CONTACTS_COLUMN_MIN_WIDTH = 72;
 const CONTACTS_SELECT_COLUMN_WIDTH = 48;
+const DUPLICATE_CHECK_ERROR_MESSAGE = "We couldn't check for duplicate contacts right now. Please try again in a moment. If the problem continues, contact support.";
 const CONTACTS_NAME_COLUMN_MIN_WIDTH = 220;
 const CONTACTS_NAME_COLUMN_MAX_WIDTH = 380;
 const CONTACTS_ACTIONS_COLUMN_WIDTH = 120;
+const CONTACT_CHECKBOX_STYLE = {
+  width: '16px',
+  height: '16px',
+  minWidth: '16px',
+  margin: 0,
+  cursor: 'pointer',
+  verticalAlign: 'middle',
+};
+const CONTACT_SELECTION_CELL_STYLE = {
+  boxSizing: 'border-box',
+  width: `${CONTACTS_SELECT_COLUMN_WIDTH}px`,
+  minWidth: `${CONTACTS_SELECT_COLUMN_WIDTH}px`,
+  padding: '0 8px',
+  textAlign: 'center',
+  verticalAlign: 'middle',
+  overflow: 'visible',
+  textOverflow: 'clip',
+  whiteSpace: 'normal',
+};
 const CONTACTS_COLUMN_DEFAULT_WIDTHS = {
   select: CONTACTS_SELECT_COLUMN_WIDTH,
   name: 240,
@@ -148,6 +168,7 @@ const Contacts = () => {
   // mock) answers with the legacy plain array.
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [pageInput, setPageInput] = useState('1');
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const contactsRequestId = useRef(0);
@@ -175,20 +196,10 @@ const Contacts = () => {
   const [bulkAgent, setBulkAgent] = useState('');
   const [contactsBulkActionsOpen, setContactsBulkActionsOpen] = useState(false);
   // Generic-vertical-only "Saved Views" — a named fixed list of contact IDs
-  // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts"
-  // (no filtering). activeViewMemberIds is the fetched membership of
-  // whichever view is currently selected.
+  // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts".
+  // Membership filtering is applied by the contacts API so it covers the
+  // entire view before limit/offset are applied.
   const [activeViewId, setActiveViewId] = useState(null);
-  const [activeViewMemberIds, setActiveViewMemberIds] = useState(null);
-  useEffect(() => {
-    if (isWellness || isTravel || activeViewId == null) {
-      setActiveViewMemberIds(null);
-      return;
-    }
-    fetchApi(`/api/contact-views/${activeViewId}/members`)
-      .then(d => setActiveViewMemberIds(new Set(Array.isArray(d.contactIds) ? d.contactIds : [])))
-      .catch(() => setActiveViewMemberIds(new Set()));
-  }, [activeViewId, isWellness, isTravel]);
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // Generic-vertical-only "Customize table" column-visibility picker
@@ -266,7 +277,10 @@ const Contacts = () => {
   // narrowing below stays instant on the raw `searchTerm`.
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearchTerm(searchTerm.trim()), 300);
+    const t = setTimeout(() => {
+      setPage(1);
+      setDebouncedSearchTerm(searchTerm.trim());
+    }, 300);
     return () => clearTimeout(t);
   }, [searchTerm]);
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
@@ -315,10 +329,15 @@ const Contacts = () => {
 
   const handleFindDupes = async () => {
     try {
-      const data = await fetchApi('/api/contacts/duplicates/find');
+      // This action has a contextual fallback message, so avoid a second
+      // generic toast from fetchApi when the request fails.
+      const data = await fetchApi('/api/contacts/duplicates/find', { silent: true });
       setDupes(Array.isArray(data) ? data : []);
       setShowDupes(true);
-    } catch { setDupes([]); }
+    } catch {
+      setDupes([]);
+      notify.error(DUPLICATE_CHECK_ERROR_MESSAGE);
+    }
   };
 
   // #592 — Merge is destructive and irreversible from the UI; duplicate
@@ -421,6 +440,7 @@ const Contacts = () => {
     window.addEventListener('mouseup', onUp);
   };
   const toggleContactSort = (key) => {
+    setPage(1);
     setSortConfig((prev) => {
       if (prev.key !== key) return { key, direction: 'asc' };
       if (prev.direction === 'asc') return { key, direction: 'desc' };
@@ -428,38 +448,12 @@ const Contacts = () => {
       return { key, direction: 'asc' };
     });
   };
-  const getContactSortValue = useCallback((contact, key) => {
-    if (key === 'name') return contact.name || '';
-    if (key === 'email') return contact.email || '';
-    if (key === 'phone') return contact.phone || '';
-    if (key === 'company') return contact.company || '';
-    if (key === 'aiScore') return Number.isFinite(Number(contact.aiScore)) ? Number(contact.aiScore) : null;
-    if (key === 'status') return contact.status || '';
-    if (key === 'assignedTo') return contact.assignedTo?.name || contact.assignedTo?.email || '';
-    if (key === 'createdAt') return contact.createdAt ? new Date(contact.createdAt).getTime() : null;
-    if (key.startsWith('cf_')) {
-      const fieldKey = key.slice(3);
-      const raw = contact.customFields?.[fieldKey];
-      if (Array.isArray(raw)) return raw.join(', ');
-      return raw ?? '';
-    }
-    return '';
-  }, []);
-
-  // Null until the server proves it speaks the paginated envelope — while
-  // unknown, every load also probes the legacy bare path in parallel so old
-  // servers (and exact-URL unit mocks) keep working. The probe fires
-  // synchronously inside the effect, which deferred-mock loading tests rely
-  // on. Once an envelope lands the probe stops (single request per load).
-  const serverSupportsPage = useRef(null);
   const fetchContacts = useCallback(() => {
     const myId = ++contactsRequestId.current;
     const isCurrent = () => myId === contactsRequestId.current;
     const offset = (page - 1) * pageSize;
-    // Server-side narrowing mirrors the client-side dropdowns so search /
-    // status / assignee work across ALL pages, not just the loaded one.
-    // Score buckets + saved views + sorting stay client-side (no server
-    // equivalent) and narrow the loaded page further below.
+    // Every narrowing/sort operation happens before pagination on the server,
+    // so totals and page boundaries describe the rows the user actually sees.
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(offset),
@@ -469,6 +463,18 @@ const Contacts = () => {
     if (statusFilter !== 'All') params.set('status', statusFilter);
     if (assignedToFilter === 'unassigned') params.set('unassigned', 'true');
     else if (assignedToFilter) params.set('assignedToId', assignedToFilter);
+    const scoreBucket = CONTACTS_SCORE_BUCKETS.find(bucket => bucket.value === scoreFilter);
+    if (scoreBucket) {
+      params.set('scoreMin', String(scoreBucket.min));
+      params.set('scoreMax', String(scoreBucket.max));
+    }
+    if (!isWellness && !isTravel && activeViewId != null) {
+      params.set('viewId', String(activeViewId));
+    }
+    if (sortConfig.key && sortConfig.direction) {
+      params.set('sortBy', sortConfig.key);
+      params.set('sortDirection', sortConfig.direction);
+    }
     if (advancedFilters.length > 0) params.set('filters', JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
     setLoading(true);
     const applyEnvelope = (env) => {
@@ -478,31 +484,16 @@ const Contacts = () => {
       setTotal(serverTotal);
       setTotalPages(typeof env.totalPages === 'number' && env.totalPages >= 1 ? env.totalPages : Math.max(1, Math.ceil(serverTotal / pageSize)));
     };
-    const applyLegacyList = (rows) => {
-      const list = Array.isArray(rows) ? rows : [];
-      setContacts(list);
-      setTotal(list.length);
-      setTotalPages(1);
-    };
-    const pagedReq = fetchApi(`/api/contacts?${params.toString()}`).catch(() => null);
-    const needProbe = serverSupportsPage.current !== true;
-    const legacyReq = needProbe ? fetchApi('/api/contacts').catch(() => null) : Promise.resolve(undefined);
-    Promise.all([pagedReq, legacyReq]).then(([paged, legacy]) => {
+    fetchApi(`/api/contacts?${params.toString()}`).then((paged) => {
       if (!isCurrent()) return;
       if (paged && Array.isArray(paged.data)) {
-        serverSupportsPage.current = true;
         applyEnvelope(paged);
-      } else if (Array.isArray(paged)) {
-        // Old server: honored limit/offset, answered the legacy array.
-        applyLegacyList(paged);
-      } else if (legacy && Array.isArray(legacy.data)) {
-        applyEnvelope(legacy);
       } else {
-        applyLegacyList(legacy);
+        throw new Error('Invalid contacts pagination response');
       }
       setLoading(false);
     }).catch(() => { if (isCurrent()) { setContacts([]); setTotal(0); setTotalPages(1); setLoading(false); } });
-  }, [advancedFilters, assignedToFilter, debouncedSearchTerm, page, pageSize, statusFilter]);
+  }, [activeViewId, advancedFilters, assignedToFilter, debouncedSearchTerm, isTravel, isWellness, page, pageSize, scoreFilter, sortConfig.direction, sortConfig.key, statusFilter]);
 
   const handleRescore = async () => {
     setRescoring(true);
@@ -525,17 +516,26 @@ const Contacts = () => {
     fetchApi('/api/staff').then(data => setStaff(Array.isArray(data) ? data : [])).catch(() => {});
   }, []);
 
-  // Any filter change restarts from page 1 (the refetch follows via the
-  // fetchContacts identity change above).
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedSearchTerm, statusFilter, assignedToFilter, scoreFilter, advancedFilters]);
-
   // If the total shrinks under the current page (records deleted elsewhere),
   // step back to the last valid page (mirrors Clients.jsx).
   useEffect(() => {
     if (!loading && page > totalPages) setPage(totalPages);
   }, [loading, page, totalPages]);
+
+  useEffect(() => {
+    setPageInput(String(page));
+  }, [page]);
+
+  const goToContactsPage = () => {
+    const nextPage = Number(pageInput);
+    if (!Number.isFinite(nextPage) || nextPage < 1) {
+      setPageInput(String(page));
+      return;
+    }
+    const clampedPage = Math.min(Math.max(Math.trunc(nextPage), 1), totalPages);
+    setPage(clampedPage);
+    setPageInput(String(clampedPage));
+  };
 
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   // Own effect keyed on [isWellness, isTravel] (not the mount-only effect
@@ -742,54 +742,16 @@ const Contacts = () => {
     fetchContacts();
   };
 
-  // #461: derive the visible rows from `contacts` + the filter inputs, then
-  // optionally apply the current header sort. Search matches name / email /
-  // company / title (case-insensitive). The dropdown supports the canonical
-  // statuses; 'All' disables status filtering. A selected Saved View
-  // additionally restricts to its fixed membership list first so
-  // search/status still narrow within the view.
-  const visibleContacts = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    return contacts.filter((c) => {
-      if (activeViewMemberIds && !activeViewMemberIds.has(c.id)) return false;
-      if (statusFilter !== 'All' && c.status !== statusFilter) return false;
-      if (assignedToFilter === 'unassigned' && c.assignedToId) return false;
-      if (assignedToFilter && assignedToFilter !== 'unassigned' && String(c.assignedToId || '') !== assignedToFilter) return false;
-      if (scoreFilter) {
-        const bucket = CONTACTS_SCORE_BUCKETS.find(b => b.value === scoreFilter);
-        if (bucket && (c.aiScore < bucket.min || c.aiScore > bucket.max)) return false;
-      }
-      if (!term) return true;
-      return (
-        (c.name || '').toLowerCase().includes(term) ||
-        (c.email || '').toLowerCase().includes(term) ||
-        (c.company || '').toLowerCase().includes(term) ||
-        (c.title || '').toLowerCase().includes(term)
-      );
-    });
-  }, [activeViewMemberIds, assignedToFilter, contacts, scoreFilter, searchTerm, statusFilter]);
-
-  const sortedContacts = useMemo(() => {
-    if (!sortConfig.key || !sortConfig.direction) return visibleContacts;
-    const direction = sortConfig.direction === 'desc' ? -1 : 1;
-    const collator = new Intl.Collator(undefined, {
-      numeric: true,
-      sensitivity: 'base',
-    });
-    return [...visibleContacts].sort((a, b) => {
-      const aValue = getContactSortValue(a, sortConfig.key);
-      const bValue = getContactSortValue(b, sortConfig.key);
-      const aNull = aValue === null || aValue === undefined || aValue === '';
-      const bNull = bValue === null || bValue === undefined || bValue === '';
-      if (aNull && bNull) return 0;
-      if (aNull) return 1;
-      if (bNull) return -1;
-      if (typeof aValue === 'number' && typeof bValue === 'number') {
-        return (aValue - bValue) * direction;
-      }
-      return collator.compare(String(aValue), String(bValue)) * direction;
-    });
-  }, [getContactSortValue, sortConfig.direction, sortConfig.key, visibleContacts]);
+  const visibleContacts = contacts;
+  const sortedContacts = contacts;
+  const hasActiveContactFilters = Boolean(
+    searchTerm ||
+    statusFilter !== 'All' ||
+    assignedToFilter ||
+    scoreFilter ||
+    activeViewId != null ||
+    advancedFilters.length > 0,
+  );
 
   const visibleCustomFieldDefs = useMemo(
     () =>
@@ -810,6 +772,7 @@ const Contacts = () => {
               label: '',
               sortable: false,
               resizable: false,
+              align: 'center',
             },
           ]
         : []),
@@ -878,7 +841,9 @@ const Contacts = () => {
       ...visibleCustomFieldDefs.map((field) => ({
         key: `cf_${field.fieldKey}`,
         label: field.label,
-        sortable: true,
+        // Values live in a typed child table. Do not imply a current-page
+        // sort until a database-backed cross-page ordering is available.
+        sortable: false,
         resizable: true,
         field,
         customField: true,
@@ -1107,7 +1072,12 @@ const Contacts = () => {
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+            justifyContent:
+              align === 'center'
+                ? 'center'
+                : align === 'right'
+                  ? 'flex-end'
+                  : 'flex-start',
             gap: '0.4rem',
             minWidth: 0,
             width: '100%',
@@ -1145,14 +1115,24 @@ const Contacts = () => {
       style={{ borderBottom: '1px solid var(--border-color)' }}
     >
       {isAdmin && (
-        <td style={getContactBodyCellStyle({ padding: '1rem' })}>
-          <input
-            type="checkbox"
-            checked={selectedContacts.includes(contact.id)}
-            onChange={() => toggleSelectContact(contact.id)}
-            style={{ cursor: 'pointer' }}
-            aria-label={`Select ${contact.name || contact.email || 'contact'}`}
-          />
+        <td style={CONTACT_SELECTION_CELL_STYLE}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '100%',
+              minHeight: '20px',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selectedContacts.includes(contact.id)}
+              onChange={() => toggleSelectContact(contact.id)}
+              style={CONTACT_CHECKBOX_STYLE}
+              aria-label={`Select ${contact.name || contact.email || 'contact'}`}
+            />
+          </div>
         </td>
       )}
       <td style={getContactBodyCellStyle({ padding: '1rem' })}>
@@ -1335,35 +1315,43 @@ const Contacts = () => {
         return (
           <td
             key={column.key}
-            style={getContactBodyCellStyle({ textAlign: 'right', whiteSpace: 'nowrap' })}
+            style={getContactBodyCellStyle({ textAlign: 'left', whiteSpace: 'nowrap' })}
           >
-            <button
-              onClick={() => setEditingContact(contact)}
-              aria-label={`Edit contact ${contact.name || contact.email || ''}`}
-              title="Edit contact"
+            <div
               style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                marginRight: '0.5rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                gap: '0.75rem',
               }}
             >
-              <Pencil size={16} />
-            </button>
-            <button
-              onClick={() => handleDelete(contact.id)}
-              aria-label={`Delete contact ${contact.name || contact.email || ''}`}
-              title="Delete contact"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#ef4444',
-                cursor: 'pointer',
-              }}
-            >
-              <Trash2 size={18} />
-            </button>
+              <button
+                onClick={() => setEditingContact(contact)}
+                aria-label={`Edit contact ${contact.name || contact.email || ''}`}
+                title="Edit contact"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                <Pencil size={16} />
+              </button>
+              <button
+                onClick={() => handleDelete(contact.id)}
+                aria-label={`Delete contact ${contact.name || contact.email || ''}`}
+                title="Delete contact"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#ef4444',
+                  cursor: 'pointer',
+                }}
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
           </td>
         );
       default:
@@ -1416,7 +1404,7 @@ const Contacts = () => {
   );
 
   return (
-    <div style={{ padding: '2rem' }}>
+    <div className="contacts-page" style={{ padding: 'clamp(1rem, 3vw, 2rem)' }}>
       {/* Renders only when this page was opened as a drill-down from a report. */}
       <ReturnToBanner />
       {/* #488: flex-wrap + gap so the action group wraps cleanly below the title
@@ -1441,7 +1429,10 @@ const Contacts = () => {
           {!isWellness && !isTravel && (
             <SavedViewsBar
               activeViewId={activeViewId}
-              onSelectView={setActiveViewId}
+              onSelectView={(viewId) => {
+                setPage(1);
+                setActiveViewId(viewId);
+              }}
               selectedIds={selectedContacts}
               allContacts={contacts}
             />
@@ -1628,8 +1619,8 @@ const Contacts = () => {
         </div>
       </header>
 
-      <div className="card" style={{ overflow: 'hidden' }}>
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="card contacts-page-card" style={{ overflow: 'hidden' }}>
+        <div className="contacts-filters-bar" style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input
@@ -1645,7 +1636,10 @@ const Contacts = () => {
           <select
             className="input-field"
             value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
+            onChange={e => {
+              setPage(1);
+              setStatusFilter(e.target.value);
+            }}
             style={{ width: '150px' }}
           >
             <option value="All">All Statuses</option>
@@ -1660,7 +1654,10 @@ const Contacts = () => {
               instead of the browser rendering every option at once. */}
           <ScrollableSelect
             value={assignedToFilter}
-            onChange={setAssignedToFilter}
+            onChange={(value) => {
+              setPage(1);
+              setAssignedToFilter(value);
+            }}
             width={170}
             ariaLabel="Filter by assigned to"
             options={[
@@ -1672,7 +1669,10 @@ const Contacts = () => {
           <select
             className="input-field"
             value={scoreFilter}
-            onChange={e => setScoreFilter(e.target.value)}
+            onChange={e => {
+              setPage(1);
+              setScoreFilter(e.target.value);
+            }}
             style={{ width: '150px' }}
             aria-label="Filter by lead score"
           >
@@ -1685,15 +1685,25 @@ const Contacts = () => {
             fieldsUrl="/api/contacts/filter-fields"
             valuesUrl={(field) => `/api/contacts/filter-values/${field}`}
             filters={advancedFilters}
-            onChange={setAdvancedFilters}
+            onChange={(filters) => {
+              setPage(1);
+              setAdvancedFilters(filters);
+            }}
           />
-          {(searchTerm || statusFilter !== 'All' || assignedToFilter || scoreFilter || activeViewId != null || advancedFilters.length > 0) && (
+          {hasActiveContactFilters && (
             <>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Showing {visibleContacts.length} of {(total || contacts.length).toLocaleString()}
               </span>
               <button
-                onClick={() => { setSearchTerm(''); setStatusFilter('All'); setAssignedToFilter(''); setScoreFilter(''); setAdvancedFilters([]); }}
+                onClick={() => {
+                  setPage(1);
+                  setSearchTerm('');
+                  setStatusFilter('All');
+                  setAssignedToFilter('');
+                  setScoreFilter('');
+                  setAdvancedFilters([]);
+                }}
                 style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.8rem' }}
               >
                 Clear filters
@@ -1704,7 +1714,7 @@ const Contacts = () => {
 
         {/* Server-synced pagination (?limit=&offset=&page=) — compact pill
             above the table, right-aligned and sized to content. */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
+        <div className="contacts-pagination-legacy" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content', maxWidth: '100%' }}>
             <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
               {total === 0 ? 'No contacts' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()}`}
@@ -1753,7 +1763,7 @@ const Contacts = () => {
                     column.key === 'select'
                       ? renderContactsHeaderCell(
                           column,
-                          {},
+                          CONTACT_SELECTION_CELL_STYLE,
                           { key: column.key },
                           <input
                             type="checkbox"
@@ -1764,7 +1774,7 @@ const Contacts = () => {
                             onChange={toggleSelectAllContacts}
                             onClick={(e) => e.stopPropagation()}
                             aria-label="Select all contacts"
-                            style={{ cursor: 'pointer', margin: 0 }}
+                            style={CONTACT_CHECKBOX_STYLE}
                           />,
                         )
                       : renderContactsHeaderCell(
@@ -1781,7 +1791,11 @@ const Contacts = () => {
                     {contactsFrozenColumnDefs.map((column) => (
                       <td
                         key={column.key}
-                        style={getContactBodyCellStyle({ padding: '2rem' })}
+                        style={
+                          column.key === 'select'
+                            ? CONTACT_SELECTION_CELL_STYLE
+                            : getContactBodyCellStyle({ padding: '2rem' })
+                        }
                       />
                     ))}
                   </tr>
@@ -1790,7 +1804,11 @@ const Contacts = () => {
                     {contactsFrozenColumnDefs.map((column) => (
                       <td
                         key={column.key}
-                        style={getContactBodyCellStyle({ padding: '2rem' })}
+                        style={
+                          column.key === 'select'
+                            ? CONTACT_SELECTION_CELL_STYLE
+                            : getContactBodyCellStyle({ padding: '2rem' })
+                        }
                       />
                     ))}
                   </tr>
@@ -1833,9 +1851,7 @@ const Contacts = () => {
                     {contactsScrollableColumnDefs.map((column) =>
                       renderContactsHeaderCell(
                         column,
-                        column.key === 'actions'
-                          ? { textAlign: 'right', paddingRight: '2rem' }
-                          : { paddingRight: '2rem' },
+                        { paddingRight: '2rem' },
                         { key: column.key },
                       ),
                     )}
@@ -1864,7 +1880,7 @@ const Contacts = () => {
                           color: 'var(--text-secondary)',
                         }}
                       >
-                        {contacts.length === 0
+                        {!hasActiveContactFilters
                           ? 'No contacts yet. Click "Add Contact" or import a CSV.'
                           : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
                       </td>
@@ -1877,6 +1893,68 @@ const Contacts = () => {
             </TopScrollSync>
           </div>
         </div>
+        {!loading && total > 0 && (
+          <div className="contacts-pagination-footer" data-testid="contacts-pagination">
+            <span className="contacts-pagination-summary">
+              Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total.toLocaleString()}
+            </span>
+            <div className="contacts-pagination-controls">
+              <label htmlFor="contacts-page-size">Rows</label>
+              <select
+                id="contacts-page-size"
+                className="input-field"
+                aria-label="Contacts per page"
+                value={pageSize}
+                onChange={e => {
+                  setPageSize(parseInt(e.target.value, 10) || 10);
+                  setPage(1);
+                }}
+              >
+                {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <button
+                type="button"
+                className="contacts-pagination-icon"
+                aria-label="Previous page"
+                title="Previous page"
+                disabled={page <= 1}
+                onClick={() => setPage(p => Math.max(p - 1, 1))}
+              >
+                <ChevronLeft size={16} aria-hidden />
+              </button>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  goToContactsPage();
+                }}
+                className="contacts-pagination-page-form"
+              >
+                <label htmlFor="contacts-page-number">Page</label>
+                <input
+                  id="contacts-page-number"
+                  type="number"
+                  min="1"
+                  max={totalPages}
+                  value={pageInput}
+                  onChange={e => setPageInput(e.target.value)}
+                  onBlur={goToContactsPage}
+                  aria-label="Page number"
+                />
+                <span>of {totalPages}</span>
+              </form>
+              <button
+                type="button"
+                className="contacts-pagination-icon"
+                aria-label="Next page"
+                title="Next page"
+                disabled={page >= totalPages}
+                onClick={() => setPage(p => Math.min(p + 1, totalPages))}
+              >
+                <ChevronRight size={16} aria-hidden />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       {showImportModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--catalogue-modal-backdrop)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>

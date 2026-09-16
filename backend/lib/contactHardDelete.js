@@ -50,6 +50,7 @@ const CONTACT_ID_CHILDREN = [
   ["travelDiagnostic", "contactId"],
   ["itinerary", "contactId"],
   ["customerTraveller", "contactId"],
+  ["tmcParentDocument", "parentContactId"],
   ["digilockerSession", "contactId"],
   ["webCheckin", "contactId"],
   ["travelTripReview", "contactId"],

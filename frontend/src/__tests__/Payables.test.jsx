@@ -296,6 +296,35 @@ describe('<Payables /> — status filter chip pushes ?status= to URL', () => {
   });
 });
 
+describe('<Payables /> — status chip theme contrast', () => {
+  it('keeps the selected status label readable in light mode', async () => {
+    document.documentElement.setAttribute('data-theme', 'light');
+    renderPage();
+
+    const pendingChip = screen.getByRole('button', {
+      name: /Filter by status: Pending/i,
+    });
+    fireEvent.click(pendingChip);
+
+    await waitFor(() => {
+      expect(pendingChip).toHaveAttribute('aria-pressed', 'true');
+    });
+    expect(pendingChip).toHaveClass('payables-status-chip');
+    expect(pendingChip.style.getPropertyValue('--payables-chip-accent')).toBeTruthy();
+
+    const source = readFileSync(
+      path.resolve(__dirname, '../index.css'),
+      'utf8',
+    );
+    expect(source).toMatch(
+      /\[data-theme="light"\] \.payables-status-chip\[aria-pressed="true"\][\s\S]*?background: color-mix\(/,
+    );
+    expect(source).toMatch(
+      /\[data-theme="light"\] \.payables-status-chip\[aria-pressed="true"\][\s\S]*?color: var\(--payables-chip-accent/,
+    );
+  });
+});
+
 describe('<Payables /> — sub-brand + category filters push to URL', () => {
   it('sub-brand select pushes ?subBrand=<value>', async () => {
     installFetchMock();

@@ -30,7 +30,7 @@ function extractFunctionBody(source, name) {
   return source.slice(match.index + match[0].length, index - 1);
 }
 
-function extractUpsertBlock(functionBody, declaration) {
+function extractContactSeedBlock(functionBody, declaration) {
   const start = functionBody.indexOf(declaration);
   if (start < 0) return null;
   const end = functionBody.indexOf('\n  });', start);
@@ -41,9 +41,9 @@ const functionBody = extractFunctionBody(seedSource, 'seedTmcParentReviewDemo');
 
 describe('seed-travel.js — TMC portal credential preservation', () => {
   test('keeps the parent password out of the existing-contact update payload', () => {
-    const parentUpsert = extractUpsertBlock(
+    const parentUpsert = extractContactSeedBlock(
       functionBody,
-      'const parent = await prisma.contact.upsert({',
+      'const parent = await upsertContactByEmail({',
     );
 
     expect(parentUpsert).not.toBeNull();
@@ -52,9 +52,9 @@ describe('seed-travel.js — TMC portal credential preservation', () => {
   });
 
   test('provisions a default only on create or a legacy row with no hash', () => {
-    const parentUpsert = extractUpsertBlock(
+    const parentUpsert = extractContactSeedBlock(
       functionBody,
-      'const parent = await prisma.contact.upsert({',
+      'const parent = await upsertContactByEmail({',
     );
 
     expect(parentUpsert).toMatch(/create:[\s\S]*portalPasswordHash:\s*passwordHash/);
@@ -63,9 +63,9 @@ describe('seed-travel.js — TMC portal credential preservation', () => {
   });
 
   test('also preserves teacher-selected portal passwords', () => {
-    const teacherUpsert = extractUpsertBlock(
+    const teacherUpsert = extractContactSeedBlock(
       functionBody,
-      'const teacher = await prisma.contact.upsert({',
+      'const teacher = await upsertContactByEmail({',
     );
 
     expect(teacherUpsert).not.toBeNull();

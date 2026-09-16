@@ -198,16 +198,28 @@ describe("TravelPipeline", () => {
     expect(screen.getByText("Status")).toBeInTheDocument();
   });
 
-  it("sorts statuses in pipeline lifecycle order", async () => {
+  it("requests server-wide status sorting in both directions", async () => {
     const statuses = [
       "expired", "advance_paid", "draft", "rejected",
       "accepted", "sent", "fully_paid", "revised",
     ];
-    mockFetch(statuses.map((status, index) => makeItin({
+    const initialRows = statuses.map((status, index) => makeItin({
       id: index + 1,
       destination: `${status} tour`,
       status,
-    })));
+    }));
+    const serverAscending = [...statuses].sort();
+    fetchApi.mockImplementation((url) => {
+      const params = new URL(url, "https://example.test").searchParams;
+      const direction = params.get("sortDirection");
+      const orderedStatuses = direction === "desc"
+        ? [...serverAscending].reverse()
+        : serverAscending;
+      const rows = params.get("sortKey") === "status"
+        ? orderedStatuses.map((status) => initialRows.find((row) => row.status === status))
+        : initialRows;
+      return Promise.resolve({ itineraries: rows, total: rows.length });
+    });
     renderPage();
     await screen.findByText("draft tour");
 
@@ -216,32 +228,21 @@ describe("TravelPipeline", () => {
       .map((link) => link.textContent);
 
     fireEvent.click(screen.getByRole("button", { name: "Sort Status" }));
-    expect(destinations()).toEqual([
-      "draft tour",
-      "sent tour",
-      "revised tour",
-      "accepted tour",
-      "advance_paid tour",
-      "fully_paid tour",
-      "rejected tour",
-      "expired tour",
-    ]);
+    await waitFor(() => expect(destinations()).toEqual(
+      serverAscending.map((status) => `${status} tour`),
+    ));
+    expect(fetchApi.mock.calls.some(([url]) =>
+      url.includes("sortKey=status") && url.includes("sortDirection=asc"),
+    )).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Sort Status" }));
-    expect(destinations()).toEqual([
-      "expired tour",
-      "rejected tour",
-      "fully_paid tour",
-      "advance_paid tour",
-      "accepted tour",
-      "revised tour",
-      "sent tour",
-      "draft tour",
-    ]);
+    await waitFor(() => expect(destinations()).toEqual(
+      [...serverAscending].reverse().map((status) => `${status} tour`),
+    ));
   });
 
   it("sorts the Company column by contact company name", async () => {
-    mockFetch([
+    const rows = [
       makeItin({
         id: 1,
         destination: "Gamma Trip",
@@ -260,7 +261,14 @@ describe("TravelPipeline", () => {
         contactId: 23,
         contact: { id: 23, name: "Beta Owner", email: "beta@test.com", company: "Blue Sky Holidays" },
       }),
-    ]);
+    ];
+    fetchApi.mockImplementation((url) => {
+      const params = new URL(url, "https://example.test").searchParams;
+      const responseRows = params.get("sortKey") === "company"
+        ? [...rows].sort((a, b) => a.contact.company.localeCompare(b.contact.company))
+        : rows;
+      return Promise.resolve({ itineraries: responseRows, total: responseRows.length });
+    });
     renderPage();
     await screen.findByText("Gamma Trip");
 
@@ -269,11 +277,14 @@ describe("TravelPipeline", () => {
       .map((link) => link.textContent);
 
     fireEvent.click(screen.getByRole("button", { name: "Sort Company" }));
-    expect(destinations()).toEqual([
+    await waitFor(() => expect(destinations()).toEqual([
       "Alpha Trip",
       "Beta Trip",
       "Gamma Trip",
-    ]);
+    ]));
+    expect(fetchApi.mock.calls.some(([url]) =>
+      url.includes("sortKey=company") && url.includes("sortDirection=asc"),
+    )).toBe(true);
   });
 
   // 7. Empty state
@@ -423,6 +434,25 @@ describe("TravelPipeline", () => {
     expect(screen.getByText("₹8.02L")).toBeInTheDocument();
   });
 
+  it("uses backend totals for all filtered rows rather than the current page", async () => {
+    fetchApi.mockResolvedValue({
+      itineraries: [DEFAULT_ITINS[0]],
+      total: 80,
+      pipelineTotals: {
+        totalValue: 2500000,
+        wonValue: 1000000,
+        negotiationValue: 750000,
+        lostValue: 500000,
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByText("₹25.00L")).toBeInTheDocument();
+    expect(screen.getByText("₹10.00L")).toBeInTheDocument();
+    expect(screen.getByText("₹7.50L")).toBeInTheDocument();
+    expect(screen.getByText("₹5.00L")).toBeInTheDocument();
+  });
+
   // 13. Export CSV
   it("export CSV button fires without throwing", async () => {
     renderPage();
@@ -434,7 +464,64 @@ describe("TravelPipeline", () => {
     global.URL.revokeObjectURL = revokeObjectURL;
     const exportBtn = screen.getByRole("button", { name: /export/i });
     fireEvent.click(exportBtn);
-    expect(createObjectURL).toHaveBeenCalled();
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
+    expect(fetchApi.mock.calls.some(([url]) =>
+      url.includes("limit=200") && url.includes("offset=0"),
+    )).toBe(true);
+  });
+
+  it("exports every server page for the active filters", async () => {
+    const pageOne = Array.from({ length: 200 }, (_, index) =>
+      makeItin({ id: index + 1, destination: `Export trip ${index + 1}` }),
+    );
+    const pageTwo = [makeItin({ id: 201, destination: "Final exported trip" })];
+    fetchApi.mockImplementation((url) => {
+      const params = new URL(url, "https://example.test").searchParams;
+      if (params.get("limit") === "200") {
+        return Promise.resolve({
+          itineraries: params.get("offset") === "0" ? pageOne : pageTwo,
+          total: 201,
+        });
+      }
+      return Promise.resolve({ itineraries: pageOne.slice(0, 20), total: 201 });
+    });
+    global.URL.createObjectURL = vi.fn(() => "blob:test");
+    global.URL.revokeObjectURL = vi.fn();
+    renderPage();
+    await screen.findByText("Export trip 1");
+
+    fireEvent.click(screen.getByRole("button", { name: /^export pipeline as csv$/i }));
+
+    await waitFor(() => expect(global.URL.createObjectURL).toHaveBeenCalled());
+    expect(fetchApi.mock.calls.some(([url]) =>
+      url.includes("limit=200") && url.includes("offset=200"),
+    )).toBe(true);
+  });
+
+  it("ignores a stale page response after a newer filter request completes", async () => {
+    let resolveInitial;
+    const initial = new Promise((resolve) => { resolveInitial = resolve; });
+    fetchApi
+      .mockReturnValueOnce(initial)
+      .mockResolvedValue({
+        itineraries: [makeItin({ id: 90, destination: "New Bali result" })],
+        total: 1,
+      });
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText("Filter by tour title..."), {
+      target: { value: "bali" },
+    });
+
+    expect(await screen.findByText("New Bali result")).toBeInTheDocument();
+    resolveInitial({
+      itineraries: [makeItin({ id: 91, destination: "Stale initial result" })],
+      total: 1,
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText("Stale initial result")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("New Bali result")).toBeInTheDocument();
   });
 
   // 14. Delete flow

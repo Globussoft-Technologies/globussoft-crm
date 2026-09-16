@@ -766,13 +766,47 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       ];
     }
 
-    const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-    const skip = parseInt(req.query.offset, 10) || 0;
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const parsedOffset = parseInt(req.query.offset, 10);
+    const take = Math.min(
+      Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50,
+      200,
+    );
+    const skip = Number.isInteger(parsedOffset) && parsedOffset > 0
+      ? parsedOffset
+      : 0;
+
+    const sortDirection = req.query.sortDirection === "asc" ? "asc" : "desc";
+    const sortKey = String(req.query.sortKey || "").trim();
+    const scalarSortFields = {
+      destination: "destination",
+      amount: "totalAmount",
+      startDate: "startDate",
+      status: "status",
+    };
+    let orderBy = [{ createdAt: "desc" }, { id: "desc" }];
+    if (sortKey) {
+      if (sortKey === "contact") {
+        orderBy = [{ contact: { name: sortDirection } }, { id: sortDirection }];
+      } else if (sortKey === "company") {
+        orderBy = [{ contact: { company: sortDirection } }, { id: sortDirection }];
+      } else if (scalarSortFields[sortKey]) {
+        orderBy = [
+          { [scalarSortFields[sortKey]]: sortDirection },
+          { id: sortDirection },
+        ];
+      } else {
+        return res.status(400).json({
+          error: "invalid sort key",
+          code: "INVALID_SORT_KEY",
+        });
+      }
+    }
 
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy,
       take,
       skip,
     };
@@ -784,11 +818,38 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
         contact: { select: { id: true, name: true, email: true } },
       };
     }
-    const [itineraries, total] = await Promise.all([
+    const [itineraries, total, totalsByStatus] = await Promise.all([
       prisma.itinerary.findMany(findManyArgs),
       prisma.itinerary.count({ where }),
+      prisma.itinerary.groupBy({
+        by: ["status"],
+        where,
+        _sum: { totalAmount: true },
+      }),
     ]);
-    res.json({ itineraries, total, limit: take, offset: skip });
+    const pipelineTotals = {
+      totalValue: 0,
+      wonValue: 0,
+      negotiationValue: 0,
+      lostValue: 0,
+    };
+    const wonStatuses = new Set(["accepted", "advance_paid", "fully_paid"]);
+    const negotiationStatuses = new Set(["sent", "revised"]);
+    const lostStatuses = new Set(["rejected", "expired"]);
+    for (const row of totalsByStatus) {
+      const value = Number(row?._sum?.totalAmount) || 0;
+      pipelineTotals.totalValue += value;
+      if (wonStatuses.has(row.status)) pipelineTotals.wonValue += value;
+      if (negotiationStatuses.has(row.status)) pipelineTotals.negotiationValue += value;
+      if (lostStatuses.has(row.status)) pipelineTotals.lostValue += value;
+    }
+    res.json({
+      itineraries,
+      total,
+      limit: take,
+      offset: skip,
+      pipelineTotals,
+    });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] list error:", e.message);

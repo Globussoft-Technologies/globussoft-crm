@@ -56,6 +56,7 @@ prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findMany = vi.fn();
 prisma.itinerary.findFirst = prisma.itinerary.findFirst || vi.fn();
 prisma.itinerary.count = vi.fn();
+prisma.itinerary.groupBy = vi.fn();
 prisma.itinerary.create = vi.fn();
 prisma.itinerary.update = prisma.itinerary.update || vi.fn();
 prisma.itinerary.delete = prisma.itinerary.delete || vi.fn();
@@ -173,6 +174,7 @@ beforeEach(() => {
   });
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.itinerary.count.mockReset().mockResolvedValue(0);
+  prisma.itinerary.groupBy.mockReset().mockResolvedValue([]);
   prisma.itinerary.create.mockReset().mockResolvedValue(HAPPY_CREATE_RESULT);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findMany.mockReset().mockResolvedValue([]);
@@ -244,6 +246,74 @@ describe('GET /api/travel/itineraries - pipeline pagination filters', () => {
         contact: { name: { contains: 'maya' } },
       }),
     });
+  });
+
+  test('uses deterministic server ordering and returns totals for the full filtered result', async () => {
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 12, destination: 'Bali B', status: 'sent', totalAmount: 200 },
+      { id: 11, destination: 'Bali A', status: 'accepted', totalAmount: 100 },
+    ]);
+    prisma.itinerary.count.mockResolvedValue(3);
+    prisma.itinerary.groupBy.mockResolvedValue([
+      { status: 'accepted', _sum: { totalAmount: 500 } },
+      { status: 'sent', _sum: { totalAmount: 250 } },
+      { status: 'rejected', _sum: { totalAmount: 50 } },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itineraries?destination=bali&sortKey=amount&sortDirection=asc&limit=2')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.itinerary.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ totalAmount: 'asc' }, { id: 'asc' }],
+        take: 2,
+        skip: 0,
+      }),
+    );
+    expect(prisma.itinerary.groupBy).toHaveBeenCalledWith({
+      by: ['status'],
+      where: expect.objectContaining({
+        tenantId: 1,
+        destination: { contains: 'bali' },
+      }),
+      _sum: { totalAmount: true },
+    });
+    expect(res.body).toMatchObject({
+      total: 3,
+      pipelineTotals: {
+        totalValue: 800,
+        wonValue: 500,
+        negotiationValue: 250,
+        lostValue: 50,
+      },
+    });
+  });
+
+  test('uses createdAt and id for deterministic default offset pagination', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itineraries?limit=20&offset=20')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.itinerary.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 20,
+        skip: 20,
+      }),
+    );
+  });
+
+  test('rejects unsupported sort keys', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itineraries?sortKey=tenantId&sortDirection=asc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_SORT_KEY' });
+    expect(prisma.itinerary.findMany).not.toHaveBeenCalled();
   });
 });
 

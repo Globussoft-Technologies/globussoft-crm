@@ -307,19 +307,61 @@ describe("TravelPipeline", () => {
     });
   });
 
-  // 10. Text search filters client-side
-  it("text search hides non-matching rows without re-fetching", async () => {
+  // 10. Text search filters immediately and refreshes the server-paginated total
+  it("text search hides non-matching rows and re-fetches with a destination filter", async () => {
     renderPage();
     await screen.findByText("Bali Honeymoon Special");
-    const prevCallCount = fetchApi.mock.calls.length;
     const searchInput = screen.getByPlaceholderText("Filter by tour title...");
     fireEvent.change(searchInput, { target: { value: "bali" } });
     // Bali row still visible
     expect(screen.getByText("Bali Honeymoon Special")).toBeInTheDocument();
     // Europe row hidden
     expect(screen.queryByText("Europe Grand Tour")).not.toBeInTheDocument();
-    // no extra fetch fired
-    expect(fetchApi.mock.calls.length).toBe(prevCallCount);
+    await waitFor(() => {
+      const calls = fetchApi.mock.calls.map((call) => call[0]);
+      expect(calls.some((url) => url.includes("destination=bali"))).toBe(true);
+    });
+  });
+
+  it("renders Diagnostics-style pagination and requests the selected page", async () => {
+    const firstPageRows = Array.from({ length: 20 }, (_, index) =>
+      makeItin({ id: index + 1, destination: `Trip ${index + 1}` }),
+    );
+    fetchApi.mockResolvedValue({ itineraries: firstPageRows, total: 45 });
+
+    renderPage();
+
+    expect(await screen.findByTestId("pipeline-pager")).toHaveTextContent(
+      "Showing 1-20 of 45 deals",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Go to page 2" }));
+
+    await waitFor(() => {
+      const calls = fetchApi.mock.calls.map((call) => call[0]);
+      expect(
+        calls.some((url) => url.includes("limit=20") && url.includes("offset=20")),
+      ).toBe(true);
+    });
+  });
+
+  it("changes the page size and resets pagination to the first page", async () => {
+    fetchApi.mockResolvedValue({ itineraries: DEFAULT_ITINS, total: 45 });
+    renderPage();
+
+    await screen.findByTestId("pipeline-pager");
+    fireEvent.change(screen.getByRole("combobox", { name: "Deals per page" }), {
+      target: { value: "10" },
+    });
+
+    await waitFor(() => {
+      const calls = fetchApi.mock.calls.map((call) => call[0]);
+      expect(
+        calls.some((url) => url.includes("limit=10") && url.includes("offset=0")),
+      ).toBe(true);
+    });
+    expect(screen.getByTestId("pipeline-pager")).toHaveTextContent(
+      "Showing 1-10 of 45 deals",
+    );
   });
 
   // 11. Inline status PATCH

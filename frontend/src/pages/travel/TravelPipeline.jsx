@@ -18,7 +18,7 @@
 import { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate, Link, useLocation, useSearchParams } from "react-router-dom";
 import {
-  Plane, Plus, Upload, Download, RefreshCw, Pencil, Trash2, X, ArrowUpDown, ChevronUp, ChevronDown,
+  Plane, Plus, Upload, RefreshCw, Pencil, Trash2, X, ArrowUpDown, ChevronUp, ChevronDown,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -26,6 +26,7 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
 import CountBadge from "../../components/CountBadge";
+import Pagination from "../../components/ui/Pagination";
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -42,6 +43,9 @@ const SUB_BRAND_OPTIONS = [
   { value: "visasure", label: "Visa Sure" },
 ];
 const LAST_LIST_URL_KEY = "travel.pipeline.lastListUrl";
+const DEFAULT_PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
+const MAX_PAGE_SIZE = 200;
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
@@ -190,6 +194,18 @@ function fmtDate(d) {
 
 // ─── Export helper ────────────────────────────────────────────────────────
 
+function readPageParam(params) {
+  return Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
+}
+
+function readPageSizeParam(params) {
+  const value = parseInt(
+    params.get("pageSize") || String(DEFAULT_PAGE_SIZE),
+    10,
+  );
+  return Math.min(MAX_PAGE_SIZE, Math.max(1, value || DEFAULT_PAGE_SIZE));
+}
+
 function exportCsv(rows) {
   const headers = ["ID", "Destination", "Contact", "Sub-brand", "Total amount", "Currency", "Status", "Travel date", "Created"];
   const lines = [
@@ -232,19 +248,21 @@ export default function TravelPipeline() {
   const notify = useNotify();
   const navigate = useNavigate();
   const theme = useTravelTheme();
+  const page = readPageParam(searchParams);
 
   // Data
   const [itineraries, setItineraries] = useState([]);
   const [total, setTotal]             = useState(0);
   const [loading, setLoading]         = useState(true);
-  const [offset, setOffset]           = useState(0);
-  const LIMIT = 100;
+  const [pageSize, setPageSize] = useState(() => readPageSizeParam(searchParams));
 
   // Filters
   const [filterSubBrand,   setFilterSubBrand]   = useState(searchParams.get("subBrand") || activeSubBrand || "");
   const [filterStatus,     setFilterStatus]     = useState(searchParams.get("status") || "");
   const [search,           setSearch]           = useState(searchParams.get("search") || "");
   const [filterContact,  setFilterContact]  = useState(searchParams.get("contact") || "");
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  const [debouncedContact, setDebouncedContact] = useState(filterContact);
   const [sortKey, setSortKey] = useState(searchParams.get("sortKey") || null);
   const [sortDirection, setSortDirection] = useState(searchParams.get("sortDirection") || null);
   const updateSubBrandFilter = (value) => {
@@ -252,12 +270,26 @@ export default function TravelPipeline() {
     const next = new URLSearchParams(searchParams);
     if (value) next.set("subBrand", value);
     else next.delete("subBrand");
+    next.set("page", "1");
     setSearchParams(next, { replace: true });
   };
 
-  const updateListParam = (key, value) => {
+  const updateListParam = (key, value, { resetPage = false } = {}) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value); else next.delete(key);
+    if (resetPage) next.set("page", "1");
+    setSearchParams(next, { replace: true });
+  };
+
+  const setPage = (nextPage) => {
+    updateListParam("page", Math.max(1, nextPage));
+  };
+
+  const setPageSizeAndReset = (nextPageSize) => {
+    setPageSize(nextPageSize);
+    const next = new URLSearchParams(searchParams);
+    next.set("page", "1");
+    next.set("pageSize", String(nextPageSize));
     setSearchParams(next, { replace: true });
   };
 
@@ -279,7 +311,17 @@ export default function TravelPipeline() {
 
   useEffect(() => {
     if (!searchParams.get("subBrand")) setFilterSubBrand(activeSubBrand || "");
-  }, [activeSubBrand]);
+  }, [activeSubBrand, searchParams]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedContact(filterContact.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [filterContact]);
 
   useEffect(() => {
     if (location.pathname !== "/travel/pipeline") return;
@@ -314,20 +356,20 @@ export default function TravelPipeline() {
   }, [creating]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load itineraries ────────────────────────────────────────────────
-  const load = (resetOffset = true) => {
+  const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterStatus)   qs.set("status", filterStatus);
-    const newOffset = resetOffset ? 0 : offset;
-    qs.set("limit", String(LIMIT));
-    qs.set("offset", String(newOffset));
+    if (debouncedSearch) qs.set("destination", debouncedSearch);
+    if (debouncedContact) qs.set("contact", debouncedContact);
+    qs.set("limit", String(pageSize));
+    qs.set("offset", String((page - 1) * pageSize));
     fetchApi(`/api/travel/itineraries?${qs.toString()}`)
       .then((res) => {
         const rows = Array.isArray(res?.itineraries) ? res.itineraries : [];
-        setItineraries(resetOffset ? rows : (prev) => [...prev, ...rows]);
+        setItineraries(rows);
         setTotal(typeof res?.total === "number" ? res.total : rows.length);
-        if (resetOffset) setOffset(0);
       })
       .catch((e) => {
         notify.error(e?.body?.error || "Failed to load pipeline");
@@ -336,26 +378,13 @@ export default function TravelPipeline() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(true); }, [filterSubBrand, filterStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [filterSubBrand, filterStatus, debouncedSearch, debouncedContact, page, pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadMore = () => {
-    const newOffset = offset + LIMIT;
-    setOffset(newOffset);
-    setLoading(true);
-    const qs = new URLSearchParams();
-    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
-    if (filterStatus)   qs.set("status", filterStatus);
-    qs.set("limit", String(LIMIT));
-    qs.set("offset", String(newOffset));
-    fetchApi(`/api/travel/itineraries?${qs.toString()}`)
-      .then((res) => {
-        const rows = Array.isArray(res?.itineraries) ? res.itineraries : [];
-        setItineraries((prev) => [...prev, ...rows]);
-        setTotal(typeof res?.total === "number" ? res.total : total);
-      })
-      .catch((e) => notify.error(e?.body?.error || "Failed to load more"))
-      .finally(() => setLoading(false));
-  };
+  const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
+
+  useEffect(() => {
+    if (total > 0 && page > pageCount) setPage(pageCount);
+  }, [page, pageCount, total]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Filtered rows (client-side search on top of server-side filters) ─
   const visible = useMemo(() => {
@@ -483,7 +512,7 @@ export default function TravelPipeline() {
       if (newId) {
         navigate(`/travel/itineraries/${newId}`);
       } else {
-        load(true);
+        load();
       }
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to create");
@@ -525,8 +554,8 @@ export default function TravelPipeline() {
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>
             Travel Pipeline
             <CountBadge
-              count={visible.length}
-              title={`${visible.length.toLocaleString()} deals in view`}
+              count={total}
+              title={`${total.toLocaleString()} total deals`}
               style={{ marginLeft: 8 }}
             />
           </h1>
@@ -586,7 +615,7 @@ export default function TravelPipeline() {
         </select>
         <select
           value={filterStatus}
-          onChange={(e) => { setFilterStatus(e.target.value); updateListParam("status", e.target.value); }}
+          onChange={(e) => { setFilterStatus(e.target.value); updateListParam("status", e.target.value, { resetPage: true }); }}
           style={selectStyle}
           aria-label="Filter by status"
         >
@@ -597,7 +626,7 @@ export default function TravelPipeline() {
         <input
           type="search"
           value={search}
-          onChange={(e) => { setSearch(e.target.value); updateListParam("search", e.target.value); }}
+          onChange={(e) => { setSearch(e.target.value); updateListParam("search", e.target.value, { resetPage: true }); }}
           placeholder="Filter by tour title..."
           aria-label="Filter by tour title"
           style={{ ...selectStyle, minWidth: 180 }}
@@ -605,14 +634,14 @@ export default function TravelPipeline() {
         <input
           type="search"
           value={filterContact}
-          onChange={(e) => { setFilterContact(e.target.value); updateListParam("contact", e.target.value); }}
+          onChange={(e) => { setFilterContact(e.target.value); updateListParam("contact", e.target.value, { resetPage: true }); }}
           placeholder="Filter by contact name..."
           aria-label="Filter by contact name"
           style={{ ...selectStyle, minWidth: 170 }}
         />
         <button
           type="button"
-          onClick={() => load(true)}
+          onClick={load}
           style={secondaryBtn}
           title="Refresh"
           aria-label="Refresh pipeline"
@@ -793,12 +822,51 @@ export default function TravelPipeline() {
           </TopScrollSync>
         )}
 
-        {/* Load more */}
-        {!loading && itineraries.length < total && (
-          <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border-light)", textAlign: "center" }}>
-            <button type="button" onClick={loadMore} style={secondaryBtn}>
-              Load more ({total - itineraries.length} remaining)
-            </button>
+        {!loading && total > 0 && (
+          <div
+            data-testid="pipeline-pager"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.75rem",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0.85rem 1rem",
+              borderTop: "1px solid var(--border-color)",
+              fontSize: "0.85rem",
+            }}
+          >
+            <div style={{ color: "var(--text-secondary)" }}>
+              Showing{" "}
+              <strong style={{ color: "var(--text-primary)" }}>
+                {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)}
+              </strong>{" "}
+              of <strong style={{ color: "var(--text-primary)" }}>{total}</strong>{" "}
+              deals
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", color: "var(--text-secondary)" }}>
+                Per page:
+                <select
+                  aria-label="Deals per page"
+                  value={pageSize}
+                  onChange={(e) => setPageSizeAndReset(Number(e.target.value))}
+                  style={{ ...selectStyle, minWidth: 70, padding: "0.3rem 0.55rem" }}
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </label>
+              <Pagination
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                onChange={setPage}
+                showRangeLabel={false}
+                style={{ margin: 0, padding: 0 }}
+              />
+            </div>
           </div>
         )}
         {loading && itineraries.length > 0 && (

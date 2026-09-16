@@ -217,6 +217,36 @@ describe('GET /api/travel/itineraries — search', () => {
   });
 });
 
+describe('GET /api/travel/itineraries - pipeline pagination filters', () => {
+  test('supports separate destination/contact filters with limit and offset', async () => {
+    prisma.itinerary.findMany.mockResolvedValue([]);
+    prisma.itinerary.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itineraries?destination=bali&contact=maya&limit=20&offset=40')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.itinerary.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 1,
+          destination: { contains: 'bali' },
+          contact: { name: { contains: 'maya' } },
+        }),
+        take: 20,
+        skip: 40,
+      }),
+    );
+    expect(prisma.itinerary.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        destination: { contains: 'bali' },
+        contact: { name: { contains: 'maya' } },
+      }),
+    });
+  });
+});
+
 describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {
   test('1. happy path: 2 days × 3 items → 1 itinerary + 6 items + 201', async () => {
     const app = makeApp();

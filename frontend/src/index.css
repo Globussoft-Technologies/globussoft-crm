@@ -256,6 +256,50 @@
   color: var(--text-primary);
 }
 
+/* Keep accidental page-wide overflow from creating a second horizontal
+   scrollbar. Components that genuinely need horizontal scrolling (such as
+   dense data tables) own an explicit nested overflow container. */
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Keep the application frame and page roots from becoming additional
+   horizontal scroll containers. Data tables provide their own nested scroll
+   area when their columns cannot fit. */
+.app-shell,
+.app-main,
+.app-main > main,
+.travel-content-frame,
+.expenses-page {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden !important;
+}
+
+.expenses-page > .card,
+.expenses-page .card {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden !important;
+}
+
+.cost-master-required {
+  color: var(--danger-color, #dc2626);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cost-master-optional {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 [data-theme="light"] body {
   background-color: var(--bg-color);
   color: var(--text-primary);
@@ -2937,6 +2981,14 @@ table.leads-table thead th {
   z-index: 6;
   background-color: var(--modal-bg);
   box-shadow: inset 0 -1px 0 var(--border-color);
+}
+
+/* Both panes already begin below a 16px scrollbar/spacer. Their headers are
+   sticky within those offset panes, so another top offset either overlaps the
+   first scrollable row or shifts the frozen Name column down by 16px. */
+.leads-table-frozen-pane table.leads-table thead th,
+.leads-table-scroll-pane table.leads-table thead th {
+  top: 0;
 }
 
 /* Generic CRM: the top scrollbar is removed, so the sticky header docks
@@ -5966,4 +6018,87 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 @media (prefers-reduced-motion: reduce) {
   .geofence-pulse-ring { animation: none; stroke-opacity: 0.85; }
   .geofence-spin { animation: none; }
+}
+.duplicates-dialog {
+  width: min(1080px, calc(100vw - 32px)) !important;
+  max-width: calc(100vw - 32px);
+  height: min(80vh, calc(100vh - 32px));
+  box-sizing: border-box;
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden !important;
+  padding: 0 !important;
+}
+
+.duplicates-dialog__header {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 1.5rem 2rem 1rem;
+  margin: 0 0 1.5rem !important;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent !important;
+}
+
+.duplicates-dialog__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+  padding: 0 2rem 2rem;
+}
+
+.duplicates-dialog__content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.duplicates-dialog__content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.duplicates-dialog__content::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.duplicates-list {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.duplicates-contact-row {
+  display: grid !important;
+  grid-template-columns: 72px minmax(190px, 1.15fr) minmax(240px, 1.45fr) minmax(160px, 1fr) 82px;
+  align-items: start !important;
+  gap: 12px !important;
+  min-width: 790px;
+}
+
+.duplicates-contact-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.duplicates-contact-row__role,
+.duplicates-contact-row__score {
+  white-space: nowrap;
+}
+
+.duplicates-contact-row__score {
+  margin-left: 0 !important;
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .duplicates-dialog__header { padding: 1rem 1rem .75rem; }
+  .duplicates-dialog__content { padding: 0 1rem 1rem; }
+  .duplicates-dialog > div:first-child { margin-bottom: 1rem !important; }
+  .duplicates-dialog h3 { font-size: 1rem !important; }
 }

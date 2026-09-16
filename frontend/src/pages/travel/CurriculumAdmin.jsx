@@ -879,7 +879,7 @@ export default function CurriculumAdmin() {
                 <th style={{ ...th, width: '5%' }}>{sortHeader('Fit', 'fitScore')}</th>
                 <th style={{ ...th, width: '7%' }}>{sortHeader('Conf.', 'confidenceScore')}</th>
                 <th style={{ ...th, width: '5%' }}>Active</th>
-                {isAdmin && <th style={{ ...th, width: '13%' }}>Actions</th>}
+                {isAdmin && <th style={{ ...th, width: '13%', textAlign: 'center' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>

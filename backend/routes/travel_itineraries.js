@@ -729,6 +729,14 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       const cid = parseInt(req.query.contactId, 10);
       if (Number.isFinite(cid)) where.contactId = cid;
     }
+    const destination = String(req.query.destination || "").trim();
+    if (destination) {
+      where.destination = { contains: destination };
+    }
+    const contact = String(req.query.contact || "").trim();
+    if (contact) {
+      where.contact = { name: { contains: contact } };
+    }
     if (req.query.from || req.query.to) {
       const from = req.query.from
         ? new Date(`${String(req.query.from)}T00:00:00.000`)

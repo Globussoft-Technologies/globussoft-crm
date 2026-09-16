@@ -2132,13 +2132,14 @@ const Contacts = () => {
       {/* Duplicate Contacts Modal */}
       {showDupes && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div className="card" style={{ padding: '2rem', width: '700px', maxHeight: '80vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <div className="card duplicates-dialog" style={{ padding: '2rem', width: '700px', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div className="duplicates-dialog__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <GitMerge size={20} color="var(--accent-color)" /> Duplicate Contacts ({dupes.length} groups)
               </h3>
               <button onClick={() => setShowDupes(false)} aria-label="Close duplicates dialog" title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={20} /></button>
             </div>
+            <div className="duplicates-dialog__content">
             {dupes.length === 0 ? (
               <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No duplicate contacts found. Your database is clean!</p>
             ) : (
@@ -2166,21 +2167,21 @@ const Contacts = () => {
                         </button>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
-                        <span style={{ fontSize: '0.65rem', fontWeight: '700', color: '#10b981', textTransform: 'uppercase' }}>Primary</span>
-                        <span style={{ fontWeight: '500', fontSize: '0.85rem' }}>{group.primary.name}</span>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{group.primary.email}</span>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{group.primary.company}</span>
-                        <span style={{ fontSize: '0.7rem', marginLeft: 'auto', color: 'var(--text-secondary)' }}>Score: {group.primary.aiScore}</span>
+                    <div className="duplicates-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                      <div className="duplicates-contact-row" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                        <span className="duplicates-contact-row__role" style={{ fontSize: '0.65rem', fontWeight: '700', color: '#10b981', textTransform: 'uppercase' }}>Primary</span>
+                        <span className="duplicates-contact-row__name" style={{ fontWeight: '500', fontSize: '0.85rem' }}>{group.primary.name}</span>
+                        <span className="duplicates-contact-row__email" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{group.primary.email}</span>
+                        <span className="duplicates-contact-row__company" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{group.primary.company}</span>
+                        <span className="duplicates-contact-row__score" style={{ fontSize: '0.7rem', marginLeft: 'auto', color: 'var(--text-secondary)' }}>Score: {group.primary.aiScore}</span>
                       </div>
                       {group.duplicates.map(dup => (
-                        <div key={dup.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.15)' }}>
-                          <span style={{ fontSize: '0.65rem', fontWeight: '700', color: '#ef4444', textTransform: 'uppercase' }}>Dup</span>
-                          <span style={{ fontWeight: '500', fontSize: '0.85rem' }}>{dup.name}</span>
-                          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{dup.email}</span>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{dup.company}</span>
-                          <span style={{ fontSize: '0.7rem', marginLeft: 'auto', color: 'var(--text-secondary)' }}>Score: {dup.aiScore}</span>
+                        <div key={dup.id} className="duplicates-contact-row" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.15)' }}>
+                          <span className="duplicates-contact-row__role" style={{ fontSize: '0.65rem', fontWeight: '700', color: '#ef4444', textTransform: 'uppercase' }}>Dup</span>
+                          <span className="duplicates-contact-row__name" style={{ fontWeight: '500', fontSize: '0.85rem' }}>{dup.name}</span>
+                          <span className="duplicates-contact-row__email" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{dup.email}</span>
+                          <span className="duplicates-contact-row__company" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{dup.company}</span>
+                          <span className="duplicates-contact-row__score" style={{ fontSize: '0.7rem', marginLeft: 'auto', color: 'var(--text-secondary)' }}>Score: {dup.aiScore}</span>
                         </div>
                       ))}
                     </div>
@@ -2188,6 +2189,7 @@ const Contacts = () => {
                 ))}
               </div>
             )}
+            </div>
           </div>
         </div>
       )}

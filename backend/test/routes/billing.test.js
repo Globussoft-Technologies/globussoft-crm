@@ -96,6 +96,7 @@ prisma.product = {
 };
 prisma.contact = {
   findFirst: vi.fn(),
+  findMany: vi.fn(),
   create: vi.fn(),
 };
 prisma.payment = {
@@ -166,6 +167,8 @@ beforeEach(() => {
   prisma.service.findMany.mockReset();
   prisma.product.findMany.mockReset();
   prisma.contact.findFirst.mockReset();
+  prisma.contact.findMany.mockReset();
+  prisma.contact.findMany.mockResolvedValue([]);
   prisma.contact.create.mockReset();
   prisma.payment.create.mockReset();
   prisma.payment.findFirst.mockReset();
@@ -474,7 +477,6 @@ describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
     prisma.service.findMany.mockResolvedValue([
       { id: 21, name: 'Skin consultation', basePrice: 1500, discountedPrice: null },
     ]);
-    prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 88 });
     prisma.invoice.create.mockResolvedValue({
       id: 1002,
@@ -524,6 +526,71 @@ describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
         amount: 3750,
       }),
     ]);
+  });
+
+  test('wellness line amount is calculated from the normalized stored precision', async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 15,
+      name: 'Priya Sharma',
+      email: null,
+      phone: null,
+      gst: null,
+      contactId: 88,
+    });
+    prisma.contact.findFirst.mockResolvedValue({ id: 88 });
+    prisma.service.findMany.mockResolvedValue([
+      { id: 21, name: 'Skin consultation', basePrice: 10.005, discountedPrice: null },
+    ]);
+    prisma.invoice.create.mockImplementation(({ data }) => Promise.resolve({ id: 1003, ...data }));
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .post('/api/billing')
+      .send({
+        dueDate: futureDate,
+        patientId: 15,
+        lineItems: [{ type: 'service', itemId: 21, quantity: 1.2345 }],
+      });
+
+    expect(res.status).toBe(201);
+    const createArgs = prisma.invoice.create.mock.calls[0][0];
+    const [line] = JSON.parse(createArgs.data.lineItemsJson);
+    expect(line).toMatchObject({ quantity: 1.235, unitPrice: 10.01, amount: 12.36 });
+    expect(createArgs.data.amount).toBe(12.36);
+    expect(line.amount).toBe(Math.round(line.quantity * line.unitPrice * 100) / 100);
+  });
+
+  test('wellness invoice rejects ambiguous contact matches instead of linking arbitrarily', async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 15,
+      name: 'Priya Sharma',
+      email: 'priya@example.in',
+      phone: '+919876543210',
+      gst: null,
+      contactId: null,
+    });
+    prisma.service.findMany.mockResolvedValue([
+      { id: 21, name: 'Skin consultation', basePrice: 1500, discountedPrice: null },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([{ id: 88 }, { id: 99 }]);
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .post('/api/billing')
+      .send({
+        dueDate: futureDate,
+        patientId: 15,
+        lineItems: [{ type: 'service', itemId: 21, quantity: 1 }],
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AMBIGUOUS_CONTACT_MATCH');
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 1, deletedAt: null }),
+      orderBy: { id: 'asc' },
+    }));
   });
 });
 

@@ -1111,7 +1111,7 @@ router.get("/patients", phiReadGate, async (req, res) => {
       where,
       take: Math.min(parseInt(limit, 10) || 50, 200),
       skip: parseInt(offset, 10) || 0,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     };
     if (wantFullShape) {
       findManyArgs.include = {

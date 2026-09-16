@@ -180,13 +180,15 @@ function defaultFetchMock(url, opts) {
   if (url === '/api/contacts') return Promise.resolve(sampleContacts);
   if (url === '/api/deals') return Promise.resolve(sampleDeals);
   if (url === '/api/payments/config') return Promise.resolve(samplePaymentConfig);
-  if (url === '/api/wellness/patients?limit=200&offset=0&fields=full') {
+  if (url === '/api/wellness/patients?limit=50&offset=0&fields=full') {
     return Promise.resolve({ patients: samplePatients, total: samplePatients.length });
   }
   if (url === '/api/wellness/patients/11/visits') return Promise.resolve([sampleVisit]);
   if (url === '/api/wellness/visits/501/consumptions') return Promise.resolve(sampleVisitConsumptions);
   if (url === '/api/wellness/services') return Promise.resolve(sampleServices);
-  if (url === '/api/wellness/products') return Promise.resolve(sampleProducts);
+  if (url === '/api/wellness/products?paginate=true&page=1&limit=100') {
+    return Promise.resolve({ items: sampleProducts, pagination: { total: sampleProducts.length } });
+  }
   return Promise.resolve(null);
 }
 
@@ -916,13 +918,13 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     expect(screen.queryByLabelText(/^Sub-brand$/i)).toBeNull();
   });
 
-  it('loads every page of the wellness patient master list for the selector', async () => {
+  it('uses a bounded backend search for wellness patients', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/wellness/patients?limit=200&offset=0&fields=full') {
-        return Promise.resolve({ patients: [samplePatients[0]], total: 2 });
+      if (url === '/api/wellness/patients?limit=50&offset=0&fields=full') {
+        return Promise.resolve({ patients: [samplePatients[0]], total: 1 });
       }
-      if (url === '/api/wellness/patients?limit=200&offset=1&fields=full') {
-        return Promise.resolve({ patients: [samplePatients[1]], total: 2 });
+      if (url === '/api/wellness/patients?limit=50&offset=0&fields=full&q=Arjun') {
+        return Promise.resolve({ patients: [samplePatients[1]], total: 1 });
       }
       return defaultFetchMock(url, opts);
     });
@@ -934,9 +936,39 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     fireEvent.focus(patientPicker);
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Priya Sharma/ })).toBeInTheDocument();
+    });
+    fireEvent.change(patientPicker, { target: { value: 'Arjun' } });
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/wellness/patients?limit=50&offset=0&fields=full&q=Arjun',
+      );
       expect(screen.getByRole('option', { name: /Arjun Mehta/ })).toBeInTheDocument();
     });
-    expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/patients?limit=200&offset=1&fields=full');
+    expect(fetchApiMock.mock.calls.some(([url]) => String(url).includes('offset=50'))).toBe(false);
+  });
+
+  it('finds products beyond the first catalogue page through backend search', async () => {
+    const rareProduct = { id: 999, name: 'Rare treatment kit', price: 725, discountedPrice: null };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/wellness/products?paginate=true&page=1&limit=100&q=Rare') {
+        return Promise.resolve({ items: [rareProduct], pagination: { total: 1 } });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+    await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    fireEvent.change(screen.getByLabelText(/Line item 1 type/i), { target: { value: 'product' } });
+    const productPicker = screen.getByRole('combobox', { name: /Line item 1 product or service/i });
+    fireEvent.change(productPicker, { target: { value: 'Rare' } });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/wellness/products?paginate=true&page=1&limit=100&q=Rare',
+      );
+      expect(screen.getByRole('option', { name: 'Rare treatment kit' })).toBeInTheDocument();
+    });
   });
 
   it('keeps the create modal fixed while scrolling only its form content', async () => {
@@ -972,7 +1004,7 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     fireEvent.change(screen.getByLabelText(/Patient visit/i), { target: { value: '501' } });
     await waitFor(() => {
       expect(screen.getByLabelText(/Line item 1 product or service/i).value).toBe('21');
-      expect(screen.getByLabelText(/Line item 2 product or service/i).value).toBe('31');
+      expect(screen.getByLabelText(/Line item 2 product or service/i).value).toBe('Aftercare kit');
     });
     expect(screen.getByText('$2500.00', { selector: 'strong' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/Billing address/i), { target: { value: '12 Clinic Road, Ranchi' } });

@@ -108,40 +108,6 @@ const createInvoiceForm = (subBrand = "") => ({
   lineItems: [createEmptyLineItem()],
 });
 
-async function fetchAllWellnessPatients() {
-  const pageSize = 200;
-  const allPatients = [];
-  let offset = 0;
-  let total = null;
-
-  while (true) {
-    const response = await fetchApi(
-      `/api/wellness/patients?limit=${pageSize}&offset=${offset}&fields=full`,
-    );
-    const page = Array.isArray(response)
-      ? response
-      : Array.isArray(response?.patients)
-        ? response.patients
-        : [];
-    if (total === null && response && !Array.isArray(response)) {
-      const parsedTotal = Number(response.total);
-      total = Number.isFinite(parsedTotal) ? parsedTotal : null;
-    }
-    allPatients.push(...page);
-
-    if (
-      page.length === 0
-      || (total === null && page.length < pageSize)
-      || (total !== null && allPatients.length >= total)
-    ) {
-      break;
-    }
-    offset += page.length;
-  }
-
-  return allPatients;
-}
-
 const INVOICE_TABLE_MIN_WIDTH = 940;
 const WELLNESS_INVOICE_TABLE_MIN_WIDTH = 1490;
 
@@ -230,9 +196,17 @@ export default function Invoices() {
   const [visits, setVisits] = useState([]);
   const [services, setServices] = useState([]);
   const [products, setProducts] = useState([]);
+  const [patientSearch, setPatientSearch] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [isLoadingPatients, setIsLoadingPatients] = useState(false);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
   const [isLoadingVisitItems, setIsLoadingVisitItems] = useState(false);
   const visitRequestRef = useRef(0);
+  const patientLookupRequestRef = useRef(0);
+  const productLookupRequestRef = useRef(0);
+  const selectedPatientIdRef = useRef("");
+  const selectedProductIdsRef = useRef(new Set());
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
   const [linkCopied, setLinkCopied] = useState(false);
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
@@ -291,27 +265,12 @@ export default function Invoices() {
       setDeals(Array.isArray(d) ? d : []);
 
       if (isWellness) {
-        const [patientResult, serviceResult, productResult] = await Promise.allSettled([
-          // This page is admin/manager-gated by the billing route. The full
-          // patient shape supplies the profile fields used to prefill the
-          // invoice snapshot after a master-record selection.
-          fetchAllWellnessPatients(),
+        const [serviceResult] = await Promise.allSettled([
           fetchApi("/api/wellness/services"),
-          fetchApi("/api/wellness/products"),
         ]);
-        setPatients(patientResult.status === "fulfilled" ? patientResult.value : []);
         setServices(
           serviceResult.status === "fulfilled" && Array.isArray(serviceResult.value)
             ? serviceResult.value
-            : [],
-        );
-        setProducts(
-          productResult.status === "fulfilled"
-            ? Array.isArray(productResult.value)
-              ? productResult.value
-              : Array.isArray(productResult.value?.items)
-                ? productResult.value.items
-                : []
             : [],
         );
       } else {
@@ -330,6 +289,74 @@ export default function Invoices() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Patient and product selectors use bounded backend searches. This keeps
+  // the invoice screen responsive for large clinics and avoids downloading
+  // every patient record (including PHI) just to populate a combobox.
+  useEffect(() => {
+    if (!isWellness) return undefined;
+    const requestId = ++patientLookupRequestRef.current;
+    setIsLoadingPatients(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ limit: "50", offset: "0", fields: "full" });
+        if (patientSearch.trim()) params.set("q", patientSearch.trim());
+        const response = await fetchApi(`/api/wellness/patients?${params.toString()}`);
+        if (requestId !== patientLookupRequestRef.current) return;
+        const incoming = Array.isArray(response)
+          ? response
+          : Array.isArray(response?.patients)
+            ? response.patients
+            : [];
+        setPatients((current) => {
+          const selected = current.filter(
+            (patient) => String(patient.id) === String(selectedPatientIdRef.current),
+          );
+          return [...new Map([...selected, ...incoming].map((patient) => [patient.id, patient])).values()];
+        });
+      } catch (_err) {
+        if (requestId === patientLookupRequestRef.current) setPatients([]);
+      } finally {
+        if (requestId === patientLookupRequestRef.current) setIsLoadingPatients(false);
+      }
+    }, patientSearch.trim() ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [isWellness, patientSearch]);
+
+  useEffect(() => {
+    if (!isWellness) return undefined;
+    const requestId = ++productLookupRequestRef.current;
+    setIsLoadingProducts(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ paginate: "true", page: "1", limit: "100" });
+        if (productSearch.trim()) params.set("q", productSearch.trim());
+        const response = await fetchApi(`/api/wellness/products?${params.toString()}`);
+        if (requestId !== productLookupRequestRef.current) return;
+        const incoming = Array.isArray(response)
+          ? response
+          : Array.isArray(response?.items)
+            ? response.items
+            : [];
+        setProducts((current) => {
+          const selected = current.filter((product) => selectedProductIdsRef.current.has(String(product.id)));
+          return [...new Map([...selected, ...incoming].map((product) => [product.id, product])).values()];
+        });
+      } catch (_err) {
+        if (requestId === productLookupRequestRef.current) setProducts([]);
+      } finally {
+        if (requestId === productLookupRequestRef.current) setIsLoadingProducts(false);
+      }
+    }, productSearch.trim() ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [isWellness, productSearch]);
+
+  selectedPatientIdRef.current = newInvoice.patientId;
+  selectedProductIdsRef.current = new Set(
+    newInvoice.lineItems
+      .filter((item) => item.type === "product" && item.itemId)
+      .map((item) => String(item.itemId)),
+  );
 
   // Default the create-form brand to the currently-active sub-brand (travel).
   useEffect(() => {
@@ -1326,6 +1353,8 @@ export default function Invoices() {
                         label: `${patient.name || "Unnamed patient"}${patient.phone ? ` · ${patient.phone}` : ""}`,
                       }))}
                       placeholder="Search patient by name or phone..."
+                      onSearchChange={setPatientSearch}
+                      loading={isLoadingPatients}
                       aria-label="Customer or patient"
                     />
                   </div>
@@ -1646,21 +1675,37 @@ export default function Invoices() {
                             <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
                               Product / Service
                             </label>
-                            <select
-                              className="input-field"
-                              required
-                              value={item.itemId}
-                              onChange={(e) => handleLineItemChange(index, "itemId", e.target.value)}
-                              aria-label={`Line item ${index + 1} product or service`}
-                              style={{ background: "var(--input-bg)", padding: "0.55rem 0.45rem" }}
-                            >
-                              <option value="">Select {item.type}</option>
-                              {options.map((option) => (
-                                <option key={option.id} value={option.id}>
-                                  {option.name}
-                                </option>
-                              ))}
-                            </select>
+                            {item.type === "product" ? (
+                              <SearchableSingleSelect
+                                value={item.itemId}
+                                onChange={(value) => handleLineItemChange(index, "itemId", value)}
+                                options={options.map((option) => ({
+                                  value: String(option.id),
+                                  label: option.name,
+                                }))}
+                                placeholder="Search product..."
+                                noneLabel="Select product"
+                                onSearchChange={setProductSearch}
+                                loading={isLoadingProducts}
+                                aria-label={`Line item ${index + 1} product or service`}
+                              />
+                            ) : (
+                              <select
+                                className="input-field"
+                                required
+                                value={item.itemId}
+                                onChange={(e) => handleLineItemChange(index, "itemId", e.target.value)}
+                                aria-label={`Line item ${index + 1} product or service`}
+                                style={{ background: "var(--input-bg)", padding: "0.55rem 0.45rem" }}
+                              >
+                                <option value="">Select {item.type}</option>
+                                {options.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
                           <div>
                             <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
@@ -1929,7 +1974,8 @@ export default function Invoices() {
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
               <table
-                className={isWellness ? "stable-table wellness-invoice-table" : "stable-table"}
+                className="stable-table"
+                data-wellness-invoice={isWellness ? "true" : undefined}
                 style={{
                   width: "100%",
                   minWidth: `${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`,
@@ -2776,27 +2822,27 @@ export default function Invoices() {
           background-clip: border-box;
           box-shadow: inset 0 -1px 0 var(--border-color);
         }
-        .wellness-invoice-table th,
-        .wellness-invoice-table td {
+        [data-wellness-invoice="true"] th,
+        [data-wellness-invoice="true"] td {
           vertical-align: middle;
           padding: 0.75rem !important;
           line-height: 1.35;
           box-sizing: border-box;
           text-align: left;
         }
-        .wellness-invoice-table th {
+        [data-wellness-invoice="true"] th {
           white-space: nowrap;
         }
-        .wellness-invoice-table td:nth-child(1) {
+        [data-wellness-invoice="true"] td:nth-child(1) {
           overflow-wrap: anywhere;
         }
-        .wellness-invoice-table td:nth-child(2) > div,
-        .wellness-invoice-table td:nth-child(3) > div {
+        [data-wellness-invoice="true"] td:nth-child(2) > div,
+        [data-wellness-invoice="true"] td:nth-child(3) > div {
           min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .wellness-invoice-table .invoice-actions-cell > div {
+        [data-wellness-invoice="true"] .invoice-actions-cell > div {
           display: flex;
           align-items: center;
           justify-content: flex-start;

@@ -983,13 +983,15 @@ router.post(
             : (catalogItem.discountedPrice ?? catalogItem.price);
           const unitPrice = item.unitPrice == null ? Number(catalogPrice) : item.unitPrice;
           if (!Number.isFinite(unitPrice) || unitPrice < 0) return null;
+          const normalizedQuantity = Math.round(item.quantity * 1000) / 1000;
+          const normalizedUnitPrice = Math.round(unitPrice * 100) / 100;
           return {
             type: item.type,
             itemId: item.itemId,
             name: sanitizeText(catalogItem.name),
-            quantity: Math.round(item.quantity * 1000) / 1000,
-            unitPrice: Math.round(unitPrice * 100) / 100,
-            amount: Math.round(item.quantity * unitPrice * 100) / 100,
+            quantity: normalizedQuantity,
+            unitPrice: normalizedUnitPrice,
+            amount: Math.round(normalizedQuantity * normalizedUnitPrice * 100) / 100,
           };
         });
         if (normalizedItems.some((item) => !item)) {
@@ -998,7 +1000,9 @@ router.post(
             code: "INVALID_LINE_ITEM",
           });
         }
-        const lineItemsTotal = normalizedItems.reduce((sum, item) => sum + item.amount, 0);
+        const lineItemsTotal = Math.round(
+          normalizedItems.reduce((sum, item) => sum + item.amount, 0) * 100,
+        ) / 100;
         if (!Number.isFinite(lineItemsTotal) || lineItemsTotal <= 0 || lineItemsTotal > 1e10) {
           return res.status(400).json({
             error: "Line item total must be greater than 0",
@@ -1016,11 +1020,27 @@ router.post(
           const contactMatch = [];
           if (customerEmail) contactMatch.push({ email: customerEmail });
           if (customerPhone) contactMatch.push({ phone: customerPhone });
-          const existingContact = contactMatch.length
-            ? await prisma.contact.findFirst({
-                where: { tenantId: req.user.tenantId, OR: contactMatch },
+          const matchingContacts = contactMatch.length
+            ? await prisma.contact.findMany({
+                where: {
+                  tenantId: req.user.tenantId,
+                  deletedAt: null,
+                  OR: contactMatch,
+                },
+                orderBy: { id: "asc" },
+                take: 3,
                 select: { id: true },
               })
+            : [];
+          const matchedContactIds = [...new Set(matchingContacts.map((contact) => contact.id))];
+          if (matchedContactIds.length > 1) {
+            return res.status(409).json({
+              error: "Patient email or phone matches multiple contacts. Link the patient to the correct contact before invoicing.",
+              code: "AMBIGUOUS_CONTACT_MATCH",
+            });
+          }
+          const existingContact = matchedContactIds.length === 1
+            ? { id: matchedContactIds[0] }
             : null;
           const contact = existingContact || await prisma.contact.create({
             data: {

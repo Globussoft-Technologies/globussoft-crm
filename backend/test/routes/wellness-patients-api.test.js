@@ -574,6 +574,7 @@ describe('GET /api/wellness/patients?fields=summary — S96+S100 surface firstNa
     expect(findManyArg.select).toBeDefined();
     expect(findManyArg.select.firstName).toBe(true);
     expect(findManyArg.select.lastName).toBe(true);
+    expect(findManyArg.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     // PHI drops still hold on slim shape — adding firstName/lastName MUST
     // NOT have re-introduced phone/email/dob/allergies/notes.
     expect(findManyArg.select.phone).toBeUndefined();

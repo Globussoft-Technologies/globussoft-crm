@@ -701,6 +701,34 @@ describe('GET /api/contacts/duplicates/find — duplicate scan', () => {
     });
   });
 
+  test('combines transitive email and phone matches into one stable group', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      {
+        id: 41, name: 'Alpha', email: 'shared@example.com', phone: null,
+        company: 'One', status: 'Lead', aiScore: 10, createdAt: new Date(),
+      },
+      {
+        id: 42, name: 'Beta', email: 'shared@example.com', phone: '9876543210',
+        company: 'Two', status: 'Lead', aiScore: 20, createdAt: new Date(),
+      },
+      {
+        id: 43, name: 'Gamma', email: 'gamma@example.com', phone: '+91 98765 43210',
+        company: 'Three', status: 'Lead', aiScore: 30, createdAt: new Date(),
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      primary: { id: 41 },
+      duplicates: [{ id: 42 }, { id: 43 }],
+      reason: 'Same email',
+    });
+    expect(res.body[0].groupKey).toBe('key:41,42,43');
+  });
+
   test('returns a safe user-facing error when duplicate scanning fails', async () => {
     prisma.contact.findMany.mockRejectedValueOnce(new Error('PrismaClientValidationError: internal field detail'));
 

@@ -688,6 +688,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           <table
             style={{
               width: "100%",
+              minWidth: 1500,
               borderCollapse: "collapse",
               fontSize: "0.85rem",
             }}
@@ -705,7 +706,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 <Th>Gateway</Th>
                 <Th>Status</Th>
                 <Th>Paid Date</Th>
-                <Th>Actions</Th>
+                <Th style={{ width: "1%", whiteSpace: "nowrap" }}>Actions</Th>
               </tr>
             </thead>
             <tbody>
@@ -847,7 +848,10 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                     <StatusBadge status={p.status} />
                   </Td>
                   <Td>{formatPaidDate(p.paidAt)}</Td>
-                  <Td onClick={(e) => e.stopPropagation()}>
+                  <Td
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: "1%", whiteSpace: "nowrap" }}
+                  >
                     <button
                       onClick={() => setSelected(p)}
                       style={{
@@ -1114,7 +1118,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
 }
 
 // ── Sub-components ───────────────────────────────────────────────
-function Th({ children }) {
+function Th({ children, style }) {
   return (
     <th
       style={{
@@ -1125,6 +1129,7 @@ function Th({ children }) {
         letterSpacing: "0.05em",
         color: "var(--text-secondary)",
         fontWeight: 600,
+        ...style,
       }}
     >
       {children}
@@ -1132,11 +1137,11 @@ function Th({ children }) {
   );
 }
 
-function Td({ children, onClick }) {
+function Td({ children, onClick, style }) {
   return (
     <td
       onClick={onClick}
-      style={{ padding: "0.75rem 1rem", verticalAlign: "middle" }}
+      style={{ padding: "0.75rem 1rem", verticalAlign: "middle", ...style }}
     >
       {children}
     </td>

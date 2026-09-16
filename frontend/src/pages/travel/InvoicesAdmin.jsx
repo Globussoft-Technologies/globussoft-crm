@@ -1453,10 +1453,11 @@ export default function InvoicesAdmin() {
         className="glass"
         style={tableFrame}
       >
-        {loading && invoices.length === 0 ? (
-          <div style={empty}>Loading&hellip;</div>
-        ) : (
-          <table style={{ width: "100%", minWidth: 1560, borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          {loading && invoices.length === 0 ? (
+            <div style={empty}>Loading&hellip;</div>
+          ) : (
+            <table style={{ width: "100%", minWidth: 1560, borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
               <col style={{ width: 250 }} />
               <col style={{ width: 230 }} />
@@ -1473,14 +1474,18 @@ export default function InvoicesAdmin() {
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <th style={th}>{sortHeader("Invoice #", "invoiceNum")}</th>
                 <th style={th}>{sortHeader("Contact", "contact")}</th>
-                <th style={th}>Trip</th>
+                <th style={{ ...th, textTransform: "none" }}>Trip</th>
                 <th style={th}>{sortHeader("Status", "status")}</th>
                 <th style={th}>{sortHeader("Total", "totalAmount")}</th>
                 <th style={th}>{sortHeader("Currency", "currency")}</th>
                 <th style={th}>{sortHeader("Due Date", "dueDate")}</th>
                 <th style={th}>{sortHeader("Sub-brand", "subBrand")}</th>
                 <th style={th}>{sortHeader("Paid At", "paidAt")}</th>
-                {canWrite && <th style={th}>Actions</th>}
+                {canWrite && (
+                  <th style={{ ...th, textTransform: "none", textAlign: "center" }}>
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -1581,7 +1586,13 @@ export default function InvoicesAdmin() {
                     </td>
                     <td style={td}>{formatDate(inv.paidAt || inv.lastPaymentAt)}</td>
                     {canWrite && (
-                      <td style={td}>
+                      <td
+                        style={{
+                          ...td,
+                          whiteSpace: "nowrap",
+                          overflow: "visible",
+                        }}
+                      >
                         <button
                           type="button"
                           onClick={() => openEdit(inv)}
@@ -1745,8 +1756,9 @@ export default function InvoicesAdmin() {
                 </tr>
               )}
             </tbody>
-          </table>
-        )}
+            </table>
+          )}
+        </div>
         <PatientPager
           total={total}
           page={page}
@@ -2175,8 +2187,7 @@ const td = {
 };
 const tableFrame = {
   padding: 0,
-  overflowX: "auto",
-  WebkitOverflowScrolling: "touch",
+  overflow: "visible",
   overflowY: "visible",
   height: "auto",
   minHeight: 0,

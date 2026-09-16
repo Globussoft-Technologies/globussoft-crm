@@ -3230,94 +3230,93 @@ router.get("/duplicates/find", async (req, res) => {
       },
     });
     const normalizedContacts = contacts.map(normalizeContactPhone);
-    const dupes = [];
-    const seen = new Map();
+    // Build connected duplicate groups in one pass. A contact can match
+    // different rows through different signals, so union-find keeps those
+    // transitive matches in one stable group instead of fragmenting them.
+    const parent = normalizedContacts.map((_, index) => index);
+    const rank = normalizedContacts.map(() => 0);
+    const reasonPriority = {
+      "Same email": 1,
+      "Same phone": 2,
+      "Same name + company": 3,
+    };
+    const keyOwners = new Map();
+    const matchedEdges = [];
+    const findRoot = (index) => {
+      let root = index;
+      while (parent[root] !== root) root = parent[root];
+      while (parent[index] !== index) {
+        const next = parent[index];
+        parent[index] = root;
+        index = next;
+      }
+      return root;
+    };
+    const union = (left, right) => {
+      let leftRoot = findRoot(left);
+      let rightRoot = findRoot(right);
+      if (leftRoot === rightRoot) return;
+      if (rank[leftRoot] < rank[rightRoot]) {
+        [leftRoot, rightRoot] = [rightRoot, leftRoot];
+      }
+      parent[rightRoot] = leftRoot;
+      if (rank[leftRoot] === rank[rightRoot]) rank[leftRoot] += 1;
+    };
 
-    for (const c of normalizedContacts) {
-      // Email is optional for imported/TMC contacts. A missing email must not
-      // crash duplicate detection or cause every email-less contact to share
-      // the same comparison key. Keep a per-contact internal key so those
-      // rows remain candidates for phone and name/company matching.
-      const emailKey =
-        typeof c.email === "string" ? c.email.trim().toLowerCase() : "";
-      const seenKey = emailKey || `__contact_${c.id}`;
-      if (emailKey && seen.has(emailKey)) {
-        const existing = seen.get(emailKey);
-        if (!dupes.find((d) => d.primary.id === existing.id)) {
-          dupes.push({
-            primary: existing,
-            duplicates: [c],
-            reason: "Same email",
-          });
+    normalizedContacts.forEach((contact, index) => {
+      const keys = [];
+      const email =
+        typeof contact.email === "string"
+          ? contact.email.trim().toLowerCase()
+          : "";
+      if (email) keys.push([`email:${email}`, "Same email"]);
+
+      const phone = normalizePhone(contact.phone);
+      const phoneDigits = phone ? phone.slice(-10) : "";
+      if (phoneDigits.length >= 10) {
+        keys.push([`phone:${phoneDigits}`, "Same phone"]);
+      }
+
+      if (contact.name && contact.company) {
+        keys.push([
+          `name-company:${contact.name.toLowerCase().trim()}|${contact.company.toLowerCase().trim()}`,
+          "Same name + company",
+        ]);
+      }
+
+      for (const [key, reason] of keys) {
+        const owner = keyOwners.get(key);
+        if (owner === undefined) {
+          keyOwners.set(key, index);
         } else {
-          dupes.find((d) => d.primary.id === existing.id).duplicates.push(c);
-        }
-      } else {
-        seen.set(seenKey, c);
-      }
-
-      // Phone match
-      if (c.phone) {
-        const phoneKey = normalizePhone(c.phone);
-        const phoneDigits = phoneKey ? phoneKey.slice(-10) : "";
-        if (phoneDigits.length >= 10) {
-          for (const [, other] of seen) {
-            if (other.id !== c.id && other.phone) {
-              const otherPhoneKey = normalizePhone(other.phone);
-              const otherPhone = otherPhoneKey ? otherPhoneKey.slice(-10) : "";
-              if (
-                phoneDigits === otherPhone &&
-                !dupes.find(
-                  (d) =>
-                    d.primary.id === other.id &&
-                    d.duplicates.some((dd) => dd.id === c.id),
-                )
-              ) {
-                const existing = dupes.find((d) => d.primary.id === other.id);
-                if (existing) {
-                  existing.duplicates.push(c);
-                } else {
-                  dupes.push({
-                    primary: other,
-                    duplicates: [c],
-                    reason: "Same phone",
-                  });
-                }
-              }
-            }
-          }
+          union(index, owner);
+          matchedEdges.push({ left: index, right: owner, reason });
         }
       }
+    });
 
-      // Name + Company match
-      if (c.name && c.company) {
-        const nameCompanyKey = `${c.name.toLowerCase().trim()}|${c.company.toLowerCase().trim()}`;
-        for (const [, other] of seen) {
-          if (other.id !== c.id && other.name && other.company) {
-            const otherKey = `${other.name.toLowerCase().trim()}|${other.company.toLowerCase().trim()}`;
-            if (
-              nameCompanyKey === otherKey &&
-              !dupes.find(
-                (d) =>
-                  d.primary.id === other.id &&
-                  d.duplicates.some((dd) => dd.id === c.id),
-              )
-            ) {
-              const existing = dupes.find((d) => d.primary.id === other.id);
-              if (existing) {
-                existing.duplicates.push(c);
-              } else {
-                dupes.push({
-                  primary: other,
-                  duplicates: [c],
-                  reason: "Same name + company",
-                });
-              }
-            }
-          }
-        }
+    const groupReasons = new Map();
+    for (const edge of matchedEdges) {
+      const root = findRoot(edge.left);
+      const current = groupReasons.get(root);
+      if (!current || reasonPriority[edge.reason] < reasonPriority[current]) {
+        groupReasons.set(root, edge.reason);
       }
     }
+
+    const grouped = new Map();
+    normalizedContacts.forEach((contact, index) => {
+      const root = findRoot(index);
+      if (!grouped.has(root)) grouped.set(root, []);
+      grouped.get(root).push(contact);
+    });
+    const dupes = [...grouped.entries()]
+      .filter(([, group]) => group.length > 1)
+      .map(([root, group]) => ({
+        primary: group[0],
+        duplicates: group.slice(1),
+        reason: groupReasons.get(root) || "Same phone",
+      }));
 
     // Stamp every group with its stable groupKey so the UI can reference it
     // when dismissing. Filter out any group the operator has already

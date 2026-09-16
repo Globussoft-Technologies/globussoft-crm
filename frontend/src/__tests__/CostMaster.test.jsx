@@ -238,6 +238,16 @@ describe('<CostMaster /> — add-rate subBrand dropdown', () => {
 
 // ── 9-10. Add-rate form ───────────────────────────────────────────────────────
 describe('<CostMaster /> — add-rate form', () => {
+  it('marks required fields and labels optional fields without helper paragraphs', async () => {
+    renderPage();
+    await screen.findByText('Makkah:Hilton:Deluxe');
+    fireEvent.click(screen.getByRole('button', { name: /Add rate/i }));
+
+    expect(document.querySelectorAll('.cost-master-required')).toHaveLength(4);
+    expect(document.querySelectorAll('.cost-master-optional')).toHaveLength(5);
+    expect(document.querySelectorAll('.cost-master-field-hint')).toHaveLength(0);
+  });
+
   it('fills and submits → POST with correct fields + notify.success("Rate added")', async () => {
     renderPage();
     await screen.findByText('Makkah:Hilton:Deluxe');

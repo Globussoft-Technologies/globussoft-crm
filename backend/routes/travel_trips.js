@@ -59,6 +59,7 @@ const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
 const { sendEmail } = require("../lib/emailSender");
 const { mintPaymentPortalToken } = require("../lib/travelPaymentPortalToken");
+const { ensureCostCentre } = require("../lib/travelTallyMasters");
 const {
   materializeTripInstalmentsFromPlan,
 } = require("../lib/travelTripInstalments");
@@ -495,6 +496,15 @@ router.post(
           micrositeUrl: micrositeUrl || null,
           driveFolderId: resolvedDriveFolderId,
         },
+      });
+      await ensureCostCentre({
+        tenantId: req.travelTenant.id,
+        sourceType: "TMC_TRIP",
+        sourceId: created.id,
+        tripCode: created.tripCode,
+        destination: created.destination,
+      }).catch((error) => {
+        console.warn("[travel-trips] Tally cost-centre auto-create failed:", error.message);
       });
       res.status(201).json(created);
     } catch (e) {

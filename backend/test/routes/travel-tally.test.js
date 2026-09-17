@@ -46,6 +46,13 @@ prisma.travelTallyMapping = {
 prisma.travelTallySyncQueue = {
   findMany: vi.fn(),
 };
+prisma.travelTallyCostCentre = {
+  findMany: vi.fn(),
+  upsert: vi.fn(),
+};
+prisma.itinerary = { ...(prisma.itinerary || {}), findMany: vi.fn(), findFirst: vi.fn() };
+prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn(), findFirst: vi.fn() };
+prisma.travelQuote = { ...(prisma.travelQuote || {}), findMany: vi.fn(), findFirst: vi.fn() };
 prisma.$transaction = vi.fn(async (operations) => Promise.all(operations));
 
 const travelTallyRouter = requireCJS("../../routes/travel_tally");
@@ -84,6 +91,7 @@ beforeEach(() => {
     prisma.travelTallyTaxMaster,
     prisma.travelTallyMapping,
     prisma.travelTallySyncQueue,
+    prisma.travelTallyCostCentre,
   ]) {
     for (const fn of Object.values(delegate)) {
       if (typeof fn === "function" && fn.mockReset) fn.mockReset();
@@ -94,6 +102,95 @@ beforeEach(() => {
   prisma.travelTallyTaxMaster.findMany.mockResolvedValue([]);
   prisma.travelTallyMapping.findMany.mockResolvedValue([]);
   prisma.travelTallySyncQueue.findMany.mockResolvedValue([]);
+  prisma.travelTallyCostCentre.findMany.mockResolvedValue([]);
+  prisma.travelTallyCostCentre.upsert.mockImplementation(async ({ create }) => ({ id: create.sourceId, ...create }));
+  prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
+  prisma.itinerary.findFirst.mockReset();
+  prisma.tmcTrip.findMany.mockReset().mockResolvedValue([]);
+  prisma.tmcTrip.findFirst.mockReset();
+  prisma.travelQuote.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelQuote.findFirst.mockReset();
+});
+
+describe("travel Tally cost centre sources", () => {
+  test("lists itineraries, TMC trips, and quote-only trips", async () => {
+    prisma.itinerary.findMany.mockResolvedValue([{ id: 3, destination: "Agra", subBrand: "rfu" }]);
+    prisma.tmcTrip.findMany.mockResolvedValue([{ id: 8, tripCode: "SCHOOL-8", destination: "Singapore" }]);
+    prisma.travelQuote.findMany.mockResolvedValue([{ id: 12, subBrand: "visasure", contact: { name: "Customer One" } }]);
+
+    const response = await request(makeApp()).get("/api/travel/tally/cost-centres").set(auth());
+
+    expect(response.status).toBe(200);
+    expect(response.body.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: "ITINERARY", code: "TRIP-3" }),
+      expect.objectContaining({ sourceType: "TMC_TRIP", code: "TMC-TRIP-8" }),
+      expect.objectContaining({ sourceType: "QUOTE", code: "QUOTE-12" }),
+    ]));
+    expect(response.body.pagination).toEqual({ page: 1, limit: 50, hasMore: false });
+    expect(response.body.sourcePagination).toEqual({ page: 1, limit: 100, hasMore: false });
+    expect(prisma.itinerary.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1 },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: 0,
+      take: 101,
+    }));
+  });
+
+  test("caps page sizes and reports another source page without truncating it permanently", async () => {
+    prisma.itinerary.findMany.mockResolvedValue(Array.from({ length: 101 }, (_, index) => ({ id: 200 - index, destination: `Trip ${index}` })));
+
+    const response = await request(makeApp()).get("/api/travel/tally/cost-centres?page=2&limit=999&sourcePage=2&sourceLimit=999").set(auth());
+
+    expect(response.status).toBe(200);
+    expect(response.body.sources).toHaveLength(100);
+    expect(response.body.sourcePagination).toEqual({ page: 2, limit: 100, hasMore: true });
+    expect(prisma.travelTallyCostCentre.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 100, take: 101 }));
+    expect(prisma.itinerary.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 100, take: 101 }));
+  });
+
+  test("prepares missing cost centres in a bounded deterministic batch", async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([{ id: 8, tripCode: "SCHOOL-8", destination: "Singapore" }]);
+
+    const response = await request(makeApp()).post("/api/travel/tally/cost-centres/prepare-missing").set(auth()).send({ sourceType: "TMC_TRIP", afterSourceId: 3, limit: 500 });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual(expect.objectContaining({ sourceType: "TMC_TRIP", created: 1, processed: 1, nextAfterSourceId: 8, done: true }));
+    expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, id: { gt: 3 } },
+      orderBy: { id: "asc" },
+      take: 100,
+    }));
+    expect(prisma.travelTallyCostCentre.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, sourceType: "TMC_TRIP", sourceId: { in: [8] } },
+    }));
+    expect(prisma.travelTallyCostCentre.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.travelTallyCostCentre.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ sourceType: "TMC_TRIP", sourceId: 8, code: "TMC-TRIP-8" }),
+    }));
+  });
+
+  test("rejects an invalid bulk source before reading tenant data", async () => {
+    const response = await request(makeApp()).post("/api/travel/tally/cost-centres/prepare-missing").set(auth()).send({ sourceType: "OTHER" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("INVALID_COST_CENTRE_SOURCE");
+    expect(prisma.itinerary.findMany).not.toHaveBeenCalled();
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelQuote.findMany).not.toHaveBeenCalled();
+  });
+
+  test("returns 404 for a source outside the authenticated tenant", async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+
+    const response = await request(makeApp()).post("/api/travel/tally/cost-centres").set(auth()).send({ sourceType: "TMC_TRIP", sourceId: 999 });
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe("COST_CENTRE_SOURCE_NOT_FOUND");
+    expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 999, tenantId: 1 },
+    }));
+    expect(prisma.travelTallyCostCentre.upsert).not.toHaveBeenCalled();
+  });
 });
 
 describe("travel Tally route guards and envelopes", () => {

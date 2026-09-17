@@ -349,6 +349,22 @@ const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { ensureCostCentre } = require("../lib/travelTallyMasters");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
+
+async function prepareItineraryCostCentre(tenantId, itinerary) {
+  if (!itinerary?.id) return null;
+  try {
+    return await ensureCostCentre({
+      tenantId,
+      itineraryId: itinerary.id,
+      tripCode: `TRIP-${itinerary.id}`,
+      destination: itinerary.destination,
+    });
+  } catch (error) {
+    // Trip creation is the primary action. This master can be retried later.
+    console.warn("[travel-itin] Tally cost-centre auto-create failed:", error.message);
+    return null;
+  }
+}
 // const { resolveForSubBrand } = require("../lib/subBrandConfig"); // (was used for the legacy Q9 wabaId log; superseded by the connected WhatsApp Web client)
 // WhatsApp dispatch goes through the CONNECTED WhatsApp Web client (the
 // QR-linked number used by the /travel/whatsapp Threads page) — NOT the legacy
@@ -978,6 +994,11 @@ router.post("/itineraries/build", verifyToken, requireTravelTenant, async (req, 
       select: { id: true },
     });
 
+    await prepareItineraryCostCentre(req.travelTenant.id, {
+      id: itin.id,
+      destination: destinationLabel,
+    });
+
     res.status(201).json({
       itineraryId: itin.id,
       totalAmount: grandTotal,
@@ -1214,16 +1235,7 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     // Ledger masters are created only through the Tally screens/actions.
     // Trip creation must not create customer or service ledgers implicitly.
     const tallyMasters = null;
-    try {
-      await ensureCostCentre({
-        tenantId: req.travelTenant.id,
-        itineraryId: itinerary.id,
-        tripCode: itinerary.id ? `TRIP-${itinerary.id}` : null,
-        destination: itinerary.destination,
-      });
-    } catch (tallyError) {
-      console.warn("[travel-itin] Tally master auto-create failed:", tallyError.message);
-    }
+    await prepareItineraryCostCentre(req.travelTenant.id, itinerary);
 
     // G049 — bump template usage metrics on clone-from-template event.
     // Non-fatal: a metric-bump failure must NOT roll back the itinerary
@@ -4169,6 +4181,7 @@ router.post(
         where: { id: created.id },
         include: { items: { orderBy: { position: "asc" } } },
       });
+      await prepareItineraryCostCentre(req.travelTenant.id, withItems || created);
       res.status(201).json(withItems);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -5309,6 +5322,8 @@ router.put("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
       },
       include: { items: { orderBy: { position: "asc" } } },
     });
+
+    await prepareItineraryCostCentre(req.travelTenant.id, newItin);
 
     // This PUT is the "redesign" path — it mints a new REVISED version. Notify
     // the customer their trip plan was updated (newItin carries contactId/dest).
@@ -8663,6 +8678,8 @@ router.post(
         },
         include: { items: { orderBy: { position: "asc" } } },
       });
+
+      await prepareItineraryCostCentre(req.travelTenant.id, itinerary);
 
       // 11. Audit-log emission. PRD FR-3.6 (d) needs to be traceable when
       //     an operator materialises an LLM suggestion into committed rows.

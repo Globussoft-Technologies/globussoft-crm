@@ -1009,7 +1009,7 @@ export default function KnowledgeBaseAdmin() {
               )}
             </div>
           </div>
-          <div className="knowledge-table-scroll" style={{ overflowX: 'auto' }}>
+          <div className="knowledge-table-scroll" style={{ overflowX: 'auto' }} role="region" aria-label="Update history records" tabIndex={0}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}>
@@ -1081,7 +1081,7 @@ export default function KnowledgeBaseAdmin() {
               </button>
             )}
           </div>
-          <div className="knowledge-table-scroll" style={{ overflowX: 'auto' }}>
+          <div className="knowledge-table-scroll" style={{ overflowX: 'auto' }} role="region" aria-label="Brochures in library records" tabIndex={0}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}>

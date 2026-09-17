@@ -8,7 +8,7 @@
  * GET /api/travel/payment-schedules/upcoming (shipped backend-side in
  * commit e4832fee):
  *
- *   1. Page chrome — "Milestone Tracker" heading + 4 KPI cards (Pending /
+ *   1. Page chrome — "Milestones" heading + 4 KPI cards (Pending /
  *      Partial / Paid / Overdue).
  *   2. Initial mount fires GET /api/travel/payment-schedules/upcoming with
  *      the default window=30 + limit=PAGE_SIZE + offset=0.
@@ -194,7 +194,7 @@ describe('<MilestoneTracker /> — page chrome', () => {
   it('renders the heading + 4 KPI cards (Pending / Partial / Paid / Overdue)', async () => {
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /Milestone Tracker/i }),
+      screen.getByRole('heading', { name: /^Milestones/i }),
     ).toBeInTheDocument();
     expect(screen.getByTitle(/milestones/i)).toBeInTheDocument();
     // KPI labels appear as both card text AND status chip — use getAllByText.

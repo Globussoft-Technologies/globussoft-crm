@@ -17,7 +17,7 @@
  *   }
  *
  * Cases:
- *   1. Heading "All Payables" renders.
+ *   1. Heading "Payables" renders.
  *   2. Initial mount fires a SINGLE GET /api/travel/payables (no
  *      per-supplier fan-out — replaced this slice).
  *   3. KPI counts read from summary.byStatus (server is authoritative).
@@ -179,10 +179,10 @@ beforeEach(() => {
 });
 
 describe('<Payables /> — page chrome', () => {
-  it('renders the "All Payables" heading', async () => {
+  it('renders the "Payables" heading', async () => {
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /All Payables/i }),
+      screen.getByRole('heading', { name: /^Payables/i }),
     ).toBeInTheDocument();
   });
 });

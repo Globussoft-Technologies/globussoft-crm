@@ -80,6 +80,21 @@ const listProjection = require("../lib/listProjection");
 const ratehawkClient = require("../services/ratehawkClient");
 const bookingExpediaClient = require("../services/bookingExpediaClient");
 const { createTravelInvoiceWithNumber } = require("../lib/travelInvoiceNumber");
+const { ensureCostCentre } = require("../lib/travelTallyMasters");
+
+async function prepareQuoteCostCentre(tenantId, quote) {
+  if (!quote?.id) return null;
+  return ensureCostCentre({
+    tenantId,
+    sourceType: "QUOTE",
+    sourceId: quote.id,
+    tripCode: `QUOTE-${quote.id}`,
+    destination: `Quote for ${quote.contact?.name || `#${quote.id}`}`,
+  }).catch((error) => {
+    console.warn("[travel-quotes] Tally cost-centre auto-create failed:", error.message);
+    return null;
+  });
+}
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -2564,6 +2579,15 @@ router.post(
           status: "confirmed",
         },
       });
+      await ensureCostCentre({
+        tenantId: req.travelTenant.id,
+        sourceType: "TMC_TRIP",
+        sourceId: trip.id,
+        tripCode: trip.tripCode,
+        destination: trip.destination,
+      }).catch((error) => {
+        console.warn("[travel-quotes] Tally TMC cost-centre auto-create failed:", error.message);
+      });
       const result = { trip, alreadyCreated: false };
       if (!result.alreadyCreated) {
         await writeAudit(
@@ -2808,6 +2832,8 @@ router.post(
           tripDate: parsedTripDate,
         },
       });
+
+      await prepareQuoteCostCentre(req.travelTenant.id, created);
 
       await writeAudit(
         "TravelQuote",
@@ -3545,6 +3571,8 @@ router.post(
           appliedMarkupPercent: marginPercent,
         },
       });
+
+      await prepareQuoteCostCentre(req.travelTenant.id, created);
 
       // Clone line items from source quote into the duplicate. Composite
       // quotes (with line items) are duplicated as a complete unit —

@@ -373,6 +373,7 @@ export default function Payments() {
   // ── Render ─────────────────────────────────────────────────────
   return (
     <div
+      className="finance-page"
       style={{
         padding: "2rem",
         color: "var(--text-primary)",
@@ -381,6 +382,7 @@ export default function Payments() {
     >
       {/* Header */}
       <div
+        className="finance-page__header"
         style={{
           display: "flex",
           alignItems: "center",
@@ -388,10 +390,10 @@ export default function Payments() {
           marginBottom: "0.5rem",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <CreditCard size={28} style={{ color: "#635bff" }} />
-          <h1 style={{ margin: 0, fontSize: "1.75rem", fontWeight: 700 }}>
-            Payments
+        <div className="finance-page__title-row" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <CreditCard className="finance-page__title-icon" size={28} style={{ color: "#635bff" }} />
+          <h1 className="finance-page__title" style={{ margin: 0, fontSize: "1.75rem", fontWeight: 700 }}>
+            Payments Received
           </h1>
         </div>
         <button
@@ -417,6 +419,7 @@ export default function Payments() {
       </div>
 
       <p
+        className="finance-page__subtitle"
         style={{
           margin: "0 0 1.5rem 0",
           color: "var(--text-secondary)",
@@ -629,6 +632,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           when the viewport narrows. Theme-aware: bg/border use --surface
           + --border so tabs stay readable on light AND dark. */}
       <div
+        className="finance-page__filters"
         style={{
           display: "flex",
           alignItems: "center",
@@ -641,6 +645,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           <button
             key={t}
             onClick={() => setTab(t)}
+            aria-pressed={tab === t}
             style={{
               padding: "0.5rem 1.1rem",
               borderRadius: "8px",
@@ -678,6 +683,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           + padding give it visual weight against the page background, and
           theme variables keep contrast under both modes. */}
       <div
+        className="finance-page__table-card"
         style={{
           ...GLASS,
           overflow: "visible",

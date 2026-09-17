@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 const {
   ensurePartyLedger,
   ensureServiceLedgers,
+  ensureCostCentre,
   enqueueTransaction,
   buildVoucherLines,
   resolveBillAllocation,
@@ -53,6 +54,29 @@ function fakePrisma() {
 }
 
 describe("travel Tally masters", () => {
+  it.each([
+    ["ITINERARY", 11, { itineraryId: 11, tmcTripId: null, quoteId: null, code: "TRIP-11" }],
+    ["TMC_TRIP", 12, { itineraryId: null, tmcTripId: 12, quoteId: null, code: "TMC-TRIP-12" }],
+    ["QUOTE", 13, { itineraryId: null, tmcTripId: null, quoteId: 13, code: "QUOTE-13" }],
+  ])("creates a tenant-scoped %s cost centre", async (sourceType, sourceId, expected) => {
+    let upsertArgs;
+    const db = {
+      travelTallyCostCentre: {
+        upsert: async (args) => { upsertArgs = args; return { id: 1, ...args.create }; },
+      },
+    };
+
+    await ensureCostCentre({ prismaClient: db, tenantId: 7, sourceType, sourceId, destination: "Test" });
+
+    expect(upsertArgs.where).toEqual({ tenantId_sourceType_sourceId: { tenantId: 7, sourceType, sourceId } });
+    expect(upsertArgs.create).toEqual(expect.objectContaining({ tenantId: 7, sourceType, sourceId, ...expected }));
+  });
+
+  it("rejects an invalid cost-centre source id before writing", async () => {
+    const upsert = async () => { throw new Error("must not be called"); };
+    await expect(ensureCostCentre({ prismaClient: { travelTallyCostCentre: { upsert } }, tenantId: 7, sourceType: "QUOTE", sourceId: 0 })).rejects.toThrow("valid cost-centre source id");
+  });
+
   it("creates a party ledger and default mapping idempotently", async () => {
     const db = fakePrisma();
     const first = await ensurePartyLedger({

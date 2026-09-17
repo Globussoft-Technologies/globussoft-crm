@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filterSidebarPages,
+  canUseGenericSidebarPage,
   genericRoleGuardProps,
   getGenericAccessByPath,
   getGenericAccessForLocation,
@@ -10,19 +11,49 @@ import {
 
 describe('filterSidebarPages', () => {
   it('uses one access contract for routes, sidebar search, and tours', () => {
-    expect(getGenericAccessByPath('/settings')).toMatchObject({ adminOnly: true });
-    expect(genericRoleGuardProps('/settings')).toEqual({ allow: ['ADMIN'] });
-    expect(genericRoleGuardProps('/data-import-export')).toEqual({ allow: ['ADMIN', 'MANAGER'] });
+    expect(getGenericAccessByPath('/settings')).toMatchObject({ requiredPermission: { module: 'settings', action: 'read' } });
+    expect(genericRoleGuardProps('/settings')).toEqual({ requiredPermission: { module: 'settings', action: 'read' } });
+    expect(genericRoleGuardProps('/data-import-export')).toEqual({
+      allow: ['ADMIN', 'MANAGER'],
+      requiredPermission: { module: 'settings', action: 'manage' },
+    });
     expect(genericRoleGuardProps('/revenue-goals')).toEqual({});
     expect(getGenericAccessForLocation('/settings/lead-capture')?.path).toBe('/settings');
     expect(getGenericAccessForLocation('/settings/roles')?.path).toBe('/settings/roles');
 
-    const regular = getGenericSidebarPages({ isAdmin: false, isManager: false });
-    const manager = getGenericSidebarPages({ isAdmin: false, isManager: true });
+    const hasPermission = () => true;
+    const regular = getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission });
+    const manager = getGenericSidebarPages({ isAdmin: false, isManager: true, permissionsReady: true, hasPermission });
     expect(regular.some((page) => page.path === '/revenue-goals')).toBe(true);
     expect(regular.some((page) => page.path === '/data-import-export')).toBe(false);
     expect(manager.some((page) => page.path === '/data-import-export')).toBe(true);
-    expect(manager.some((page) => page.path === '/settings')).toBe(false);
+    expect(manager.some((page) => page.path === '/settings')).toBe(true);
+  });
+
+  it('requires both the role tier and assigned permission for manager pages', () => {
+    const page = getGenericAccessByPath('/cpq');
+    expect(canUseGenericSidebarPage(page, {
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => false,
+    })).toBe(false);
+    expect(canUseGenericSidebarPage(page, {
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: (module, action) => module === 'cpq' && action === 'read',
+    })).toBe(true);
+  });
+
+  it('uses canonical permissions for forms, calendar, and document templates', () => {
+    expect(genericRoleGuardProps('/forms')).toEqual({
+      requiredPermission: { module: 'web_forms', action: 'read' },
+    });
+    expect(genericRoleGuardProps('/calendar-sync')).toEqual({
+      requiredPermission: { module: 'calendar', action: 'read' },
+    });
+    expect(genericRoleGuardProps('/document-templates')).toEqual({
+      requiredPermission: { module: 'document_templates', action: 'read' },
+    });
   });
 
   it('includes navigable pages and external launchers in the searchable catalogue', () => {

@@ -144,13 +144,6 @@ function buildSteps(feature) {
     title: `${feature.label} builder`,
     content: `Use the builder to assemble and reorder the configuration. Preview or validate it before publishing changes to active users.`,
   });
-  if (profile.create || profile.edit || profile.builder) steps.push({
-    target: `[data-tour="${feature.id}-dialog"]`,
-    title: `${feature.label} form`,
-    content: `Create and edit forms open here. Review required fields and validation messages, then save or cancel explicitly; closing does not imply a save.`,
-    optional: true,
-    skipIfMissing: true,
-  });
   if (profile.export) steps.push({
     target: `[data-tour="${feature.id}-export"]`,
     title: `Export ${profile.plural}`,

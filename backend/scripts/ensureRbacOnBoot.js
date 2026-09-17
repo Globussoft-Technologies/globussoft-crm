@@ -118,6 +118,27 @@ const MANAGER_PERMISSIONS = [
   'prescription_requests.read', 'prescription_requests.update',
 ];
 
+// Generic-only manager additions live outside the shared preset. A catalog
+// filter alone is insufficient because names such as `calendar` also exist on
+// wellness; explicit vertical selection keeps those role matrices unchanged.
+const GENERIC_MANAGER_PERMISSIONS = [
+  'cpq.read', 'cpq.write', 'cpq.update',
+  'playbooks.read', 'playbooks.write', 'playbooks.update',
+  'territories.read', 'territories.write', 'territories.update',
+  'live_chat.read', 'live_chat.write', 'live_chat.update',
+  'support.read', 'support.write', 'support.update',
+  'sla.read', 'sla.write', 'sla.update',
+  'social.read', 'social.write', 'social.update',
+  'document_templates.read', 'document_templates.write', 'document_templates.update',
+  'lead_scoring.read', 'lead_scoring.write', 'lead_scoring.update',
+  'deal_insights.read', 'deal_insights.write', 'deal_insights.update',
+  'calendar.read', 'calendar.write', 'calendar.update',
+  'ab_tests.read', 'ab_tests.write', 'ab_tests.update',
+  'booking_pages.read', 'booking_pages.write', 'booking_pages.update',
+  'web_forms.read', 'web_forms.write', 'web_forms.update',
+  'forecasting.read', 'quotas.read', 'sequences.read', 'settings.read',
+];
+
 const CUSTOMER_PERMISSIONS = [
   // Spec §2 CUSTOMER row — patient/customer portal access. LEADS-read so a
   // customer can view their own enquiry record. VISITS + PAYMENTS read so
@@ -662,7 +683,10 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     // creation. Subsequent boots leave the grant matrix alone so tenant admins'
     // revocations survive server restarts.
     if (managerCreated) {
-      await grantPermissionList(stats, managerRole.id, filterPermsToVertical(MANAGER_PERMISSIONS, vertical));
+      const managerPreset = vertical === 'generic'
+        ? [...MANAGER_PERMISSIONS, ...GENERIC_MANAGER_PERMISSIONS]
+        : MANAGER_PERMISSIONS;
+      await grantPermissionList(stats, managerRole.id, filterPermsToVertical(managerPreset, vertical));
     }
 
     const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {

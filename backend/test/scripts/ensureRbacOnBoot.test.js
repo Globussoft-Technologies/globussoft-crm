@@ -414,6 +414,40 @@ describe('MANAGER permission backfill - seed-on-creation only', () => {
     expect(managerPermCreates.length).toBeGreaterThan(0);
   });
 
+  test('fresh generic MANAGER receives generic page grants without delete access', async () => {
+    await provisionTenantRbac(202, { vertical: 'generic' });
+
+    const managerId = managerIdFromCalls();
+    const grants = mockPrisma.rolePermission.create.mock.calls
+      .filter((call) => call[0].data.roleId === managerId)
+      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+
+    expect(grants).toContain('cpq.read');
+    expect(grants).toContain('web_forms.write');
+    expect(grants).toContain('calendar.update');
+    expect(grants).toContain('forecasting.read');
+    expect(grants).toContain('quotas.read');
+    expect(grants).toContain('sequences.read');
+    expect(grants).toContain('settings.read');
+    expect(grants).not.toContain('cpq.delete');
+    expect(grants).not.toContain('patients.read');
+    expect(grants).not.toContain('itineraries.read');
+  });
+
+  test('generic manager additions do not leak through shared module names', async () => {
+    await provisionTenantRbac(203, { vertical: 'wellness' });
+
+    const managerId = managerIdFromCalls();
+    const grants = mockPrisma.rolePermission.create.mock.calls
+      .filter((call) => call[0].data.roleId === managerId)
+      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+
+    expect(grants).not.toContain('calendar.update');
+    expect(grants).not.toContain('forecasting.read');
+    expect(grants).not.toContain('sequences.read');
+    expect(grants).not.toContain('settings.read');
+  });
+
   test('existing MANAGER does NOT receive grants on subsequent boot', async () => {
     const PRE_EXISTING_MANAGER_ID = 555;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {

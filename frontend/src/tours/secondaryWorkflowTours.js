@@ -32,6 +32,7 @@ const section = (slot, match) => ({ slot, match, elements: "h2, h3, legend, [rol
 export const GENERIC_SECONDARY_WORKFLOW_TOURS = [
   workflow({
     id: "contact-detail", label: "Contact Detail", pattern: /^\/contacts\/[^/]+$/,
+    access: { requiredPermission: { module: "contacts", action: "read" } },
     anchors: [control("edit", "Edit contact"), section("summary", "Chat Summary|AI Summary|Summary"), heading("activity", "Activity Timeline"), section("attachments", "Attachments")],
     steps: [
       ["header", "Contact identity", "Confirm the contact, company, owner, and tenant context before changing customer data."],
@@ -43,6 +44,7 @@ export const GENERIC_SECONDARY_WORKFLOW_TOURS = [
   }),
   workflow({
     id: "landing-site-builder", label: "Landing Site Builder", pattern: /^\/landing-sites\/builder\/[^/]+$/,
+    access: { requiredPermission: { module: "marketing", action: "read" } },
     anchors: [
       { slot: "identity", selector: "input[aria-label='Page title']", closest: "div" },
       control("preview", "Preview|Desktop preview|Mobile preview"), control("save", "^Save"), control("publish", "Publish|Unpublish|Check"),
@@ -58,6 +60,7 @@ export const GENERIC_SECONDARY_WORKFLOW_TOURS = [
   }),
   workflow({
     id: "sequence-builder", label: "Sequence Builder", pattern: /^\/sequences\/[^/]+\/builder$/,
+    access: { requiredPermission: { module: "sequences", action: "read" } },
     anchors: [control("status", "Active|Inactive"), heading("preview", "Flow preview"), control("add", "Email|SMS|Wait|Condition"), control("save", "Save")],
     steps: [
       ["header", "Sequence identity", "Verify the sequence before editing; changes affect future enrolled leads when the sequence is active."],
@@ -69,6 +72,7 @@ export const GENERIC_SECONDARY_WORKFLOW_TOURS = [
   }),
   workflow({
     id: "custom-object-records", label: "Custom Object Records", pattern: /^\/objects\/[^/]+$/,
+    access: { requiredPermission: { module: "custom_objects", action: "read" } },
     anchors: [control("filter", "Filter Set"), control("export", "Export CSV"), control("create", "Add New"), { slot: "records", selector: "table" }],
     steps: [
       ["header", "Custom object workspace", "Confirm the object and its configured fields before working with tenant records."],

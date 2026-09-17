@@ -52,15 +52,17 @@ describe('backfill wellness-only guard', () => {
     expect(src).toMatch(/tenant\.vertical === 'wellness'/);
   });
 
-  test('call_history is inside the guard', () => {
+  test('wellness call permissions are inside the guard', () => {
     const m = src.match(/const WELLNESS_ONLY_GRANTS = new Set\(\[([\s\S]*?)\]\)/);
     expect(m).toBeTruthy();
     const guarded = [...m[1].matchAll(/'([a-z_]+\.[a-z_]+)'/g)].map((x) => x[1]);
+    expect(guarded).toContain('appointments.ai_call');
+    expect(guarded).toContain('appointments.manual_call');
     expect(guarded).toContain('call_history.read');
     expect(guarded).toContain('call_history.read_all');
   });
 
-  test('every call_history grant in every preset is guarded', () => {
+  test('every wellness call grant in every preset is guarded', () => {
     // The guard is a denylist, so a grant added to a preset but forgotten
     // here would ship straight onto generic and travel tenants.
     const m = src.match(/const WELLNESS_ONLY_GRANTS = new Set\(\[([\s\S]*?)\]\)/);
@@ -68,7 +70,7 @@ describe('backfill wellness-only guard', () => {
 
     for (const name of ROLE_PRESETS) {
       for (const perm of preset(name)) {
-        if (perm.startsWith('call_history.')) {
+        if (perm.startsWith('call_history.') || ['appointments.ai_call', 'appointments.manual_call'].includes(perm)) {
           expect(guarded.has(perm), `${name} grants unguarded ${perm}`).toBe(true);
         }
       }

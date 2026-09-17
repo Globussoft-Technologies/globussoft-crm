@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -17,6 +17,8 @@ const notifyObj = {
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
 import ContactDetail from '../pages/ContactDetail';
+import ContactDetailsDrawer from '../components/contact/ContactDetailsDrawer';
+import { AuthContext } from '../appContexts';
 
 const BASE_CONTACT = {
   id: 42,
@@ -189,5 +191,34 @@ describe('ContactDetail — current profile contract', () => {
     const profile = await getProfile();
     fireEvent.click(profile.getByRole('button', { name: 'Activities' }));
     expect(await profile.findByText('No activities recorded yet.')).toBeInTheDocument();
+  });
+});
+
+describe('Generic CRM contact tags', () => {
+  it('selects an existing tag and creates a new tag without duplicates', async () => {
+    const saveTags = vi.fn().mockResolvedValue(undefined);
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      if (url === '/api/contacts/tags' && options.method === 'POST') return Promise.resolve({ name: 'Renewal', color: '#db2777' });
+      if (url === '/api/contacts/tags') return Promise.resolve({ tags: [{ name: 'VIP', color: '#2563eb' }, { name: 'Prospect', color: '#059669' }] });
+      return Promise.resolve({});
+    });
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer inline genericTagsEnabled contact={{ ...BASE_CONTACT, tags: ['VIP'] }} onFieldSave={saveTags} />
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '+ Add tag' }));
+    const picker = await screen.findByRole('dialog', { name: 'Tag selector' });
+    const vipLabel = within(picker).getByText('VIP', { exact: true });
+    expect(vipLabel.closest('button')).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(within(picker).getByText('Prospect', { exact: true }));
+    fireEvent.change(within(picker).getByRole('textbox', { name: 'New tag name' }), { target: { value: 'Renewal' } });
+    fireEvent.click(within(picker).getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/tags', expect.objectContaining({ method: 'POST' })));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Apply tags' }));
+
+    await waitFor(() => expect(saveTags).toHaveBeenCalledWith({ key: 'tags' }, ['VIP', 'Prospect', 'Renewal']));
   });
 });

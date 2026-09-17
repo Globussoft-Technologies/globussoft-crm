@@ -96,6 +96,15 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getAllByRole('button', { name: /add deal/i }).length).toBeGreaterThan(0);
   });
 
+  it('shows a toast after refreshing deals successfully', async () => {
+    renderPipeline();
+    await screen.findByText('Acme Corp Renewal');
+
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith('Deals refreshed'));
+  });
+
   it('shows the loading state while the API requests are pending', () => {
     fetchApi.mockImplementation(() => new Promise(() => {}));
     renderPipeline();
@@ -132,7 +141,7 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getAllByRole('heading', { name: 'Stage 1' })).toHaveLength(1);
   });
 
-  it('selects the default pipeline when the URL does not specify one', async () => {
+  it('shows all pipelines by default when the URL does not specify one', async () => {
     mockApi({ pipelines: [
       { id: 41, name: 'Default Sales', isDefault: true },
       { id: 42, name: 'Secondary', isDefault: false },
@@ -140,8 +149,8 @@ describe('Deals and Pipelines page', () => {
 
     renderPipeline();
 
-    await waitFor(() => expect(screen.getByRole('combobox', { name: /pipeline/i })).toHaveValue('41'));
-    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/deals\?.*pipelineId=41/)));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /pipeline/i })).toHaveValue(''));
+    expect(fetchApi).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/deals\?(?!.*pipelineId=)/));
   });
 
   it('preserves an explicitly selected pipeline from the URL', async () => {

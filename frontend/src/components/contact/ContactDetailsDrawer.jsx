@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import {
   CheckSquare,
   ChevronDown,
@@ -20,6 +20,7 @@ import {
 import { SOCIAL_NETWORKS } from './contactProfileConfig';
 import { InlineField } from './ProfileWidgets';
 import { fetchApi } from '../../utils/api';
+import { AuthContext } from '../../appContexts';
 import './ContactDetailsDrawer.css';
 
 const GROUPS = [{ key: 'basic', label: 'Basic information', openByDefault: true }];
@@ -35,6 +36,49 @@ const ACTIONS = [
   { key: 'deal', label: 'Add deal', Icon: Plus, primary: true },
 ];
 
+export const GENERIC_TAG_COLORS = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#db2777', '#dc2626'];
+
+export function tagKey(name) {
+  return String(name || '').trim().toLowerCase();
+}
+
+export function fallbackTagColor(name) {
+  let hash = 0;
+  for (const char of String(name || '')) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  return GENERIC_TAG_COLORS[Math.abs(hash) % GENERIC_TAG_COLORS.length];
+}
+
+export function tagTextColor(color) {
+  const hex = String(color || '').replace('#', '');
+  if (hex.length !== 6) return '#fff';
+  const [r, g, b] = [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+  return (r * 299 + g * 587 + b * 114) / 1000 > 155 ? '#0f172a' : '#fff';
+}
+
+export function normalizeTagRecords(data) {
+  const values = Array.isArray(data) ? data : data?.tags || data?.data || [];
+  const seen = new Set();
+  return values.reduce((result, item) => {
+    const name = typeof item === 'string' ? item.trim() : String(item?.name || '').trim();
+    if (!name || seen.has(tagKey(name))) return result;
+    seen.add(tagKey(name));
+    result.push({ name, color: item?.color || fallbackTagColor(name) });
+    return result;
+  }, []);
+}
+
+export function dedupeTags(values) {
+  const seen = new Set();
+  return (Array.isArray(values) ? values : []).reduce((result, value) => {
+    const name = String(value || '').trim();
+    const key = tagKey(name);
+    if (!name || seen.has(key)) return result;
+    seen.add(key);
+    result.push(name);
+    return result;
+  }, []);
+}
+
 export function ContactDetailsGroup({ label, open, onToggle, children, showHeader = true }) {
   return (
     <section className={`cd-group${open ? ' is-open' : ''}`}>
@@ -47,7 +91,11 @@ export function ContactDetailsGroup({ label, open, onToggle, children, showHeade
   );
 }
 
-export default function ContactDetailsDrawer({ contact, onClose, onAction, onFieldSave, onOwnerChange, staff = [], inline = false }) {
+export default function ContactDetailsDrawer({ contact, onClose, onAction, onFieldSave, onOwnerChange, staff = [], inline = false, hideSms = false, genericTagsEnabled = false }) {
+  const { tenant } = useContext(AuthContext);
+  const isWellness = tenant?.vertical === 'wellness';
+  const isTravel = tenant?.vertical === 'travel';
+  const isGenericTagManager = genericTagsEnabled && !isWellness && !isTravel;
   const [openGroups, setOpenGroups] = useState(() => (
     Object.fromEntries(GROUPS.map((group) => [group.key, Boolean(group.openByDefault)]))
   ));
@@ -56,6 +104,18 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const [customDefinitions, setCustomDefinitions] = useState([]);
   const [tagDraft, setTagDraft] = useState('');
   const tags = Array.isArray(contact?.tags) ? contact.tags : [];
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagCatalog, setTagCatalog] = useState([]);
+  const [tagCatalogLoading, setTagCatalogLoading] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
+  const [pendingTags, setPendingTags] = useState(tags);
+  const [tagSelectionSaving, setTagSelectionSaving] = useState(false);
+  const [tagMutationError, setTagMutationError] = useState('');
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState(GENERIC_TAG_COLORS[0]);
+  const [tagCreating, setTagCreating] = useState(false);
+  const [tagColorSaving, setTagColorSaving] = useState('');
+  const [tagRemoving, setTagRemoving] = useState('');
   const name = contact?.name || 'Unnamed contact';
   const initials = name.charAt(0).toUpperCase();
   const nameParts = name.split(' ').filter(Boolean);
@@ -68,6 +128,25 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    setPendingTags(dedupeTags(contact?.tags));
+  }, [contact?.id, contact?.tags]);
+
+  useEffect(() => {
+    if (!isGenericTagManager) return undefined;
+    let active = true;
+    setTagCatalogLoading(true);
+    setTagMutationError('');
+    fetchApi('/api/contacts/tags', { silent: true }).then((data) => {
+      if (active) setTagCatalog(normalizeTagRecords(data));
+    }).catch(() => {
+      if (active) setTagMutationError('Could not load tags.');
+    }).finally(() => {
+      if (active) setTagCatalogLoading(false);
+    });
+    return () => { active = false; };
+  }, [isGenericTagManager]);
+
   const customFields = contact?.customFields || {};
   const customKey = (keys) => keys.find((key) => Object.prototype.hasOwnProperty.call(customFields, key));
   const basicFields = [
@@ -76,7 +155,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Last name', key: 'lastName', value: contact?.lastName || nameParts.slice(1).join(' ') },
     { label: 'Account', key: 'company', value: contact?.company },
     { label: 'Job title', key: 'title', value: contact?.title },
-    { label: 'Sales owner', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email, owner: true },
+    { label: isWellness ? 'Assigned staff' : 'Sales owner', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email, owner: true },
     { label: 'Keyword', key: customKey(['keyword']) || 'keyword', value: contact?.keyword ?? customFields.keyword, custom: true, readOnly: true },
     { label: 'Note', key: customKey(['note']) || 'note', value: contact?.note ?? customFields.note, custom: true },
     { label: 'Medium', key: 'source', value: contact?.medium || contact?.source },
@@ -104,7 +183,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     });
   const allBasicFields = [...basicFields, ...dynamicFields];
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleBasicFields = allBasicFields.filter((field) => (showEmpty || field.value !== null && field.value !== undefined && field.value !== '') && (!normalizedQuery || field.label.toLowerCase().includes(normalizedQuery)));
+  const visibleBasicFields = allBasicFields.filter((field) => !(isTravel && field.key === 'keyword') && (showEmpty || field.value !== null && field.value !== undefined && field.value !== '') && (!normalizedQuery || field.label.toLowerCase().includes(normalizedQuery)));
   const displayValue = (value) => value === null || value === undefined || value === ''
     ? <span className="cd-empty-value">Click to add</span>
     : <span className="cd-filled-value">{String(value)}</span>;
@@ -112,8 +191,108 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const toggleGroup = (key) => setOpenGroups((current) => ({ ...current, [key]: !current[key] }));
   const runAction = (key) => onAction?.(key);
 
+  const allTagRecords = [...tagCatalog];
+  tags.forEach((tag) => {
+    const nameValue = String(tag || '').trim();
+    if (nameValue && !allTagRecords.some((record) => tagKey(record.name) === tagKey(nameValue))) {
+      allTagRecords.push({ name: nameValue, color: fallbackTagColor(nameValue) });
+    }
+  });
+  const filteredTagRecords = allTagRecords.filter((record) => !tagSearch.trim() || record.name.toLowerCase().includes(tagSearch.trim().toLowerCase()));
+  const tagColorMap = new Map(allTagRecords.map((record) => [tagKey(record.name), record.color || fallbackTagColor(record.name)]));
+  const isPendingTag = (nameValue) => pendingTags.some((tag) => tagKey(tag) === tagKey(nameValue));
+
+  const openTagPicker = () => {
+    setPendingTags(dedupeTags(tags));
+    setTagSearch('');
+    setNewTagName('');
+    setNewTagColor(GENERIC_TAG_COLORS[0]);
+    setTagMutationError('');
+    setTagPickerOpen(true);
+  };
+
+  const togglePendingTag = (nameValue) => {
+    setPendingTags((current) => current.some((tag) => tagKey(tag) === tagKey(nameValue))
+      ? current.filter((tag) => tagKey(tag) !== tagKey(nameValue))
+      : [...current, nameValue]);
+  };
+
+  const applyPendingTags = async () => {
+    const next = dedupeTags(pendingTags);
+    setTagSelectionSaving(true);
+    setTagMutationError('');
+    try {
+      await onFieldSave?.({ key: 'tags' }, next);
+      setTagPickerOpen(false);
+    } catch (_error) {
+      setTagMutationError('Could not save tags.');
+    } finally {
+      setTagSelectionSaving(false);
+    }
+  };
+
+  const removeGenericTag = async (nameValue) => {
+    const next = tags.filter((tag) => tagKey(tag) !== tagKey(nameValue));
+    setTagRemoving(nameValue);
+    setTagMutationError('');
+    try {
+      await onFieldSave?.({ key: 'tags' }, next);
+    } catch (_error) {
+      setTagMutationError('Could not remove tag.');
+    } finally {
+      setTagRemoving('');
+    }
+  };
+
+  const createGenericTag = async () => {
+    const nameValue = newTagName.trim();
+    if (!nameValue) {
+      setTagMutationError('Enter a tag name.');
+      return;
+    }
+    if (allTagRecords.some((record) => tagKey(record.name) === tagKey(nameValue))) {
+      setTagMutationError('That tag already exists.');
+      return;
+    }
+    setTagMutationError('');
+    setTagCreating(true);
+    try {
+      const created = await fetchApi('/api/contacts/tags', {
+        method: 'POST',
+        body: JSON.stringify({ name: nameValue, color: newTagColor }),
+      });
+      const record = normalizeTagRecords([created])[0] || { name: nameValue, color: newTagColor };
+      setTagCatalog((current) => [...current, record]);
+      setPendingTags((current) => [...current, record.name]);
+      setNewTagName('');
+    } catch (_error) {
+      setTagMutationError('Could not create tag.');
+    } finally {
+      setTagCreating(false);
+    }
+  };
+
+  const changeGenericTagColor = async (nameValue, color) => {
+    const key = tagKey(nameValue);
+    const previous = tagCatalog;
+    setTagColorSaving(key);
+    setTagCatalog((current) => current.map((record) => tagKey(record.name) === key ? { ...record, color } : record));
+    setTagMutationError('');
+    try {
+      await fetchApi(`/api/contacts/tags/${encodeURIComponent(nameValue)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ color }),
+      });
+    } catch (_error) {
+      setTagCatalog(previous);
+      setTagMutationError('Could not update tag color.');
+    } finally {
+      setTagColorSaving('');
+    }
+  };
+
   const drawer = (
-    <div className={inline ? 'cd-inline' : 'cd-overlay'} role={inline ? undefined : 'dialog'} aria-modal={inline ? undefined : 'true'} aria-label={inline ? undefined : 'Contact details'} onMouseDown={(event) => { if (!inline && event.target === event.currentTarget) onClose(); }}>
+    <div className={inline ? 'cd-inline' : 'cd-overlay'} role={inline ? undefined : 'dialog'} aria-modal={inline ? undefined : 'true'} aria-label={inline ? undefined : (isWellness ? 'Patient details' : 'Contact details')} onMouseDown={(event) => { if (!inline && event.target === event.currentTarget) onClose(); }}>
       <aside className="cd-drawer">
         <header className="cd-header">
           <div className="cd-header-top">
@@ -147,7 +326,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
           </div>
 
           <div className="cd-actions" aria-label="Contact actions">
-            {ACTIONS.map(({ key, label, Icon, primary }) => (
+            {ACTIONS.filter(({ key }) => !(hideSms && key === 'sms')).map(({ key, label, Icon, primary }) => (
               <button key={key} type="button" className={`cd-action-btn${primary ? ' is-primary' : ''}`} onClick={() => runAction(key)}>
                 <Icon size={13} /> {label}
               </button>
@@ -158,12 +337,14 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
 
         <div className="cd-content">
           <div className="cd-title-row">
-            <h3>Contact details</h3>
+            <h3>{isWellness ? 'Patient details' : 'Contact details'}</h3>
           </div>
 
-          <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
-            <button type="button" className="is-active" role="tab" aria-selected="true">All details</button>
-          </div>
+          {!isTravel && (
+            <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
+              <button type="button" className="is-active" role="tab" aria-selected="true">All details</button>
+            </div>
+          )}
 
           <div className="cd-tools">
             <label className="cd-search">
@@ -175,7 +356,50 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
 
           <section className="cd-all-details">
             <h4>All details</h4>
-            <div className="cd-tags"><Tag size={13} /><span>Tags</span><div className="cd-tag-values">{tags.map((tag) => <button type="button" className="cd-tag-value" key={String(tag)} onClick={() => onFieldSave?.({ key: 'tags' }, tags.filter((item) => String(item) !== String(tag)))} title={`Remove ${String(tag)}`}>{String(tag)} ×</button>)}<form className="cd-tag-form" onSubmit={(event) => { event.preventDefault(); const next = tagDraft.trim(); if (!next || tags.some((tag) => String(tag).toLowerCase() === next.toLowerCase())) return; onFieldSave?.({ key: 'tags' }, [...tags, next]); setTagDraft(''); }}><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add tag" aria-label="Add tag" /></form></div></div>
+            {isGenericTagManager ? (
+              <div className="cd-tags cd-tag-manager">
+                <Tag size={13} />
+                <span>Tags</span>
+                <div className="cd-tag-values">
+                  {tags.map((tag) => {
+                    const nameValue = String(tag);
+                    const color = tagColorMap.get(tagKey(nameValue)) || fallbackTagColor(nameValue);
+                    return (
+                      <span className="cd-tag-chip" key={nameValue} style={{ background: color, borderColor: color, color: tagTextColor(color) }}>
+                        <span>{nameValue}</span>
+                        <button type="button" aria-label={`Remove tag ${nameValue}`} onClick={() => removeGenericTag(nameValue)} disabled={tagRemoving === nameValue}>×</button>
+                      </span>
+                    );
+                  })}
+                  <button type="button" className="cd-add-tag-btn" onClick={openTagPicker}>+ Add tag</button>
+                  {tagPickerOpen && (
+                    <div className="cd-tag-picker" role="dialog" aria-label="Tag selector">
+                      <div className="cd-tag-picker-head"><strong>Add tags</strong><button type="button" className="cd-tag-picker-close" onClick={() => setTagPickerOpen(false)} aria-label="Close tag selector"><X size={14} /></button></div>
+                      <label className="cd-tag-picker-search"><Search size={13} /><input value={tagSearch} onChange={(event) => setTagSearch(event.target.value)} placeholder="Search tags" aria-label="Search tags" /></label>
+                      <div className="cd-tag-picker-list" role="listbox" aria-multiselectable="true">
+                        {tagCatalogLoading ? <div className="cd-tag-picker-message">Loading tags...</div> : filteredTagRecords.length ? filteredTagRecords.map((record) => (
+                          <div className={`cd-tag-option${isPendingTag(record.name) ? ' is-selected' : ''}`} key={record.name}>
+                            <button type="button" role="option" aria-selected={isPendingTag(record.name)} onClick={() => togglePendingTag(record.name)}>
+                              <span className="cd-tag-option-check">{isPendingTag(record.name) ? '✓' : ''}</span>
+                              <span className="cd-tag-chip" style={{ background: record.color, borderColor: record.color, color: tagTextColor(record.color) }}>{record.name}</span>
+                            </button>
+                            <label className="cd-tag-color"><input type="color" value={record.color} onChange={(event) => changeGenericTagColor(record.name, event.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /></label>
+                          </div>
+                        )) : <div className="cd-tag-picker-message">No tags available.</div>}
+                      </div>
+                      <form className="cd-create-tag" onSubmit={(event) => { event.preventDefault(); createGenericTag(); }}>
+                        <strong>Create new tag</strong>
+                        <div className="cd-create-tag-row"><input value={newTagName} onChange={(event) => setNewTagName(event.target.value)} placeholder="Tag name" aria-label="New tag name" /><input type="color" value={newTagColor} onChange={(event) => setNewTagColor(event.target.value)} aria-label="New tag color" /><button type="submit" disabled={tagCreating}>{tagCreating ? 'Creating...' : 'Create'}</button></div>
+                      </form>
+                      {tagMutationError && <div className="cd-tag-picker-error" role="alert">{tagMutationError}</div>}
+                      <div className="cd-tag-picker-actions"><button type="button" className="cd-tag-picker-cancel" onClick={() => setTagPickerOpen(false)}>Cancel</button><button type="button" className="cd-tag-picker-apply" onClick={applyPendingTags} disabled={tagSelectionSaving || tagCreating}>{tagSelectionSaving ? 'Applying...' : 'Apply tags'}</button></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="cd-tags"><Tag size={13} /><span>Tags</span><div className="cd-tag-values">{tags.map((tag) => <button type="button" className="cd-tag-value" key={String(tag)} onClick={() => onFieldSave?.({ key: 'tags' }, tags.filter((item) => String(item) !== String(tag)))} title={`Remove ${String(tag)}`}>{String(tag)} ×</button>)}<form className="cd-tag-form" onSubmit={(event) => { event.preventDefault(); const next = tagDraft.trim(); if (!next || tags.some((tag) => String(tag).toLowerCase() === next.toLowerCase())) return; onFieldSave?.({ key: 'tags' }, [...tags, next]); setTagDraft(''); }}><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add tag" aria-label="Add tag" /></form></div></div>
+            )}
           </section>
 
           <div className="cd-groups">

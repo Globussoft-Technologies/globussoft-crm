@@ -11,6 +11,8 @@ import {
 } from './contactActions';
 import { DEAL_STAGES } from './contactProfileConfig';
 import { FormRow, Stars } from './ProfileWidgets';
+import { RichText } from '../../utils/richText';
+import RichTextNotePreview from './RichTextNotePreview';
 
 export function DetailsTab({ contact, staff, refresh }) {
   const notify = useNotify();
@@ -84,7 +86,7 @@ export function DetailsTab({ contact, staff, refresh }) {
   );
 }
 
-export function ConversationsTab({ contact, contactId, onOpenAction }) {
+export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = false, richText = false }) {
   const [filter, setFilter] = useState('all');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -158,12 +160,12 @@ export function ConversationsTab({ contact, contactId, onOpenAction }) {
     <div className="cp-card">
       <h3>Conversation ({items.length})</h3>
       <div className="cp-filters">
-        {[['all', 'All'], ['email', 'Email'], ['sms', 'SMS']].map(([k, label]) => (
+        {[['all', 'All'], ['email', 'Email'], ...(!hideSms ? [['sms', 'SMS']] : [])].map(([k, label]) => (
           <button key={k} type="button" className={`cp-filter${filter === k ? ' active' : ''}`} onClick={() => setFilter(k)}>{label}</button>
         ))}
         <span style={{ flex: 1 }} />
         {contact.email && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('email')}>New email</button>}
-        {contact.phone && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('sms')}>New SMS</button>}
+        {!hideSms && contact.phone && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('sms')}>New SMS</button>}
       </div>
       {loading ? (
         <div className="cp-empty">Loading conversations…</div>
@@ -185,7 +187,7 @@ export function ConversationsTab({ contact, contactId, onOpenAction }) {
                       {m.participant ? ` • ${m.direction === 'INBOUND' ? 'From' : 'To'} ${m.participant}` : ''}
                     </div>
                     {m.subject && <div className="cp-msg-subject">{m.subject}</div>}
-                    <div>{m.body || '—'}</div>
+                    {richText && m.channel === 'email' ? <RichText value={m.body || '—'} /> : <div>{m.body || '—'}</div>}
                   </div>
                 ))}
               </div>
@@ -202,7 +204,7 @@ export function ConversationsTab({ contact, contactId, onOpenAction }) {
 
 const DOT = { Email: '#3b82f6', Call: '#f59e0b', Meeting: '#8b5cf6', Note: '#10b981', Deal: '#eab308' };
 
-function ActivityTimeline({ contact, staff }) {
+function ActivityTimeline({ contact, staff, richText = false }) {
   const [filter, setFilter] = useState('All');
   const [activities, setActivities] = useState([]);
   const [page, setPage] = useState(1);
@@ -257,7 +259,7 @@ function ActivityTimeline({ contact, staff }) {
               <span className="cp-dot" style={{ background: DOT[a.type] || '#10b981' }} />
               <div>
                 <div className="cp-timeline-meta">{formatDateTime(a.createdAt)} • {a.type} • {authorOf(a)}</div>
-                <div>{a.description}</div>
+                {richText && ['Email', 'Note'].includes(a.type) ? <RichTextNotePreview value={a.description} /> : <div>{a.description}</div>}
               </div>
             </div>
           ))}
@@ -277,11 +279,11 @@ function ActivityTimeline({ contact, staff }) {
   );
 }
 
-export function ActivitiesTab({ contact, onAddActivity, staff }) {
-  return <ActivityTimeline contact={contact} staff={staff} onAddActivity={onAddActivity} />;
+export function ActivitiesTab({ contact, onAddActivity, staff, richText = false }) {
+  return <ActivityTimeline contact={contact} staff={staff} onAddActivity={onAddActivity} richText={richText} />;
 }
 
-export function AccountsTab({ contact, refresh, patchField }) {
+export function AccountsTab({ contact, refresh, patchField, isTravel = false }) {
   const notify = useNotify();
   const [siblings, setSiblings] = useState([]);
   const [linkName, setLinkName] = useState('');
@@ -308,7 +310,7 @@ export function AccountsTab({ contact, refresh, patchField }) {
   };
 
   const unlink = async () => {
-    const ok = await notify.confirm({ title: 'Unlink account', message: `Remove ${contact.name} from ${contact.company}?`, confirmText: 'Unlink', destructive: true });
+    const ok = await notify.confirm({ title: isTravel ? 'Delete account' : 'Unlink account', message: `Remove ${contact.name} from ${contact.company}?`, confirmText: isTravel ? 'Delete' : 'Unlink', destructive: true });
     if (!ok) return;
     await patchField({ company: null });
     refresh();
@@ -325,7 +327,7 @@ export function AccountsTab({ contact, refresh, patchField }) {
               <div className="cp-field"><div className="cp-label">Company size</div><div className="cp-value">{contact.companySize || 'Not available'}</div></div>
               <div className="cp-field"><div className="cp-label">Website</div><div className="cp-value">{contact.website ? <a href={/^https?:\/\//i.test(contact.website) ? contact.website : `https://${contact.website}`} target="_blank" rel="noopener noreferrer">{contact.website}</a> : 'Not available'}</div></div>
             </div>
-            <div className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={unlink}>Unlink account</button></div>
+            <div className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={unlink}>{isTravel ? 'Delete account' : 'Unlink account'}</button></div>
           </>
         ) : (
           <form onSubmit={link} className="cp-form">
@@ -351,11 +353,37 @@ export function AccountsTab({ contact, refresh, patchField }) {
   );
 }
 
-export function DealsTab({ contact, refresh, onOpenDeal }) {
+export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isTravel = false, onOpenAppointment, onOpenTravelDeal }) {
   const notify = useNotify();
   const deals = contact.deals || [];
+  const [appointments, setAppointments] = useState(contact.appointments || []);
   const total = deals.reduce((n, d) => n + (Number(d.amount) || 0), 0);
   const [savingId, setSavingId] = useState(null);
+
+  useEffect(() => {
+    if (!isWellness) return undefined;
+    setAppointments(contact.appointments || []);
+    return undefined;
+  }, [contact.appointments, isWellness]);
+
+  if (isWellness) {
+    return (
+      <div className="cp-card">
+        <h3>Appointments ({appointments.length})</h3>
+        <div className="cp-btn-row" style={{ marginBottom: '0.75rem' }}>
+          <button type="button" className="cp-action-btn cp-action-primary" onClick={onOpenAppointment}><Plus size={12} /> Add appointment</button>
+        </div>
+        {appointments.length === 0 ? (
+          <div className="cp-empty">No appointments associated with this contact.</div>
+        ) : appointments.map((appointment) => (
+          <div className="cp-row" key={appointment.id}>
+            <span style={{ flex: 1, fontWeight: 600 }}>{appointment.serviceName || 'General appointment'}</span>
+            <span style={{ color: 'var(--text-secondary)' }}>{formatDate(appointment.appointmentDate)}{appointment.doctorName ? ` • ${appointment.doctorName}` : ''}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   const changeStage = async (deal, stage) => {
     setSavingId(deal.id);
@@ -372,12 +400,12 @@ export function DealsTab({ contact, refresh, onOpenDeal }) {
 
   return (
     <div className="cp-card">
-      <h3>Deals ({deals.length}) • {formatMoney(total)}</h3>
+      <h3>{isWellness ? 'Appointments' : 'Deals'} ({deals.length}) • {formatMoney(total)}</h3>
       <div className="cp-btn-row" style={{ marginBottom: '0.75rem' }}>
-        <button type="button" className="cp-action-btn cp-action-primary" onClick={() => onOpenDeal(null)}><Plus size={12} /> Add deal</button>
+        <button type="button" className="cp-action-btn cp-action-primary" onClick={() => (isWellness ? onOpenAppointment?.() : isTravel ? onOpenTravelDeal?.() : onOpenDeal(null))}><Plus size={12} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
       </div>
       {deals.length === 0 ? (
-        <div className="cp-empty">No deals associated with this contact.</div>
+        <div className="cp-empty">No {isWellness ? 'appointments' : 'deals'} associated with this contact.</div>
       ) : (
         deals.map((d) => (
           <div className="cp-row" key={d.id}>

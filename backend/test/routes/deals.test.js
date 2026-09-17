@@ -97,6 +97,7 @@ prisma.deal = {
 prisma.activity = {
   create: vi.fn(),
   findMany: vi.fn(),
+  count: vi.fn(),
 };
 prisma.emailMessage = prisma.emailMessage || {};
 prisma.emailMessage.findMany = vi.fn().mockResolvedValue([]);
@@ -146,6 +147,7 @@ beforeEach(() => {
   prisma.deal.update.mockReset();
   prisma.activity.create.mockReset();
   prisma.activity.findMany.mockReset();
+  prisma.activity.count.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.auditLog.findFirst.mockReset();
   prisma.auditLog.create.mockReset();
@@ -158,6 +160,7 @@ beforeEach(() => {
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
   prisma.activity.create.mockResolvedValue({ id: 100 });
   prisma.activity.findMany.mockResolvedValue([]);
+  prisma.activity.count.mockResolvedValue(0);
   prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'USD' });
   prisma.user.findUnique.mockReset();
   prisma.user.findUnique.mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
@@ -288,6 +291,31 @@ describe('GET /api/deals/:id — fetch one (#188)', () => {
     const res = await request(app).get('/api/deals/99999');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Deal not found');
+  });
+});
+
+describe('GET /api/deals/:id/activities — paginated activity feed', () => {
+  test('returns a tenant-scoped page and pagination metadata', async () => {
+    prisma.deal.findFirst.mockResolvedValue({ contactId: 17, deletedAt: null });
+    prisma.activity.findMany.mockResolvedValue([{ id: 3, type: 'Note', description: 'Third' }]);
+    prisma.activity.count.mockResolvedValue(21);
+
+    const res = await request(makeApp()).get('/api/deals/7/activities?page=2&limit=10');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: [{ id: 3, type: 'Note', description: 'Third' }],
+      total: 21,
+      page: 2,
+      limit: 10,
+      totalPages: 3,
+    });
+    expect(prisma.activity.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { contactId: 17, tenantId: 1 },
+      skip: 10,
+      take: 10,
+    }));
+    expect(prisma.activity.count).toHaveBeenCalledWith({ where: { contactId: 17, tenantId: 1 } });
   });
 });
 

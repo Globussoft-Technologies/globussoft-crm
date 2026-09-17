@@ -102,7 +102,10 @@ const requireCJS = createRequire(import.meta.url);
 delete process.env.SENDGRID_API_KEY;
 
 const communicationsRouter = requireCJS('../../routes/communications');
-const { parseRecipients, isValidEmail, escapeHtml, linkifyHtml } = communicationsRouter;
+const {
+  parseRecipients, isValidEmail, escapeHtml, linkifyHtml, sanitizeComposeHtml, composeHtmlToText,
+  decodeEscapedComposeHtml,
+} = communicationsRouter;
 
 function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
@@ -195,6 +198,28 @@ describe('linkifyHtml — bare URLs become clickable anchors', () => {
     expect(out).toContain('&lt;script&gt;');
     expect(out).not.toContain('<script>');
     expect(out).toContain('<a href="https://ok.com"');
+  });
+});
+
+describe('Generic CRM formatted email body', () => {
+  test('keeps supported formatting and strips unsafe tags/attributes', () => {
+    const html = sanitizeComposeHtml('<p>Hello <strong>World</strong></p><ul><li>Item</li></ul><script>alert(1)</script>');
+    expect(html).toContain('<strong>World</strong>');
+    expect(html).toContain('<ul>');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('alert(1)');
+  });
+
+  test('creates a plain-text alternative without exposing HTML tags', () => {
+    const text = composeHtmlToText('<p>Hello <strong>World</strong></p><p>Next line<br>here</p>');
+    expect(text).toContain('Hello World');
+    expect(text).toContain('Next line\nhere');
+    expect(text).not.toContain('<strong>');
+  });
+
+  test('decodes escaped editor markup before sanitizing', () => {
+    expect(decodeEscapedComposeHtml('&lt;strong&gt;Hello&lt;/strong&gt;'))
+      .toBe('<strong>Hello</strong>');
   });
 });
 

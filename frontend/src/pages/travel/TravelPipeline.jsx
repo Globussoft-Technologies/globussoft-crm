@@ -514,6 +514,21 @@ export default function TravelPipeline() {
     setCreating(true);
   };
 
+  useEffect(() => {
+    if (searchParams.get("newDeal") !== "1") return;
+    const contactId = searchParams.get("contactId") || "";
+    setForm({
+      ...EMPTY_FORM,
+      contactId,
+      subBrand: defaultSubBrandFor(user, "") || "travelstall",
+    });
+    setCreating(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("newDeal");
+    next.delete("contactId");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, user]);
+
   const submitCreate = async (e) => {
     e.preventDefault();
     if (!form.contactId) { notify.error("Contact is required"); return; }
@@ -538,7 +553,10 @@ export default function TravelPipeline() {
       setCreating(false);
       // Navigate to the new itinerary's detail page
       const newId = res?.id || res?.itinerary?.id;
-      if (newId) {
+      const returnTo = searchParams.get("returnTo");
+      if (returnTo && returnTo.startsWith("/contacts/") && !returnTo.startsWith("//")) {
+        navigate(returnTo);
+      } else if (newId) {
         navigate(`/travel/itineraries/${newId}`);
       } else {
         load();
@@ -548,6 +566,15 @@ export default function TravelPipeline() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const closeCreate = () => {
+    const returnTo = searchParams.get("returnTo");
+    if (returnTo && returnTo.startsWith("/contacts/") && !returnTo.startsWith("//")) {
+      navigate(returnTo);
+      return;
+    }
+    setCreating(false);
   };
 
   // ── Sub-brand badge ─────────────────────────────────────────────────
@@ -909,7 +936,7 @@ export default function TravelPipeline() {
       {/* Create drawer */}
       {creating && (
         <div
-          onClick={(e) => { if (e.target === e.currentTarget) setCreating(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
           style={overlayStyle}
         >
           <form
@@ -922,7 +949,7 @@ export default function TravelPipeline() {
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>New Deal</h2>
-              <button type="button" onClick={() => setCreating(false)} style={closeBtn} aria-label="Close">
+              <button type="button" onClick={closeCreate} style={closeBtn} aria-label="Close">
                 <X size={16} />
               </button>
             </div>

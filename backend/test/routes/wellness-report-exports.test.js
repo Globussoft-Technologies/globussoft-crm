@@ -33,6 +33,7 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { createRequire } from "node:module";
 import Module from "node:module";
 import path from "node:path";
+import zlib from "node:zlib";
 
 const requireCJS = createRequire(import.meta.url);
 
@@ -92,14 +93,38 @@ const prismaStub = {
   product: { findMany: async () => products },
   productSalesImport: { findMany: async () => [] },
   productSalesImportRow: { findMany: async () => [] },
+  sale: { findMany: async () => [] },
   visit: { findMany: async () => visits },
   service: { findMany: async () => services },
   serviceConsumption: { findMany: async () => [] },
   location: { findMany: async () => [], findFirst: async () => null },
   user: { findMany: async () => [] },
-  patient: { groupBy: async () => [] },
+  patient: { groupBy: async () => [], findMany: async () => [] },
+  invoice: { findMany: async () => [] },
+  expense: { findMany: async () => [] },
   contact: { findMany: async () => [] },
-  tenant: { findUnique: async () => ({ id: 1, vertical: "wellness" }) },
+  tenant: {
+    findUnique: async () => ({
+      id: 1,
+      vertical: "wellness",
+      name: "Tenant Name Fallback",
+      logoUrl: null,
+      brandColor: "#C9A063",
+      themeColor: "#265855",
+      locale: "en-IN",
+      ownerEmail: "owner@example.com",
+    }),
+  },
+  tenantSetting: {
+    findMany: async () => [
+      { key: "invoice.brandName", value: "Configured Report Brand" },
+      { key: "invoice.tagline", value: "Configured wellness care" },
+      { key: "invoice.companyAddress", value: "Configured Report Address" },
+      { key: "invoice.companyPhone", value: "+91 90000 00000" },
+      { key: "invoice.companyEmail", value: "reports@example.com" },
+      { key: "invoice.themeColor", value: "#2D6A5D" },
+    ],
+  },
   wellnessRoleType: { findMany: async () => [] },
 };
 
@@ -156,6 +181,45 @@ afterAll(() => {
 
 const WINDOW = "from=2026-01-01&to=2026-12-31";
 
+function extractPdfText(buf) {
+  const str = buf.toString("latin1");
+  let allOps = "";
+  const lengthRe = /\/Length\s+(\d+)\b[^>]*>>\s*stream\r?\n/g;
+  let match;
+  while ((match = lengthRe.exec(str)) !== null) {
+    const length = parseInt(match[1], 10);
+    const start = lengthRe.lastIndex;
+    const raw = buf.subarray(start, start + length);
+    try {
+      allOps += zlib.inflateSync(raw).toString("latin1");
+    } catch {
+      allOps += raw.toString("latin1");
+    }
+  }
+  let text = "";
+  const arrayRe = /\[([^\]]*)\]\s*TJ/g;
+  while ((match = arrayRe.exec(allOps)) !== null) {
+    const hexRe = /<([0-9a-fA-F\s]+)>/g;
+    let hexMatch;
+    while ((hexMatch = hexRe.exec(match[1])) !== null) {
+      const hex = hexMatch[1].replace(/\s+/g, "");
+      for (let i = 0; i + 1 < hex.length; i += 2) {
+        text += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+      }
+    }
+    text += " ";
+  }
+  const literalRe = /\(((?:[^()\\]|\\.)*)\)\s*Tj/g;
+  while ((match = literalRe.exec(allOps)) !== null) {
+    text += match[1].replace(/\\(.)/g, "$1") + " ";
+  }
+  return text;
+}
+
+function pdfPageCount(buf) {
+  return (buf.toString("latin1").match(/\/Type\s*\/Page\b/g) || []).length;
+}
+
 // Split a CSV body into its data rows and its TOTAL row. Product/service names
 // here contain no commas, so a naive split is safe for this fixture.
 function readCsv(text) {
@@ -196,6 +260,34 @@ describe("report JSON endpoints still paginate", () => {
     expect(p2.body.rows).toHaveLength(10);
     expect(p2.body.rows[0].key).not.toBe(p1.body.rows[0].key);
   });
+});
+
+describe("additional wellness reports", () => {
+  const reports = [
+    { slug: "sales-by-customer", firstColumn: "Customer" },
+    { slug: "product-summary", firstColumn: "Product" },
+    { slug: "payments-by-mode", firstColumn: "Payment mode" },
+    { slug: "expense-summary", firstColumn: "Category" },
+  ];
+
+  for (const report of reports) {
+    test(`${report.slug} returns the standard JSON envelope`, async () => {
+      const res = await request(app).get(`/api/wellness/reports/${report.slug}?${WINDOW}`);
+      expect(res.status).toBe(200);
+      expect(res.body.window).toHaveProperty("from");
+      expect(res.body.window).toHaveProperty("to");
+      expect(res.body.totals).toBeTruthy();
+      expect(Array.isArray(res.body.rows)).toBe(true);
+      expect(res.body.pagination).toHaveProperty("total");
+    });
+
+    test(`${report.slug} CSV uses the report-specific header`, async () => {
+      const res = await request(app).get(`/api/wellness/reports/${report.slug}.csv?${WINDOW}`);
+      expect(res.status).toBe(200);
+      expect(res.text.replace(/^\uFEFF/, "").split(/\r?\n/)[0]).toContain(report.firstColumn);
+      expect(res.headers["content-type"]).toContain("text/csv");
+    });
+  }
 });
 
 describe("report exports contain every row", () => {
@@ -260,6 +352,43 @@ describe("report exports contain every row", () => {
   // An explicit ?limit on an export must not re-truncate it — the export
   // contract is "everything", independent of the paging query params the page
   // happens to send.
+  test("PDF exports use tenant settings for the branded report header and footer", async () => {
+    const pdf = await request(app).get(`/api/wellness/reports/product-summary.pdf?${WINDOW}`);
+    expect(pdf.status).toBe(200);
+    const text = extractPdfText(pdf.body);
+    expect(text).toContain("Configured Report Brand");
+    expect(text).toContain("Configured wellness care");
+    expect(text).toContain("Configured Report Address");
+    expect(text).toContain("Product Summary");
+    expect(text).toContain("Reporting period");
+    expect(text).toContain("Confidential business report");
+    expect(text).toContain("TOTAL");
+    expect(pdfPageCount(pdf.body)).toBeLessThanOrEqual(3);
+
+    const perProduct = await request(app).get(`/api/wellness/reports/per-product.pdf?${WINDOW}`);
+    expect(extractPdfText(perProduct.body)).toMatch(/Product\s+Count/);
+  });
+
+  test("every report tab has a branded PDF export endpoint", async () => {
+    const pdfReports = [
+      "pnl-by-service",
+      "per-professional",
+      "per-product",
+      "sales-by-customer",
+      "product-summary",
+      "payments-by-mode",
+      "expense-summary",
+      "per-location",
+      "attribution",
+    ];
+    for (const slug of pdfReports) {
+      const pdf = await request(app).get(`/api/wellness/reports/${slug}.pdf?${WINDOW}`);
+      expect(pdf.status, slug).toBe(200);
+      expect(pdf.headers["content-type"], slug).toBe("application/pdf");
+      expect(pdf.body.slice(0, 4).toString(), slug).toBe("%PDF");
+    }
+  });
+
   test("an explicit ?limit does not truncate an export", async () => {
     const res = await request(app).get(
       `/api/wellness/reports/per-product.csv?${WINDOW}&limit=5`,

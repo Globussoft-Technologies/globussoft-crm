@@ -104,7 +104,9 @@ async function loadWellnessInvoiceContext(tenantId, tenant) {
   }
   let logoBuffer = null;
   try {
-    logoBuffer = await pdfRenderer.resolveProfessionalInvoiceLogo(tenant?.logoUrl);
+    logoBuffer = await pdfRenderer.resolveProfessionalInvoiceLogo(
+      tenant?.logoUrl,
+    );
   } catch (_e) {
     // Logo loading is fail-soft; text and tenant colors remain available.
   }
@@ -135,6 +137,49 @@ function optionalInvoiceText(value, maxLength = 5000) {
   if (value == null || value === "") return null;
   const cleaned = sanitizeText(String(value)).slice(0, maxLength);
   return cleaned || null;
+}
+
+// A wellness visit stores the final amount charged separately from the active
+// service catalogue. When an invoice is created from that visit, preserve the
+// itemized catalogue rows while reconciling the service row to the persisted
+// final bill. This keeps invoice/payment totals consistent without changing
+// catalogue prices or historical visit data.
+function applyVisitFinalBillToLineItems(lineItems, visit) {
+  const targetTotal = Number(visit?.amountCharged);
+  if (
+    !Number.isFinite(targetTotal) ||
+    targetTotal <= 0 ||
+    !Array.isArray(lineItems)
+  ) {
+    return lineItems;
+  }
+
+  const serviceId = Number(visit?.serviceId);
+  const serviceIndex = lineItems.findIndex(
+    (item) => item.type === "service" && Number(item.itemId) === serviceId,
+  );
+  if (serviceIndex < 0) return lineItems;
+
+  const otherItemsTotal = lineItems.reduce(
+    (total, item, index) =>
+      index === serviceIndex ? total : total + item.amount,
+    0,
+  );
+  const serviceItem = lineItems[serviceIndex];
+  const quantity = Number(serviceItem.quantity) || 1;
+  const serviceTotal = targetTotal - otherItemsTotal;
+  if (serviceTotal < 0) return lineItems;
+
+  const unitPrice =
+    Math.round((serviceTotal / quantity + Number.EPSILON) * 100) / 100;
+  return lineItems.map((item, index) => {
+    if (index !== serviceIndex) return item;
+    return {
+      ...item,
+      unitPrice,
+      amount: Math.round(quantity * unitPrice * 100) / 100,
+    };
+  });
 }
 // ────────────────────────────────────────────────────────────────
 // Shared helpers for the two CA / Tally export endpoints below.
@@ -411,10 +456,10 @@ function parseLedgerDateBound(raw, { endOfDay = false } = {}) {
     // a March range the caller never asked for.
     const base = new Date(year, month - 1, day);
     if (
-      Number.isNaN(base.getTime())
-      || base.getFullYear() !== year
-      || base.getMonth() !== month - 1
-      || base.getDate() !== day
+      Number.isNaN(base.getTime()) ||
+      base.getFullYear() !== year ||
+      base.getMonth() !== month - 1 ||
+      base.getDate() !== day
     ) {
       return null;
     }
@@ -448,14 +493,22 @@ function buildLedgerDateWhere(query) {
   if (from) {
     const parsed = parseLedgerDateBound(from);
     if (!parsed) {
-      return { ok: false, error: "from must be a valid date (YYYY-MM-DD or ISO)", code: "INVALID_DATE_RANGE" };
+      return {
+        ok: false,
+        error: "from must be a valid date (YYYY-MM-DD or ISO)",
+        code: "INVALID_DATE_RANGE",
+      };
     }
     range.gte = parsed.date;
   }
   if (to) {
     const parsed = parseLedgerDateBound(to, { endOfDay: true });
     if (!parsed) {
-      return { ok: false, error: "to must be a valid date (YYYY-MM-DD or ISO)", code: "INVALID_DATE_RANGE" };
+      return {
+        ok: false,
+        error: "to must be a valid date (YYYY-MM-DD or ISO)",
+        code: "INVALID_DATE_RANGE",
+      };
     }
     range[parsed.exclusive ? "lt" : "lte"] = parsed.date;
   }
@@ -464,7 +517,11 @@ function buildLedgerDateWhere(query) {
   // than "you typed the dates backwards". Say so instead.
   const upper = range.lt ?? range.lte;
   if (range.gte && upper && range.gte > upper) {
-    return { ok: false, error: "from must be on or before to", code: "INVALID_DATE_RANGE" };
+    return {
+      ok: false,
+      error: "from must be on or before to",
+      code: "INVALID_DATE_RANGE",
+    };
   }
 
   // paidAt is nullable — an unpaid invoice has no paid date and must not
@@ -480,7 +537,7 @@ router.get("/", verifyToken, async (req, res) => {
     // two heavy joins that the Invoices/Payments/Billing pages don't need
     // when rendering ledger chrome (status chip, invoice number, amount,
     // due date). When the caller passes ?fields=summary we drop both joins
-      // + tenantId and timestamp fields + the recurrence metadata
+    // + tenantId and timestamp fields + the recurrence metadata
     // (isRecurring, recurFrequency, nextRecurDate, parentInvoiceId, paidAt,
     // legalEntityCode, visitId), returning only the columns needed for the
     // ledger row + status filter. Opt-in additive — existing callers (no
@@ -500,9 +557,10 @@ router.get("/", verifyToken, async (req, res) => {
     // Matches invoices explicitly tagged with the brand OR (back-compat with
     // pre-subBrand rows) untagged invoices whose CONTACT is that brand. Other
     // verticals never pass ?subBrand, so this is a no-op for them.
-    const sb = isTravelRequest(req) && req.query.subBrand
-      ? String(req.query.subBrand).slice(0, 32)
-      : null;
+    const sb =
+      isTravelRequest(req) && req.query.subBrand
+        ? String(req.query.subBrand).slice(0, 32)
+        : null;
     if (sb) {
       findManyArgs.where.OR = [
         { subBrand: sb },
@@ -513,7 +571,9 @@ router.get("/", verifyToken, async (req, res) => {
     // condition, so the two compose rather than one clobbering the other.
     const dateWhere = buildLedgerDateWhere(req.query);
     if (!dateWhere.ok) {
-      return res.status(400).json({ error: dateWhere.error, code: dateWhere.code });
+      return res
+        .status(400)
+        .json({ error: dateWhere.error, code: dateWhere.code });
     }
     Object.assign(findManyArgs.where, dateWhere.where);
     if (isSummary) {
@@ -739,7 +799,13 @@ router.post(
         "Invoice",
         req.user.tenantId,
       );
-      const { amount, dueDate, contactId, dealId, visitId: rawVisitId } = req.body;
+      const {
+        amount,
+        dueDate,
+        contactId,
+        dealId,
+        visitId: rawVisitId,
+      } = req.body;
       const wellness = isWellnessRequest(req);
       let resolvedInvoiceAmount = null;
       // #158 #177: validate amount > 0 and within sane cap, dueDate >= today.
@@ -747,51 +813,41 @@ router.post(
       // below, so callers do not need to duplicate that total in the payload.
       const amt = Number(amount);
       if (!wellness && (!Number.isFinite(amt) || amt <= 0)) {
-        return res
-          .status(400)
-          .json({
-            error: "amount must be greater than 0",
-            code: "INVALID_AMOUNT",
-          });
+        return res.status(400).json({
+          error: "amount must be greater than 0",
+          code: "INVALID_AMOUNT",
+        });
       }
       if (!wellness && amt > 1e10) {
-        return res
-          .status(400)
-          .json({
-            error: "amount exceeds maximum allowed",
-            code: "AMOUNT_TOO_HIGH",
-          });
+        return res.status(400).json({
+          error: "amount exceeds maximum allowed",
+          code: "AMOUNT_TOO_HIGH",
+        });
       }
       // #198: reject sub-paise precision. The smallest currency unit is 0.01 —
       // anything finer drifts under aggregation and breaks GST filings. The
       // 1e-9 epsilon swallows JS float noise (0.1+0.2 type artefacts) while
       // still catching genuine 6-decimal inputs like 123.456789.
       if (!wellness && Math.abs(amt - Math.round(amt * 100) / 100) > 1e-9) {
-        return res
-          .status(400)
-          .json({
-            error: "amount must have at most 2 decimal places",
-            code: "INVALID_AMOUNT_PRECISION",
-          });
+        return res.status(400).json({
+          error: "amount must have at most 2 decimal places",
+          code: "INVALID_AMOUNT_PRECISION",
+        });
       }
       const due = dueDate ? new Date(dueDate) : null;
       if (!due || Number.isNaN(due.getTime())) {
-        return res
-          .status(400)
-          .json({
-            error: "dueDate is required and must be a valid date",
-            code: "INVALID_DUE_DATE",
-          });
+        return res.status(400).json({
+          error: "dueDate is required and must be a valid date",
+          code: "INVALID_DUE_DATE",
+        });
       }
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       if (due < todayStart) {
-        return res
-          .status(400)
-          .json({
-            error: "dueDate cannot be in the past",
-            code: "DUE_DATE_IN_PAST",
-          });
+        return res.status(400).json({
+          error: "dueDate cannot be in the past",
+          code: "DUE_DATE_IN_PAST",
+        });
       }
       let resolvedContactId = contactId ? parseInt(contactId, 10) : null;
       let wellnessData = {};
@@ -835,7 +891,8 @@ router.post(
         // supplied it must belong to the selected patient and this tenant.
         // The browser keeps this id hidden; this server-side check prevents a
         // visit from another patient or clinic being attached accidentally.
-        const hasVisitId = rawVisitId !== undefined && rawVisitId !== null && rawVisitId !== "";
+        const hasVisitId =
+          rawVisitId !== undefined && rawVisitId !== null && rawVisitId !== "";
         const visitId = hasVisitId ? parseInt(rawVisitId, 10) : null;
         if (hasVisitId && (!Number.isInteger(visitId) || visitId <= 0)) {
           return res.status(400).json({
@@ -843,16 +900,17 @@ router.post(
             code: "INVALID_VISIT",
           });
         }
+        let selectedVisit = null;
         if (visitId) {
-          const visit = await prisma.visit.findFirst({
+          selectedVisit = await prisma.visit.findFirst({
             where: {
               id: visitId,
               patientId,
               tenantId: req.user.tenantId,
             },
-            select: { id: true },
+            select: { id: true, serviceId: true, amountCharged: true },
           });
-          if (!visit) {
+          if (!selectedVisit) {
             return res.status(400).json({
               error: "Selected visit was not found for this patient",
               code: "VISIT_NOT_FOUND",
@@ -889,7 +947,10 @@ router.post(
           req.body.customerEmail || patient.email,
           191,
         );
-        if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
+        if (
+          customerEmail &&
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)
+        ) {
           return res.status(400).json({
             error: "customerEmail must be a valid email address",
             code: "INVALID_CUSTOMER_EMAIL",
@@ -907,10 +968,13 @@ router.post(
             code: "INVALID_GSTIN",
           });
         }
-        const paymentMode = String(req.body.paymentMode || "cash").toLowerCase();
+        const paymentMode = String(
+          req.body.paymentMode || "cash",
+        ).toLowerCase();
         if (!WELLNESS_PAYMENT_MODES.has(paymentMode)) {
           return res.status(400).json({
-            error: "paymentMode must be cash, upi, card, bank_transfer, or other",
+            error:
+              "paymentMode must be cash, upi, card, bank_transfer, or other",
             code: "INVALID_PAYMENT_MODE",
           });
         }
@@ -923,7 +987,11 @@ router.post(
             lineItems = null;
           }
         }
-        if (!Array.isArray(lineItems) || lineItems.length === 0 || lineItems.length > 100) {
+        if (
+          !Array.isArray(lineItems) ||
+          lineItems.length === 0 ||
+          lineItems.length > 100
+        ) {
           return res.status(400).json({
             error: "At least one product or service is required",
             code: "LINE_ITEMS_REQUIRED",
@@ -934,54 +1002,89 @@ router.post(
           type: String(item?.type || "").toLowerCase(),
           itemId: parseInt(item?.itemId, 10),
           quantity: Number(item?.quantity),
-          unitPrice: item?.unitPrice === "" || item?.unitPrice == null
-            ? null
-            : Number(item.unitPrice),
+          unitPrice:
+            item?.unitPrice === "" || item?.unitPrice == null
+              ? null
+              : Number(item.unitPrice),
         }));
-        if (requestedItems.some((item) =>
-          !["service", "product"].includes(item.type)
-          || !Number.isInteger(item.itemId)
-          || item.itemId <= 0
-          || !Number.isFinite(item.quantity)
-          || item.quantity <= 0
-          || item.quantity > 10000
-          || (item.unitPrice !== null && (!Number.isFinite(item.unitPrice) || item.unitPrice < 0))
-        )) {
+        if (
+          requestedItems.some(
+            (item) =>
+              !["service", "product"].includes(item.type) ||
+              !Number.isInteger(item.itemId) ||
+              item.itemId <= 0 ||
+              !Number.isFinite(item.quantity) ||
+              item.quantity <= 0 ||
+              item.quantity > 10000 ||
+              (item.unitPrice !== null &&
+                (!Number.isFinite(item.unitPrice) || item.unitPrice < 0)),
+          )
+        ) {
           return res.status(400).json({
             error: "Each line item needs a valid product/service and quantity",
             code: "INVALID_LINE_ITEM",
           });
         }
 
-        const serviceIds = [...new Set(
-          requestedItems.filter((item) => item.type === "service").map((item) => item.itemId),
-        )];
-        const productIds = [...new Set(
-          requestedItems.filter((item) => item.type === "product").map((item) => item.itemId),
-        )];
+        const serviceIds = [
+          ...new Set(
+            requestedItems
+              .filter((item) => item.type === "service")
+              .map((item) => item.itemId),
+          ),
+        ];
+        const productIds = [
+          ...new Set(
+            requestedItems
+              .filter((item) => item.type === "product")
+              .map((item) => item.itemId),
+          ),
+        ];
         const [services, products] = await Promise.all([
           serviceIds.length
             ? prisma.service.findMany({
-                where: { tenantId: req.user.tenantId, id: { in: serviceIds }, isActive: true },
-                select: { id: true, name: true, basePrice: true, discountedPrice: true },
+                where: {
+                  tenantId: req.user.tenantId,
+                  id: { in: serviceIds },
+                  isActive: true,
+                },
+                select: {
+                  id: true,
+                  name: true,
+                  basePrice: true,
+                  discountedPrice: true,
+                },
               })
             : [],
           productIds.length
             ? prisma.product.findMany({
-                where: { tenantId: req.user.tenantId, id: { in: productIds }, isActive: true },
-                select: { id: true, name: true, price: true, discountedPrice: true },
+                where: {
+                  tenantId: req.user.tenantId,
+                  id: { in: productIds },
+                  isActive: true,
+                },
+                select: {
+                  id: true,
+                  name: true,
+                  price: true,
+                  discountedPrice: true,
+                },
               })
             : [],
         ]);
         const serviceById = new Map(services.map((item) => [item.id, item]));
         const productById = new Map(products.map((item) => [item.id, item]));
         const normalizedItems = requestedItems.map((item) => {
-          const catalogItem = (item.type === "service" ? serviceById : productById).get(item.itemId);
+          const catalogItem = (
+            item.type === "service" ? serviceById : productById
+          ).get(item.itemId);
           if (!catalogItem) return null;
-          const catalogPrice = item.type === "service"
-            ? (catalogItem.discountedPrice ?? catalogItem.basePrice)
-            : (catalogItem.discountedPrice ?? catalogItem.price);
-          const unitPrice = item.unitPrice == null ? Number(catalogPrice) : item.unitPrice;
+          const catalogPrice =
+            item.type === "service"
+              ? (catalogItem.discountedPrice ?? catalogItem.basePrice)
+              : (catalogItem.discountedPrice ?? catalogItem.price);
+          const unitPrice =
+            item.unitPrice == null ? Number(catalogPrice) : item.unitPrice;
           if (!Number.isFinite(unitPrice) || unitPrice < 0) return null;
           const normalizedQuantity = Math.round(item.quantity * 1000) / 1000;
           const normalizedUnitPrice = Math.round(unitPrice * 100) / 100;
@@ -991,7 +1094,8 @@ router.post(
             name: sanitizeText(catalogItem.name),
             quantity: normalizedQuantity,
             unitPrice: normalizedUnitPrice,
-            amount: Math.round(normalizedQuantity * normalizedUnitPrice * 100) / 100,
+            amount:
+              Math.round(normalizedQuantity * normalizedUnitPrice * 100) / 100,
           };
         });
         if (normalizedItems.some((item) => !item)) {
@@ -1000,16 +1104,28 @@ router.post(
             code: "INVALID_LINE_ITEM",
           });
         }
-        const lineItemsTotal = Math.round(
-          normalizedItems.reduce((sum, item) => sum + item.amount, 0) * 100,
-        ) / 100;
-        if (!Number.isFinite(lineItemsTotal) || lineItemsTotal <= 0 || lineItemsTotal > 1e10) {
+        const reconciledItems = applyVisitFinalBillToLineItems(
+          normalizedItems,
+          selectedVisit,
+        );
+        const lineItemsTotal =
+          Math.round(
+            reconciledItems.reduce((sum, item) => sum + item.amount, 0) * 100,
+          ) / 100;
+        if (
+          !Number.isFinite(lineItemsTotal) ||
+          lineItemsTotal <= 0 ||
+          lineItemsTotal > 1e10
+        ) {
           return res.status(400).json({
             error: "Line item total must be greater than 0",
             code: "INVALID_AMOUNT",
           });
         }
-        if (Math.abs(lineItemsTotal - Math.round(lineItemsTotal * 100) / 100) > 1e-9) {
+        if (
+          Math.abs(lineItemsTotal - Math.round(lineItemsTotal * 100) / 100) >
+          1e-9
+        ) {
           return res.status(400).json({
             error: "Line item total must have at most 2 decimal places",
             code: "INVALID_AMOUNT_PRECISION",
@@ -1032,27 +1148,33 @@ router.post(
                 select: { id: true },
               })
             : [];
-          const matchedContactIds = [...new Set(matchingContacts.map((contact) => contact.id))];
+          const matchedContactIds = [
+            ...new Set(matchingContacts.map((contact) => contact.id)),
+          ];
           if (matchedContactIds.length > 1) {
             return res.status(409).json({
-              error: "Patient email or phone matches multiple contacts. Link the patient to the correct contact before invoicing.",
+              error:
+                "Patient email or phone matches multiple contacts. Link the patient to the correct contact before invoicing.",
               code: "AMBIGUOUS_CONTACT_MATCH",
             });
           }
-          const existingContact = matchedContactIds.length === 1
-            ? { id: matchedContactIds[0] }
-            : null;
-          const contact = existingContact || await prisma.contact.create({
-            data: {
-              name: customerName,
-              email: customerEmail,
-              phone: customerPhone,
-              status: "Customer",
-              source: "wellness-invoice",
-              tenantId: req.user.tenantId,
-            },
-            select: { id: true },
-          });
+          const existingContact =
+            matchedContactIds.length === 1
+              ? { id: matchedContactIds[0] }
+              : null;
+          const contact =
+            existingContact ||
+            (await prisma.contact.create({
+              data: {
+                name: customerName,
+                email: customerEmail,
+                phone: customerPhone,
+                status: "Customer",
+                source: "wellness-invoice",
+                tenantId: req.user.tenantId,
+              },
+              select: { id: true },
+            }));
           resolvedContactId = contact.id;
         }
 
@@ -1067,10 +1189,11 @@ router.post(
           billingAddress: optionalInvoiceText(req.body.billingAddress),
           shippingAddress: optionalInvoiceText(req.body.shippingAddress),
           paymentMode,
-          lineItemsJson: sanitizeJsonForStringColumn(normalizedItems),
+          lineItemsJson: sanitizeJsonForStringColumn(reconciledItems),
         };
-        // Wellness totals are derived from the selected master-catalogue rows;
-        // the browser cannot lower the invoice amount independently of them.
+        // Wellness totals are derived from the validated rows, with a selected
+        // visit's persisted final bill taking precedence over its catalogue
+        // service price.
         resolvedInvoiceAmount = lineItemsTotal;
       }
 
@@ -1088,11 +1211,11 @@ router.post(
         typeof req.body.subBrand === "string"
           ? req.body.subBrand.trim().toLowerCase()
           : "";
-      const subBrand = isTravelRequest(req) && ["tmc", "rfu", "travelstall", "visasure"].includes(
-        subBrandRaw,
-      )
-        ? subBrandRaw
-        : null;
+      const subBrand =
+        isTravelRequest(req) &&
+        ["tmc", "rfu", "travelstall", "visasure"].includes(subBrandRaw)
+          ? subBrandRaw
+          : null;
 
       const baseData = {
         invoiceNum: invNum,
@@ -1219,12 +1342,10 @@ router.patch(
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
         if (due < todayStart) {
-          return res
-            .status(400)
-            .json({
-              error: "dueDate cannot be in the past",
-              code: "DUE_DATE_IN_PAST",
-            });
+          return res.status(400).json({
+            error: "dueDate cannot be in the past",
+            code: "DUE_DATE_IN_PAST",
+          });
         }
         data.dueDate = due;
       }
@@ -1235,12 +1356,10 @@ router.patch(
         const allowed = [null, "monthly", "quarterly", "yearly"];
         const v = req.body.recurFrequency || null;
         if (!allowed.includes(v)) {
-          return res
-            .status(400)
-            .json({
-              error: "recurFrequency must be one of monthly/quarterly/yearly",
-              code: "INVALID_RECUR_FREQUENCY",
-            });
+          return res.status(400).json({
+            error: "recurFrequency must be one of monthly/quarterly/yearly",
+            code: "INVALID_RECUR_FREQUENCY",
+          });
         }
         data.recurFrequency = v;
       }
@@ -1680,7 +1799,9 @@ router.post("/public/confirm-payment", async (req, res) => {
       existingMeta = JSON.parse(payment.metadata || "{}");
     } catch (_) {}
 
-    const callbackPaymentId = razorpay_payment_id ? String(razorpay_payment_id) : null;
+    const callbackPaymentId = razorpay_payment_id
+      ? String(razorpay_payment_id)
+      : null;
     const isDifferentCapturedPayment =
       payment.status === "SUCCESS" &&
       callbackPaymentId &&
@@ -1769,7 +1890,10 @@ router.post("/public/confirm-payment", async (req, res) => {
     // (the instalment's invoiceId FK) but must not reconcile as a TravelInvoice
     // payment; the tmc-instalment block above handles them.
     const travelInvoiceId = Number(existingMeta.travelInvoiceId);
-    if (Number.isFinite(travelInvoiceId) && existingMeta.kind !== "tmc-instalment") {
+    if (
+      Number.isFinite(travelInvoiceId) &&
+      existingMeta.kind !== "tmc-instalment"
+    ) {
       try {
         const travelInv = await prisma.travelInvoice.findFirst({
           where: { id: travelInvoiceId },
@@ -2112,12 +2236,18 @@ router.post("/public/confirm-payment", async (req, res) => {
               if (itinerary) {
                 // Recompute from all paid instalments for idempotency
                 const paidRows = await prisma.tripInstalmentPayment.findMany({
-                  where: { participantId: instalment.participantId, status: "paid" },
+                  where: {
+                    participantId: instalment.participantId,
+                    status: "paid",
+                  },
                   select: { paidAmount: true, amount: true },
                 });
-                const trueTotal = paidRows.reduce(
-                  (s, r) => s + (Number(r.paidAmount) || Number(r.amount) || 0), 0,
-                ) + paidAmount; // include this instalment (not yet committed)
+                const trueTotal =
+                  paidRows.reduce(
+                    (s, r) =>
+                      s + (Number(r.paidAmount) || Number(r.amount) || 0),
+                    0,
+                  ) + paidAmount; // include this instalment (not yet committed)
                 await prisma.itinerary.update({
                   where: { id: itinerary.id },
                   data: {
@@ -2127,10 +2257,15 @@ router.post("/public/confirm-payment", async (req, res) => {
                 });
               }
             }
-          } catch (_ie) { /* non-fatal */ }
+          } catch (_ie) {
+            /* non-fatal */
+          }
         }
       } catch (e) {
-        console.error("[PublicConfirmPayment] tmc-instalment reconcile failed (non-fatal):", e.message);
+        console.error(
+          "[PublicConfirmPayment] tmc-instalment reconcile failed (non-fatal):",
+          e.message,
+        );
       }
     }
 
@@ -2234,7 +2369,9 @@ router.get("/public/receipt", async (req, res) => {
     if (meta.kind === "tmc-instalment" && meta.instalmentId) {
       const instalmentId = Number(meta.instalmentId);
       const instalment = Number.isFinite(instalmentId)
-        ? await prisma.tripInstalmentPayment.findFirst({ where: { id: instalmentId } })
+        ? await prisma.tripInstalmentPayment.findFirst({
+            where: { id: instalmentId },
+          })
         : null;
       const trip = instalment
         ? await prisma.tmcTrip.findFirst({
@@ -2257,33 +2394,71 @@ router.get("/public/receipt", async (req, res) => {
       applyRupeeCapableFonts(doc);
       const filename = `instalment-receipt-${instalmentId}.pdf`;
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
       doc.pipe(res);
 
       const tenantName = tenant?.name || "Travel Stall";
       doc.fontSize(22).font("Helvetica-Bold").text(tenantName, 50, 50);
-      doc.fontSize(11).font("Helvetica").fillColor("#666").text("Payment Receipt", 50, 78);
+      doc
+        .fontSize(11)
+        .font("Helvetica")
+        .fillColor("#666")
+        .text("Payment Receipt", 50, 78);
       doc.moveTo(50, 95).lineTo(545, 95).strokeColor("#e0e0e0").stroke();
 
-      doc.fillColor("#000").fontSize(12).font("Helvetica-Bold").text("Instalment Payment", 50, 110);
+      doc
+        .fillColor("#000")
+        .fontSize(12)
+        .font("Helvetica-Bold")
+        .text("Instalment Payment", 50, 110);
       doc.font("Helvetica").fontSize(11).fillColor("#333");
-      if (participant?.fullName) doc.text(`Student: ${participant.fullName}`, 50, 130);
-      if (participant?.parentName) doc.text(`Parent / Guardian: ${participant.parentName}`, 50, 148);
-      if (trip?.tripCode) doc.text(`Trip: ${trip.tripCode}${trip.destination ? " — " + trip.destination : ""}`, 50, 166);
+      if (participant?.fullName)
+        doc.text(`Student: ${participant.fullName}`, 50, 130);
+      if (participant?.parentName)
+        doc.text(`Parent / Guardian: ${participant.parentName}`, 50, 148);
+      if (trip?.tripCode)
+        doc.text(
+          `Trip: ${trip.tripCode}${trip.destination ? " — " + trip.destination : ""}`,
+          50,
+          166,
+        );
       if (instalment) {
-        const due = instalment.dueDate ? new Date(instalment.dueDate).toLocaleDateString("en-IN") : "—";
-        doc.text(`Instalment #${instalment.instalmentIndex + 1}  (Due: ${due})`, 50, 184);
+        const due = instalment.dueDate
+          ? new Date(instalment.dueDate).toLocaleDateString("en-IN")
+          : "—";
+        doc.text(
+          `Instalment #${instalment.instalmentIndex + 1}  (Due: ${due})`,
+          50,
+          184,
+        );
       }
 
       doc.moveTo(50, 210).lineTo(545, 210).strokeColor("#e0e0e0").stroke();
-      doc.fontSize(13).font("Helvetica-Bold").fillColor("#000").text("Amount Paid", 50, 220);
+      doc
+        .fontSize(13)
+        .font("Helvetica-Bold")
+        .fillColor("#000")
+        .text("Amount Paid", 50, 220);
       const amtStr = `INR ${Number(payment.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
       doc.fontSize(20).text(amtStr, 50, 240);
 
-      const paidOn = payment.paidAt ? new Date(payment.paidAt).toLocaleString("en-IN") : new Date().toLocaleString("en-IN");
-      doc.fontSize(10).font("Helvetica").fillColor("#666").text(`Paid on: ${paidOn}`, 50, 270);
+      const paidOn = payment.paidAt
+        ? new Date(payment.paidAt).toLocaleString("en-IN")
+        : new Date().toLocaleString("en-IN");
+      doc
+        .fontSize(10)
+        .font("Helvetica")
+        .fillColor("#666")
+        .text(`Paid on: ${paidOn}`, 50, 270);
       doc.text(`Payment ID: ${plinkId}`, 50, 285);
-      doc.text("This is a computer-generated receipt and does not require a signature.", 50, 320);
+      doc.text(
+        "This is a computer-generated receipt and does not require a signature.",
+        50,
+        320,
+      );
 
       doc.end();
       return;
@@ -2528,13 +2703,13 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
         contact: true,
         ...(isWellnessInvoice
           ? {
-            visit: {
-              select: {
-                visitDate: true,
-                service: { select: { name: true } },
+              visit: {
+                select: {
+                  visitDate: true,
+                  service: { select: { name: true } },
+                },
               },
-            },
-          }
+            }
           : {}),
       },
     });
@@ -2560,7 +2735,10 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     // Wellness invoices use the structured, tenant-branded layout. The
     // generic/travel renderer below is intentionally left unchanged.
     if (isWellnessInvoice) {
-      const context = await loadWellnessInvoiceContext(req.user.tenantId, tenant);
+      const context = await loadWellnessInvoiceContext(
+        req.user.tenantId,
+        tenant,
+      );
       const buf = await pdfRenderer.renderProfessionalWellnessInvoicePdf(
         invoice,
         invoice.contact,
@@ -2575,7 +2753,10 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
       );
       const filename = `${invoice.invoiceNum || "INV-" + invoice.id}.pdf`;
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
       res.setHeader("Content-Length", buf.length);
       return res.send(buf);
     }
@@ -2631,53 +2812,53 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     // Wellness invoice data is rendered by the structured renderer above.
     // Generic and Travel invoices retain the existing PDF layout below.
     // Contact info
-      doc
-        .fontSize(12)
-        .font("Helvetica-Bold")
-        .fillColor("#000000")
-        .text("Bill To:", 50, 225);
-      doc
-        .fontSize(10)
-        .font("Helvetica")
-        .fillColor("#333333")
-        .text(invoice.contact?.name || "Unknown Contact", 50, 245)
-        .text(invoice.contact?.email || "", 50, 260)
-        .text(invoice.contact?.company || "", 50, 275);
+    doc
+      .fontSize(12)
+      .font("Helvetica-Bold")
+      .fillColor("#000000")
+      .text("Bill To:", 50, 225);
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#333333")
+      .text(invoice.contact?.name || "Unknown Contact", 50, 245)
+      .text(invoice.contact?.email || "", 50, 260)
+      .text(invoice.contact?.company || "", 50, 275);
 
-      // Line separator
-      doc.moveTo(50, 310).lineTo(545, 310).strokeColor("#cccccc").stroke();
+    // Line separator
+    doc.moveTo(50, 310).lineTo(545, 310).strokeColor("#cccccc").stroke();
 
-      // Amount table header
-      doc.fillColor("#ffffff").rect(50, 325, 495, 30).fill("#3b82f6");
-      doc
-        .fillColor("#ffffff")
-        .fontSize(10)
-        .font("Helvetica-Bold")
-        .text("Description", 60, 333)
-        .text("Amount", 450, 333, { width: 85, align: "right" });
+    // Amount table header
+    doc.fillColor("#ffffff").rect(50, 325, 495, 30).fill("#3b82f6");
+    doc
+      .fillColor("#ffffff")
+      .fontSize(10)
+      .font("Helvetica-Bold")
+      .text("Description", 60, 333)
+      .text("Amount", 450, 333, { width: 85, align: "right" });
 
-      // Amount row
-      doc
-        .fillColor("#333333")
-        .font("Helvetica")
-        .fontSize(10)
-        .text("Invoice Charge", 60, 370)
-        .text(formatMoney(invoice.amount, currency, locale), 450, 370, {
-          width: 85,
-          align: "right",
-        });
+    // Amount row
+    doc
+      .fillColor("#333333")
+      .font("Helvetica")
+      .fontSize(10)
+      .text("Invoice Charge", 60, 370)
+      .text(formatMoney(invoice.amount, currency, locale), 450, 370, {
+        width: 85,
+        align: "right",
+      });
 
-      // Total
-      doc.moveTo(50, 400).lineTo(545, 400).strokeColor("#cccccc").stroke();
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(12)
-        .fillColor("#000000")
-        .text("Total:", 350, 415)
-        .text(formatMoney(invoice.amount, currency, locale), 450, 415, {
-          width: 85,
-          align: "right",
-        });
+    // Total
+    doc.moveTo(50, 400).lineTo(545, 400).strokeColor("#cccccc").stroke();
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor("#000000")
+      .text("Total:", 350, 415)
+      .text(formatMoney(invoice.amount, currency, locale), 450, 415, {
+        width: 85,
+        align: "right",
+      });
     // Footer
     doc
       .fontSize(8)
@@ -2750,12 +2931,10 @@ async function voidInvoiceHandler(req, res) {
     });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
     if (existing.status === "PAID")
-      return res
-        .status(400)
-        .json({
-          error: "Cannot void a paid invoice — use /refund instead",
-          code: "INVOICE_ALREADY_PAID",
-        });
+      return res.status(400).json({
+        error: "Cannot void a paid invoice — use /refund instead",
+        code: "INVOICE_ALREADY_PAID",
+      });
     if (existing.status === "VOIDED")
       return res.json({ ...existing, idempotent: true });
     const invoice = await prisma.invoice.update({
@@ -2886,12 +3065,10 @@ router.post(
       if (!existing)
         return res.status(404).json({ error: "Invoice not found" });
       if (existing.status !== "PAID") {
-        return res
-          .status(400)
-          .json({
-            error: "Only PAID invoices can be refunded",
-            code: "INVOICE_NOT_PAID",
-          });
+        return res.status(400).json({
+          error: "Only PAID invoices can be refunded",
+          code: "INVOICE_NOT_PAID",
+        });
       }
       const invoice = await prisma.invoice.update({
         where: { id: existing.id },
@@ -2954,33 +3131,26 @@ router.post(
       if (!original)
         return res.status(404).json({ error: "Invoice not found" });
       if (original.status === "VOIDED")
-        return res
-          .status(400)
-          .json({
-            error: "Cannot issue credit note against a voided invoice",
-            code: "INVOICE_VOIDED",
-          });
+        return res.status(400).json({
+          error: "Cannot issue credit note against a voided invoice",
+          code: "INVOICE_VOIDED",
+        });
 
       const requestedAmount =
         req.body.amount !== undefined
           ? Number(req.body.amount)
           : Number(original.amount);
       if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
-        return res
-          .status(400)
-          .json({
-            error: "credit-note amount must be greater than 0",
-            code: "INVALID_AMOUNT",
-          });
+        return res.status(400).json({
+          error: "credit-note amount must be greater than 0",
+          code: "INVALID_AMOUNT",
+        });
       }
       if (requestedAmount > Number(original.amount) + 1e-9) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "credit-note amount cannot exceed the original invoice amount",
-            code: "AMOUNT_EXCEEDS_ORIGINAL",
-          });
+        return res.status(400).json({
+          error: "credit-note amount cannot exceed the original invoice amount",
+          code: "AMOUNT_EXCEEDS_ORIGINAL",
+        });
       }
       const cnAmount = -1 * (Math.round(requestedAmount * 100) / 100);
       const cnNum = `CN-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
@@ -3028,13 +3198,11 @@ router.post(
           via: "credit-note",
         },
       );
-      res
-        .status(201)
-        .json({
-          creditNote,
-          originalInvoiceId: original.id,
-          reason: req.body.reason || null,
-        });
+      res.status(201).json({
+        creditNote,
+        originalInvoiceId: original.id,
+        reason: req.body.reason || null,
+      });
     } catch (err) {
       console.error("[billing] credit-note error:", err);
       res.status(500).json({ error: "Failed to issue credit note" });
@@ -3164,12 +3332,10 @@ router.post(
       });
     } catch (err) {
       console.error("[billing/recurring/run]", err);
-      res
-        .status(500)
-        .json({
-          error: "Failed to run recurring invoice engine",
-          detail: err.message,
-        });
+      res.status(500).json({
+        error: "Failed to run recurring invoice engine",
+        detail: err.message,
+      });
     }
   },
 );

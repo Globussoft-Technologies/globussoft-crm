@@ -11,7 +11,7 @@
  *   - wellness-clinical-api.spec.js — patients/visits/Rx/consent/services
  *   - wellness-rbac-api.spec.js — cross-cutting role gates (#214/#326)
  *
- * Endpoints covered (12):
+ * Endpoints covered (36):
  *   GET /api/wellness/reports/pnl-by-service           — JSON  (P&L tab)
  *   GET /api/wellness/reports/pnl-by-service.csv       — CSV export
  *   GET /api/wellness/reports/pnl-by-service.pdf       — PDF export
@@ -24,6 +24,8 @@
  *   GET /api/wellness/reports/attribution              — JSON  (Attribution tab)
  *   GET /api/wellness/reports/attribution.csv          — CSV export
  *   GET /api/wellness/reports/attribution.pdf          — PDF export
+ *   Plus the four required report views (customer, product summary, payment
+ *   mode, and expense summary), each with JSON + CSV + PDF + XLSX contracts.
  *
  * Why this exists: the wellness Reports tabs back the Owner's go-no-go
  * decisions (campaign attribution, doctor productivity, P&L per service).
@@ -108,13 +110,18 @@ const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_FLOW_REPORTS_${Date.now()}`;
 
-// All four JSON endpoints, plus a parameterised list of (json, csv, pdf) triples
-// for the export matrix.
+// All current JSON endpoints, plus a parameterised list of report export
+// triples for the export matrix.
 const REPORT_JSON_PATHS = [
   '/api/wellness/reports/pnl-by-service',
   '/api/wellness/reports/per-professional',
   '/api/wellness/reports/per-location',
   '/api/wellness/reports/attribution',
+  '/api/wellness/reports/per-product',
+  '/api/wellness/reports/sales-by-customer',
+  '/api/wellness/reports/product-summary',
+  '/api/wellness/reports/payments-by-mode',
+  '/api/wellness/reports/expense-summary',
 ];
 
 const REPORT_TRIPLES = [
@@ -123,6 +130,7 @@ const REPORT_TRIPLES = [
     json: '/api/wellness/reports/pnl-by-service',
     csv: '/api/wellness/reports/pnl-by-service.csv',
     pdf: '/api/wellness/reports/pnl-by-service.pdf',
+    xlsx: '/api/wellness/reports/pnl-by-service.xlsx',
     csvHeaderFirstCol: 'Service',
   },
   {
@@ -130,6 +138,7 @@ const REPORT_TRIPLES = [
     json: '/api/wellness/reports/per-professional',
     csv: '/api/wellness/reports/per-professional.csv',
     pdf: '/api/wellness/reports/per-professional.pdf',
+    xlsx: '/api/wellness/reports/per-professional.xlsx',
     csvHeaderFirstCol: 'Staff',
   },
   {
@@ -137,6 +146,7 @@ const REPORT_TRIPLES = [
     json: '/api/wellness/reports/per-location',
     csv: '/api/wellness/reports/per-location.csv',
     pdf: '/api/wellness/reports/per-location.pdf',
+    xlsx: '/api/wellness/reports/per-location.xlsx',
     csvHeaderFirstCol: 'Location',
   },
   {
@@ -144,7 +154,48 @@ const REPORT_TRIPLES = [
     json: '/api/wellness/reports/attribution',
     csv: '/api/wellness/reports/attribution.csv',
     pdf: '/api/wellness/reports/attribution.pdf',
+    xlsx: '/api/wellness/reports/attribution.xlsx',
     csvHeaderFirstCol: 'Source',
+  },
+  {
+    name: 'per-product',
+    json: '/api/wellness/reports/per-product',
+    csv: '/api/wellness/reports/per-product.csv',
+    pdf: '/api/wellness/reports/per-product.pdf',
+    xlsx: '/api/wellness/reports/per-product.xlsx',
+    csvHeaderFirstCol: 'Product Name',
+  },
+  {
+    name: 'sales-by-customer',
+    json: '/api/wellness/reports/sales-by-customer',
+    csv: '/api/wellness/reports/sales-by-customer.csv',
+    pdf: '/api/wellness/reports/sales-by-customer.pdf',
+    xlsx: '/api/wellness/reports/sales-by-customer.xlsx',
+    csvHeaderFirstCol: 'Customer',
+  },
+  {
+    name: 'product-summary',
+    json: '/api/wellness/reports/product-summary',
+    csv: '/api/wellness/reports/product-summary.csv',
+    pdf: '/api/wellness/reports/product-summary.pdf',
+    xlsx: '/api/wellness/reports/product-summary.xlsx',
+    csvHeaderFirstCol: 'Product',
+  },
+  {
+    name: 'payments-by-mode',
+    json: '/api/wellness/reports/payments-by-mode',
+    csv: '/api/wellness/reports/payments-by-mode.csv',
+    pdf: '/api/wellness/reports/payments-by-mode.pdf',
+    xlsx: '/api/wellness/reports/payments-by-mode.xlsx',
+    csvHeaderFirstCol: 'Payment mode',
+  },
+  {
+    name: 'expense-summary',
+    json: '/api/wellness/reports/expense-summary',
+    csv: '/api/wellness/reports/expense-summary.csv',
+    pdf: '/api/wellness/reports/expense-summary.pdf',
+    xlsx: '/api/wellness/reports/expense-summary.xlsx',
+    csvHeaderFirstCol: 'Category',
   },
 ];
 
@@ -774,6 +825,22 @@ test.describe('Wellness Reports API — PDF exports (#227)', () => {
     );
     expect(res.status()).toBe(400);
   });
+});
+
+// =====================================================================
+// 11b. XLSX exports — content-type + attachment disposition
+// =====================================================================
+
+test.describe('Wellness Reports API — XLSX exports', () => {
+  for (const triple of REPORT_TRIPLES) {
+    test(`${triple.name}.xlsx: 200 + spreadsheet content-type + attachment disposition`, async ({ request }) => {
+      const res = await authGet(request, triple.xlsx, 'admin');
+      expect(res.status(), `body: ${await res.text().catch(() => '')}`).toBe(200);
+      expect(res.headers()['content-type']).toContain('spreadsheetml.sheet');
+      expect(res.headers()['content-disposition'] || '').toContain('.xlsx');
+      expect((await res.body()).length).toBeGreaterThan(100);
+    });
+  }
 });
 
 // =====================================================================

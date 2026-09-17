@@ -1647,6 +1647,16 @@ select option {
   color: #1a1a2e;
 }
 
+/* Toolbar date filters should use the current application surface instead of
+   the browser/light-theme default white select treatment. */
+select.invoice-date-range-filter {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 6px;
+  color: var(--text-primary) !important;
+  box-shadow: var(--shadow-sm, none);
+}
+
 .nav-link {
   position: relative;
   overflow: hidden;

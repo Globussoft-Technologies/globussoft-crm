@@ -966,11 +966,13 @@ async function attachComputedWalletBalance(contact, tenantId) {
 
 // Wellness-only contact enrichment for the Patient details appointment flow.
 // Generic and travel contacts retain their existing response shape.
-async function attachWellnessAppointments(contact, tenantId) {
+async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
   if (!contact || typeof contact !== 'object' || !contact.id) return contact;
   try {
-    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
-    if (!tenant || tenant.vertical !== 'wellness') return contact;
+    const vertical = tenantVertical !== undefined
+      ? tenantVertical
+      : (await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }))?.vertical;
+    if (vertical !== 'wellness') return contact;
     const patient = await prisma.patient.findFirst({
       where: { tenantId, contactId: contact.id, deletedAt: null },
       select: { id: true },
@@ -1014,14 +1016,16 @@ async function attachWellnessAppointments(contact, tenantId) {
 // Deals stay (the PRD keeps them — FR-3.7.4 quote-accept → Deal "Booked"/"Won");
 // this only ADDS the travel entities. No-op for generic/wellness tenants.
 // Best-effort: any failure returns the contact unchanged — never breaks the GET.
-async function attachTravelRelationshipTimeline(contact, tenantId) {
+async function attachTravelRelationshipTimeline(contact, tenantId, tenantVertical) {
   if (!contact || typeof contact !== "object" || !contact.id) return contact;
   try {
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { vertical: true },
-    });
-    if (!tenant || tenant.vertical !== "travel") return contact;
+    const vertical = tenantVertical !== undefined
+      ? tenantVertical
+      : (await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { vertical: true },
+      }))?.vertical;
+    if (vertical !== "travel") return contact;
 
     const [itineraries, invoices] = await Promise.all([
       prisma.itinerary
@@ -2056,28 +2060,14 @@ router.get("/filter-values/:field", async (req, res) => {
   }
 });
 
-router.delete("/tags", async (req, res) => {
 // Generic CRM tag catalog. Contact ↔ tag membership continues to use the
 // existing Contact.tagsJson field; the tenant setting stores shared names and
 // colors so every contact renders the same tag color after a reload.
 router.get('/tags', async (req, res) => {
   try {
     if (!await requireGenericContactTags(req, res)) return;
-    const [catalog, rows] = await Promise.all([
-      readContactTagCatalog(req.user.tenantId),
-      prisma.contact.findMany({
-        where: { tenantId: req.user.tenantId, deletedAt: null },
-        select: { tagsJson: true },
-      }),
-    ]);
-    const byKey = new Map(catalog.map((tag) => [tag.name.toLowerCase(), tag]));
-    for (const row of rows) {
-      for (const name of parseContactTags(row.tagsJson)) {
-        const key = name.toLowerCase();
-        if (!byKey.has(key)) byKey.set(key, { name, color: defaultContactTagColor(name) });
-      }
-    }
-    res.json({ tags: [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name)) });
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    res.json({ tags: catalog.sort((a, b) => a.name.localeCompare(b.name)) });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact tags' });
   }
@@ -2119,6 +2109,7 @@ router.patch('/tags/:tagName', async (req, res) => {
   }
 });
 
+router.delete("/tags", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const tag = normalizeContactTagValue(req.body?.tag);
@@ -2168,6 +2159,19 @@ router.patch('/tags/:tagName', async (req, res) => {
       });
       updatedContacts += 1;
     }
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    if (tenant?.vertical === "generic") {
+      const catalog = await readContactTagCatalog(tenantId);
+      const nextCatalog = catalog.filter(
+        (catalogTag) => catalogTag.name.toLowerCase() !== tagKey,
+      );
+      if (nextCatalog.length !== catalog.length) {
+        await writeContactTagCatalog(tenantId, nextCatalog);
+      }
+    }
     return res.json({ deletedTag: tag, status: statusScope, updatedContacts });
   } catch (_err) {
     return res.status(500).json({ error: "Failed to delete tag" });
@@ -2207,15 +2211,24 @@ router.get("/:id", async (req, res) => {
       filtered,
       req.user.tenantId,
     );
+    let tenantVertical = "";
+    try {
+      tenantVertical = (await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { vertical: true },
+      }))?.vertical || "";
+    } catch (_e) { /* vertical enrichment remains fail-soft */ }
     const withAppointments = await attachWellnessAppointments(
       withWallet,
       req.user.tenantId,
+      tenantVertical,
     );
     // Travel-only: merge the contact's bookings (Itineraries) + invoices into
     // the activity timeline so booking-only customers aren't shown empty.
     const withTimeline = await attachTravelRelationshipTimeline(
       withAppointments,
       req.user.tenantId,
+      tenantVertical,
     );
     // Generic-vertical-only: attach { fieldKey: value } from this tenant's
     // Lead custom field definitions/values (no-op elsewhere — see helper).

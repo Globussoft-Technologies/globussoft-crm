@@ -148,6 +148,35 @@ test.afterAll(async ({ request }) => {
   }
 });
 
+test.describe('Contacts API — Generic tag catalog', () => {
+  test('catalog routes are registered at startup and persist tenant-scoped tags', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    test.skip(!token, 'admin token unavailable');
+    const tag = `${RUN_TAG}_catalog`;
+
+    const initial = await get(request, token, '/api/contacts/tags');
+    expect(initial.status()).toBe(200);
+    expect(Array.isArray((await initial.json()).tags)).toBe(true);
+
+    const created = await post(request, token, '/api/contacts/tags', { name: tag, color: '#2563eb' });
+    expect([200, 201]).toContain(created.status());
+    expect(await created.json()).toMatchObject({ name: tag, color: '#2563eb' });
+
+    const afterCreate = await get(request, token, '/api/contacts/tags');
+    expect(afterCreate.status()).toBe(200);
+    expect((await afterCreate.json()).tags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: tag, color: '#2563eb' }),
+    ]));
+
+    const cleanup = await request.delete(`${BASE_URL}/api/contacts/tags`, {
+      headers: headers(token),
+      data: { tag },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(cleanup.status()).toBe(200);
+  });
+});
+
 // Use the RUN_TAG plus a random suffix so application-level duplicate
 // detection remains deterministic across repeated CI runs.
 function uniqueEmail(label) {

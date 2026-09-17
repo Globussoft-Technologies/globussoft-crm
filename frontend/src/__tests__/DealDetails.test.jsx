@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -112,5 +112,29 @@ describe('<DealDetails />', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View all notes' }));
     expect(screen.getByRole('heading', { name: 'Activities' })).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Add note' })).not.toBeInTheDocument();
+  });
+
+  it('searches related contacts through the backend instead of truncating to an initial list', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/deals/42') return Promise.resolve(deal);
+      if (url === '/api/pipeline_stages') return Promise.resolve([{ id: 1, name: 'Lead' }]);
+      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
+      if (url.includes('/api/contacts?') && url.includes('q=Beyond')) {
+        return Promise.resolve({ data: [{ id: 999, name: 'Beyond First Page' }] });
+      }
+      if (url.startsWith('/api/contacts?')) return Promise.resolve({ data: [] });
+      return Promise.resolve([]);
+    });
+
+    renderPage();
+    await screen.findByRole('heading', { name: 'Acme Expansion' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit Related contact' })[0]);
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Search contacts' }), { target: { value: 'Beyond' } });
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts?fields=summary&limit=50&q=Beyond',
+      { silent: true },
+    ));
+    expect(await screen.findByRole('option', { name: 'Beyond First Page' })).toBeInTheDocument();
   });
 });

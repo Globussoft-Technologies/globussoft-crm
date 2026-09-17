@@ -60,8 +60,9 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 8350,
-    "//latest-total-bump": "8250→8350 on 2026-09-17: PR #1454 expanded wellness reporting and invoice workflows, taking main to 8251.7 KB; PR #1455 then added the appointment-call RBAC UI, taking it to 8252.4 KB. Both changes reuse existing dependencies and every per-chunk budget remains green; this restores 97.6 KB of total headroom.",
+    "all-js-maxKB": 8400,
+    "//latest-total-bump": "8350→8400 on 2026-09-17: PR #1459 adds the lazy-loaded Generic CRM deal-details workspace and shared rich-text rendering, bringing total JS to 8362.3 KB. No runtime dependency was added; per-chunk budgets remain green and the cap retains 37.7 KB headroom.",
+    "//previous-total-bump-5": "8250→8350 on 2026-09-17: PR #1454 expanded wellness reporting and invoice workflows, taking main to 8251.7 KB; PR #1455 then added the appointment-call RBAC UI, taking it to 8252.4 KB. Both changes reuse existing dependencies and every per-chunk budget remains green; this restores 97.6 KB of total headroom.",
     "//previous-total-bump-4": "8150→8250 on 2026-09-15: the generic CRM product-tour framework adds lazy-loaded tour context, catalogue, settings, and workflow guidance, bringing total JS to 8185.7 KB. No new runtime dependency was added; this preserves 64.3 KB headroom while retaining per-chunk limits.",
     "//previous-total-bump-3": "7950→8150 on 2026-09-15: PR #1441 adds lazy-loaded contact/deal profile workflows and the standalone email composer, bringing total JS to 8027.5 KB. No new runtime dependency was added; this preserves 122.5 KB headroom while retaining per-chunk limits.",
     "//previous-total-bump-2": "7850→7950 on 2026-09-10: PR #1432 added the lazy-loaded TMC teacher and parent portal screens, bringing total JS to 7885.4 KB. The feature adds no new dependency; this restores 64.6 KB of total-budget headroom while retaining the existing per-chunk limits.",

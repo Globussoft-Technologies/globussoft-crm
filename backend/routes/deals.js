@@ -381,7 +381,8 @@ router.get("/:id", async (req, res) => {
     if (deal.contactId) {
       activities = await prisma.activity.findMany({
         where: { contactId: deal.contactId, tenantId: req.user.tenantId },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 10,
       });
     }
 

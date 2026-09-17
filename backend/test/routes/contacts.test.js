@@ -248,6 +248,7 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
 prisma.tenantSetting = prisma.tenantSetting || {};
 prisma.tenantSetting.findUnique = vi.fn();
+prisma.tenantSetting.upsert = vi.fn();
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findMany = vi.fn().mockResolvedValue([]);
 prisma.travelInvoice = prisma.travelInvoice || {};
@@ -321,6 +322,7 @@ beforeEach(() => {
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.tenantSetting.findUnique.mockReset();
+  prisma.tenantSetting.upsert.mockReset().mockResolvedValue({});
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
   prisma.dismissedDuplicateGroup.findMany.mockReset().mockResolvedValue([]);
@@ -1660,6 +1662,65 @@ describe('DELETE /api/contacts/tags', () => {
       where: { id: 102 },
       data: { tagsJson: null },
     });
+  });
+});
+
+describe('Generic contact tag catalog', () => {
+  test('GET /api/contacts/tags is registered at startup and reads only the tenant catalog', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify([
+        { name: 'VIP', color: '#2563EB' },
+        { name: 'Prospect', color: '#059669' },
+      ]),
+    });
+
+    const res = await request(makeApp()).get('/api/contacts/tags');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      tags: [
+        { name: 'Prospect', color: '#059669' },
+        { name: 'VIP', color: '#2563eb' },
+      ],
+    });
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.contactTagCatalog' } },
+      select: { value: true },
+    });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test('POST /api/contacts/tags persists the catalog for the authenticated tenant', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({ value: '[]' });
+
+    const res = await request(makeApp())
+      .post('/api/contacts/tags')
+      .send({ name: 'Renewal', color: '#DB2777' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ name: 'Renewal', color: '#db2777' });
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.contactTagCatalog' } },
+      create: {
+        tenantId: TENANT_ID,
+        key: 'generic.contactTagCatalog',
+        value: JSON.stringify([{ name: 'Renewal', color: '#db2777' }]),
+        category: 'general',
+      },
+      update: {
+        value: JSON.stringify([{ name: 'Renewal', color: '#db2777' }]),
+        category: 'general',
+      },
+    });
+  });
+
+  test('tag catalog endpoints are unavailable outside Generic CRM', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+
+    const res = await request(makeApp({ vertical: 'travel' })).get('/api/contacts/tags');
+
+    expect(res.status).toBe(404);
+    expect(prisma.tenantSetting.findUnique).not.toHaveBeenCalled();
   });
 });
 

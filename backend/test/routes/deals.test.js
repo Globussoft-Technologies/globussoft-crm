@@ -292,6 +292,26 @@ describe('GET /api/deals/:id — fetch one (#188)', () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Deal not found');
   });
+
+  test('returns only a deterministic activity preview', async () => {
+    prisma.deal.findFirst.mockResolvedValue({
+      id: 7, title: 'Acme Q3', stage: 'lead', amount: 1000, tenantId: 1,
+      contactId: 17, contact: { id: 17 }, owner: null,
+      attachments: [], invoices: [], quotes: [], contracts: [],
+      estimates: [], projects: [], deletedAt: null,
+    });
+    prisma.activity.findMany.mockResolvedValue([{ id: 3, type: 'Note' }]);
+
+    const res = await request(makeApp()).get('/api/deals/7');
+
+    expect(res.status).toBe(200);
+    expect(res.body.activities).toEqual([{ id: 3, type: 'Note' }]);
+    expect(prisma.activity.findMany).toHaveBeenCalledWith({
+      where: { contactId: 17, tenantId: 1 },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 10,
+    });
+  });
 });
 
 describe('GET /api/deals/:id/activities — paginated activity feed', () => {

@@ -150,6 +150,8 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     // Wellness is in
     expect(cat.patients).toBeDefined();
     expect(cat.appointments).toBeDefined();
+    expect(cat.appointments).toContain('ai_call');
+    expect(cat.appointments).toContain('manual_call');
     expect(cat.prescriptions).toBeDefined();
     // Travel is OUT
     expect(cat.itineraries).toBeUndefined();
@@ -173,6 +175,13 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(cat.appointments).toBeUndefined();
     expect(cat.prescriptions).toBeUndefined();
     expect(cat.gift_cards).toBeUndefined();
+  });
+
+  it('keeps appointment calling permissions wellness-only', () => {
+    expect(isValidPermissionForVertical('appointments', 'ai_call', 'wellness')).toBe(true);
+    expect(isValidPermissionForVertical('appointments', 'manual_call', 'wellness')).toBe(true);
+    expect(isValidPermissionForVertical('appointments', 'ai_call', 'generic')).toBe(false);
+    expect(isValidPermissionForVertical('appointments', 'manual_call', 'travel')).toBe(false);
   });
 
   it('generic / unknown vertical = COMMON_MODULES only', () => {

@@ -86,6 +86,7 @@ const MANAGER_PERMISSIONS = [
   'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
   'patients.read',
   'appointments.read', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   'services.read',
   'inventory.read',
   'pos.read',
@@ -186,6 +187,7 @@ const NURSE_PERMISSIONS = [
 const RECEPTIONIST_PERMISSIONS = [
   'patients.read', 'patients.write',
   'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   'book_appointment.write',
   'waitlist.read', 'waitlist.write',
   'my_appointments.read',
@@ -218,6 +220,7 @@ const TELECALLER_PERMISSIONS = [
   'leads.read', 'leads.write', 'leads.update',
   'contacts.read', 'contacts.write',
   'appointments.read', 'appointments.write', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   'book_appointment.write',
   'waitlist.read', 'waitlist.write',
   'my_appointments.read',
@@ -259,6 +262,8 @@ function buildAdminPermissions() {
 // permissionCatalog.js, so granting it elsewhere would write a row that is
 // not even a valid permission for that tenant.
 const WELLNESS_ONLY_GRANTS = new Set([
+  'appointments.ai_call',
+  'appointments.manual_call',
   'call_history.read',
   'call_history.read_all',
 ]);

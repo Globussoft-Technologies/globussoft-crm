@@ -51,10 +51,10 @@
  *   - /export/tally.xml + /export/ca-summary.csv — covered by buildTallyXml
  *     + buildCaCsv helper tests.
  */
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from "vitest";
 
-import prisma from '../../lib/prisma.js';
-import { createRequire } from 'node:module';
+import prisma from "../../lib/prisma.js";
+import { createRequire } from "node:module";
 const requireCJS = createRequire(import.meta.url);
 
 // Patch the auth middleware BEFORE the billing router is required — the
@@ -62,7 +62,7 @@ const requireCJS = createRequire(import.meta.url);
 // so the destructured reference captures whatever `authMw.{verifyToken,verifyRole}`
 // points at THE MOMENT the route is required. Pass-through both so the
 // route's handlers see whatever req.user we inject downstream.
-const authMw = requireCJS('../../middleware/auth');
+const authMw = requireCJS("../../middleware/auth");
 authMw.verifyToken = (_req, _res, next) => next();
 authMw.verifyRole = () => (_req, _res, next) => next();
 
@@ -70,7 +70,7 @@ authMw.verifyRole = () => (_req, _res, next) => next();
 // from inside the route don't hit the real DB-backed workflow path. The
 // route already wraps every emit in try/catch, but stubbing keeps the test
 // output clean.
-const eventBus = requireCJS('../../lib/eventBus');
+const eventBus = requireCJS("../../lib/eventBus");
 eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
 
 // Prisma singleton patching — replace the lazy delegates with bare vi.fn()
@@ -139,21 +139,28 @@ prisma.travelInvoice.update = vi.fn().mockResolvedValue({});
 prisma.travelPaymentSchedule = prisma.travelPaymentSchedule || {};
 prisma.travelPaymentSchedule.findFirst = vi.fn().mockResolvedValue(null);
 prisma.travelPaymentSchedule.update = vi.fn().mockResolvedValue({});
-prisma.travelPaymentSchedule.updateMany = vi.fn().mockResolvedValue({ count: 0 });
+prisma.travelPaymentSchedule.updateMany = vi
+  .fn()
+  .mockResolvedValue({ count: 0 });
 prisma.travelPaymentSchedule.count = vi.fn().mockResolvedValue(0);
 
-import express from 'express';
-import request from 'supertest';
-const billingRouter = requireCJS('../../routes/billing');
+import express from "express";
+import request from "supertest";
+const billingRouter = requireCJS("../../routes/billing");
 
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', vertical = 'generic' } = {}) {
+function makeApp({
+  tenantId = 1,
+  userId = 7,
+  role = "ADMIN",
+  vertical = "generic",
+} = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
     req.user = { userId, tenantId, role, vertical };
     next();
   });
-  app.use('/api/billing', billingRouter);
+  app.use("/api/billing", billingRouter);
   return app;
 }
 
@@ -193,83 +200,94 @@ beforeEach(() => {
   prisma.travelInvoice.update.mockReset().mockResolvedValue({});
   prisma.travelPaymentSchedule.findFirst.mockReset().mockResolvedValue(null);
   prisma.travelPaymentSchedule.update.mockReset().mockResolvedValue({});
-  prisma.travelPaymentSchedule.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.travelPaymentSchedule.updateMany
+    .mockReset()
+    .mockResolvedValue({ count: 0 });
   prisma.travelPaymentSchedule.count.mockReset().mockResolvedValue(0);
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
-  prisma.payment.create.mockResolvedValue({ id: 555, amount: 0, currency: 'USD' });
+  prisma.payment.create.mockResolvedValue({
+    id: 555,
+    amount: 0,
+    currency: "USD",
+  });
   prisma.payment.findMany.mockResolvedValue([]);
   prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
   eventBus.emitEvent.mockClear();
 });
 
-describe('POST /api/billing/public/confirm-payment - payment-link statuses', () => {
-  test('Razorpay partially_paid callback is reconciled as a successful payment', async () => {
+describe("POST /api/billing/public/confirm-payment - payment-link statuses", () => {
+  test("Razorpay partially_paid callback is reconciled as a successful payment", async () => {
     const payment = {
       id: 901,
       tenantId: 1,
       invoiceId: null,
-      gateway: 'razorpay',
-      gatewayId: 'plink_partial_123',
-      status: 'PENDING',
+      gateway: "razorpay",
+      gatewayId: "plink_partial_123",
+      status: "PENDING",
       amount: 5000,
-      currency: 'INR',
-      metadata: JSON.stringify({ mode: 'payment_link', plinkId: 'plink_partial_123' }),
+      currency: "INR",
+      metadata: JSON.stringify({
+        mode: "payment_link",
+        plinkId: "plink_partial_123",
+      }),
     };
     prisma.payment.findFirst
       .mockResolvedValueOnce(payment)
       .mockResolvedValueOnce({
         amount: 5000,
-        currency: 'INR',
+        currency: "INR",
         metadata: payment.metadata,
       });
-    prisma.payment.update.mockResolvedValue({ ...payment, status: 'SUCCESS' });
+    prisma.payment.update.mockResolvedValue({ ...payment, status: "SUCCESS" });
 
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/public/confirm-payment')
+      .post("/api/billing/public/confirm-payment")
       .send({
-        razorpay_payment_link_id: 'plink_partial_123',
-        razorpay_payment_link_reference_id: 'quote-10',
-        razorpay_payment_link_status: 'partially_paid',
-        razorpay_payment_id: 'pay_partial_123',
+        razorpay_payment_link_id: "plink_partial_123",
+        razorpay_payment_link_reference_id: "quote-10",
+        razorpay_payment_link_status: "partially_paid",
+        razorpay_payment_id: "pay_partial_123",
       });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       ok: true,
-      plinkId: 'plink_partial_123',
+      plinkId: "plink_partial_123",
       amountPaid: 5000,
-      currency: 'INR',
+      currency: "INR",
     });
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: 901 },
       data: expect.objectContaining({
-        status: 'SUCCESS',
-        metadata: expect.stringContaining('"razorpayPaymentId":"pay_partial_123"'),
+        status: "SUCCESS",
+        metadata: expect.stringContaining(
+          '"razorpayPaymentId":"pay_partial_123"',
+        ),
       }),
     });
   });
 
-  test('second payment on same quote link creates a new transaction instead of overwriting the advance', async () => {
+  test("second payment on same quote link creates a new transaction instead of overwriting the advance", async () => {
     prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
     const firstPayment = {
       id: 901,
       tenantId: 1,
       invoiceId: 17,
       contactId: 33,
-      description: 'Quote #21 ? 50% advance payment',
-      gateway: 'razorpay',
-      gatewayId: 'pay_advance_1l',
-      status: 'SUCCESS',
+      description: "Quote #21 ? 50% advance payment",
+      gateway: "razorpay",
+      gatewayId: "pay_advance_1l",
+      status: "SUCCESS",
       amount: 100000,
-      currency: 'INR',
+      currency: "INR",
       metadata: JSON.stringify({
-        type: 'travel-quote-advance',
-        mode: 'payment_link',
-        plinkId: 'plink_quote_21',
-        razorpayPaymentId: 'pay_advance_1l',
+        type: "travel-quote-advance",
+        mode: "payment_link",
+        plinkId: "plink_quote_21",
+        razorpayPaymentId: "pay_advance_1l",
         quoteId: 21,
         travelInvoiceId: 17,
       }),
@@ -280,16 +298,16 @@ describe('POST /api/billing/public/confirm-payment - payment-link statuses', () 
       invoiceId: 17,
       contactId: 33,
       description: firstPayment.description,
-      gateway: 'razorpay',
-      gatewayId: 'pay_balance_rest',
-      status: 'SUCCESS',
+      gateway: "razorpay",
+      gatewayId: "pay_balance_rest",
+      status: "SUCCESS",
       amount: 98257.15,
-      currency: 'INR',
+      currency: "INR",
       metadata: JSON.stringify({
-        type: 'travel-quote-advance',
-        mode: 'payment_link',
-        plinkId: 'plink_quote_21',
-        razorpayPaymentId: 'pay_balance_rest',
+        type: "travel-quote-advance",
+        mode: "payment_link",
+        plinkId: "plink_quote_21",
+        razorpayPaymentId: "pay_balance_rest",
         quoteId: 21,
         travelInvoiceId: 17,
       }),
@@ -305,26 +323,39 @@ describe('POST /api/billing/public/confirm-payment - payment-link statuses', () 
     prisma.travelQuote.findFirst.mockResolvedValue({
       id: 21,
       totalAmount: 198257.15,
-      status: 'advance_paid',
+      status: "advance_paid",
       contactId: 33,
-      subBrand: 'rfu',
+      subBrand: "rfu",
     });
     prisma.payment.findMany.mockResolvedValue([
       { amount: 100000 },
       { amount: 98257.15 },
     ]);
     prisma.travelInvoice.findFirst
-      .mockResolvedValueOnce({ id: 17, tenantId: 1, totalAmount: 198257.15, status: 'Partial' })
-      .mockResolvedValueOnce({ id: 17, totalAmount: 198257.15, invoiceNum: 'TINV-2026-0017' })
-      .mockResolvedValueOnce({ id: 17, totalAmount: 198257.15, invoiceNum: 'TINV-2026-0017' });
+      .mockResolvedValueOnce({
+        id: 17,
+        tenantId: 1,
+        totalAmount: 198257.15,
+        status: "Partial",
+      })
+      .mockResolvedValueOnce({
+        id: 17,
+        totalAmount: 198257.15,
+        invoiceNum: "TINV-2026-0017",
+      })
+      .mockResolvedValueOnce({
+        id: 17,
+        totalAmount: 198257.15,
+        invoiceNum: "TINV-2026-0017",
+      });
 
     const res = await request(makeApp())
-      .post('/api/billing/public/confirm-payment')
+      .post("/api/billing/public/confirm-payment")
       .send({
-        razorpay_payment_link_id: 'plink_quote_21',
-        razorpay_payment_link_reference_id: 'quote-21',
-        razorpay_payment_link_status: 'paid',
-        razorpay_payment_id: 'pay_balance_rest',
+        razorpay_payment_link_id: "plink_quote_21",
+        razorpay_payment_link_reference_id: "quote-21",
+        razorpay_payment_link_status: "paid",
+        razorpay_payment_id: "pay_balance_rest",
       });
 
     expect(res.status).toBe(200);
@@ -333,12 +364,12 @@ describe('POST /api/billing/public/confirm-payment - payment-link statuses', () 
       amountPaid: 98257.15,
       totalDue: 198257.15,
       balanceDue: 0,
-      invoiceNum: 'TINV-2026-0017',
+      invoiceNum: "TINV-2026-0017",
     });
     expect(prisma.payment.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        gatewayId: 'pay_balance_rest',
-        status: 'SUCCESS',
+        gatewayId: "pay_balance_rest",
+        status: "SUCCESS",
         invoiceId: 17,
         amount: 0,
       }),
@@ -353,46 +384,46 @@ describe('POST /api/billing/public/confirm-payment - payment-link statuses', () 
     });
     expect(prisma.travelInvoice.update).toHaveBeenCalledWith({
       where: { id: 17 },
-      data: expect.objectContaining({ status: 'Paid' }),
+      data: expect.objectContaining({ status: "Paid" }),
     });
     expect(prisma.travelQuote.update).toHaveBeenCalledWith({
       where: { id: 21 },
-      data: { status: 'fully_paid' },
+      data: { status: "fully_paid" },
     });
   });
 
-  test('non-complete Razorpay payment-link status is still rejected', async () => {
+  test("non-complete Razorpay payment-link status is still rejected", async () => {
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/public/confirm-payment')
+      .post("/api/billing/public/confirm-payment")
       .send({
-        razorpay_payment_link_id: 'plink_partial_123',
-        razorpay_payment_link_status: 'created',
+        razorpay_payment_link_id: "plink_partial_123",
+        razorpay_payment_link_status: "created",
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Payment not completed');
+    expect(res.body.error).toBe("Payment not completed");
     expect(prisma.payment.findFirst).not.toHaveBeenCalled();
   });
 });
 
 // ─── POST / — Invoice creation (validation contract) ───────────────
 
-describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
-  test('happy path: amount + dueDate + contactId → 201 with created row', async () => {
+describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
+  test("happy path: amount + dueDate + contactId → 201 with created row", async () => {
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.invoice.create.mockResolvedValue({
       id: 1001,
-      invoiceNum: 'INV-ABC123',
+      invoiceNum: "INV-ABC123",
       amount: 250,
       dueDate: new Date(futureDate),
       contactId: 42,
       tenantId: 1,
-      status: 'UNPAID',
+      status: "UNPAID",
     });
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing')
+      .post("/api/billing")
       .send({ amount: 250, dueDate: futureDate, contactId: 42 });
     expect(res.status).toBe(201);
     expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
@@ -403,105 +434,110 @@ describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
     expect(createArgs.data.invoiceNum).toMatch(/^INV-/);
   });
 
-  test('amount ≤ 0 → 400 INVALID_AMOUNT', async () => {
+  test("amount ≤ 0 → 400 INVALID_AMOUNT", async () => {
     const app = makeApp();
     const futureDate = new Date(Date.now() + 86400000).toISOString();
     const res = await request(app)
-      .post('/api/billing')
+      .post("/api/billing")
       .send({ amount: 0, dueDate: futureDate, contactId: 42 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_AMOUNT');
+    expect(res.body.code).toBe("INVALID_AMOUNT");
     expect(prisma.invoice.create).not.toHaveBeenCalled();
   });
 
-  test('amount > 1e10 → 400 AMOUNT_TOO_HIGH', async () => {
+  test("amount > 1e10 → 400 AMOUNT_TOO_HIGH", async () => {
     const app = makeApp();
     const futureDate = new Date(Date.now() + 86400000).toISOString();
     const res = await request(app)
-      .post('/api/billing')
+      .post("/api/billing")
       .send({ amount: 1e11, dueDate: futureDate, contactId: 42 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('AMOUNT_TOO_HIGH');
+    expect(res.body.code).toBe("AMOUNT_TOO_HIGH");
   });
 
-  test('sub-paise precision → 400 INVALID_AMOUNT_PRECISION (#198)', async () => {
+  test("sub-paise precision → 400 INVALID_AMOUNT_PRECISION (#198)", async () => {
     const app = makeApp();
     const futureDate = new Date(Date.now() + 86400000).toISOString();
     const res = await request(app)
-      .post('/api/billing')
+      .post("/api/billing")
       .send({ amount: 123.456789, dueDate: futureDate, contactId: 42 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_AMOUNT_PRECISION');
+    expect(res.body.code).toBe("INVALID_AMOUNT_PRECISION");
   });
 
-  test('dueDate missing → 400 INVALID_DUE_DATE', async () => {
+  test("dueDate missing → 400 INVALID_DUE_DATE", async () => {
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing')
+      .post("/api/billing")
       .send({ amount: 100, contactId: 42 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_DUE_DATE');
+    expect(res.body.code).toBe("INVALID_DUE_DATE");
   });
 
-  test('dueDate in the past → 400 DUE_DATE_IN_PAST', async () => {
+  test("dueDate in the past → 400 DUE_DATE_IN_PAST", async () => {
     const app = makeApp();
     const pastDate = new Date(Date.now() - 7 * 86400000).toISOString();
     const res = await request(app)
-      .post('/api/billing')
+      .post("/api/billing")
       .send({ amount: 100, dueDate: pastDate, contactId: 42 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('DUE_DATE_IN_PAST');
+    expect(res.body.code).toBe("DUE_DATE_IN_PAST");
   });
 
-  test('contactId missing → 400 CONTACT_REQUIRED', async () => {
+  test("contactId missing → 400 CONTACT_REQUIRED", async () => {
     const app = makeApp();
     const futureDate = new Date(Date.now() + 86400000).toISOString();
     const res = await request(app)
-      .post('/api/billing')
+      .post("/api/billing")
       .send({ amount: 100, dueDate: futureDate });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('CONTACT_REQUIRED');
+    expect(res.body.code).toBe("CONTACT_REQUIRED");
   });
 
-  test('wellness invoice derives amount from catalog items and stores customer snapshot', async () => {
+  test("wellness invoice derives amount from catalog items and stores customer snapshot", async () => {
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.patient.findFirst.mockResolvedValue({
       id: 15,
-      name: 'Priya Sharma',
-      email: 'priya@example.in',
-      phone: '+919876543210',
+      name: "Priya Sharma",
+      email: "priya@example.in",
+      phone: "+919876543210",
       gst: null,
       contactId: null,
     });
     prisma.visit.findFirst.mockResolvedValue({ id: 44 });
     prisma.service.findMany.mockResolvedValue([
-      { id: 21, name: 'Skin consultation', basePrice: 1500, discountedPrice: null },
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 1500,
+        discountedPrice: null,
+      },
     ]);
     prisma.contact.create.mockResolvedValue({ id: 88 });
     prisma.invoice.create.mockResolvedValue({
       id: 1002,
-      invoiceNum: 'INV-WELLNESS',
+      invoiceNum: "INV-WELLNESS",
       amount: 3750,
       dueDate: new Date(futureDate),
       contactId: 88,
       patientId: 15,
       tenantId: 1,
-      status: 'UNPAID',
+      status: "UNPAID",
     });
 
-    const res = await request(makeApp({ vertical: 'wellness' }))
-      .post('/api/billing')
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
       .send({
         dueDate: futureDate,
         patientId: 15,
         visitId: 44,
-        customerName: 'Priya Sharma',
-        customerEmail: 'priya@example.in',
-        customerPhone: '+919876543210',
-        billingAddress: '12 Clinic Road',
-        shippingAddress: '12 Clinic Road',
-        paymentMode: 'upi',
-        lineItems: [{ type: 'service', itemId: 21, quantity: 2.5 }],
+        customerName: "Priya Sharma",
+        customerEmail: "priya@example.in",
+        customerPhone: "+919876543210",
+        billingAddress: "12 Clinic Road",
+        shippingAddress: "12 Clinic Road",
+        paymentMode: "upi",
+        lineItems: [{ type: "service", itemId: 21, quantity: 2.5 }],
       });
 
     expect(res.status).toBe(201);
@@ -511,16 +547,16 @@ describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
       contactId: 88,
       patientId: 15,
       visitId: 44,
-      customerName: 'Priya Sharma',
-      customerEmail: 'priya@example.in',
-      paymentMode: 'upi',
-      billingAddress: '12 Clinic Road',
+      customerName: "Priya Sharma",
+      customerEmail: "priya@example.in",
+      paymentMode: "upi",
+      billingAddress: "12 Clinic Road",
     });
     expect(JSON.parse(createArgs.data.lineItemsJson)).toEqual([
       expect.objectContaining({
-        type: 'service',
+        type: "service",
         itemId: 21,
-        name: 'Skin consultation',
+        name: "Skin consultation",
         quantity: 2.5,
         unitPrice: 1500,
         amount: 3750,
@@ -528,11 +564,11 @@ describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
     ]);
   });
 
-  test('wellness line amount is calculated from the normalized stored precision', async () => {
+  test("wellness line amount is calculated from the normalized stored precision", async () => {
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.patient.findFirst.mockResolvedValue({
       id: 15,
-      name: 'Priya Sharma',
+      name: "Priya Sharma",
       email: null,
       phone: null,
       gst: null,
@@ -540,79 +576,245 @@ describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
     });
     prisma.contact.findFirst.mockResolvedValue({ id: 88 });
     prisma.service.findMany.mockResolvedValue([
-      { id: 21, name: 'Skin consultation', basePrice: 10.005, discountedPrice: null },
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 10.005,
+        discountedPrice: null,
+      },
     ]);
-    prisma.invoice.create.mockImplementation(({ data }) => Promise.resolve({ id: 1003, ...data }));
+    prisma.invoice.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 1003, ...data }),
+    );
 
-    const res = await request(makeApp({ vertical: 'wellness' }))
-      .post('/api/billing')
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
       .send({
         dueDate: futureDate,
         patientId: 15,
-        lineItems: [{ type: 'service', itemId: 21, quantity: 1.2345 }],
+        lineItems: [{ type: "service", itemId: 21, quantity: 1.2345 }],
       });
 
     expect(res.status).toBe(201);
     const createArgs = prisma.invoice.create.mock.calls[0][0];
     const [line] = JSON.parse(createArgs.data.lineItemsJson);
-    expect(line).toMatchObject({ quantity: 1.235, unitPrice: 10.01, amount: 12.36 });
+    expect(line).toMatchObject({
+      quantity: 1.235,
+      unitPrice: 10.01,
+      amount: 12.36,
+    });
     expect(createArgs.data.amount).toBe(12.36);
-    expect(line.amount).toBe(Math.round(line.quantity * line.unitPrice * 100) / 100);
+    expect(line.amount).toBe(
+      Math.round(line.quantity * line.unitPrice * 100) / 100,
+    );
   });
 
-  test('wellness invoice rejects ambiguous contact matches instead of linking arbitrarily', async () => {
+  test("wellness invoice rejects ambiguous contact matches instead of linking arbitrarily", async () => {
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.patient.findFirst.mockResolvedValue({
       id: 15,
-      name: 'Priya Sharma',
-      email: 'priya@example.in',
-      phone: '+919876543210',
+      name: "Priya Sharma",
+      email: "priya@example.in",
+      phone: "+919876543210",
       gst: null,
       contactId: null,
     });
     prisma.service.findMany.mockResolvedValue([
-      { id: 21, name: 'Skin consultation', basePrice: 1500, discountedPrice: null },
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 1500,
+        discountedPrice: null,
+      },
     ]);
     prisma.contact.findMany.mockResolvedValue([{ id: 88 }, { id: 99 }]);
 
-    const res = await request(makeApp({ vertical: 'wellness' }))
-      .post('/api/billing')
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
       .send({
         dueDate: futureDate,
         patientId: 15,
-        lineItems: [{ type: 'service', itemId: 21, quantity: 1 }],
+        lineItems: [{ type: "service", itemId: 21, quantity: 1 }],
       });
 
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AMBIGUOUS_CONTACT_MATCH');
+    expect(res.body.code).toBe("AMBIGUOUS_CONTACT_MATCH");
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(prisma.invoice.create).not.toHaveBeenCalled();
-    expect(prisma.contact.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: 1, deletedAt: null }),
-      orderBy: { id: 'asc' },
-    }));
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1, deletedAt: null }),
+        orderBy: { id: "asc" },
+      }),
+    );
+  });
+
+  test("wellness invoice uses the persisted final visit bill over the catalogue price", async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 15,
+      name: "Priya Sharma",
+      email: "priya@example.in",
+      phone: "+919876543210",
+      gst: null,
+      contactId: null,
+    });
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 44,
+      serviceId: 21,
+      amountCharged: 5000,
+    });
+    prisma.service.findMany.mockResolvedValue([
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 4500,
+        discountedPrice: null,
+      },
+    ]);
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 88 });
+    prisma.invoice.create.mockResolvedValue({
+      id: 1003,
+      invoiceNum: "INV-WELLNESS-FINAL-BILL",
+      amount: 5000,
+      dueDate: new Date(futureDate),
+      contactId: 88,
+      patientId: 15,
+      tenantId: 1,
+      status: "UNPAID",
+    });
+
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
+      .send({
+        dueDate: futureDate,
+        patientId: 15,
+        visitId: 44,
+        customerName: "Priya Sharma",
+        customerEmail: "priya@example.in",
+        customerPhone: "+919876543210",
+        paymentMode: "upi",
+        lineItems: [
+          { type: "service", itemId: 21, quantity: 1, unitPrice: 4500 },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    const createArgs = prisma.invoice.create.mock.calls[0][0];
+    expect(createArgs.data.amount).toBe(5000);
+    expect(JSON.parse(createArgs.data.lineItemsJson)).toEqual([
+      expect.objectContaining({
+        type: "service",
+        itemId: 21,
+        unitPrice: 5000,
+        amount: 5000,
+      }),
+    ]);
+  });
+
+  test("wellness invoice rejects a final bill that fixed-precision line items cannot represent", async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 15,
+      name: "Priya Sharma",
+      email: null,
+      phone: null,
+      gst: null,
+      contactId: 88,
+    });
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 44,
+      serviceId: 21,
+      amountCharged: 100,
+    });
+    prisma.service.findMany.mockResolvedValue([
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 50,
+        discountedPrice: null,
+      },
+    ]);
+
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
+      .send({
+        dueDate: futureDate,
+        patientId: 15,
+        visitId: 44,
+        lineItems: [
+          { type: "service", itemId: 21, quantity: 3, unitPrice: 50 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("FINAL_BILL_RECONCILIATION_FAILED");
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+  });
+
+  test("wellness invoice never replaces a zero final visit bill with the catalogue price", async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 15,
+      name: "Priya Sharma",
+      email: null,
+      phone: null,
+      gst: null,
+      contactId: 88,
+    });
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 44,
+      serviceId: 21,
+      amountCharged: 0,
+    });
+    prisma.service.findMany.mockResolvedValue([
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 1500,
+        discountedPrice: null,
+      },
+    ]);
+
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
+      .send({
+        dueDate: futureDate,
+        patientId: 15,
+        visitId: 44,
+        lineItems: [
+          { type: "service", itemId: 21, quantity: 1, unitPrice: 1500 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_AMOUNT");
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
   });
 });
 
-describe('billing response vertical isolation', () => {
-  test('generic invoice responses omit travel-only fields', async () => {
+describe("billing response vertical isolation", () => {
+  test("generic invoice responses omit travel-only fields", async () => {
     prisma.invoice.findMany.mockResolvedValue([
       {
         id: 1,
-        invoiceNum: 'INV-GENERIC',
+        invoiceNum: "INV-GENERIC",
         amount: 100,
-        status: 'UNPAID',
-        dueDate: new Date('2099-01-01'),
-        issuedDate: new Date('2026-01-01'),
+        status: "UNPAID",
+        dueDate: new Date("2099-01-01"),
+        issuedDate: new Date("2026-01-01"),
         tenantId: 1,
-        subBrand: 'tmc',
-        legalEntityCode: 'tmc_nexus',
-        contact: { id: 7, name: 'Acme', subBrand: 'tmc' },
+        subBrand: "tmc",
+        legalEntityCode: "tmc_nexus",
+        contact: { id: 7, name: "Acme", subBrand: "tmc" },
         deal: null,
       },
     ]);
 
-    const res = await request(makeApp({ vertical: 'generic' })).get('/api/billing');
+    const res = await request(makeApp({ vertical: "generic" })).get(
+      "/api/billing",
+    );
 
     expect(res.status).toBe(200);
     expect(res.body[0].subBrand).toBeUndefined();
@@ -620,65 +822,70 @@ describe('billing response vertical isolation', () => {
     expect(res.body[0].contact.subBrand).toBeUndefined();
   });
 
-  test('travel invoice responses retain travel-only fields for the travel CRM', async () => {
+  test("travel invoice responses retain travel-only fields for the travel CRM", async () => {
     prisma.invoice.findMany.mockResolvedValue([
       {
         id: 2,
-        invoiceNum: 'INV-TRAVEL',
+        invoiceNum: "INV-TRAVEL",
         amount: 100,
-        status: 'UNPAID',
-        dueDate: new Date('2099-01-01'),
-        issuedDate: new Date('2026-01-01'),
+        status: "UNPAID",
+        dueDate: new Date("2099-01-01"),
+        issuedDate: new Date("2026-01-01"),
         tenantId: 1,
-        subBrand: 'tmc',
-        legalEntityCode: 'tmc_nexus',
-        contact: { id: 8, name: 'Traveller', subBrand: 'tmc' },
+        subBrand: "tmc",
+        legalEntityCode: "tmc_nexus",
+        contact: { id: 8, name: "Traveller", subBrand: "tmc" },
         deal: null,
       },
     ]);
 
-    const res = await request(makeApp({ vertical: 'travel' })).get('/api/billing');
+    const res = await request(makeApp({ vertical: "travel" })).get(
+      "/api/billing",
+    );
 
     expect(res.status).toBe(200);
-    expect(res.body[0]).toMatchObject({ subBrand: 'tmc', legalEntityCode: 'tmc_nexus' });
-    expect(res.body[0].contact.subBrand).toBe('tmc');
+    expect(res.body[0]).toMatchObject({
+      subBrand: "tmc",
+      legalEntityCode: "tmc_nexus",
+    });
+    expect(res.body[0].contact.subBrand).toBe("tmc");
   });
 });
 
 // ─── GET /:id — fetch single invoice (#196) ────────────────────────
 
-describe('GET /api/billing/:id — fetch one (#196)', () => {
-  test('happy path: returns invoice scoped to tenant', async () => {
+describe("GET /api/billing/:id — fetch one (#196)", () => {
+  test("happy path: returns invoice scoped to tenant", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
       id: 7,
-      invoiceNum: 'INV-X',
+      invoiceNum: "INV-X",
       amount: 100,
-      status: 'UNPAID',
+      status: "UNPAID",
       tenantId: 1,
-      contact: { id: 42, name: 'Acme' },
+      contact: { id: 42, name: "Acme" },
       deal: null,
     });
     const app = makeApp();
-    const res = await request(app).get('/api/billing/7');
+    const res = await request(app).get("/api/billing/7");
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(7);
     const findArgs = prisma.invoice.findFirst.mock.calls[0][0];
     expect(findArgs.where).toEqual({ id: 7, tenantId: 1 });
   });
 
-  test('non-numeric id → 400 INVALID_ID (parseInt-NaN guard, #196)', async () => {
+  test("non-numeric id → 400 INVALID_ID (parseInt-NaN guard, #196)", async () => {
     const app = makeApp();
-    const res = await request(app).get('/api/billing/not-a-number');
+    const res = await request(app).get("/api/billing/not-a-number");
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_ID');
+    expect(res.body.code).toBe("INVALID_ID");
     // Crucially, the parseInt-NaN guard must short-circuit BEFORE Prisma.
     expect(prisma.invoice.findFirst).not.toHaveBeenCalled();
   });
 
-  test('cross-tenant fetch → 404 (findFirst returns null because tenant filter does not match)', async () => {
+  test("cross-tenant fetch → 404 (findFirst returns null because tenant filter does not match)", async () => {
     prisma.invoice.findFirst.mockResolvedValue(null);
     const app = makeApp({ tenantId: 99 });
-    const res = await request(app).get('/api/billing/7');
+    const res = await request(app).get("/api/billing/7");
     expect(res.status).toBe(404);
     const findArgs = prisma.invoice.findFirst.mock.calls[0][0];
     // Tenant-isolation: the where clause MUST include the caller's tenantId.
@@ -688,139 +895,197 @@ describe('GET /api/billing/:id — fetch one (#196)', () => {
 
 // ─── PATCH /:id — terminal-status + amount-immutable guards (#202) ─
 
-describe('PATCH /api/billing/:id — terminal & amount-immutable guards (#202)', () => {
-  test('PAID invoice → 422 INVALID_INVOICE_TRANSITION', async () => {
-    prisma.invoice.findFirst.mockResolvedValue({ id: 7, status: 'PAID', tenantId: 1 });
+describe("PATCH /api/billing/:id — terminal & amount-immutable guards (#202)", () => {
+  test("PAID invoice → 422 INVALID_INVOICE_TRANSITION", async () => {
+    prisma.invoice.findFirst.mockResolvedValue({
+      id: 7,
+      status: "PAID",
+      tenantId: 1,
+    });
     const app = makeApp();
     const futureDate = new Date(Date.now() + 86400000).toISOString();
     const res = await request(app)
-      .patch('/api/billing/7')
+      .patch("/api/billing/7")
       .send({ dueDate: futureDate });
     expect(res.status).toBe(422);
-    expect(res.body.code).toBe('INVALID_INVOICE_TRANSITION');
-    expect(res.body.currentStatus).toBe('PAID');
+    expect(res.body.code).toBe("INVALID_INVOICE_TRANSITION");
+    expect(res.body.currentStatus).toBe("PAID");
     expect(prisma.invoice.update).not.toHaveBeenCalled();
   });
 
-  test('amount in body → 400 AMOUNT_IMMUTABLE (money moves go via refund/credit-note)', async () => {
-    prisma.invoice.findFirst.mockResolvedValue({ id: 7, status: 'UNPAID', tenantId: 1 });
+  test("amount in body → 400 AMOUNT_IMMUTABLE (money moves go via refund/credit-note)", async () => {
+    prisma.invoice.findFirst.mockResolvedValue({
+      id: 7,
+      status: "UNPAID",
+      tenantId: 1,
+    });
     const app = makeApp();
     const res = await request(app)
-      .patch('/api/billing/7')
+      .patch("/api/billing/7")
       .send({ amount: 999 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('AMOUNT_IMMUTABLE');
+    expect(res.body.code).toBe("AMOUNT_IMMUTABLE");
     expect(prisma.invoice.update).not.toHaveBeenCalled();
   });
 });
 
 // ─── POST /:id/mark-paid — idempotency contract (#202) ─────────────
 
-describe('POST /api/billing/:id/mark-paid — UNPAID → PAID + idempotency (#202)', () => {
-  test('UNPAID → PAID: flips status, writes Payment row, emits invoice.paid', async () => {
+describe("POST /api/billing/:id/mark-paid — UNPAID → PAID + idempotency (#202)", () => {
+  test("UNPAID → PAID: flips status, writes Payment row, emits invoice.paid", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'UNPAID', tenantId: 1, contactId: 42, dealId: null,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "UNPAID",
+      tenantId: 1,
+      contactId: 42,
+      dealId: null,
     });
     prisma.invoice.update.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'PAID', tenantId: 1,
-      contactId: 42, dealId: null, paidAt: new Date(),
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "PAID",
+      tenantId: 1,
+      contactId: 42,
+      dealId: null,
+      paidAt: new Date(),
     });
-    prisma.payment.create.mockResolvedValue({ id: 99, amount: 100, currency: 'USD' });
+    prisma.payment.create.mockResolvedValue({
+      id: 99,
+      amount: 100,
+      currency: "USD",
+    });
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/7/mark-paid')
-      .send({ paymentMethod: 'razorpay', transactionRef: 'rzp_abc123' });
+      .post("/api/billing/7/mark-paid")
+      .send({ paymentMethod: "razorpay", transactionRef: "rzp_abc123" });
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('PAID');
+    expect(res.body.status).toBe("PAID");
     expect(res.body.payment).toBeTruthy();
     const updateArgs = prisma.invoice.update.mock.calls[0][0];
-    expect(updateArgs.data.status).toBe('PAID');
+    expect(updateArgs.data.status).toBe("PAID");
     expect(updateArgs.data.paidAt).toBeInstanceOf(Date);
     // invoice.paid emitted (downstream automations subscribe).
     const eventNames = eventBus.emitEvent.mock.calls.map(([name]) => name);
-    expect(eventNames).toContain('invoice.paid');
+    expect(eventNames).toContain("invoice.paid");
   });
 
-  test('already-PAID invoice → 200 { idempotent: true } (#202 contract)', async () => {
+  test("already-PAID invoice → 200 { idempotent: true } (#202 contract)", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'PAID', tenantId: 1,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "PAID",
+      tenantId: 1,
     });
     const app = makeApp();
-    const res = await request(app).post('/api/billing/7/mark-paid').send({});
+    const res = await request(app).post("/api/billing/7/mark-paid").send({});
     expect(res.status).toBe(200);
     expect(res.body.idempotent).toBe(true);
     // Crucially, no Prisma update fires — the status was already PAID.
     expect(prisma.invoice.update).not.toHaveBeenCalled();
   });
 
-  test('VOIDED invoice → 422 INVALID_INVOICE_TRANSITION', async () => {
+  test("VOIDED invoice → 422 INVALID_INVOICE_TRANSITION", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'VOIDED', tenantId: 1,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "VOIDED",
+      tenantId: 1,
     });
     const app = makeApp();
-    const res = await request(app).post('/api/billing/7/mark-paid').send({});
+    const res = await request(app).post("/api/billing/7/mark-paid").send({});
     expect(res.status).toBe(422);
-    expect(res.body.code).toBe('INVALID_INVOICE_TRANSITION');
-    expect(res.body.currentStatus).toBe('VOIDED');
+    expect(res.body.code).toBe("INVALID_INVOICE_TRANSITION");
+    expect(res.body.currentStatus).toBe("VOIDED");
   });
 });
 
 // ─── POST /:id/refund — PAID-only guard (#193) ─────────────────────
 
-describe('POST /api/billing/:id/refund — PAID → REFUNDED (#193)', () => {
-  test('PAID → REFUNDED: flips status + audit + invoice.refunded event', async () => {
+describe("POST /api/billing/:id/refund — PAID → REFUNDED (#193)", () => {
+  test("PAID → REFUNDED: flips status + audit + invoice.refunded event", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'PAID', tenantId: 1,
-      contactId: 42, dealId: null,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "PAID",
+      tenantId: 1,
+      contactId: 42,
+      dealId: null,
     });
     prisma.invoice.update.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'REFUNDED', tenantId: 1,
-      contactId: 42, dealId: null,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "REFUNDED",
+      tenantId: 1,
+      contactId: 42,
+      dealId: null,
     });
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/7/refund')
-      .send({ reason: 'customer dissatisfied' });
+      .post("/api/billing/7/refund")
+      .send({ reason: "customer dissatisfied" });
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('REFUNDED');
+    expect(res.body.status).toBe("REFUNDED");
     const updateArgs = prisma.invoice.update.mock.calls[0][0];
-    expect(updateArgs.data.status).toBe('REFUNDED');
+    expect(updateArgs.data.status).toBe("REFUNDED");
     const eventNames = eventBus.emitEvent.mock.calls.map(([name]) => name);
-    expect(eventNames).toContain('invoice.refunded');
+    expect(eventNames).toContain("invoice.refunded");
   });
 
-  test('non-PAID invoice → 400 INVOICE_NOT_PAID', async () => {
+  test("non-PAID invoice → 400 INVOICE_NOT_PAID", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'UNPAID', tenantId: 1,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "UNPAID",
+      tenantId: 1,
     });
     const app = makeApp();
-    const res = await request(app).post('/api/billing/7/refund').send({});
+    const res = await request(app).post("/api/billing/7/refund").send({});
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVOICE_NOT_PAID');
+    expect(res.body.code).toBe("INVOICE_NOT_PAID");
     expect(prisma.invoice.update).not.toHaveBeenCalled();
   });
 });
 
 // ─── POST /:id/credit-note — GST-compliant negative-amount row (#193) ─
 
-describe('POST /api/billing/:id/credit-note — issue credit note (#193)', () => {
-  test('happy path: creates negative-amount Invoice row with parentInvoiceId link', async () => {
+describe("POST /api/billing/:id/credit-note — issue credit note (#193)", () => {
+  test("happy path: creates negative-amount Invoice row with parentInvoiceId link", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'PAID', tenantId: 1,
-      contactId: 42, dealId: null, dueDate: new Date('2026-12-31'),
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "PAID",
+      tenantId: 1,
+      contactId: 42,
+      dealId: null,
+      dueDate: new Date("2026-12-31"),
     });
     prisma.invoice.create.mockResolvedValue({
-      id: 8, invoiceNum: 'CN-XYZ123', amount: -50, parentInvoiceId: 7,
-      status: 'CREDIT_NOTE', tenantId: 1, contactId: 42, dealId: null,
+      id: 8,
+      invoiceNum: "CN-XYZ123",
+      amount: -50,
+      parentInvoiceId: 7,
+      status: "CREDIT_NOTE",
+      tenantId: 1,
+      contactId: 42,
+      dealId: null,
     });
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/7/credit-note')
-      .send({ amount: 50, reason: 'partial refund' });
+      .post("/api/billing/7/credit-note")
+      .send({ amount: 50, reason: "partial refund" });
     expect(res.status).toBe(201);
     expect(res.body.creditNote.amount).toBe(-50);
     expect(res.body.creditNote.parentInvoiceId).toBe(7);
-    expect(res.body.creditNote.status).toBe('CREDIT_NOTE');
+    expect(res.body.creditNote.status).toBe("CREDIT_NOTE");
     expect(res.body.originalInvoiceId).toBe(7);
     const createArgs = prisma.invoice.create.mock.calls[0][0];
     expect(createArgs.data.amount).toBe(-50);
@@ -828,41 +1093,58 @@ describe('POST /api/billing/:id/credit-note — issue credit note (#193)', () =>
     expect(createArgs.data.invoiceNum).toMatch(/^CN-/);
   });
 
-  test('amount > original → 400 AMOUNT_EXCEEDS_ORIGINAL', async () => {
+  test("amount > original → 400 AMOUNT_EXCEEDS_ORIGINAL", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'PAID', tenantId: 1,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "PAID",
+      tenantId: 1,
     });
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/7/credit-note')
+      .post("/api/billing/7/credit-note")
       .send({ amount: 200 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('AMOUNT_EXCEEDS_ORIGINAL');
+    expect(res.body.code).toBe("AMOUNT_EXCEEDS_ORIGINAL");
     expect(prisma.invoice.create).not.toHaveBeenCalled();
   });
 
-  test('VOIDED original → 400 INVOICE_VOIDED (cannot CN against a voided row)', async () => {
+  test("VOIDED original → 400 INVOICE_VOIDED (cannot CN against a voided row)", async () => {
     prisma.invoice.findFirst.mockResolvedValue({
-      id: 7, invoiceNum: 'INV-X', amount: 100, status: 'VOIDED', tenantId: 1,
+      id: 7,
+      invoiceNum: "INV-X",
+      amount: 100,
+      status: "VOIDED",
+      tenantId: 1,
     });
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/7/credit-note')
+      .post("/api/billing/7/credit-note")
       .send({ amount: 50 });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVOICE_VOIDED');
+    expect(res.body.code).toBe("INVOICE_VOIDED");
   });
 });
 
 // ─── GET / — ?fields=summary slim-shape opt-in (#920 slice 31) ─────
 
-describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)', () => {
-  test('?fields=summary → Prisma called with `select` (no nested includes)', async () => {
+describe("GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)", () => {
+  test("?fields=summary → Prisma called with `select` (no nested includes)", async () => {
     prisma.invoice.findMany.mockResolvedValue([
-      { id: 1, invoiceNum: 'INV-A', amount: 100, status: 'UNPAID', dueDate: new Date(), issuedDate: new Date(), contactId: 42, dealId: null },
+      {
+        id: 1,
+        invoiceNum: "INV-A",
+        amount: 100,
+        status: "UNPAID",
+        dueDate: new Date(),
+        issuedDate: new Date(),
+        contactId: 42,
+        dealId: null,
+      },
     ]);
     const app = makeApp();
-    const res = await request(app).get('/api/billing?fields=summary');
+    const res = await request(app).get("/api/billing?fields=summary");
     expect(res.status).toBe(200);
     const args = prisma.invoice.findMany.mock.calls[0][0];
     expect(args.select).toBeDefined();
@@ -891,10 +1173,10 @@ describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)'
     expect(args.select.visitId).toBeUndefined();
   });
 
-  test('no ?fields param → default include path preserved (back-compat)', async () => {
+  test("no ?fields param → default include path preserved (back-compat)", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
     const app = makeApp();
-    const res = await request(app).get('/api/billing');
+    const res = await request(app).get("/api/billing");
     expect(res.status).toBe(200);
     const args = prisma.invoice.findMany.mock.calls[0][0];
     // Default callers MUST still get the full nested shape — this is the
@@ -904,23 +1186,23 @@ describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)'
     expect(args.select).toBeUndefined();
   });
 
-  test('?fields=other (non-exact value) → default include path (strict exact-match)', async () => {
+  test("?fields=other (non-exact value) → default include path (strict exact-match)", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
     const app = makeApp();
     // Anything other than literal "summary" must fall through to the
     // default include path. Prevents typos / partial matches from
     // accidentally tripping the slim shape.
-    const res = await request(app).get('/api/billing?fields=summari');
+    const res = await request(app).get("/api/billing?fields=summari");
     expect(res.status).toBe(200);
     const args = prisma.invoice.findMany.mock.calls[0][0];
     expect(args.include).toEqual({ contact: true, deal: true });
     expect(args.select).toBeUndefined();
   });
 
-  test('?fields=summary preserves tenant scoping + status/dueDate ordering', async () => {
+  test("?fields=summary preserves tenant scoping + status/dueDate ordering", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
     const app = makeApp({ tenantId: 42 });
-    const res = await request(app).get('/api/billing?fields=summary');
+    const res = await request(app).get("/api/billing?fields=summary");
     expect(res.status).toBe(200);
     const args = prisma.invoice.findMany.mock.calls[0][0];
     // Tenant scoping must survive the slim-shape branch — otherwise the
@@ -928,41 +1210,41 @@ describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)'
     expect(args.where).toEqual({ tenantId: 42 });
     // Ordering contract preserved so the Invoices/Billing page still
     // renders status-grouped, due-date-sorted rows under the slim shape.
-    expect(args.orderBy).toEqual([{ status: 'desc' }, { dueDate: 'asc' }]);
+    expect(args.orderBy).toEqual([{ status: "desc" }, { dueDate: "asc" }]);
   });
 
-  test('Wellness orders newest issued invoices first using the Invoice schema field', async () => {
+  test("Wellness orders newest issued invoices first using the Invoice schema field", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const app = makeApp({ tenantId: 42, vertical: 'wellness' });
-    const res = await request(app).get('/api/billing?fields=summary');
+    const app = makeApp({ tenantId: 42, vertical: "wellness" });
+    const res = await request(app).get("/api/billing?fields=summary");
     expect(res.status).toBe(200);
     const args = prisma.invoice.findMany.mock.calls[0][0];
-    expect(args.orderBy).toEqual([{ issuedDate: 'desc' }, { id: 'desc' }]);
+    expect(args.orderBy).toEqual([{ issuedDate: "desc" }, { id: "desc" }]);
   });
 
-  test('?fields=summary response body shape — slim row passes through unchanged', async () => {
+  test("?fields=summary response body shape — slim row passes through unchanged", async () => {
     // The slim row Prisma returns under `select` has no `contact`/`deal`
     // properties at all — the route must NOT re-fabricate them. This is
     // a pin against a regression where someone later "helpfully" patches
     // missing keys back in after the fieldFilter pass.
     const slimRow = {
       id: 1,
-      invoiceNum: 'INV-A',
+      invoiceNum: "INV-A",
       amount: 100,
-      status: 'UNPAID',
-      dueDate: new Date('2026-12-31'),
-      issuedDate: new Date('2026-01-01'),
+      status: "UNPAID",
+      dueDate: new Date("2026-12-31"),
+      issuedDate: new Date("2026-01-01"),
       contactId: 42,
       dealId: null,
     };
     prisma.invoice.findMany.mockResolvedValue([slimRow]);
     const app = makeApp();
-    const res = await request(app).get('/api/billing?fields=summary');
+    const res = await request(app).get("/api/billing?fields=summary");
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBe(1);
     expect(res.body[0].id).toBe(1);
-    expect(res.body[0].invoiceNum).toBe('INV-A');
+    expect(res.body[0].invoiceNum).toBe("INV-A");
     expect(res.body[0].contactId).toBe(42);
     // contact / deal should NOT have been hydrated by the route.
     expect(res.body[0].contact).toBeUndefined();
@@ -976,57 +1258,77 @@ describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)'
 // accidentally treating an instalment payment as a TravelInvoice payment.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('POST /api/billing/public/confirm-payment — tmc-instalment reconciliation', () => {
+describe("POST /api/billing/public/confirm-payment — tmc-instalment reconciliation", () => {
   function makeTmcPayment(overrides = {}) {
     return {
       id: 902,
       tenantId: 1,
       invoiceId: null,
-      gateway: 'razorpay',
-      gatewayId: 'plink_tmc_cb',
-      status: 'PENDING',
+      gateway: "razorpay",
+      gatewayId: "plink_tmc_cb",
+      status: "PENDING",
       amount: 50000,
-      currency: 'INR',
+      currency: "INR",
       metadata: JSON.stringify({
-        mode: 'payment_link',
-        plinkId: 'plink_tmc_cb',
-        kind: 'tmc-instalment',
-        instalmentId: '200',
-        url: 'https://rzp.io/rzp/CBTEST',
+        mode: "payment_link",
+        plinkId: "plink_tmc_cb",
+        kind: "tmc-instalment",
+        instalmentId: "200",
+        url: "https://rzp.io/rzp/CBTEST",
         ...overrides,
       }),
       ...overrides,
     };
   }
 
-  test('tmc-instalment confirm-payment marks instalment paid and updates itinerary', async () => {
+  test("tmc-instalment confirm-payment marks instalment paid and updates itinerary", async () => {
     const payment = makeTmcPayment();
     prisma.payment.findFirst
-      .mockResolvedValueOnce(payment)       // first call: find pending payment by plinkId
-      .mockResolvedValueOnce({              // second call: reload after update
+      .mockResolvedValueOnce(payment) // first call: find pending payment by plinkId
+      .mockResolvedValueOnce({
+        // second call: reload after update
         ...payment,
-        status: 'SUCCESS',
+        status: "SUCCESS",
         metadata: payment.metadata,
       });
-    prisma.payment.update.mockResolvedValue({ ...payment, status: 'SUCCESS' });
+    prisma.payment.update.mockResolvedValue({ ...payment, status: "SUCCESS" });
 
     prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
-      id: 200, participantId: 5, status: 'pending', amount: 50000,
+      id: 200,
+      participantId: 5,
+      status: "pending",
+      amount: 50000,
     });
-    prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
-    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{ paidAmount: 50000, amount: 50000 }]);
-    prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@test.com' });
-    prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'sent' });
-    prisma.itinerary.update.mockResolvedValue({ id: 77, status: 'advance_paid', advancePaidAmount: 50000 });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({
+      id: 200,
+      status: "paid",
+      paidAmount: 50000,
+    });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { paidAmount: 50000, amount: 50000 },
+    ]);
+    prisma.tripParticipant.findFirst.mockResolvedValue({
+      parentEmail: "parent@test.com",
+    });
+    prisma.itinerary.findFirst.mockResolvedValue({
+      id: 77,
+      advancePaidAmount: 0,
+      status: "sent",
+    });
+    prisma.itinerary.update.mockResolvedValue({
+      id: 77,
+      status: "advance_paid",
+      advancePaidAmount: 50000,
+    });
 
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/public/confirm-payment')
+      .post("/api/billing/public/confirm-payment")
       .send({
-        razorpay_payment_link_id: 'plink_tmc_cb',
-        razorpay_payment_link_reference_id: 'tmc-ref-1',
-        razorpay_payment_link_status: 'paid',
-        razorpay_payment_id: 'pay_tmc_cb',
+        razorpay_payment_link_id: "plink_tmc_cb",
+        razorpay_payment_link_reference_id: "tmc-ref-1",
+        razorpay_payment_link_status: "paid",
+        razorpay_payment_id: "pay_tmc_cb",
       });
 
     expect(res.status).toBe(200);
@@ -1035,36 +1337,42 @@ describe('POST /api/billing/public/confirm-payment — tmc-instalment reconcilia
     expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 200 },
-        data: expect.objectContaining({ status: expect.stringMatching(/^(paid|partial)$/) }),
+        data: expect.objectContaining({
+          status: expect.stringMatching(/^(paid|partial)$/),
+        }),
       }),
     );
     // Itinerary must be updated to reflect payment
     expect(prisma.itinerary.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 77 },
-        data: expect.objectContaining({ status: 'advance_paid' }),
+        data: expect.objectContaining({ status: "advance_paid" }),
       }),
     );
   });
 
-  test('tmc-instalment confirm-payment does NOT reconcile TravelInvoice (kind guard)', async () => {
+  test("tmc-instalment confirm-payment does NOT reconcile TravelInvoice (kind guard)", async () => {
     // The old bug: billing.js's travelInvoiceId branch would fire even when
     // kind='tmc-instalment', treating the instalment's invoiceId as a TravelInvoice id.
     // After the fix, kind='tmc-instalment' skips the TravelInvoice branch entirely.
-    const payment = makeTmcPayment({ travelInvoiceId: '55' }); // old metadata had this
+    const payment = makeTmcPayment({ travelInvoiceId: "55" }); // old metadata had this
     prisma.payment.findFirst
       .mockResolvedValueOnce(payment)
-      .mockResolvedValueOnce({ ...payment, status: 'SUCCESS', metadata: payment.metadata });
-    prisma.payment.update.mockResolvedValue({ ...payment, status: 'SUCCESS' });
+      .mockResolvedValueOnce({
+        ...payment,
+        status: "SUCCESS",
+        metadata: payment.metadata,
+      });
+    prisma.payment.update.mockResolvedValue({ ...payment, status: "SUCCESS" });
 
     const app = makeApp();
     const res = await request(app)
-      .post('/api/billing/public/confirm-payment')
+      .post("/api/billing/public/confirm-payment")
       .send({
-        razorpay_payment_link_id: 'plink_tmc_cb',
-        razorpay_payment_link_reference_id: 'tmc-ref-2',
-        razorpay_payment_link_status: 'paid',
-        razorpay_payment_id: 'pay_tmc_cb_2',
+        razorpay_payment_link_id: "plink_tmc_cb",
+        razorpay_payment_link_reference_id: "tmc-ref-2",
+        razorpay_payment_link_status: "paid",
+        razorpay_payment_id: "pay_tmc_cb_2",
       });
 
     expect(res.status).toBe(200);
@@ -1073,7 +1381,6 @@ describe('POST /api/billing/public/confirm-payment — tmc-instalment reconcilia
     // The absence of a throw is the assertion.
   });
 });
-
 
 // ─── GET / — ?from / ?to / ?dateField date-range filter ────────────
 //
@@ -1089,10 +1396,10 @@ describe('POST /api/billing/public/confirm-payment — tmc-instalment reconcilia
 //   3. Bad input must 400, not silently return an unfiltered (or empty) list.
 //   4. No params ⇒ no date key at all, so every existing caller is untouched.
 
-describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
-  test('no date params → where carries no date key (back-compat)', async () => {
+describe("GET /api/billing — ?from/?to/?dateField date-range filter", () => {
+  test("no date params → where carries no date key (back-compat)", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing');
+    const res = await request(makeApp()).get("/api/billing");
     expect(res.status).toBe(200);
     const { where } = prisma.invoice.findMany.mock.calls[0][0];
     expect(where.issuedDate).toBeUndefined();
@@ -1101,9 +1408,9 @@ describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
     expect(where.tenantId).toBe(1);
   });
 
-  test('?from → gte on issuedDate at LOCAL midnight (the default column)', async () => {
+  test("?from → gte on issuedDate at LOCAL midnight (the default column)", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?from=2026-08-01');
+    const res = await request(makeApp()).get("/api/billing?from=2026-08-01");
     expect(res.status).toBe(200);
     const { where } = prisma.invoice.findMany.mock.calls[0][0];
     expect(where.issuedDate.gte).toEqual(new Date(2026, 7, 1));
@@ -1111,9 +1418,9 @@ describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
     expect(where.issuedDate.lte).toBeUndefined();
   });
 
-  test('?to as a bare date covers the whole day (exclusive next-midnight bound)', async () => {
+  test("?to as a bare date covers the whole day (exclusive next-midnight bound)", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?to=2026-08-28');
+    const res = await request(makeApp()).get("/api/billing?to=2026-08-28");
     expect(res.status).toBe(200);
     const { where } = prisma.invoice.findMany.mock.calls[0][0];
     // An invoice issued at 14:00 on the 28th must be INCLUDED. A naive
@@ -1122,18 +1429,22 @@ describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
     expect(where.issuedDate.lte).toBeUndefined();
   });
 
-  test('an explicit ISO timestamp is honoured exactly (inclusive lte)', async () => {
+  test("an explicit ISO timestamp is honoured exactly (inclusive lte)", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?to=2026-08-28T10:30:00.000Z');
+    const res = await request(makeApp()).get(
+      "/api/billing?to=2026-08-28T10:30:00.000Z",
+    );
     expect(res.status).toBe(200);
     const { where } = prisma.invoice.findMany.mock.calls[0][0];
-    expect(where.issuedDate.lte).toEqual(new Date('2026-08-28T10:30:00.000Z'));
+    expect(where.issuedDate.lte).toEqual(new Date("2026-08-28T10:30:00.000Z"));
     expect(where.issuedDate.lt).toBeUndefined();
   });
 
-  test('?dateField=dueDate moves the range onto the due-date column', async () => {
+  test("?dateField=dueDate moves the range onto the due-date column", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?from=2026-08-01&to=2026-08-31&dateField=dueDate');
+    const res = await request(makeApp()).get(
+      "/api/billing?from=2026-08-01&to=2026-08-31&dateField=dueDate",
+    );
     expect(res.status).toBe(200);
     const { where } = prisma.invoice.findMany.mock.calls[0][0];
     expect(where.dueDate.gte).toEqual(new Date(2026, 7, 1));
@@ -1143,47 +1454,55 @@ describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
 
   test('?dateField=paidAt is accepted (backs a "paid in period" view)', async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?from=2026-08-01&dateField=paidAt');
+    const res = await request(makeApp()).get(
+      "/api/billing?from=2026-08-01&dateField=paidAt",
+    );
     expect(res.status).toBe(200);
     const { where } = prisma.invoice.findMany.mock.calls[0][0];
     expect(where.paidAt.gte).toEqual(new Date(2026, 7, 1));
   });
 
-  test('an unknown dateField is rejected, not passed through to Prisma', async () => {
+  test("an unknown dateField is rejected, not passed through to Prisma", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?from=2026-08-01&dateField=tenantId');
+    const res = await request(makeApp()).get(
+      "/api/billing?from=2026-08-01&dateField=tenantId",
+    );
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_DATE_FIELD');
+    expect(res.body.code).toBe("INVALID_DATE_FIELD");
     // The security point: an arbitrary column name must never reach the query.
     expect(prisma.invoice.findMany).not.toHaveBeenCalled();
   });
 
-  test('an unparseable date is a 400, not a silently unfiltered ledger', async () => {
+  test("an unparseable date is a 400, not a silently unfiltered ledger", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?from=not-a-date');
+    const res = await request(makeApp()).get("/api/billing?from=not-a-date");
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    expect(res.body.code).toBe("INVALID_DATE_RANGE");
     expect(prisma.invoice.findMany).not.toHaveBeenCalled();
   });
 
-  test('a rolled-over calendar date (31 Feb) is rejected rather than repaired', async () => {
+  test("a rolled-over calendar date (31 Feb) is rejected rather than repaired", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?from=2026-02-31');
+    const res = await request(makeApp()).get("/api/billing?from=2026-02-31");
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    expect(res.body.code).toBe("INVALID_DATE_RANGE");
   });
 
-  test('an inverted range explains itself instead of returning zero rows', async () => {
+  test("an inverted range explains itself instead of returning zero rows", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?from=2026-08-28&to=2026-08-01');
+    const res = await request(makeApp()).get(
+      "/api/billing?from=2026-08-28&to=2026-08-01",
+    );
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    expect(res.body.code).toBe("INVALID_DATE_RANGE");
     expect(res.body.error).toMatch(/on or before/i);
   });
 
-  test('date range composes with ?subBrand rather than clobbering it', async () => {
+  test("date range composes with ?subBrand rather than clobbering it", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp({ vertical: 'travel' })).get('/api/billing?subBrand=voyagr&from=2026-08-01');
+    const res = await request(makeApp({ vertical: "travel" })).get(
+      "/api/billing?subBrand=voyagr&from=2026-08-01",
+    );
     expect(res.status).toBe(200);
     const { where } = prisma.invoice.findMany.mock.calls[0][0];
     // Both survive: the subBrand OR is a sibling of the date range, so the
@@ -1192,9 +1511,11 @@ describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
     expect(where.issuedDate.gte).toEqual(new Date(2026, 7, 1));
   });
 
-  test('date range composes with ?fields=summary', async () => {
+  test("date range composes with ?fields=summary", async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const res = await request(makeApp()).get('/api/billing?fields=summary&from=2026-08-01');
+    const res = await request(makeApp()).get(
+      "/api/billing?fields=summary&from=2026-08-01",
+    );
     expect(res.status).toBe(200);
     const args = prisma.invoice.findMany.mock.calls[0][0];
     expect(args.select).toBeDefined();
@@ -1203,26 +1524,41 @@ describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
   });
 });
 
-describe('GET /api/billing/stats — Invoice timestamp compatibility', () => {
-  test('uses issuedDate for filtering, projection, and latest-invoice KPI', async () => {
-    const olderIssuedDate = new Date('2026-09-10T10:00:00.000Z');
-    const latestIssuedDate = new Date('2026-09-16T10:00:00.000Z');
+describe("GET /api/billing/stats — Invoice timestamp compatibility", () => {
+  test("uses issuedDate for filtering, projection, and latest-invoice KPI", async () => {
+    const olderIssuedDate = new Date("2026-09-10T10:00:00.000Z");
+    const latestIssuedDate = new Date("2026-09-16T10:00:00.000Z");
     prisma.invoice.findMany.mockResolvedValue([
-      { status: 'UNPAID', amount: 100, dueDate: new Date('2026-09-20'), issuedDate: olderIssuedDate },
-      { status: 'PAID', amount: 250, dueDate: new Date('2026-09-20'), issuedDate: latestIssuedDate },
+      {
+        status: "UNPAID",
+        amount: 100,
+        dueDate: new Date("2026-09-20"),
+        issuedDate: olderIssuedDate,
+      },
+      {
+        status: "PAID",
+        amount: 250,
+        dueDate: new Date("2026-09-20"),
+        issuedDate: latestIssuedDate,
+      },
     ]);
 
     const res = await request(makeApp({ tenantId: 42 })).get(
-      '/api/billing/stats?from=2026-09-01&to=2026-09-30',
+      "/api/billing/stats?from=2026-09-01&to=2026-09-30",
     );
 
     expect(res.status).toBe(200);
     const args = prisma.invoice.findMany.mock.calls[0][0];
     expect(args.where).toEqual({
       tenantId: 42,
-      issuedDate: { gte: new Date('2026-09-01'), lte: new Date('2026-09-30') },
+      issuedDate: { gte: new Date("2026-09-01"), lte: new Date("2026-09-30") },
     });
-    expect(args.select).toEqual({ status: true, amount: true, dueDate: true, issuedDate: true });
+    expect(args.select).toEqual({
+      status: true,
+      amount: true,
+      dueDate: true,
+      issuedDate: true,
+    });
     expect(args.select.createdAt).toBeUndefined();
     expect(res.body.lastInvoiceAt).toBe(latestIssuedDate.toISOString());
   });

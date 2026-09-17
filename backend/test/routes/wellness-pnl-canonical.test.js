@@ -29,6 +29,8 @@ prisma.service = prisma.service || {};
 prisma.service.findMany = vi.fn();
 prisma.serviceConsumption = prisma.serviceConsumption || {};
 prisma.serviceConsumption.findMany = vi.fn();
+prisma.invoice = prisma.invoice || {};
+prisma.invoice.findMany = vi.fn();
 prisma.patient = prisma.patient || { findFirst: vi.fn() };
 prisma.loyaltyTransaction = prisma.loyaltyTransaction || { findFirst: vi.fn(), aggregate: vi.fn(), findMany: vi.fn(), create: vi.fn() };
 prisma.referral = prisma.referral || { findMany: vi.fn(), count: vi.fn() };
@@ -58,6 +60,8 @@ beforeEach(() => {
   prisma.visit.findMany.mockReset();
   prisma.service.findMany.mockReset();
   prisma.serviceConsumption.findMany.mockReset();
+  prisma.invoice.findMany.mockReset();
+  prisma.invoice.findMany.mockResolvedValue([]);
 });
 
 describe('GET /api/wellness/reports/pnl-by-service — #565 (HI-16)', () => {

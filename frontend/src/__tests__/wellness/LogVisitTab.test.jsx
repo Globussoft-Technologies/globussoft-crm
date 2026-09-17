@@ -333,6 +333,42 @@ describe('<wellness/LogVisitTab />  payment link surface', () => {
     expect(await screen.findByDisplayValue('https://rzp.io/l/visit-10')).toBeInTheDocument();
   });
 
+  it('submits a final bill above the service price without applying a service-price ceiling', async () => {
+    fetchApiMock.mockResolvedValue([]);
+
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 15,
+          status: 'booked',
+          visitDate: '2026-07-21T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Anita Das' },
+        },
+      ],
+    };
+
+    renderTab({ patient });
+
+    fireEvent.click(screen.getByText(/2026-07-21 - Botox Treatment/));
+    const billInput = await screen.findByPlaceholderText('Enter total treatment bill...');
+    fireEvent.change(billInput, { target: { value: '30000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Mark as visited/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/wellness/visits/15',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({ status: 'completed', notes: '', amountCharged: 30000 }),
+        }),
+      );
+    });
+    expect(screen.queryByText(/Amount cannot be more than/i)).not.toBeInTheDocument();
+  });
+
   it('renders the coupon-adjusted balance and coupon name when couponBreakdown is present', () => {
     const patient = {
       id: 1,

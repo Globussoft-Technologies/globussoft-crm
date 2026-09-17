@@ -10,6 +10,9 @@ import {
   Download,
   RefreshCw,
   CreditCard,
+  Link2,
+  Eye,
+  ChevronDown,
   X,
   Filter,
   CalendarRange,
@@ -19,6 +22,7 @@ import {
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
+import { useSearchParams } from "react-router-dom";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
 import TopScrollSync from "../components/TopScrollSync";
@@ -87,6 +91,40 @@ const createEmptyLineItem = () => ({
   unitPrice: "",
 });
 
+// A completed visit can have a final bill that differs from the service
+// catalogue price (for example, after additional charges or taxes). Keep the
+// catalogue price untouched and reconcile the service line to that persisted
+// visit total when the invoice is composed from the visit.
+function applyVisitFinalBill(lineItems, finalBill) {
+  if (finalBill == null || finalBill === '' || !Array.isArray(lineItems)) {
+    return lineItems;
+  }
+  const targetTotal = Number(finalBill);
+  if (!Number.isFinite(targetTotal) || targetTotal < 0) {
+    return lineItems;
+  }
+
+  const serviceIndex = lineItems.findIndex((item) => item.type === "service");
+  if (serviceIndex < 0) return lineItems;
+
+  const otherItemsTotal = lineItems.reduce(
+    (total, item, index) => {
+      if (index === serviceIndex) return total;
+      return total + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+    },
+    0,
+  );
+  const serviceItem = lineItems[serviceIndex];
+  const quantity = Number(serviceItem.quantity) || 1;
+  const serviceTotal = targetTotal - otherItemsTotal;
+  if (serviceTotal < 0) return lineItems;
+
+  const unitPrice = Math.round(((serviceTotal / quantity) + Number.EPSILON) * 100) / 100;
+  return lineItems.map((item, index) => (
+    index === serviceIndex ? { ...item, unitPrice: String(unitPrice) } : item
+  ));
+}
+
 const createInvoiceForm = (subBrand = "") => ({
   invoiceNum: "",
   contactId: "",
@@ -109,7 +147,7 @@ const createInvoiceForm = (subBrand = "") => ({
 });
 
 const INVOICE_TABLE_MIN_WIDTH = 940;
-const WELLNESS_INVOICE_TABLE_MIN_WIDTH = 1490;
+const WELLNESS_INVOICE_TABLE_MIN_WIDTH = 1540;
 
 /**
  * Date-range presets for the invoice ledger filter.
@@ -127,13 +165,6 @@ const DATE_RANGE_PRESETS = [
   { value: "MTD", label: "This month" },
   { value: "YTD", label: "This year" },
   { value: "CUSTOM", label: "Custom range…" },
-];
-
-/** Which column ?dateField points at. Mirrors INVOICE_DATE_FIELDS server-side. */
-const DATE_FIELD_OPTIONS = [
-  { value: "issuedDate", label: "Issued" },
-  { value: "dueDate", label: "Due" },
-  { value: "paidAt", label: "Paid" },
 ];
 
 /** Local-midnight YYYY-MM-DD. `toISOString()` would shift the day in any
@@ -209,6 +240,8 @@ export default function Invoices() {
   const selectedProductIdsRef = useRef(new Set());
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
   const [linkCopied, setLinkCopied] = useState(false);
+  const [openActionMenuId, setOpenActionMenuId] = useState(null);
+  const [pdfPreview, setPdfPreview] = useState(null); // { url, invoiceNum } | null
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm());
   // #124: replace the old prompt() flow with a proper modal so the user can
@@ -217,25 +250,69 @@ export default function Invoices() {
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  // Reports link to one or more invoice ids with this query parameter. Keep
+  // the filter client-side because the billing ledger already returns the
+  // tenant-scoped rows needed for the table and existing callers remain
+  // unchanged.
+  const [searchParams] = useSearchParams();
+  const reportInvoiceIds = useMemo(() => {
+    const raw = searchParams.get("invoiceIds") || searchParams.get("invoiceId") || "";
+    return new Set(
+      raw
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    );
+  }, [searchParams]);
+  const hasReportInvoiceFilter = reportInvoiceIds.size > 0;
 
   // Date-range filter. Unlike `statusFilter` (which slices the already-loaded
-  // array), this is applied SERVER-SIDE via ?from/?to/?dateField on
-  // GET /api/billing — the ledger is unbounded (979 invoices on the demo
-  // tenant already) so narrowing it in the browser would keep downloading the
-  // whole table just to hide most of it.
+  // array), this is applied SERVER-SIDE via ?from/?to on GET /api/billing —
+  // the API uses the issued date by default. The ledger is unbounded (979
+  // invoices on the demo tenant already) so narrowing it in the browser would
+  // keep downloading the whole table just to hide most of it.
   const [dateRange, setDateRange] = useState("ALL");
-  const [dateField, setDateField] = useState("issuedDate");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
 
   useEffect(() => {
-    if (!isCreateFormOpen) return undefined;
+    if (!isCreateFormOpen && !pdfPreview) return undefined;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [isCreateFormOpen]);
+  }, [isCreateFormOpen, pdfPreview]);
+
+  useEffect(() => {
+    if (openActionMenuId == null) return undefined;
+    const closeOnOutsideClick = (event) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(`[data-invoice-action-menu="${openActionMenuId}"]`)
+      ) {
+        return;
+      }
+      setOpenActionMenuId(null);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setOpenActionMenuId(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openActionMenuId]);
+
+  useEffect(
+    () => () => {
+      if (pdfPreview?.url) URL.revokeObjectURL(pdfPreview.url);
+    },
+    [pdfPreview],
+  );
 
 
 
@@ -251,9 +328,6 @@ export default function Invoices() {
       const range = resolveDateRange(dateRange, customFrom, customTo);
       if (range.from) params.set("from", range.from);
       if (range.to) params.set("to", range.to);
-      // Only send dateField when a range is actually active — it is
-      // meaningless on its own and would just be noise in the request log.
-      if (range.from || range.to) params.set("dateField", dateField);
       const qs = params.toString() ? `?${params.toString()}` : "";
       const [invs, c, d] = await Promise.all([
         fetchApi(`/api/billing${qs}`),
@@ -284,7 +358,7 @@ export default function Invoices() {
     } catch (_err) {
       // Network or auth error handled by fetchApi
     }
-  }, [activeSubBrand, isTravel, isWellness, dateRange, dateField, customFrom, customTo]);
+  }, [activeSubBrand, isTravel, isWellness, dateRange, customFrom, customTo]);
 
   useEffect(() => {
     loadData();
@@ -394,9 +468,13 @@ export default function Invoices() {
   }, [invoices]);
 
   const filteredInvoices = useMemo(() => {
-    if (statusFilter === "ALL") return invoices;
-    return invoices.filter((inv) => inv.status === statusFilter);
-  }, [invoices, statusFilter]);
+    let rows = invoices;
+    if (hasReportInvoiceFilter) {
+      rows = rows.filter((inv) => reportInvoiceIds.has(Number(inv.id)));
+    }
+    if (statusFilter === "ALL") return rows;
+    return rows.filter((inv) => inv.status === statusFilter);
+  }, [invoices, statusFilter, hasReportInvoiceFilter, reportInvoiceIds]);
 
   const visibleInvoices = filteredInvoices;
 
@@ -530,9 +608,11 @@ export default function Invoices() {
         });
       });
 
+      const adjustedLineItems = applyVisitFinalBill(nextLineItems, visit?.amountCharged);
+
       setNewInvoice((prev) => ({
         ...prev,
-        lineItems: nextLineItems.length ? nextLineItems : [createEmptyLineItem()],
+        lineItems: adjustedLineItems.length ? adjustedLineItems : [createEmptyLineItem()],
       }));
       if (skippedItems.length) {
         notify.info(`${skippedItems.join(", ")} could not be matched to the active catalogue.`);
@@ -622,6 +702,21 @@ export default function Invoices() {
         notify.error("The invoice total must be greater than zero");
         return;
       }
+      const selectedVisit = visits.find(
+        (visit) => String(visit.id) === String(newInvoice.visitId),
+      );
+      if (
+        selectedVisit?.amountCharged != null &&
+        selectedVisit.amountCharged !== "" &&
+        Math.abs(
+          wellnessInvoiceTotal - Number(selectedVisit.amountCharged),
+        ) > 0.009
+      ) {
+        notify.error(
+          "The invoice line items must add up exactly to the visit final bill",
+        );
+        return;
+      }
     }
     try {
       await fetchApi("/api/billing", {
@@ -704,6 +799,31 @@ export default function Invoices() {
         URL.revokeObjectURL(link.href);
       })
       .catch((err) => notify.error(`Failed to download PDF: ${err.message}`));
+  };
+
+  const viewInvoicePdf = (id, invoiceNum) => {
+    const token = getAuthToken();
+    fetch(`/api/billing/${id}/pdf`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            if (body?.error) detail = body.error;
+          } catch {
+            /* response wasn't JSON — keep the HTTP status */
+          }
+          throw new Error(detail);
+        }
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        setPdfPreview({ url, invoiceNum: invoiceNum || "Invoice" });
+      })
+      .catch((err) => notify.error(`Failed to open invoice preview: ${err.message}`));
   };
 
   const voidInvoice = async (inv) => {
@@ -844,6 +964,20 @@ export default function Invoices() {
               the ledger, so the wording follows the filter. */}
           {invoices.length}{dateRange === "ALL" ? " total invoices" : " invoices in range"}
         </span>
+        {hasReportInvoiceFilter && (
+          <span
+            style={{
+              padding: "0.4rem 1rem",
+              borderRadius: "999px",
+              fontSize: "0.75rem",
+              background: "rgba(59,130,246,0.12)",
+              color: "var(--text-secondary)",
+              border: "1px solid rgba(59,130,246,0.25)",
+            }}
+          >
+            Report drill-down: {reportInvoiceIds.size} invoice{reportInvoiceIds.size === 1 ? "" : "s"}
+          </span>
+        )}
 
         {/* Travel vertical — Sub-brand filter for the ledger. Bound to the
             shared active-sub-brand context (same source the sidebar selector
@@ -916,10 +1050,9 @@ export default function Invoices() {
           </div>
         )}
 
-        {/* Date-range filter. Applied on the server (?from/?to/?dateField on
-            GET /api/billing) — see loadData. The field selector exists because
-            the ledger shows BOTH an ISSUED and a DUE DATE column, so "filter
-            by date" is ambiguous without saying which one. */}
+        {/* Date-range filter. Applied on the server (?from/?to on GET
+            /api/billing); the API's default issued-date scope is the only
+            date basis exposed by this ledger control. */}
         <div
           style={{
             marginLeft: isTravel ? "0.5rem" : "auto",
@@ -935,29 +1068,8 @@ export default function Invoices() {
         >
           <CalendarRange size={14} color="var(--text-secondary)" />
           <select
-            id="invoice-date-field"
-            value={dateField}
-            onChange={(e) => setDateField(e.target.value)}
-            aria-label="Choose which invoice date to filter on"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--text-primary)",
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              outline: "none",
-              padding: "0.25rem 0.25rem",
-            }}
-          >
-            {DATE_FIELD_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          <select
             id="invoice-date-range"
+            className="invoice-date-range-filter"
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value)}
             aria-label="Filter invoices by date range"
@@ -1960,8 +2072,9 @@ export default function Invoices() {
               }}
             />
             <p style={{ color: "var(--text-secondary)" }}>
-              No invoices match the “
-              {STATUS_CONFIG[statusFilter]?.label || statusFilter}” filter.
+              {hasReportInvoiceFilter
+                ? "No invoices from this report drill-down are available."
+                : <>No invoices match the “{STATUS_CONFIG[statusFilter]?.label || statusFilter}” filter.</>}
             </p>
           </div>
         ) : (
@@ -1987,9 +2100,9 @@ export default function Invoices() {
                 aria-label="Invoices table"
               >
                 <colgroup>
-                  <col style={{ width: isWellness ? "160px" : "110px" }} />
+                  <col style={{ width: isWellness ? "180px" : "110px" }} />
                   {isWellness && <col style={{ width: "190px" }} />}
-                  {isWellness && <col style={{ width: "180px" }} />}
+                  {isWellness && <col style={{ width: "310px" }} />}
                   {isWellness && <col style={{ width: "70px" }} />}
                   <col style={{ width: isWellness ? "105px" : "104px" }} />
                   {isWellness && <col style={{ width: "125px" }} />}
@@ -1997,7 +2110,7 @@ export default function Invoices() {
                   <col style={{ width: isWellness ? "105px" : "108px" }} />
                   <col style={{ width: isWellness ? "105px" : "108px" }} />
                   {!isWellness && <col style={{ width: "170px" }} />}
-                  <col style={{ width: isWellness ? "360px" : "244px" }} />
+                  <col style={{ width: isWellness ? "250px" : "244px" }} />
                 </colgroup>
                 <thead className="invoice-table-header">
                   <tr
@@ -2143,7 +2256,7 @@ export default function Invoices() {
                         fontSize: "0.75rem",
                         textTransform: "uppercase",
                         letterSpacing: "0.05em",
-                        // textAlign: "right",
+                        textAlign: "left",
                       }}
                     >
                       Actions
@@ -2315,151 +2428,141 @@ export default function Invoices() {
                           )}
                       </td>}
                       <td
-                        className="invoice-actions-cell"
+                        className={`invoice-actions-cell${openActionMenuId === inv.id ? " invoice-actions-cell--menu-open" : ""}`}
                         style={{
                           padding: "0.75rem 0.4rem",
-                          textAlign: isWellness ? "left" : "right",
+                          textAlign: "left",
                         }}
                       >
-                        {/* Keep the action controls on one line; horizontal
-                            overflow belongs to the table scroller. */}
                         <div
-                          style={{
-                            display: "flex",
-                            justifyContent: isWellness ? "flex-start" : "flex-end",
-                            gap: "0.35rem",
-                            flexWrap: "wrap",
-                            minWidth: 0,
-                          }}
+                          className="invoice-actions-toolbar"
+                          data-invoice-action-menu={String(inv.id)}
                         >
                           <button
-                            onClick={() => downloadPdf(inv.id, inv.invoiceNum)}
-                            style={{
-                              background: "transparent",
-                              border: "1px solid rgba(59,130,246,0.3)",
-                              color: "var(--text-secondary)",
-                              cursor: "pointer",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.25rem",
-                              fontSize: "0.75rem",
-                              padding: "0.32rem 0.55rem",
-                              borderRadius: "6px",
+                            type="button"
+                            className="invoice-action-button invoice-action-button--view"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              viewInvoicePdf(inv.id, inv.invoiceNum);
                             }}
-                            onMouseOver={(e) =>
-                              (e.currentTarget.style.color = "#3b82f6")
-                            }
-                            onMouseOut={(e) =>
-                            (e.currentTarget.style.color =
-                              "var(--text-secondary)")
-                            }
-                            aria-label={`Download PDF for invoice ${inv.invoiceNum}`}
+                            aria-label={`View invoice ${inv.invoiceNum}`}
                           >
-                            <Download size={14} /> PDF
+                            <Eye size={15} aria-hidden="true" />
+                            <span>View</span>
                           </button>
-                          {inv.status !== "PAID" && inv.status !== "VOIDED" && (
-                            <>
-                              <button
-                                onClick={() => generatePaymentLink(inv)}
-                                className="btn-secondary"
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "0.25rem",
-                                  background: "#3b82f6",
-                                  color: "#fff",
-                                  border: "none",
-                                  padding: "0.32rem 0.55rem",
-                                  fontSize: "0.75rem",
-                                  borderRadius: "6px",
-                                  cursor: "pointer",
-                                }}
-                                aria-label={`Generate payment link for invoice ${inv.invoiceNum}`}
+                          <span
+                            className="invoice-action-divider"
+                            aria-hidden="true"
+                          />
+                          <div className="invoice-more-action">
+                            <button
+                              type="button"
+                              className="invoice-action-button invoice-action-button--more"
+                              onClick={() =>
+                                setOpenActionMenuId((current) =>
+                                  current === inv.id ? null : inv.id,
+                                )
+                              }
+                              aria-haspopup="menu"
+                              aria-expanded={openActionMenuId === inv.id}
+                              aria-controls={`invoice-actions-menu-${inv.id}`}
+                              aria-label={`More actions for invoice ${inv.invoiceNum}`}
+                            >
+                              <span>More</span>
+                              <ChevronDown size={14} aria-hidden="true" />
+                            </button>
+                            {openActionMenuId === inv.id && (
+                              <div
+                                id={`invoice-actions-menu-${inv.id}`}
+                                className="invoice-actions-menu"
+                                role="menu"
+                                aria-label={`Actions for invoice ${inv.invoiceNum}`}
                               >
-                                <CreditCard size={14} /> Generate Payment Link
-                              </button>
-                              <button
-                                onClick={() => markPaid(inv.id)}
-                                className="btn-secondary"
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "0.25rem",
-                                  background: "var(--success-color)",
-                                  color: "#fff",
-                                  border: "none",
-                                  padding: "0.32rem 0.55rem",
-                                  fontSize: "0.75rem",
-                                  borderRadius: "6px",
-                                  cursor: "pointer",
-                                }}
-                                aria-label={`Mark invoice ${inv.invoiceNum} as paid`}
-                              >
-                                <CheckCircle2 size={14} /> Mark Paid
-                              </button>
-                            </>
-                          )}
+                                {inv.status !== "PAID" && inv.status !== "VOIDED" && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="invoice-action-menu-item"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setOpenActionMenuId(null);
+                                        generatePaymentLink(inv);
+                                      }}
+                                      aria-label={`Generate payment link for invoice ${inv.invoiceNum}`}
+                                    >
+                                      <Link2 size={16} aria-hidden="true" />
+                                      <span>Generate Payment Link</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="invoice-action-menu-item"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setOpenActionMenuId(null);
+                                        markPaid(inv.id);
+                                      }}
+                                      aria-label={`Mark invoice ${inv.invoiceNum} as paid`}
+                                    >
+                                      <CheckCircle2 size={16} aria-hidden="true" />
+                                      <span>Mark as Paid</span>
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  className="invoice-action-menu-item"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setOpenActionMenuId(null);
+                                    downloadPdf(inv.id, inv.invoiceNum);
+                                  }}
+                                  aria-label={`Download PDF for invoice ${inv.invoiceNum}`}
+                                >
+                                  <Download size={16} aria-hidden="true" />
+                                  <span>Download PDF</span>
+                                </button>
+                                {inv.status !== "VOIDED" && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="invoice-action-menu-item invoice-action-menu-item--danger"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setOpenActionMenuId(null);
+                                        voidInvoice(inv);
+                                      }}
+                                      aria-label={`Void invoice ${inv.invoiceNum}`}
+                                    >
+                                      <Trash2 size={16} aria-hidden="true" />
+                                      <span>Mark as Void</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="invoice-action-menu-item"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setOpenActionMenuId(null);
+                                        setRecurInvoice(inv);
+                                        setRecurFreq(inv.recurFrequency || "monthly");
+                                      }}
+                                    >
+                                      <RefreshCw size={16} aria-hidden="true" />
+                                      <span>
+                                        {inv.isRecurring
+                                          ? `Recurring: ${inv.recurFrequency}`
+                                          : "Create Recurring"}
+                                      </span>
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
                           {/* #304: a voided invoice should never offer recurring
                               billing — the user already cancelled it, and
                               activating recurrence on a voided row would silently
                               auto-generate live invoices from a cancelled
                               template. Hide the button entirely for VOIDED. */}
-                          {inv.status !== "VOIDED" && (
-                            <button
-                              onClick={() => {
-                                setRecurInvoice(inv);
-                                setRecurFreq(inv.recurFrequency || "monthly");
-                              }}
-                              style={{
-                                background: inv.isRecurring
-                                  ? "rgba(139,92,246,0.1)"
-                                  : "transparent",
-                                border: `1px solid ${inv.isRecurring ? "rgba(139,92,246,0.3)" : "var(--border-color)"}`,
-                                color: inv.isRecurring
-                                  ? "#8b5cf6"
-                                  : "var(--text-secondary)",
-                                cursor: "pointer",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "0.25rem",
-                                fontSize: "0.75rem",
-                                padding: "0.32rem 0.55rem",
-                                borderRadius: "6px",
-                              }}
-                            >
-                              <RefreshCw size={14} />{" "}
-                              {inv.isRecurring
-                                ? `${inv.recurFrequency}`
-                                : "Recur"}
-                            </button>
-                          )}
-                          {inv.status !== "VOIDED" && (
-                            <button
-                              onClick={() => voidInvoice(inv)}
-                              style={{
-                                background: "transparent",
-                                border: "1px solid rgba(239,68,68,0.3)",
-                                color: "var(--text-secondary)",
-                                cursor: "pointer",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "0.25rem",
-                                fontSize: "0.75rem",
-                                padding: "0.32rem 0.55rem",
-                                borderRadius: "6px",
-                              }}
-                              onMouseOver={(e) =>
-                                (e.currentTarget.style.color = "#ef4444")
-                              }
-                              onMouseOut={(e) =>
-                              (e.currentTarget.style.color =
-                                "var(--text-secondary)")
-                              }
-                              aria-label={`Void invoice ${inv.invoiceNum}`}
-                            >
-                              <Trash2 size={14} /> Void
-                            </button>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -2630,6 +2733,84 @@ export default function Invoices() {
                   : `Activate ${recurFreq}`}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invoice preview */}
+      {pdfPreview && (
+        <div
+          onClick={() => setPdfPreview(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1.5rem",
+            background: "rgba(15, 23, 42, 0.55)",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="card"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "min(980px, 100%)",
+              height: "min(92vh, 900px)",
+              overflow: "hidden",
+              padding: 0,
+              background: "var(--surface-color)",
+              border: "1px solid var(--border-color)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "1rem",
+                padding: "0.85rem 1rem",
+                borderBottom: "1px solid var(--border-color)",
+              }}
+            >
+              <strong style={{ color: "var(--text-primary)" }}>
+                Invoice preview: {pdfPreview.invoiceNum}
+              </strong>
+              <button
+                type="button"
+                onClick={() => setPdfPreview(null)}
+                aria-label="Close invoice preview"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "2rem",
+                  height: "2rem",
+                  padding: 0,
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "8px",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={17} />
+              </button>
+            </div>
+            <iframe
+              src={pdfPreview.url}
+              title={`Invoice preview ${pdfPreview.invoiceNum}`}
+              style={{
+                width: "100%",
+                flex: 1,
+                minHeight: 0,
+                border: 0,
+                background: "#fff",
+              }}
+            />
           </div>
         </div>
       )}
@@ -2850,9 +3031,112 @@ export default function Invoices() {
           column-gap: 0.35rem;
           row-gap: 0.4rem;
         }
+        .invoice-actions-toolbar,
+        .wellness-invoice-table .invoice-actions-cell > div.invoice-actions-toolbar {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-start;
+          gap: 0.6rem;
+          min-width: max-content;
+          flex-wrap: nowrap;
+        }
+        .invoice-action-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.4rem;
+          min-height: 2rem;
+          padding: 0.4rem 0.7rem;
+          border: 1px solid var(--border-color);
+          border-radius: 10px;
+          background: var(--surface-color);
+          color: var(--text-primary);
+          cursor: pointer;
+          font: inherit;
+          font-size: 0.75rem;
+          font-weight: 600;
+          line-height: 1;
+          transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+        }
+        .invoice-action-button:hover,
+        .invoice-action-button:focus-visible {
+          border-color: var(--accent-color);
+          background: color-mix(in srgb, var(--accent-color) 8%, var(--surface-color));
+          box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+          outline: none;
+        }
+        .invoice-action-button--view svg {
+          color: var(--accent-color);
+        }
+        .invoice-action-button--more {
+          min-width: 5.25rem;
+          justify-content: center;
+          text-align: center;
+        }
+        .invoice-action-divider {
+          width: 1px;
+          height: 1.5rem;
+          flex: 0 0 1px;
+          background: var(--border-color);
+        }
+        .invoice-more-action {
+          position: relative;
+          display: inline-flex;
+        }
+        .invoice-actions-menu {
+          position: absolute;
+          top: calc(100% + 0.45rem);
+          left: auto;
+          right: 0;
+          z-index: 100;
+          width: 14.5rem;
+          max-width: calc(100vw - 2rem);
+          padding: 0.4rem;
+          border: 1px solid var(--border-color);
+          border-radius: 12px;
+          background: var(--surface-color);
+          box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+          text-align: left;
+        }
+        .invoice-action-menu-item {
+          display: flex;
+          align-items: center;
+          width: 100%;
+          gap: 0.65rem;
+          padding: 0.6rem 0.65rem;
+          border: 0;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--text-primary);
+          cursor: pointer;
+          font: inherit;
+          font-size: 0.78rem;
+          line-height: 1.2;
+          text-align: left;
+        }
+        .invoice-action-menu-item:hover,
+        .invoice-action-menu-item:focus-visible {
+          background: var(--hover-bg);
+          outline: none;
+        }
+        .invoice-action-menu-item svg {
+          flex: 0 0 auto;
+          color: var(--accent-color);
+        }
+        .invoice-action-menu-item--danger,
+        .invoice-action-menu-item--danger svg {
+          color: var(--danger-color, #dc2626);
+        }
         .invoice-actions-cell {
           white-space: nowrap;
           overflow: visible;
+          text-align: left;
+        }
+        .invoice-actions-cell--menu-open {
+          position: relative;
+          z-index: 50;
+          overflow: visible !important;
         }
         .invoice-actions-cell button {
           flex-shrink: 0;

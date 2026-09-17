@@ -470,9 +470,6 @@ export default function TravelDiagnosticPublicReport() {
 }
 
 function Shell({ theme, styling, children }) {
-  const bgImage = styling?.bgImageUrl
-    ? { backgroundImage: `url(${styling.bgImageUrl})` }
-    : {};
   const overlayOpacity = styling?.bgOverlayOpacity ?? 0;
   const overlayColor = styling?.bgOverlayColor || "#000000";
 
@@ -487,13 +484,24 @@ function Shell({ theme, styling, children }) {
           "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
         padding: "24px 16px",
         boxSizing: "border-box",
-        backgroundSize: styling?.bgImageSize || "cover",
-        backgroundPosition: styling?.bgImagePosition || "center",
-        backgroundRepeat: styling?.bgImageRepeat || "no-repeat",
-        ...bgImage,
         position: "relative",
       }}
     >
+      {styling?.bgImageUrl && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundImage: `url("${styling.bgImageUrl}")`,
+            backgroundSize: styling?.bgImageSize || "cover",
+            backgroundPosition: styling?.bgImagePosition || "center",
+            backgroundRepeat: "no-repeat",
+            zIndex: 0,
+            pointerEvents: "none",
+          }}
+        />
+      )}
       {styling?.bgImageUrl && overlayOpacity > 0 && (
         <div
           style={{

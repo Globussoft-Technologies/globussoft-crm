@@ -36,6 +36,7 @@ const prisma = require("../lib/prisma");
 const { sanitizeText } = require("../lib/sanitizeJson");
 const { parseCsv } = require("../lib/csvHelpers");
 const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
+const s3Service = require("../services/s3Service");
 
 const VALID_KINDS = ["term", "holiday", "exam-blackout"];
 const VALID_SOURCES = ["manual", "seed", "website"];
@@ -400,6 +401,7 @@ router.post(
   upload.single("file"),
   async (req, res) => {
     let savedPath = null;
+    let uploadedObjectKey = null;
     try {
       if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
         return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
@@ -414,8 +416,31 @@ router.post(
       }
       const uploadId = crypto.randomUUID();
       const storedName = `${req.user.tenantId}-${uploadId}${ext}`;
-      savedPath = path.join(UPLOAD_DIR, storedName);
-      fs.writeFileSync(savedPath, req.file.buffer);
+      let fileUrl;
+      let storage = "disk";
+      let storageWarning = null;
+
+      if (s3Service.isOciConfigured()) {
+        try {
+          fileUrl = await s3Service.uploadFile(
+            req.file.buffer,
+            req.file.originalname || storedName,
+            mime,
+            `travel/school-term-calendars/${req.user.tenantId}`,
+          );
+          uploadedObjectKey = s3Service.extractKeyFromUrl(fileUrl);
+          storage = "ocs";
+        } catch (storageError) {
+          console.error("[travel-school-terms] OCS calendar upload error:", storageError.message);
+          storageWarning = "Oracle Cloud upload failed; the calendar was stored on local disk.";
+        }
+      }
+
+      if (storage === "disk") {
+        savedPath = path.join(UPLOAD_DIR, storedName);
+        fs.writeFileSync(savedPath, req.file.buffer);
+        fileUrl = `/api/uploads/travel-school-term-calendars/${storedName}`;
+      }
 
       const row = {
         id: uploadId,
@@ -427,16 +452,22 @@ router.post(
         storedName,
         mimeType: mime,
         sizeBytes: req.file.size || req.file.buffer.length,
-        fileUrl: `/api/uploads/travel-school-term-calendars/${storedName}`,
+        fileUrl,
+        storage,
+        objectKey: uploadedObjectKey,
         createdAt: new Date().toISOString(),
         uploadedBy: req.user.userId,
       };
       const indexRows = readUploadIndex();
       indexRows.push(row);
       writeUploadIndex(indexRows);
-      res.status(201).json(row);
+      uploadedObjectKey = null;
+      res.status(201).json({ ...row, ...(storageWarning ? { storageWarning } : {}) });
     } catch (e) {
       unlinkIfExists(savedPath);
+      if (uploadedObjectKey) {
+        await s3Service.deleteFile(uploadedObjectKey, { provider: "oci" }).catch(() => {});
+      }
       if (e instanceof multer.MulterError && e.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ error: "File exceeds 10 MB limit", code: "FILE_TOO_LARGE" });
       }
@@ -464,8 +495,12 @@ router.delete(
         return res.status(404).json({ error: "Upload not found", code: "UPLOAD_NOT_FOUND" });
       }
       const [removed] = rows.splice(idx, 1);
+      if (removed.storage === "ocs" && removed.objectKey) {
+        await s3Service.deleteFile(removed.objectKey, { provider: "oci" });
+      } else {
+        unlinkIfExists(path.join(UPLOAD_DIR, removed.storedName));
+      }
       writeUploadIndex(rows);
-      unlinkIfExists(path.join(UPLOAD_DIR, removed.storedName));
       res.json({ success: true });
     } catch (e) {
       console.error("[travel-school-terms] delete upload error:", e.message);

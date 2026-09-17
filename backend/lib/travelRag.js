@@ -22,6 +22,11 @@ const llmRouter = require("./llmRouter");
 const { sanitizeJsonForStringColumn } = require("./sanitizeJson");
 const { READINESS_LEVELS, readinessLevelFromScore } = require("./travelDiagnosticScoring");
 const { getRecommendationTopK, DEFAULT_TOP_K } = require("./diagnosticRecommendationSettings");
+const {
+  categoryFromFolderPath,
+  matchesSelectedTripType,
+  selectedTripTypes,
+} = require("./tmcTripTypePreference");
 
 // Brochures commonly produce multiple chunks, so retrieve more chunks than
 // the number of recommendations requested. Keep the query bounded: this path
@@ -73,13 +78,6 @@ function consolidateChunks(chunks) {
     });
   }
   return result.sort((a, b) => b.score - a.score);
-}
-
-function categoryFromFolderPath(folderPath) {
-  const parts = String(folderPath || '').split('/').map((part) => part.trim()).filter(Boolean);
-  const ignored = new Set(['tmc', 'brochure', 'brochures']);
-  const category = parts.find((part) => !ignored.has(part.toLowerCase()) && !/\.pdf$/i.test(part));
-  return category || 'Other';
 }
 
 function brochureKey(value) {
@@ -208,6 +206,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
   }
 
   const queryText = buildQueryText(answers, subBrand, bank);
+  const preferredTripTypes = selectedTripTypes(answers, bank);
   const queryVector = await embedConfig.client.embedText(queryText, embedConfig);
   if (!queryVector) {
     console.warn("[travelRag] query embedding failed");
@@ -219,19 +218,26 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     tenantId,
     subBrand,
     providerId: embedConfig.providerId,
-    limit: getRagRetrievalLimit(topK),
+    limit: preferredTripTypes.length ? RAG_MAX_RETRIEVAL : getRagRetrievalLimit(topK),
   });
   if (!chunks.length) {
     console.log("[travelRag] no matching chunks found");
     return null;
   }
 
-  const context = consolidateChunks(chunks);
+  const context = consolidateChunks(chunks).filter((brochure) =>
+    matchesSelectedTripType(brochure.category, preferredTripTypes),
+  );
+  if (!context.length) {
+    console.log("[travelRag] no brochures matched the selected trip types");
+    return null;
+  }
   const recommendationCandidates = context.slice(0, Math.max(topK * 3, 30));
   const llmPayload = {
     subBrand,
     queryText,
     recommendationLimit: topK,
+    preferredTripTypes,
     brochures: recommendationCandidates.map((c) => ({
       fileName: c.fileName,
       folderPath: c.folderPath,
@@ -260,6 +266,9 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
   }
 
   attachBrochureMetadata(parsed.recommendedTrips, recommendationCandidates);
+  parsed.recommendedTrips = parsed.recommendedTrips.filter((trip) =>
+    matchesSelectedTripType(trip.category, preferredTripTypes),
+  );
   parsed.recommendedTrips = fillRecommendationTarget(
     parsed.recommendedTrips,
     recommendationCandidates,

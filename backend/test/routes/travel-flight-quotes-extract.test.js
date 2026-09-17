@@ -27,6 +27,7 @@ authMw.verifyToken = (_req, _res, next) => next();
 
 import prisma from '../../lib/prisma.js';
 prisma.tenant = { findUnique: vi.fn() };
+const s3Service = requireCJS('../../services/s3Service');
 
 const { mockExtractFlight, mockExtractHotel } = vi.hoisted(() => ({
   mockExtractFlight: vi.fn(),
@@ -77,6 +78,9 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset();
   mockExtractFlight.mockReset();
   mockExtractHotel.mockReset();
+  vi.spyOn(s3Service, 'isOciConfigured').mockReturnValue(false);
+  vi.spyOn(s3Service, 'uploadFile').mockResolvedValue('https://objectstorage.example.com/n/b/o/travel/flight.png');
+  vi.spyOn(s3Service, 'extractKeyFromUrl').mockReturnValue('travel/flight-quick-quotes/5/flight.png');
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: 'travel', name: 'Acme Travel', slug: 'acme' });
 });
 
@@ -137,6 +141,78 @@ describe('POST /extract-prices', () => {
     expect(res.status).toBe(200);
     expect(res.body.stub).toBe(true);
     expect(res.body.note).toMatch(/not configured an AI provider/);
+  });
+
+  test('stores screenshots in OCS when OCI credentials are configured', async () => {
+    s3Service.isOciConfigured.mockReturnValue(true);
+    mockExtractFlight.mockResolvedValue({
+      provider: 'gemini', model: 'gemini-2.5-flash', stub: false, currency: 'INR',
+      tripType: 'domestic', routeLabel: 'Delhi to Goa', rows: [],
+    });
+
+    const res = await request(makeApp({ tenantId: 5 }))
+      .post('/api/v1/flight-plugin/extract-prices')
+      .attach('images', TINY_PNG, 'fare.png');
+
+    expect(res.status).toBe(200);
+    expect(s3Service.uploadFile).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      'fare.png',
+      'image/png',
+      'travel/flight-quick-quotes/5',
+    );
+    expect(res.body.storage).toEqual({
+      provider: 'ocs',
+      files: [{
+        originalName: 'fare.png',
+        mimeType: 'image/png',
+        size: TINY_PNG.length,
+        url: 'https://objectstorage.example.com/n/b/o/travel/flight.png',
+        key: 'travel/flight-quick-quotes/5/flight.png',
+      }],
+    });
+  });
+
+  test('keeps extraction successful when optional OCS persistence fails', async () => {
+    s3Service.isOciConfigured.mockReturnValue(true);
+    s3Service.uploadFile.mockRejectedValue(new Error('OCI unavailable'));
+    mockExtractFlight.mockResolvedValue({
+      provider: 'gemini', model: 'gemini-2.5-flash', stub: false, currency: 'INR',
+      tripType: 'domestic', routeLabel: 'Delhi to Goa', rows: [],
+    });
+
+    const res = await request(makeApp())
+      .post('/api/v1/flight-plugin/extract-prices')
+      .attach('images', TINY_PNG, 'fare.png');
+
+    expect(res.status).toBe(200);
+    expect(res.body.provider).toBe('gemini');
+    expect(res.body.storage).toEqual({
+      provider: 'ocs',
+      files: [],
+      warning: 'Screenshots were processed but could not be stored in OCS.',
+    });
+  });
+
+  test('returns a structured 504 instead of leaving a slow extraction request pending', async () => {
+    const previousTimeout = process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS;
+    process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS = '10';
+    mockExtractFlight.mockReturnValue(new Promise(() => {}));
+
+    try {
+      const res = await request(makeApp())
+        .post('/api/v1/flight-plugin/extract-prices')
+        .attach('images', TINY_PNG, 'fare.png');
+
+      expect(res.status).toBe(504);
+      expect(res.body).toEqual({
+        error: 'Flight price extraction took too long. Please retry or enter the fare manually.',
+        code: 'FLIGHT_EXTRACTION_TIMEOUT',
+      });
+    } finally {
+      if (previousTimeout == null) delete process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS;
+      else process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS = previousTimeout;
+    }
   });
 });
 

@@ -79,6 +79,7 @@ function renderPage({ contactId = 42, state } = {}) {
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/contacts" element={<div data-testid="contacts-list-stub">Contacts list stub</div>} />
+        <Route path="/travel/diagnostics" element={<div data-testid="diagnostics-list-stub">Diagnostics list stub</div>} />
       </Routes>
     </MemoryRouter>
   );
@@ -111,9 +112,17 @@ describe('ContactDetail — current profile contract', () => {
     }
   });
 
-  it('uses the profile close action to return to Contacts', async () => {
+  it('uses the originating diagnostics URL when closing the profile', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({ state: { backTo: '/travel/diagnostics?page=2' } });
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
+    expect(await screen.findByTestId('diagnostics-list-stub')).toBeInTheDocument();
+  });
+
+  it('returns to Contacts when the profile has no originating route', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
     expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
     expect(await screen.findByTestId('contacts-list-stub')).toBeInTheDocument();

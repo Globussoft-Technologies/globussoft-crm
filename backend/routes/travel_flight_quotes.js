@@ -48,6 +48,7 @@ const { uploadImageMultiple, validateImages } = require("../middleware/uploadHan
 const prisma = require("../lib/prisma");
 const { pickMarkup } = require("../lib/travelPricing");
 const { ensureCostCentre } = require("../lib/travelTallyMasters");
+const s3Service = require("../services/s3Service");
 const flightOfferImageExtraction = require("../services/flightOfferImageExtractionLLM");
 const hotelOfferImageExtraction = require("../services/hotelOfferImageExtractionLLM");
 const {
@@ -60,6 +61,7 @@ const {
 // Hard cap on manually-entered options per quote (PRD §7 — "up to 4 flight
 // options"). Mirrored client-side in FlightQuoteAgent.jsx.
 const MAX_AGENT_OPTIONS = 4;
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 45_000;
 
 const FLIGHT_PLUGIN_PURPOSE = "flight-plugin";
 
@@ -72,6 +74,86 @@ function requireFlightPluginKey(req, res, next) {
     return res.status(403).json({ error: "API key is not scoped for the flight plugin", code: "WRONG_KEY_PURPOSE" });
   }
   next();
+}
+
+function extractionTimeoutMs() {
+  const configured = Number(process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_EXTRACTION_TIMEOUT_MS;
+}
+
+function withExtractionTimeout(promise) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error("Flight price extraction timed out");
+      error.code = "FLIGHT_EXTRACTION_TIMEOUT";
+      reject(error);
+    }, extractionTimeoutMs());
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function persistFlightScreenshotsToOcs(tenantId, files) {
+  if (!s3Service.isOciConfigured()) return null;
+
+  try {
+    const storedFiles = await Promise.all(files.map(async (file) => {
+      const url = await s3Service.uploadFile(
+        file.buffer,
+        file.originalname,
+        file.mimetype,
+        `travel/flight-quick-quotes/${tenantId}`,
+      );
+      return {
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        url,
+        key: s3Service.extractKeyFromUrl(url),
+      };
+    }));
+    return { provider: "ocs", files: storedFiles };
+  } catch (error) {
+    console.error("[flight-plugin] OCS screenshot persistence error:", error.message);
+    return {
+      provider: "ocs",
+      files: [],
+      warning: "Screenshots were processed but could not be stored in OCS.",
+    };
+  }
+}
+
+async function persistHotelScreenshotsToOcs(tenantId, files) {
+  if (!s3Service.isOciConfigured()) return null;
+
+  try {
+    const storedFiles = await Promise.all(files.map(async (file) => {
+      const url = await s3Service.uploadFile(
+        file.buffer,
+        file.originalname,
+        file.mimetype,
+        `travel/quote-builder/hotel-offers/${tenantId}`,
+      );
+      return {
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        url,
+        key: s3Service.extractKeyFromUrl(url),
+      };
+    }));
+    return { provider: "ocs", files: storedFiles };
+  } catch (error) {
+    console.error("[flight-plugin] hotel OCS screenshot persistence error:", error.message);
+    return {
+      provider: "ocs",
+      files: [],
+      warning: "Hotel screenshots were processed but could not be stored in OCS.",
+    };
+  }
 }
 
 function uploadHotelScreenshotsOrReject(req, res, next) {
@@ -91,19 +173,33 @@ router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScre
   try {
     const files = Array.isArray(req.files) ? req.files : [];
     const tripType = typeof req.body?.tripType === "string" ? req.body.tripType.trim().toLowerCase() : null;
-    const result = await flightOfferImageExtraction.extractFlightOfferPricing({ tenantId: req.user.tenantId, files, tripType });
-    return res.status(200).json(result);
+    const [result, storage] = await withExtractionTimeout(
+      Promise.all([
+        flightOfferImageExtraction.extractFlightOfferPricing({ tenantId: req.user.tenantId, files, tripType }),
+        persistFlightScreenshotsToOcs(req.user.tenantId, files),
+      ]),
+    );
+    return res.status(200).json({ ...result, ...(storage ? { storage } : {}) });
   } catch (e) {
     console.error("[flight-plugin] flight extract error:", e.message);
-    res.status(500).json({ error: "Failed to extract flight prices" });
+    if (e.code === "FLIGHT_EXTRACTION_TIMEOUT") {
+      return res.status(504).json({
+        error: "Flight price extraction took too long. Please retry or enter the fare manually.",
+        code: "FLIGHT_EXTRACTION_TIMEOUT",
+      });
+    }
+    res.status(500).json({ error: "Failed to extract flight prices", code: "FLIGHT_EXTRACTION_FAILED" });
   }
 });
 
 router.post("/extract-hotel-prices", verifyToken, requireTravelTenant, uploadHotelScreenshotsOrReject, validateImages, async (req, res) => {
   try {
     const files = Array.isArray(req.files) ? req.files : [];
-    const result = await hotelOfferImageExtraction.extractHotelOfferPricing({ tenantId: req.user.tenantId, files });
-    return res.status(200).json(result);
+    const [result, storage] = await Promise.all([
+      hotelOfferImageExtraction.extractHotelOfferPricing({ tenantId: req.user.tenantId, files }),
+      persistHotelScreenshotsToOcs(req.user.tenantId, files),
+    ]);
+    return res.status(200).json({ ...result, ...(storage ? { storage } : {}) });
   } catch (e) {
     console.error("[flight-plugin] hotel extract error:", e.message);
     res.status(500).json({ error: "Failed to extract hotel prices" });
@@ -450,4 +546,3 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
 });
 
 module.exports = router;
-

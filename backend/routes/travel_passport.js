@@ -635,6 +635,7 @@ router.post(
   requireTmcAccess,
   uploadHandler,
   async (req, res) => {
+    let uncommittedScan = null;
     try {
       let participant;
       try {
@@ -690,7 +691,13 @@ router.post(
       // passportExtractionJson.imageFilename for the operator UI.
       // /api/uploads (not bare /uploads): in production only /api/* is proxied
       // to the backend, so a bare /uploads link 404s to the SPA host.
-      const fileUrl = `/api/uploads/passport-ocr/${req.file.filename}`;
+      // Keep the disk-backed multer file only as OCR input. The shared
+      // passport store writes the durable copy to OCI when configured and
+      // falls back to local disk when cloud credentials are unavailable.
+      const scanBuffer = await fs.promises.readFile(req.file.path);
+      uncommittedScan = await passportFileStore.storeScan(scanBuffer, req.file.mimetype);
+      await fs.promises.unlink(req.file.path).catch(() => {});
+      const fileUrl = uncommittedScan.url;
 
       // Augment the extraction envelope with the image path so the
       // verification UI can render a "View image" link without a separate
@@ -698,7 +705,9 @@ router.post(
       // number) so audit-log safety is preserved.
       const persistedEnvelope = {
         ...result,
-        imageFilename: req.file.filename,
+        storage: uncommittedScan.storage,
+        imageKey: uncommittedScan.key,
+        imageFilename: uncommittedScan.imageFilename,
         imageUrl: fileUrl,
         originalName: req.file.originalname || null,
       };
@@ -722,9 +731,12 @@ router.post(
         },
       });
 
+      const committedScan = uncommittedScan;
+      uncommittedScan = null;
+
       // Supersede the previous scan so a re-upload doesn't orphan it. Awaited
       // so the delete completes before we respond (no leak on a sudden restart).
-      await removeScanFromEnvelopeJson(participant.passportExtractionJson, req.file.filename);
+      await removeScanFromEnvelopeJson(participant.passportExtractionJson, committedScan.key);
 
       // Audit: field NAMES only, never field VALUES.
       writeAudit(
@@ -748,13 +760,15 @@ router.post(
         provider: result.provider,
         extractedAt: updated.passportExtractedAt,
         imageUrl: fileUrl,
+        storage: committedScan.storage,
         identityCandidates,
       });
     } catch (e) {
+      unlinkUploadedScan(req);
+      if (uncommittedScan) await passportFileStore.removeScan(uncommittedScan);
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       // Multer 413/415 are handled in uploadHandler before this runs. Anything
       // reaching here is a handler-level failure — clean up the stored scan.
-      unlinkUploadedScan(req);
       console.error("[travel-passport] upload error:", e.message);
       res.status(500).json({ error: "Failed to process passport upload" });
     }

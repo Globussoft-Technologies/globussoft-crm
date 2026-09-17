@@ -301,8 +301,9 @@ export default function FlightOfferImageGenerator() {
     setFareRows((prev) => (prev.length <= 1 ? prev : prev.filter((_, rowIndex) => rowIndex !== index)));
   };
 
-  const continueFromUpload = async () => {
-    if (uploadedScreenshots.length === 0) {
+  const extractUploadedScreenshots = async (files) => {
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) {
       setGeneratorError("Upload at least one screenshot before continuing.");
       notify.error("Upload at least one screenshot before continuing.");
       return;
@@ -311,7 +312,7 @@ export default function FlightOfferImageGenerator() {
     setExtractingPrices(true);
     try {
       const form = new FormData();
-      uploadedScreenshots.forEach((file) => form.append("images", file));
+      selectedFiles.forEach((file) => form.append("images", file));
       form.append("tripType", tripType);
       const result = await fetchApi("/api/v1/flight-plugin/extract-prices", { method: "POST", body: form });
       const rows = Array.isArray(result?.rows) ? result.rows : [];
@@ -341,6 +342,7 @@ export default function FlightOfferImageGenerator() {
         flightNumbers: result?.summary?.flightNumbers || result?.flightNumbers || "",
         timingNotes: Array.isArray(result?.timingNotes) ? result.timingNotes : [],
         notes: result?.notes || {},
+        storage: result?.storage || null,
       });
       if (result?.provider || result?.model) {
         notify.success(`Extracted prices using ${result.provider}${result.model ? ` (${result.model})` : ""}.`);
@@ -356,6 +358,19 @@ export default function FlightOfferImageGenerator() {
       setActiveStep(2);
     }
   };
+
+  const handleScreenshotSelection = (event) => {
+    const selectedFiles = Array.from(event.target.files || []);
+    setUploadedScreenshots(selectedFiles);
+    setGeneratedImageUrl("");
+    setGeneratedSvgMarkup("");
+    setQuoteMeta({});
+    if (selectedFiles.length > 0) {
+      void extractUploadedScreenshots(selectedFiles);
+    }
+  };
+
+  const continueFromUpload = () => extractUploadedScreenshots(uploadedScreenshots);
 
   const generateImage = () => {
     setGeneratingImage(true);
@@ -452,7 +467,7 @@ export default function FlightOfferImageGenerator() {
               multiple
               accept="image/png,image/jpeg,image/webp,image/gif"
               aria-label="Upload screenshots"
-              onChange={(event) => setUploadedScreenshots(Array.from(event.target.files || []))}
+              onChange={handleScreenshotSelection}
               style={fieldStyle}
             />
             <div style={{ marginTop: 8, ...helper }}>
@@ -479,6 +494,10 @@ export default function FlightOfferImageGenerator() {
             <div style={titleBlock}>
               <h3 style={sectionTitle}><Sparkles size={18} aria-hidden /> Type + markup</h3>
               <p style={helper}>Choose the trip type, then configure one or more pricing rows.</p>
+              {quoteMeta?.storage?.provider === "ocs" && quoteMeta.storage.files?.length > 0 ? (
+                <p style={helper}>{quoteMeta.storage.files.length} screenshot{quoteMeta.storage.files.length === 1 ? "" : "s"} stored securely in OCS.</p>
+              ) : null}
+              {quoteMeta?.storage?.warning ? <p style={{ ...helper, color: "var(--warning-color, #f59e0b)" }}>{quoteMeta.storage.warning}</p> : null}
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <button type="button" onClick={() => setActiveStep(1)} style={secondaryBtn}><ChevronLeft size={14} aria-hidden /> Back</button>

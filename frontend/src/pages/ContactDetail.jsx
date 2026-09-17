@@ -219,8 +219,18 @@ export default function ContactDetail() {
   const isTravel = tenant?.vertical === 'travel';
   const isGeneric = !isWellness && !isTravel;
   const lifecycleSegments = isWellness ? WELLNESS_PIPELINE_SEGS : isTravel ? TRAVEL_PIPELINE_SEGS : PIPELINE_SEGS;
-  const listPath = location.state?.returnTo || (location.pathname.startsWith('/leads/') ? '/leads' : '/contacts');
-  const closeProfile = () => navigate(listPath, { replace: Boolean(location.state?.returnTo) });
+  const defaultListPath = location.pathname.startsWith('/leads/') ? '/leads' : '/contacts';
+  const requestedBackTo = location.state?.returnTo || location.state?.backTo;
+  const closePath = typeof requestedBackTo === 'string'
+    && requestedBackTo.startsWith('/')
+    && !requestedBackTo.startsWith('//')
+    ? requestedBackTo
+    : defaultListPath;
+  const listPath = closePath;
+  const closeLabel = typeof (location.state?.returnLabel || location.state?.backLabel) === 'string'
+    ? (location.state.returnLabel || location.state.backLabel)
+    : `Back to ${defaultListPath === '/leads' ? 'Leads' : 'Contacts'}`;
+  const closeProfile = () => navigate(closePath, { replace: Boolean(requestedBackTo) });
   const [contact, setContact] = useState(null);
   const [overviewActivities, setOverviewActivities] = useState([]);
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
@@ -340,10 +350,10 @@ export default function ContactDetail() {
 
   useEffect(() => {
     if (modal || dealModal.open || seqPicker || confirmAction || isCustomizing) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') navigate(listPath); };
+    const onKey = (e) => { if (e.key === 'Escape') navigate(closePath); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [modal, dealModal.open, seqPicker, confirmAction, isCustomizing, navigate, listPath]);
+  }, [modal, dealModal.open, seqPicker, confirmAction, isCustomizing, navigate, closePath]);
 
   useEffect(() => {
     if (!isCustomizing) { setFieldPickerOpen(false); }
@@ -440,7 +450,7 @@ export default function ContactDetail() {
       const idx = arr.findIndex((c) => String(c.id) === String(id));
       const target = idx >= 0 ? arr[idx + dir] : null;
       if (target) {
-        navigate(`/contacts/${target.id}`);
+        navigate(`/contacts/${target.id}`, { state: location.state });
       } else {
         notify.info(dir > 0 ? 'This is the last contact.' : 'This is the first contact.');
       }
@@ -737,7 +747,7 @@ export default function ContactDetail() {
       <div className="cp-slide-bg"><Contacts /></div>
       <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
       <aside className="cp-slide-panel" aria-label="Contact profile">
-        <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title="Back to Contacts">
+        <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
           <X size={15} />
         </button>
         <div className="cp-slide-scroll">
@@ -752,7 +762,7 @@ export default function ContactDetail() {
   if (loading) return shell(<p style={{ color: 'var(--text-secondary)' }}>Loading contact…</p>);
   if (!contact) {
     return shell(
-      <div className="cp-soon"><h3>Contact not found</h3><button className="cp-action-btn" onClick={() => navigate(listPath)}>Return to Contacts</button></div>,
+      <div className="cp-soon"><h3>Contact not found</h3><button className="cp-action-btn" onClick={() => navigate(closePath)}>{closeLabel}</button></div>,
     );
   }
 

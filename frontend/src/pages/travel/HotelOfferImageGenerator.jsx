@@ -342,8 +342,8 @@ export default function HotelOfferImageGenerator() {
     setHotelRows((prev) => (prev.length <= 1 ? prev : prev.filter((_, rowIndex) => rowIndex !== index)));
   };
 
-  const continueFromUpload = async () => {
-    if (uploadedScreenshots.length === 0) {
+  const extractUploadedScreenshots = async (files = uploadedScreenshots) => {
+    if (files.length === 0) {
       setGeneratorError("Upload at least one screenshot before continuing.");
       notify.error("Upload at least one screenshot before continuing.");
       return;
@@ -352,7 +352,7 @@ export default function HotelOfferImageGenerator() {
     setExtractingPrices(true);
     try {
       const form = new FormData();
-      uploadedScreenshots.forEach((file) => form.append("images", file));
+      files.forEach((file) => form.append("images", file));
       const result = await fetchApi("/api/v1/flight-plugin/extract-hotel-prices", { method: "POST", body: form });
       const rows = Array.isArray(result?.rows) ? result.rows : [];
       if (rows.length > 0) {
@@ -378,6 +378,7 @@ export default function HotelOfferImageGenerator() {
         basisLabel: result?.summary?.basisLabel || result?.basisLabel || "",
         sourceLabel: result?.summary?.sourceLabel || result?.sourceLabel || "",
         notes: result?.notes || {},
+        storage: result?.storage || null,
       });
       if (result?.provider || result?.model) {
         notify.success(`Extracted hotel prices using ${result.provider}${result.model ? ` (${result.model})` : ""}.`);
@@ -393,6 +394,19 @@ export default function HotelOfferImageGenerator() {
       setActiveStep(2);
     }
   };
+
+  const handleScreenshotSelection = (event) => {
+    const selectedFiles = Array.from(event.target.files || []);
+    setUploadedScreenshots(selectedFiles);
+    setGeneratedImageUrl("");
+    setGeneratedSvgMarkup("");
+    setQuoteMeta({});
+    if (selectedFiles.length > 0) {
+      void extractUploadedScreenshots(selectedFiles);
+    }
+  };
+
+  const continueFromUpload = () => extractUploadedScreenshots(uploadedScreenshots);
 
   const generateImage = () => {
     setGeneratingImage(true);
@@ -488,7 +502,8 @@ export default function HotelOfferImageGenerator() {
               multiple
               accept="image/png,image/jpeg,image/webp,image/gif"
               aria-label="Upload hotel screenshots"
-              onChange={(event) => setUploadedScreenshots(Array.from(event.target.files || []))}
+              onChange={handleScreenshotSelection}
+              disabled={extractingPrices}
               style={fieldStyle}
             />
             <div style={{ marginTop: 8, ...helper }}>

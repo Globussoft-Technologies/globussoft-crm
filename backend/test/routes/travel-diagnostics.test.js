@@ -100,6 +100,11 @@ prisma.travelDiagnosticQuestionBank = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
+  update: vi.fn(),
+};
+prisma.travelKnowledgeBaseFile = {
+  ...(prisma.travelKnowledgeBaseFile || {}),
+  findMany: vi.fn(),
 };
 prisma.travelDiagnostic = {
   ...(prisma.travelDiagnostic || {}),
@@ -222,6 +227,8 @@ beforeEach(() => {
   prisma.travelDiagnosticQuestionBank.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnosticQuestionBank.findFirst.mockReset().mockResolvedValue(null);
   prisma.travelDiagnosticQuestionBank.create.mockReset().mockResolvedValue(bankRow());
+  prisma.travelDiagnosticQuestionBank.update.mockReset().mockResolvedValue(bankRow());
+  prisma.travelKnowledgeBaseFile.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnostic.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnostic.findFirst.mockReset().mockResolvedValue(null);
   prisma.travelDiagnostic.create.mockReset().mockResolvedValue({
@@ -459,7 +466,7 @@ describe('POST /diagnostics (submit)', () => {
     const res = await request(makeApp())
       .post('/api/travel/diagnostics')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ bankId: 100, answers: { budget: 'high' } });
+      .send({ bankId: 100, answers: { budget: 'high', preferred_trip_types: ['domestic'] } });
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'BANK_NOT_FOUND' });
   });
@@ -481,7 +488,7 @@ describe('POST /diagnostics (submit)', () => {
     const res = await request(makeApp())
       .post('/api/travel/diagnostics')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ bankId: 100, answers: { budget: 'high' } });
+      .send({ bankId: 100, answers: { budget: 'high', preferred_trip_types: ['domestic'] } });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       score: 5,
@@ -503,8 +510,28 @@ describe('POST /diagnostics (submit)', () => {
     expect(snapshot).toMatchObject({
       bankId: 100,
       bankVersion: 1,
-      questionsJson: QUESTIONS_JSON,
+      questionsJson: expect.any(String),
     });
+    expect(JSON.parse(snapshot.questionsJson).questions[0]).toMatchObject({
+      id: 'preferred_trip_types',
+      required: true,
+      type: 'multi-select',
+    });
+  });
+
+  test('TMC API submit rejects a missing required trip-type preference', async () => {
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow());
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ bankId: 100, answers: { budget: 'high' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'REQUIRED_QUESTION_MISSING',
+      questionId: 'preferred_trip_types',
+    });
+    expect(prisma.travelDiagnostic.create).not.toHaveBeenCalled();
   });
 });
 
@@ -523,7 +550,7 @@ describe('POST /diagnostics — curriculum-fit recommendations (FR-5)', () => {
     const res = await request(makeApp())
       .post('/api/travel/diagnostics')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ bankId: 100, answers: { budget: 'high' }, curriculum: 'CBSE', grade: 'Class 9', subject: 'Geography' });
+      .send({ bankId: 100, answers: { budget: 'high', preferred_trip_types: ['international'] }, curriculum: 'CBSE', grade: 'Class 9', subject: 'Geography' });
     expect(res.status).toBe(201);
     // Aggregated by destination, ranked by AVG fitScore desc.
     // Switzerland avg(80,90)=85 ranks above Italy avg(70)=70.
@@ -544,7 +571,7 @@ describe('POST /diagnostics — curriculum-fit recommendations (FR-5)', () => {
     const res = await request(makeApp())
       .post('/api/travel/diagnostics')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ bankId: 100, answers: { budget: 'high' } });
+      .send({ bankId: 100, answers: { budget: 'high', preferred_trip_types: ['domestic'] } });
     expect(res.status).toBe(201);
     expect(res.body.recommendations).toEqual([]);
     expect(prisma.travelCurriculumMapping.findMany).not.toHaveBeenCalled();

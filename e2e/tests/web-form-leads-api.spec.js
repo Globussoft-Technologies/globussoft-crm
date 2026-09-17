@@ -36,3 +36,28 @@ test('web form leads stay scoped during search and pagination', async ({ request
     for (const id of ids) await request.delete(`${BASE_URL}/api/forms/${id}`, { headers });
   }
 });
+
+test('travel Web Forms logo selection has a real multipart upload endpoint', async ({ request }) => {
+  const login = await request.post(`${BASE_URL}/api/auth/login`, {
+    data: { email: 'yasin@travelstall.in', password: 'password123' },
+  });
+  expect(login.ok()).toBeTruthy();
+  const { token } = await login.json();
+
+  const response = await request.post(`${BASE_URL}/api/forms/logo-upload?scope=travel`, {
+    headers: { Authorization: `Bearer ${token}` },
+    multipart: {
+      image: {
+        name: `E2E_WEB_FORM_LOGO_${Date.now()}_${process.pid}_${test.info().workerIndex}.png`,
+        mimeType: 'image/png',
+        buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+      },
+    },
+  });
+
+  expect(response.status(), await response.text()).toBe(201);
+  const body = await response.json();
+  expect(body.url).toBeTruthy();
+  expect(['ocs', 's3', 'local']).toContain(body.storage);
+  expect(body).toMatchObject({ mimeType: 'image/png' });
+});

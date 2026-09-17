@@ -238,6 +238,22 @@ function renderPage(form = FORM_FIXTURE) {
 
 }
 
+function renderTravelPage(form = FORM_FIXTURE) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    const method = opts?.method || 'GET';
+    if (url === '/api/forms?scope=travel' && method === 'GET') return Promise.resolve([{ ...form, scope: 'travel' }]);
+    if (url === '/api/forms/logo-upload?scope=travel' && method === 'POST') {
+      return Promise.resolve({ url: 'https://objectstorage.example.com/travel-logo.png', storage: 'ocs' });
+    }
+    return Promise.resolve(null);
+  });
+  return render(
+    <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+      <WebForms scope="travel" />
+    </AuthContext.Provider>,
+  );
+}
+
 
 
 async function openBuilder(formName = 'Brand intake') {
@@ -267,6 +283,26 @@ beforeEach(() => {
 
 
 describe('WebForms builder page', () => {
+
+  test('travel logo selection immediately sends a multipart upload request', async () => {
+    const { container } = renderTravelPage();
+    await openBuilder();
+    const input = container.querySelector('input[type="file"][accept="image/*"]');
+    const file = new File(['logo bytes'], 'travel-logo.png', { type: 'image/png' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/forms/logo-upload?scope=travel',
+        expect.objectContaining({ method: 'POST', body: expect.any(FormData) }),
+      );
+    });
+    const [, options] = fetchApiMock.mock.calls.find(([url]) => url === '/api/forms/logo-upload?scope=travel');
+    expect(options.body.get('image')).toBe(file);
+    expect(await screen.findByAltText('Form logo preview')).toHaveAttribute('src', 'https://objectstorage.example.com/travel-logo.png');
+    expect(notifySuccess).toHaveBeenCalledWith('Logo uploaded to OCS.');
+  });
 
   test('renders web form builder chrome and opens the embed + preview modals', async () => {
 

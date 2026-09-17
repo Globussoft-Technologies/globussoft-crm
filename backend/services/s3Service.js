@@ -364,5 +364,6 @@ module.exports = {
   AWS_BUCKET_NAME,
   AWS_S3_BASE_URL,
   isConfigured: () => Boolean(BUCKET_NAME),
+  isOciConfigured: () => ociService.isConfigured(),
   isOciUrl: ociService.isOciUrl,
 };

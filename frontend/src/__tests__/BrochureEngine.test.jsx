@@ -5,7 +5,7 @@
  * The page is now a 5-step wizard with itinerary import.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -33,6 +33,7 @@ const MODELS_FIXTURE = {
     { id: 'b', label: 'Smart Model', provider: 'openai', blurb: 'smart', available: true, intelligence: 5, costEff: 2, inputPer1M: 2.5, outputPer1M: 15 },
   ],
 };
+let lastEventSource = null;
 
 function wireFetch() {
   fetchApiMock.mockImplementation((url, opts) => {
@@ -135,9 +136,10 @@ beforeEach(() => {
   wireFetch();
   localStorage.clear();
   global.EventSource = class {
-    constructor(url) { this.url = url; this.onmessage = null; this.onerror = null; }
+    constructor(url) { this.url = url; this.onmessage = null; this.onerror = null; lastEventSource = this; }
     close() {}
   };
+  lastEventSource = null;
 });
 
 describe('brochure itinerary editorial normalization', () => {
@@ -180,6 +182,15 @@ describe('BrochureEngine page (wizard)', () => {
     expect(screen.getByTestId('step-3')).toBeInTheDocument();
     expect(screen.getByTestId('step-4')).toBeInTheDocument();
     expect(screen.getByTestId('step-5')).toBeInTheDocument();
+  });
+
+  it('keeps the Back/Next action bar fixed in the visible workspace', () => {
+    renderPage();
+    const navigation = screen.getByTestId('brochure-floating-navigation');
+
+    expect(navigation).toHaveStyle({ position: 'fixed', bottom: '12px' });
+    expect(navigation).toContainElement(screen.getByRole('button', { name: /Back/i }));
+    expect(navigation).toContainElement(screen.getByTestId('next-step'));
   });
 
   it('fetches models, itineraries and history on mount', async () => {
@@ -258,6 +269,9 @@ describe('BrochureEngine page (wizard)', () => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/brochures/brand-images/upload', expect.objectContaining({ method: 'POST' }));
     });
     fireEvent.click(screen.getByTestId('school-logo-approved'));
+    const logoSliders = document.querySelectorAll('.brochure-logo-slider');
+    expect(logoSliders).toHaveLength(3);
+    expect(logoSliders[0].style.getPropertyValue('--brochure-slider-progress')).toBe('70%');
 
     // Go to final step and generate
     fireEvent.click(screen.getByTestId('step-5'));
@@ -276,6 +290,30 @@ describe('BrochureEngine page (wizard)', () => {
       expect(body.brand.tmcBrandKitId).toBe('tmc-default');
       expect(body.models).toEqual({ reasoning: 'a' });
     });
+
+    expect(screen.getByTestId('brochure-progress-label')).toHaveTextContent('Starting brochure generation');
+    expect(screen.getByTestId('brochure-technical-details-toggle')).toHaveTextContent('Show technical details');
+    expect(screen.queryByTestId('brochure-technical-details')).not.toBeInTheDocument();
+
+    await waitFor(() => expect(lastEventSource).toBeTruthy());
+    const events = [
+      { type: 'engine.log', data: { line: 'INFO [providers] Providers available {"providers":["openai"]}' } },
+      { type: 'run.started', agentKey: 'tmc_composer', data: {} },
+      { type: 'agent.started', agentKey: 'tmc_composer', data: {} },
+      { type: 'agent.message', agentKey: 'tmc_composer', data: { final: true } },
+      { type: 'agent.tool_call', agentKey: 'tmc_composer', data: { tool: 'render_pdf' } },
+      { type: 'usage', agentKey: 'tmc_composer', data: { model: 'gpt-5.4', inputTokens: 100, outputTokens: 200, billedUsd: 0.01 } },
+    ];
+    await act(async () => {
+      events.forEach((event) => lastEventSource.onmessage({ data: JSON.stringify(event) }));
+    });
+    expect(screen.getByTestId('brochure-technical-details-toggle')).toHaveTextContent('technical details (1)');
+    fireEvent.click(screen.getByTestId('brochure-technical-details-toggle'));
+    expect(screen.getByTestId('brochure-technical-details')).toHaveTextContent('gpt-5.4');
+    expect(screen.getByTestId('brochure-technical-details')).not.toHaveTextContent('Providers available');
+    expect(screen.getByTestId('brochure-technical-details')).not.toHaveTextContent('run.started');
+    expect(screen.getByTestId('brochure-technical-details')).not.toHaveTextContent('agent.started');
+    expect(screen.getByTestId('brochure-technical-details')).not.toHaveTextContent('render_pdf');
   }, 15000);
 
   it('allows adding and removing itinerary days', async () => {
@@ -318,7 +356,7 @@ describe('BrochureEngine page (wizard)', () => {
         { id: 3, itemType: 'activity', dayNumber: 2, description: 'Robot museum visit', locationName: 'Tokyo', position: 3 },
       ],
     };
-    fetchApiMock.mockImplementation((url, opts) => {
+    fetchApiMock.mockImplementation((url, _opts) => {
       if (url === '/api/travel/itineraries?fields=summary') return Promise.resolve({ itineraries: [itineraryFixture] });
       if (url === '/api/travel/itineraries/42') return Promise.resolve({ itinerary: itineraryFixture });
       if (url === '/api/travel/brochures/sectors') return Promise.resolve({ sectors: [{ key: 'travel', name: 'Travel Brochure', styles: ['tmc-school'] }] });

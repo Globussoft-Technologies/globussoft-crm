@@ -50,7 +50,7 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'gift_cards',       actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'patient_wallets',  actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'patients',      actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
-  { module: 'appointments',     actions: ['read', 'write', 'update', 'delete', 'export'] },
+  { module: 'appointments',     actions: ['read', 'write', 'update', 'delete', 'export', 'assign', 'ai_call', 'manual_call'] },
   { module: 'my_appointments',  actions: ['read'] },
   { module: 'book_appointment', actions: ['write'] },
   { module: 'waitlist',         actions: ['read', 'write'] },
@@ -436,12 +436,20 @@ function PermissionSeverityBadge({ severity, module, action, onClick }) {
 // deals" both grant the same shape of access, so a single canonical
 // description keeps the modal compact instead of N×6 per-cell strings.
 const ACTION_DESCRIPTIONS = {
+  ai_call: 'Start a Callified AI call from an appointment.',
+  manual_call: 'Start a Callified browser call and speak to the patient.',
+  assign: 'Assign an appointment to a practitioner.',
   read:   'View records and lists in this module.',
   write:  'Create new records in this module.',
   update: 'Edit existing records in this module.',
   delete: 'Remove records in this module (typically soft-delete).',
   export: 'Download or export module data to CSV / PDF / Excel.',
   manage: 'Full administrative control — settings, bulk ops, and destructive admin actions.',
+};
+
+const ACTION_LABELS = {
+  ai_call: 'AI call',
+  manual_call: 'Manual call',
 };
 
 export default function RolesAdmin() {
@@ -2276,7 +2284,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                                   cursor: readOnly ? 'not-allowed' : 'pointer',
                                 }}
                               />
-                              {a}
+                              {ACTION_LABELS[a] || a}
                               {/* Severity badge — sits at the right
                                   edge via marginLeft:'auto' in its
                                   inline style. Renders only when the

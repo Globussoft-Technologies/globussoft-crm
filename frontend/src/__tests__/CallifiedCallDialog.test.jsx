@@ -85,6 +85,7 @@ function renderDialog(props = {}) {
         endpoints={ENDPOINTS}
         onClose={props.onClose || vi.fn()}
         onCalled={props.onCalled}
+        allowedModes={props.allowedModes}
       />
     </MemoryRouter>,
   );
@@ -118,6 +119,14 @@ describe('CallifiedCallDialog', () => {
 
     const posts = fetchApiMock.mock.calls.filter(([, opts]) => opts?.method === 'POST');
     expect(posts).toHaveLength(0);
+  });
+
+  test('shows only the call mode granted by the appointment role', async () => {
+    installFetch();
+    renderDialog({ allowedModes: { ai: true, manual: false } });
+
+    expect(await screen.findByTestId('callified-call-mode-ai')).toBeInTheDocument();
+    expect(screen.queryByTestId('callified-call-mode-manual')).not.toBeInTheDocument();
   });
 
   test('explains a customer with no dialable number instead of failing later', async () => {

@@ -6,6 +6,7 @@ import { AuthContext } from '../../App';
 import { useNotify } from '../../utils/notify';
 import { AssignDoctorModal, displayStatus } from './Calendar';
 import CallifiedCallDialog from '../../components/CallifiedCallDialog';
+import { usePermissions } from '../../hooks/usePermissions';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Any status' },
@@ -40,7 +41,19 @@ export default function Appointments() {
   const { user } = useContext(AuthContext) || {};
   const isOrg = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const notify = useNotify();
+  const {
+    hasPermission,
+    isReady: permissionsReady,
+    refresh: refreshPermissions,
+  } = usePermissions();
   const requestSeqRef = useRef(0);
+
+  // These two explicit grants are authoritative. Broad appointment/calendar
+  // write access must not keep Callified visible after an admin unchecks the
+  // corresponding call permissions.
+  const canAiCall = permissionsReady && hasPermission('appointments', 'ai_call');
+  const canManualCall = permissionsReady && hasPermission('appointments', 'manual_call');
+  const canCallFromAppointments = canAiCall || canManualCall;
 
   const [assignTarget, setAssignTarget] = useState(null);
   const [callifiedReady, setCallifiedReady] = useState(null);
@@ -63,6 +76,13 @@ export default function Appointments() {
   const [loading, setLoading] = useState(true);
   const [pagination, setPagination] = useState(EMPTY_PAGINATION);
   const [error, setError] = useState(null);
+
+  // Role grants may have changed in another tab/session. Refresh on page
+  // entry so a revoked call permission cannot remain visible because of the
+  // module-level permission cache from an earlier navigation.
+  useEffect(() => {
+    refreshPermissions().catch(() => {});
+  }, [refreshPermissions]);
 
   const loadVisits = useCallback(async () => {
     const requestId = ++requestSeqRef.current;
@@ -148,6 +168,10 @@ export default function Appointments() {
   }, [isOrg]);
 
   useEffect(() => {
+    if (!permissionsReady || !canCallFromAppointments) {
+      setCallifiedReady(false);
+      return undefined;
+    }
     let cancelled = false;
     fetchApi('/api/wellness/callified/status', { silent: true })
       .then((res) => {
@@ -160,7 +184,7 @@ export default function Appointments() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [permissionsReady, canCallFromAppointments]);
 
   const handleRefresh = () => {
     setReloadTick((n) => n + 1);
@@ -474,9 +498,10 @@ export default function Appointments() {
                           <UserPlus size={13} /> Assign doctor
                         </button>
                       )}
-                      {callifiedReady && (
+                      {canCallFromAppointments && (
                         <CallAction
                           visit={v}
+                          callifiedReady={callifiedReady}
                           onCall={() => setCallTarget(v)}
                         />
                       )}
@@ -587,6 +612,7 @@ export default function Appointments() {
             aiCall: `/api/wellness/callified/visits/${callTarget.id}/ai-call`,
             manualCall: `/api/wellness/callified/visits/${callTarget.id}/manual-call`,
           }}
+          allowedModes={{ ai: canAiCall, manual: canManualCall }}
           onClose={() => setCallTarget(null)}
         />
       )}
@@ -594,18 +620,27 @@ export default function Appointments() {
   );
 }
 
-function CallAction({ visit, onCall }) {
+function CallAction({ visit, callifiedReady, onCall }) {
   const phone = visit.patient?.phone || '';
   const dialable = phone.replace(/\D/g, '').length >= 10;
+  const enabled = dialable && callifiedReady === true;
+  const title = !dialable
+    ? 'No valid phone number on file'
+    : callifiedReady === null
+      ? 'Checking Callified integration...'
+      : callifiedReady
+        ? `Call ${visit.patient?.name || 'customer'}`
+        : 'Callified is not configured for this clinic';
 
   return (
     <button
       type="button"
       className="btn-secondary"
       onClick={onCall}
-      disabled={!dialable}
+      disabled={!enabled}
       data-testid={`appointments-call-${visit.id}`}
-      title={dialable ? `Call ${visit.patient?.name || 'customer'}` : 'No valid phone number on file'}
+      title={title}
+      aria-label={title}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -613,11 +648,12 @@ function CallAction({ visit, onCall }) {
         padding: '0.3rem 0.6rem',
         borderRadius: 6,
         fontSize: '0.78rem',
-        cursor: dialable ? 'pointer' : 'not-allowed',
-        opacity: dialable ? 1 : 0.55,
+        cursor: enabled ? 'pointer' : 'not-allowed',
+        opacity: enabled ? 1 : 0.55,
       }}
     >
-      <Phone size={13} style={{ color: 'var(--accent-color)' }} /> Call
+      <Phone size={13} style={{ color: 'var(--accent-color)' }} />
+      {dialable ? 'Call' : 'No phone'}
     </button>
   );
 }

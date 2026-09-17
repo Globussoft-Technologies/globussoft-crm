@@ -35,6 +35,10 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, RBAC_DENIED_MESSAGE } = require("../middleware/auth");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
+const {
+  requirePermission,
+  requireAnyPermission,
+} = require("../middleware/requirePermission");
 const callifiedClient = require("../services/callifiedClient");
 const { ensurePatientContact } = require("../lib/patientContactLink");
 const { startBrowserCall } = require("../lib/callifiedAgentBridge");
@@ -58,6 +62,41 @@ const callGate = [
       { module: "calendar", action: "write" },
     ],
   }),
+];
+
+// Status + campaign discovery are shared by the dialog, so an appointments-
+// only caller needs these two read/setup endpoints. This gate is deliberately
+// NOT used on patient/lead dial endpoints; appointment call grants must not
+// spill into those separate surfaces.
+const callSetupGate = [
+  verifyToken,
+  verifyWellnessRole(["admin", "manager", "telecaller", "receptionist"], {
+    anyOfPermissions: [
+      { module: "appointments", action: "write" },
+      { module: "calendar", action: "write" },
+      { module: "appointments", action: "ai_call" },
+      { module: "appointments", action: "manual_call" },
+    ],
+  }),
+];
+
+// Appointment calls have two independently grantable modes. Unlike the
+// legacy callGate, these routes finish with a strict RBAC check: unchecking a
+// call permission in Roles & Permissions must revoke that mode even from an
+// ADMIN/MANAGER/front-desk role.
+function appointmentCallGate(action) {
+  return [
+    ...callSetupGate,
+    requirePermission("appointments", action),
+  ];
+}
+
+const appointmentCallContextGate = [
+  ...callSetupGate,
+  requireAnyPermission([
+      { module: "appointments", action: "ai_call" },
+      { module: "appointments", action: "manual_call" },
+  ]),
 ];
 
 /**
@@ -221,7 +260,7 @@ async function resolveCallTarget(subject, tenantId, { ensureContact = false } = 
  * fails. Never throws — an unconfigured tenant is a normal state, not an
  * error.
  */
-router.get("/callified/status", callGate, async (req, res) => {
+router.get("/callified/status", callSetupGate, async (req, res) => {
   try {
     const [config, enabled] = await Promise.all([
       callifiedClient.getCallifiedConfig(req.user.tenantId),
@@ -243,7 +282,7 @@ router.get("/callified/status", callGate, async (req, res) => {
  * The campaign list the call dialog picks from. Same Callified campaigns the
  * generic CRM sees — this is one org-level campaign set, not a wellness copy.
  */
-router.get("/callified/campaigns", callGate, async (req, res) => {
+router.get("/callified/campaigns", callSetupGate, async (req, res) => {
   try {
     const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);
     res.json({ campaigns: Array.isArray(campaigns) ? campaigns : [] });
@@ -473,17 +512,17 @@ const resolveLeadSubject = async (req) => {
  */
 router.get(
   "/callified/visits/:visitId/context",
-  callGate,
+  appointmentCallContextGate,
   callContextHandler(resolveVisitSubject, VISIT_NOT_FOUND),
 );
 router.post(
   "/callified/visits/:visitId/ai-call",
-  callGate,
+  appointmentCallGate("ai_call"),
   aiCallHandler(resolveVisitSubject, VISIT_NOT_FOUND),
 );
 router.post(
   "/callified/visits/:visitId/manual-call",
-  callGate,
+  appointmentCallGate("manual_call"),
   manualCallHandler(resolveVisitSubject, VISIT_NOT_FOUND),
 );
 

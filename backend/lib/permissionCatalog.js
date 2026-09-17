@@ -115,7 +115,13 @@ const WELLNESS_MODULES = {
   // write the every-appointment-in-the-clinic view. Owners / managers /
   // receptionists who triage the global queue need this; doctors who
   // only work their own slots do NOT (they use `my_appointments`).
-  appointments: ['read', 'write', 'update', 'delete', 'export', 'assign'],
+  // Callified actions stay on the Appointments card because that is where
+  // clinic staff initiate these calls. Keeping AI and manual calling
+  // separate lets a tenant grant either mode independently.
+  appointments: [
+    'read', 'write', 'update', 'delete', 'export', 'assign',
+    'ai_call', 'manual_call',
+  ],
   // `my_appointments` gates /wellness/my-appointments — the per-practitioner
   // view that's intentionally distinct from the tenant-wide list. Split out
   // so a doctor / nurse can be granted "see my own appointments" without

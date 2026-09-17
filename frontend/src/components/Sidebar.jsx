@@ -645,7 +645,7 @@ const Sidebar = ({
     // permissions fail to load or are delayed. Once permissions load, show only
     // if the user has explicit permission.
     if (
-      requiredPermission &&
+      !managerOnly && requiredPermission &&
       (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
     ) {
       return null;

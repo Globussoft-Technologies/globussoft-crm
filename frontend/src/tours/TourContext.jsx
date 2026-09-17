@@ -58,6 +58,7 @@ function canAccess(feature, user, permissionState) {
     // do not expose it from Browse/Restart All Tours. Only catalogued pages
     // with an effective permission are tourable.
     if (!pageAccess) return false;
+    if (feature.path === "/tasks") return true;
     if (pageAccess && !canUseGenericSidebarPage(pageAccess, {
       isAdmin,
       isManager,

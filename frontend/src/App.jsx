@@ -87,6 +87,7 @@ const Home = lazy(() => import("./pages/Home"));
 const Contacts = lazy(() => import("./pages/Contacts"));
 const ContactDetail = lazy(() => import("./pages/ContactDetail"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
+const DealDetails = lazy(() => import("./pages/DealDetails"));
 const Workflows = lazy(() => import("./pages/Workflows"));
 const Inbox = lazy(() => import("./pages/Inbox"));
 const EmailCompose = lazy(() => import("./pages/EmailCompose"));
@@ -2534,6 +2535,14 @@ export default function App() {
                         element={
                           <GenericOnly>
                             <Pipeline />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="deals/:dealId"
+                        element={
+                          <GenericOnly>
+                            <DealDetails />
                           </GenericOnly>
                         }
                       />

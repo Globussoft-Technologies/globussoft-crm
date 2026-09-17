@@ -2,6 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'r
 import { createPortal } from 'react-dom';
 import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, AlignJustify, Indent, Outdent, Image, Smile, Link2, RemoveFormatting, Paperclip, Send, Trash2, ChevronDown, Info, PackagePlus, Plus, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import './ContactProfile.css';
 import { useNotify } from '../../utils/notify';
 import { tenantCurrency } from '../../utils/money';
 import {

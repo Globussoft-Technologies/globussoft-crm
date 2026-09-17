@@ -322,6 +322,40 @@ router.get("/stats", async (req, res) => {
 });
 
 // ─── GET /:id — single deal with full relations ─────────────────────
+router.get("/:id/activities", async (req, res) => {
+  try {
+    const deal = await prisma.deal.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      select: { contactId: true, deletedAt: true },
+    });
+    if (!deal || (deal.deletedAt && req.query.includeDeleted !== "true")) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const skip = (page - 1) * limit;
+    const where = { contactId: deal.contactId, tenantId: req.user.tenantId };
+    const [activities, total] = await Promise.all([
+      deal.contactId
+        ? prisma.activity.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip, take: limit })
+        : [],
+      deal.contactId ? prisma.activity.count({ where }) : 0,
+    ]);
+
+    return res.json({
+      data: activities,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (error) {
+    console.error("[deals] get activities error:", error.message);
+    return res.status(500).json({ error: "Failed to fetch deal activities" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const includeDeleted = req.query.includeDeleted === "true";
@@ -347,7 +381,8 @@ router.get("/:id", async (req, res) => {
     if (deal.contactId) {
       activities = await prisma.activity.findMany({
         where: { contactId: deal.contactId, tenantId: req.user.tenantId },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 10,
       });
     }
 

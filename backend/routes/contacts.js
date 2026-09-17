@@ -26,7 +26,7 @@ const {
 } = require("../utils/deduplication");
 const { notify } = require("../lib/notificationService");
 const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
-const { getSetting, KEYS } = require("../lib/tenantSettings");
+const { getSetting, setSetting, KEYS } = require("../lib/tenantSettings");
 const {
   evaluateAutoCampaignRules,
 } = require("../lib/callifiedAutoCampaignRules");
@@ -55,6 +55,9 @@ const CONTACT_TAG_LIMIT = 50;
 const CONTACT_TAG_MAX_LENGTH = 80;
 // eslint-disable-next-line no-control-regex
 const CONTACT_TAG_CONTROL_RE = /[\x00-\x1F\x7F]/;
+const CONTACT_TAG_CATALOG_KEY = 'generic.contactTagCatalog';
+const CONTACT_TAG_COLOR_RE = /^#[0-9a-f]{6}$/i;
+const CONTACT_TAG_DEFAULT_COLORS = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#db2777', '#dc2626'];
 
 // Contacts pagination must be ordered in the database. Sorting a single page
 // in the browser produces a different order on every page and can hide the
@@ -176,6 +179,60 @@ function serializeContactTagsBatch(contacts) {
 
 function normalizeContactTagValue(raw) {
   return sanitizeText(String(raw || "")).trim();
+}
+
+function normalizeContactTagColor(raw) {
+  const color = String(raw || '').trim();
+  return CONTACT_TAG_COLOR_RE.test(color) ? color.toLowerCase() : '';
+}
+
+function defaultContactTagColor(name) {
+  let hash = 0;
+  for (const char of String(name || '')) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  return CONTACT_TAG_DEFAULT_COLORS[Math.abs(hash) % CONTACT_TAG_DEFAULT_COLORS.length];
+}
+
+function parseContactTagCatalog(raw) {
+  let values = raw;
+  if (typeof raw === 'string') {
+    try { values = JSON.parse(raw); } catch (_e) { values = []; }
+  }
+  if (!Array.isArray(values)) {
+    values = values && typeof values === 'object'
+      ? Object.entries(values).map(([name, color]) => ({ name, color }))
+      : [];
+  }
+  const seen = new Set();
+  return values.reduce((result, item) => {
+    const name = normalizeContactTagValue(item?.name);
+    if (!name) return result;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return result;
+    seen.add(key);
+    result.push({ name, color: normalizeContactTagColor(item?.color) || defaultContactTagColor(name) });
+    return result;
+  }, []);
+}
+
+async function readContactTagCatalog(tenantId) {
+  const raw = await getSetting(tenantId, CONTACT_TAG_CATALOG_KEY, { coerce: (value) => value, fallback: '[]' });
+  return parseContactTagCatalog(raw);
+}
+
+async function writeContactTagCatalog(tenantId, catalog) {
+  await setSetting(tenantId, CONTACT_TAG_CATALOG_KEY, JSON.stringify(catalog), { category: 'general' });
+}
+
+async function requireGenericContactTags(req, res) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: req.user.tenantId },
+    select: { vertical: true },
+  });
+  if (tenant?.vertical !== 'generic') {
+    res.status(404).json({ error: 'Contact tag catalog not found' });
+    return false;
+  }
+  return true;
 }
 
 function normalizeContactTagsInput(raw) {
@@ -907,6 +964,46 @@ async function attachComputedWalletBalance(contact, tenantId) {
   }
 }
 
+// Wellness-only contact enrichment for the Patient details appointment flow.
+// Generic and travel contacts retain their existing response shape.
+async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
+  if (!contact || typeof contact !== 'object' || !contact.id) return contact;
+  try {
+    const vertical = tenantVertical !== undefined
+      ? tenantVertical
+      : (await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }))?.vertical;
+    if (vertical !== 'wellness') return contact;
+    const patient = await prisma.patient.findFirst({
+      where: { tenantId, contactId: contact.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!patient) return { ...contact, patientId: null, appointments: [] };
+    const visits = await prisma.visit.findMany({
+      where: { tenantId, patientId: patient.id, status: { notIn: ['cancelled', 'completed', 'no-show'] } },
+      include: {
+        doctor: { select: { id: true, name: true } },
+        service: { select: { id: true, name: true } },
+      },
+      orderBy: { visitDate: 'asc' },
+      take: 100,
+    });
+    return {
+      ...contact,
+      patientId: patient.id,
+      appointments: visits.map((visit) => ({
+        id: visit.id,
+        doctorName: visit.doctor?.name || 'Pending assignment',
+        serviceName: visit.service?.name || 'General',
+        appointmentDate: visit.visitDate,
+        status: visit.status,
+        reason: visit.reason || null,
+      })),
+    };
+  } catch (_e) {
+    return contact;
+  }
+}
+
 // TRAVEL-ONLY contact-timeline enrichment.
 //
 // Per PRD_TRAVEL_QUOTE_BUILDER FR-3.7.1 the contact timeline is a UNIFIED
@@ -919,14 +1016,16 @@ async function attachComputedWalletBalance(contact, tenantId) {
 // Deals stay (the PRD keeps them — FR-3.7.4 quote-accept → Deal "Booked"/"Won");
 // this only ADDS the travel entities. No-op for generic/wellness tenants.
 // Best-effort: any failure returns the contact unchanged — never breaks the GET.
-async function attachTravelRelationshipTimeline(contact, tenantId) {
+async function attachTravelRelationshipTimeline(contact, tenantId, tenantVertical) {
   if (!contact || typeof contact !== "object" || !contact.id) return contact;
   try {
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { vertical: true },
-    });
-    if (!tenant || tenant.vertical !== "travel") return contact;
+    const vertical = tenantVertical !== undefined
+      ? tenantVertical
+      : (await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { vertical: true },
+      }))?.vertical;
+    if (vertical !== "travel") return contact;
 
     const [itineraries, invoices] = await Promise.all([
       prisma.itinerary
@@ -1961,6 +2060,55 @@ router.get("/filter-values/:field", async (req, res) => {
   }
 });
 
+// Generic CRM tag catalog. Contact ↔ tag membership continues to use the
+// existing Contact.tagsJson field; the tenant setting stores shared names and
+// colors so every contact renders the same tag color after a reload.
+router.get('/tags', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    res.json({ tags: catalog.sort((a, b) => a.name.localeCompare(b.name)) });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch contact tags' });
+  }
+});
+
+router.post('/tags', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const name = normalizeContactTagValue(req.body?.name);
+    const color = normalizeContactTagColor(req.body?.color) || defaultContactTagColor(name);
+    if (!name) return res.status(400).json({ error: 'Tag name is required', code: 'TAG_NAME_REQUIRED' });
+    if (CONTACT_TAG_CONTROL_RE.test(name)) return res.status(400).json({ error: 'Tag contains invalid control characters', code: 'INVALID_TAG' });
+    if (name.length > CONTACT_TAG_MAX_LENGTH) return res.status(400).json({ error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`, code: 'TAG_TOO_LONG' });
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    const existing = catalog.find((tag) => tag.name.toLowerCase() === name.toLowerCase());
+    if (existing) return res.json(existing);
+    const created = { name, color };
+    await writeContactTagCatalog(req.user.tenantId, [...catalog, created]);
+    res.status(201).json(created);
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to create contact tag' });
+  }
+});
+
+router.patch('/tags/:tagName', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const name = normalizeContactTagValue(req.params.tagName);
+    const color = normalizeContactTagColor(req.body?.color);
+    if (!name || !color) return res.status(400).json({ error: 'A valid tag name and color are required', code: 'INVALID_TAG_COLOR' });
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    const index = catalog.findIndex((tag) => tag.name.toLowerCase() === name.toLowerCase());
+    const updated = index >= 0 ? { ...catalog[index], color } : { name, color };
+    const next = index >= 0 ? catalog.map((tag, itemIndex) => itemIndex === index ? updated : tag) : [...catalog, updated];
+    await writeContactTagCatalog(req.user.tenantId, next);
+    res.json(updated);
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to update contact tag' });
+  }
+});
+
 router.delete("/tags", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -2011,6 +2159,19 @@ router.delete("/tags", async (req, res) => {
       });
       updatedContacts += 1;
     }
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    if (tenant?.vertical === "generic") {
+      const catalog = await readContactTagCatalog(tenantId);
+      const nextCatalog = catalog.filter(
+        (catalogTag) => catalogTag.name.toLowerCase() !== tagKey,
+      );
+      if (nextCatalog.length !== catalog.length) {
+        await writeContactTagCatalog(tenantId, nextCatalog);
+      }
+    }
     return res.json({ deletedTag: tag, status: statusScope, updatedContacts });
   } catch (_err) {
     return res.status(500).json({ error: "Failed to delete tag" });
@@ -2050,11 +2211,24 @@ router.get("/:id", async (req, res) => {
       filtered,
       req.user.tenantId,
     );
+    let tenantVertical = "";
+    try {
+      tenantVertical = (await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { vertical: true },
+      }))?.vertical || "";
+    } catch (_e) { /* vertical enrichment remains fail-soft */ }
+    const withAppointments = await attachWellnessAppointments(
+      withWallet,
+      req.user.tenantId,
+      tenantVertical,
+    );
     // Travel-only: merge the contact's bookings (Itineraries) + invoices into
     // the activity timeline so booking-only customers aren't shown empty.
     const withTimeline = await attachTravelRelationshipTimeline(
-      withWallet,
+      withAppointments,
       req.user.tenantId,
+      tenantVertical,
     );
     // Generic-vertical-only: attach { fieldKey: value } from this tenant's
     // Lead custom field definitions/values (no-op elsewhere — see helper).

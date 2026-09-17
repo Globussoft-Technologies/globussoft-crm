@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useContext } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Calendar, Clock, Stethoscope, Info, Sparkles } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -118,6 +118,7 @@ function filterPastSlots(slots, date) {
 
 export default function BookAppointment() {
   const notify = useNotify();
+  const navigate = useNavigate();
   const { user } = useContext(AuthContext); // eslint-disable-line no-unused-vars
   // #service-catalog "Book service" deep-link: ?serviceId=<id> pre-selects the
   // service the user tapped in the catalog. They fill in the rest (date/time/
@@ -159,6 +160,10 @@ export default function BookAppointment() {
   const urlServiceId = searchParams.get("serviceId") || "";
   const urlDate = searchParams.get("date");
   const urlTime = searchParams.get("time");
+  const contactId = searchParams.get("contactId");
+  const patientId = searchParams.get("patientId");
+  const returnTo = searchParams.get("returnTo");
+  const contactReturn = contactId && returnTo && returnTo.startsWith("/contacts/");
   const initialDate =
     urlDate && /^\d{4}-\d{2}-\d{2}$/.test(urlDate) ? urlDate : todayLocalDate();
   const initialTime = urlTime && /^\d{2}:\d{2}$/.test(urlTime) ? urlTime : "";
@@ -377,6 +382,14 @@ export default function BookAppointment() {
     loadData();
   };
 
+  const finishBooking = () => {
+    if (contactReturn) {
+      navigate(returnTo, { replace: true });
+      return;
+    }
+    resetFormAfterSuccess();
+  };
+
   const handleBookAppointment = async (e) => {
     e.preventDefault();
     if (!formData.reason.trim()) {
@@ -418,6 +431,7 @@ export default function BookAppointment() {
               membershipId: formData.membershipId
                 ? parseInt(formData.membershipId)
                 : null,
+              ...(patientId ? { patientId: parseInt(patientId) } : {}),
               appointmentDate: formData.appointmentDate,
               appointmentTime: formData.appointmentTime,
               bookingType: "CLINIC_VISIT",
@@ -465,7 +479,7 @@ export default function BookAppointment() {
               notify.success(
                 `Payment received. Appointment confirmed (#${confirmRes.visitId}).`,
               );
-              resetFormAfterSuccess();
+              finishBooking();
             } else {
               notify.error(
                 "Payment captured but confirmation failed — our team will reach out.",
@@ -504,6 +518,7 @@ export default function BookAppointment() {
           membershipId: formData.membershipId
             ? parseInt(formData.membershipId)
             : null,
+          ...(patientId ? { patientId: parseInt(patientId) } : {}),
           appointmentDate: formData.appointmentDate,
           appointmentTime: formData.appointmentTime,
         }),
@@ -516,7 +531,7 @@ export default function BookAppointment() {
             ? `Appointment booked with Dr. ${apt.doctorName}`
             : "Appointment requested — our team will assign a doctor and confirm shortly.",
         );
-        resetFormAfterSuccess();
+        finishBooking();
       }
     } catch (err) {
       notify.error(err.message || "Failed to book appointment");

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
@@ -154,11 +154,13 @@ const DEFAULT_STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed', 'Cancelle
 
 export default function Tasks() {
   const notify = useNotify();
+  const navigate = useNavigate();
   const { hasPermission, isReady: permsReady } = usePermissions();
   const [tasks, setTasks] = useState([]);
   const [staff, setStaff] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const [newTask, setNewTask] = useState(EMPTY_FORM);
+  const travelTaskReturnToRef = useRef('');
   const [showTagPicker, setShowTagPicker] = useState(false);
   const tagAnchorRef = useRef(null);
 
@@ -205,16 +207,23 @@ export default function Tasks() {
   useEffect(() => {
     if (searchParams.get('create') !== '1') return;
     const requestedType = searchParams.get('type') || '';
+    const requestedContactId = isTravel ? searchParams.get('contactId') || '' : '';
+    if (isTravel) travelTaskReturnToRef.current = searchParams.get('returnTo') || '';
     setNewTask((prev) => ({
       ...prev,
       type: ALLOWED_DEEPLINK_TYPES.includes(requestedType) ? requestedType : '',
+      ...(requestedContactId ? { contactId: requestedContactId } : {}),
     }));
     setCreating(true);
     const next = new URLSearchParams(searchParams);
     next.delete('create');
     next.delete('type');
+    if (isTravel) {
+      next.delete('contactId');
+      next.delete('returnTo');
+    }
     setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [isTravel, searchParams, setSearchParams]);
 
   // Load tenant tags from the wellness patients/tags endpoint so the tag
   // picker in the Add Todo modal reuses the same tag set as patients.
@@ -252,7 +261,7 @@ export default function Tasks() {
     if (!creating && !selectedTask) return undefined;
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
-      if (creating) { setCreating(false); setShowTagPicker(false); }
+      if (creating) closeCreate();
       if (selectedTask) { setSelectedTask(null); setEditingTask(false); }
     };
     window.addEventListener('keydown', onKey);
@@ -277,6 +286,9 @@ export default function Tasks() {
   const closeCreate = () => {
     setCreating(false);
     setShowTagPicker(false);
+    const returnTo = travelTaskReturnToRef.current;
+    travelTaskReturnToRef.current = '';
+    if (isTravel && returnTo) navigate(returnTo);
   };
 
   const createTask = async (e) => {

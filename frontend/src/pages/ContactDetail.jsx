@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Mail, Phone, MessageSquare, StickyNote, CheckSquare,
@@ -10,6 +10,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate, formatDateTime } from '../utils/date';
+import { AuthContext } from '../appContexts';
 import { PROFILE_TABS, SOCIAL_NETWORKS, buildOverviewSections, normalizeSocialUrl } from '../components/contact/contactProfileConfig';
 import CustomizeFieldsDrawer, { ALL_OVERVIEW_FIELDS, DEFAULT_VISIBLE_FIELD_KEYS, normalizeVisibleKeys } from '../components/contact/CustomizeFieldsDrawer';
 import { assignOwner, fetchActivities, fetchStaff, patchContact, postActivity } from '../components/contact/contactActions';
@@ -21,8 +22,10 @@ import {
   AccountsTab, ActivitiesTab, ConversationsTab, DealsTab, FilesTab, InsightsTab,
 } from '../components/contact/ProfileTabs';
 import ContactDetailsDrawer from '../components/contact/ContactDetailsDrawer';
+import CallifiedCallDialog from '../components/CallifiedCallDialog';
 import Contacts from './Contacts';
 import '../components/contact/ContactProfile.css';
+import RichTextNotePreview from '../components/contact/RichTextNotePreview';
 
 const EDITABLE_TYPES = new Set(['text', 'email', 'phone', 'url', 'number', 'date']);
 
@@ -62,17 +65,44 @@ const PIPELINE_SEGS = [
   },
 ];
 
-const segOption = (label) => {
-  for (const seg of PIPELINE_SEGS) {
+const WELLNESS_PIPELINE_SEGS = [
+  { title: 'New', options: [{ label: 'New', backend: 'Lead', negative: false }] },
+  { title: 'Contacted', options: [{ label: 'Contacted', backend: 'Prospect', negative: false }] },
+  { title: 'Consultation', options: [{ label: 'Consultation', backend: 'Prospect', negative: false }] },
+  { title: 'Treatment Plan', options: [{ label: 'Treatment Plan', backend: 'Prospect', negative: false }] },
+  { title: 'Active', options: [{ label: 'Active', backend: 'Customer', negative: false }] },
+  { title: 'Completed', options: [{ label: 'Completed', backend: 'Customer', negative: false }] },
+];
+
+const TRAVEL_PIPELINE_SEGS = [
+  { title: 'Contact', options: [{ label: 'Contact', backend: 'Lead', negative: false }] },
+  { title: 'Lead', options: [{ label: 'Lead', backend: 'Prospect', negative: false }] },
+  { title: 'Deal', options: [{ label: 'Deal', backend: 'Customer', negative: false }] },
+  { title: 'Trip', options: [{ label: 'Trip', backend: 'Customer', negative: false }] },
+  { title: 'Payment', options: [{ label: 'Payment', backend: 'Customer', negative: false }] },
+];
+
+const segOption = (label, segments = PIPELINE_SEGS) => {
+  for (const seg of segments) {
     const found = seg.options.find((o) => o.label === label);
     if (found) return found;
   }
   return null;
 };
 
-const segIndexOf = (label) => PIPELINE_SEGS.findIndex((seg) => seg.options.some((o) => o.label === label));
+const segIndexOf = (label, segments = PIPELINE_SEGS) => segments.findIndex((seg) => seg.options.some((o) => o.label === label));
 
-const defaultStageFor = (status) => {
+const defaultStageFor = (status, wellness = false, travel = false) => {
+  if (travel) {
+    if (status === 'Prospect') return 'Lead';
+    if (status === 'Customer') return 'Deal';
+    return 'Contact';
+  }
+  if (wellness) {
+    if (status === 'Customer') return 'Active';
+    if (status === 'Prospect') return 'Contacted';
+    return 'New';
+  }
   if (status === 'Lead') return 'New';
   if (status === 'Prospect') return 'Contacted';
   if (status === 'Customer') return 'Qualified';
@@ -151,9 +181,9 @@ function timeAgo(v) {
   return formatDate(v);
 }
 
-function linkDisplay(raw, type) {
+function linkDisplay(raw, type, onClick) {
   if (isEmpty(raw)) return undefined;
-  if (type === 'email') return <a href={`mailto:${raw}`}>{String(raw)}</a>;
+  if (type === 'email') return <a href={`mailto:${raw}`} onClick={onClick}>{String(raw)}</a>;
   if (type === 'phone') return <a href={`tel:${String(raw).replace(/\s/g, '')}`}>{String(raw)}</a>;
   if (type === 'url') {
     const href = /^https?:\/\//i.test(String(raw)) ? String(raw) : `https://${String(raw)}`;
@@ -162,10 +192,10 @@ function linkDisplay(raw, type) {
   return undefined;
 }
 
-function ReadValue({ contact, field }) {
+function ReadValue({ contact, field, onEmailClick }) {
   const raw = field.value !== undefined ? field.value : contact[field.key === 'tags' ? 'tags' : field.key];
   if (isEmpty(raw)) return <span style={{ color: 'var(--text-secondary)' }}>Not available</span>;
-  if (field.type === 'email' || field.type === 'phone' || field.type === 'url') return <span>{linkDisplay(raw, field.type)}</span>;
+  if (field.type === 'email' || field.type === 'phone' || field.type === 'url') return <span>{linkDisplay(raw, field.type, field.type === 'email' ? onEmailClick : undefined)}</span>;
   if (field.type === 'date') return <span>{formatDate(raw)}</span>;
   if (field.type === 'datetime') return <span>{formatDateTime(raw)}</span>;
   if (field.type === 'relative') return <span>{timeAgo(raw) || formatDate(raw)}</span>;
@@ -184,7 +214,13 @@ export default function ContactDetail() {
   const location = useLocation();
   const navigate = useNavigate();
   const notify = useNotify();
-  const listPath = location.pathname.startsWith('/leads/') ? '/leads' : '/contacts';
+  const { tenant } = useContext(AuthContext);
+  const isWellness = tenant?.vertical === 'wellness';
+  const isTravel = tenant?.vertical === 'travel';
+  const isGeneric = !isWellness && !isTravel;
+  const lifecycleSegments = isWellness ? WELLNESS_PIPELINE_SEGS : isTravel ? TRAVEL_PIPELINE_SEGS : PIPELINE_SEGS;
+  const listPath = location.state?.returnTo || (location.pathname.startsWith('/leads/') ? '/leads' : '/contacts');
+  const closeProfile = () => navigate(listPath, { replace: Boolean(location.state?.returnTo) });
   const [contact, setContact] = useState(null);
   const [overviewActivities, setOverviewActivities] = useState([]);
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
@@ -203,6 +239,7 @@ export default function ContactDetail() {
   const [tagDraft, setTagDraft] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
   const [modal, setModal] = useState(null);
+  const [wellnessCallTarget, setWellnessCallTarget] = useState(null);
   const [activityPreset, setActivityPreset] = useState('Note');
   const [dealModal, setDealModal] = useState({ open: false, deal: null });
   const [stageSel, setStageSel] = useState(null);
@@ -225,6 +262,16 @@ export default function ContactDetail() {
   const noteInputRef = useRef(null);
   const moreRef = useRef(null);
 
+  const openWellnessBooking = () => {
+    if (!isWellness) return;
+    const params = new URLSearchParams({
+      contactId: String(contact.id),
+      returnTo: `/contacts/${contact.id}?tab=deals`,
+    });
+    if (contact.patientId) params.set('patientId', String(contact.patientId));
+    navigate(`/wellness/book-appointment?${params.toString()}`);
+  };
+
   const loadContact = useCallback(() => {
     setLoading(true);
     fetchApi(`/api/contacts/${id}`)
@@ -235,7 +282,7 @@ export default function ContactDetail() {
   useEffect(() => {
     setContact(null);
     setOverviewActivityPage(1);
-    setActiveTab('overview');
+    setActiveTab(new URLSearchParams(location.search).get('tab') === 'deals' ? 'deals' : 'overview');
     setSummaryOpen(true);
     setModal(null);
     setDealModal({ open: false, deal: null });
@@ -247,7 +294,7 @@ export default function ContactDetail() {
     setConfirmAction(null);
     loadContact();
     fetchStaff().then(setStaff);
-  }, [id, loadContact]);
+  }, [id, location.search, loadContact]);
 
   const overviewContactId = contact?.id;
   const overviewActivityRefreshId = contact?.activities?.[0]?.id;
@@ -354,7 +401,7 @@ export default function ContactDetail() {
   const pickStage = (label) => {
     setOpenSeg(null);
     setStageSel(label);
-    const opt = segOption(label);
+    const opt = segOption(label, lifecycleSegments);
     if (opt) changeStatus(opt.backend);
   };
 
@@ -412,6 +459,7 @@ export default function ContactDetail() {
     [contact],
   );
   const deals = contact?.deals || [];
+  const appointments = contact?.appointments || [];
   const tags = Array.isArray(contact?.tags) ? contact.tags : [];
   const authorOf = (a) => staff.find((u) => String(u.id) === String(a.userId))?.name
     || (a.userId ? `User #${a.userId}` : 'System');
@@ -543,7 +591,52 @@ export default function ContactDetail() {
       notify.error('Add a phone number first.');
       return;
     }
+    if (kind === 'email' && isTravel) {
+      navigate(`/inbox?travelComposeTo=${encodeURIComponent(contact.email)}`);
+      return;
+    }
+    if (kind === 'meeting' && isTravel) {
+      navigate(`/inbox?travelScheduleContactId=${encodeURIComponent(contact.id)}`);
+      return;
+    }
+    if (kind === 'task' && isTravel) {
+      const returnTo = `${location.pathname}${location.search}${location.hash}`;
+      navigate(`/tasks?create=1&contactId=${encodeURIComponent(contact.id)}&returnTo=${encodeURIComponent(returnTo)}`);
+      return;
+    }
     setModal(kind);
+  };
+
+  const openTravelEmail = (event) => {
+    if (!isTravel) return;
+    event.preventDefault();
+    openAction('email');
+  };
+
+  const openContactCall = () => {
+    if (!isWellness) {
+      openAction('call');
+      return;
+    }
+    const appointment = appointments[0];
+    if (!appointment) {
+      notify.info('No appointment available.');
+      return;
+    }
+    setWellnessCallTarget(appointment);
+  };
+
+  const openContactDeal = () => {
+    if (isTravel) {
+      const returnTo = `/contacts/${contact.id}?tab=deals`;
+      navigate(`/travel/pipeline?newDeal=1&contactId=${encodeURIComponent(contact.id)}&returnTo=${encodeURIComponent(returnTo)}`);
+      return;
+    }
+    if (isWellness) {
+      openWellnessBooking();
+      return;
+    }
+    setDealModal({ open: true, deal: null });
   };
 
   const focusNotes = () => {
@@ -642,9 +735,9 @@ export default function ContactDetail() {
   const shell = (content) => (
     <div className="cp-slide-root">
       <div className="cp-slide-bg"><Contacts /></div>
-      <div className="cp-backdrop" onClick={() => navigate(listPath)} aria-hidden="true" />
+      <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
       <aside className="cp-slide-panel" aria-label="Contact profile">
-        <button type="button" className="cp-slide-close" onClick={() => navigate(listPath)} aria-label="Close profile" title="Back to Contacts">
+        <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title="Back to Contacts">
           <X size={15} />
         </button>
         <div className="cp-slide-scroll">
@@ -679,16 +772,22 @@ export default function ContactDetail() {
       await patchField({ [network.key]: clean });
     } catch { /* patchField surfaces the error toast */ }
   };
-  const activeStage = stageSel && segOption(stageSel)?.backend === contact.status ? stageSel : defaultStageFor(contact.status);
-  const activeSeg = segIndexOf(activeStage);
-  const activeNegative = Boolean(segOption(activeStage)?.negative);
+  const activeStage = stageSel && (isTravel || segOption(stageSel, lifecycleSegments)?.backend === contact.status)
+    ? stageSel
+    : defaultStageFor(contact.status, isWellness, isTravel);
+  const activeSeg = segIndexOf(activeStage, lifecycleSegments);
+  const activeNegative = Boolean(segOption(activeStage, lifecycleSegments)?.negative);
 
   const openOverviewEditor = () => {
-    const lifecycle = contact.status === 'Customer'
-      ? 'Customer'
-      : contact.status === 'Prospect'
-        ? 'Sales Qualified Lead'
-        : 'Lead';
+    const lifecycle = isWellness
+      ? defaultStageFor(contact.status, true)
+      : isTravel
+        ? (contact.status === 'Customer' ? 'Customer' : contact.status === 'Prospect' ? 'Sales Qualified Lead' : 'Lead')
+        : (contact.status === 'Customer'
+        ? 'Customer'
+        : contact.status === 'Prospect'
+          ? 'Sales Qualified Lead'
+          : 'Lead');
     setOverviewEdit({ lifecycle, status: contact.status || 'Lead' });
     setOverviewEditOpen(true);
   };
@@ -699,7 +798,9 @@ export default function ContactDetail() {
       const updated = await patchContact(id, { status: overviewEdit.status });
       setContact(updated);
       await loadContact();
-      setStageSel(defaultStageFor(updated.status));
+      setStageSel(isTravel
+        ? activeStage
+        : defaultStageFor(updated.status, isWellness, isTravel));
       setOverviewEditOpen(false);
       notify.success('Saved.');
     } catch {
@@ -712,7 +813,7 @@ export default function ContactDetail() {
   const renderField = (f) => {
     if (f.key === '__owner') {
       return (
-        <select className="cp-input" value={contact.assignedToId ?? ''} onChange={(e) => changeOwner(e.target.value)} aria-label="Sales owner">
+        <select className="cp-input" value={contact.assignedToId ?? ''} onChange={(e) => changeOwner(e.target.value)} aria-label={isWellness ? 'Treatment owner' : 'Sales owner'}>
           <option value="">Unassigned</option>
           {staff.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
         </select>
@@ -723,13 +824,13 @@ export default function ContactDetail() {
       return (
         <InlineField
           value={raw ?? ''}
-          display={linkDisplay(raw, f.type)}
+          display={linkDisplay(raw, f.type, f.type === 'email' ? openTravelEmail : undefined)}
           type={f.type === 'phone' ? 'text' : f.type}
           onSave={(v) => patchField({ [f.key]: v })}
         />
       );
     }
-    return <ReadValue contact={contact} field={f} />;
+    return <ReadValue contact={contact} field={f} onEmailClick={openTravelEmail} />;
   };
 
   const overviewText = (raw) => (isEmpty(raw) ? (
@@ -739,7 +840,8 @@ export default function ContactDetail() {
   ));
 
   const renderOverviewField = (key) => {
-    const label = (ALL_OVERVIEW_FIELDS.find((f) => f.key === key) || {}).label || key;
+    const configuredLabel = (ALL_OVERVIEW_FIELDS.find((f) => f.key === key) || {}).label || key;
+    const label = isWellness && key === 'owner' ? 'Assigned staff' : configuredLabel;
     const cell = (value) => (
       <div className="cp-field" key={key}>
         <div className="cp-label">{label}</div>
@@ -776,7 +878,7 @@ export default function ContactDetail() {
     }
     if (key === 'owner') {
       return cell(
-        <select className="cp-input" value={contact.assignedToId ?? ''} onChange={(e) => changeOwner(e.target.value)} aria-label="Sales owner">
+        <select className="cp-input" value={contact.assignedToId ?? ''} onChange={(e) => changeOwner(e.target.value)} aria-label={isWellness ? 'Treatment owner' : 'Sales owner'}>
           <option value="">Unassigned</option>
           {staff.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
         </select>,
@@ -786,7 +888,7 @@ export default function ContactDetail() {
       return cell(
         <InlineField
           value={contact.email ?? ''}
-          display={linkDisplay(contact.email, 'email')}
+          display={linkDisplay(contact.email, 'email', openTravelEmail)}
           type="text"
           onSave={(v) => patchField({ email: v })}
         />,
@@ -888,7 +990,7 @@ export default function ContactDetail() {
             <p className="cp-sub">{[contact.title, contact.company].filter(Boolean).join(' • ')}</p>
           )}
           <div className="cp-contact-line">
-            {contact.email && <a href={`mailto:${contact.email}`}>{contact.email}</a>}
+            {contact.email && <a href={`mailto:${contact.email}`} onClick={openTravelEmail}>{contact.email}</a>}
             {contact.phone && <a href={`tel:${String(contact.phone).replace(/\s/g, '')}`}>{contact.phone}</a>}
             {ownerName && <span>Owner: {ownerName}</span>}
           </div>
@@ -937,7 +1039,7 @@ export default function ContactDetail() {
           <div className="cp-score-block">
             <div className="cp-label">Customer fit</div>
             <Stars value={fitStars} />
-            <button type="button" className="cp-link-btn" onClick={() => setActiveTab('ai-insights')}>Show key scoring factors</button>
+            {!isGeneric && <button type="button" className="cp-link-btn" onClick={() => setActiveTab('ai-insights')}>Show key scoring factors</button>}
           </div>
         </div>
         <div className="cp-header-right">
@@ -951,13 +1053,13 @@ export default function ContactDetail() {
 
       <div className="cp-actions-bar">
         {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
-        {contact.phone && <button type="button" className="cp-action-btn" onClick={() => openAction('call')}><Phone size={13} /> Call</button>}
+        {!isTravel && contact.phone && <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>}
         <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
-        <button type="button" className="cp-action-btn" onClick={() => openAction('task')}><CheckSquare size={13} /> Task</button>
+        <button type="button" className="cp-action-btn" onClick={() => (isWellness ? navigate('/tasks') : openAction('task'))}><CheckSquare size={13} /> Task</button>
         <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
-        <button type="button" className="cp-action-btn" onClick={() => { setActivityPreset('Call'); setModal('activity'); }}><TrendingUp size={13} /> Sales activities</button>
-        <button type="button" className="cp-action-btn cp-action-primary" onClick={() => setDealModal({ open: true, deal: null })}><Plus size={13} /> Add deal</button>
-        {contact.phone && <button type="button" className="cp-action-btn" onClick={() => openAction('sms')}><MessageSquare size={13} /> SMS</button>}
+        <button type="button" className="cp-action-btn" onClick={() => { setActivityPreset('Call'); setModal('activity'); }}><TrendingUp size={13} /> {isWellness ? 'Care activities' : 'Sales activities'}</button>
+        <button type="button" className="cp-action-btn cp-action-primary" onClick={openContactDeal}><Plus size={13} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
+        {!isWellness && !isTravel && contact.phone && <button type="button" className="cp-action-btn" onClick={() => openAction('sms')}><MessageSquare size={13} /> SMS</button>}
         <div className="cp-more-wrap" ref={moreRef}>
           <button type="button" className="cp-action-btn" onClick={() => setMoreOpen((o) => !o)} title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen}><MoreHorizontal size={13} /></button>
           {moreOpen && (
@@ -965,9 +1067,9 @@ export default function ContactDetail() {
               <button type="button" role="menuitem" onClick={() => { closeMore(); setActiveTab('details'); }}><Pencil size={13} /> Edit</button>
               <button type="button" role="menuitem" onClick={handleClone}><Copy size={13} /> Clone</button>
               <button type="button" role="menuitem" className="neg" onClick={askDelete}><Trash2 size={13} /> Delete</button>
-              <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>
+              {!isTravel && <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>}
               <button type="button" role="menuitem" onClick={handleExport}><Download size={13} /> Export</button>
-              <button type="button" role="menuitem" onClick={handleUnsubscribe}><BellOff size={13} /> Unsubscribe</button>
+              {!isTravel && <button type="button" role="menuitem" onClick={handleUnsubscribe}><BellOff size={13} /> Unsubscribe</button>}
               <button type="button" role="menuitem" className="neg" onClick={askForget}><UserX size={13} /> Forget</button>
             </div>
           )}
@@ -986,15 +1088,20 @@ export default function ContactDetail() {
         >
           {PROFILE_TABS.map((t) => {
             const Icon = t.icon;
+            const tabLabel = isWellness && t.key === 'details'
+              ? 'Patient details'
+              : isWellness && t.key === 'deals'
+                ? 'Appointments'
+                : t.label;
             return (
               <button
                 key={t.key}
                 type="button"
                 className={`cp-nav-item${activeTab === t.key ? ' active' : ''}`}
                 onClick={(e) => { setActiveTab(t.key); setNavExpanded(false); e.currentTarget.blur(); }}
-                title={t.label}
+                title={tabLabel}
               >
-                <Icon size={15} /> <span className="cp-nav-label">{t.label}</span>
+                <Icon size={15} /> <span className="cp-nav-label">{tabLabel}</span>
               </button>
             );
           })}
@@ -1007,7 +1114,10 @@ export default function ContactDetail() {
                 <h2>Overview</h2>
                 <div className="cp-ov-head-actions">
                   {isCustomizing ? (
-                    <button type="button" className="cp-action-btn" onClick={() => setIsCustomizing(false)}><XCircle size={13} /> Cancel customization</button>
+                    <>
+                      {!isTravel && !isWellness && <button type="button" className="cp-action-btn cp-action-primary" onClick={() => { persistPrefs(prefs); setIsCustomizing(false); }}>Apply</button>}
+                      <button type="button" className="cp-action-btn" onClick={() => setIsCustomizing(false)}><XCircle size={13} /> Cancel customization</button>
+                    </>
                   ) : (
                     <button type="button" className="cp-action-btn" onClick={() => setIsCustomizing(true)}><Settings size={13} /> Customize overview</button>
                   )}
@@ -1022,13 +1132,35 @@ export default function ContactDetail() {
                       value={overviewEdit.lifecycle}
                       onChange={(e) => {
                         const lifecycle = e.target.value;
-                        const status = lifecycle === 'Lead' ? 'Lead' : lifecycle === 'Sales Qualified Lead' ? 'Prospect' : 'Customer';
+                        const status = isTravel
+                          ? ({ Lead: 'Lead', 'Sales Qualified Lead': 'Prospect', Customer: 'Customer' }[lifecycle] || 'Lead')
+                          : isWellness
+                          ? ({ New: 'Lead', Contacted: 'Prospect', Consultation: 'Prospect', 'Treatment Plan': 'Prospect', Active: 'Customer', Completed: 'Customer' }[lifecycle] || 'Lead')
+                          : (lifecycle === 'Lead' ? 'Lead' : lifecycle === 'Sales Qualified Lead' ? 'Prospect' : 'Customer');
                         setOverviewEdit({ lifecycle, status });
                       }}
                     >
-                      <option value="Lead">Lead</option>
-                      <option value="Sales Qualified Lead">Sales Qualified Lead</option>
-                      <option value="Customer">Customer</option>
+                      {!isTravel && <option value="Lead">Lead</option>}
+                      {isTravel ? (
+                        <>
+                          <option value="Lead">Lead</option>
+                          <option value="Sales Qualified Lead">Sales Qualified Lead</option>
+                          <option value="Customer">Customer</option>
+                        </>
+                      ) : isWellness ? (
+                        <>
+                          <option value="Contacted">Contacted</option>
+                          <option value="Consultation">Consultation</option>
+                          <option value="Treatment Plan">Treatment Plan</option>
+                          <option value="Active">Active</option>
+                          <option value="Completed">Completed</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="Sales Qualified Lead">Sales Qualified Lead</option>
+                          <option value="Customer">Customer</option>
+                        </>
+                      )}
                     </select>
                   </label>
                   <label className="cp-form-row">
@@ -1036,13 +1168,27 @@ export default function ContactDetail() {
                     <select
                       className="cp-input"
                       value={overviewEdit.status}
-                      onChange={(e) => setOverviewEdit((current) => ({ ...current, status: e.target.value }))}
+                        onChange={(e) => {
+                          setOverviewEdit((current) => ({ ...current, status: e.target.value }));
+                        }}
                     >
-                      <option value="Lead">New</option>
-                      <option value="Prospect">Contacted</option>
-                      <option value="Customer">Qualified</option>
-                      <option value="Junk">Unqualified</option>
-                      <option value="Churned">Churned</option>
+                      {isTravel ? (
+                        <>
+                          <option value="Lead">Contact</option>
+                          <option value="Prospect">Lead</option>
+                          <option value="Customer">Deal</option>
+                          <option value="Customer">Trip</option>
+                          <option value="Customer">Payment</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="Lead">New</option>
+                          <option value="Prospect">Contacted</option>
+                          <option value="Customer">Qualified</option>
+                          <option value="Junk">Unqualified</option>
+                          <option value="Churned">Churned</option>
+                        </>
+                      )}
                     </select>
                   </label>
                   <div className="cp-btn-row">
@@ -1071,7 +1217,7 @@ export default function ContactDetail() {
                 <div className="cp-lifecycle-right">
                   <div className="cp-label">Status</div>
                   <div className="cp-pipeline" role="group" aria-label="Lifecycle stage">
-                    {PIPELINE_SEGS.map((seg, i) => (
+                    {lifecycleSegments.map((seg, i) => (
                       <div className="cp-chev-wrap" key={seg.title}>
                         {seg.options.length === 1 ? (
                           <button
@@ -1202,17 +1348,24 @@ export default function ContactDetail() {
                       <div className="cp-block">
                         <span className="cp-block-icon teal"><Handshake size={16} /></span>
                         <div>
-                          {deals.length === 0 ? (
-                            <p>No open deals associated with {contact.name}.</p>
+                          {(isWellness ? appointments.length === 0 : deals.length === 0) ? (
+                            <p>{isWellness ? 'No open appointments associated with' : 'No open deals associated with'} {contact.name}.</p>
                           ) : (
-                            deals.map((d) => (
-                              <div className="cp-row" key={d.id}>
-                                <button type="button" onClick={() => setDealModal({ open: true, deal: d })} className="cp-link-btn" style={{ fontWeight: 600 }}>{d.title}</button>
-                                <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{formatMoney(d.amount, { currency: d.currency })}</span>
-                              </div>
-                            ))
+                            isWellness
+                              ? appointments.slice(0, 1).map((appointment) => (
+                                <div className="cp-row" key={appointment.id}>
+                                  <span style={{ flex: 1, fontWeight: 600 }}>{appointment.serviceName || 'General appointment'}</span>
+                                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{formatDate(appointment.appointmentDate)}</span>
+                                </div>
+                              ))
+                              : deals.map((d) => (
+                                <div className="cp-row" key={d.id}>
+                                  <button type="button" onClick={() => setDealModal({ open: true, deal: d })} className="cp-link-btn" style={{ fontWeight: 600 }}>{d.title}</button>
+                                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{formatMoney(d.amount, { currency: d.currency })}</span>
+                                </div>
+                              ))
                           )}
-                          <button type="button" className="cp-link-btn" onClick={() => setDealModal({ open: true, deal: null })}><Plus size={12} /> Add deal</button>
+                          <button type="button" className="cp-link-btn" onClick={openContactDeal}><Plus size={12} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
                         </div>
                       </div>
                       <div className="cp-block">
@@ -1242,17 +1395,19 @@ export default function ContactDetail() {
                           <p>
                             <button type="button" className="cp-link-btn" onClick={() => openAction('email')}><Mail size={12} /> Send email</button>
                             <span style={{ color: 'var(--text-secondary)', margin: '0 0.4rem' }}>·</span>
-                            <button type="button" className="cp-link-btn" onClick={() => openAction('call')}><Phone size={12} /> Make call</button>
+                            <button type="button" className="cp-link-btn" onClick={openContactCall}><Phone size={12} /> Make call</button>
                           </p>
                         </div>
                       </div>
-                      <div className="cp-block">
-                        <span className="cp-block-icon blue"><Zap size={16} /></span>
-                        <div>
-                          <p>{contact.name} is not part of any sales sequence.</p>
-                          <Link to="/sequences" className="cp-link-btn"><Plus size={12} /> Add to a sequence</Link>
+                      {!isWellness && !isTravel && (
+                        <div className="cp-block">
+                          <span className="cp-block-icon blue"><Zap size={16} /></span>
+                          <div>
+                            <p>{contact.name} is not part of any sales sequence.</p>
+                            <Link to="/sequences" className="cp-link-btn"><Plus size={12} /> Add to a sequence</Link>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
                     </>
@@ -1280,7 +1435,10 @@ export default function ContactDetail() {
                         <div className="cp-empty">Loading activity...</div>
                       ) : overviewActivities.map((a) => (
                         <div key={a.id} className="cp-timeline-entry">
-                          <div className="cp-timeline-title">{a.type}{a.description ? ` / ${a.description.split('\n')[0].slice(0, 60)}` : ''}</div>
+                          <div className="cp-timeline-title" style={!isWellness && !isTravel ? { whiteSpace: 'pre-wrap' } : undefined}>
+                            {a.type}{a.description ? ' / ' : ''}
+                            {a.description && isGeneric && ['Email', 'Note'].includes(a.type) ? <RichTextNotePreview value={a.description} /> : a.description || null}
+                          </div>
                           <div className="cp-timeline-meta"><Pencil size={11} /> {authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}</div>
                         </div>
                       ))}
@@ -1305,11 +1463,11 @@ export default function ContactDetail() {
             </div>
           )}
 
-          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
-          {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} onOpenAction={openAction} />}
-          {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} />}
-          {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} />}
-          {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}
+          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel} genericTagsEnabled={isGeneric} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
+          {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
+          {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} />}
+          {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}
+          {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}
           {activeTab === 'ai-insights' && <InsightsTab contactId={id} />}
           {activeTab === 'files' && <FilesTab contactId={id} />}
         </div>
@@ -1317,6 +1475,18 @@ export default function ContactDetail() {
 
       {modal === 'email' && <EmailModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'call' && <CallModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
+      {wellnessCallTarget && (
+        <CallifiedCallDialog
+          customer={{ name: contact.name, phone: contact.phone, subtitle: wellnessCallTarget.serviceName || null }}
+          endpoints={{
+            context: `/api/wellness/callified/visits/${wellnessCallTarget.id}/context`,
+            campaigns: '/api/wellness/callified/campaigns',
+            aiCall: `/api/wellness/callified/visits/${wellnessCallTarget.id}/ai-call`,
+            manualCall: `/api/wellness/callified/visits/${wellnessCallTarget.id}/manual-call`,
+          }}
+          onClose={() => setWellnessCallTarget(null)}
+        />
+      )}
       {modal === 'sms' && <SmsModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'whatsapp' && <WhatsappModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'task' && <TaskModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
@@ -1367,11 +1537,11 @@ export default function ContactDetail() {
       )}
       {dealModal.open && <DealModal contact={contact} deal={dealModal.deal} onClose={() => setDealModal({ open: false, deal: null })} onDone={refresh} />}
       {seqPicker && (
-        <Modal title="Add to sequence" onClose={() => setSeqPicker(false)}>
+        <Modal title={isWellness ? 'Add to estimate' : 'Add to sequence'} onClose={() => setSeqPicker(false)}>
           {seqLoading ? (
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading sequences…</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading {isWellness ? 'estimates' : 'sequences'}…</p>
           ) : sequences.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No sequences yet. Create one under Marketing → Sequences.</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No {isWellness ? 'estimates' : 'sequences'} yet. Create one under {isWellness ? 'Finance → Estimates' : 'Marketing → Sequences'}.</p>
           ) : (
             <div className="cp-seq-list">
               {sequences.map((s) => (

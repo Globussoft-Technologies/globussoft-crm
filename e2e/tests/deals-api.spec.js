@@ -503,6 +503,21 @@ test.describe('Deals API — GET /:id', () => {
   });
 });
 
+test.describe('Deals API — GET /:id/activities', () => {
+  test('returns a bounded pagination envelope', async ({ request }) => {
+    const d = await createDeal(request, { title: 'activity-page' });
+    const res = await aget(request, `/api/deals/${d.id}/activities?page=1&limit=10`);
+
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ page: 1, limit: 10 });
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(Number.isInteger(body.total)).toBe(true);
+    expect(Number.isInteger(body.totalPages)).toBe(true);
+    expect(body.data.length).toBeLessThanOrEqual(10);
+  });
+});
+
 // ─── PUT /api/deals/:id ──────────────────────────────────────────────
 
 test.describe('Deals API — PUT /:id', () => {

@@ -296,6 +296,11 @@ a.cp-soc:hover { border-color: currentColor; }
 .cp-timeline-item { display: flex; gap: 0.7rem; font-size: 0.83rem; }
 .cp-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 0.3rem; flex-shrink: 0; }
 .cp-timeline-meta { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 0.15rem; }
+.cp-generic-note-preview { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.cp-note-extend { border: 0; background: transparent; color: var(--primary-color, var(--accent-color)); padding: 0.2rem 0; font-size: 0.72rem; font-weight: 600; cursor: pointer; }
+.cp-note-extend:hover { text-decoration: underline; }
+.cp-generic-note-full { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.cp-generic-note-full img { max-width: 100%; height: auto; }
 .cp-call-number { font-size: 1.3rem; font-weight: 700; text-align: center; padding: 0.5rem 0; }
 .cp-stage-select { width: auto; padding: 0.3rem 0.5rem; font-size: 0.75rem; }
 @media (max-width: 1024px) {

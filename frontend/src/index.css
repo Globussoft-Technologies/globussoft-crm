@@ -643,6 +643,28 @@ button {
   color: #976c23;
 }
 
+.tally-cost-centres-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.tally-cost-centres-pagination button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+}
+
+.tally-cost-centres-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 @media (max-width: 760px) {
   .tally-cost-centres-form { min-height: 0; }
   .tally-cost-centres-table-wrap { overflow-x: auto; }

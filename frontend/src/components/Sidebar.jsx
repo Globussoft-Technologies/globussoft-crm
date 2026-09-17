@@ -2579,8 +2579,8 @@ function renderGenericNav({
       {/* AdsGPT + Callified are marketing / call-centre integrations
           intended for ADMIN + MANAGER only. Mirrors the same gate in the
           wellness sidebar; keep both branches in sync. */}
-      {isManager && hasPermission("integrations", "manage") && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
-      {isManager && hasPermission("integrations", "manage") && <CallifiedLink icon={PhoneCall} label="Callified" />}
+      {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
+      {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
       <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
       {/* WhatsApp (Meta Cloud API) agent inbox. The generic nav is a HARDCODED
           list — unlike the wellness nav it does NOT read the page catalog — so
@@ -2615,7 +2615,7 @@ function renderGenericNav({
         icon={Ticket}
         label="Tickets"
         count={counts.tickets}
-        requiredPermission={{ module: "tickets", action: "read" }}
+        
       />
       {/* #474: label was "Calendar" pointing at /calendar-sync  the integration
           settings page (Google/Outlook bindings), not an event calendar. Users
@@ -2630,7 +2630,7 @@ function renderGenericNav({
       <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
       <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
       <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-      <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
+      <Link to="/forms" icon={Code} label="Web Forms" adminOnly />
       <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
       <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
       <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "documents", action: "read" }} />
@@ -2842,14 +2842,14 @@ function renderGenericNav({
             gap: "0.25rem",
           }}
         >
-          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" requiredPermission={{ module: "reports", action: "write" }} />
+          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
           <Link to="/data-import-export" icon={Database} label="Import / Export" requiredPermission={{ module: "settings", action: "manage" }} />
         </div>
       )}
 
       {!isAdmin && !isManager && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" requiredPermission={{ module: "reports", action: "write" }} />
+          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
         </div>
       )}
 

@@ -357,7 +357,7 @@ export default function Omnibar() {
     fetchApi("/api/pages/me", { silent: true })
       .then((res) => {
         if (cancelled) return;
-        setPagesIndex(Array.isArray(res?.pages) ? res.pages : []);
+        setPagesIndex(Array.isArray(res) ? res : (Array.isArray(res?.pages) ? res.pages : []));
       })
       .catch(() => {
         if (cancelled) return;
@@ -366,7 +366,7 @@ export default function Omnibar() {
     const onInvalidate = () => {
       fetchApi("/api/pages/me", { silent: true })
         .then((res) =>
-          setPagesIndex(Array.isArray(res?.pages) ? res.pages : []),
+            setPagesIndex(Array.isArray(res) ? res : (Array.isArray(res?.pages) ? res.pages : [])),
         )
         .catch(() => {});
     };
@@ -385,7 +385,7 @@ export default function Omnibar() {
     let cancelled = false;
     fetchApi(`/api/pages/me?q=${encodeURIComponent(query.trim())}`, { silent: true })
       .then((res) => {
-        if (!cancelled && Array.isArray(res?.pages)) setPagesIndex(res.pages);
+        if (!cancelled && (Array.isArray(res) || Array.isArray(res?.pages))) setPagesIndex(Array.isArray(res) ? res : res.pages);
       })
       .catch(() => {});
     return () => {
@@ -483,7 +483,7 @@ export default function Omnibar() {
       // side merge defensive: a stale response must not reintroduce a generic
       // page that the current role cannot access (notably Settings).
       const permissionFilteredPages =
-        tenant?.vertical === "generic" || !tenant?.vertical
+        tenant?.vertical === "generic"
           ? pagesIndex.filter((page) => {
               const spec = getGenericAccessByPath(page?.path);
               return !spec || canUseGenericSidebarPage(spec, {

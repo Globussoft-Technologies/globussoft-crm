@@ -2996,6 +2996,31 @@ router.post("/diagnostics/public/submit", async (req, res) => {
     }
     bank = await ensureTmcTripTypeBank({ prisma, bank });
 
+    // Validate the full diagnostic before deduping or creating a Contact.
+    // Public clients may submit stale/incomplete answer sets after an active
+    // bank changes; those requests must not leave orphan CRM records behind.
+    const { bank: parsed, warnings: parseWarnings } = parseBank(
+      bank.questionsJson,
+      bank.scoringRulesJson,
+    );
+    if (!parsed) {
+      return res
+        .status(500)
+        .json({
+          error: "Bank JSON unparseable",
+          code: "BANK_CORRUPTED",
+          warnings: parseWarnings,
+        });
+    }
+    const missingRequired = findUnansweredRequiredQuestion(parsed.questions, answers);
+    if (missingRequired) {
+      return res.status(400).json({
+        error: `"${missingRequired.text}" is required.`,
+        code: "REQUIRED_QUESTION_MISSING",
+        questionId: missingRequired.id,
+      });
+    }
+
     // PRD 4.5 dedup: try to attach to an existing Contact by email or
     // phone before creating a new one  prevents the duplicate-pop-up
     // problem and keeps the pilgrim's history on one record.
@@ -3034,28 +3059,7 @@ router.post("/diagnostics/public/submit", async (req, res) => {
       contactId = newContact.id;
     }
 
-    // Score the diagnostic.
-    const { bank: parsed, warnings: parseWarnings } = parseBank(
-      bank.questionsJson,
-      bank.scoringRulesJson,
-    );
-    if (!parsed) {
-      return res
-        .status(500)
-        .json({
-          error: "Bank JSON unparseable",
-          code: "BANK_CORRUPTED",
-          warnings: parseWarnings,
-        });
-    }
-    const missingRequired = findUnansweredRequiredQuestion(parsed.questions, answers);
-    if (missingRequired) {
-      return res.status(400).json({
-        error: `"${missingRequired.text}" is required.`,
-        code: "REQUIRED_QUESTION_MISSING",
-        questionId: missingRequired.id,
-      });
-    }
+    // All validation has completed; scoring and persistence may now proceed.
     const result = scoreDiagnostic(parsed, answers);
 
     const snapshot = JSON.stringify({

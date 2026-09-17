@@ -1414,6 +1414,33 @@ describe('POST /diagnostics/public/submit (no auth)', () => {
     expect(res.body).toMatchObject({ code: 'TENANT_NOT_FOUND' });
   });
 
+  test('rejects an incomplete TMC submission before creating a Contact', async () => {
+    prisma.tenant.findFirst.mockResolvedValue({
+      id: 1, slug: 'travelstall', name: 'Travel Stall', vertical: 'travel',
+    });
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow());
+
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/public/submit')
+      .send({
+        tenantSlug: 'travelstall',
+        subBrand: 'tmc',
+        bankId: 100,
+        answers: { budget: 'high' },
+        name: 'Jane Doe',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'REQUIRED_QUESTION_MISSING',
+      questionId: 'preferred_trip_types',
+    });
+    expect(dedup.findDuplicateContactFull).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.travelDiagnostic.create).not.toHaveBeenCalled();
+  });
+
   test('happy: customer-facing payload omits raw score + contactId + diagnosticId', async () => {
     prisma.tenant.findFirst.mockResolvedValue({
       id: 1, slug: 'travelstall', name: 'Travel Stall', vertical: 'travel',

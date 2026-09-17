@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useMemo, useRef, useState } from "react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { Hotel, Upload, ChevronLeft, ChevronRight, Download, Plus, Trash2, Sparkles, Eye, X } from "lucide-react";
@@ -302,6 +302,7 @@ export default function HotelOfferImageGenerator() {
   const [generatingImage, setGeneratingImage] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [extractingPrices, setExtractingPrices] = useState(false);
+  const extractionInFlightRef = useRef(false);
   const [generatorError, setGeneratorError] = useState("");
 
   const pricedRows = useMemo(() => hotelRows.map((row, index) => {
@@ -348,6 +349,8 @@ export default function HotelOfferImageGenerator() {
       notify.error("Upload at least one screenshot before continuing.");
       return;
     }
+    if (extractionInFlightRef.current) return;
+    extractionInFlightRef.current = true;
     setGeneratorError("");
     setExtractingPrices(true);
     try {
@@ -378,7 +381,6 @@ export default function HotelOfferImageGenerator() {
         basisLabel: result?.summary?.basisLabel || result?.basisLabel || "",
         sourceLabel: result?.summary?.sourceLabel || result?.sourceLabel || "",
         notes: result?.notes || {},
-        storage: result?.storage || null,
       });
       if (result?.provider || result?.model) {
         notify.success(`Extracted hotel prices using ${result.provider}${result.model ? ` (${result.model})` : ""}.`);
@@ -390,6 +392,7 @@ export default function HotelOfferImageGenerator() {
       setGeneratorError(message);
       notify.error(message);
     } finally {
+      extractionInFlightRef.current = false;
       setExtractingPrices(false);
       setActiveStep(2);
     }
@@ -401,9 +404,6 @@ export default function HotelOfferImageGenerator() {
     setGeneratedImageUrl("");
     setGeneratedSvgMarkup("");
     setQuoteMeta({});
-    if (selectedFiles.length > 0) {
-      void extractUploadedScreenshots(selectedFiles);
-    }
   };
 
   const continueFromUpload = () => extractUploadedScreenshots(uploadedScreenshots);
@@ -663,7 +663,6 @@ export default function HotelOfferImageGenerator() {
     </section>
   );
 }
-
 
 
 

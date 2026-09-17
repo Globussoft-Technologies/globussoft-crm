@@ -99,7 +99,10 @@ function ensureTmcTripTypeQuestion(questionsDocument, categories = DEFAULT_TRIP_
   return document;
 }
 
-async function ensureTmcTripTypeBank({ prisma, bank, persist = true }) {
+// Normalization is read-only by default. Public/admin GET routes call this
+// helper while serving a request and must never rewrite the active bank as a
+// side effect. Callers performing an explicit migration may opt into persist.
+async function ensureTmcTripTypeBank({ prisma, bank, persist = false }) {
   if (!bank || String(bank.subBrand || "").toLowerCase() !== "tmc") return bank;
   const categories = await loadTmcTripTypeCategories(prisma, bank.tenantId);
   let parsed;

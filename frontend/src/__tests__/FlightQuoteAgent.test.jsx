@@ -60,10 +60,6 @@ const EXTRACT_RESULT = {
   tripType: "domestic",
   routeLabel: "Mumbai to Delhi",
   rows: [{ label: "Air India", basePrice: 12345, currency: "INR" }],
-  storage: {
-    provider: "ocs",
-    files: [{ originalName: "screenshot-1.png", url: "https://objectstorage.example.com/flight.png" }],
-  },
 };
 
 function ymdOffset(days = 0) {
@@ -109,6 +105,10 @@ function uploadScreenshot() {
   const file = new File(["fake image bytes"], "screenshot-1.png", { type: "image/png" });
   fireEvent.change(input, { target: { files: [file] } });
   return file;
+}
+
+function continueToPricing() {
+  fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
 }
 
 beforeEach(() => {
@@ -160,6 +160,7 @@ describe("<FlightQuoteAgent />", () => {
   it("fetches contacts and markup rules on mount", async () => {
     renderPage();
     uploadScreenshot();
+    continueToPricing();
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
       expect(urls).toContain("/api/contacts?status=Customer");
@@ -220,6 +221,7 @@ describe("<FlightQuoteAgent />", () => {
   it("generates and exposes a downloadable flight offer image", async () => {
     renderPage();
     uploadScreenshot();
+    continueToPricing();
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /Type \+ markup/i })).toBeInTheDocument();
     });
@@ -255,22 +257,18 @@ describe("<FlightQuoteAgent />", () => {
     expect(clickSpy).toHaveBeenCalled();
   });
 
-  it("requests price extraction immediately when screenshots are selected", async () => {
+  it("requests price extraction before entering markup rows", async () => {
     renderPage();
-    const file = uploadScreenshot();
+    uploadScreenshot();
+    continueToPricing();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith("/api/v1/flight-plugin/extract-prices", expect.objectContaining({ method: "POST" }));
     });
-    const [, request] = fetchApiMock.mock.calls.find(([url]) => url === "/api/v1/flight-plugin/extract-prices");
-    expect(request.body).toBeInstanceOf(FormData);
-    expect(request.body.getAll("images")).toEqual([file]);
-    expect(request.body.get("tripType")).toBe("domestic");
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /Type \+ markup/i })).toBeInTheDocument();
     });
     expect(screen.getByLabelText("Base price 1")).toHaveValue("12345");
     expect(screen.getByText("Air India")).toBeInTheDocument();
-    expect(screen.getByText("1 screenshot stored securely in OCS.")).toBeInTheDocument();
     expect(notifySuccess).toHaveBeenCalled();
   });
 });

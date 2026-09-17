@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useMemo, useRef, useState } from "react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { Upload, ChevronLeft, ChevronRight, Download, Plus, Trash2, Sparkles, Eye, X } from "lucide-react";
@@ -256,6 +256,7 @@ export default function FlightOfferImageGenerator() {
   const [generatingImage, setGeneratingImage] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [extractingPrices, setExtractingPrices] = useState(false);
+  const extractionInFlightRef = useRef(false);
   const [generatorError, setGeneratorError] = useState("");
 
   const pricedRows = useMemo(() => fareRows.map((row, index) => {
@@ -308,6 +309,8 @@ export default function FlightOfferImageGenerator() {
       notify.error("Upload at least one screenshot before continuing.");
       return;
     }
+    if (extractionInFlightRef.current) return;
+    extractionInFlightRef.current = true;
     setGeneratorError("");
     setExtractingPrices(true);
     try {
@@ -342,7 +345,6 @@ export default function FlightOfferImageGenerator() {
         flightNumbers: result?.summary?.flightNumbers || result?.flightNumbers || "",
         timingNotes: Array.isArray(result?.timingNotes) ? result.timingNotes : [],
         notes: result?.notes || {},
-        storage: result?.storage || null,
       });
       if (result?.provider || result?.model) {
         notify.success(`Extracted prices using ${result.provider}${result.model ? ` (${result.model})` : ""}.`);
@@ -354,6 +356,7 @@ export default function FlightOfferImageGenerator() {
       setGeneratorError(message);
       notify.error(message);
     } finally {
+      extractionInFlightRef.current = false;
       setExtractingPrices(false);
       setActiveStep(2);
     }
@@ -365,9 +368,6 @@ export default function FlightOfferImageGenerator() {
     setGeneratedImageUrl("");
     setGeneratedSvgMarkup("");
     setQuoteMeta({});
-    if (selectedFiles.length > 0) {
-      void extractUploadedScreenshots(selectedFiles);
-    }
   };
 
   const continueFromUpload = () => extractUploadedScreenshots(uploadedScreenshots);
@@ -468,6 +468,7 @@ export default function FlightOfferImageGenerator() {
               accept="image/png,image/jpeg,image/webp,image/gif"
               aria-label="Upload screenshots"
               onChange={handleScreenshotSelection}
+              disabled={extractingPrices}
               style={fieldStyle}
             />
             <div style={{ marginTop: 8, ...helper }}>
@@ -494,10 +495,6 @@ export default function FlightOfferImageGenerator() {
             <div style={titleBlock}>
               <h3 style={sectionTitle}><Sparkles size={18} aria-hidden /> Type + markup</h3>
               <p style={helper}>Choose the trip type, then configure one or more pricing rows.</p>
-              {quoteMeta?.storage?.provider === "ocs" && quoteMeta.storage.files?.length > 0 ? (
-                <p style={helper}>{quoteMeta.storage.files.length} screenshot{quoteMeta.storage.files.length === 1 ? "" : "s"} stored securely in OCS.</p>
-              ) : null}
-              {quoteMeta?.storage?.warning ? <p style={{ ...helper, color: "var(--warning-color, #f59e0b)" }}>{quoteMeta.storage.warning}</p> : null}
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <button type="button" onClick={() => setActiveStep(1)} style={secondaryBtn}><ChevronLeft size={14} aria-hidden /> Back</button>
@@ -619,4 +616,3 @@ export default function FlightOfferImageGenerator() {
     </section>
   );
 }
-

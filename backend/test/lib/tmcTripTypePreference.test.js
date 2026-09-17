@@ -2,12 +2,34 @@ import { describe, expect, test } from "vitest";
 
 const {
   TRIP_TYPE_QUESTION_ID,
+  ensureTmcTripTypeBank,
   ensureTmcTripTypeQuestion,
   matchesSelectedTripType,
   selectedTripTypes,
 } = require("../../lib/tmcTripTypePreference");
 
 describe("TMC trip-type preference", () => {
+  test("normalizes legacy banks without mutating them during reads", async () => {
+    const prisma = {
+      travelKnowledgeBaseFile: { findMany: async () => [] },
+      travelDiagnosticQuestionBank: { update: async () => { throw new Error("read mutated bank"); } },
+    };
+    const bank = {
+      id: 7,
+      tenantId: 11,
+      subBrand: "tmc",
+      questionsJson: JSON.stringify({ questions: [] }),
+    };
+
+    const normalized = await ensureTmcTripTypeBank({ prisma, bank });
+
+    expect(JSON.parse(normalized.questionsJson).questions[0]).toMatchObject({
+      id: TRIP_TYPE_QUESTION_ID,
+      required: true,
+    });
+    expect(bank.questionsJson).toBe(JSON.stringify({ questions: [] }));
+  });
+
   test("adds a required, zero-impact multi-select with catalogue categories", () => {
     const result = ensureTmcTripTypeQuestion(
       { questions: [{ id: "grade", text: "Grade", type: "single-choice", options: [] }] },

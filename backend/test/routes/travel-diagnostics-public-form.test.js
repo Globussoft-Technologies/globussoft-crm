@@ -416,7 +416,7 @@ describe("GET /api/travel/diagnostics/public/form/:tenantSlug/:subBrand", () => 
       "Overnight Adventure",
       "In Campus Programs",
     ]);
-    expect(prisma.travelDiagnosticQuestionBank.update).toHaveBeenCalled();
+    expect(prisma.travelDiagnosticQuestionBank.update).not.toHaveBeenCalled();
   });
 });
 

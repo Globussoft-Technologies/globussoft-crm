@@ -48,7 +48,6 @@ const { uploadImageMultiple, validateImages } = require("../middleware/uploadHan
 const prisma = require("../lib/prisma");
 const { pickMarkup } = require("../lib/travelPricing");
 const { ensureCostCentre } = require("../lib/travelTallyMasters");
-const s3Service = require("../services/s3Service");
 const flightOfferImageExtraction = require("../services/flightOfferImageExtractionLLM");
 const hotelOfferImageExtraction = require("../services/hotelOfferImageExtractionLLM");
 const {
@@ -96,66 +95,6 @@ function withExtractionTimeout(promise) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function persistFlightScreenshotsToOcs(tenantId, files) {
-  if (!s3Service.isOciConfigured()) return null;
-
-  try {
-    const storedFiles = await Promise.all(files.map(async (file) => {
-      const url = await s3Service.uploadFile(
-        file.buffer,
-        file.originalname,
-        file.mimetype,
-        `travel/flight-quick-quotes/${tenantId}`,
-      );
-      return {
-        originalName: file.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
-        url,
-        key: s3Service.extractKeyFromUrl(url),
-      };
-    }));
-    return { provider: "ocs", files: storedFiles };
-  } catch (error) {
-    console.error("[flight-plugin] OCS screenshot persistence error:", error.message);
-    return {
-      provider: "ocs",
-      files: [],
-      warning: "Screenshots were processed but could not be stored in OCS.",
-    };
-  }
-}
-
-async function persistHotelScreenshotsToOcs(tenantId, files) {
-  if (!s3Service.isOciConfigured()) return null;
-
-  try {
-    const storedFiles = await Promise.all(files.map(async (file) => {
-      const url = await s3Service.uploadFile(
-        file.buffer,
-        file.originalname,
-        file.mimetype,
-        `travel/quote-builder/hotel-offers/${tenantId}`,
-      );
-      return {
-        originalName: file.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
-        url,
-        key: s3Service.extractKeyFromUrl(url),
-      };
-    }));
-    return { provider: "ocs", files: storedFiles };
-  } catch (error) {
-    console.error("[flight-plugin] hotel OCS screenshot persistence error:", error.message);
-    return {
-      provider: "ocs",
-      files: [],
-      warning: "Hotel screenshots were processed but could not be stored in OCS.",
-    };
-  }
-}
-
 function uploadHotelScreenshotsOrReject(req, res, next) {
   uploadImageMultiple(req, res, (err) => {
     if (!err) return next();
@@ -173,13 +112,12 @@ router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScre
   try {
     const files = Array.isArray(req.files) ? req.files : [];
     const tripType = typeof req.body?.tripType === "string" ? req.body.tripType.trim().toLowerCase() : null;
-    const [result, storage] = await withExtractionTimeout(
-      Promise.all([
-        flightOfferImageExtraction.extractFlightOfferPricing({ tenantId: req.user.tenantId, files, tripType }),
-        persistFlightScreenshotsToOcs(req.user.tenantId, files),
-      ]),
+    // Screenshots are extraction inputs only. Do not persist raw supplier
+    // screenshots without a database owner and explicit retention policy.
+    const result = await withExtractionTimeout(
+      flightOfferImageExtraction.extractFlightOfferPricing({ tenantId: req.user.tenantId, files, tripType }),
     );
-    return res.status(200).json({ ...result, ...(storage ? { storage } : {}) });
+    return res.status(200).json(result);
   } catch (e) {
     console.error("[flight-plugin] flight extract error:", e.message);
     if (e.code === "FLIGHT_EXTRACTION_TIMEOUT") {
@@ -195,11 +133,8 @@ router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScre
 router.post("/extract-hotel-prices", verifyToken, requireTravelTenant, uploadHotelScreenshotsOrReject, validateImages, async (req, res) => {
   try {
     const files = Array.isArray(req.files) ? req.files : [];
-    const [result, storage] = await Promise.all([
-      hotelOfferImageExtraction.extractHotelOfferPricing({ tenantId: req.user.tenantId, files }),
-      persistHotelScreenshotsToOcs(req.user.tenantId, files),
-    ]);
-    return res.status(200).json({ ...result, ...(storage ? { storage } : {}) });
+    const result = await hotelOfferImageExtraction.extractHotelOfferPricing({ tenantId: req.user.tenantId, files });
+    return res.status(200).json(result);
   } catch (e) {
     console.error("[flight-plugin] hotel extract error:", e.message);
     res.status(500).json({ error: "Failed to extract hotel prices" });

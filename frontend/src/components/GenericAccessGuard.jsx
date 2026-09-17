@@ -14,6 +14,15 @@ export default function GenericAccessGuard({ path, children, message }) {
   const resolvedPath = path || getGenericAccessForLocation(location.pathname)?.path;
   const guard = genericRoleGuardProps(resolvedPath);
   if (!guard.allow && !guard.requiredPermission) return children;
+  if (guard.allow && guard.requiredPermission) {
+    return (
+      <RoleGuard allow={guard.allow} message={message}>
+        <RoleGuard requiredPermission={guard.requiredPermission} message={message}>
+          {children}
+        </RoleGuard>
+      </RoleGuard>
+    );
+  }
   return (
     <RoleGuard {...guard} message={message}>
       {children}

@@ -1201,6 +1201,8 @@ app.use("/api", (req, res, next) => {
 
 // Strip dangerous fields (id, createdAt, updatedAt, tenantId, userId) from all request bodies
 const { stripDangerous } = require("./middleware/validateInput");
+const { genericPermissionGate } = require("./middleware/genericPermissionGate");
+app.use("/api", genericPermissionGate);
 app.use(stripDangerous);
 
 // #426: scrub credential-shaped fields (currently: portalPasswordHash) from

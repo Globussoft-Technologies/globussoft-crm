@@ -97,6 +97,30 @@ describe('backfill wellness-only guard', () => {
   });
 });
 
+describe('backfill generic-only guard', () => {
+  test('generic grants are explicitly guarded by tenant vertical', () => {
+    expect(src).toContain('GENERIC_ONLY_GRANTS');
+    expect(src).toMatch(/GENERIC_ONLY_GRANTS\.has\(perm\)\) return tenant\.vertical === 'generic'/);
+  });
+
+  test('every generic preset grant is valid for generic tenants', () => {
+    const m = src.match(/const GENERIC_ONLY_GRANTS = new Set\(\[([\s\S]*?)\]\)/);
+    expect(m).toBeTruthy();
+    const guarded = [...m[1].matchAll(/'([a-z_]+\.[a-z_]+)'/g)].map((x) => x[1]);
+    expect(guarded).toContain('cpq.read');
+    expect(guarded).toContain('web_forms.update');
+    expect(guarded).toContain('forecasting.read');
+    expect(guarded).toContain('quotas.read');
+    expect(guarded).toContain('sequences.read');
+    expect(guarded).toContain('settings.read');
+
+    for (const perm of guarded) {
+      const [mod, action] = perm.split('.');
+      expect(catalog.isValidPermissionForVertical(mod, action, 'generic')).toBe(true);
+    }
+  });
+});
+
 describe('ensureRbacOnBoot needs no such guard', () => {
   const boot = readFileSync(
     fileURLToPath(new URL('../../scripts/ensureRbacOnBoot.js', import.meta.url)),
@@ -104,7 +128,9 @@ describe('ensureRbacOnBoot needs no such guard', () => {
   );
 
   test('MANAGER is filtered to the vertical catalog', () => {
-    expect(boot).toMatch(/grantPermissionList\([^)]*managerRole\.id,\s*filterPermsToVertical\(/);
+    expect(boot).toContain("vertical === 'generic'");
+    expect(boot).toContain('GENERIC_MANAGER_PERMISSIONS');
+    expect(boot).toMatch(/filterPermsToVertical\(managerPreset, vertical\)/);
   });
 
   test('USER and the clinical roles are granted only on wellness tenants', () => {

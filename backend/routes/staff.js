@@ -466,6 +466,21 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       }
     }
 
+    // CSV imports do not expose internal Role ids. Resolve the canonical role
+    // inside this tenant so imported users receive effective permissions
+    // immediately instead of waiting for a backend restart.
+    if (!rbacRole && isGenericImport) {
+      rbacRole = await prisma.role.findFirst({
+        where: { tenantId: req.user.tenantId, key: role, userType: 'STAFF', isActive: true },
+      });
+      if (!rbacRole) {
+        return res.status(409).json({
+          error: `The ${role} permission role is not configured for this organization.`,
+          code: 'IMPORT_ROLE_NOT_CONFIGURED',
+        });
+      }
+    }
+
     // Email is composite-unique with tenantId (@@unique([email, tenantId])
     // on schema.prisma:546) — not a standalone @unique. The bare findUnique
     // throws PrismaClientValidationError under the current schema. Scope
@@ -576,6 +591,26 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       console.warn("[staff] audit User CREATE failed:", e.message),
     );
 
+    let inviteSent = false;
+    if (isGenericImport) {
+      const token = crypto.randomBytes(32).toString('hex');
+      await persistAdminToken(
+        token,
+        created.id,
+        new Date(Date.now() + 24 * 3600000),
+        inviteTokens,
+      );
+      const frontendBase = resolveFrontendBase(req);
+      const inviteUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
+      await sendEmail(
+        created.email,
+        "You're invited to Globussoft CRM",
+        `You've been invited to access Globussoft CRM. Set your password within 24 hours:\n\n${inviteUrl}`,
+        `<p>You've been invited to access Globussoft CRM.</p><p><a href="${inviteUrl}">Set your password</a> within 24 hours.</p>`,
+      );
+      inviteSent = true;
+    }
+
     // If the reverse sync promoted the user to a clinical RBAC role,
     // echo THAT role (not the originally-picked one) so the frontend
     // row state matches DB state without a refetch. Strip the internal
@@ -594,6 +629,7 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
             landingPath: echoedRole.landingPath || null,
           }
         : null,
+      ...(isGenericImport ? { inviteSent } : {}),
     });
   } catch (err) {
     if (err && err.code === "P2002") {

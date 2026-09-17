@@ -63,16 +63,16 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/converted-leads', label: 'Converted Leads', description: 'Leads that converted to customers', requiredPermission: { module: 'leads', action: 'read' } },
   { path: '/clients', label: 'Clients', description: 'Company and organization directory', requiredPermission: { module: 'contacts', action: 'read' } },
   { path: '/tasks', label: 'Task Queue', description: 'Task queue', requiredPermission: { module: 'tasks', action: 'read' } },
-  { path: '/tickets', label: 'Tickets', description: 'Support ticket management' },
-  { path: '/calendar-sync', label: 'Calendar Sync', description: 'Google and Outlook calendar integration', requiredPermission: { module: 'integrations', action: 'read' } },
+  { path: '/tickets', label: 'Tickets', description: 'Support ticket management', requiredPermission: { module: 'tickets', action: 'read' } },
+  { path: '/calendar-sync', label: 'Calendar Sync', description: 'Google and Outlook calendar integration', requiredPermission: { module: 'calendar', action: 'read' } },
   { path: '/live-chat', label: 'Live Chat', description: 'Website visitor chat support', requiredPermission: { module: 'live_chat', action: 'read' } },
   { path: '/deal-insights', label: 'Deal Insights', description: 'AI-powered deal analytics', requiredPermission: { module: 'deal_insights', action: 'read' } },
   { path: '/playbooks', label: 'Playbooks', description: 'Sales process workflows', requiredPermission: { module: 'playbooks', action: 'read' } },
   { path: '/booking-pages', label: 'Booking Pages', description: 'Customer booking form builder', requiredPermission: { module: 'booking_pages', action: 'read' } },
-  { path: '/forms', label: 'Web Forms', description: 'Embedded lead capture forms', adminOnly: true },
+  { path: '/forms', label: 'Web Forms', description: 'Embedded lead capture forms', requiredPermission: { module: 'web_forms', action: 'read' } },
   { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' } },
   { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue', requiredPermission: { module: 'signatures', action: 'read' } },
-  { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', requiredPermission: { module: 'documents', action: 'read' } },
+  { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', requiredPermission: { module: 'document_templates', action: 'read' } },
   { path: '/document-tracking', label: 'Doc Tracking', description: 'Track documents and signatures', requiredPermission: { module: 'documents', action: 'read' } },
   { path: '/invoices', label: 'Invoices', description: 'Invoice ledger + payment links', requiredPermission: { module: 'invoices', action: 'read' } },
   { path: '/estimates', label: 'Estimates', description: 'Quotes + estimates sent to customers', requiredPermission: { module: 'estimates', action: 'read' } },
@@ -124,7 +124,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/zapier', label: 'Zapier', description: 'Third-party automation hub', adminOnly: true },
   { path: '/developer', label: 'Developers', description: 'API + webhook console', adminOnly: true },
   { path: '/data-import-export', label: 'Import / Export', description: 'Bulk CSV operations', managerOnly: true },
-  { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', adminOnly: true },
+  { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', requiredPermission: { module: 'settings', action: 'read' } },
   { path: '/notification-settings', label: 'Notification Settings', description: 'Personal notification preferences', userOnly: true },
   { id: 'adsgpt', label: 'AdsGPT', description: 'Open the connected AdsGPT marketing workspace', managerOnly: true, actionTarget: '[data-tour-feature="adsgpt"]' },
   { id: 'callified', label: 'Callified', description: 'Open the connected Callified calling workspace', managerOnly: true, actionTarget: '[data-tour-feature="callified"]' },
@@ -222,11 +222,12 @@ export function getGenericAccessForLocation(pathname) {
 export function genericRoleGuardProps(path) {
   const access = getGenericAccessByPath(path);
   if (!access) return {};
-  if (access.adminOnly) return { allow: ['ADMIN'] };
-  if (access.managerOnly) return { allow: ['ADMIN', 'MANAGER'] };
-  if (access.userOnly) return { allow: ['USER'] };
-  if (access.requiredPermission) return { requiredPermission: access.requiredPermission };
-  return {};
+  return {
+    ...(access.adminOnly ? { allow: ['ADMIN'] } : {}),
+    ...(access.managerOnly ? { allow: ['ADMIN', 'MANAGER'] } : {}),
+    ...(access.userOnly ? { allow: ['USER'] } : {}),
+    ...(access.requiredPermission ? { requiredPermission: access.requiredPermission } : {}),
+  };
 }
 const TRAVEL_SIDEBAR_PAGE_MAP = new Map(
   TRAVEL_SIDEBAR_PAGE_SPECS.map((page) => [page.path, page]),
@@ -258,9 +259,8 @@ export function canUseGenericSidebarPage(page, {
     ? { module: fallbackPermission[0], action: fallbackPermission[1] }
     : null);
   if (
-    !page.managerOnly &&
     requiredPermission &&
-    (permissionsReady && !hasPermission(requiredPermission.module, requiredPermission.action))
+    (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
   ) {
     return false;
   }

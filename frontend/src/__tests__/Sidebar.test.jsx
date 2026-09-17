@@ -122,8 +122,23 @@ const GENERIC_BASE_PERMS = [
   'audit.read', 'developer.read', 'settings.read', 'settings.manage',
   'contacts.read', 'deals.read', 'pipeline.read', 'tickets.read',
   'reports.read', 'leads.read',
+  'communications.read', 'tasks.read', 'projects.read', 'whatsapp.read',
+  'live_chat.read', 'deal_insights.read', 'playbooks.read',
+  'booking_pages.read', 'web_forms.read', 'marketing.read',
+  'signatures.read', 'document_templates.read', 'documents.read',
+  'invoices.read', 'estimates.read', 'expenses.read', 'contracts.read',
+  'forecasting.read', 'quotas.read', 'dashboards.read', 'analytics.read',
+  'sequences.read', 'surveys.read', 'social.read', 'sla.read',
+  'payments.read', 'lead_scoring.read', 'cpq.read', 'territories.read',
+  'calendar.read',
 ];
-function permsForRole(role) {
+const GENERIC_USER_PERMS = [
+  'contacts.read', 'deals.read', 'leads.read', 'tasks.read', 'projects.read',
+  'pipeline.read', 'reports.read', 'communications.read', 'tickets.read',
+  'surveys.read', 'documents.read', 'contracts.read', 'estimates.read',
+];
+function permsForRole(role, vertical) {
+  if (vertical === 'generic' && role === 'USER') return new Set(GENERIC_USER_PERMS);
   if (role === 'ADMIN') {
     return new Set([...GENERIC_BASE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_ADMIN_EXTRAS]);
   }
@@ -205,7 +220,7 @@ function renderSidebar({
   // RBAC migration — every permission-gated <Link> consults
   // usePermissions().hasPermission. Capture the per-render permission
   // set so the closure-backed mock returns role-appropriate grants.
-  currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role);
+  currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role, vertical);
   if (activeSubBrand == null) window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   else window.sessionStorage.setItem(ACTIVE_SUB_BRAND_STORAGE_KEY, activeSubBrand);
 
@@ -1434,11 +1449,11 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/settings');
     });
 
-    it('hides admin Settings from MANAGER and exposes manager-safe destinations', () => {
+    it('shows only generic destinations granted to the manager', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      expect(screen.queryByText('Settings')).toBeNull();
+      expect(screen.getByText('Settings').closest('a')).toHaveAttribute('href', '/settings');
       expect(screen.getByText('Revenue Goals').closest('a')).toHaveAttribute('href', '/revenue-goals');
-      expect(screen.getByText('Import / Export').closest('a')).toHaveAttribute('href', '/data-import-export');
+      expect(screen.queryByText('Import / Export')).toBeNull();
     });
 
     it('renders Notification Settings (not Settings) for USER under generic', () => {

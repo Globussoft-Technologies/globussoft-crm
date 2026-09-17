@@ -645,7 +645,7 @@ const Sidebar = ({
     // permissions fail to load or are delayed. Once permissions load, show only
     // if the user has explicit permission.
     if (
-      !managerOnly && requiredPermission &&
+      requiredPermission &&
       (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
     ) {
       return null;
@@ -2615,7 +2615,7 @@ function renderGenericNav({
         icon={Ticket}
         label="Tickets"
         count={counts.tickets}
-        
+        requiredPermission={{ module: "tickets", action: "read" }}
       />
       {/* #474: label was "Calendar" pointing at /calendar-sync  the integration
           settings page (Google/Outlook bindings), not an event calendar. Users
@@ -2624,16 +2624,16 @@ function renderGenericNav({
           not yet). Rename to match the destination so the affordance matches
           reality; a future event-list /calendar route can be added separately
           and re-promoted to the bare "Calendar" label then. */}
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "integrations", action: "read" }} />
+      <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
       <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
 
       <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
       <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
       <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-      <Link to="/forms" icon={Code} label="Web Forms" adminOnly />
+      <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
       <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
       <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
-      <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "documents", action: "read" }} />
+      <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
       <Link to="/document-tracking" icon={Eye} label="Doc Tracking" requiredPermission={{ module: "documents", action: "read" }} />
 
       {/* Finance items gated on per-module read perms so a custom role
@@ -2844,6 +2844,7 @@ function renderGenericNav({
         >
           <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
           <Link to="/data-import-export" icon={Database} label="Import / Export" requiredPermission={{ module: "settings", action: "manage" }} />
+          <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
         </div>
       )}
 
@@ -2947,5 +2948,3 @@ const badgeStyle = {
 };
 
 export default Sidebar;
-
-

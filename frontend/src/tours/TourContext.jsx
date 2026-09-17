@@ -46,9 +46,6 @@ function canAccess(feature, user, permissionState) {
   // (for example /contacts/:id). Keep the generic tour catalogue limited to
   // explicitly catalogued page routes.
   if (feature.pattern && !feature.path) return false;
-  // Organization Settings is an administrator-only walkthrough even when a
-  // lower role has settings.read for view access to the page.
-  if (feature.path === "/settings" && !isAdmin) return false;
   // Generic feature tours inherit the same page-level access contract as the
   // generic sidebar. This prevents a tour with incomplete legacy metadata
   // (for example Settings or Contacts) from opening an inaccessible page.

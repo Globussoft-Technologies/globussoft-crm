@@ -7526,6 +7526,7 @@ model TmcTrip {
   parentPortalLinks   TmcParentTrip[]
   teacherReviews      TmcTripTeacherReview[]
   parentReviews       TravelTripReview[]
+  travelTallyCostCentre TravelTallyCostCentre?
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
@@ -8662,16 +8663,23 @@ model TravelTallyLedgerGroup {
 model TravelTallyCostCentre {
   id          Int       @id @default(autoincrement())
   tenantId    Int       @default(1)
-  itineraryId Int       @unique
+  sourceType  String    @default("ITINERARY") @db.VarChar(30)
+  sourceId    Int
+  itineraryId Int?      @unique
+  tmcTripId   Int?      @unique
+  quoteId     Int?      @unique
   code        String    @db.VarChar(80)
   name        String    @db.VarChar(180)
   status      String    @default("ACTIVE") @db.VarChar(20)
   syncStatus  String    @default("NOT_CONNECTED") @db.VarChar(30)
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  itinerary   Itinerary? @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  tmcTrip     TmcTrip?  @relation(fields: [tmcTripId], references: [id], onDelete: Cascade)
+  quote       TravelQuote? @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   @@unique([tenantId, code])
+  @@unique([tenantId, sourceType, sourceId])
   @@index([tenantId, status])
 }
 
@@ -8875,6 +8883,7 @@ model TravelQuote {
   invoices             TravelInvoice[]
   snapshots            TravelQuoteSnapshot[]
   itinerary            Itinerary?            @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
+  travelTallyCostCentre TravelTallyCostCentre?
   tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt

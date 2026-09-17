@@ -239,13 +239,57 @@ async function ensureTripMasters({ prismaClient = prisma, tenantId, subBrand, it
   return { customer, services };
 }
 
-async function ensureCostCentre({ prismaClient = prisma, tenantId, itineraryId, tripCode, destination }) {
+async function ensureCostCentre({
+  prismaClient = prisma,
+  tenantId,
+  sourceType = "ITINERARY",
+  sourceId,
+  itineraryId = null,
+  tmcTripId = null,
+  quoteId = null,
+  tripCode,
+  destination,
+}) {
   if (!prismaClient.travelTallyCostCentre) return null;
-  const code = `TRIP-${itineraryId}`;
+  const normalizedType = String(sourceType || "ITINERARY").trim().toUpperCase();
+  const resolvedSourceId = Number(sourceId || itineraryId || tmcTripId || quoteId);
+  if (!Number.isInteger(resolvedSourceId) || resolvedSourceId <= 0) {
+    throw new Error("A valid cost-centre source id is required");
+  }
+  const code = normalizedType === "TMC_TRIP"
+    ? `TMC-TRIP-${resolvedSourceId}`
+    : normalizedType === "QUOTE"
+      ? `QUOTE-${resolvedSourceId}`
+      : `TRIP-${resolvedSourceId}`;
+  const relationIds = {
+    itineraryId: normalizedType === "ITINERARY" ? resolvedSourceId : null,
+    tmcTripId: normalizedType === "TMC_TRIP" ? resolvedSourceId : null,
+    quoteId: normalizedType === "QUOTE" ? resolvedSourceId : null,
+  };
   return prismaClient.travelTallyCostCentre.upsert({
-    where: { itineraryId },
-    update: { name: `${tripCode || code} - ${destination || "Trip"}`, status: "ACTIVE" },
-    create: { tenantId, itineraryId, code, name: `${tripCode || code} - ${destination || "Trip"}`, status: "ACTIVE", syncStatus: "NOT_CONNECTED" },
+    where: {
+      tenantId_sourceType_sourceId: {
+        tenantId,
+        sourceType: normalizedType,
+        sourceId: resolvedSourceId,
+      },
+    },
+    update: {
+      ...relationIds,
+      code,
+      name: `${tripCode || code} - ${destination || "Trip"}`,
+      status: "ACTIVE",
+    },
+    create: {
+      tenantId,
+      sourceType: normalizedType,
+      sourceId: resolvedSourceId,
+      ...relationIds,
+      code,
+      name: `${tripCode || code} - ${destination || "Trip"}`,
+      status: "ACTIVE",
+      syncStatus: "NOT_CONNECTED",
+    },
   });
 }
 

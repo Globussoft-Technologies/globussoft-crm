@@ -47,6 +47,7 @@ const { verifyToken } = require("../middleware/auth");
 const { uploadImageMultiple, validateImages } = require("../middleware/uploadHandler");
 const prisma = require("../lib/prisma");
 const { pickMarkup } = require("../lib/travelPricing");
+const { ensureCostCentre } = require("../lib/travelTallyMasters");
 const flightOfferImageExtraction = require("../services/flightOfferImageExtractionLLM");
 const hotelOfferImageExtraction = require("../services/hotelOfferImageExtractionLLM");
 const {
@@ -365,6 +366,14 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
           currency,
         },
         select: { id: true, subBrand: true },
+      });
+      await ensureCostCentre({
+        tenantId,
+        itineraryId: itin.id,
+        tripCode: `TRIP-${itin.id}`,
+        destination: `${first.from}→${first.to} flights`,
+      }).catch((error) => {
+        console.warn("[travel-flight-quotes] Tally cost-centre auto-create failed:", error.message);
       });
     }
 

@@ -174,13 +174,13 @@ const pickerOnlyProps = {
 
 export default function PricingRules() {
   return (
-    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+    <div className="finance-page" style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
+      <header className="finance-page__header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
+          <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
             <Percent size={28} aria-hidden /> Pricing Rules
           </h1>
-          <p style={{ color: "var(--text-secondary)", marginTop: 4, marginBottom: 0 }}>
+          <p className="finance-page__subtitle" style={{ color: "var(--text-secondary)", marginTop: 4, marginBottom: 0 }}>
             Seasons multiply baseRate; markup rules add a % or flat amount on top. Both feed
             <code style={{ marginLeft: 4 }}>POST /api/travel/pricing/quote</code>.
           </p>
@@ -440,8 +440,8 @@ function SeasonsSection() {
   };
 
   return (
-    <section style={card}>
-      <div style={sectionHeader}>
+    <section className="finance-page__section-card" style={card}>
+      <div className="finance-page__section-header" style={sectionHeader}>
         <h2 style={sectionTitle}>
           <CalendarRange size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Seasons
@@ -449,7 +449,7 @@ function SeasonsSection() {
             <CountBadge count={total || seasons.length} title={`${(total || seasons.length).toLocaleString()} seasons`} />
           </span>
         </h2>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="finance-page__section-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Upload size={14} /> Export CSV
           </button>
@@ -476,14 +476,14 @@ function SeasonsSection() {
             aria-label="Upload seasons CSV or Excel file"
           />
           {!showForm && (
-            <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
+            <button className="finance-page__primary-action" type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
               <Plus size={14} /> Add season
             </button>
           )}
         </div>
       </div>
 
-      <div style={filterRow}>
+      <div className="finance-page__filters" style={filterRow}>
         <Filter size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
         <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ seasonSubBrand: e.target.value }); }} style={selectStyle} aria-label="Filter seasons by sub-brand">
           <option value="all">All sub-brands</option>
@@ -566,7 +566,7 @@ function SeasonsSection() {
         </div>
       )}
 
-      <div style={tableWrap} onScroll={handleTableScroll}>
+      <div className="finance-page__table-card" style={tableWrap} onScroll={handleTableScroll}>
         {loading && seasons.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : seasons.length === 0 ? (
@@ -968,8 +968,8 @@ function MarkupRulesSection() {
   };
 
   return (
-    <section style={card}>
-      <div style={sectionHeader}>
+    <section className="finance-page__section-card" style={card}>
+      <div className="finance-page__section-header" style={sectionHeader}>
         <h2 style={sectionTitle}>
           <Percent size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Markup Rules
@@ -977,7 +977,7 @@ function MarkupRulesSection() {
             <CountBadge count={total || rules.length} title={`${(total || rules.length).toLocaleString()} markup rules`} />
           </span>
         </h2>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="finance-page__section-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Upload size={14} /> Export CSV
           </button>
@@ -1004,14 +1004,14 @@ function MarkupRulesSection() {
             aria-label="Upload markup rules CSV or Excel file"
           />
           {!showForm && (
-            <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
+            <button className="finance-page__primary-action" type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
               <Plus size={14} /> Add rule
             </button>
           )}
         </div>
       </div>
 
-      <div style={filterRow}>
+      <div className="finance-page__filters" style={filterRow}>
         <Filter size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
         <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ subBrand: e.target.value }); }} style={selectStyle} aria-label="Filter rules by sub-brand">
           <option value="all">All sub-brands</option>
@@ -1136,7 +1136,7 @@ function MarkupRulesSection() {
         </div>
       )}
 
-      <div style={tableWrap} onScroll={handleTableScroll}>
+      <div className="finance-page__table-card" style={tableWrap} onScroll={handleTableScroll}>
         {loading && rules.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rules.length === 0 ? (

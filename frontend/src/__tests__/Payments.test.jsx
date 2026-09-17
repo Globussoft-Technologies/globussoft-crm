@@ -137,7 +137,7 @@ describe('<Payments /> — page surface', () => {
   it('renders the heading and the stat cards', async () => {
     renderPayments();
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /^Payments$/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /^Payments Received$/i })).toBeInTheDocument();
     });
     // Stat-card labels include a window suffix like "(Last 30 Days)".
     expect(screen.getByText(/Total Collected/i)).toBeInTheDocument();

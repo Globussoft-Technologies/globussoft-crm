@@ -1113,8 +1113,24 @@ export default function InvoicesAdmin() {
   };
 
   return (
-    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
+    <div
+      className="finance-page invoices-admin-page"
+      style={{
+        padding: 24,
+        width: "100%",
+        maxWidth: 1440,
+        height: "100%",
+        minHeight: 0,
+        margin: "0 auto",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        animation: "fadeIn 0.4s ease-out",
+      }}
+    >
       <header
+        className="finance-page__header"
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -1125,16 +1141,16 @@ export default function InvoicesAdmin() {
         }}
       >
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
-            <Receipt size={26} aria-hidden /> Travel Invoices
+          <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+            <Receipt size={26} aria-hidden /> Invoices
             <CountBadge count={total} title={`${total.toLocaleString()} invoices`} />
           </h1>
-          <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
+          <p className="finance-page__subtitle" style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
             Customer invoices — Draft / Issued / Partial / Paid / Voided.
           </p>
         </div>
         {canWrite && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div className="finance-page__header-actions" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <button
               type="button"
               onClick={() => downloadExport("xlsx")}
@@ -1162,7 +1178,7 @@ export default function InvoicesAdmin() {
             >
               <Upload size={14} /> {exporting === "tally" ? "Exporting…" : "Tally"}
             </button>
-            <button type="button" onClick={openCreate} style={primaryBtnBranded}>
+            <button className="finance-page__primary-action" type="button" onClick={openCreate} style={primaryBtnBranded}>
               <Plus size={14} /> New Invoice
             </button>
           </div>
@@ -1219,7 +1235,7 @@ export default function InvoicesAdmin() {
       )}
 
       <div
-        className="glass"
+        className="glass finance-page__filters"
         style={{
           padding: 12,
           marginBottom: 16,
@@ -1450,10 +1466,21 @@ export default function InvoicesAdmin() {
       )}
 
       <div
-        className="glass"
+        className="glass finance-page__table-card"
         style={tableFrame}
       >
-        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <div
+          className="finance-page__table-scroll"
+          style={{
+            flex: "1 1 auto",
+            minHeight: 0,
+            minWidth: 0,
+            overflow: "auto",
+            overscrollBehavior: "contain",
+            background: "var(--surface-color)",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
           {loading && invoices.length === 0 ? (
             <div style={empty}>Loading&hellip;</div>
           ) : (
@@ -2187,9 +2214,11 @@ const td = {
 };
 const tableFrame = {
   padding: 0,
-  overflow: "visible",
-  overflowY: "visible",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
   height: "auto",
+  flex: "1 1 auto",
   minHeight: 0,
   maxHeight: "none",
 };

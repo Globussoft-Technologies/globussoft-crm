@@ -4,7 +4,7 @@
  * tick #98 commit c156df4).
  *
  * Scope â€” pins page-surface invariants for the Travel invoices CRUD page:
- *   1. Page chrome â€” heading "Travel Invoices" + filter bar + "New Invoice"
+ *   1. Page chrome â€” heading "Invoices" + filter bar + "New Invoice"
  *      CTA (CTA gated on ADMIN/MANAGER via AuthContext.user.role).
  *   2. Loading state â€” pre-first-fetch the table region renders "Loadingâ€¦"
  *      copy; once GET resolves the table replaces it.
@@ -283,7 +283,7 @@ describe('<InvoicesAdmin /> â€” page chrome', () => {
   it('renders heading + filter bar + "New Invoice" CTA when role=ADMIN', async () => {
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /Travel Invoices/i }),
+      screen.getByRole('heading', { name: /^Invoices/i }),
     ).toBeInTheDocument();
     // CTA visible for ADMIN.
     expect(
@@ -311,6 +311,20 @@ describe('<InvoicesAdmin /> â€” page chrome', () => {
         fetchApiMock.mock.calls.some(([url]) => url.startsWith('/api/travel/invoices')),
       ).toBe(true);
     });
+  });
+
+  it('keeps the Travel page fixed and scrolls invoice rows inside the table viewport', async () => {
+    renderPage();
+    await screen.findByText(/TINV-2026-0001/);
+
+    const page = document.querySelector('.invoices-admin-page');
+    const tableCard = document.querySelector('.finance-page__table-card');
+    const tableScroller = document.querySelector('.finance-page__table-scroll');
+
+    expect(page).toHaveStyle({ height: '100%', minHeight: '0', overflow: 'hidden' });
+    expect(tableCard).toHaveStyle({ display: 'flex', overflow: 'hidden', minHeight: '0' });
+    expect(tableScroller).toHaveStyle({ overflow: 'auto', minHeight: '0', background: 'var(--surface-color)' });
+    expect(getComputedStyle(tableScroller).overscrollBehavior).toBe('contain');
   });
 
   it('hides "New Invoice" CTA + actions column when role=USER', async () => {
@@ -353,7 +367,7 @@ describe('<InvoicesAdmin /> - Excel Software reconciliation', () => {
 
   it('uploads a workbook as multipart/form-data and renders the summary', async () => {
     renderPage();
-    await screen.findByText(/Travel Invoices/i);
+    await screen.findByRole('heading', { name: /^Invoices/i });
     const file = new File(['Invoice Number,Invoice Total\nTINV-2026-0001,100'], 'travel-accounting.csv', { type: 'text/csv' });
     fireEvent.change(screen.getByLabelText(/Excel Software reconciliation file/i), {
       target: { files: [file] },

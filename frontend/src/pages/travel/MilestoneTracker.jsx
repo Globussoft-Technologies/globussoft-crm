@@ -291,15 +291,17 @@ export default function MilestoneTracker() {
   const overdueCount = summary.byStatus.overdue || 0;
 
   return (
-    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
-          <CalendarClock size={26} aria-hidden /> Milestone Tracker
+    <div className="finance-page" style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
+      <header className="finance-page__header" style={{ marginBottom: 16 }}>
+        <div>
+        <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
+          <CalendarClock size={26} aria-hidden /> Milestones
           <CountBadge count={total} title={`${total.toLocaleString()} milestones`} />
         </h1>
-        <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
+        <p className="finance-page__subtitle" style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
           Cross-invoice payment milestones — pending, partial, paid, overdue.
         </p>
+        </div>
       </header>
 
       {/* KPI cards from summary.byStatus */}
@@ -339,7 +341,7 @@ export default function MilestoneTracker() {
 
       {/* Filter chrome — chips + dropdowns */}
       <div
-        className="glass"
+        className="glass finance-page__filters"
         style={{
           padding: 12,
           marginBottom: 16,
@@ -428,7 +430,7 @@ export default function MilestoneTracker() {
       </div>
 
       {/* Table */}
-      <div className="glass" onScroll={handleTableScroll} style={tableFrame}>
+      <div className="glass finance-page__table-card" onScroll={handleTableScroll} style={tableFrame}>
         {loading && milestones.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : milestones.length === 0 ? (

@@ -46,6 +46,13 @@ prisma.travelTallyMapping = {
 prisma.travelTallySyncQueue = {
   findMany: vi.fn(),
 };
+prisma.travelTallyCostCentre = {
+  findMany: vi.fn(),
+  upsert: vi.fn(),
+};
+prisma.itinerary = { ...(prisma.itinerary || {}), findMany: vi.fn(), findFirst: vi.fn() };
+prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn(), findFirst: vi.fn() };
+prisma.travelQuote = { ...(prisma.travelQuote || {}), findMany: vi.fn(), findFirst: vi.fn() };
 prisma.$transaction = vi.fn(async (operations) => Promise.all(operations));
 
 const travelTallyRouter = requireCJS("../../routes/travel_tally");
@@ -84,6 +91,7 @@ beforeEach(() => {
     prisma.travelTallyTaxMaster,
     prisma.travelTallyMapping,
     prisma.travelTallySyncQueue,
+    prisma.travelTallyCostCentre,
   ]) {
     for (const fn of Object.values(delegate)) {
       if (typeof fn === "function" && fn.mockReset) fn.mockReset();
@@ -94,6 +102,46 @@ beforeEach(() => {
   prisma.travelTallyTaxMaster.findMany.mockResolvedValue([]);
   prisma.travelTallyMapping.findMany.mockResolvedValue([]);
   prisma.travelTallySyncQueue.findMany.mockResolvedValue([]);
+  prisma.travelTallyCostCentre.findMany.mockResolvedValue([]);
+  prisma.travelTallyCostCentre.upsert.mockImplementation(async ({ create }) => ({ id: create.sourceId, ...create }));
+  prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
+  prisma.itinerary.findFirst.mockReset();
+  prisma.tmcTrip.findMany.mockReset().mockResolvedValue([]);
+  prisma.tmcTrip.findFirst.mockReset();
+  prisma.travelQuote.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelQuote.findFirst.mockReset();
+});
+
+describe("travel Tally cost centre sources", () => {
+  test("lists itineraries, TMC trips, and quote-only trips", async () => {
+    prisma.itinerary.findMany.mockResolvedValue([{ id: 3, destination: "Agra", subBrand: "rfu" }]);
+    prisma.tmcTrip.findMany.mockResolvedValue([{ id: 8, tripCode: "SCHOOL-8", destination: "Singapore" }]);
+    prisma.travelQuote.findMany.mockResolvedValue([{ id: 12, subBrand: "visasure", contact: { name: "Customer One" } }]);
+
+    const response = await request(makeApp()).get("/api/travel/tally/cost-centres").set(auth());
+
+    expect(response.status).toBe(200);
+    expect(response.body.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: "ITINERARY", code: "TRIP-3" }),
+      expect.objectContaining({ sourceType: "TMC_TRIP", code: "TMC-TRIP-8" }),
+      expect.objectContaining({ sourceType: "QUOTE", code: "QUOTE-12" }),
+    ]));
+  });
+
+  test("prepares missing cost centres for every source type", async () => {
+    prisma.itinerary.findMany.mockResolvedValue([{ id: 3, destination: "Agra" }]);
+    prisma.tmcTrip.findMany.mockResolvedValue([{ id: 8, tripCode: "SCHOOL-8", destination: "Singapore" }]);
+    prisma.travelQuote.findMany.mockResolvedValue([{ id: 12, contact: { name: "Customer One" } }]);
+
+    const response = await request(makeApp()).post("/api/travel/tally/cost-centres/prepare-missing").set(auth()).send({});
+
+    expect(response.status).toBe(201);
+    expect(response.body.created).toBe(3);
+    expect(prisma.travelTallyCostCentre.upsert).toHaveBeenCalledTimes(3);
+    expect(prisma.travelTallyCostCentre.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ sourceType: "TMC_TRIP", sourceId: 8, code: "TMC-TRIP-8" }),
+    }));
+  });
 });
 
 describe("travel Tally route guards and envelopes", () => {

@@ -679,7 +679,8 @@ export default function Diagnostics() {
             )}
           </div>
         ) : (
-          <table
+          <div className="diagnostics-table-scroll" role="region" aria-label="Diagnostics records" tabIndex={0}>
+            <table
                 className="diagnostics-table"
                 aria-label="Diagnostics results"
                 style={{
@@ -800,7 +801,8 @@ export default function Diagnostics() {
                     );
                   })}
                 </tbody>
-              </table>
+            </table>
+          </div>
         )}
         {total > 0 && (
           <DiagnosticsPager

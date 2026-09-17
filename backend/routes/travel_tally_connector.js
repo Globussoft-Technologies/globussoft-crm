@@ -70,12 +70,27 @@ function validateImportXml(value, stage) {
   if (!new RegExp(`<REPORTNAME>\\s*${expectedReport}\\s*</REPORTNAME>`, "i").test(xml)) {
     return { valid: false, reason: `The ${stage} payload has an unexpected Tally report type` };
   }
-  const allowedTypes = stage === "masters" ? new Set(["LEDGER", "VOUCHERTYPE"]) : new Set(["VOUCHER"]);
+  const allowedTypes = stage === "masters" ? new Set(["LEDGER", "VOUCHERTYPE", "COSTCENTRE"]) : new Set(["VOUCHER"]);
   if (objectTypes.some((type) => !allowedTypes.has(type))) {
     return { valid: false, reason: `The ${stage} payload contains an unsupported Tally object` };
   }
 
   return { valid: true, xml };
+}
+
+function costCentreCodesFromMastersXml(xml) {
+  return [...String(xml || "").matchAll(/<COSTCENTRE\b[^>]*\bNAME\s*=\s*["']([^"']+)["']/gi)]
+    .map((match) => match[1].trim())
+    .filter((code) => /^[A-Z0-9-]{1,80}$/i.test(code));
+}
+
+async function updateCostCentreSyncStatus(tenantId, mastersXml, syncStatus) {
+  const codes = [...new Set(costCentreCodesFromMastersXml(mastersXml))];
+  if (!codes.length || !prisma.travelTallyCostCentre?.updateMany) return;
+  await prisma.travelTallyCostCentre.updateMany({
+    where: { tenantId, code: { in: codes } },
+    data: { syncStatus },
+  });
 }
 
 router.get("/status", ...guards, requirePermission("tally", "read"), async (req, res) => {
@@ -168,8 +183,16 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
         await prisma.travelTallySyncLog.create({
           data: { tenantId: req.travelTenant.id, sourceType: "DIRECT_EXPORT", sourceId: 0, voucherType: stage.name.toUpperCase(), status: "SYNCED", triggeredByUserId: req.user.userId, requestPayload: stage.xml, responsePayload: result.responseXml },
         });
+        if (stage.name === "masters") {
+          await updateCostCentreSyncStatus(req.travelTenant.id, stage.xml, "SYNCED").catch((error) => {
+            console.warn("[tally-connector] cost-centre sync status update failed:", error.message);
+          });
+        }
       } catch (error) {
         const tally = error.tally || parseTallyResponse(error.responseXml);
+        if (stage.name === "masters") {
+          await updateCostCentreSyncStatus(req.travelTenant.id, stage.xml, "FAILED").catch(() => {});
+        }
         await prisma.travelTallySyncLog.create({
           data: { tenantId: req.travelTenant.id, sourceType: "DIRECT_EXPORT", sourceId: 0, voucherType: stage.name.toUpperCase(), status: "FAILED", triggeredByUserId: req.user.userId, requestPayload: stage.xml, responsePayload: error.responseXml || null },
         }).catch(() => {});

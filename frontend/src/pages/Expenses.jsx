@@ -478,14 +478,16 @@ export default function Expenses() {
     .reduce((sum, e) => sum + e.amount, 0);
 
   return (
-    <div className="expenses-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+    <div className="expenses-page finance-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="finance-page__header" style={{ marginBottom: '2rem' }}>
+        <div>
+        <h1 className="finance-page__title" style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Receipt size={26} color="var(--accent-color)" /> Expense Management
         </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+        <p className="finance-page__subtitle" style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
           Track, approve, and reimburse team expenses.
         </p>
+        </div>
       </header>
 
       {/* Summary Stats */}
@@ -521,7 +523,7 @@ export default function Expenses() {
         </div>
         <button
           type="button"
-          className="btn-primary"
+          className="btn-primary finance-page__primary-action"
           onClick={() => setIsCreateFormOpen(true)}
           style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}
         >
@@ -808,8 +810,8 @@ export default function Expenses() {
       )}
 
       {/* Expenses Table */}
-        <div className="card" style={{ padding: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
+        <div className="card finance-page__table-card" style={{ padding: '2rem' }}>
+          <div className="finance-page__section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Receipt size={20} color="var(--accent-color)" /> All Expenses
             </h3>

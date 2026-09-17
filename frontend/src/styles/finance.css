@@ -1,0 +1,257 @@
+/* Shared visual contract for the travel Finance module entry pages. */
+.finance-page {
+  --finance-accent: var(--primary-color, var(--accent-color, #5b7cfa));
+  width: 100%;
+  max-width: 1440px !important;
+  margin: 0 auto !important;
+  padding: 24px !important;
+  box-sizing: border-box;
+  min-height: 100% !important;
+  overflow-x: hidden;
+  color: var(--text-primary);
+  animation: fadeIn 0.4s ease-out;
+}
+
+/* The Travel invoice ledger is a viewport inside the finance shell. Keep the
+   page chrome in the app's fixed main region and give only the row viewport
+   vertical overflow (the table card and its inner scroller are both flex
+   children so the table cannot enlarge the page). */
+.travel-content-frame:has(> .invoices-admin-page) {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.invoices-admin-page {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.invoices-admin-page > .finance-page__header,
+.invoices-admin-page > .finance-page__filters,
+.invoices-admin-page > [data-testid="excel-reconciliation-panel"] {
+  flex-shrink: 0;
+}
+
+.invoices-admin-page > .finance-page__table-card {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.invoices-admin-page > .finance-page__table-card > .finance-page__table-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.finance-page__header {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  flex-wrap: wrap !important;
+  margin-bottom: 16px !important;
+}
+
+.finance-page__title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.finance-page__title {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin: 0 !important;
+  color: var(--text-primary) !important;
+  font-size: 1.75rem !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+  letter-spacing: -0.02em;
+  flex-wrap: wrap;
+}
+
+.finance-page__title > svg:first-child,
+.finance-page__title-icon {
+  color: var(--finance-accent) !important;
+  flex-shrink: 0;
+}
+
+.finance-page__subtitle {
+  margin: 4px 0 0 !important;
+  color: var(--text-secondary) !important;
+  font-size: 0.9rem !important;
+  line-height: 1.5;
+}
+
+.finance-page__header-actions,
+.finance-page__section-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+}
+
+.finance-page__filters {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  flex-wrap: wrap !important;
+  margin-bottom: 16px !important;
+  padding: 12px !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 12px !important;
+  background: var(--surface-color) !important;
+  box-shadow: none !important;
+}
+
+.finance-page__filters input:not([type="checkbox"]),
+.finance-page__filters select {
+  min-height: 36px;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  background: var(--surface-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.finance-page__filters [aria-pressed="true"] {
+  border-color: var(--finance-accent) !important;
+  background: var(--finance-accent) !important;
+  color: #fff !important;
+}
+
+.finance-page__header-actions button,
+.finance-page__header-actions a,
+.finance-page__section-actions button,
+.finance-page__section-actions a,
+.finance-page__filters button,
+.finance-page__secondary-action,
+.finance-page__primary-action {
+  min-height: 36px;
+  border-radius: 8px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+}
+
+.finance-page__primary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent !important;
+  background: var(--finance-accent) !important;
+  color: #fff !important;
+}
+
+.finance-page__table-card,
+.finance-page__section-card {
+  border: 1px solid var(--border-color) !important;
+  border-radius: 12px !important;
+  background: var(--surface-color) !important;
+  box-shadow: none !important;
+}
+
+.finance-page__section-card {
+  padding: 16px !important;
+}
+
+.finance-page__section-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  flex-wrap: wrap !important;
+  margin-bottom: 12px !important;
+}
+
+.finance-page__table-card table,
+.finance-page__section-card table {
+  color: var(--text-primary);
+}
+
+.finance-page__table-card table thead th,
+.finance-page__section-card table thead th {
+  padding: 11px 12px !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  background: var(--modal-bg, var(--bg-color)) !important;
+  color: var(--text-secondary) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.finance-page__table-card table tbody td,
+.finance-page__section-card table tbody td {
+  padding: 11px 12px !important;
+  border-bottom: 1px solid var(--border-light, var(--border-color));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.finance-page__table-card table tbody tr,
+.finance-page__section-card table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.finance-page__table-card table tbody tr:hover,
+.finance-page__section-card table tbody tr:hover {
+  background: var(--hover-bg, var(--surface-hover));
+}
+
+.finance-page__nav-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.finance-page__nav-card {
+  display: grid;
+  gap: 10px;
+  min-height: 150px;
+  padding: 18px;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 12px !important;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.finance-page__nav-card:hover {
+  border-color: var(--finance-accent) !important;
+  background: var(--hover-bg, var(--surface-hover));
+  transform: translateY(-1px);
+}
+
+.finance-page__nav-card > svg:first-child,
+.finance-page__nav-card-action {
+  color: var(--finance-accent) !important;
+}
+
+@media (max-width: 768px) {
+  .finance-page {
+    padding: 16px !important;
+  }
+
+  .finance-page__title {
+    font-size: 1.5rem !important;
+  }
+
+  .finance-page__header-actions,
+  .finance-page__header-actions > button,
+  .finance-page__header-actions > a {
+    width: 100%;
+  }
+
+  .finance-page__filters > input:not([type="checkbox"]),
+  .finance-page__filters > select {
+    flex: 1 1 180px;
+  }
+}

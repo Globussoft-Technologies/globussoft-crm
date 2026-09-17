@@ -64,22 +64,48 @@ export const buildCsv = (rows) =>
   rows.map((row) => row.map(csvCell).join(",")).join("\n");
 
 const tallyDate = (value) => dateOnly(value).replace(/-/g, "");
-const ledgerEntryXml = ({ ledger, amount, isParty = false, billReference = "", billType = "On Account" }) => {
+const ledgerEntryXml = ({ ledger, amount, isParty = false, billReference = "", billType = "On Account", costCentre = "" }) => {
   const isDebit = amount < 0;
   const billAllocation = isParty
     ? `<BILLALLOCATIONS.LIST><NAME>${xmlCell(billReference || "On Account")}</NAME><BILLTYPE>${billType}</BILLTYPE><AMOUNT>${amount.toFixed(2)}</AMOUNT></BILLALLOCATIONS.LIST>`
     : "";
+  const costCentreAllocation = costCentre
+    ? `<CATEGORYALLOCATIONS.LIST><CATEGORY>Primary Cost Category</CATEGORY><ISDEEMEDPOSITIVE>${isDebit ? "Yes" : "No"}</ISDEEMEDPOSITIVE><COSTCENTREALLOCATIONS.LIST><NAME>${xmlCell(costCentre)}</NAME><AMOUNT>${amount.toFixed(2)}</AMOUNT></COSTCENTREALLOCATIONS.LIST></CATEGORYALLOCATIONS.LIST>`
+    : "";
 
-  return `<LEDGERENTRIES.LIST><LEDGERNAME>${xmlCell(ledger)}</LEDGERNAME><ISDEEMEDPOSITIVE>${isDebit ? "Yes" : "No"}</ISDEEMEDPOSITIVE><ISPARTYLEDGER>${isParty ? "Yes" : "No"}</ISPARTYLEDGER><ISLASTDEEMEDPOSITIVE>${isDebit ? "Yes" : "No"}</ISLASTDEEMEDPOSITIVE><AMOUNT>${amount.toFixed(2)}</AMOUNT>${billAllocation}</LEDGERENTRIES.LIST>`;
+  return `<LEDGERENTRIES.LIST><LEDGERNAME>${xmlCell(ledger)}</LEDGERNAME><ISDEEMEDPOSITIVE>${isDebit ? "Yes" : "No"}</ISDEEMEDPOSITIVE><ISPARTYLEDGER>${isParty ? "Yes" : "No"}</ISPARTYLEDGER><ISLASTDEEMEDPOSITIVE>${isDebit ? "Yes" : "No"}</ISLASTDEEMEDPOSITIVE><AMOUNT>${amount.toFixed(2)}</AMOUNT>${billAllocation}${costCentreAllocation}</LEDGERENTRIES.LIST>`;
 };
 
-const masterLedgerXml = ({ name, parent, billWise = false }) =>
-  `<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="${xmlCell(name)}" ACTION="Create"><NAME>${xmlCell(name)}</NAME><PARENT>${xmlCell(parent)}</PARENT><ISBILLWISEON>${billWise ? "Yes" : "No"}</ISBILLWISEON></LEDGER></TALLYMESSAGE>`;
+const masterLedgerXml = ({ name, parent, billWise = false, costCentres = false }) =>
+  `<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="${xmlCell(name)}" ACTION="Create"><NAME>${xmlCell(name)}</NAME><PARENT>${xmlCell(parent)}</PARENT><ISBILLWISEON>${billWise ? "Yes" : "No"}</ISBILLWISEON><ISCOSTCENTRESON>${costCentres ? "Yes" : "No"}</ISCOSTCENTRESON></LEDGER></TALLYMESSAGE>`;
 
 const masterVoucherTypeXml = (name) => {
   const parent = ({ Sales: "Sales", Receipt: "Receipt", Purchase: "Purchase", Payment: "Payment", Journal: "Journal" }[name] || "Journal");
   return `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHERTYPE NAME="${xmlCell(name)}" ACTION="Create"><NAME>${xmlCell(name)}</NAME><PARENT>${xmlCell(parent)}</PARENT><NUMBERINGMETHOD>Manual</NUMBERINGMETHOD><ISOPTIONAL>No</ISOPTIONAL></VOUCHERTYPE></TALLYMESSAGE>`;
 };
+
+const masterCostCentreXml = (name) =>
+  `<TALLYMESSAGE xmlns:UDF="TallyUDF"><COSTCENTRE NAME="${xmlCell(name)}" ACTION="Create"><NAME>${xmlCell(name)}</NAME><PARENT></PARENT><CATEGORY>Primary Cost Category</CATEGORY></COSTCENTRE></TALLYMESSAGE>`;
+
+const tripCostCentreCode = ({ itineraryId, tripId, quoteId } = {}) => {
+  if (Number(itineraryId) > 0) return `TRIP-${Number(itineraryId)}`;
+  if (Number(tripId) > 0) return `TMC-TRIP-${Number(tripId)}`;
+  if (Number(quoteId) > 0) return `QUOTE-${Number(quoteId)}`;
+  return "";
+};
+
+const tripRowCostCentreCode = (trip = {}) => {
+  if (trip.ledgerType === "tmc" || trip.tmcTripId) {
+    return tripCostCentreCode({ tripId: trip.tmcTripId || String(trip.id || "").replace(/^tmc-/, "") });
+  }
+  if (trip.ledgerType === "quote" || trip.quoteId) {
+    return tripCostCentreCode({ quoteId: trip.quoteId || String(trip.id || "").replace(/^quote-/, "") });
+  }
+  return tripCostCentreCode({ itineraryId: trip.id });
+};
+
+const shouldAllocateCostCentre = (sourceTag) =>
+  !/customer receipt|supplier payment/i.test(String(sourceTag || ""));
 
 const voucherRowToXml = (row, index, { educationalMode = false, alterExistingReceipts = false } = {}) => {
   const [
@@ -127,11 +153,15 @@ const voucherRowToXml = (row, index, { educationalMode = false, alterExistingRec
     ? tallyDate(educationalDate || `${dateOnly(new Date().toISOString()).slice(0, 8)}01`)
     : tallyDate(date) || tallyDate(new Date().toISOString());
   const counterIsParty = voucherType !== "Journal";
+  // Cost centres belong on the income/expense side. Receipt and supplier
+  // settlement rows move money through cash/bank and must not count the same
+  // trip income or expense a second time in Tally's cost-centre reports.
+  const allocatePrimaryLedger = shouldAllocateCostCentre(sourceTag);
   const shouldAlter = alterExistingReceipts && (voucherType === "Sales" || voucherType === "Receipt");
   const actionAttributes = shouldAlter
     ? ` DATE="${xmlCell(originalDate || dateOnly(new Date().toISOString()))}" TAGNAME="Voucher Number" TAGVALUE="${xmlCell(voucherNumber)}" ACTION="Alter"`
     : ` DATE="${safeDate}" ACTION="Create"`;
-  return `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER VCHTYPE="${xmlCell(voucherType)}"${actionAttributes} OBJVIEW="Accounting Voucher View"><DATE>${safeDate}</DATE><VOUCHERTYPENAME>${xmlCell(voucherType)}</VOUCHERTYPENAME><VOUCHERNUMBER>${xmlCell(voucherNumber)}</VOUCHERNUMBER><PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW><ISINVOICE>No</ISINVOICE><REFERENCE>${xmlCell(reference)}</REFERENCE><NARRATION>${xmlCell(fullNarration)}</NARRATION>${ledgerEntryXml({ ledger, amount: primaryAmount })}${ledgerEntryXml({ ledger: counterLedger, amount: -primaryAmount, isParty: counterIsParty, billReference: billReference || (voucherType === "Sales" || voucherType === "Purchase" ? voucherNumber : ""), billType })}</VOUCHER></TALLYMESSAGE>`;
+  return `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER VCHTYPE="${xmlCell(voucherType)}"${actionAttributes} OBJVIEW="Accounting Voucher View"><DATE>${safeDate}</DATE><VOUCHERTYPENAME>${xmlCell(voucherType)}</VOUCHERTYPENAME><VOUCHERNUMBER>${xmlCell(voucherNumber)}</VOUCHERNUMBER><PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW><ISINVOICE>No</ISINVOICE><REFERENCE>${xmlCell(reference)}</REFERENCE><NARRATION>${xmlCell(fullNarration)}</NARRATION>${ledgerEntryXml({ ledger, amount: primaryAmount, costCentre: allocatePrimaryLedger ? trip : "" })}${ledgerEntryXml({ ledger: counterLedger, amount: -primaryAmount, isParty: counterIsParty, billReference: billReference || (voucherType === "Sales" || voucherType === "Purchase" ? voucherNumber : ""), billType })}</VOUCHER></TALLYMESSAGE>`;
 };
 
 export const buildTallyXml = ({ companyName, voucherRows, educationalMode = false, alterExistingReceipts = false }) => {
@@ -182,11 +212,14 @@ export const buildTallyMastersXml = ({ companyName, voucherRows }) => {
         : normalized.includes("purchase") || normalized.includes("expense")
           ? "Purchase Accounts"
           : "Sales Accounts");
-    return masterLedgerXml({ name, parent, billWise: Boolean(ledgerParents.get(name)) });
+    const costCentres = rows.some((row) =>
+      row[2] === name && String(row[4] || "").trim() && shouldAllocateCostCentre(row[9]));
+    return masterLedgerXml({ name, parent, billWise: Boolean(ledgerParents.get(name)), costCentres });
   }).join("");
   const builtInVoucherTypes = new Set(["Sales", "Receipt", "Purchase", "Payment", "Journal", "Credit Note", "Debit Note"]);
   const voucherTypeXml = [...new Set(rows.map((row) => row[1]).filter((name) => name && !builtInVoucherTypes.has(name)))].map(masterVoucherTypeXml).join("");
-  return `<?xml version="1.0" encoding="UTF-8"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>${xmlCell(companyName || "")}</SVCURRENTCOMPANY><IMPORTDUPS>@@DUPMODIFY</IMPORTDUPS></STATICVARIABLES></REQUESTDESC><REQUESTDATA>${ledgerXml}${voucherTypeXml}</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`;
+  const costCentreXml = [...new Set(rows.map((row) => String(row[4] || "").trim()).filter(Boolean))].map(masterCostCentreXml).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>${xmlCell(companyName || "")}</SVCURRENTCOMPANY><IMPORTDUPS>@@DUPMODIFY</IMPORTDUPS></STATICVARIABLES></REQUESTDESC><REQUESTDATA>${ledgerXml}${voucherTypeXml}${costCentreXml}</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`;
 };
 
 const createLedgerResolver = ({ ledgerRows = [], ledgerMappings = [] }) => {
@@ -291,7 +324,7 @@ export const buildVoucherRows = ({
       "Voucher Type",
       "Ledger",
       "Party",
-      "Trip",
+      "Cost Centre",
       "Reference",
       "Debit",
       "Credit",
@@ -347,7 +380,7 @@ export const buildVoucherRows = ({
     // collected for the customer. The existing invoice reference remains
     // stable so a later cumulative payment can alter the same vouchers.
     const invoiceAmount = receivedAmount;
-    const tripName = row.tripName || "";
+    const tripName = tripCostCentreCode(row);
     const customerName = row.name || "Customer";
     const invoiceReference = row.reference || "";
     const receiptReference = row.reference
@@ -408,7 +441,7 @@ export const buildVoucherRows = ({
       date: dateOnly(row.dueDate || row.paidDate || master.to || master.from),
       ledger: ledgerName("supplierPayable", "Purchase Ledger"),
       party: row.name || row.supplierName || "Supplier",
-      trip: row.tripName || "",
+      trip: tripCostCentreCode(row),
       reference: row.reference || row.paymentReference || "",
       debit: amount.toFixed(2),
       narration: `${selectedSubBrandLabel} supplier payable`,
@@ -427,7 +460,7 @@ export const buildVoucherRows = ({
         date: dateOnly(row.paidAt || row.paidDate || master.to || master.from),
         ledger: cashLedgerName,
         party: row.name || row.supplierName || "Supplier",
-        trip: row.tripName || "",
+        trip: tripCostCentreCode(row),
         reference:
           row.paymentReference || row.reference || `${row.id || "SUPPLIER"}-PAY`,
         credit: paidAmount.toFixed(2),
@@ -454,7 +487,7 @@ export const buildVoucherRows = ({
       ),
       ledger: ledgerName("officeExpense", "Common Ledger"),
       party: row.name || "Office Expenses",
-      trip: row.tripName || (master.tripId ? `Trip ${master.tripId}` : "Common"),
+      trip: tripCostCentreCode(row) || (master.tripId ? `TRIP-${master.tripId}` : ""),
       reference: row.reference || row.category || "COMMON-EXPENSE",
       debit: amount.toFixed(2),
       narration: row.description || `${selectedSubBrandLabel} common expense`,
@@ -470,7 +503,7 @@ export const buildVoucherRows = ({
       date: dateOnly(master.to || master.from),
       ledger: ledgerName("officeExpense", "Common Ledger"),
       party: "Office Expenses",
-      trip: master.tripId ? `Trip ${master.tripId}` : "All trips",
+      trip: master.tripId ? `TRIP-${master.tripId}` : "",
       reference: "COMMON-EXPENSES-BALANCE",
       debit: remainingCommonExpenses.toFixed(2),
       narration: `${selectedSubBrandLabel} common expenses balance`,
@@ -500,7 +533,7 @@ export const buildVoucherRows = ({
         date: dateOnly(master.to || master.from),
         ledger,
         party: counterLedger,
-        trip: trip.label,
+        trip: tripRowCostCentreCode(trip),
         reference: `${ledger.toUpperCase().replace(/\s+/g, "-")}-${trip.id}`,
         debit: amount.toFixed(2),
         narration: `${ledger} for ${trip.label}`,

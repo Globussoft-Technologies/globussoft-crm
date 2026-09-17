@@ -8,6 +8,7 @@ import prisma from "../../lib/prisma.js";
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 const SAFE_VOUCHER_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
+const SAFE_COST_CENTRE_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><COSTCENTRE NAME="TRIP-1" ACTION="Create"><NAME>TRIP-1</NAME></COSTCENTRE></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
@@ -85,6 +86,16 @@ describe("travel Tally connector routes", () => {
     const offline = await request(makeApp()).post("/api/travel/tally/connector/push").set(auth()).send({ vouchersXml: SAFE_VOUCHER_XML });
     expect(offline.status).toBe(503);
     expect(offline.body.code).toBe("TALLY_CONNECTOR_OFFLINE");
+  });
+
+  test("accepts cost centres as safe master objects", async () => {
+    const response = await request(makeApp())
+      .post("/api/travel/tally/connector/push")
+      .set(auth())
+      .send({ mastersXml: SAFE_COST_CENTRE_XML, vouchersXml: SAFE_VOUCHER_XML });
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe("TALLY_CONNECTOR_OFFLINE");
   });
 
   test.each([

@@ -1111,6 +1111,42 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     });
   });
 
+  it('does not submit line items whose rounded total differs from the visit final bill', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/wellness/patients/11/visits') {
+        return Promise.resolve([{ ...sampleVisit, amountCharged: 100 }]);
+      }
+      if (url === '/api/wellness/visits/501/consumptions') return Promise.resolve([]);
+      return defaultFetchMock(url, opts);
+    });
+
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+    await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    await openCreateInvoiceForm();
+
+    const patientPicker = screen.getByRole('combobox', { name: /Customer or patient/i });
+    fireEvent.focus(patientPicker);
+    fireEvent.click(screen.getByRole('option', { name: /Priya Sharma/i }));
+    await waitFor(() => expect(screen.getByRole('option', { name: /Skin consultation/ })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Patient visit/i), { target: { value: '501' } });
+    await waitFor(() => expect(screen.getByLabelText(/Line item 1 unit price/i).value).toBe('100'));
+
+    fireEvent.change(screen.getByLabelText(/Line item 1 quantity/i), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText(/Due date/i), { target: { value: '2099-12-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        'The invoice line items must add up exactly to the visit final bill',
+      );
+    });
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([url, opts]) => url === '/api/billing' && opts?.method === 'POST',
+      ),
+    ).toBe(false);
+  });
+
   it('shows wellness customer, product/service, quantity, and payment columns in the ledger', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {

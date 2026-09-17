@@ -8991,6 +8991,17 @@ async function loadReportInvoicesInWindow(tenantId, from, to) {
   });
 }
 
+async function loadPaidReportInvoicesInWindow(tenantId, from, to) {
+  return prisma.invoice.findMany({
+    where: {
+      tenantId,
+      status: "PAID",
+      paidAt: { gte: from, lte: to },
+    },
+    select: REPORT_INVOICE_SELECT,
+  });
+}
+
 function parseReportInvoiceLineItems(invoice) {
   if (!invoice || typeof invoice.lineItemsJson !== "string") return [];
   try {
@@ -9960,9 +9971,15 @@ async function computePaymentsByMode(req) {
   const { from, to } = _rr;
   const sales = await prisma.sale.findMany({
     where: { tenantId, status: "COMPLETED", createdAt: { gte: from, lte: to } },
-    select: { id: true, invoiceNumber: true, total: true, paidAmount: true, paymentMethod: true },
+    select: {
+      id: true,
+      invoiceNumber: true,
+      paidAmount: true,
+      paymentMethod: true,
+      paymentBreakdownJson: true,
+    },
   });
-  const invoices = await loadReportInvoicesInWindow(tenantId, from, to);
+  const invoices = await loadPaidReportInvoicesInWindow(tenantId, from, to);
   const acc = {};
   const add = (mode, amount, source, invoiceId) => {
     const key = normalizeReportPaymentMode(mode);
@@ -9993,10 +10010,36 @@ async function computePaymentsByMode(req) {
     }
   };
   for (const sale of sales) {
-    add(sale.paymentMethod, Number(sale.paidAmount) || Number(sale.total), "pos");
+    const paidAmount = Number(sale.paidAmount);
+    // A completed POS sale may intentionally be put on credit with paidAmount
+    // zero. It is a sale, but it is not a payment and must not inflate this
+    // report with the sale total.
+    if (!Number.isFinite(paidAmount) || paidAmount <= 0) continue;
+
+    if (String(sale.paymentMethod || "").toUpperCase() === "COMBINED") {
+      let breakdown = null;
+      try {
+        breakdown = JSON.parse(sale.paymentBreakdownJson || "null");
+      } catch (_e) {}
+      const tenders = Array.isArray(breakdown)
+        ? breakdown
+            .map((tender) => ({
+              mode: tender?.method,
+              amount: Number.isFinite(Number(tender?.amount))
+                ? Number(tender.amount)
+                : Number(tender?.amountCents) / 100,
+            }))
+            .filter((tender) => Number.isFinite(tender.amount) && tender.amount > 0)
+        : [];
+      const allocated = tenders.reduce((sum, tender) => sum + tender.amount, 0);
+      if (tenders.length > 0 && Math.abs(allocated - paidAmount) <= 0.01) {
+        for (const tender of tenders) add(tender.mode, tender.amount, "pos");
+        continue;
+      }
+    }
+    add(sale.paymentMethod, paidAmount, "pos");
   }
   for (const invoice of invoices) {
-    if (String(invoice.status || "").toUpperCase() !== "PAID") continue;
     add(invoice.paymentMode, invoice.amount, "invoice", invoice.id);
   }
   const rows = Object.values(acc).map((row) => ({

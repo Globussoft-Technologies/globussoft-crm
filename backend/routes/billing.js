@@ -145,39 +145,48 @@ function optionalInvoiceText(value, maxLength = 5000) {
 // final bill. This keeps invoice/payment totals consistent without changing
 // catalogue prices or historical visit data.
 function applyVisitFinalBillToLineItems(lineItems, visit) {
-  const targetTotal = Number(visit?.amountCharged);
   if (
-    !Number.isFinite(targetTotal) ||
-    targetTotal <= 0 ||
+    visit?.amountCharged == null ||
+    visit.amountCharged === "" ||
     !Array.isArray(lineItems)
   ) {
     return lineItems;
   }
+  const targetTotal = Number(visit?.amountCharged);
+  if (!Number.isFinite(targetTotal) || targetTotal < 0) return null;
 
   const serviceId = Number(visit?.serviceId);
   const serviceIndex = lineItems.findIndex(
     (item) => item.type === "service" && Number(item.itemId) === serviceId,
   );
-  if (serviceIndex < 0) return lineItems;
+  if (serviceIndex < 0) return null;
 
-  const otherItemsTotal = lineItems.reduce(
+  const otherItemsCents = lineItems.reduce(
     (total, item, index) =>
-      index === serviceIndex ? total : total + item.amount,
+      index === serviceIndex ? total : total + Math.round(item.amount * 100),
     0,
   );
   const serviceItem = lineItems[serviceIndex];
   const quantity = Number(serviceItem.quantity) || 1;
-  const serviceTotal = targetTotal - otherItemsTotal;
-  if (serviceTotal < 0) return lineItems;
+  const serviceTotalCents = Math.round(targetTotal * 100) - otherItemsCents;
+  if (serviceTotalCents < 0) return null;
 
   const unitPrice =
-    Math.round((serviceTotal / quantity + Number.EPSILON) * 100) / 100;
+    Math.round(((serviceTotalCents / 100) / quantity + Number.EPSILON) * 100) /
+    100;
+  const reconciledAmountCents = Math.round(quantity * unitPrice * 100);
+  // Both quantity and unit price are persisted at fixed precision. Some totals
+  // (for example 100.00 / quantity 3) cannot be represented without a one-cent
+  // drift. Reject those combinations instead of silently changing the final
+  // bill recorded on the visit.
+  if (reconciledAmountCents !== serviceTotalCents) return null;
+
   return lineItems.map((item, index) => {
     if (index !== serviceIndex) return item;
     return {
       ...item,
       unitPrice,
-      amount: Math.round(quantity * unitPrice * 100) / 100,
+      amount: reconciledAmountCents / 100,
     };
   });
 }
@@ -1108,6 +1117,13 @@ router.post(
           normalizedItems,
           selectedVisit,
         );
+        if (!reconciledItems) {
+          return res.status(400).json({
+            error:
+              "The visit final bill cannot be reconciled with these line items at the supported precision",
+            code: "FINAL_BILL_RECONCILIATION_FAILED",
+          });
+        }
         const lineItemsTotal =
           Math.round(
             reconciledItems.reduce((sum, item) => sum + item.amount, 0) * 100,

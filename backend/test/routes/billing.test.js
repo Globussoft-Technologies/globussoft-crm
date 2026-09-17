@@ -712,6 +712,86 @@ describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
       }),
     ]);
   });
+
+  test("wellness invoice rejects a final bill that fixed-precision line items cannot represent", async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 15,
+      name: "Priya Sharma",
+      email: null,
+      phone: null,
+      gst: null,
+      contactId: 88,
+    });
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 44,
+      serviceId: 21,
+      amountCharged: 100,
+    });
+    prisma.service.findMany.mockResolvedValue([
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 50,
+        discountedPrice: null,
+      },
+    ]);
+
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
+      .send({
+        dueDate: futureDate,
+        patientId: 15,
+        visitId: 44,
+        lineItems: [
+          { type: "service", itemId: 21, quantity: 3, unitPrice: 50 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("FINAL_BILL_RECONCILIATION_FAILED");
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+  });
+
+  test("wellness invoice never replaces a zero final visit bill with the catalogue price", async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 15,
+      name: "Priya Sharma",
+      email: null,
+      phone: null,
+      gst: null,
+      contactId: 88,
+    });
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 44,
+      serviceId: 21,
+      amountCharged: 0,
+    });
+    prisma.service.findMany.mockResolvedValue([
+      {
+        id: 21,
+        name: "Skin consultation",
+        basePrice: 1500,
+        discountedPrice: null,
+      },
+    ]);
+
+    const res = await request(makeApp({ vertical: "wellness" }))
+      .post("/api/billing")
+      .send({
+        dueDate: futureDate,
+        patientId: 15,
+        visitId: 44,
+        lineItems: [
+          { type: "service", itemId: 21, quantity: 1, unitPrice: 1500 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_AMOUNT");
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("billing response vertical isolation", () => {

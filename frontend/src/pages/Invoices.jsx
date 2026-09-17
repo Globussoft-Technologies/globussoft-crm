@@ -96,8 +96,11 @@ const createEmptyLineItem = () => ({
 // catalogue price untouched and reconcile the service line to that persisted
 // visit total when the invoice is composed from the visit.
 function applyVisitFinalBill(lineItems, finalBill) {
+  if (finalBill == null || finalBill === '' || !Array.isArray(lineItems)) {
+    return lineItems;
+  }
   const targetTotal = Number(finalBill);
-  if (!Number.isFinite(targetTotal) || targetTotal <= 0 || !Array.isArray(lineItems)) {
+  if (!Number.isFinite(targetTotal) || targetTotal < 0) {
     return lineItems;
   }
 
@@ -697,6 +700,21 @@ export default function Invoices() {
       }
       if (wellnessInvoiceTotal <= 0) {
         notify.error("The invoice total must be greater than zero");
+        return;
+      }
+      const selectedVisit = visits.find(
+        (visit) => String(visit.id) === String(newInvoice.visitId),
+      );
+      if (
+        selectedVisit?.amountCharged != null &&
+        selectedVisit.amountCharged !== "" &&
+        Math.abs(
+          wellnessInvoiceTotal - Number(selectedVisit.amountCharged),
+        ) > 0.009
+      ) {
+        notify.error(
+          "The invoice line items must add up exactly to the visit final bill",
+        );
         return;
       }
     }

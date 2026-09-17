@@ -29,7 +29,14 @@
 //
 // The DB is stubbed, so this runs without MySQL.
 
-import { describe, test, expect, beforeAll, afterAll } from "vitest";
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+} from "vitest";
 import { createRequire } from "node:module";
 import Module from "node:module";
 import path from "node:path";
@@ -83,6 +90,10 @@ const visits = services.map((s) => ({
   doctorId: null,
 }));
 
+let reportSales = [];
+let reportInvoices = [];
+let invoiceFindManyArgs = [];
+
 const prismaStub = {
   saleLineItem: {
     findMany: async () => saleLineItems,
@@ -93,14 +104,19 @@ const prismaStub = {
   product: { findMany: async () => products },
   productSalesImport: { findMany: async () => [] },
   productSalesImportRow: { findMany: async () => [] },
-  sale: { findMany: async () => [] },
+  sale: { findMany: async () => reportSales },
   visit: { findMany: async () => visits },
   service: { findMany: async () => services },
   serviceConsumption: { findMany: async () => [] },
   location: { findMany: async () => [], findFirst: async () => null },
   user: { findMany: async () => [] },
   patient: { groupBy: async () => [], findMany: async () => [] },
-  invoice: { findMany: async () => [] },
+  invoice: {
+    findMany: async (args) => {
+      invoiceFindManyArgs.push(args);
+      return reportInvoices;
+    },
+  },
   expense: { findMany: async () => [] },
   contact: { findMany: async () => [] },
   tenant: {
@@ -180,6 +196,12 @@ afterAll(() => {
 });
 
 const WINDOW = "from=2026-01-01&to=2026-12-31";
+
+beforeEach(() => {
+  reportSales = [];
+  reportInvoices = [];
+  invoiceFindManyArgs = [];
+});
 
 function extractPdfText(buf) {
   const str = buf.toString("latin1");
@@ -288,6 +310,71 @@ describe("additional wellness reports", () => {
       expect(res.headers["content-type"]).toContain("text/csv");
     });
   }
+
+  test("payments-by-mode excludes credit sales, splits combined tenders, and filters invoices by paidAt", async () => {
+    reportSales = [
+      {
+        id: 1,
+        invoiceNumber: "POS-CREDIT",
+        paidAmount: 0,
+        paymentMethod: "PAYLATER",
+        paymentBreakdownJson: null,
+      },
+      {
+        id: 2,
+        invoiceNumber: "POS-SPLIT",
+        paidAmount: 500,
+        paymentMethod: "COMBINED",
+        paymentBreakdownJson: JSON.stringify([
+          { method: "CASH", amount: 200 },
+          { method: "CARD", amount: 300 },
+        ]),
+      },
+    ];
+    reportInvoices = [
+      {
+        id: 81,
+        invoiceNum: "INV-PAID",
+        amount: 700,
+        status: "PAID",
+        paidAt: new Date("2026-06-15T10:00:00.000Z"),
+        paymentMode: "upi",
+      },
+    ];
+
+    const res = await request(app).get(
+      `/api/wellness/reports/payments-by-mode?${WINDOW}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.totals).toMatchObject({
+      transactions: 3,
+      amount: 1200,
+      posAmount: 500,
+      invoiceAmount: 700,
+    });
+    expect(res.body.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "cash", amount: 200 }),
+        expect.objectContaining({ id: "card", amount: 300 }),
+        expect.objectContaining({ id: "upi", amount: 700 }),
+      ]),
+    );
+    expect(res.body.rows).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "paylater" })]),
+    );
+    expect(invoiceFindManyArgs.at(-1).where).toEqual(
+      expect.objectContaining({
+        tenantId: 1,
+        status: "PAID",
+        paidAt: expect.objectContaining({
+          gte: expect.any(Date),
+          lte: expect.any(Date),
+        }),
+      }),
+    );
+    expect(invoiceFindManyArgs.at(-1).where).not.toHaveProperty("issuedDate");
+  });
 });
 
 describe("report exports contain every row", () => {

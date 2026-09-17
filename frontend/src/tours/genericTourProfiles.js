@@ -12,7 +12,8 @@ const PROFILE_GROUPS = {
 // compact profile is expanded into feature-specific instructions by the tour
 // registry; keeping capabilities here avoids copying generic prose 71 times.
 const FEATURE_PROFILES = {
-  home: ["workspace", "widget", "widgets", "personalize"],
+  // Home is a read-only, role-aware dashboard; it has no create/edit form.
+  home: ["analytics", "widget", "widgets", "personalize"],
   inbox: ["queue", "conversation", "conversations", "reply to or assign"],
   "converted-leads": ["queue", "converted lead", "converted leads", "open the resulting customer"],
   clients: ["workspace", "company", "companies", "update company ownership and relationships"],

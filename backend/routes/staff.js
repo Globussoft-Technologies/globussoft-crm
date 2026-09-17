@@ -413,7 +413,9 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
     ) {
       return res.status(400).json({ error: "A valid work email is required." });
     }
-    if (!password || typeof password !== "string" || password.length < 6) {
+    const isGenericImport = req.query.import === "1" && (await getCallerVertical(req)) === "generic";
+    const resolvedPassword = isGenericImport ? crypto.randomBytes(18).toString("base64url") : password;
+    if (!resolvedPassword || typeof resolvedPassword !== "string" || resolvedPassword.length < 6) {
       return res
         .status(400)
         .json({ error: "Password must be at least 6 characters." });
@@ -478,7 +480,7 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
         .json({ error: "A user with that email already exists." });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(resolvedPassword, 10);
 
     // Travel-only: scope the new staff member to one or more sub-brands. Ignored
     // entirely for generic/wellness tenants (they never send it, and we gate on

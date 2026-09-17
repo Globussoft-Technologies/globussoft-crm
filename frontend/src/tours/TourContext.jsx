@@ -31,6 +31,7 @@ import {
   performTourActions,
   waitForTourTarget,
 } from "./tourStepActions";
+import { canUseGenericSidebarPage, getGenericAccessByPath } from "../utils/sidebarSearch";
 
 function canAccess(feature, user, permissionState) {
   const role = String(user?.role || "").toUpperCase();
@@ -41,6 +42,29 @@ function canAccess(feature, user, permissionState) {
   if (feature.adminOnly && !isAdmin) return false;
   if (feature.managerOnly && !isManager) return false;
   if (feature.userOnly && isManager) return false;
+  // Pattern-only/detail workflows do not represent permission-catalog pages
+  // (for example /contacts/:id). Keep the generic tour catalogue limited to
+  // explicitly catalogued page routes.
+  if (feature.pattern && !feature.path) return false;
+  // Organization Settings is an administrator-only walkthrough even when a
+  // lower role has settings.read for view access to the page.
+  if (feature.path === "/settings" && !isAdmin) return false;
+  // Generic feature tours inherit the same page-level access contract as the
+  // generic sidebar. This prevents a tour with incomplete legacy metadata
+  // (for example Settings or Contacts) from opening an inaccessible page.
+  if (feature.path) {
+    const pageAccess = getGenericAccessByPath(feature.path);
+    // A route-only tour is not part of the generic permission/page catalog;
+    // do not expose it from Browse/Restart All Tours. Only catalogued pages
+    // with an effective permission are tourable.
+    if (!pageAccess) return false;
+    if (pageAccess && !canUseGenericSidebarPage(pageAccess, {
+      isAdmin,
+      isManager,
+      permissionsReady: permissionState.isReady,
+      hasPermission: permissionState.hasPermission,
+    })) return false;
+  }
   if (feature.requiredPermission) {
     if (!permissionState.isReady) return false;
     return permissionState.hasPermission(
@@ -49,6 +73,28 @@ function canAccess(feature, user, permissionState) {
     );
   }
   return true;
+}
+
+function filterWelcomeStepsForAccess(steps, permissionState) {
+  const canSeeDashboard = permissionState.isReady
+    && permissionState.hasPermission("reports", "read");
+  return steps
+    .filter((step) => {
+      const dashboardStep = step.navigateTo === "/dashboard"
+        || String(step.target || "").includes("/dashboard");
+      return !dashboardStep || canSeeDashboard;
+    })
+    .map((step) => {
+      // The sidebar orientation remains useful without dashboard access;
+      // remove only the forced navigation that would otherwise send the user
+      // to an Access Denied page.
+      if (!canSeeDashboard && step.navigateTo === "/dashboard") {
+        const safeStep = { ...step };
+        delete safeStep.navigateTo;
+        return safeStep;
+      }
+      return step;
+    });
 }
 
 function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onSkipAll }) {
@@ -413,9 +459,12 @@ export default function ProductTourProvider({ children }) {
 
   const availableTours = useMemo(
     () => isAvailable
-      ? [GENERIC_WELCOME_TOUR, ...GENERIC_FEATURE_TOURS].filter((feature) => canAccess(feature, user, permissionState)).map((tour) => ({
+    ? [GENERIC_WELCOME_TOUR, ...GENERIC_FEATURE_TOURS].filter((feature) => canAccess(feature, user, permissionState)).map((tour) => ({
         ...tour,
-        steps: tour.steps.filter((step) => !step.roles || step.roles.includes(String(user?.role || "").toUpperCase())),
+        steps: filterWelcomeStepsForAccess(
+          tour.steps.filter((step) => !step.roles || step.roles.includes(String(user?.role || "").toUpperCase())),
+          permissionState,
+        ),
       }))
       : [],
     [isAvailable, permissionState, user],
@@ -450,9 +499,24 @@ export default function ProductTourProvider({ children }) {
     if (tour.welcome) suppressModuleAutoPathRef.current = location.pathname;
     const saved = state.progress[`${tour.id}:${tour.version}`];
     const stepIndex = options.restart ? 0 : Math.min(saved?.currentStep || 0, tour.steps.length - 1);
+    // Persist the first automatic start immediately. Without this marker, a
+    // browser refresh before the user clicks Next/Close looks like a brand-new
+    // tour and the auto-start effect opens it again.
+    persist((current) => ({
+      ...current,
+      progress: {
+        ...current.progress,
+        [`${tour.id}:${tour.version}`]: {
+          ...(current.progress[`${tour.id}:${tour.version}`] || {}),
+          status: "IN_PROGRESS",
+          currentStep: stepIndex,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    }));
     setActive({ tour, stepIndex, preparing: needsTourPreparation(tour.steps[stepIndex]), continueSequence: options.continueSequence !== false });
     return true;
-  }, [availableTours, effectiveEnabled, location.hash, location.pathname, location.search, navigate, state.progress]);
+  }, [availableTours, effectiveEnabled, location.hash, location.pathname, location.search, navigate, persist, state.progress]);
 
   const record = useCallback((tour, patch) => {
     const key = `${tour.id}:${tour.version}`;
@@ -481,6 +545,14 @@ export default function ProductTourProvider({ children }) {
       focusTarget?.focus?.({ preventScroll: true });
     }, 0);
   }, [location.hash, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (!active) return;
+    if (!availableTours.some((tour) => tour.id === active.tour.id)) {
+      setActive(null);
+      restoreOriginalScreen();
+    }
+  }, [active, availableTours, restoreOriginalScreen]);
 
   const closeTour = useCallback(() => {
     if (active) record(active.tour, { status: "IN_PROGRESS", currentStep: active.stepIndex });
@@ -608,7 +680,7 @@ export default function ProductTourProvider({ children }) {
     if (suppressModuleAutoPathRef.current === location.pathname) return undefined;
     const key = `${currentFeature.id}:${currentFeature.version}`;
     const saved = state.progress[key];
-    if (saved?.status === "COMPLETED" || saved?.status === "DISMISSED" || autoStartedRef.current.has(key)) return undefined;
+    if (saved?.status || autoStartedRef.current.has(key)) return undefined;
     autoStartedRef.current.add(key);
     const timer = window.setTimeout(() => startTour(currentFeature.id, { navigate: false }), 700);
     return () => window.clearTimeout(timer);
@@ -617,7 +689,7 @@ export default function ProductTourProvider({ children }) {
   useEffect(() => {
     if (!remoteReady || !effectiveEnabled || active || !state.preferences.autoStart) return undefined;
     const saved = state.progress[WELCOME_TOUR_KEY];
-    if (saved?.status === "COMPLETED" || saved?.status === "DISMISSED" || autoStartedRef.current.has(WELCOME_TOUR_KEY)) return undefined;
+    if (saved?.status || autoStartedRef.current.has(WELCOME_TOUR_KEY)) return undefined;
     const timer = window.setTimeout(() => startTour(GENERIC_WELCOME_TOUR.id, { navigate: false, continueSequence: false }), 500);
     return () => window.clearTimeout(timer);
   }, [active, effectiveEnabled, remoteReady, startTour, state.preferences.autoStart, state.progress]);

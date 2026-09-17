@@ -98,6 +98,30 @@ const COMMON_MODULES = {
   developer: ['read', 'manage'],
 };
 
+// Generic-only page permissions. These modules correspond to pages in the
+// generic page catalog that are not shared by the wellness/travel products.
+// Keep this separate from COMMON_MODULES so adding a generic page never
+// changes another vertical's permission matrix.
+const GENERIC_MODULES = {
+  cpq: ['read', 'write', 'update', 'delete'],
+  playbooks: ['read', 'write', 'update', 'delete'],
+  territories: ['read', 'write', 'update', 'delete'],
+  live_chat: ['read', 'write', 'update', 'delete'],
+  support: ['read', 'write', 'update', 'delete'],
+  sla: ['read', 'write', 'update', 'delete'],
+  social: ['read', 'write', 'update', 'delete'],
+  field_permissions: ['read', 'write', 'update', 'delete'],
+  sandbox: ['read', 'write', 'update', 'delete'],
+  document_templates: ['read', 'write', 'update', 'delete'],
+  custom_objects: ['read', 'write', 'update', 'delete'],
+  lead_scoring: ['read', 'write', 'update', 'delete'],
+  deal_insights: ['read', 'write', 'update', 'delete'],
+  calendar: ['read', 'write', 'update', 'delete'],
+  ab_tests: ['read', 'write', 'update', 'delete'],
+  booking_pages: ['read', 'write', 'update', 'delete'],
+  web_forms: ['read', 'write', 'update', 'delete'],
+};
+
 // ─────────────────────────────────────────────────────────────────────
 // WELLNESS_MODULES — clinical, inventory, attendance, leave, and the
 // wellness-specific financial split (gift_cards / patient_wallets).
@@ -320,7 +344,7 @@ const TRAVEL_MODULES = {
 // ─────────────────────────────────────────────────────────────────────
 // Per-vertical catalogs (what the matrix renders for each tenant type)
 // ─────────────────────────────────────────────────────────────────────
-const PERMISSION_CATALOG_GENERIC = { ...COMMON_MODULES };
+const PERMISSION_CATALOG_GENERIC = { ...COMMON_MODULES, ...GENERIC_MODULES };
 const PERMISSION_CATALOG_WELLNESS = { ...COMMON_MODULES, ...WELLNESS_MODULES };
 const PERMISSION_CATALOG_TRAVEL = { ...COMMON_MODULES, ...TRAVEL_MODULES };
 
@@ -332,6 +356,7 @@ const PERMISSION_CATALOG_TRAVEL = { ...COMMON_MODULES, ...TRAVEL_MODULES };
 // migration is needed.
 const PERMISSION_CATALOG = {
   ...COMMON_MODULES,
+  ...GENERIC_MODULES,
   ...WELLNESS_MODULES,
   ...TRAVEL_MODULES,
 };
@@ -451,7 +476,11 @@ const TRAVEL_DOMAINS_BODY = [
   },
 ];
 
-const PERMISSION_DOMAINS_GENERIC = [...COMMON_DOMAINS_HEAD, ADMIN_DOMAIN];
+const PERMISSION_DOMAINS_GENERIC = [
+  ...COMMON_DOMAINS_HEAD,
+  { domain: 'Generic CRM Pages', modules: Object.keys(GENERIC_MODULES) },
+  ADMIN_DOMAIN,
+];
 const PERMISSION_DOMAINS_WELLNESS = [...COMMON_DOMAINS_HEAD, ...WELLNESS_DOMAINS_BODY, ADMIN_DOMAIN];
 const PERMISSION_DOMAINS_TRAVEL = [...COMMON_DOMAINS_HEAD, ...TRAVEL_DOMAINS_BODY, ADMIN_DOMAIN];
 

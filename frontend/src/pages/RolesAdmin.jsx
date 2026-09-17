@@ -66,6 +66,10 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'staff',         actions: ['read', 'write', 'update', 'delete', 'manage'] },
   { module: 'roles',         actions: ['read', 'manage'] },
   { module: 'settings',      actions: ['read', 'manage'] },
+  // Generic CRM page modules. The live catalog is authoritative; these keep
+  // the modal useful while an older backend is still serving the fallback.
+  ...['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms']
+    .map((module) => ({ module, actions: ['read', 'write', 'update', 'delete'] })),
 ];
 
 // Domain grouping shown in the Permissions modal. Mirrors PERMISSION_DOMAINS
@@ -86,6 +90,7 @@ const PERMISSION_DOMAINS_FALLBACK = [
   { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'my_appointments', 'book_appointment', 'waitlist', 'services', 'prescriptions', 'my_prescriptions', 'consents', 'visits'] },
   { domain: 'Wellness Inventory', modules: ['products', 'inventory', 'pos'] },
   { domain: 'Admin & Platform',   modules: ['staff', 'roles', 'settings', 'audit', 'integrations', 'developer'] },
+  { domain: 'Generic CRM Pages',  modules: ['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms'] },
 ];
 
 // One-line description per module so admins know what each permission box
@@ -199,6 +204,23 @@ const MODULE_DESCRIPTIONS = {
   // Travel — Marketing
   flyer_studio:         'Marketing Flyer Studio — design and publish sub-brand flyers.',
   flyer_templates:      'Reusable flyer templates and brand-kit defaults.',
+  // Generic CRM page modules
+  cpq:                 'Configure-price-quote builder and quote calculations.',
+  playbooks:           'Reusable sales playbooks and guided processes.',
+  territories:         'Sales territory mapping and assignment.',
+  live_chat:           'Live-chat conversations and visitor handoff.',
+  support:             'Customer support workspace and case handling.',
+  sla:                 'Support service-level policies and targets.',
+  social:              'Social publishing and connected social channels.',
+  field_permissions:   'Role-level field visibility and edit rules.',
+  sandbox:             'Safe workspace for testing CRM operations.',
+  document_templates:  'Reusable document templates.',
+  custom_objects:      'Custom CRM objects and their records.',
+  lead_scoring:        'Lead scoring rules and score review.',
+  deal_insights:       'AI-powered deal insights and recommendations.',
+  ab_tests:            'Marketing A/B tests and experiment results.',
+  booking_pages:       'Public booking pages and appointment capture.',
+  web_forms:           'Embedded lead-capture forms and submissions.',
 };
 
 // Per-vertical description overrides for COMMON modules where the

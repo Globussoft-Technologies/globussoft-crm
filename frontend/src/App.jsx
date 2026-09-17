@@ -2668,7 +2668,7 @@ export default function App() {
                       <Route
                         path="settings"
                         element={
-                          <GenericAccessGuard path="/settings" message="Settings requires admin access.">
+                          <GenericAccessGuard path="/settings" message="Settings requires the settings.read permission.">
                             <Settings />
                           </GenericAccessGuard>
                         }

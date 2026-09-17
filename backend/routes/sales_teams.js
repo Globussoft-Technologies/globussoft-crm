@@ -5,7 +5,12 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 
 router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
 
-const includeTeam = { members: { include: { user: { select: { id: true, name: true, email: true, role: true } } } } };
+const userSelect = { id: true, name: true, email: true, role: true };
+const includeTeam = {
+  members: { include: { user: { select: userSelect } } },
+  createdBy: { select: userSelect },
+  updatedBy: { select: userSelect },
+};
 const tenantWhere = (req, id) => ({ id, tenantId: req.user.tenantId });
 
 router.get("/", async (req, res) => {
@@ -21,7 +26,7 @@ router.post("/", async (req, res) => {
   if (!name) return res.status(400).json({ error: "Team name is required", code: "TEAM_NAME_REQUIRED" });
   try {
     const users = await prisma.user.findMany({ where: { tenantId: req.user.tenantId, id: { in: memberIds } }, select: { id: true } });
-    const team = await prisma.salesTeam.create({ data: { name, tenantId: req.user.tenantId, members: { create: users.map(({ id }) => ({ userId: id, tenantId: req.user.tenantId })) } }, include: includeTeam });
+    const team = await prisma.salesTeam.create({ data: { name, tenantId: req.user.tenantId, createdById: req.user.userId, updatedById: req.user.userId, members: { create: users.map(({ id }) => ({ userId: id, tenantId: req.user.tenantId })) } }, include: includeTeam });
     res.status(201).json(team);
   } catch (_err) { res.status(500).json({ error: "Failed to create team", code: "TEAM_CREATE_FAILED" }); }
 });
@@ -39,7 +44,7 @@ router.put("/:id", async (req, res) => {
       await prisma.salesTeamMember.deleteMany({ where: { teamId: id, tenantId: req.user.tenantId } });
       await prisma.salesTeamMember.createMany({ data: users.map(({ id: userId }) => ({ teamId: id, userId, tenantId: req.user.tenantId })) });
     }
-    res.json(await prisma.salesTeam.update({ where: { id }, data: { name }, include: includeTeam }));
+    res.json(await prisma.salesTeam.update({ where: { id }, data: { name, updatedById: req.user.userId }, include: includeTeam }));
   } catch (_err) { res.status(500).json({ error: "Failed to update team", code: "TEAM_UPDATE_FAILED" }); }
 });
 

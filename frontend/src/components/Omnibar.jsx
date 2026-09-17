@@ -27,6 +27,8 @@ import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
 import {
   filterSidebarPages,
+  canUseGenericSidebarPage,
+  getGenericAccessByPath,
   getGenericSidebarPages,
   mergePagesByPath,
 } from "../utils/sidebarSearch";
@@ -477,7 +479,22 @@ export default function Omnibar() {
               hasPermission,
             })
           : [];
-      const mergedPages = mergePagesByPath(pagesIndex, genericSidebarPages);
+      // The API catalog is normally permission-filtered, but keep the client
+      // side merge defensive: a stale response must not reintroduce a generic
+      // page that the current role cannot access (notably Settings).
+      const permissionFilteredPages =
+        tenant?.vertical === "generic" || !tenant?.vertical
+          ? pagesIndex.filter((page) => {
+              const spec = getGenericAccessByPath(page?.path);
+              return !spec || canUseGenericSidebarPage(spec, {
+                isAdmin,
+                isManager,
+                permissionsReady,
+                hasPermission,
+              });
+            })
+          : pagesIndex;
+      const mergedPages = mergePagesByPath(permissionFilteredPages, genericSidebarPages);
       return filterSidebarPages(mergedPages, {
         vertical: tenant?.vertical || null,
         activeSubBrand,

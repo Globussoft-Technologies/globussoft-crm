@@ -309,7 +309,7 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
   const tagColorMap = new Map(dealTagCatalog.map((record) => [tagKey(record.name), record.color || fallbackTagColor(record.name)]));
   const initials = String(deal.title || 'D').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
   const navItems = tabs.filter((item) => !['Overview', 'Products', 'Quotes', 'Files'].includes(item));
-  const selectTab = (nextTab) => { setTab(nextTab); if (nextTab === 'Activities') onActivitiesOpen?.(); };
+  const selectTab = useCallback((nextTab) => { setTab(nextTab); if (nextTab === 'Activities') onActivitiesOpen?.(); }, [onActivitiesOpen]);
   useEffect(() => {
     const contactCard = [...document.querySelectorAll('.deal-side-cards .deal-info-card')].find((card) => card.querySelector('h2')?.textContent.startsWith('Contacts by sales owner'));
     const contactName = document.querySelector('.deal-reference-cards .deal-related span');
@@ -373,9 +373,9 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
     const notesCard = document.querySelector('.deal-reference-notes');
     const textarea = notesCard?.querySelector('textarea');
     const latest = notesCard?.querySelector('.deal-note');
-    if (!notesCard || !textarea || !latest) return undefined;
+    if (!notesCard || !textarea) return undefined;
     textarea.style.display = 'none';
-    latest.style.display = 'none';
+    if (latest) latest.style.display = 'none';
     const add = document.createElement('button');
     add.type = 'button'; add.className = 'deal-link'; add.textContent = 'Add note'; add.style.marginBottom = '10px';
     add.addEventListener('click', () => window.dispatchEvent(new Event('deal-note-open')));
@@ -389,9 +389,12 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
       const time = document.createElement('small'); time.textContent = relative(item.createdAt); body.append(time); row.append(body); list.append(row);
     });
     if (!notes.length) { const empty = document.createElement('span'); empty.className = 'deal-empty'; empty.textContent = 'No notes available'; list.append(empty); }
-    notesCard.append(add, list);
-    return () => { add.remove(); list.remove(); textarea.style.display = ''; latest.style.display = ''; };
-  }, [deal.activities]);
+    const viewAll = document.createElement('button');
+    viewAll.type = 'button'; viewAll.className = 'deal-link'; viewAll.textContent = 'View all notes';
+    viewAll.addEventListener('click', () => selectTab('Activities'));
+    notesCard.append(add, list, viewAll);
+    return () => { add.remove(); list.remove(); viewAll.remove(); textarea.style.display = ''; if (latest) latest.style.display = ''; };
+  }, [deal.activities, selectTab]);
   useEffect(() => {
     const teamTab = [...document.querySelectorAll('.deal-reference-nav button')].find((button) => button.textContent === 'Deal team');
     if (!teamTab) return undefined;

@@ -1,4 +1,4 @@
-import { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect, useRef } from "react";
 import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { Mail, Square } from "lucide-react";
 import { AuthContext, ThemeContext } from "../App";
@@ -33,6 +33,11 @@ const Login = () => {
   const [forgotMessage, setForgotMessage] = useState("");
   const [forgotToken, setForgotToken] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
+  const [loginPending, setLoginPending] = useState(false);
+  const [tenantChoices, setTenantChoices] = useState([]);
+  const [loginTenantId, setLoginTenantId] = useState("");
+  const loginPendingRef = useRef(false);
+  const loginRequestRef = useRef(0);
 
   // 2FA challenge state
   const [require2FA, setRequire2FA] = useState(false);
@@ -159,7 +164,10 @@ const Login = () => {
       const response = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: forgotEmail }),
+        body: JSON.stringify({
+          email: forgotEmail.trim().toLowerCase(),
+          ...(loginTenantId ? { resetTenantId: Number(loginTenantId) } : {}),
+        }),
       });
       const data = await response.json();
       if (response.ok) {
@@ -338,39 +346,63 @@ const Login = () => {
     }
   };
 
-  const performLogin = async (loginEmail, loginPassword) => {
+  const performLogin = async (loginEmail, loginPassword, requestedTenantId = loginTenantId) => {
+    if (loginPendingRef.current) return;
+    loginPendingRef.current = true;
+    setLoginPending(true);
+    const requestId = ++loginRequestRef.current;
     setError("");
     if (!loginEmail || !loginPassword) {
       setError("Please fill out all required fields");
+      loginPendingRef.current = false;
+      setLoginPending(false);
       return;
     }
+    const normalizedEmail = loginEmail.trim().toLowerCase();
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: loginEmail,
+          email: normalizedEmail,
           password: loginPassword,
+          ...(requestedTenantId ? { loginTenantId: Number(requestedTenantId) } : {}),
         }),
       });
 
       const data = await response.json();
+      if (requestId !== loginRequestRef.current) return;
 
       if (response.ok) {
+        setTenantChoices([]);
         if (data.requires2FA && data.tempToken) {
           setRequire2FA(true);
           setTempToken(data.tempToken);
           return;
         }
         finalizeLogin(data);
+      } else if (response.status === 409 && data.code === "TENANT_SELECTION_REQUIRED") {
+        const choices = Array.isArray(data.tenants) ? data.tenants : [];
+        setTenantChoices(choices);
+        setLoginTenantId(choices.length === 1 ? String(choices[0].id) : "");
+        setError(data.error || "Select the organization you want to access");
       } else if (response.status === 401) {
-        const wentToPortal = await tryPortalLogin(loginEmail, loginPassword);
-        if (!wentToPortal) setError(data.error || "Login failed");
+        const wentToPortal = await tryPortalLogin(normalizedEmail, loginPassword);
+        if (requestId === loginRequestRef.current && !wentToPortal) {
+          setError(data.error || "Login failed");
+        }
       } else {
         setError(data.error || "Login failed");
       }
-    } catch (err) {
-      setError("Server error. Ensure backend is running.");
+    } catch {
+      if (requestId === loginRequestRef.current) {
+        setError("Server error. Ensure backend is running.");
+      }
+    } finally {
+      if (requestId === loginRequestRef.current) {
+        loginPendingRef.current = false;
+        setLoginPending(false);
+      }
     }
   };
 
@@ -382,7 +414,9 @@ const Login = () => {
   const quickLogin = (qEmail, qPassword) => {
     setEmail(qEmail);
     setPassword(qPassword);
-    performLogin(qEmail, qPassword);
+    setTenantChoices([]);
+    setLoginTenantId("");
+    performLogin(qEmail, qPassword, "");
   };
 
   const handleVerify2FA = async (e) => {
@@ -554,7 +588,13 @@ const Login = () => {
                   className="input-field"
                   placeholder="admin@globussoft.com"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (tenantChoices.length > 0) {
+                      setTenantChoices([]);
+                      setLoginTenantId("");
+                    }
+                  }}
                 />
               </div>
               <div style={{ marginBottom: "1rem" }}>
@@ -575,6 +615,35 @@ const Login = () => {
                   autoComplete="current-password"
                 />
               </div>
+              {tenantChoices.length > 0 && (
+                <div style={{ marginBottom: "1rem" }}>
+                  <label
+                    htmlFor="login-tenant"
+                    style={{
+                      display: "block",
+                      marginBottom: "0.5rem",
+                      fontSize: "0.875rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Organization
+                  </label>
+                  <select
+                    id="login-tenant"
+                    className="input-field"
+                    value={loginTenantId}
+                    onChange={(event) => setLoginTenantId(event.target.value)}
+                    required
+                  >
+                    <option value="">Select organization</option>
+                    {tenantChoices.map((choice) => (
+                      <option key={choice.id} value={choice.id}>
+                        {choice.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <label
                 style={{
                   display: "flex",
@@ -601,8 +670,9 @@ const Login = () => {
                 type="submit"
                 className="btn-primary"
                 style={{ width: "100%" }}
+                disabled={loginPending}
               >
-                Sign In
+                {loginPending ? "Signing in…" : "Sign In"}
               </button>
             </form>
 

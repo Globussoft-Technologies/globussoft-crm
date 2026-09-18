@@ -155,11 +155,15 @@ beforeEach(() => {
   prisma.rolePermission.findFirst.mockReset().mockResolvedValue({ id: 999 });
   prisma.rolePermission.create.mockReset().mockResolvedValue({});
   prisma.roleWidget.create.mockReset().mockResolvedValue({});
-  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.user.findMany.mockReset();
   prisma.tenant.findMany.mockReset().mockResolvedValue([]);
   // After reset: findFirst delegates to findUnique so per-test
   // findUnique.mockResolvedValue calls cover the login code path too.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
+  prisma.user.findMany.mockImplementation(async (...args) => {
+    const user = await prisma.user.findUnique(...args);
+    return user ? [user] : [];
+  });
   // Default NODE_ENV to non-production so secure=false in cookie assertions.
   delete process.env.NODE_ENV;
 });

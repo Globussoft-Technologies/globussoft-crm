@@ -48,9 +48,15 @@ import prisma from '../../lib/prisma.js';
 
 prisma.user = {
   findFirst: vi.fn(),
+  findUnique: vi.fn(),
   findMany: vi.fn(),
+  count: vi.fn(),
+  create: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+};
+prisma.role = {
+  findFirst: vi.fn(),
 };
 prisma.userRole = {
   findFirst: vi.fn().mockResolvedValue(null),
@@ -73,6 +79,7 @@ prisma.tenant = {
 // Passthrough so the callback receives `prisma` itself as `tx`, and the
 // mocked tx.user.update / tx.userRole.* hits the same mocks above.
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
+prisma.$executeRawUnsafe = vi.fn().mockResolvedValue(1);
 
 import express from 'express';
 import request from 'supertest';
@@ -94,15 +101,78 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 beforeEach(() => {
   prisma.user.findFirst.mockReset();
   prisma.user.findMany.mockReset();
+  prisma.user.findUnique.mockReset();
+  prisma.user.count.mockReset();
+  prisma.user.create.mockReset();
   prisma.user.update.mockReset();
   prisma.user.delete.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.role.findFirst.mockReset();
+  prisma.userRole.create.mockClear();
+  prisma.$executeRawUnsafe.mockClear();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({});
   // Clear in-memory token stores between tests so cardinality assertions
   // (size after issue) are deterministic.
   staffRouter.__testHooks.adminResetTokens.clear();
   staffRouter.__testHooks.inviteTokens.clear();
+});
+
+describe('POST / — generic CSV import', () => {
+  test('assigns the tenant role and issues an invitation instead of an unknown password', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.role.findFirst.mockResolvedValue({
+      id: 31,
+      key: 'USER',
+      name: 'User',
+      userType: 'STAFF',
+      isActive: true,
+      landingPath: '/home',
+    });
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 44,
+      name: 'Imported User',
+      email: 'imported@example.com',
+      role: 'USER',
+      wellnessRole: null,
+      subBrandAccess: null,
+      commissionProfileId: null,
+      createdAt: new Date('2026-09-17T00:00:00Z'),
+      deactivatedAt: null,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/staff?import=1')
+      .send({ name: 'Imported User', email: 'imported@example.com', role: 'USER' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.inviteSent).toBe(true);
+    expect(res.body.primaryRole).toMatchObject({ id: 31, key: 'USER' });
+    expect(prisma.userRole.create).toHaveBeenCalledWith({
+      data: { userId: 44, roleId: 31, assignedById: 7 },
+    });
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('PasswordResetToken'),
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      44,
+      expect.any(Date),
+    );
+    const createData = prisma.user.create.mock.calls[0][0].data;
+    expect(createData.password).not.toBeUndefined();
+    expect(createData.password).not.toBe('password123');
+  });
+
+  test('does not enable passwordless CSV import for wellness tenants', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    const res = await request(makeApp())
+      .post('/api/staff?import=1')
+      .send({ name: 'Clinic User', email: 'clinic@example.com', role: 'USER' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Password/);
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
 });
 
 // ── PUT /:id — edit user fields (#618) ─────────────────────────────

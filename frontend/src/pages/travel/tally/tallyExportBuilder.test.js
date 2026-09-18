@@ -75,6 +75,29 @@ describe("Tally GST journal export", () => {
     expect(xml).not.toContain('<LEDGER NAME="Travel"');
   });
 
+  it("creates one trip cost centre master and enables it on posting ledgers", () => {
+    const xml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: makeRows() });
+    expect(xml).toContain('<COSTCENTRE NAME="TRIP-1" ACTION="Create">');
+    expect(xml.match(/<COSTCENTRE NAME="TRIP-1"/g)).toHaveLength(1);
+    expect(xml).toContain("<ISCOSTCENTRESON>Yes</ISCOSTCENTRESON>");
+    expect(xml).not.toContain('<LEDGER NAME="TRIP-1"');
+  });
+
+  it("allocates sales and purchases to the trip without double-counting settlements", () => {
+    const xml = buildTallyXml({ companyName: master.companyName, voucherRows: makeRows() });
+    const sales = xml.match(/<VOUCHER VCHTYPE="Sales"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
+    const purchase = xml.match(/<VOUCHER VCHTYPE="Purchase"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
+    const receipt = xml.match(/<VOUCHER VCHTYPE="Receipt"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
+    const payment = xml.match(/<VOUCHER VCHTYPE="Payment"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
+
+    for (const voucher of [sales, purchase]) {
+      expect(voucher).toContain("<CATEGORYALLOCATIONS.LIST>");
+      expect(voucher).toContain("<NAME>TRIP-1</NAME>");
+    }
+    expect(receipt).not.toContain("COSTCENTREALLOCATIONS.LIST");
+    expect(payment).not.toContain("COSTCENTREALLOCATIONS.LIST");
+  });
+
   it("preserves the educational date behavior and GST accounting", () => {
     const xml = buildTallyXml({ companyName: master.companyName, voucherRows: makeRows(), educationalMode: true });
     expect(xml).toContain("<DATE>20260901</DATE>");

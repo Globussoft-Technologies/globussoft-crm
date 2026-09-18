@@ -1,0 +1,102 @@
+const PROFILE_GROUPS = {
+  workspace: { create: true, edit: true, filter: true, export: true },
+  queue: { edit: true, filter: true, export: true },
+  builder: { create: true, edit: true, filter: true, export: true, builder: true },
+  analytics: { filter: true, export: true },
+  admin: { create: true, edit: true, filter: true, admin: true },
+  integration: { edit: true, filter: true, admin: true, integration: true },
+  personal: { edit: true, filter: true, personal: true },
+};
+
+// Every generic navigation destination is deliberately classified here. The
+// compact profile is expanded into feature-specific instructions by the tour
+// registry; keeping capabilities here avoids copying generic prose 71 times.
+const FEATURE_PROFILES = {
+  // Home is a read-only, role-aware dashboard; it has no create/edit form.
+  home: ["analytics", "widget", "widgets", "personalize"],
+  inbox: ["queue", "conversation", "conversations", "reply to or assign"],
+  "converted-leads": ["queue", "converted lead", "converted leads", "open the resulting customer"],
+  clients: ["workspace", "company", "companies", "update company ownership and relationships"],
+  tasks: ["workspace", "task", "tasks", "complete, reschedule, or reassign"],
+  tickets: ["workspace", "ticket", "tickets", "triage, assign, and resolve"],
+  "calendar-sync": ["integration", "calendar connection", "calendar connections", "connect or reconnect"],
+  "live-chat": ["queue", "chat session", "chat sessions", "reply, assign, or close"],
+  "deal-insights": ["analytics", "deal insight", "deal insights", "review the recommendation"],
+  playbooks: ["builder", "playbook", "playbooks", "edit stages and guidance"],
+  "booking-pages": ["builder", "booking page", "booking pages", "configure availability and sharing"],
+  forms: ["builder", "web form", "web forms", "edit fields, validation, and embed options"],
+  "landing-sites": ["builder", "landing site", "landing sites", "edit sections, theme, and publishing"],
+  signatures: ["workspace", "signature request", "signature requests", "review recipients and status"],
+  "document-templates": ["builder", "document template", "document templates", "edit reusable content"],
+  "document-tracking": ["queue", "tracked document", "tracked documents", "inspect views and signatures"],
+  invoices: ["workspace", "invoice", "invoices", "edit line items, payment status, and delivery"],
+  estimates: ["workspace", "estimate", "estimates", "edit line items, validity, and delivery"],
+  expenses: ["workspace", "expense", "expenses", "review, approve, or reimburse"],
+  contracts: ["workspace", "contract", "contracts", "edit terms, parties, and lifecycle status"],
+  projects: ["workspace", "project", "projects", "manage members, milestones, and work"],
+  pipelines: ["builder", "sales pipeline", "sales pipelines", "reorder stages and rules"],
+  forecasting: ["analytics", "forecast", "forecasts", "inspect period and owner projections"],
+  quotas: ["workspace", "quota", "quotas", "adjust targets, periods, and assignees"],
+  "win-loss": ["analytics", "sales outcome", "sales outcomes", "compare reasons and trends"],
+  funnel: ["analytics", "funnel stage", "funnel stages", "inspect conversion and drop-off"],
+  reports: ["analytics", "report", "reports", "open the underlying records"],
+  "agent-reports": ["analytics", "agent result", "agent results", "compare activity and outcomes"],
+  dashboards: ["builder", "dashboard", "dashboards", "arrange widgets and sharing"],
+  "custom-reports": ["builder", "custom report", "custom reports", "edit fields, grouping, and visualization"],
+  approvals: ["queue", "approval request", "approval requests", "approve, reject, or inspect"],
+  "lead-routing": ["builder", "routing rule", "routing rules", "edit priority, conditions, and assignee"],
+  territories: ["workspace", "territory", "territories", "edit boundaries and assignments"],
+  marketing: ["workspace", "campaign", "campaigns", "edit audience, content, and schedule"],
+  sequences: ["builder", "sequence", "sequences", "edit steps, delays, and enrollment"],
+  "ab-tests": ["builder", "experiment", "experiments", "edit variants and success criteria"],
+  "web-visitors": ["analytics", "visitor session", "visitor sessions", "inspect pages, source, and identity"],
+  chatbots: ["builder", "chatbot", "chatbots", "edit conversation nodes and publishing"],
+  social: ["workspace", "social post", "social posts", "edit content, channel, and schedule"],
+  "knowledge-base": ["builder", "article", "articles", "edit content, visibility, and publishing"],
+  surveys: ["builder", "survey", "surveys", "edit questions, audience, and delivery"],
+  sla: ["builder", "SLA policy", "SLA policies", "edit targets, escalation, and scope"],
+  payments: ["queue", "payment", "payments", "inspect allocation, gateway, and status"],
+  "lead-scoring": ["builder", "scoring rule", "scoring rules", "edit criteria, weights, and activation"],
+  cpq: ["builder", "quote configuration", "quote configurations", "edit products, pricing, and approval"],
+  staff: ["admin", "staff account", "staff accounts", "edit role, access, and status"],
+  "settings-roles": ["admin", "role", "roles", "edit permissions and assigned users"],
+  "audit-log": ["analytics", "audit event", "audit events", "inspect actor, action, and changes"],
+  privacy: ["admin", "privacy request", "privacy requests", "review retention and DSAR handling"],
+  "field-permissions": ["admin", "field rule", "field rules", "edit role-level visibility and access"],
+  "admin-csp-violations": ["analytics", "CSP violation", "CSP violations", "inspect blocked resources and directives"],
+  "admin-embed-allowlist": ["admin", "allowed embed origin", "allowed embed origins", "edit trusted domains"],
+  "admin-status": ["admin", "status component", "status components", "edit availability and notices"],
+  "commission-profiles": ["admin", "commission profile", "commission profiles", "edit rates, scope, and eligibility"],
+  "commission-data": ["analytics", "commission result", "commission results", "inspect calculations and recipients"],
+  "revenue-goals": ["admin", "revenue goal", "revenue goals", "edit target, owner, and period"],
+  channels: ["integration", "communication channel", "communication channels", "configure credentials and defaults"],
+  "industry-templates": ["admin", "industry template", "industry templates", "preview and apply configuration"],
+  sandbox: ["admin", "sandbox experiment", "sandbox experiments", "configure and safely test"],
+  objects: ["builder", "custom object", "custom objects", "edit fields, relationships, and layout"],
+  currencies: ["admin", "currency", "currencies", "edit rates, symbols, and defaults"],
+  zapier: ["integration", "Zapier connection", "Zapier connections", "configure credentials and triggers"],
+  developer: ["integration", "API credential or webhook", "API credentials and webhooks", "rotate keys or edit delivery settings"],
+  "data-import-export": ["workspace", "data job", "data jobs", "review mapping, validation, and results"],
+  settings: ["admin", "tenant setting", "tenant settings", "edit organization defaults and integrations"],
+  "notification-settings": ["personal", "notification preference", "notification preferences", "choose channels and frequency"],
+  whatsapp: ["queue", "WhatsApp conversation", "WhatsApp conversations", "reply, assign, or resolve"],
+  "lead-reports": ["analytics", "lead metric", "lead metrics", "inspect source, owner, and conversion detail"],
+  workflows: ["builder", "workflow", "workflows", "edit triggers, conditions, and actions"],
+  adsgpt: ["integration", "AdsGPT workspace", "AdsGPT workspaces", "open the connected marketing workspace"],
+  callified: ["integration", "Callified workspace", "Callified workspaces", "open the connected calling workspace"],
+};
+
+export function getGenericTourProfile(featureId) {
+  const raw = FEATURE_PROFILES[featureId];
+  if (!raw) return null;
+  const [group, singular, plural, editInstruction] = raw;
+  return {
+    ...PROFILE_GROUPS[group],
+    group,
+    singular,
+    plural,
+    editInstruction,
+  };
+}
+
+export const GENERIC_TOUR_PROFILE_IDS = Object.freeze(Object.keys(FEATURE_PROFILES));

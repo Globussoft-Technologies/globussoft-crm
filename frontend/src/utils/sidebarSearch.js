@@ -20,15 +20,16 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/suppliers-admin', label: 'Suppliers' },
   { path: '/travel/commission-profiles', label: 'Commission Profiles' },
   { path: '/travel/quotes-admin', label: 'Quotes' },
-  { path: '/travel/flights/quote', label: 'Flight quick-quote' },
+  { path: '/travel/flights/quote', label: 'Flight Quick-quote' },
   { path: '/travel/quotes/builder', label: 'Quote Builder' },
   { path: '/travel/quote-templates', label: 'Quote Templates' },
   { path: '/travel/cancellation-policies', label: 'Cancellation Policies' },
-  { path: '/travel/suppliers', label: 'Supplier credentials' },
+  { path: '/travel/suppliers', label: 'Supplier Credentials' },
   { path: '/travel/religious-packets', label: 'Religious Packets', brand: 'rfu' },
   { path: '/travel/curriculum-mappings', label: 'Curriculum Mappings', brand: 'tmc' },
   { path: '/travel/school-terms', label: 'School Term Calendar', brand: 'tmc' },
   { path: '/travel/brochures', label: 'Brochure Engine' },
+  { path: '/travel/forms', label: 'Web Forms', description: 'Embedded travel lead capture forms' },
   { path: '/landing-pages', label: 'Landing Pages' },
   { path: '/inbox', label: 'Inbox' },
   { path: '/tasks', label: 'Tasks' },
@@ -38,7 +39,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/tally', label: 'Tally', description: 'Tally accounting, XML and CA exports' },
   { path: '/travel/milestones', label: 'Milestones' },
   { path: '/travel/payables', label: 'Payables' },
-  { path: '/payments', label: 'Payments received' },
+  { path: '/payments', label: 'Payments Received' },
   { path: '/expenses', label: 'Expense Management' },
   { path: '/staff', label: 'Staff' },
   { path: '/settings', label: 'Settings' },
@@ -47,8 +48,6 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/developer', label: 'Developer' },
   { path: '/privacy', label: 'Privacy' },
   { path: '/admin/brand-kits', label: 'Brand Kits' },
-  { path: '/travel-stall', label: 'Dashboard', brand: 'travelstall' },
-  { path: '/travel/visa', label: 'Dashboard', brand: 'visasure' },
   { path: '/travel/visa/applications', label: 'Applications', brand: 'visasure' },
   { path: '/travel/visa/checklists', label: 'Checklists', brand: 'visasure' },
   { path: '/travel/visa/embassy-rules', label: 'Embassy Rules', brand: 'visasure' },
@@ -56,30 +55,30 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
 
 export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/home', label: 'Home', description: 'Role-aware widget dashboard', hideForAdmin: true },
-  { path: '/dashboard', label: 'Dashboard', description: 'Enterprise overview' },
-  { path: '/inbox', label: 'Inbox', description: 'Unified inbox' },
-  { path: '/contacts', label: 'Contacts', description: 'Contact directory' },
-  { path: '/pipeline', label: 'Pipeline', description: 'Deal pipeline by stage' },
-  { path: '/leads', label: 'Leads', description: 'Inbound + open leads' },
-  { path: '/converted-leads', label: 'Converted Leads', description: 'Leads that converted to customers' },
-  { path: '/clients', label: 'Clients', description: 'Company and organization directory' },
-  { path: '/tasks', label: 'Task Queue', description: 'Task queue' },
-  { path: '/tickets', label: 'Tickets', description: 'Support ticket management' },
-  { path: '/calendar-sync', label: 'Calendar Sync', description: 'Google and Outlook calendar integration' },
-  { path: '/live-chat', label: 'Live Chat', description: 'Website visitor chat support' },
-  { path: '/deal-insights', label: 'Deal Insights', description: 'AI-powered deal analytics' },
-  { path: '/playbooks', label: 'Playbooks', description: 'Sales process workflows' },
-  { path: '/booking-pages', label: 'Booking Pages', description: 'Customer booking form builder' },
-  { path: '/forms', label: 'Web Forms', description: 'Embedded lead capture forms' },
-  { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder' },
-  { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue' },
-  { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates' },
-  { path: '/document-tracking', label: 'Doc Tracking', description: 'Track documents and signatures' },
+  { path: '/dashboard', label: 'Dashboard', description: 'Enterprise overview', requiredPermission: { module: 'reports', action: 'read' } },
+  { path: '/inbox', label: 'Inbox', description: 'Unified inbox', requiredPermission: { module: 'communications', action: 'read' } },
+  { path: '/contacts', label: 'Contacts', description: 'Contact directory', requiredPermission: { module: 'contacts', action: 'read' } },
+  { path: '/pipeline', label: 'Pipeline', description: 'Deal pipeline by stage', requiredPermission: { module: 'pipeline', action: 'read' } },
+  { path: '/leads', label: 'Leads', description: 'Inbound + open leads', requiredPermission: { module: 'leads', action: 'read' } },
+  { path: '/converted-leads', label: 'Converted Leads', description: 'Leads that converted to customers', requiredPermission: { module: 'leads', action: 'read' } },
+  { path: '/clients', label: 'Clients', description: 'Company and organization directory', requiredPermission: { module: 'contacts', action: 'read' } },
+  { path: '/tasks', label: 'Task Queue', description: 'Task queue', requiredPermission: { module: 'tasks', action: 'read' } },
+  { path: '/tickets', label: 'Tickets', description: 'Support ticket management', requiredPermission: { module: 'tickets', action: 'read' } },
+  { path: '/calendar-sync', label: 'Calendar Sync', description: 'Google and Outlook calendar integration', requiredPermission: { module: 'calendar', action: 'read' } },
+  { path: '/live-chat', label: 'Live Chat', description: 'Website visitor chat support', requiredPermission: { module: 'live_chat', action: 'read' } },
+  { path: '/deal-insights', label: 'Deal Insights', description: 'AI-powered deal analytics', requiredPermission: { module: 'deal_insights', action: 'read' } },
+  { path: '/playbooks', label: 'Playbooks', description: 'Sales process workflows', requiredPermission: { module: 'playbooks', action: 'read' } },
+  { path: '/booking-pages', label: 'Booking Pages', description: 'Customer booking form builder', requiredPermission: { module: 'booking_pages', action: 'read' } },
+  { path: '/forms', label: 'Web Forms', description: 'Embedded lead capture forms', requiredPermission: { module: 'web_forms', action: 'read' } },
+  { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' } },
+  { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue', requiredPermission: { module: 'signatures', action: 'read' } },
+  { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', requiredPermission: { module: 'document_templates', action: 'read' } },
+  { path: '/document-tracking', label: 'Doc Tracking', description: 'Track documents and signatures', requiredPermission: { module: 'documents', action: 'read' } },
   { path: '/invoices', label: 'Invoices', description: 'Invoice ledger + payment links', requiredPermission: { module: 'invoices', action: 'read' } },
   { path: '/estimates', label: 'Estimates', description: 'Quotes + estimates sent to customers', requiredPermission: { module: 'estimates', action: 'read' } },
   { path: '/expenses', label: 'Expenses', description: 'Team expense submissions', requiredPermission: { module: 'expenses', action: 'read' } },
   { path: '/contracts', label: 'Contracts', description: 'Contract lifecycle management', requiredPermission: { module: 'contracts', action: 'read' } },
-  { path: '/projects', label: 'Projects', description: 'Project tracking + task boards' },
+  { path: '/projects', label: 'Projects', description: 'Project tracking + task boards', requiredPermission: { module: 'projects', action: 'read' } },
   { path: '/pipelines', label: 'Pipelines', description: 'Create and configure sales pipelines', managerOnly: true },
   { path: '/forecasting', label: 'Forecasting', description: 'Sales forecast modeling', managerOnly: true },
   { path: '/quotas', label: 'Quotas', description: 'Sales quota management', managerOnly: true },
@@ -91,7 +90,9 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/custom-reports', label: 'Custom Reports', description: 'Build custom data reports', managerOnly: true },
   { path: '/approvals', label: 'Approvals', description: 'Pending approvals queue', managerOnly: true },
   { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
-  { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true },
+  { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, parent: 'Team & Territories' },
+  { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, parent: 'Team & Territories' },
+  { path: '/users', label: 'Users', description: 'Manage CRM users and access', managerOnly: true, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing', description: 'One-shot marketing campaigns', managerOnly: true },
   { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true },
   { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true },
@@ -114,7 +115,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/admin/status', label: 'Status', description: 'Platform status admin', adminOnly: true },
   { path: '/commission-profiles', label: 'Commission Profiles', description: 'Commission rule configuration', adminOnly: true },
   { path: '/commission-data', label: 'Commission Data', description: 'Commission analytics', adminOnly: true },
-  { path: '/revenue-goals', label: 'Revenue Goals', description: 'Revenue target configuration', adminOnly: true },
+  { path: '/revenue-goals', label: 'Revenue Goals', description: 'Revenue target configuration' },
   { path: '/channels', label: 'Channels', description: 'SMS, WhatsApp, and call channel config', adminOnly: true },
   { path: '/industry-templates', label: 'Industry Templates', description: 'Pre-built workflow templates', adminOnly: true },
   { path: '/sandbox', label: 'Sandbox', description: 'Testing + feature preview', adminOnly: true },
@@ -122,16 +123,128 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/currencies', label: 'Currencies', description: 'Multi-currency configuration', adminOnly: true },
   { path: '/zapier', label: 'Zapier', description: 'Third-party automation hub', adminOnly: true },
   { path: '/developer', label: 'Developers', description: 'API + webhook console', adminOnly: true },
-  { path: '/data-import-export', label: 'Import / Export', description: 'Bulk CSV operations', adminOnly: true },
-  { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', adminOnly: true },
+  { path: '/data-import-export', label: 'Import / Export', description: 'Bulk CSV operations', managerOnly: true },
+  { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', requiredPermission: { module: 'settings', action: 'read' } },
   { path: '/notification-settings', label: 'Notification Settings', description: 'Personal notification preferences', userOnly: true },
+  { id: 'adsgpt', label: 'AdsGPT', description: 'Open the connected AdsGPT marketing workspace', managerOnly: true, actionTarget: '[data-tour-feature="adsgpt"]' },
+  { id: 'callified', label: 'Callified', description: 'Open the connected Callified calling workspace', managerOnly: true, actionTarget: '[data-tour-feature="callified"]' },
+  { path: '/whatsapp', label: 'WhatsApp', description: 'Manage tenant-scoped WhatsApp conversations', requiredPermission: { module: 'whatsapp', action: 'read' } },
+  { path: '/lead-reports', label: 'Lead Reports', description: 'Review lead productivity, quality, sources, and follow-ups', managerOnly: true },
+  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' } },
 ];
 
+// Permission mapping for legacy generic search entries that historically only
+// declared a role tier. This keeps global search consistent with the generic
+// sidebar without changing wellness/travel search behavior.
+const GENERIC_PAGE_PERMISSION_FALLBACK = {
+  '/pipelines': ['pipeline', 'write'],
+  '/forecasting': ['forecasting', 'read'],
+  '/quotas': ['quotas', 'read'],
+  '/win-loss': ['reports', 'read'],
+  '/funnel': ['pipeline', 'read'],
+  '/reports': ['reports', 'read'],
+  '/agent-reports': ['reports', 'read'],
+  '/dashboards': ['dashboards', 'read'],
+  '/custom-reports': ['reports', 'read'],
+  '/approvals': ['staff', 'manage'],
+  '/lead-routing': ['leads', 'read'],
+  '/lead-scoring': ['lead_scoring', 'read'],
+  '/lead-reports': ['reports', 'read'],
+  '/marketing': ['marketing', 'read'],
+  '/sequences': ['sequences', 'read'],
+  '/ab-tests': ['ab_tests', 'read'],
+  '/web-visitors': ['analytics', 'read'],
+  '/chatbots': ['chatbots', 'read'],
+  '/social': ['social', 'read'],
+  '/knowledge-base': ['knowledge_base', 'read'],
+  '/surveys': ['surveys', 'read'],
+  '/sla': ['sla', 'read'],
+  '/payments': ['payments', 'read'],
+  '/cpq': ['cpq', 'read'],
+  '/data-import-export': ['settings', 'manage'],
+};
+
+// Keep consumers of the Generic navigation catalog independent from whether
+// a future navigation entry is represented as a flat item or as a nested
+// children/items/subItems collection. The sidebar and the tour both consume
+// the same source; no DOM expansion state is involved.
+export function flattenGenericNavigation(entries, parent = null) {
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const { children, items, subItems, ...page } = entry;
+    const current = page.path || page.id ? [{ ...page, parent }] : [];
+    const nested = flattenGenericNavigation(
+      [
+        ...(Array.isArray(children) ? children : []),
+        ...(Array.isArray(items) ? items : []),
+        ...(Array.isArray(subItems) ? subItems : []),
+      ],
+      page.label || parent,
+    );
+    return [...current, ...nested];
+  });
+}
+
+export const GENERIC_NAVIGATION_OPTIONS = flattenGenericNavigation(GENERIC_SIDEBAR_PAGE_SPECS);
+
+// This allow-list intentionally mirrors renderTravelNav in Sidebar.jsx. It
+// keeps hidden routes (such as the retired travel dashboards) out of global
+// search while still letting the permission-filtered backend catalog supply
+// the actual accessible entries and descriptions.
+
+const GENERIC_PAGE_BY_PATH = new Map(
+  GENERIC_NAVIGATION_OPTIONS.filter((page) => page.path).map((page) => [page.path, page]),
+);
+
+export function getGenericAccessByPath(path) {
+  const page = GENERIC_PAGE_BY_PATH.get(path);
+  if (!page) return null;
+  const fallbackPermission = GENERIC_PAGE_PERMISSION_FALLBACK[path];
+  return page.requiredPermission || !fallbackPermission
+    ? page
+    : {
+        ...page,
+        requiredPermission: {
+          module: fallbackPermission[0],
+          action: fallbackPermission[1],
+        },
+      };
+}
+
+export function getGenericAccessForLocation(pathname) {
+  if (!pathname) return null;
+  return GENERIC_NAVIGATION_OPTIONS
+    .filter((page) => page.path && (pathname === page.path || pathname.startsWith(`${page.path}/`)))
+    .sort((left, right) => right.path.length - left.path.length)[0] || null;
+}
+
+export function genericRoleGuardProps(path) {
+  const access = getGenericAccessByPath(path);
+  if (!access) return {};
+  return {
+    ...(access.adminOnly ? { allow: ['ADMIN'] } : {}),
+    ...(access.managerOnly ? { allow: ['ADMIN', 'MANAGER'] } : {}),
+    ...(access.userOnly ? { allow: ['USER'] } : {}),
+    ...(access.requiredPermission ? { requiredPermission: access.requiredPermission } : {}),
+  };
+}
 const TRAVEL_SIDEBAR_PAGE_MAP = new Map(
   TRAVEL_SIDEBAR_PAGE_SPECS.map((page) => [page.path, page]),
 );
 
-function canUseGenericSidebarPage(page, {
+const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
+  '/travel/web-checkins',
+  '/travel/sightseeing',
+  '/travel/suppliers',
+  '/travel/quotes-admin',
+  '/travel/flights/quote',
+  '/travel/quotes/builder',
+  '/travel/quote-templates',
+  '/gmail',
+]);
+
+export function canUseGenericSidebarPage(page, {
   isAdmin = false,
   isManager = false,
   permissionsReady = false,
@@ -141,9 +254,13 @@ function canUseGenericSidebarPage(page, {
   if (page.managerOnly && !isManager) return false;
   if (page.hideForAdmin && isAdmin) return false;
   if (page.userOnly && (isAdmin || isManager)) return false;
+  const fallbackPermission = page.path ? GENERIC_PAGE_PERMISSION_FALLBACK[page.path] : null;
+  const requiredPermission = page.requiredPermission || (fallbackPermission
+    ? { module: fallbackPermission[0], action: fallbackPermission[1] }
+    : null);
   if (
-    page.requiredPermission &&
-    (!permissionsReady || !hasPermission(page.requiredPermission.module, page.requiredPermission.action))
+    requiredPermission &&
+    (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
   ) {
     return false;
   }
@@ -151,12 +268,17 @@ function canUseGenericSidebarPage(page, {
 }
 
 export function getGenericSidebarPages(options = {}) {
-  return GENERIC_SIDEBAR_PAGE_SPECS
+  return GENERIC_NAVIGATION_OPTIONS
     .filter((page) => canUseGenericSidebarPage(page, options))
-    .map(({ requiredPermission, adminOnly, managerOnly, hideForAdmin, userOnly, ...page }) => ({
-      ...page,
-      category: page.category || 'Navigation',
-    }));
+    .map((page) => {
+      const searchable = { ...page };
+      delete searchable.requiredPermission;
+      delete searchable.adminOnly;
+      delete searchable.managerOnly;
+      delete searchable.hideForAdmin;
+      delete searchable.userOnly;
+      return { ...searchable, category: searchable.category || 'Navigation' };
+    });
 }
 
 export function mergePagesByPath(...pageLists) {
@@ -164,9 +286,10 @@ export function mergePagesByPath(...pageLists) {
   for (const list of pageLists) {
     if (!Array.isArray(list)) continue;
     for (const page of list) {
-      if (!page?.path) continue;
-      byPath.set(page.path, {
-        ...(byPath.get(page.path) || {}),
+      const key = page?.path || (page?.actionTarget ? `action:${page.id}` : null);
+      if (!key) continue;
+      byPath.set(key, {
+        ...(byPath.get(key) || {}),
         ...page,
       });
     }
@@ -174,25 +297,42 @@ export function mergePagesByPath(...pageLists) {
   return Array.from(byPath.values());
 }
 
-export function filterSidebarPages(pages, { vertical = null, activeSubBrand = null } = {}) {
+function normalizeSubBrandAccess(value) {
+  if (value == null || value === '') return null;
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  return parsed;
+}
+
+export function filterSidebarPages(
+  pages,
+  { vertical = null, activeSubBrand = null, subBrandAccess = null } = {},
+) {
   if (!Array.isArray(pages)) return [];
   if (vertical !== 'travel') return pages.slice();
 
+  const normalizedSubBrandAccess = normalizeSubBrandAccess(subBrandAccess);
   const filtered = [];
   for (const page of pages) {
     const spec = TRAVEL_SIDEBAR_PAGE_MAP.get(page?.path);
     if (!spec) continue;
-    // TMC does not use Web Check-ins, Sightseeing Master, Supplier
-    // Credentials, or the Gmail page. Keep them searchable for the other
-    // sub-brands and for the All (4) view, but hide them when TMC is active.
+    // Mirror the travel sidebar's conditional links. TMC has no web
+    // check-ins, sightseeing, supplier credentials, quote-builder, or Gmail
+    // entry. These remain searchable for other sub-brands and in All mode.
+    if (activeSubBrand === 'tmc' && TMC_HIDDEN_TRAVEL_PAGE_PATHS.has(page?.path)) continue;
+    // The sidebar also narrows brand-scoped entries by the user's granted
+    // sub-brand access, even when the switcher is currently set to All.
     if (
-      activeSubBrand === 'tmc' &&
-      (
-        page?.path === '/travel/web-checkins' ||
-        page?.path === '/travel/sightseeing' ||
-        page?.path === '/travel/suppliers' ||
-        page?.path === '/gmail'
-      )
+      spec.brand &&
+      normalizedSubBrandAccess &&
+      !normalizedSubBrandAccess.includes(spec.brand)
     ) continue;
     if (spec.brand && activeSubBrand && spec.brand !== activeSubBrand) continue;
     filtered.push({
@@ -202,4 +342,3 @@ export function filterSidebarPages(pages, { vertical = null, activeSubBrand = nu
   }
   return filtered;
 }
-

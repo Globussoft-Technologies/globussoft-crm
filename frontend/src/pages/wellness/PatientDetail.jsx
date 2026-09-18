@@ -198,7 +198,7 @@ export default function PatientDetail() {
 
       {tab === 'history' && <CaseHistoryTab patient={patient} />}
       {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
-      {tab === 'consent' && <ConsentTab patient={patient} services={services} onSaved={load} />}
+      {tab === 'consent' && <ConsentTab patient={patient} services={services} />}
       {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
       {tab === 'visit' && <LogVisitTab patient={patient} services={services} doctors={doctors} onSaved={load} />}
       {tab === 'photos' && <PhotosTab patient={patient} onSaved={load} />}

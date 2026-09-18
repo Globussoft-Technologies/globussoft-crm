@@ -193,8 +193,12 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
     if (!name || !email || !phone || !company) {
       return res.status(400).json({ error: "Name, email, phone, and company are required" });
     }
-    if (!/^\S+@\S+\.\S+$/.test(email)) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.includes("..")) {
       return res.status(400).json({ error: "Enter a valid email address" });
+    }
+    const normalizedPhone = phone.replace(/[\s().-]/g, "");
+    if (!/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
+      return res.status(400).json({ error: "Enter a valid international phone number with country code, for example +919876543210", code: "INVALID_PHONE" });
     }
 
     const configuredTenantSlug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim().toLowerCase();
@@ -242,7 +246,7 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       return res.status(503).json({ error: "Lead capture is not configured" });
     }
 
-    const submissionPayload = JSON.stringify({ name, email, phone, company, companySize });
+    const submissionPayload = JSON.stringify({ name, email, phone: normalizedPhone, company, companySize });
     const existing = await prisma.contact.findFirst({
       where: { tenantId: tenant.id, email, deletedAt: null },
       select: { id: true },
@@ -264,7 +268,7 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       data: {
         name: name.slice(0, 191),
         email: email.slice(0, 191),
-        phone: phone.slice(0, 40),
+        phone: normalizedPhone.slice(0, 40),
         company: company.slice(0, 191),
         companySize: companySize.slice(0, 100) || null,
         status: "Lead",
@@ -1016,18 +1020,32 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // here must never break the User registration above.
     if ((user.tenant?.vertical || tenant.vertical) === "travel") {
       try {
-        await prisma.contact.upsert({
-          where: { email_tenantId: { email, tenantId } },
-          update: { portalPasswordHash: hashedPassword },
-          create: {
-            name: name || email.split("@")[0],
-            email,
-            subBrand: "travelstall",
-            status: "Lead",
-            tenantId,
-            portalPasswordHash: hashedPassword,
-          },
+        // A Contact may already be a TMC teacher/parent account. The User
+        // registration bridge must not replace a password chosen through
+        // the portal registration flow. Email is indexed, not unique, so
+        // only live portal identities are considered here.
+        let portalContact = await prisma.contact.findFirst({
+          where: { email, tenantId, deletedAt: null },
         });
+        if (!portalContact) {
+          portalContact = await prisma.contact.create({
+            data: {
+              name: name || email.split("@")[0],
+              email,
+              subBrand: "travelstall",
+              status: "Lead",
+              tenantId,
+              portalPasswordHash: hashedPassword,
+            },
+          });
+        }
+        // Backfill only legacy contacts that have no portal credential yet.
+        if (!portalContact.portalPasswordHash) {
+          await prisma.contact.update({
+            where: { id: portalContact.id },
+            data: { portalPasswordHash: hashedPassword },
+          });
+        }
       } catch (e) {
         console.error(`[auth] customer/register portal-contact bridge failed (non-fatal): ${e.message}`);
       }
@@ -1063,38 +1081,84 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
 // (1000 req/15min on auth/login per server.js).
 router.post("/login", async (req, res) => {
   try {
-    const { email, password, loginTenantId } = req.body || {};
+    const { email: rawEmail, password, loginTenantId } = req.body || {};
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 
     // Input validation — without this, an empty body crashes findFirst with
     // PrismaClientValidationError (email: undefined). Return 400 instead.
-    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+    if (!email || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email and password are required" });
     }
 
     // Admin/admin bypass intentionally removed for security hardening.
 
-    // Email is unique per-tenant, not globally (see schema User model), so an
-    // email can match an account in more than one org. The login form sends
-    // the chosen org as `loginTenantId` (a non-stripped name — `tenantId`
-    // would be deleted by stripDangerous). When supplied we scope to it; when
-    // absent (legacy API callers) we fall back to the first match by email.
+    // Email is unique per tenant, not globally. Never use an unscoped
+    // findFirst here: if two tenants have the same email but different
+    // passwords, whichever row MySQL happens to return first makes valid
+    // credentials intermittently fail. A supplied loginTenantId selects the
+    // composite identity directly. Legacy clients without it remain supported
+    // by checking every active candidate and accepting only one password match.
     const scopedTenantId = Number(loginTenantId);
-    const tenantFilter = Number.isInteger(scopedTenantId) && scopedTenantId > 0
-      ? { tenantId: scopedTenantId }
-      : {};
-    const user = await prisma.user.findFirst({ where: { email, ...tenantFilter }, include: { tenant: true } });
+    const hasTenantScope = Number.isInteger(scopedTenantId) && scopedTenantId > 0;
+    let user = null;
+    let passwordAlreadyVerified = false;
+    let passwordCheckPerformed = false;
+
+    if (hasTenantScope) {
+      user = await prisma.user.findUnique({
+        where: { email_tenantId: { email, tenantId: scopedTenantId } },
+        include: { tenant: true },
+      });
+    } else {
+      // Pre-authentication identity resolution intentionally spans tenants;
+      // tenant access is granted only after exactly one password match.
+      /* eslint-disable gbscrm/tenant-scope-finder-heuristic -- intentional pre-auth tenant resolution */
+      const candidates = await prisma.user.findMany({
+        where: {
+          email,
+          deactivatedAt: null,
+          tenant: { isActive: true },
+        },
+        include: { tenant: true },
+        orderBy: { id: "asc" },
+      });
+      /* eslint-enable gbscrm/tenant-scope-finder-heuristic */
+
+      const matches = [];
+      for (const candidate of candidates) {
+        passwordCheckPerformed = true;
+        if (await bcrypt.compare(password, candidate.password)) matches.push(candidate);
+      }
+
+      if (matches.length === 1) {
+        [user] = matches;
+        passwordAlreadyVerified = true;
+      } else if (matches.length > 1) {
+        return res.status(409).json({
+          error: "Select the organization you want to access",
+          code: "TENANT_SELECTION_REQUIRED",
+          tenants: matches.map((candidate) => ({
+            id: candidate.tenantId,
+            name: candidate.tenant?.name || `Organization ${candidate.tenantId}`,
+            slug: candidate.tenant?.slug || null,
+          })),
+        });
+      }
+    }
     // #192: when the email isn't found, run a dummy bcrypt compare against a
     // fixed-cost hash so the unknown-email path takes the same wall time as
     // the known-email-wrong-password path. Closes the timing-oracle that let
     // attackers enumerate valid emails without sending an "is this a user?"
     // request that would show up in IDS.
-    if (!user) {
+    if (!user || user.deactivatedAt || user.tenant?.isActive === false) {
       // 2b$10 hash of "_no_user_dummy_" — never matches a real password.
-      await bcrypt.compare(password, "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC");
+      if (!passwordCheckPerformed) {
+        await bcrypt.compare(password, "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC");
+      }
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = passwordAlreadyVerified || await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     const tenantId = user.tenantId || 1;
@@ -1276,13 +1340,38 @@ router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res)
 // that asserts the response body never contains a `resetToken`/`token` field.
 router.post("/forgot-password", async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email: rawEmail, resetTenantId } = req.body || {};
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
     if (!email) return res.status(400).json({ error: "Email is required" });
 
-    // Email is unique per-tenant now, so findFirst (not findUnique). If the
-    // same email exists in multiple orgs this resets the first match; a future
-    // enhancement could disambiguate by org, but the common case is one org.
-    const user = await prisma.user.findFirst({ where: { email } });
+    // Never reset an arbitrary tenant's account. Use the selected tenant when
+    // supplied; otherwise send only when the normalized email resolves to one
+    // active account. The public response remains identical for all outcomes.
+    const parsedTenantId = Number(resetTenantId);
+    const hasTenantScope = Number.isInteger(parsedTenantId) && parsedTenantId > 0;
+    let user = null;
+    if (hasTenantScope) {
+      user = await prisma.user.findUnique({
+        where: { email_tenantId: { email, tenantId: parsedTenantId } },
+        include: { tenant: true },
+      });
+      if (user?.deactivatedAt || user?.tenant?.isActive === false) user = null;
+    } else {
+      // Pre-authentication recovery lookup intentionally spans tenants and
+      // proceeds only when the email resolves to exactly one active account.
+      /* eslint-disable gbscrm/tenant-scope-finder-heuristic -- intentional unambiguous recovery lookup */
+      const candidates = await prisma.user.findMany({
+        where: {
+          email,
+          deactivatedAt: null,
+          tenant: { isActive: true },
+        },
+        orderBy: { id: "asc" },
+        take: 2,
+      });
+      /* eslint-enable gbscrm/tenant-scope-finder-heuristic */
+      if (candidates.length === 1) [user] = candidates;
+    }
 
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");

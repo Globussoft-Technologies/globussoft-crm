@@ -11,7 +11,7 @@
  *      getGroupedCatalogForVertical) drive /api/roles/catalog so the
  *      Roles & Permissions matrix on a travel tenant only shows
  *      COMMON + TRAVEL modules and a wellness tenant only shows
- *      COMMON + WELLNESS. Generic tenants only see COMMON.
+ *      COMMON + WELLNESS. Generic tenants see COMMON + GENERIC.
  *
  * Added 2026-06-15 alongside the Phase 1 vertical-aware refactor.
  */
@@ -21,6 +21,7 @@ import {
   PERMISSION_CATALOG,
   PERMISSION_DOMAINS,
   COMMON_MODULES,
+  GENERIC_MODULES,
   WELLNESS_MODULES,
   TRAVEL_MODULES,
   PERMISSION_CATALOG_GENERIC,
@@ -38,18 +39,21 @@ import {
 } from '../../lib/permissionCatalog.js';
 
 describe('PERMISSION_CATALOG shape', () => {
-  it('exposes COMMON, WELLNESS, and TRAVEL module maps', () => {
+  it('exposes COMMON, GENERIC, WELLNESS, and TRAVEL module maps', () => {
     expect(typeof COMMON_MODULES).toBe('object');
+    expect(typeof GENERIC_MODULES).toBe('object');
     expect(typeof WELLNESS_MODULES).toBe('object');
     expect(typeof TRAVEL_MODULES).toBe('object');
     expect(Object.keys(COMMON_MODULES).length).toBeGreaterThan(0);
+    expect(Object.keys(GENERIC_MODULES).length).toBeGreaterThan(0);
     expect(Object.keys(WELLNESS_MODULES).length).toBeGreaterThan(0);
     expect(Object.keys(TRAVEL_MODULES).length).toBeGreaterThan(0);
   });
 
-  it('union catalog is the merge of common + wellness + travel modules', () => {
+  it('union catalog is the merge of common + generic + wellness + travel modules', () => {
     const unionKeys = new Set(Object.keys(PERMISSION_CATALOG));
     for (const k of Object.keys(COMMON_MODULES)) expect(unionKeys.has(k)).toBe(true);
+    for (const k of Object.keys(GENERIC_MODULES)) expect(unionKeys.has(k)).toBe(true);
     for (const k of Object.keys(WELLNESS_MODULES)) expect(unionKeys.has(k)).toBe(true);
     for (const k of Object.keys(TRAVEL_MODULES)) expect(unionKeys.has(k)).toBe(true);
   });
@@ -150,6 +154,8 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     // Wellness is in
     expect(cat.patients).toBeDefined();
     expect(cat.appointments).toBeDefined();
+    expect(cat.appointments).toContain('ai_call');
+    expect(cat.appointments).toContain('manual_call');
     expect(cat.prescriptions).toBeDefined();
     // Travel is OUT
     expect(cat.itineraries).toBeUndefined();
@@ -175,17 +181,39 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(cat.gift_cards).toBeUndefined();
   });
 
-  it('generic / unknown vertical = COMMON_MODULES only', () => {
+  it('keeps appointment calling permissions wellness-only', () => {
+    expect(isValidPermissionForVertical('appointments', 'ai_call', 'wellness')).toBe(true);
+    expect(isValidPermissionForVertical('appointments', 'manual_call', 'wellness')).toBe(true);
+    expect(isValidPermissionForVertical('appointments', 'ai_call', 'generic')).toBe(false);
+    expect(isValidPermissionForVertical('appointments', 'manual_call', 'travel')).toBe(false);
+  });
+
+  it('generic / unknown vertical = COMMON_MODULES + GENERIC_MODULES', () => {
     const generic = getCatalogForVertical('generic');
     const unknown = getCatalogForVertical('made-up');
     const nullV = getCatalogForVertical(null);
     for (const cat of [generic, unknown, nullV]) {
       expect(cat.contacts).toBeDefined();
       expect(cat.invoices).toBeDefined();
+      expect(cat.cpq).toBeDefined();
+      expect(cat.web_forms).toBeDefined();
       expect(cat.patients).toBeUndefined();
       expect(cat.itineraries).toBeUndefined();
     }
-    expect(Object.keys(generic).length).toBe(Object.keys(COMMON_MODULES).length);
+    expect(Object.keys(generic).length).toBe(
+      Object.keys(COMMON_MODULES).length + Object.keys(GENERIC_MODULES).length,
+    );
+  });
+
+  it('keeps generic page modules out of other catalogs except shared calendar', () => {
+    for (const vertical of ['wellness', 'travel']) {
+      const cat = getCatalogForVertical(vertical);
+      for (const module of Object.keys(GENERIC_MODULES)) {
+        if (vertical === 'wellness' && module === 'calendar') continue;
+        expect(cat[module], `${module} leaked into ${vertical}`).toBeUndefined();
+      }
+    }
+    expect(getCatalogForVertical('wellness').calendar).toEqual(['read', 'write']);
   });
 
   it('matches the bundled PERMISSION_CATALOG_* constants', () => {
@@ -232,11 +260,12 @@ describe('getGroupedCatalogForVertical (vertical-aware grouping)', () => {
     }
   });
 
-  it('generic grouping has only common + Admin & Platform domains', () => {
+  it('generic grouping includes generic pages but no wellness or travel domains', () => {
     const grouped = getGroupedCatalogForVertical('generic');
     const domains = grouped.map((g) => g.domain);
     expect(domains).toContain('CRM Core');
     expect(domains).toContain('Admin & Platform');
+    expect(domains).toContain('Generic CRM Pages');
     for (const d of domains) {
       expect(d.startsWith('Travel '), `generic leaked travel domain: ${d}`).toBe(false);
       expect(d.startsWith('Wellness '), `generic leaked wellness domain: ${d}`).toBe(false);

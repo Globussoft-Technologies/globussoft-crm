@@ -71,7 +71,11 @@ const rateLimit = require("express-rate-limit");
 // below — that's why this block sits up here, not down by the route mounts.
 const { validateNumericId } = require("./middleware/validateNumericId");
 const { resolveSubscriptionAccess } = require("./lib/subscriptionAccess");
-const { shouldSkipLoginAccountLimiter } = require("./lib/loginLimiterPolicy");
+const {
+  shouldSkipLoginAccountLimiter,
+  loginIpKey,
+  getLoginIpLimit,
+} = require("./lib/loginLimiterPolicy");
 {
   const _RouterFactory = express.Router;
   // express.Router is a callable factory (not a class). Wrap it to attach
@@ -313,14 +317,17 @@ const apiLimiter = rateLimit({
 // rotating IPs.
 // IMPORTANT: only applied to /api/auth/login itself — /api/auth/2fa/verify
 // is a separate endpoint with its own threat model.
-const { ipKeyGenerator } = require("express-rate-limit");
 const loginIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 min
-  max: 5, // 5 wrong-password attempts per IP per 15 min
+  // CI runs thousands of API checks from one loopback IP, including
+  // intentional invalid-login cases. Keep the limiter wired (and its headers
+  // testable) without letting those negative tests lock out every later spec.
+  // Production remains capped at 5 failed attempts per IP per 15 minutes.
+  max: getLoginIpLimit(),
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: {
     error: "Too many login attempts from this IP, please try again later.",
   },
@@ -339,11 +346,11 @@ const loginUsernameLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req, res) => {
+  keyGenerator: (req) => {
     const email = (req.body?.email || "").toLowerCase().trim();
     // If no email in body (malformed request), fall back to IP so we don't
     // collapse all anonymous traffic onto a single shared bucket.
-    return email || `noemail:${ipKeyGenerator(req, res)}`;
+    return email || `noemail:${loginIpKey(req)}`;
   },
   message: {
     error: "Too many login attempts for this account, please try again later.",
@@ -376,7 +383,7 @@ const superAdminLoginIpLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: { error: "Too many Super Admin login attempts from this IP, please try again later." },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
@@ -404,7 +411,7 @@ const forgotPasswordIpLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 20, // 20 requests/hour/IP
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: {
     error:
       "Too many password-reset requests from this IP, please try again later.",
@@ -416,9 +423,9 @@ const forgotPasswordEmailLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 5, // 5 requests/hour/email
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => {
+  keyGenerator: (req) => {
     const email = (req.body?.email || "").toLowerCase().trim();
-    return email || `noemail:${ipKeyGenerator(req, res)}`;
+    return email || `noemail:${loginIpKey(req)}`;
   },
   message: {
     error:
@@ -441,7 +448,7 @@ const checkEmailIpLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 30, // 30 requests/15min/IP
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: { error: "Too many requests from this IP, please try again later." },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
@@ -450,9 +457,9 @@ const checkEmailEmailLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 10, // 10 requests/hour/email
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => {
+  keyGenerator: (req) => {
     const email = (req.body?.email || "").toLowerCase().trim();
-    return email || `noemail:${ipKeyGenerator(req, res)}`;
+    return email || `noemail:${loginIpKey(req)}`;
   },
   message: {
     error: "Too many requests for this email, please try again later.",
@@ -698,6 +705,7 @@ const sequencesRoutes = require("./routes/sequences");
 const cpqRoutes = require("./routes/cpq");
 const tasksRoutes = require("./routes/tasks");
 const staffRoutes = require("./routes/staff");
+const salesTeamsRoutes = require("./routes/sales_teams");
 const expensesRoutes = require("./routes/expenses");
 const contractsRoutes = require("./routes/contracts");
 const estimatesRoutes = require("./routes/estimates");
@@ -728,6 +736,7 @@ const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
 const userPreferencesRoutes = require("./routes/user_preferences");
+const tourProgressRoutes = require("./routes/tour_progress");
 const auth2faRoutes = require("./routes/auth_2fa");
 // #654 — step-up auth for destructive admin flows (5-min stepUpToken bound
 // to (userId, tenantId)). See backend/routes/auth_stepup.js + the
@@ -1199,6 +1208,8 @@ app.use("/api", (req, res, next) => {
 
 // Strip dangerous fields (id, createdAt, updatedAt, tenantId, userId) from all request bodies
 const { stripDangerous } = require("./middleware/validateInput");
+const { genericPermissionGate } = require("./middleware/genericPermissionGate");
+app.use("/api", genericPermissionGate);
 app.use(stripDangerous);
 
 // #426: scrub credential-shaped fields (currently: portalPasswordHash) from
@@ -1273,6 +1284,7 @@ app.use("/api/cpq", cpqRoutes);
 app.use("/api/support", supportRoutes);
 app.use("/api/tasks", tasksRoutes);
 app.use("/api/staff", staffRoutes);
+app.use("/api/sales-teams", salesTeamsRoutes);
 app.use("/api/expenses", expensesRoutes);
 app.use("/api/subscriptions", subscriptionsRoutes);
 app.use("/api/ai-provider-management", aiProviderManagementRoutes);
@@ -1314,6 +1326,7 @@ app.use("/api/tenants", tenantsRoutes);
 app.use("/api/tenant-settings", tenantSettingsRoutes);
 // #870 — GET/PUT /api/user/theme; per-user theme preference for cross-device roaming.
 app.use("/api/user", userPreferencesRoutes);
+app.use("/api/tours", tourProgressRoutes);
 app.use("/api/auth/2fa", auth2faRoutes);
 // #654 — POST /api/auth/step-up — mints a 5-min stepUpToken for destructive
 // admin flows. Mounted after /api/auth/2fa so the URL space stays tidy.

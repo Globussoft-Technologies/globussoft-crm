@@ -255,6 +255,32 @@ describe('PUT /api/wellness/visits/:id payment link hook', () => {
     );
   });
 
+  test('uses the final visit bill for the linked invoice and payment link when it exceeds the service price', async () => {
+    prisma.visit.update.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      serviceId: 10,
+      doctorId: 5,
+      status: 'completed',
+      amountCharged: 5000,
+      paymentLinkUrl: 'https://rzp.io/l/test-visit-link',
+      paymentLinkGeneratedAt: new Date('2026-07-21T07:00:00.000Z'),
+    });
+
+    const res = await request(makeApp())
+      .put('/api/wellness/visits/1')
+      .send({ status: 'completed', notes: '', amountCharged: 5000 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.invoice.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount: 5000 }) }),
+    );
+    expect(mockCreateInvoicePaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ invoice: expect.objectContaining({ amount: 5000 }) }),
+    );
+  });
+
   test('completing a visit with no charge does not create an invoice or payment link', async () => {
     prisma.visit.findFirst.mockResolvedValue({
       id: 1,

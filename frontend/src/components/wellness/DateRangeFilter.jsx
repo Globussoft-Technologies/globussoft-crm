@@ -22,12 +22,14 @@ import { Calendar, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const fieldStyle = {
   padding: '0.4rem 0.6rem',
+  minHeight: 36,
   background: 'var(--surface-color)',
   border: '1px solid var(--border-color)',
   borderRadius: 8,
   color: 'var(--text-primary)',
   fontSize: '0.9rem',
   outline: 'none',
+  boxShadow: 'var(--shadow-sm, none)',
 };
 
 export const DATE_FILTER_OPTIONS = [
@@ -135,7 +137,7 @@ export function resolveDateRangeYmd(value) {
   return [s ? ymd(s) : null, e ? ymd(e) : null];
 }
 
-export function DateRangeFilter({ value, onChange, label = 'Filter by date', includeAllOption = true }) {
+export function DateRangeFilter({ value, onChange, label = 'Filter by date', includeAllOption = true, className = '' }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const v = value || EMPTY_DATE_FILTER;
   const isCustom = v.preset === 'custom';
@@ -152,6 +154,7 @@ export function DateRangeFilter({ value, onChange, label = 'Filter by date', inc
           </label>
         )}
         <select
+          className={className || undefined}
           value={v.preset}
           onChange={(ev) => onChange({ ...v, preset: ev.target.value })}
           style={{ ...fieldStyle, width: 'auto', minWidth: 160, flexShrink: 0 }}

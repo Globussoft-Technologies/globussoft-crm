@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { tripRequiresPassport } from "../../utils/travelDocumentPolicy";
 import SearchHighlight from "../../components/ui/SearchHighlight";
 
 const REJECT_REASONS = [
@@ -150,7 +151,9 @@ function PassportVerificationTab({ pendingEditKey, onPendingEditConsumed }) {
     setError(null);
     fetchApi("/api/travel/passport/verification-queue")
       .then((data) => {
-        setRows(Array.isArray(data?.pending) ? data.pending : []);
+        setRows((Array.isArray(data?.pending) ? data.pending : []).filter((row) => (
+          row.kind !== "trip" || tripRequiresPassport(row.trip?.tripType)
+        )));
         setLoading(false);
       })
       .catch((e) => {
@@ -831,7 +834,9 @@ function PassportListTab({ onRequestEdit }) {
     });
     fetchApi(`/api/travel/passport/passport-list?${params.toString()}`)
       .then((data) => {
-        const nextRows = Array.isArray(data?.passports) ? data.passports : [];
+        const nextRows = (Array.isArray(data?.passports) ? data.passports : []).filter((row) => (
+          row.kind !== "trip" || tripRequiresPassport(row.trip?.tripType)
+        ));
         setRows((current) => (isAppend ? [...current, ...nextRows] : nextRows));
         setMeta({
           total: Number(data?.total) || 0,

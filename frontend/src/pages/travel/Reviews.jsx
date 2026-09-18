@@ -43,10 +43,11 @@ const Q_LABELS = {
   loved_most: "Loved most",
   improve: "Could do better",
   highlight: "Memorable moment",
+  experience: "Parent experience",
 };
 const RATING_IDS = ["rate_accommodation", "rate_transport", "rate_activities", "rate_support", "rate_value"];
 const CHOICE_IDS = ["recommend", "rebook"];
-const TEXT_IDS = ["loved_most", "improve", "highlight"];
+const TEXT_IDS = ["loved_most", "improve", "highlight", "experience"];
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -127,6 +128,10 @@ export default function Reviews() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [reviews, setReviews] = useState([]);
+  const [reviewMode, setReviewMode] = useState("customer");
+  const [teacherReports, setTeacherReports] = useState([]);
+  const [teacherReportsLoading, setTeacherReportsLoading] = useState(false);
+  const [teacherSearch, setTeacherSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [pageSizeMenuOpen, setPageSizeMenuOpen] = useState(false);
   const [redirectSettingsOpen, setRedirectSettingsOpen] = useState(false);
@@ -163,6 +168,14 @@ export default function Reviews() {
       .then((res) => setReviews(Array.isArray(res?.reviews) ? res.reviews : []))
       .catch((e) => { notify.error(e?.body?.error || "Failed to load reviews"); setReviews([]); })
       .finally(() => setLoading(false));
+  };
+
+  const loadTeacherReports = () => {
+    setTeacherReportsLoading(true);
+    fetchApi("/api/travel/teacher-reviews")
+      .then((res) => setTeacherReports(Array.isArray(res?.reports) ? res.reports : []))
+      .catch((e) => { notify.error(e?.body?.error || "Failed to load teacher reports"); setTeacherReports([]); })
+      .finally(() => setTeacherReportsLoading(false));
   };
 
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -264,6 +277,17 @@ export default function Reviews() {
     }
   };
 
+  if (reviewMode === "teacher") {
+    return <TeacherReportsAdmin
+      reports={teacherReports}
+      loading={teacherReportsLoading}
+      search={teacherSearch}
+      setSearch={setTeacherSearch}
+      onBack={() => setReviewMode("customer")}
+      onRefresh={loadTeacherReports}
+    />;
+  }
+
   return (
     <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
@@ -296,6 +320,11 @@ export default function Reviews() {
           </strong>
         )}
       </p>
+
+      <div role="tablist" aria-label="Travel review types" style={reviewTabsStyle}>
+        <button type="button" role="tab" aria-selected="true" style={activeReviewTabStyle}>Customer reviews</button>
+        <button type="button" role="tab" aria-selected="false" onClick={() => { setReviewMode("teacher"); loadTeacherReports(); }} style={reviewTabStyle}>Teacher tour reports</button>
+      </div>
 
       {/* Filters */}
       <div
@@ -554,6 +583,92 @@ export default function Reviews() {
   );
 }
 
+const TEACHER_REPORT_RATING_ROWS = [
+  ["travelRating", "Travel"],
+  ["foodRating", "Food"],
+  ["activitiesRating", "Activities"],
+  ["careSupportRating", "Care & support"],
+  ["overallRating", "Overall"],
+];
+
+function teacherRatingLabel(value) {
+  return value ? String(value).replace(/_/g, " ").replace(/^./, (letter) => letter.toUpperCase()) : "—";
+}
+
+function TeacherReportsAdmin({ reports, loading, search, setSearch, onBack, onRefresh }) {
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return reports;
+    return reports.filter((report) => [
+      report.institution,
+      report.tourDestination,
+      report.trip?.destination,
+      report.trip?.tripCode,
+      report.teacher?.name,
+      report.teacher?.email,
+    ].some((value) => String(value || "").toLowerCase().includes(query)));
+  }, [reports, search]);
+
+  return (
+    <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
+        <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
+          <MessageSquareText size={26} aria-hidden /> Teacher Tour Reports
+        </h1>
+        <button type="button" onClick={onRefresh} disabled={loading} style={{ ...secondaryButtonStyle, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1 }}>
+          <RefreshCw size={15} aria-hidden /> Refresh
+        </button>
+      </div>
+      <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>Post-trip feedback submitted by teachers for completed school trips.</p>
+
+      <div role="tablist" aria-label="Travel review types" style={reviewTabsStyle}>
+        <button type="button" role="tab" aria-selected={false} onClick={onBack} style={reviewTabStyle}>Customer reviews</button>
+        <button type="button" role="tab" aria-selected={true} style={activeReviewTabStyle}>Teacher tour reports</button>
+      </div>
+
+      <div style={teacherReportToolbarStyle}>
+        <Search size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+        <input type="search" aria-label="Search teacher reports" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search institution, destination, teacher..." style={teacherReportSearchStyle} />
+        <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>{filtered.length} report{filtered.length === 1 ? "" : "s"}</span>
+      </div>
+
+      {loading && <p style={{ color: "var(--text-secondary)" }}>Loading...</p>}
+      {!loading && filtered.length === 0 && <div style={{ ...card, textAlign: "center", color: "var(--text-secondary)" }}>{search.trim() ? "No teacher reports match your search." : "No teacher reports have been submitted yet."}</div>}
+      {!loading && filtered.map((report) => {
+        const trip = report.trip || {};
+        const teacher = report.teacher || {};
+        return <article key={report.id} style={card}>
+          <div style={teacherReportHeaderStyle}>
+            <div style={{ minWidth: 0 }}>
+              <div style={teacherReportTitleStyle}>{report.tourDestination || trip.destination || "Trip report"}</div>
+              <div style={teacherReportMetaStyle}>{report.institution || "Institution not provided"} · {trip.tripCode || `Trip #${report.tripId}`}</div>
+              <div style={teacherReportMetaStyle}>Teacher: {teacher.name || `Contact #${report.teacherContactId}`} {teacher.email ? `· ${teacher.email}` : ""}</div>
+            </div>
+            <div style={{ textAlign: "right", color: "var(--text-secondary)", fontSize: 12 }}>
+              <div>Report date: {fmtDateTime(report.reportDate)}</div>
+              <div>Submitted: {fmtDateTime(report.submittedAt)}</div>
+            </div>
+          </div>
+
+          <div style={teacherReportDetailsStyle}>
+            <span><strong>Coordinator:</strong> {report.coordinator || "—"}</span>
+            <span><strong>Grade:</strong> {report.grade || "—"}</span>
+            <span><strong>Students:</strong> {report.studentCount}</span>
+            <span><strong>Staff:</strong> {report.staffCount}</span>
+            <span><strong>Total passengers:</strong> {report.totalPassengers}</span>
+          </div>
+
+          <div style={teacherRatingsStyle}>
+            {TEACHER_REPORT_RATING_ROWS.map(([field, label]) => <div key={field} style={teacherRatingRowStyle}><span>{label}</span><strong>{teacherRatingLabel(report[field])}</strong></div>)}
+          </div>
+          {report.feedback && <div style={teacherFeedbackStyle}><div style={teacherReportLabelStyle}>Feedback & suggestion</div><div>{report.feedback}</div></div>}
+          <div style={teacherSignatureStyle}><span><strong>Signature:</strong> {report.signature || "—"}</span><span style={teacherReportMetaStyle}>{trip.tripType ? String(trip.tripType).replace(/_/g, " ") : "School trip"}</span></div>
+        </article>;
+      })}
+    </div>
+  );
+}
+
 const secondaryButtonStyle = {
   display: "inline-flex",
   alignItems: "center",
@@ -611,6 +726,126 @@ const modalInputStyle = {
   background: "var(--bg-color, #fff)",
   color: "var(--text-primary)",
   fontSize: 14,
+};
+
+const reviewTabsStyle = {
+  display: "flex",
+  gap: 6,
+  marginBottom: 14,
+  borderBottom: "1px solid var(--border-color, #d1d5db)",
+};
+
+const reviewTabStyle = {
+  padding: "9px 12px",
+  border: 0,
+  borderBottom: "2px solid transparent",
+  background: "transparent",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+  fontWeight: 600,
+};
+
+const activeReviewTabStyle = {
+  ...reviewTabStyle,
+  borderBottomColor: PRIMARY,
+  color: PRIMARY,
+};
+
+const teacherReportToolbarStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 9,
+  marginBottom: 16,
+  padding: 12,
+  border: "1px solid var(--border-color)",
+  borderRadius: 8,
+  background: "var(--surface-color)",
+};
+
+const teacherReportSearchStyle = {
+  flex: 1,
+  minWidth: 0,
+  padding: "8px 10px",
+  border: "1px solid var(--border-color)",
+  borderRadius: 6,
+  background: "var(--bg-color)",
+  color: "var(--text-primary)",
+  fontSize: 13,
+};
+
+const teacherReportHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  flexWrap: "wrap",
+  gap: 10,
+};
+
+const teacherReportTitleStyle = {
+  color: "var(--text-primary)",
+  fontSize: 17,
+  fontWeight: 700,
+};
+
+const teacherReportMetaStyle = {
+  marginTop: 3,
+  color: "var(--text-secondary)",
+  fontSize: 12,
+};
+
+const teacherReportDetailsStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "7px 18px",
+  marginTop: 14,
+  color: "var(--text-primary)",
+  fontSize: 13,
+};
+
+const teacherRatingsStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 170px), 1fr))",
+  gap: 7,
+  marginTop: 14,
+};
+
+const teacherRatingRowStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 7,
+  background: "var(--bg-color, #f8fafc)",
+  color: "var(--text-secondary)",
+  fontSize: 13,
+};
+
+const teacherFeedbackStyle = {
+  marginTop: 14,
+  padding: "10px 12px",
+  borderLeft: `3px solid ${PRIMARY}`,
+  color: "var(--text-primary)",
+  fontSize: 14,
+  lineHeight: 1.5,
+};
+
+const teacherReportLabelStyle = {
+  marginBottom: 3,
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const teacherSignatureStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  flexWrap: "wrap",
+  marginTop: 14,
+  paddingTop: 10,
+  borderTop: "1px solid var(--border-color)",
+  color: "var(--text-primary)",
+  fontSize: 13,
 };
 
 function ReviewsPager({

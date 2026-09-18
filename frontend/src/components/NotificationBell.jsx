@@ -226,7 +226,7 @@ const NotificationBell = () => {
   };
 
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div ref={ref} data-tour="welcome-notifications" style={{ position: "relative" }}>
       <button
         onClick={() => setOpen(!open)}
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}

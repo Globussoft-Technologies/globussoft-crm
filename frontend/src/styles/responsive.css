@@ -334,6 +334,75 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Travel Knowledge already owns a dedicated scroll region immediately around
+   each table. Keep its outer card clipped so the shared card shimmer
+   pseudo-element cannot enlarge the card's scrollable area and create a
+   second, false horizontal scrollbar. */
+[data-vertical="travel"] .travel-content-frame .card.knowledge-table-card {
+  overflow: hidden;
+}
+
+[data-vertical="travel"] .travel-content-frame .knowledge-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: clamp(280px, 48vh, 520px);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+[data-vertical="travel"] .travel-content-frame .knowledge-table-scroll thead {
+  position: static;
+}
+
+[data-vertical="travel"] .travel-content-frame .knowledge-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff !important;
+  background-image: none !important;
+  opacity: 1;
+  backdrop-filter: none;
+  box-shadow: 0 1px 0 var(--border-color);
+}
+
+html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .knowledge-table-scroll thead th,
+[data-theme="dark"][data-vertical="travel"] .travel-content-frame .knowledge-table-scroll thead th,
+[data-theme="dark"] [data-vertical="travel"] .travel-content-frame .knowledge-table-scroll thead th {
+  background: #19243a !important;
+}
+
+[data-vertical="travel"] .travel-content-frame .diagnostics-table-scroll {
+  max-width: 100%;
+  max-height: clamp(300px, 52vh, 560px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+[data-vertical="travel"] .travel-content-frame .diagnostics-table-scroll .diagnostics-table {
+  min-width: 1000px;
+}
+
+[data-vertical="travel"] .travel-content-frame .diagnostics-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff !important;
+  background-image: none !important;
+  opacity: 1;
+  backdrop-filter: none;
+  box-shadow: 0 1px 0 var(--border-color);
+}
+
+html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnostics-table-scroll thead th,
+[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnostics-table-scroll thead th,
+[data-theme="dark"] [data-vertical="travel"] .travel-content-frame .diagnostics-table-scroll thead th {
+  background: #19243a !important;
+}
+
 [data-vertical="travel"] .travel-content-frame table th,
 [data-vertical="travel"] .travel-content-frame table td {
   white-space: nowrap;

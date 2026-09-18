@@ -3,15 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import TallyExportPreviewPage from "./TallyExportPreviewPage";
 import { fetchApi } from "../../../utils/api";
 
-const { navigate, routeParams, success } = vi.hoisted(() => ({
+const { navigate, routeParams, searchParamsState, setSearchParams, success } = vi.hoisted(() => ({
   navigate: vi.fn(),
   routeParams: { current: { tripId: "1" } },
+  searchParamsState: { current: new URLSearchParams() },
+  setSearchParams: vi.fn((next) => { searchParamsState.current = new URLSearchParams(next); }),
   success: vi.fn(),
 }));
 
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigate,
   useParams: () => routeParams.current,
+  useLocation: () => ({ pathname: routeParams.current.tripId ? `/travel/tally/export/${routeParams.current.tripId}` : "/travel/tally/export" }),
+  useSearchParams: () => [searchParamsState.current, setSearchParams],
 }));
 vi.mock("../../../components/PermissionGate", () => ({ default: ({ children }) => children }));
 vi.mock("../../../utils/notify", () => ({ useNotify: () => ({ success, error: vi.fn() }) }));
@@ -55,6 +59,7 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     routeParams.current = { tripId: "1" };
+    searchParamsState.current = new URLSearchParams();
     window.localStorage.clear();
     URL.createObjectURL = vi.fn(() => "blob:tally-export");
     URL.revokeObjectURL = vi.fn();
@@ -106,6 +111,79 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
     await screen.findByText("Online on office-pc-1");
     expect(statusRequests).toBe(2);
     expect(navigate).not.toHaveBeenCalledWith("/travel/tally/export");
+  });
+
+  it("uses browser history for the Back button", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      return apiResponse(url);
+    });
+
+    render(<TallyExportPreviewPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+
+    expect(navigate).toHaveBeenCalledWith(-1);
+    expect(navigate).not.toHaveBeenCalledWith("/travel/tally");
+  });
+
+  it("opens Sync History from the All Trips page", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      return apiResponse(url);
+    });
+
+    render(<TallyExportPreviewPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync history" }));
+
+    expect(navigate).toHaveBeenCalledWith("/travel/tally/sync-history");
+  });
+
+  it("filters the All Trips records by sub-brand", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      if (url.includes("/itineraries")) {
+        return url.includes("subBrand=rfu")
+          ? { itineraries: [{ id: 2, destination: "RFU Pilgrimage", status: "completed", subBrand: "rfu" }] }
+          : { itineraries: [
+              { id: 1, destination: "TMC Corporate Trip", status: "completed", subBrand: "tmc" },
+              { id: 2, destination: "RFU Pilgrimage", status: "completed", subBrand: "rfu" },
+            ] };
+      }
+      if (url.includes("/trips")) return { trips: [] };
+      if (url.includes("/ledger")) return { customerDetails: [], payableDetails: [] };
+      return {};
+    });
+
+    render(<TallyExportPreviewPage />);
+    await screen.findByText("TMC Corporate Trip");
+
+    fireEvent.change(screen.getByLabelText("Sub-brand"), { target: { value: "rfu" } });
+
+    await screen.findByText("RFU Pilgrimage");
+    await waitFor(() => expect(screen.queryByText("TMC Corporate Trip")).not.toBeInTheDocument());
+    expect(fetchApi).toHaveBeenCalledWith(expect.stringContaining("subBrand=rfu"));
+    expect(fetchApi).toHaveBeenCalledWith("/api/travel/tally/ledger?subBrand=rfu");
+  });
+
+  it("restores the sub-brand from the URL and keeps it in the preview link", async () => {
+    routeParams.current = {};
+    searchParamsState.current = new URLSearchParams("subBrand=travelstall");
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      if (url.includes("/itineraries")) return { itineraries: [{ id: 10, destination: "Kerala", status: "completed", subBrand: "travelstall" }] };
+      if (url.includes("/trips")) return { trips: [] };
+      if (url.includes("/ledger")) return { customerDetails: [], payableDetails: [] };
+      return {};
+    });
+
+    render(<TallyExportPreviewPage />);
+
+    expect(await screen.findByLabelText("Sub-brand")).toHaveValue("travelstall");
+    fireEvent.click(await screen.findByRole("button", { name: "Preview Kerala" }));
+    expect(navigate).toHaveBeenCalledWith("/travel/tally/export/10?subBrand=travelstall");
   });
 
   it("does not let a stale browser flag block a changed trip from being pushed", async () => {

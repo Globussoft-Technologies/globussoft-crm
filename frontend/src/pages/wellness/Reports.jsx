@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart3, TrendingUp, Stethoscope, MapPin, Package, Upload, Loader2, Database, AlertTriangle } from 'lucide-react';
+import { BarChart3, TrendingUp, Stethoscope, MapPin, Package, Upload, Loader2, Database, AlertTriangle, Users, Layers, CreditCard, Receipt } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatPercent } from '../../utils/percent';
@@ -9,18 +9,26 @@ import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/
 import ProductSalesImportModal from '../../components/wellness/ProductSalesImportModal';
 
 const TABS = [
-  { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
-  { key: 'pro', label: 'Per Professional', icon: Stethoscope },
+  { key: 'pnl', label: 'Sales by Services', icon: BarChart3 },
+  { key: 'pro', label: 'Sales by Staff', icon: Stethoscope },
+  { key: 'prod', label: 'Sales by Products', icon: Package },
+  { key: 'cust', label: 'Sales by Customers', icon: Users },
+  { key: 'summary', label: 'Product Summary', icon: Layers },
+  { key: 'pay', label: 'Payments by Mode', icon: CreditCard },
+  { key: 'exp', label: 'Expense Summary', icon: Receipt },
   { key: 'loc', label: 'Per Location', icon: MapPin },
-  { key: 'prod', label: 'Per Product', icon: Package },
   { key: 'att', label: 'Marketing Attribution', icon: TrendingUp },
 ];
 
 const ENDPOINTS = {
   pnl: '/api/wellness/reports/pnl-by-service',
   pro: '/api/wellness/reports/per-professional',
-  loc: '/api/wellness/reports/per-location',
   prod: '/api/wellness/reports/per-product',
+  cust: '/api/wellness/reports/sales-by-customer',
+  summary: '/api/wellness/reports/product-summary',
+  pay: '/api/wellness/reports/payments-by-mode',
+  exp: '/api/wellness/reports/expense-summary',
+  loc: '/api/wellness/reports/per-location',
   att: '/api/wellness/reports/attribution',
 };
 
@@ -30,8 +38,12 @@ const ENDPOINTS = {
 const EXPORT_BASENAMES = {
   pnl: 'pnl-by-service',
   pro: 'per-professional',
-  loc: 'per-location',
   prod: 'per-product',
+  cust: 'sales-by-customer',
+  summary: 'product-summary',
+  pay: 'payments-by-mode',
+  exp: 'expense-summary',
+  loc: 'per-location',
   att: 'attribution',
 };
 
@@ -279,6 +291,62 @@ export default function Reports() {
     }
   };
 
+  const exportActions = (
+    <>
+      {exportError && (
+        <div role="alert" style={{ color: 'var(--danger-color)', fontSize: '0.8rem', marginRight: 'auto' }}>
+          {exportError}
+        </div>
+      )}
+      {tab === 'prod' && (
+        <button
+          type="button"
+          onClick={() => setImportOpen(true)}
+          aria-label="Import product sales from a CSV or Excel file"
+          style={exportBtn(false)}
+        >
+          <Database size={14} /> Import sales data
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => downloadExport('csv')}
+        disabled={loading || !!exporting}
+        aria-label="Export this report as CSV"
+        style={exportBtn(exporting === 'csv')}
+      >
+        {exporting === 'csv'
+          ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+          : <Upload size={14} />}
+        Export CSV
+      </button>
+      <button
+        type="button"
+        onClick={() => downloadExport('xlsx')}
+        disabled={loading || !!exporting}
+        aria-label="Export this report as Excel"
+        style={exportBtn(exporting === 'xlsx')}
+      >
+        {exporting === 'xlsx'
+          ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+          : <Upload size={14} />}
+        Export Excel
+      </button>
+      <button
+        type="button"
+        onClick={() => downloadExport('pdf')}
+        disabled={loading || !!exporting}
+        aria-label="Export this report as PDF"
+        style={exportBtn(exporting === 'pdf')}
+      >
+        {exporting === 'pdf'
+          ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+          : <Upload size={14} />}
+        Export PDF
+      </button>
+    </>
+  );
+
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.25rem' }}>
@@ -290,79 +358,34 @@ export default function Reports() {
         </p>
       </header>
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div data-testid="reports-tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {TABS.map((t) => {
           const Icon = t.icon;
           return (
             <button key={t.key} onClick={() => handleTabChange(t.key)}
               style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem',
-                background: tab === t.key ? 'var(--accent-color)' : 'transparent',
-                color: tab === t.key ? '#fff' : 'var(--text-primary)',
-                border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}>
+                minHeight: 36,
+                background: tab === t.key ? 'var(--accent-color)' : 'var(--surface-color)',
+                color: tab === t.key ? 'var(--accent-text, #fff)' : 'var(--text-primary)',
+                border: `1px solid ${tab === t.key ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem', fontWeight: tab === t.key ? 600 : 500,
+                boxShadow: 'var(--shadow-sm, none)' }}>
               <Icon size={14} /> {t.label}
             </button>
           );
         })}
-        <div style={{ flex: 1 }} />
-        <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} />
       </div>
 
-      {/* #227: export bar — both buttons disabled while either is in flight, and
-          while the JSON load is still in flight (no point exporting an empty
-          tab the user hasn't seen yet). */}
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-        {exportError && (
-          <div role="alert" style={{ color: 'var(--danger-color)', fontSize: '0.8rem', marginRight: 'auto' }}>
-            {exportError}
-          </div>
-        )}
-        {tab === 'prod' && (
-          <button
-            type="button"
-            onClick={() => setImportOpen(true)}
-            aria-label="Import product sales from a CSV or Excel file"
-            style={exportBtn(false)}
-          >
-            <Database size={14} /> Import sales data
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => downloadExport('csv')}
-          disabled={loading || !!exporting}
-          aria-label="Export this report as CSV"
-          style={exportBtn(exporting === 'csv')}
-        >
-          {exporting === 'csv'
-            ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Upload size={14} />}
-          Export CSV
-        </button>
-        <button
-          type="button"
-          onClick={() => downloadExport('xlsx')}
-          disabled={loading || !!exporting}
-          aria-label="Export this report as Excel"
-          style={exportBtn(exporting === 'xlsx')}
-        >
-          {exporting === 'xlsx'
-            ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Upload size={14} />}
-          Export Excel
-        </button>
-        <button
-          type="button"
-          onClick={() => downloadExport('pdf')}
-          disabled={loading || !!exporting}
-          aria-label="Export this report as PDF"
-          style={exportBtn(exporting === 'pdf')}
-        >
-          {exporting === 'pdf'
-            ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Upload size={14} />}
-          Export PDF
-        </button>
+      <div
+        data-testid="reports-controls"
+        style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: 0, marginBottom: '1.5rem', flexWrap: 'wrap' }}
+      >
+        <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} className="reports-date-filter" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+          {exportActions}
+        </div>
       </div>
+
 
       {loading && <div>Loading…</div>}
       {!loading && data && tab === 'pnl' && (
@@ -378,6 +401,7 @@ export default function Reports() {
       {!loading && data && tab === 'pro' && (
         <ProTable
           data={data}
+          onNavigate={navigate}
           scrollRef={scrollContainerRef}
           sentinelRef={sentinelRef}
           loadingMore={loadingMore}
@@ -387,6 +411,7 @@ export default function Reports() {
       {!loading && data && tab === 'loc' && (
         <LocTable
           data={data}
+          onNavigate={navigate}
           scrollRef={scrollContainerRef}
           sentinelRef={sentinelRef}
           loadingMore={loadingMore}
@@ -396,7 +421,47 @@ export default function Reports() {
       {!loading && data && tab === 'prod' && (
         <ProdTable
           data={data}
+          onNavigate={navigate}
           onImport={() => setImportOpen(true)}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
+      {!loading && data && tab === 'cust' && (
+        <CustomerTable
+          data={data}
+          onNavigate={navigate}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
+      {!loading && data && tab === 'summary' && (
+        <ProductSummaryTable
+          data={data}
+          onNavigate={navigate}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
+      {!loading && data && tab === 'pay' && (
+        <PaymentsTable
+          data={data}
+          onNavigate={navigate}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
+      {!loading && data && tab === 'exp' && (
+        <ExpensesTable
+          data={data}
           scrollRef={scrollContainerRef}
           sentinelRef={sentinelRef}
           loadingMore={loadingMore}
@@ -406,6 +471,7 @@ export default function Reports() {
       {!loading && data && tab === 'att' && (
         <AttTable
           data={data}
+          onNavigate={navigate}
           scrollRef={scrollContainerRef}
           sentinelRef={sentinelRef}
           loadingMore={loadingMore}
@@ -467,12 +533,15 @@ function PnlTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMo
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
           <thead>
-            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 2 ? 'right' : 'left' }}>{h}</th>)}</tr>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: 'left' }}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <div>{r.name}</div>
+                  <InvoiceDrilldown invoiceIds={r.invoiceIds} onNavigate={onNavigate} />
+                </td>
                 <td style={{ ...td, width: colWidths[1] }}>{r.category}</td>
                 <td style={{ ...td, width: colWidths[2] }}>
                   <span style={{ background: tierBg(r.ticketTier), padding: '0.15rem 0.45rem', borderRadius: 4, fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 600 }}>
@@ -487,7 +556,7 @@ function PnlTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMo
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No services with revenue in this window.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={7} style={{ ...td, textAlign: 'left', color: 'var(--text-secondary)' }}>No services with revenue in this window.</td></tr>}
           </tbody>
         </table>
       </ReportTableShell>
@@ -495,7 +564,7 @@ function PnlTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMo
   );
 }
 
-function ProTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
+function ProTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMore }) {
   const colWidths = ['40%', '20%', '20%', '20%'];
   const headers = ['Staff', 'Role', 'Visits', 'Revenue'];
   const totals = data?.totals || { visits: 0, revenue: 0 };
@@ -516,7 +585,7 @@ function ProTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
               doctors/professionals/etc) and surface wellnessRole as the primary
               "Role" instead — that's the meaningful one for clinics. */}
           <thead>
-            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: 'left' }}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {/* #637: per-practitioner avatar with hashed colour so each name
@@ -527,7 +596,10 @@ function ProTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
                 <td style={{ ...td, width: colWidths[0] }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem' }}>
                     <Avatar name={r.name || ''} size={28} />
-                    <span>{r.name}</span>
+                    <span>
+                      <span style={{ display: 'block' }}>{r.name}</span>
+                      <InvoiceDrilldown invoiceIds={r.invoiceIds} onNavigate={onNavigate} />
+                    </span>
                   </span>
                 </td>
                 <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
@@ -542,7 +614,7 @@ function ProTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
   );
 }
 
-function LocTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
+function LocTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMore }) {
   const colWidths = ['20%', '18%', '13%', '13%', '18%', '18%'];
   const headers = ['Location', 'City', 'Patients', 'Visits', 'Revenue', 'Status'];
   const totals = data?.totals || { visits: 0, revenue: 0 };
@@ -588,12 +660,15 @@ function LocTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
           <thead>
-            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: (i > 1 && i < 5) ? 'right' : 'left' }}>{h}</th>)}</tr>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: 'left' }}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <div>{r.name}</div>
+                  <InvoiceDrilldown invoiceIds={r.invoiceIds} onNavigate={onNavigate} />
+                </td>
                 <td style={{ ...td, width: colWidths[1] }}>{r.city}{r.state ? `, ${r.state}` : ''}</td>
                 <td style={{ ...tdR, width: colWidths[2] }}>{r.patients}</td>
                 <td style={{ ...tdR, width: colWidths[3] }}>{r.visits}</td>
@@ -613,7 +688,7 @@ function LocTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
 // `source` badge) rather than left to be inferred: the same tab silently
 // changes source as a clinic onboards, and a figure whose provenance is
 // invisible is a figure nobody trusts.
-function ProdTable({ data, onImport, scrollRef, sentinelRef, loadingMore, hasMore }) {
+function ProdTable({ data, onNavigate, onImport, scrollRef, sentinelRef, loadingMore, hasMore }) {
   const colWidths = ['26%', '10%', '9%', '13%', '11%', '13%', '9%', '13%'];
   const headers = ['Product', 'HSN', 'Count', 'Gross sales', 'Discount', 'Net sales', 'Tax', 'Total sales'];
   const totals = data?.totals || {
@@ -693,12 +768,15 @@ function ProdTable({ data, onImport, scrollRef, sentinelRef, loadingMore, hasMor
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
           <thead>
-            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: 'left' }}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.key || r.name}>
-                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <div>{r.name}</div>
+                  <InvoiceDrilldown invoiceIds={r.invoiceIds} onNavigate={onNavigate} />
+                </td>
                 <td style={{ ...td, width: colWidths[1], color: r.hsnCode ? 'inherit' : 'var(--text-secondary)' }}>{r.hsnCode || '--'}</td>
                 <td style={{ ...tdR, width: colWidths[2] }}>{r.productCount}</td>
                 <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(r.grossSales)}</td>
@@ -710,7 +788,7 @@ function ProdTable({ data, onImport, scrollRef, sentinelRef, loadingMore, hasMor
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 1rem' }}>
+                <td colSpan={8} style={{ ...td, textAlign: 'left', color: 'var(--text-secondary)', padding: '2rem 1rem' }}>
                   No product sales in this window.
                   {onImport && (
                     <>
@@ -735,7 +813,7 @@ function ProdTable({ data, onImport, scrollRef, sentinelRef, loadingMore, hasMor
   );
 }
 
-function AttTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
+function AttTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMore }) {
   // #156: defensive defaults — if the API ever returns a partial response (e.g.
   // missing totals or rows), render "No data" instead of crashing the whole page
   // on `undefined.toLocaleString()`. Reproducer wasn't found in dry-runs, but
@@ -759,12 +837,15 @@ function AttTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
           <thead>
-            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 0 ? 'right' : 'left' }}>{h}</th>)}</tr>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: 'left' }}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.source}>
-                <td style={{ ...td, width: colWidths[0] }}><strong>{r.source}</strong></td>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <strong>{r.source}</strong>
+                  <InvoiceDrilldown invoiceIds={r.invoiceIds} onNavigate={onNavigate} />
+                </td>
                 <td style={{ ...tdR, width: colWidths[1] }}>{r.leads}</td>
                 <td style={{ ...tdR, width: colWidths[2], color: r.junkRate > 70 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{formatPercent(r.junkRate)}</td>
                 <td style={{ ...tdR, width: colWidths[3], color: r.conversionRate > 10 ? 'var(--success-color)' : 'var(--text-secondary)', fontWeight: r.conversionRate > 10 ? 600 : 400 }}>{formatPercent(r.conversionRate)}</td>
@@ -772,7 +853,198 @@ function AttTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
                 <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(r.revenuePerLead)}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'left', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
+          </tbody>
+        </table>
+      </ReportTableShell>
+    </>
+  );
+}
+
+function InvoiceDrilldown({ invoiceIds, onNavigate }) {
+  const ids = Array.isArray(invoiceIds)
+    ? [...new Set(invoiceIds.map(Number).filter(Number.isFinite))]
+    : [];
+  if (ids.length === 0 || !onNavigate) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onNavigate(`/invoices?invoiceIds=${encodeURIComponent(ids.join(','))}`)}
+      aria-label={`View ${ids.length} underlying invoice${ids.length === 1 ? '' : 's'}`}
+      style={{
+        marginTop: '0.25rem',
+        padding: 0,
+        border: 0,
+        background: 'transparent',
+        color: 'var(--primary-color, var(--accent-color))',
+        cursor: 'pointer',
+        fontSize: '0.72rem',
+      }}
+    >
+      View invoice{ids.length === 1 ? '' : 's'} ({ids.length})
+    </button>
+  );
+}
+
+function CustomerTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMore }) {
+  const totals = data?.totals || { customers: 0, invoices: 0, visits: 0, sales: 0 };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const colWidths = ['40%', '15%', '15%', '15%', '15%'];
+  const headers = ['Customer', 'Invoices', 'Visits', 'Sales', 'Average sale'];
+
+  return (
+    <>
+      <Totals items={[
+        { label: 'Customers', value: (totals.customers || 0).toLocaleString('en-IN') },
+        { label: 'Invoices', value: (totals.invoices || 0).toLocaleString('en-IN') },
+        { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
+        { label: 'Sales', value: formatMoney(totals.sales || 0) },
+      ]} />
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
+        <table style={tableStyle}>
+          <colgroup>{colWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+          <thead>
+            <tr>{headers.map((header, index) => <th key={header} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[index], textAlign: 'left' }}>{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <div>{row.name}</div>
+                  <InvoiceDrilldown invoiceIds={row.invoiceIds} onNavigate={onNavigate} />
+                </td>
+                <td style={{ ...tdR, width: colWidths[1] }}>{row.invoices}</td>
+                <td style={{ ...tdR, width: colWidths[2] }}>{row.visits}</td>
+                <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(row.sales)}</td>
+                <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(row.averageSale)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={5} style={{ ...td, textAlign: 'left', color: 'var(--text-secondary)' }}>No customer sales in this window.</td></tr>}
+          </tbody>
+        </table>
+      </ReportTableShell>
+    </>
+  );
+}
+
+function ProductSummaryTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMore }) {
+  const totals = data?.totals || { products: 0, unitsSold: 0, sales: 0, stockValue: 0, lowStock: 0 };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const colWidths = ['25%', '12%', '15%', '12%', '10%', '12%', '12%', '10%'];
+  const headers = ['Product', 'SKU', 'Category', 'Stock on hand', 'Units sold', 'Sales', 'Stock value', 'Status'];
+
+  return (
+    <>
+      <Totals items={[
+        { label: 'Products', value: (totals.products || 0).toLocaleString('en-IN') },
+        { label: 'Units sold', value: (totals.unitsSold || 0).toLocaleString('en-IN') },
+        { label: 'Sales', value: formatMoney(totals.sales || 0) },
+        { label: 'Stock value', value: formatMoney(totals.stockValue || 0) },
+        { label: 'Low stock', value: (totals.lowStock || 0).toLocaleString('en-IN') },
+      ]} />
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
+        <table style={tableStyle}>
+          <colgroup>{colWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+          <thead>
+            <tr>{headers.map((header, index) => <th key={header} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[index], textAlign: 'left' }}>{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <div>{row.name}</div>
+                  <InvoiceDrilldown invoiceIds={row.invoiceIds} onNavigate={onNavigate} />
+                </td>
+                <td style={{ ...td, width: colWidths[1] }}>{row.sku}</td>
+                <td style={{ ...td, width: colWidths[2] }}>{row.category}</td>
+                <td style={{ ...tdR, width: colWidths[3] }}>{row.stockOnHand}</td>
+                <td style={{ ...tdR, width: colWidths[4] }}>{row.unitsSold}</td>
+                <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(row.sales)}</td>
+                <td style={{ ...tdR, width: colWidths[6] }}>{formatMoney(row.stockValue)}</td>
+                <td style={{ ...td, width: colWidths[7], color: row.lowStock ? 'var(--danger-color)' : 'var(--success-color)', fontWeight: 600 }}>{row.lowStock ? 'Low stock' : 'In stock'}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={8} style={{ ...td, textAlign: 'left', color: 'var(--text-secondary)' }}>No products found.</td></tr>}
+          </tbody>
+        </table>
+      </ReportTableShell>
+    </>
+  );
+}
+
+function PaymentsTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMore }) {
+  const totals = data?.totals || { transactions: 0, amount: 0, posAmount: 0, invoiceAmount: 0 };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const colWidths = ['22%', '16%', '16%', '16%', '15%', '15%'];
+  const headers = ['Payment mode', 'Transactions', 'Amount', 'Average amount', 'POS amount', 'Invoice amount'];
+
+  return (
+    <>
+      <Totals items={[
+        { label: 'Transactions', value: (totals.transactions || 0).toLocaleString('en-IN') },
+        { label: 'Amount collected', value: formatMoney(totals.amount || 0) },
+        { label: 'POS amount', value: formatMoney(totals.posAmount || 0) },
+        { label: 'Invoice amount', value: formatMoney(totals.invoiceAmount || 0) },
+      ]} />
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
+        <table style={tableStyle}>
+          <colgroup>{colWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+          <thead>
+            <tr>{headers.map((header, index) => <th key={header} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[index], textAlign: 'left' }}>{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td style={{ ...td, width: colWidths[0] }}>
+                  <div>{row.mode}</div>
+                  <InvoiceDrilldown invoiceIds={row.invoiceIds} onNavigate={onNavigate} />
+                </td>
+                <td style={{ ...tdR, width: colWidths[1] }}>{row.transactions}</td>
+                <td style={{ ...tdR, width: colWidths[2] }}>{formatMoney(row.amount)}</td>
+                <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(row.averageAmount)}</td>
+                <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(row.posAmount)}</td>
+                <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(row.invoiceAmount)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'left', color: 'var(--text-secondary)' }}>No payments in this window.</td></tr>}
+          </tbody>
+        </table>
+      </ReportTableShell>
+    </>
+  );
+}
+
+function ExpensesTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
+  const totals = data?.totals || { expenses: 0, amount: 0, approvedAmount: 0, pendingAmount: 0 };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const colWidths = ['30%', '17%', '18%', '18%', '17%'];
+  const headers = ['Category', 'Expenses', 'Amount', 'Approved', 'Pending'];
+
+  return (
+    <>
+      <Totals items={[
+        { label: 'Expenses', value: (totals.expenses || 0).toLocaleString('en-IN') },
+        { label: 'Total amount', value: formatMoney(totals.amount || 0) },
+        { label: 'Approved', value: formatMoney(totals.approvedAmount || 0) },
+        { label: 'Pending', value: formatMoney(totals.pendingAmount || 0) },
+      ]} />
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
+        <table style={tableStyle}>
+          <colgroup>{colWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+          <thead>
+            <tr>{headers.map((header, index) => <th key={header} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[index], textAlign: 'left' }}>{header}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td style={{ ...td, width: colWidths[0] }}>{row.category}</td>
+                <td style={{ ...tdR, width: colWidths[1] }}>{row.expenses}</td>
+                <td style={{ ...tdR, width: colWidths[2] }}>{formatMoney(row.amount)}</td>
+                <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(row.approvedAmount)}</td>
+                <td style={{ ...tdR, width: colWidths[4] }}>{formatMoney(row.pendingAmount)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={5} style={{ ...td, textAlign: 'left', color: 'var(--text-secondary)' }}>No expenses in this window.</td></tr>}
           </tbody>
         </table>
       </ReportTableShell>
@@ -800,21 +1072,26 @@ const sourceBadge = (source) => ({
 });
 const tableStyle = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' };
 const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', textOverflow: 'ellipsis' };
-const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };
+const td = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };
 // #602: right-aligned cells are always numeric / currency / count in this
 // page's report tables. Forbid mid-number wrap (`₹1,2\n34,567` breaks
 // copy-paste + CSV alignment) and use tabular-nums so digit columns line up.
 // wordBreak overrides the inherited break-word from `td`.
-const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap', wordBreak: 'normal', fontVariantNumeric: 'tabular-nums' };
+// All report tables intentionally use one alignment convention. Numeric
+// values stay tabular/nowrap for readability, but their content aligns with
+// the labels and neighboring columns instead of switching to right alignment.
+const tdR = { ...td, textAlign: 'left', whiteSpace: 'nowrap', wordBreak: 'normal', fontVariantNumeric: 'tabular-nums' };
 // #227: export buttons sit next to the date picker — wait state shows a
 // spinner and dims the button without removing it from the layout.
 const exportBtn = (busy) => ({
   display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
   padding: '0.45rem 0.85rem',
-  background: busy ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.06)',
-  border: '1px solid rgba(255,255,255,0.1)',
+  minHeight: 36,
+  background: busy ? 'var(--surface-hover, var(--surface-color))' : 'var(--surface-color)',
+  border: '1px solid var(--border-color)',
   borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.8rem',
   cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1,
+  boxShadow: 'var(--shadow-sm, none)',
 });
 
 

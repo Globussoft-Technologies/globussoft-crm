@@ -11,11 +11,11 @@
  *     counts + sums correct (totalIssued excludes VOIDED + CREDIT_NOTE;
  *     totalPaid sums only PAID rows).
  *   - totalOutstanding = totalIssued - totalPaid; clamps to 0.
- *   - lastInvoiceAt: picks the maximum createdAt.
+ *   - lastInvoiceAt: picks the maximum issuedDate.
  *   - overdueCount: dueDate < now AND status NOT IN (PAID,VOIDED,REFUNDED,
  *     CREDIT_NOTE).
  *   - Tenant isolation: prisma where.tenantId comes from req.user.tenantId.
- *   - ?from/?to narrows the window (createdAt clauses present on the query).
+ *   - ?from/?to narrows the window (issuedDate clauses present on the query).
  *   - NO audit row written (auditLog.create not called).
  *   - Defensive: missing/null amount fields don't NaN-poison the sum.
  *
@@ -141,11 +141,11 @@ describe('GET /api/billing/stats', () => {
     const futureDue = new Date(Date.now() + 7 * 86400000);
     const pastDue = new Date(Date.now() - 7 * 86400000);
     prisma.invoice.findMany.mockResolvedValue([
-      { status: 'PAID', amount: 1000, dueDate: futureDue, createdAt: new Date('2026-05-01T10:00:00Z') },
-      { status: 'PAID', amount: 500, dueDate: futureDue, createdAt: new Date('2026-05-02T10:00:00Z') },
-      { status: 'UNPAID', amount: 750, dueDate: futureDue, createdAt: new Date('2026-05-03T10:00:00Z') },
-      { status: 'OVERDUE', amount: 300, dueDate: pastDue, createdAt: new Date('2026-05-04T10:00:00Z') },
-      { status: 'VOIDED', amount: 200, dueDate: futureDue, createdAt: new Date('2026-05-05T10:00:00Z') },
+      { status: 'PAID', amount: 1000, dueDate: futureDue, issuedDate: new Date('2026-05-01T10:00:00Z') },
+      { status: 'PAID', amount: 500, dueDate: futureDue, issuedDate: new Date('2026-05-02T10:00:00Z') },
+      { status: 'UNPAID', amount: 750, dueDate: futureDue, issuedDate: new Date('2026-05-03T10:00:00Z') },
+      { status: 'OVERDUE', amount: 300, dueDate: pastDue, issuedDate: new Date('2026-05-04T10:00:00Z') },
+      { status: 'VOIDED', amount: 200, dueDate: futureDue, issuedDate: new Date('2026-05-05T10:00:00Z') },
     ]);
 
     const app = makeApp();
@@ -179,7 +179,7 @@ describe('GET /api/billing/stats', () => {
     // on a row whose status is VOIDED (excluded from issued):
     prisma.invoice.findMany.mockResolvedValue([
       // PAID counts toward issued AND paid (issued += 500, paid += 500)
-      { status: 'PAID', amount: 500, dueDate: null, createdAt: new Date('2026-05-01T10:00:00Z') },
+      { status: 'PAID', amount: 500, dueDate: null, issuedDate: new Date('2026-05-01T10:00:00Z') },
       // Imagine an admin manually wrote a PAID-but-VOIDED-original; the
       // clamp ensures we never surface negative outstanding to the UI.
       // Here issued=500, paid=500, outstanding=0 — exact-equality boundary.
@@ -199,12 +199,12 @@ describe('GET /api/billing/stats', () => {
     expect(res.body.totalOutstanding).toBeGreaterThanOrEqual(0);
   });
 
-  test('lastInvoiceAt: picks the most-recent createdAt', async () => {
+  test('lastInvoiceAt: picks the most-recent issuedDate', async () => {
     const newest = new Date('2026-05-20T10:00:00Z');
     prisma.invoice.findMany.mockResolvedValue([
-      { status: 'UNPAID', amount: 100, dueDate: null, createdAt: new Date('2026-05-01T10:00:00Z') },
-      { status: 'UNPAID', amount: 100, dueDate: null, createdAt: newest }, // newest
-      { status: 'UNPAID', amount: 100, dueDate: null, createdAt: new Date('2026-05-10T10:00:00Z') },
+      { status: 'UNPAID', amount: 100, dueDate: null, issuedDate: new Date('2026-05-01T10:00:00Z') },
+      { status: 'UNPAID', amount: 100, dueDate: null, issuedDate: newest }, // newest
+      { status: 'UNPAID', amount: 100, dueDate: null, issuedDate: new Date('2026-05-10T10:00:00Z') },
     ]);
 
     const app = makeApp();
@@ -220,13 +220,13 @@ describe('GET /api/billing/stats', () => {
     const past = new Date(Date.now() - 86400000);
     const future = new Date(Date.now() + 86400000);
     prisma.invoice.findMany.mockResolvedValue([
-      { status: 'UNPAID', amount: 100, dueDate: past, createdAt: new Date('2026-05-01T10:00:00Z') },     // overdue ✓
-      { status: 'OVERDUE', amount: 100, dueDate: past, createdAt: new Date('2026-05-02T10:00:00Z') },    // overdue ✓
-      { status: 'UNPAID', amount: 100, dueDate: future, createdAt: new Date('2026-05-03T10:00:00Z') },   // not yet due
-      { status: 'PAID', amount: 100, dueDate: past, createdAt: new Date('2026-05-04T10:00:00Z') },       // PAID excluded
-      { status: 'VOIDED', amount: 100, dueDate: past, createdAt: new Date('2026-05-05T10:00:00Z') },     // VOIDED excluded
-      { status: 'REFUNDED', amount: 100, dueDate: past, createdAt: new Date('2026-05-06T10:00:00Z') },   // REFUNDED excluded
-      { status: 'CREDIT_NOTE', amount: -50, dueDate: past, createdAt: new Date('2026-05-07T10:00:00Z') },// CREDIT_NOTE excluded
+      { status: 'UNPAID', amount: 100, dueDate: past, issuedDate: new Date('2026-05-01T10:00:00Z') },     // overdue ✓
+      { status: 'OVERDUE', amount: 100, dueDate: past, issuedDate: new Date('2026-05-02T10:00:00Z') },    // overdue ✓
+      { status: 'UNPAID', amount: 100, dueDate: future, issuedDate: new Date('2026-05-03T10:00:00Z') },   // not yet due
+      { status: 'PAID', amount: 100, dueDate: past, issuedDate: new Date('2026-05-04T10:00:00Z') },       // PAID excluded
+      { status: 'VOIDED', amount: 100, dueDate: past, issuedDate: new Date('2026-05-05T10:00:00Z') },     // VOIDED excluded
+      { status: 'REFUNDED', amount: 100, dueDate: past, issuedDate: new Date('2026-05-06T10:00:00Z') },   // REFUNDED excluded
+      { status: 'CREDIT_NOTE', amount: -50, dueDate: past, issuedDate: new Date('2026-05-07T10:00:00Z') },// CREDIT_NOTE excluded
     ]);
 
     const app = makeApp();
@@ -251,7 +251,7 @@ describe('GET /api/billing/stats', () => {
     expect(whereArg.tenantId).toBe(42);
   });
 
-  test('?from/?to: narrows the window via createdAt clauses on the prisma query', async () => {
+  test('?from/?to: narrows the window via issuedDate clauses on the prisma query', async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
 
     const fromIso = '2026-05-01T00:00:00.000Z';
@@ -263,13 +263,13 @@ describe('GET /api/billing/stats', () => {
 
     expect(res.status).toBe(200);
     const whereArg = prisma.invoice.findMany.mock.calls[0][0].where;
-    expect(whereArg.createdAt.gte).toEqual(new Date(fromIso));
-    expect(whereArg.createdAt.lte).toEqual(new Date(toIso));
+    expect(whereArg.issuedDate.gte).toEqual(new Date(fromIso));
+    expect(whereArg.issuedDate.lte).toEqual(new Date(toIso));
   });
 
   test('NO audit row written (read-only meta surface)', async () => {
     prisma.invoice.findMany.mockResolvedValue([
-      { status: 'PAID', amount: 1000, dueDate: null, createdAt: new Date('2026-05-01T10:00:00Z') },
+      { status: 'PAID', amount: 1000, dueDate: null, issuedDate: new Date('2026-05-01T10:00:00Z') },
     ]);
 
     const app = makeApp();
@@ -283,9 +283,9 @@ describe('GET /api/billing/stats', () => {
 
   test('defensive: null/undefined amount fields default to 0 (no NaN poisoning)', async () => {
     prisma.invoice.findMany.mockResolvedValue([
-      { status: 'UNPAID', amount: null, dueDate: null, createdAt: new Date('2026-05-01T10:00:00Z') },
-      { status: 'PAID', amount: undefined, dueDate: null, createdAt: new Date('2026-05-02T10:00:00Z') },
-      { status: 'PAID', amount: 200, dueDate: null, createdAt: new Date('2026-05-03T10:00:00Z') },
+      { status: 'UNPAID', amount: null, dueDate: null, issuedDate: new Date('2026-05-01T10:00:00Z') },
+      { status: 'PAID', amount: undefined, dueDate: null, issuedDate: new Date('2026-05-02T10:00:00Z') },
+      { status: 'PAID', amount: 200, dueDate: null, issuedDate: new Date('2026-05-03T10:00:00Z') },
     ]);
 
     const app = makeApp();
@@ -304,9 +304,9 @@ describe('GET /api/billing/stats', () => {
 
   test('half-up rounding to 2dp on sums with float-noise inputs', async () => {
     prisma.invoice.findMany.mockResolvedValue([
-      { status: 'PAID', amount: 100.555, dueDate: null, createdAt: new Date('2026-05-01T10:00:00Z') },
-      { status: 'PAID', amount: 50.005, dueDate: null, createdAt: new Date('2026-05-02T10:00:00Z') },
-      { status: 'PAID', amount: 25.001, dueDate: null, createdAt: new Date('2026-05-03T10:00:00Z') },
+      { status: 'PAID', amount: 100.555, dueDate: null, issuedDate: new Date('2026-05-01T10:00:00Z') },
+      { status: 'PAID', amount: 50.005, dueDate: null, issuedDate: new Date('2026-05-02T10:00:00Z') },
+      { status: 'PAID', amount: 25.001, dueDate: null, issuedDate: new Date('2026-05-03T10:00:00Z') },
     ]);
 
     const app = makeApp();

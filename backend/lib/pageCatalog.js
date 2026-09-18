@@ -551,6 +551,14 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
   {
+    path: '/forms',
+    label: 'Web Forms',
+    description: 'Embedded lead-capture forms and submissions',
+    category: 'Marketing',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'web_forms', action: 'read' }],
+  },
+  {
     path: '/sequences',
     label: 'Drip Sequences',
     description: 'Multi-step automated outreach',
@@ -1073,6 +1081,13 @@ const PAGE_CATALOG = [
     path: '/travel/brochures',
     label: 'Brochure Engine',
     description: 'AI brochure PDF composer (cover, itinerary, pricing)',
+    category: 'Travel Marketing',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
+  {
+    path: '/travel/forms',
+    label: 'Web Forms',
+    description: 'Embedded travel lead capture forms',
     category: 'Travel Marketing',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },

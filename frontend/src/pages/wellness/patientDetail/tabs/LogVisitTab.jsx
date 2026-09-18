@@ -46,6 +46,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   const handleSelectVisit = async (apt) => {
     setSelectedVisitId(apt.id);
     setNotes(apt.notes || '');
+    setAmountError('');
     setCouponCode('');
     setAppliedCoupon(null);
     setPreviewBreakdown(null);
@@ -193,9 +194,13 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       return;
     }
     if (submitting) return;
+    const chargeAmount = amountCharged === '' ? 0 : Number(amountCharged);
+    if (!Number.isFinite(chargeAmount) || chargeAmount < 0) {
+      setAmountError('Enter a valid bill amount of 0 or greater');
+      return;
+    }
     setSubmitting(true);
     try {
-      const chargeAmount = Number(amountCharged) || 0;
       const result = await fetchApi(`/api/wellness/visits/${selectedVisit.id}`, {
         method: 'PUT',
         body: JSON.stringify({
@@ -590,23 +595,17 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
             <input
               type="number"
               min="0"
-              defaultValue=""
-
+              value={amountCharged}
               step="1"
-              // value={amountCharged}
               onChange={(e) => {
                 const value = e.target.value;
-                const maxAmount = Number(selectedService?.basePrice || 0);
-
-
-                if (value !== '' && Number(value) > maxAmount) {
-                  setAmountError(`Amount cannot be more than ₹${maxAmount}`);
-                } else {
-                  setAmountError('');
-                  setAmountCharged(value);
-                }
-
-                //  setAmountCharged(value);
+                const numericValue = Number(value);
+                setAmountCharged(value);
+                setAmountError(
+                  value !== '' && (!Number.isFinite(numericValue) || numericValue < 0)
+                    ? 'Enter a valid bill amount of 0 or greater'
+                    : '',
+                );
                 setAppliedCoupon(null);
                 setPreviewBreakdown(null);
                 setCouponError('');

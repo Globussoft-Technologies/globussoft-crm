@@ -38,7 +38,7 @@ const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
 
 let authToken = null;
-const RUN_TAG = `E2E_EST_${Date.now()}`;
+const RUN_TAG = `E2E_EST_${Date.now()}_${process.pid}`;
 
 async function getAuthToken(request) {
   if (authToken) return authToken;
@@ -105,10 +105,14 @@ async function authDelete(request, path) {
 
 // ── cleanup tracking ────────────────────────────────────────────────
 const createdEstimateIds = [];
+const createdContactIds = [];
 
 test.afterAll(async ({ request }) => {
   for (const id of createdEstimateIds) {
     await authDelete(request, `/api/estimates/${id}`).catch(() => {});
+  }
+  for (const id of createdContactIds) {
+    await authDelete(request, `/api/contacts/${id}`).catch(() => {});
   }
 });
 
@@ -131,16 +135,18 @@ async function createEstimate(request, overrides = {}) {
   return e;
 }
 
-// Helper: pick any contact id we can use for conversion tests. The convert
-// endpoint refuses estimates that have no contactId, so we need a real one.
-// Returns null if the tenant has no contacts (the calling test should skip).
-async function findContactId(request) {
-  const res = await authGet(request, '/api/contacts?limit=1');
-  if (!res.ok()) return null;
-  const list = await res.json();
-  // /api/contacts may return either an array or { rows, total }. Handle both.
-  const rows = Array.isArray(list) ? list : (list.rows || list.data || []);
-  return rows[0]?.id ?? null;
+// Conversion tests own their contact fixture. Selecting the first tenant
+// contact races with the contacts suite, which may merge or delete that row.
+async function createEstimateContact(request, label) {
+  const res = await authPost(request, '/api/contacts', {
+    name: `${RUN_TAG} ${label}`,
+    email: `${RUN_TAG.toLowerCase()}-${label}@e2e.local`,
+    status: 'Lead',
+  });
+  expect(res.status(), `contact create: ${await res.text()}`).toBe(201);
+  const contact = await res.json();
+  createdContactIds.push(contact.id);
+  return contact.id;
 }
 
 // ─── POST /api/estimates ────────────────────────────────────────────
@@ -746,8 +752,7 @@ test.describe('Estimates API — PUT /:id/convert', () => {
   });
 
   test('successful convert creates Invoice + flips estimate to Converted', async ({ request }) => {
-    const contactId = await findContactId(request);
-    test.skip(!contactId, 'no contact in tenant — cannot exercise convert success path');
+    const contactId = await createEstimateContact(request, 'convert-success');
 
     const e = await createEstimate(request, {
       title: 'convertable',
@@ -771,8 +776,7 @@ test.describe('Estimates API — PUT /:id/convert', () => {
   });
 
   test('400 when re-converting an already-Converted estimate', async ({ request }) => {
-    const contactId = await findContactId(request);
-    test.skip(!contactId, 'no contact in tenant — cannot exercise convert idempotency');
+    const contactId = await createEstimateContact(request, 'convert-idempotency');
 
     const e = await createEstimate(request, {
       title: 'already-converted',

@@ -238,6 +238,22 @@ function renderPage(form = FORM_FIXTURE) {
 
 }
 
+function renderTravelPage(form = FORM_FIXTURE) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    const method = opts?.method || 'GET';
+    if (url === '/api/forms?scope=travel' && method === 'GET') return Promise.resolve([{ ...form, scope: 'travel' }]);
+    if (url === '/api/forms/logo-upload?scope=travel' && method === 'POST') {
+      return Promise.resolve({ url: 'https://objectstorage.example.com/travel-logo.png', storage: 'ocs' });
+    }
+    return Promise.resolve(null);
+  });
+  return render(
+    <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+      <WebForms scope="travel" />
+    </AuthContext.Provider>,
+  );
+}
+
 
 
 async function openBuilder(formName = 'Brand intake') {
@@ -267,6 +283,26 @@ beforeEach(() => {
 
 
 describe('WebForms builder page', () => {
+
+  test('travel logo selection immediately sends a multipart upload request', async () => {
+    const { container } = renderTravelPage();
+    await openBuilder();
+    const input = container.querySelector('input[type="file"][accept="image/*"]');
+    const file = new File(['logo bytes'], 'travel-logo.png', { type: 'image/png' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/forms/logo-upload?scope=travel',
+        expect.objectContaining({ method: 'POST', body: expect.any(FormData) }),
+      );
+    });
+    const [, options] = fetchApiMock.mock.calls.find(([url]) => url === '/api/forms/logo-upload?scope=travel');
+    expect(options.body.get('image')).toBe(file);
+    expect(await screen.findByAltText('Form logo preview')).toHaveAttribute('src', 'https://objectstorage.example.com/travel-logo.png');
+    expect(notifySuccess).toHaveBeenCalledWith('Logo uploaded to OCS.');
+  });
 
   test('renders web form builder chrome and opens the embed + preview modals', async () => {
 
@@ -324,7 +360,17 @@ describe('WebForms builder page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Preview form/i }));
 
-    expect(screen.getByTitle('Web form preview')).toBeInTheDocument();
+    const previewFrame = screen.getByTitle('Web form preview');
+    expect(previewFrame).toBeInTheDocument();
+    expect(previewFrame).toHaveStyle({ height: 'auto', minHeight: '0px' });
+
+    Object.defineProperty(previewFrame, 'contentWindow', { configurable: true, value: {} });
+    window.dispatchEvent(new MessageEvent('message', {
+      source: previewFrame.contentWindow,
+      data: { source: 'gbs-web-form', type: 'size', height: 1234.2 },
+    }));
+    expect(previewFrame.style.height).toBe('1235px');
+    expect(previewFrame.style.minHeight).toBe('0px');
 
   });
 
@@ -487,6 +533,34 @@ describe('WebForms builder page', () => {
 
   });
 
+  test('saves edits across fields, settings, and colors in one request', async () => {
+    renderPage();
+
+    await openBuilder();
+
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Full name' } });
+    fireEvent.change(screen.getByDisplayValue('Submit'), { target: { value: 'Send request' } });
+    const formColorPicker = screen.getAllByLabelText('Form color *').find((element) => element.type === 'color');
+    const buttonColorPicker = screen.getAllByLabelText('Color of Submit button *').find((element) => element.type === 'color');
+    fireEvent.change(formColorPicker, { target: { value: '#F4F5F6' } });
+    fireEvent.change(buttonColorPicker, { target: { value: '#99B177' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      const body = JSON.parse(saveCall[1].body);
+      expect(body.fields[0]).toEqual(expect.objectContaining({ label: 'Full name' }));
+      expect(body.settings).toEqual(expect.objectContaining({ submitButtonLabel: 'Send request' }));
+      expect(body.style).toEqual(expect.objectContaining({ formColor: '#F4F5F6', buttonColor: '#99B177' }));
+    });
+
+    expect(notifySuccess).toHaveBeenCalledWith('Form saved');
+  });
+
   test('custom choice fields expose an editable options textarea', async () => {
 
     const customForm = {
@@ -600,4 +674,16 @@ describe('WebForms builder page', () => {
     expect(document.querySelector('input[type="date"]')).toBeTruthy();
 
   });
+});
+
+test.each(['generic', 'wellness', 'travel'])('View All Leads is available only for Generic CRM (%s)', async (vertical) => {
+  installFetchMock();
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+  expect(screen.queryByRole('button', { name: 'View All Leads' }) !== null).toBe(vertical === 'generic');
+  if (vertical === 'generic') {
+    fireEvent.click(screen.getByRole('button', { name: 'View All Leads' }));
+    expect(screen.getByRole('dialog', { name: /Leads .* Brand intake/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dialog'));
+  }
 });

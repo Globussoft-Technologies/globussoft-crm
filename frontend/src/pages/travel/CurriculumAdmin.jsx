@@ -614,26 +614,28 @@ export default function CurriculumAdmin() {
     }
   };
 
-  const handleDelete = (m) => {
+  const handleDelete = async (m) => {
     if (!isAdmin) return;
-    // Wellness pattern (per CLAUDE.md): native confirm for hard-stop ops.
-    // Curriculum mappings are soft-deleted (set isActive=false) so the
-    // wording names that explicitly — preserves the diagnostic engine's
-    // audit-trail references per backend route header.
-    const ok = window.confirm(
-      `Deactivate curriculum mapping "${m.curriculum} / ${m.grade} / ${m.subject}"?\n\nThis is a soft delete — the mapping will be marked inactive but kept in the audit history for the diagnostic engine.`,
-    );
+    // Curriculum mappings are soft-deleted (set isActive=false). Use the
+    // app modal so the confirmation stays inside the page instead of opening
+    // the browser-native "site says" dialog.
+    const ok = await notify.confirm({
+      title: 'Deactivate curriculum mapping?',
+      message: `"${m.curriculum} / ${m.grade} / ${m.subject}"\n\nThis is a soft delete — the mapping will be marked inactive but kept in the audit history for the diagnostic engine.`,
+      confirmText: 'Deactivate',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
     if (!ok) return;
-    fetchApi(`/api/travel-curriculum/${m.id}`, { method: 'DELETE', silent: true })
-      .then(() => {
-        notify.success('Curriculum mapping deactivated');
-        load();
-      })
-      .catch((err) => {
-        const code = err?.code || err?.data?.code;
-        const userMsg = errorCodeToMessage(code, err?.message || 'Delete failed');
-        notify.error(userMsg);
-      });
+    try {
+      await fetchApi(`/api/travel-curriculum/${m.id}`, { method: 'DELETE', silent: true });
+      notify.success('Curriculum mapping deactivated');
+      load();
+    } catch (err) {
+      const code = err?.code || err?.data?.code;
+      const userMsg = errorCodeToMessage(code, err?.message || 'Delete failed');
+      notify.error(userMsg);
+    }
   };
 
   return (
@@ -875,9 +877,9 @@ export default function CurriculumAdmin() {
                 <th style={{ ...th, width: '19%' }}>{sortHeader('Learning outcome', 'learningOutcome')}</th>
                 <th style={{ ...th, width: '17%' }}>{sortHeader('Destination', 'destinationLabel')}</th>
                 <th style={{ ...th, width: '5%' }}>{sortHeader('Fit', 'fitScore')}</th>
-                <th style={{ ...th, width: '5%' }}>{sortHeader('Conf.', 'confidenceScore')}</th>
+                <th style={{ ...th, width: '7%' }}>{sortHeader('Conf.', 'confidenceScore')}</th>
                 <th style={{ ...th, width: '5%' }}>Active</th>
-                {isAdmin && <th style={{ ...th, width: '15%' }}>Actions</th>}
+                {isAdmin && <th style={{ ...th, width: '13%', textAlign: 'center' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>

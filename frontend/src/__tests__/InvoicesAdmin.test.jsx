@@ -4,7 +4,7 @@
  * tick #98 commit c156df4).
  *
  * Scope â€” pins page-surface invariants for the Travel invoices CRUD page:
- *   1. Page chrome â€” heading "Travel Invoices" + filter bar + "New Invoice"
+ *   1. Page chrome â€” heading "Invoices" + filter bar + "New Invoice"
  *      CTA (CTA gated on ADMIN/MANAGER via AuthContext.user.role).
  *   2. Loading state â€” pre-first-fetch the table region renders "Loadingâ€¦"
  *      copy; once GET resolves the table replaces it.
@@ -99,7 +99,7 @@
  * Path: flat __tests__/ â€” DO NOT add a __tests__/travel/ subdir.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -181,8 +181,8 @@ function installFetchMock({
     policyApplied: null,
   },
   // Default contact book for the customer <select> in the create/edit modal.
-  // Intentionally does NOT include id 42 so the list-row fallback test still
-  // sees the raw "#42" placeholder while create-modal tests can opt-in a
+  // Intentionally does NOT include id 42 so the list-row fallback test sees
+  // the "Deleted account" tombstone while create-modal tests can opt-in a
   // matching contact when they need to submit the form.
   contacts = [{ id: 7, name: 'Seven', email: 'seven@example.com' }],
   trips = [{ id: 501, tripCode: 'TMC-0501', destination: 'Goa' }],
@@ -283,7 +283,7 @@ describe('<InvoicesAdmin /> â€” page chrome', () => {
   it('renders heading + filter bar + "New Invoice" CTA when role=ADMIN', async () => {
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /Travel Invoices/i }),
+      screen.getByRole('heading', { name: /^Invoices/i }),
     ).toBeInTheDocument();
     // CTA visible for ADMIN.
     expect(
@@ -311,6 +311,20 @@ describe('<InvoicesAdmin /> â€” page chrome', () => {
         fetchApiMock.mock.calls.some(([url]) => url.startsWith('/api/travel/invoices')),
       ).toBe(true);
     });
+  });
+
+  it('keeps the Travel page fixed and scrolls invoice rows inside the table viewport', async () => {
+    renderPage();
+    await screen.findByText(/TINV-2026-0001/);
+
+    const page = document.querySelector('.invoices-admin-page');
+    const tableCard = document.querySelector('.finance-page__table-card');
+    const tableScroller = document.querySelector('.finance-page__table-scroll');
+
+    expect(page).toHaveStyle({ height: '100%', minHeight: '0', overflow: 'hidden' });
+    expect(tableCard).toHaveStyle({ display: 'flex', overflow: 'hidden', minHeight: '0' });
+    expect(tableScroller).toHaveStyle({ overflow: 'auto', minHeight: '0', background: 'var(--surface-color)' });
+    expect(getComputedStyle(tableScroller).overscrollBehavior).toBe('contain');
   });
 
   it('hides "New Invoice" CTA + actions column when role=USER', async () => {
@@ -353,7 +367,7 @@ describe('<InvoicesAdmin /> - Excel Software reconciliation', () => {
 
   it('uploads a workbook as multipart/form-data and renders the summary', async () => {
     renderPage();
-    await screen.findByText(/Travel Invoices/i);
+    await screen.findByRole('heading', { name: /^Invoices/i });
     const file = new File(['Invoice Number,Invoice Total\nTINV-2026-0001,100'], 'travel-accounting.csv', { type: 'text/csv' });
     fireEvent.change(screen.getByLabelText(/Excel Software reconciliation file/i), {
       target: { files: [file] },
@@ -377,11 +391,13 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
     renderPage();
     // Row renders the verbatim TINV-YYYY-NNNN backend-assigned serial.
     expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
-    // #1051 â€” CONTACT column falls back to "#<id>" when the /api/contacts/:id
+    // #1051 â€” CONTACT column shows "Deleted account" when the /api/contacts/:id
     // lookup returns null (default mock); when it returns a Contact row the
     // cell renders `contact.name` instead. See the "#1051 â€” contact name
     // resolution" describe block below for the success path.
-    expect(screen.getByText('#42')).toBeInTheDocument();
+    expect(await screen.findByText('Deleted account')).toBeInTheDocument();
+    expect(screen.queryByText('#42')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Deleted account' })).toBeNull();
     // Initial list GET includes pager params.
     const gets = fetchApiMock.mock.calls.filter(
       ([url, opts]) =>
@@ -391,6 +407,22 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
     );
     expect(gets.length).toBeGreaterThanOrEqual(1);
     expect(gets.some(([url]) => /limit=20/.test(url) && /offset=0/.test(url))).toBe(true);
+  });
+
+  it('keeps long invoice numbers inside their table column', async () => {
+    const invoiceNum = 'TINV-2026-T727-P322-25692';
+    installFetchMock({
+      list: { invoices: [makeInvoice({ invoiceNum })], total: 1 },
+    });
+    renderPage();
+
+    const invoiceCell = (await screen.findByText(invoiceNum)).closest('td');
+    expect(invoiceCell).toHaveStyle({
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    });
+    expect(invoiceCell).toHaveAttribute('title', invoiceNum);
   });
 
   it('loading state shows "Loadingâ€¦" before the first GET resolves', async () => {
@@ -522,6 +554,23 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
 });
 
 describe('<InvoicesAdmin /> â€” row rendering', () => {
+  it('shows the latest payment date for a partially paid invoice', async () => {
+    installFetchMock({
+      list: {
+        invoices: [makeInvoice({
+          status: 'Partial',
+          paidAt: null,
+          lastPaymentAt: '2026-09-14T10:30:00.000Z',
+        })],
+        total: 1,
+      },
+    });
+    renderPage();
+
+    const invoiceNumber = await screen.findByText('TINV-2026-0001');
+    expect(within(invoiceNumber.closest('tr')).getByText('2026-09-14')).toBeInTheDocument();
+  });
+
   it('renders a linked trip code as a link to the trip detail page', async () => {
     installFetchMock({
       list: {

@@ -33,6 +33,11 @@ prisma.travelDiagnosticPublicForm = {
 prisma.travelDiagnosticQuestionBank = {
   ...(prisma.travelDiagnosticQuestionBank || {}),
   findFirst: vi.fn(),
+  update: vi.fn(),
+};
+prisma.travelKnowledgeBaseFile = {
+  ...(prisma.travelKnowledgeBaseFile || {}),
+  findMany: vi.fn(),
 };
 prisma.travelDiagnostic = {
   ...(prisma.travelDiagnostic || {}),
@@ -269,6 +274,8 @@ beforeEach(() => {
   prisma.travelDiagnosticPublicForm.create.mockReset().mockImplementation((args) => ({ id: 100, ...args.data }));
   prisma.travelDiagnosticPublicForm.update.mockReset().mockImplementation((args) => ({ id: args.where.id, ...args.data }));
   prisma.travelDiagnosticQuestionBank.findFirst.mockReset().mockResolvedValue(bankRow());
+  prisma.travelDiagnosticQuestionBank.update.mockReset().mockImplementation((args) => ({ id: args.where.id, ...args.data }));
+  prisma.travelKnowledgeBaseFile.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnostic.create.mockReset().mockImplementation((args) => ({ id: 555, ...args.data, createdAt: new Date() }));
   prisma.travelDiagnostic.update.mockReset().mockResolvedValue({});
   prisma.travelCurriculumMapping.findMany.mockReset().mockResolvedValue([]);
@@ -378,6 +385,39 @@ describe("GET /api/travel/diagnostics/public/form/:tenantSlug/:subBrand", () => 
     expect(res.status).toBe(404);
     expect(res.body.code).toBe("FORM_NOT_FOUND");
   });
+
+  test("adds the required TMC trip-type question from indexed Drive categories", async () => {
+    prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(
+      formRow({ subBrand: "tmc", isPublished: true }),
+    );
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(
+      bankRow({ subBrand: "tmc", questionsJson: tmcQuestions }),
+    );
+    prisma.travelKnowledgeBaseFile.findMany.mockResolvedValue([
+      { folderPath: "TMC/Overnight Adventure/Area 83.pdf" },
+      { folderPath: "TMC/In Campus Programs/Campus Overnight.pdf" },
+    ]);
+
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/form/travelstall/tmc",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.questions[0]).toMatchObject({
+      id: "preferred_trip_types",
+      type: "multi-select",
+      required: true,
+      minSelections: 1,
+    });
+    expect(res.body.questions[0].options.map((option) => option.label)).toEqual([
+      "Day Trips",
+      "Domestic",
+      "International",
+      "Overnight Adventure",
+      "In Campus Programs",
+    ]);
+    expect(prisma.travelDiagnosticQuestionBank.update).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit", () => {
@@ -452,6 +492,7 @@ describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit"
       .post("/api/travel/diagnostics/public/form/travelstall/tmc/submit")
       .send({
         answers: {
+          preferred_trip_types: ["domestic"],
           curriculum: "CBSE",
           grade: "Grade 8",
           subject: "Geography",
@@ -500,6 +541,7 @@ describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit"
       .post("/api/travel/diagnostics/public/form/travelstall/tmc/submit")
       .send({
         answers: {
+          preferred_trip_types: ["domestic"],
           q9: "opt1",
           q10: "opt4",
           q11: "opt1",
@@ -546,6 +588,7 @@ describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit"
       .post("/api/travel/diagnostics/public/form/travelstall/tmc/submit")
       .send({
         answers: {
+          preferred_trip_types: ["domestic"],
           curriculum: "CBSE",
           grade: "Grade 8",
           q1: "few",
@@ -649,6 +692,38 @@ describe("GET /api/travel/diagnostics/public/report/:slug", () => {
     expect(res.status).toBe(200);
     expect(res.body.diagnosticId).toBe(555);
     expect(res.body.classificationLabel).toBe("Regular");
+  });
+
+  test("keeps the unified report inside the submitted trip categories", async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      id: 555,
+      tenantId: 1,
+      subBrand: "tmc",
+      score: 4,
+      classification: "level_2",
+      classificationLabel: "Regular",
+      recommendedTier: "primary",
+      answersJson: JSON.stringify({ preferred_trip_types: ["international"] }),
+      curriculumFitJson: null,
+      reportSlugToken: "abc123abc123abcd",
+      createdAt: new Date(),
+    });
+    travelRag.getRagResultForDiagnostic.mockResolvedValue({
+      recommendations: {
+        recommendedTrips: [
+          { name: "Europe Tour", category: "International", driveLink: "https://drive.example/europe" },
+          { name: "Hampi Tour", category: "Domestic", driveLink: "https://drive.example/hampi" },
+          { name: "Area 83", category: "Overnight Adventure", driveLink: "https://drive.example/area83" },
+        ],
+      },
+    });
+
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/report/555-abc123abc123abcd",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.recommendations.map((item) => item.name)).toEqual(["Europe Tour"]);
   });
 
   test("is side-effect free even when persisted recommendations are below the configured target", async () => {

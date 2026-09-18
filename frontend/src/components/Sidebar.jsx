@@ -145,6 +145,7 @@ import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
+import { getGenericAccessByPath } from "../utils/sidebarSearch";
 // Branding refactor (2026-07-08): the sidebar shows exactly ONE logo, driven
 // by the fallback-resolved effective brand for the active sub-brand  never
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
@@ -228,6 +229,7 @@ const Sidebar = ({
     hasPermission,
     isReady: permissionsReady,
     permissions,
+    refresh: refreshPermissions,
   } = usePermissions();
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
@@ -613,14 +615,22 @@ const Sidebar = ({
     to,
     icon: Icon,
     label,
-    adminOnly,
-    managerOnly,
+    adminOnly: requestedAdminOnly,
+    managerOnly: requestedManagerOnly,
     wellnessRoles,
-    requiredPermission,
+    requiredPermission: requestedPermission,
     count,
     matchPaths = [],
     end = false,
   }) => {
+    const canonicalAccess = !isTravel && !isWellness
+      ? getGenericAccessByPath(to)
+      : null;
+    const adminOnly = canonicalAccess ? Boolean(canonicalAccess.adminOnly) : requestedAdminOnly;
+    const managerOnly = canonicalAccess ? Boolean(canonicalAccess.managerOnly) : requestedManagerOnly;
+    const requiredPermission = canonicalAccess?.requiredPermission || requestedPermission;
+    if (canonicalAccess?.hideForAdmin && isAdmin) return null;
+    if (canonicalAccess?.userOnly && isManager) return null;
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     // wellnessRoles gates a link to specific wellnessRole values. Managers
@@ -703,6 +713,7 @@ const Sidebar = ({
     return (
       <NavLink
         to={resolvedTo}
+        data-tour-nav={activeTarget}
         end={end}
         className={({ isActive }) => {
           const isPathMatch = matchPaths.some(
@@ -891,6 +902,16 @@ const Sidebar = ({
     };
   }, [permissionsKey]);
 
+  // Generic RBAC edits invalidate the shared permission cache. Refresh the
+  // active generic user's effective permissions immediately so sidebar and
+  // global-search gates do not keep showing a removed page until reload.
+  useEffect(() => {
+    if (tenant?.vertical !== "generic") return undefined;
+    const onPermissionChange = () => { refreshPermissions().catch(() => {}); };
+    window.addEventListener("sidebar:pages-changed", onPermissionChange);
+    return () => window.removeEventListener("sidebar:pages-changed", onPermissionChange);
+  }, [refreshPermissions, tenant?.vertical]);
+
   // SSO-authenticated AdsGPT launcher  does the same token + Redis-key
   // handoff as the wellness OwnerDashboard card. If the SSO flow fails
   // (network / provider down), degrade to opening the plain dashboard URL
@@ -931,6 +952,7 @@ const Sidebar = ({
     return (
       <button
         type="button"
+        data-tour-feature="adsgpt"
         onClick={handleClick}
         disabled={adsLoading}
         className="nav-link"
@@ -992,6 +1014,7 @@ const Sidebar = ({
     return (
       <button
         type="button"
+        data-tour-feature="callified"
         onClick={handleClick}
         disabled={callifiedLoading}
         className="nav-link"
@@ -1050,6 +1073,7 @@ const Sidebar = ({
         role={asideRole}
         aria-modal={asideAriaModal}
         aria-label="Main navigation"
+        data-tour="welcome-sidebar"
         data-search-highlight-scope="global-search"
         className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}`}
         style={{
@@ -1394,6 +1418,7 @@ function GenericLeadsNavGroup({ Link, counts = {}, isMobileViewport = false }) {
   return (
     <WellnessNavGroup
       label="Leads"
+      dataTour="leads-group"
       paths={["/leads", "/converted-leads", "/lead-reports", "/lead-routing", "/lead-scoring"]}
       isMobileViewport={isMobileViewport}
       activeGroup={openGroup}
@@ -1401,19 +1426,20 @@ function GenericLeadsNavGroup({ Link, counts = {}, isMobileViewport = false }) {
       // (deactivatePanel); a raw setState handles both.
       onActivate={setOpenGroup}
     >
-      <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} />
-      <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" />
+      <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
+      <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
       {/* managerOnly is handled inside <Link>, so ADMIN/MANAGER-only entries
           stay hidden for lower roles exactly as they were before grouping. */}
-      <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly />
-      <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
-      <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly />
+      <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly requiredPermission={{ module: "lead_scoring", action: "read" }} />
+      <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} />
+      <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
     </WellnessNavGroup>
   );
 }
 
 function WellnessNavGroup({
   label,
+  dataTour,
   paths = [],
   children,
   moduleColor,
@@ -1586,6 +1612,7 @@ function WellnessNavGroup({
           className={`nav-link ${isActive ? "active" : ""}`}
           aria-expanded={isOpen}
           aria-controls={panelId}
+          data-tour={dataTour}
           onClick={() => {
             if (isPinned) {
               setPinned(false);
@@ -2548,13 +2575,13 @@ function renderGenericNav({
           their nav focused. Mirrors the catalog-level hideForAdminTier
           flag used by the wellness sidebar. */}
       {!isAdmin && <Link to="/home" end icon={LayoutDashboard} label="Home" />}
-      <Link to="/dashboard" end icon={LayoutDashboard} label="Dashboard" />
+      <Link to="/dashboard" end icon={LayoutDashboard} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
       {/* AdsGPT + Callified are marketing / call-centre integrations
           intended for ADMIN + MANAGER only. Mirrors the same gate in the
           wellness sidebar; keep both branches in sync. */}
       {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
       {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
-      <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} />
+      <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
       {/* WhatsApp (Meta Cloud API) agent inbox. The generic nav is a HARDCODED
           list — unlike the wellness nav it does NOT read the page catalog — so
           this link is what actually surfaces /whatsapp; the catalog row only
@@ -2569,22 +2596,26 @@ function renderGenericNav({
           "read" }} and grant whatsapp.read in Roles & Permissions.
           Travel has its own Wati entry in renderTravelNav; wellness reaches its
           copy through the catalog. */}
-      <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" />
-      <Link to="/contacts" icon={Users} label="Contacts" />
-      <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
-      <GenericLeadsNavGroup Link={Link} counts={counts} isMobileViewport={isMobileViewport} />
-      <Link to="/clients" icon={Building2} label="Clients" />
+      <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+      <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+          <Link to="/pipeline" icon={Briefcase} label="Deals and Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+      {hasPermission("leads", "read") && (
+        <GenericLeadsNavGroup Link={Link} counts={counts} isMobileViewport={isMobileViewport} />
+      )}
+      <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
       <Link
         to="/tasks"
         icon={CheckSquare}
         label="Task Queue"
         count={counts.tasks}
+        requiredPermission={{ module: "tasks", action: "read" }}
       />
       <Link
         to="/tickets"
         icon={Ticket}
         label="Tickets"
         count={counts.tickets}
+        requiredPermission={{ module: "tickets", action: "read" }}
       />
       {/* #474: label was "Calendar" pointing at /calendar-sync  the integration
           settings page (Google/Outlook bindings), not an event calendar. Users
@@ -2593,17 +2624,17 @@ function renderGenericNav({
           not yet). Rename to match the destination so the affordance matches
           reality; a future event-list /calendar route can be added separately
           and re-promoted to the bare "Calendar" label then. */}
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" />
-      <Link to="/live-chat" icon={MessageSquare} label="Live Chat" />
+      <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
+      <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
 
-      <Link to="/deal-insights" icon={Eye} label="Deal Insights" />
-      <Link to="/playbooks" icon={FileText} label="Playbooks" />
-      <Link to="/booking-pages" icon={Calendar} label="Booking Pages" />
-      <Link to="/forms" icon={Code} label="Web Forms" />
-      <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" />
-      <Link to="/signatures" icon={FileSignature} label="E-Signatures" />
-      <Link to="/document-templates" icon={FileText} label="Doc Templates" />
-      <Link to="/document-tracking" icon={Eye} label="Doc Tracking" />
+      <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
+      <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
+      <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
+      <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
+      <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
+      <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
+      <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
+      <Link to="/document-tracking" icon={Eye} label="Doc Tracking" requiredPermission={{ module: "documents", action: "read" }} />
 
       {/* Finance items gated on per-module read perms so a custom role
           without billing access doesn't see the surfaces at all. */}
@@ -2631,19 +2662,19 @@ function renderGenericNav({
         label="Contracts"
         requiredPermission={{ module: "contracts", action: "read" }}
       />
-      <Link to="/projects" icon={FolderKanban} label="Projects" />
+      <Link to="/projects" icon={FolderKanban} label="Projects" requiredPermission={{ module: "projects", action: "read" }} />
 
-      <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly />
+      <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
       <Link
         to="/forecasting"
         icon={TrendingUp}
         label="Forecasting"
         managerOnly
       />
-      <Link to="/quotas" icon={Award} label="Quotas" managerOnly />
-      <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly />
-      <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly />
-      <Link to="/reports" icon={BarChart3} label="Reports" managerOnly />
+      <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
+      <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
+      <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly requiredPermission={{ module: "pipeline", action: "read" }} />
+      <Link to="/reports" icon={BarChart3} label="Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
       {/* Lead Reports cluster — productivity (daily/weekly/monthly), lead
           quality, follow-up tracking, source analysis, lead-stage funnel
           builder, meetings & site visits, visited-but-not-booked nurturing.
@@ -2667,15 +2698,15 @@ function renderGenericNav({
         label="Custom Reports"
         managerOnly
       />
-      <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly />
-      <Link to="/territories" icon={Network} label="Territories" managerOnly />
+      <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
+      <GenericTeamTerritoriesNav Link={Link} isManager={isManager} />
 
-      <Link to="/marketing" icon={Send} label="Marketing" managerOnly />
-      <Link to="/sequences" icon={Network} label="Sequences" managerOnly />
-      <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly />
-      <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly />
-      <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly />
-      <Link to="/social" icon={Send} label="Social Media" managerOnly />
+      <Link to="/marketing" icon={Send} label="Marketing" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
+      <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "sequences", action: "read" }} />
+      <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} />
+      <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
+      <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
+      <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} />
       {/* Marketplace Leads sidebar link removed by request. Route stays
           mounted in App.jsx so /marketplace-leads is reachable by deep
           link / direct URL. */}
@@ -2686,13 +2717,13 @@ function renderGenericNav({
         label="Knowledge Base"
         managerOnly
       />
-      <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly />
-      <Link to="/sla" icon={Target} label="SLA Policies" managerOnly />
-      <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
-      <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly />
+      <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly requiredPermission={{ module: "surveys", action: "read" }} />
+      <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
+      <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
+      <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly requiredPermission={{ module: "cpq", action: "read" }} />
       {/* Generic CRM workflow automation. Kept in the generic navigation only;
           travel and wellness render their own vertical navigation branches. */}
-      <Link to="/workflows" icon={GitBranch} label="Workflows" />
+      <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
 
       {/* Admin section. Opens for the legacy `ADMIN` role-string AND for any
           custom role granted `roles.read` via RBAC  without the latter,
@@ -2796,7 +2827,7 @@ function renderGenericNav({
             label="Import / Export"
             adminOnly
           />
-          <Link to="/settings" icon={Settings} label="Settings" adminOnly />
+          <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
         </div>
       )}
 
@@ -2811,7 +2842,15 @@ function renderGenericNav({
             gap: "0.25rem",
           }}
         >
-          <Link to="/settings" icon={Settings} label="Settings" />
+          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
+          <Link to="/data-import-export" icon={Database} label="Import / Export" requiredPermission={{ module: "settings", action: "manage" }} />
+          <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
+        </div>
+      )}
+
+      {!isAdmin && !isManager && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
         </div>
       )}
 
@@ -2835,6 +2874,24 @@ function renderGenericNav({
         </div>
       )}
     </>
+  );
+}
+
+function GenericTeamTerritoriesNav({ Link, isManager }) {
+  const [openGroup, setOpenGroup] = useState(null);
+  if (!isManager) return null;
+  return (
+    <WellnessNavGroup
+      label="Team & Territories"
+      paths={["/sales-teams", "/staff", "/settings/roles", "/territories"]}
+      activeGroup={openGroup}
+      onActivate={setOpenGroup}
+    >
+      <Link to="/sales-teams" icon={Users} label="Sales Teams" />
+      <Link to="/users" icon={Users} label="Users" />
+      <Link to="/settings/roles" icon={ShieldCheck} label="Roles" />
+      <Link to="/territories" icon={Network} label="Territories" />
+    </WellnessNavGroup>
   );
 }
 
@@ -2891,9 +2948,3 @@ const badgeStyle = {
 };
 
 export default Sidebar;
-
-
-
-
-
-

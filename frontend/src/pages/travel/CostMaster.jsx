@@ -716,14 +716,14 @@ export default function CostMaster() {
   )].sort((a, b) => a.localeCompare(b));
 
   return (
-    <div style={{ padding: "28px 32px", width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
+    <div className="finance-page" style={{ padding: "28px 32px", width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
-        <h1 style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontSize: 22, fontWeight: 600, color: "var(--success-color, #3ecf7e)" }}>
+      <div className="finance-page__header" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
+        <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontSize: 22, fontWeight: 600, color: "var(--success-color, #3ecf7e)" }}>
           <IndianRupee size={22} aria-hidden /> Cost Master
           <CountBadge count={total} title={`${total.toLocaleString()} cost rows`} />
         </h1>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div className="finance-page__header-actions" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Link to="/travel/pricing-rules" style={{ ...secondaryBtn, textDecoration: "none" }}>
             <BadgePercent size={14} /> Pricing rules
           </Link>
@@ -743,13 +743,13 @@ export default function CostMaster() {
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" onChange={importCsv}
             style={{ display: "none" }} aria-label="Upload cost-master CSV or Excel file" />
           {!adding && (
-            <button type="button" onClick={() => { setAdding(true); setEditingId(null); }} style={primaryBtn}>
+            <button className="finance-page__primary-action" type="button" onClick={() => { setAdding(true); setEditingId(null); }} style={primaryBtn}>
               <Plus size={14} /> Add rate
             </button>
           )}
         </div>
       </div>
-      <p style={{ color: "var(--text-secondary)", fontSize: 13.5, margin: "2px 0 10px" }}>
+      <p className="finance-page__subtitle" style={{ color: "var(--text-secondary)", fontSize: 13.5, margin: "2px 0 10px" }}>
         Supplier rate book. /pricing/quote applies seasons + markup rules over these base rates.
       </p>
       <div style={templateHelpCard}>
@@ -761,7 +761,7 @@ export default function CostMaster() {
       </div>
 
       {/* Filters */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", background: "var(--surface-color)", padding: 16, borderRadius: 12, border: "1px solid var(--border-color)", marginBottom: 20 }}>
+      <div className="finance-page__filters" style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", background: "var(--surface-color)", padding: 16, borderRadius: 12, border: "1px solid var(--border-color)", marginBottom: 20 }}>
         <Filter size={15} aria-hidden style={{ color: "var(--text-secondary)" }} />
         <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ subBrand: e.target.value || "all" }); }} style={selectStyle} aria-label="Sub-brand">
           {ALL_SUBBRAND_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -781,14 +781,14 @@ export default function CostMaster() {
             {/* Sub-brand — show all accessible brands with full readable labels */}
             {lockedBrand ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <label style={fieldLabel}>Sub-brand</label>
+                <label style={fieldLabel}>Sub-brand <span className="cost-master-required" aria-hidden="true">*</span></label>
                 <input type="text" value={SUB_BRAND_LABEL[lockedBrand] || lockedBrand} readOnly disabled
                   aria-label="Sub-brand (locked to your assigned brand)"
                   style={{ ...input, opacity: 0.7, cursor: "not-allowed" }} />
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <label style={fieldLabel}>Sub-brand</label>
+                <label style={fieldLabel}>Sub-brand <span className="cost-master-required" aria-hidden="true">*</span></label>
                 <select value={form.subBrand} onChange={(e) => setForm({ ...form, subBrand: e.target.value })} style={input}>
                   {myBrands.map((b) => (
                     <option key={b} value={b}>{SUB_BRAND_LABEL[b] || b}</option>
@@ -798,103 +798,113 @@ export default function CostMaster() {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Category</label>
+              <label style={fieldLabel}>Category <span className="cost-master-required" aria-hidden="true">*</span></label>
               <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={input}>
                 {CATEGORIES.filter((c) => c.value).map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Route / SKU</label>
+              <label style={fieldLabel}>Route / SKU <span className="cost-master-required" aria-hidden="true">*</span></label>
               <input placeholder="e.g. BLR-DPS-Economy or Makkah:Hilton:Deluxe"
                 value={form.routeOrSku} onChange={(e) => setForm({ ...form, routeOrSku: e.target.value })} style={input} />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Base rate</label>
+              <label style={fieldLabel}>Base rate <span className="cost-master-required" aria-hidden="true">*</span></label>
               <input placeholder="e.g. 22000" type="number"
                 value={form.baseRate} onChange={(e) => setForm({ ...form, baseRate: e.target.value })} style={input} />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Currency</label>
+              <label style={fieldLabel}>Currency <span className="cost-master-optional">(Optional)</span></label>
               <select value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} style={input}>
                 {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Supplier</label>
-              <div style={fieldHint}>Optional. Pick an existing supplier or choose Other to add a temporary one.</div>
-              <select
-                value={form.supplierChoice}
-                onChange={(e) => setForm({ ...form, supplierChoice: e.target.value, supplierOtherName: e.target.value === OTHER_OPTION ? form.supplierOtherName : "" })}
-                style={input}
-              >
-                <option value="">No supplier</option>
-                {supplierChoices.map((name) => <option key={name} value={name}>{name}</option>)}
-                <option value={OTHER_OPTION}>Other</option>
-              </select>
-              {form.supplierChoice === OTHER_OPTION && (
-                <input
-                  placeholder="Enter supplier name"
-                  value={form.supplierOtherName}
-                  onChange={(e) => setForm({ ...form, supplierOtherName: e.target.value })}
+              <label style={fieldLabel}>Supplier <span className="cost-master-optional">(Optional)</span></label>
+              {form.supplierChoice === OTHER_OPTION ? (
+                <div style={{ position: "relative" }}>
+                  <input
+                    autoFocus
+                    placeholder="Enter supplier name"
+                    value={form.supplierOtherName}
+                    onChange={(e) => setForm({ ...form, supplierOtherName: e.target.value })}
+                    style={{ ...input, width: "100%", paddingRight: 34 }}
+                    aria-label="New supplier name"
+                  />
+                  <button type="button" onClick={() => setForm({ ...form, supplierChoice: "", supplierOtherName: "" })}
+                    style={{ ...ghostBtn, position: "absolute", right: 4, top: 4, width: 28, height: 28, padding: 0, border: 0 }} aria-label="Choose existing supplier" title="Choose existing supplier"><ChevronDown size={14} /></button>
+                </div>
+              ) : (
+                <select
+                  value={form.supplierChoice}
+                  onChange={(e) => setForm({ ...form, supplierChoice: e.target.value, supplierOtherName: e.target.value === OTHER_OPTION ? form.supplierOtherName : "" })}
                   style={input}
-                />
+                >
+                  <option value="">No supplier</option>
+                  {supplierChoices.map((name) => <option key={name} value={name}>{name}</option>)}
+                  <option value={OTHER_OPTION}>Other</option>
+                </select>
               )}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Season</label>
-              <div style={fieldHint}>Optional. Pick an existing season or choose Other to add a temporary one.</div>
-              <select
-                value={form.seasonChoice}
-                onChange={(e) => setForm({ ...form, seasonChoice: e.target.value, seasonOtherName: e.target.value === OTHER_OPTION ? form.seasonOtherName : "" })}
-                style={input}
-              >
-                <option value="">No season</option>
-                {seasonChoices.map((name) => <option key={name} value={name}>{name}</option>)}
-                <option value={OTHER_OPTION}>Other</option>
-              </select>
-              {form.seasonChoice === OTHER_OPTION && (
-                <input
-                  placeholder="Enter season name"
-                  value={form.seasonOtherName}
-                  onChange={(e) => setForm({ ...form, seasonOtherName: e.target.value })}
+              <label style={fieldLabel}>Season <span className="cost-master-optional">(Optional)</span></label>
+              {form.seasonChoice === OTHER_OPTION ? (
+                <div style={{ position: "relative" }}>
+                  <input
+                    autoFocus
+                    placeholder="Enter season name"
+                    value={form.seasonOtherName}
+                    onChange={(e) => setForm({ ...form, seasonOtherName: e.target.value })}
+                    style={{ ...input, width: "100%", paddingRight: 34 }}
+                    aria-label="New season name"
+                  />
+                  <button type="button" onClick={() => setForm({ ...form, seasonChoice: "", seasonOtherName: "" })}
+                    style={{ ...ghostBtn, position: "absolute", right: 4, top: 4, width: 28, height: 28, padding: 0, border: 0 }} aria-label="Choose existing season" title="Choose existing season"><ChevronDown size={14} /></button>
+                </div>
+              ) : (
+                <select
+                  value={form.seasonChoice}
+                  onChange={(e) => setForm({ ...form, seasonChoice: e.target.value, seasonOtherName: e.target.value === OTHER_OPTION ? form.seasonOtherName : "" })}
                   style={input}
-                />
+                >
+                  <option value="">No season</option>
+                  {seasonChoices.map((name) => <option key={name} value={name}>{name}</option>)}
+                  <option value={OTHER_OPTION}>Other</option>
+                </select>
               )}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Valid from</label>
-              <div style={fieldHint}>Optional. Use this when the rate should start on a specific date.</div>
+              <label style={fieldLabel}>Valid from <span className="cost-master-optional">(Optional)</span></label>
               <input type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} {...pickerOnlyProps} min={ymd()} style={{ ...input, cursor: "pointer" }} aria-label="Valid from" />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={fieldLabel}>Valid to</label>
-              <div style={fieldHint}>Optional. Leave blank if the rate does not have an end date yet.</div>
+              <label style={fieldLabel}>Valid to <span className="cost-master-optional">(Optional)</span></label>
               <input type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} {...pickerOnlyProps} min={form.validFrom ? addDaysYmd(form.validFrom, 1) : ymd()} style={{ ...input, cursor: "pointer" }} aria-label="Valid to" />
             </div>
 
             {form.category === "hotel" && (
               <>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={fieldLabel}>View</label>
+                  <label style={fieldLabel}>View <span className="cost-master-optional">(Optional)</span></label>
                   <select value={form.view} onChange={(e) => setForm({ ...form, view: e.target.value })} style={input} aria-label="Hotel view preference">
                     {HOTEL_VIEWS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={fieldLabel}>Floor</label>
+                  <label style={fieldLabel}>Floor <span className="cost-master-optional">(Optional)</span></label>
                   <select value={form.floorLevel} onChange={(e) => setForm({ ...form, floorLevel: e.target.value })} style={input} aria-label="Hotel floor level">
                     {HOTEL_FLOORS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={fieldLabel}>Room category</label>
+                  <label style={fieldLabel}>Room category <span className="cost-master-optional">(Optional)</span></label>
                   <input placeholder="e.g. Deluxe" value={form.roomCategory}
                     onChange={(e) => setForm({ ...form, roomCategory: e.target.value })} style={input} aria-label="Room category" />
                 </div>
@@ -909,7 +919,7 @@ export default function CostMaster() {
       )}
 
       {/* Table */}
-      <div style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)" }}>
+      <div className="finance-page__table-card" style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)" }}>
         {loading && rates.length === 0 ? (
           <div style={emptyStyle}>Loading&hellip;</div>
         ) : rates.length === 0 ? (
@@ -1029,7 +1039,6 @@ export default function CostMaster() {
 }
 
 const fieldLabel = { fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-secondary)" };
-const fieldHint = { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 };
 const templateHelpCard = { margin: "0 0 22px", padding: "12px 14px", borderRadius: 10, border: "1px solid var(--border-color)", background: "var(--surface-color)", display: "flex", flexDirection: "column", gap: 6 };
 const templateHelpTitle = { fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-primary)" };
 const templateHelpLine = { fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.5 };

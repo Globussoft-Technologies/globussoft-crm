@@ -307,6 +307,89 @@ describe('<Login /> — page surface', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it('normalizes the email before submitting credentials', async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') return fetchResponse({ error: 'Invalid credentials' }, 401);
+      if (url === '/api/portal/login') return fetchResponse({ error: 'Invalid credentials' }, 401);
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fillCredentials('  ADMIN@Example.COM  ');
+    fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
+
+    await screen.findByText(/Invalid credentials/i);
+    const loginCall = global.fetch.mock.calls.find(([url]) => url === '/api/auth/login');
+    expect(JSON.parse(loginCall[1].body)).toEqual({
+      email: 'admin@example.com',
+      password: 'password123',
+    });
+  });
+
+  it('prompts for an organization on an ambiguous login and resubmits with loginTenantId', async () => {
+    let loginAttempts = 0;
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') {
+        loginAttempts += 1;
+        if (loginAttempts === 1) {
+          return fetchResponse({
+            error: 'Select the organization you want to access',
+            code: 'TENANT_SELECTION_REQUIRED',
+            tenants: [
+              { id: 4, name: 'North Region', slug: 'north' },
+              { id: 9, name: 'South Region', slug: 'south' },
+            ],
+          }, 409);
+        }
+        return fetchResponse({
+          token: 'jwt-south',
+          user: { userId: 8, email: 'shared@example.com', role: 'ADMIN' },
+          tenant: { id: 9, name: 'South Region', vertical: 'generic' },
+        });
+      }
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fillCredentials('shared@example.com');
+    fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
+
+    const selector = await screen.findByLabelText('Organization');
+    expect(screen.getByRole('option', { name: 'North Region' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'South Region' })).toBeInTheDocument();
+    fireEvent.change(selector, { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/dashboard'));
+    const loginCalls = global.fetch.mock.calls.filter(([url]) => url === '/api/auth/login');
+    expect(JSON.parse(loginCalls[1][1].body)).toEqual({
+      email: 'shared@example.com',
+      password: 'password123',
+      loginTenantId: 9,
+    });
+  });
+
+  it('prevents duplicate login requests while the first request is pending', async () => {
+    let resolveLogin;
+    const pendingLogin = new Promise((resolve) => { resolveLogin = resolve; });
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') return pendingLogin;
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fillCredentials();
+    const submit = screen.getByRole('button', { name: /Sign In$/i });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+
+    expect(global.fetch.mock.calls.filter(([url]) => url === '/api/auth/login')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Signing in/i })).toBeDisabled();
+
+    resolveLogin(await fetchResponse({ error: 'Invalid credentials' }, 401));
+    await screen.findByText(/Invalid credentials/i);
+  });
+
   it('429 login responses surface the rate-limit error without attempting portal fallback', async () => {
     localStorage.clear();
     global.fetch.mockImplementation((url) => {

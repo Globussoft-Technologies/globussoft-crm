@@ -17,7 +17,7 @@
  *   }
  *
  * Cases:
- *   1. Heading "All Payables" renders.
+ *   1. Heading "Payables" renders.
  *   2. Initial mount fires a SINGLE GET /api/travel/payables (no
  *      per-supplier fan-out — replaced this slice).
  *   3. KPI counts read from summary.byStatus (server is authoritative).
@@ -179,10 +179,10 @@ beforeEach(() => {
 });
 
 describe('<Payables /> — page chrome', () => {
-  it('renders the "All Payables" heading', async () => {
+  it('renders the "Payables" heading', async () => {
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /All Payables/i }),
+      screen.getByRole('heading', { name: /^Payables/i }),
     ).toBeInTheDocument();
   });
 });
@@ -293,6 +293,35 @@ describe('<Payables /> — status filter chip pushes ?status= to URL', () => {
       );
       expect(paidCall).toBeTruthy();
     });
+  });
+});
+
+describe('<Payables /> — status chip theme contrast', () => {
+  it('keeps the selected status label readable in light mode', async () => {
+    document.documentElement.setAttribute('data-theme', 'light');
+    renderPage();
+
+    const pendingChip = screen.getByRole('button', {
+      name: /Filter by status: Pending/i,
+    });
+    fireEvent.click(pendingChip);
+
+    await waitFor(() => {
+      expect(pendingChip).toHaveAttribute('aria-pressed', 'true');
+    });
+    expect(pendingChip).toHaveClass('payables-status-chip');
+    expect(pendingChip.style.getPropertyValue('--payables-chip-accent')).toBeTruthy();
+
+    const source = readFileSync(
+      path.resolve(__dirname, '../index.css'),
+      'utf8',
+    );
+    expect(source).toMatch(
+      /\[data-theme="light"\] \.payables-status-chip\[aria-pressed="true"\][\s\S]*?background: color-mix\(/,
+    );
+    expect(source).toMatch(
+      /\[data-theme="light"\] \.payables-status-chip\[aria-pressed="true"\][\s\S]*?color: var\(--payables-chip-accent/,
+    );
   });
 });
 

@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, useContext } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../appContexts';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
-import { Receipt, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
+import { Receipt, Plus, Eye, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 
 const CATEGORY_OPTIONS = [
@@ -111,6 +112,33 @@ function paymentModeLabel(notes) {
   }
 }
 
+function paymentModeOnlyLabel(notes) {
+  if (!notes) return '\u2014';
+
+  try {
+    const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
+    const payment = parsed?.payment;
+    if (!payment || typeof payment !== 'object') return '\u2014';
+
+    const methods = PAYMENT_METHODS
+      .filter(method => Number(payment[method]) > 0)
+      .map(method => method === 'upi' ? 'UPI' : method[0].toUpperCase() + method.slice(1));
+
+    return methods.length ? methods.join(', ') : '\u2014';
+  } catch {
+    return '\u2014';
+  }
+}
+
+function expenseMetadata(notes) {
+  try {
+    const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function StatusBadge({ status }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.Pending;
   return (
@@ -127,11 +155,13 @@ function StatusBadge({ status }) {
 function CategoryBadge({ category }) {
   const cfg = categoryStyle(category);
   return (
-    <span style={{
+    <span title={category} style={{
       padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem',
       fontWeight: '600', backgroundColor: cfg.bg, color: cfg.color,
       border: `1px solid ${cfg.color}33`,
-      whiteSpace: 'nowrap',
+      display: 'inline-block', maxWidth: '100%', boxSizing: 'border-box',
+      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      verticalAlign: 'middle',
     }}>
       {category}
     </span>
@@ -158,6 +188,9 @@ const PAGE_SIZE = 25;
 
 export default function Expenses() {
   const notify = useNotify();
+  const { user, tenant } = useContext(AuthContext) || {};
+  const tenantVertical = tenant?.vertical || user?.tenant?.vertical || null;
+  const isTravel = tenantVertical === 'travel';
   const [expenses, setExpenses] = useState([]);
   const [expenseStats, setExpenseStats] = useState({
     total: null,
@@ -169,6 +202,7 @@ export default function Expenses() {
   const [quotes, setQuotes] = useState([]);
   const [tmcTrips, setTmcTrips] = useState([]);
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
+  const [selectedExpense, setSelectedExpense] = useState(null);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
   const tableScrollRef = useRef(null);
@@ -183,14 +217,25 @@ export default function Expenses() {
   const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
+    if (!isTravel) {
+      setQuotes([]);
+      setTmcTrips([]);
+      return undefined;
+    }
+
+    let cancelled = false;
     Promise.all([
-      fetchApi('/api/travel/quotes?limit=500&fields=summary').catch(() => ({ quotes: [] })),
-      fetchApi('/api/travel/trips?limit=500&fields=summary').catch(() => ({ trips: [] })),
+      fetchApi('/api/travel/quotes?limit=500&fields=summary', { silent: true }).catch(() => ({ quotes: [] })),
+      fetchApi('/api/travel/trips?limit=500&fields=summary', { silent: true }).catch(() => ({ trips: [] })),
     ]).then(([quoteData, tripData]) => {
+      if (cancelled) return;
       setQuotes(Array.isArray(quoteData?.quotes) ? quoteData.quotes : []);
       setTmcTrips(Array.isArray(tripData?.trips) ? tripData.trips : []);
     });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [isTravel]);
 
   useEffect(() => {
     expensesRef.current = expenses;
@@ -336,6 +381,7 @@ export default function Expenses() {
         }),
       });
       setForm(EMPTY_FORM);
+      setIsCreateFormOpen(false);
       notify.success(`Expense created as ${status}`);
       refreshExpenses();
     } catch (err) {
@@ -411,6 +457,15 @@ export default function Expenses() {
     }
   };
 
+  const openExpenseDetails = (expense) => setSelectedExpense(expense);
+  const selectedExpenseMeta = selectedExpense ? expenseMetadata(selectedExpense.notes) : {};
+  const selectedQuote = selectedExpenseMeta.quoteId
+    ? quotes.find((quote) => Number(quote.id) === Number(selectedExpenseMeta.quoteId))
+    : null;
+  const selectedTmcTrip = selectedExpenseMeta.tmcTripId
+    ? tmcTrips.find((trip) => Number(trip.id) === Number(selectedExpenseMeta.tmcTripId))
+    : null;
+
   const computedPending = expenses
     .filter(e => e.status === 'Pending')
     .reduce((sum, e) => sum + Number(e.amount || 0), 0);
@@ -423,14 +478,16 @@ export default function Expenses() {
     .reduce((sum, e) => sum + e.amount, 0);
 
   return (
-    <div className="expenses-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+    <div className="expenses-page finance-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="finance-page__header" style={{ marginBottom: '2rem' }}>
+        <div>
+        <h1 className="finance-page__title" style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Receipt size={26} color="var(--accent-color)" /> Expense Management
         </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+        <p className="finance-page__subtitle" style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
           Track, approve, and reimburse team expenses.
         </p>
+        </div>
       </header>
 
       {/* Summary Stats */}
@@ -466,7 +523,7 @@ export default function Expenses() {
         </div>
         <button
           type="button"
-          className="btn-primary"
+          className="btn-primary finance-page__primary-action"
           onClick={() => setIsCreateFormOpen(true)}
           style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}
         >
@@ -533,17 +590,17 @@ export default function Expenses() {
               </button>
             </h3>
             <form onSubmit={(e) => createExpense(e, 'Pending')} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div>
+              {isTravel && <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
                   Expense For <span style={{ color: '#ef4444' }}>*</span>
                 </label>
                 <select required className="input-field" value={form.expenseType}
                   onChange={e => setForm({ ...EMPTY_FORM, expenseType: e.target.value })}
                   style={{ background: 'var(--input-bg)' }}>
-                  <option value="">Select Office or Trip</option>
+                  {isTravel && <option value="">Select Office or Trip</option>}
                   {EXPENSE_SOURCE_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
                 </select>
-              </div>
+              </div>}
 
               {form.expenseType === 'TRIP' && <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
@@ -672,9 +729,89 @@ export default function Expenses() {
         </div>
       )}
 
+      {selectedExpense && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Expense details for ${selectedExpense.title || 'expense'}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedExpense(null);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'var(--catalogue-modal-backdrop)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+            overflowY: 'auto',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(620px, 100%)',
+              maxHeight: 'calc(100vh - 2rem)',
+              overflowY: 'auto',
+              padding: '1.5rem',
+              boxSizing: 'border-box',
+              background: 'var(--modal-bg, var(--bg-color))',
+              border: '1px solid var(--border-color)',
+              borderRadius: 16,
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.28)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.25rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 600 }}>Expense Details</h3>
+              <button
+                type="button"
+                onClick={() => setSelectedExpense(null)}
+                aria-label="Close expense details"
+                title="Close"
+                style={{ background: 'transparent', border: '1px solid var(--border-color)', cursor: 'pointer', color: 'var(--text-secondary)', padding: '0.4rem', borderRadius: 6, display: 'inline-flex' }}
+              >
+                <XCircle size={18} />
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 0.7fr) minmax(0, 1.3fr)', gap: '0.75rem 1rem', fontSize: '0.9rem' }}>
+              <strong>Title</strong><span>{selectedExpense.title || '—'}</span>
+              <strong>Amount</strong><span style={{ color: '#10b981', fontWeight: 600 }}>{formatMoney(selectedExpense.amount)}</span>
+              <strong>Payment Mode</strong><span style={{ overflowWrap: 'anywhere' }}>{paymentModeLabel(selectedExpense.notes)}</span>
+              <strong>Category</strong><span><CategoryBadge category={selectedExpense.category} /></span>
+              <strong>Status</strong><span><StatusBadge status={selectedExpense.status} /></span>
+              <strong>User</strong><span>{selectedExpense.user?.name || selectedExpense.user?.email || '—'}</span>
+              <strong>Date</strong><span>{selectedExpense.expenseDate ? formatDate(selectedExpense.expenseDate) : '—'}</span>
+              <strong>Expense Type</strong><span>{(selectedExpenseMeta.expenseType || selectedExpense.expenseType || 'OFFICE').toUpperCase()}</span>
+              {String(selectedExpenseMeta.expenseType || selectedExpense.expenseType || 'OFFICE').toUpperCase() === 'TRIP' && (
+                <>
+                  <strong>Sub-brand</strong><span>{selectedExpenseMeta.subBrand || selectedExpense.subBrand || '—'}</span>
+                  <strong>Quote ID</strong>
+                  <span>
+                    {selectedExpenseMeta.quoteId
+                      ? `#${selectedExpenseMeta.quoteId}${selectedQuote?.contact?.name ? ` — ${selectedQuote.contact.name}` : ''}`
+                      : '—'}
+                  </span>
+                  <strong>TMC Trip ID</strong>
+                  <span>
+                    {selectedExpenseMeta.tmcTripId
+                      ? `${selectedExpenseMeta.tmcTripId}${selectedTmcTrip?.tripCode ? ` — ${selectedTmcTrip.tripCode}` : ''}${selectedTmcTrip?.destination ? ` — ${selectedTmcTrip.destination}` : ''}`
+                      : '—'}
+                  </span>
+                </>
+              )}
+              <strong>Description</strong><span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{selectedExpense.description || '—'}</span>
+              <strong>Created</strong><span>{selectedExpense.createdAt ? formatDate(selectedExpense.createdAt) : '—'}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Expenses Table */}
-        <div className="card" style={{ padding: '2rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
+        <div className="card finance-page__table-card" style={{ padding: '2rem' }}>
+          <div className="finance-page__section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Receipt size={20} color="var(--accent-color)" /> All Expenses
             </h3>
@@ -755,7 +892,9 @@ export default function Expenses() {
                     <col style={{ width: '300px' }} /> {/* Actions */}
                   </colgroup>
                 <tbody>
-                  {visibleExpenses.map(exp => (
+                  {visibleExpenses.map(exp => {
+                    const paymentLabel = paymentModeOnlyLabel(exp.notes);
+                    return (
                     <tr key={exp.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
                       onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -763,10 +902,18 @@ export default function Expenses() {
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '600', color: '#10b981' }}>
                         {formatMoney(exp.amount)}
                       </td>
-                      <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
-                        {paymentModeLabel(exp.notes)}
+                      <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', overflow: 'hidden' }}>
+                        <button
+                          type="button"
+                          onClick={() => openExpenseDetails(exp)}
+                          aria-label={`View details for ${exp.title || 'expense'}`}
+                          title="View expense details"
+                          style={{ display: 'block', width: '100%', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: 0, border: 0, background: 'transparent', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+                        >
+                          {paymentLabel}
+                        </button>
                       </td>
-                      <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap', overflow: 'hidden' }}>
                         <CategoryBadge category={exp.category} />
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
@@ -780,6 +927,15 @@ export default function Expenses() {
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
                         <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'nowrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => openExpenseDetails(exp)}
+                            title="View details"
+                            aria-label={`View details for ${exp.title || 'expense'}`}
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.3rem 0.45rem', cursor: 'pointer', transition: '0.15s' }}
+                          >
+                            <Eye size={14} />
+                          </button>
                           {exp.status === 'Draft' && (
                             <>
                               <button
@@ -853,7 +1009,8 @@ export default function Expenses() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {loadingMore && (
                     <tr>
                       <td colSpan={7} style={{ padding: '1rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>

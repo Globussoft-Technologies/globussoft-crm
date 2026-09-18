@@ -94,4 +94,46 @@ function validateSubmission(rawAnswers) {
   return { ok: Object.keys(errors).length === 0, errors, overallRating, clean };
 }
 
-module.exports = { QUESTIONS, SECTION_TITLES, RATING_IDS, buildForm, validateSubmission, interp };
+// TMC parents use a short in-portal form: one overall five-star rating and
+// one required experience note. The answer keys intentionally remain in the
+// shared review vocabulary so the admin review list can render both flows.
+function validateParentSubmission(rawAnswers) {
+  const answers = rawAnswers && typeof rawAnswers === "object" ? rawAnswers : {};
+  const errors = {};
+  const rating = Number(answers.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    errors.rating = "Please give a rating between 1 and 5";
+  }
+
+  const experience = typeof answers.experience === "string" ? answers.experience.trim() : "";
+  if (!experience) errors.experience = "Please tell us about your experience";
+
+  return {
+    ok: Object.keys(errors).length === 0,
+    errors,
+    overallRating: Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : null,
+    clean: experience ? { parent_rating: rating, experience: experience.slice(0, TEXT_MAX) } : {},
+  };
+}
+
+function buildParentForm(destination) {
+  const tripName = destination || "your trip";
+  return {
+    formTitle: `How was your trip to ${tripName}?`,
+    fields: [
+      { id: "rating", label: "How would you rate your trip?", type: "rating", max: 5, required: true },
+      { id: "experience", label: "Tell us about your experience", type: "text", required: true, maxLength: TEXT_MAX },
+    ],
+  };
+}
+
+module.exports = {
+  QUESTIONS,
+  SECTION_TITLES,
+  RATING_IDS,
+  buildForm,
+  buildParentForm,
+  validateSubmission,
+  validateParentSubmission,
+  interp,
+};

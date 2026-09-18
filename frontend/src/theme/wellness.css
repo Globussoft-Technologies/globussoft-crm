@@ -259,6 +259,26 @@ html[data-theme="dark"][data-vertical="wellness"],
   box-shadow: 0 0 0 3px rgba(201, 160, 99, 0.12) !important;
 }
 
+/* Report date filter uses the same surface treatment as the report tabs.
+   The generic wellness input rule intentionally gives form fields a white
+   background, but that makes this navigation control look out of place. */
+[data-vertical="wellness"] select.reports-date-filter {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: var(--shadow-sm, none) !important;
+}
+
+/* The invoice date-range control is a toolbar filter, not a form field. Keep
+   the wellness input defaults from turning it into a stark white rectangle. */
+[data-vertical="wellness"] select.invoice-date-range-filter {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 6px;
+  color: var(--text-primary) !important;
+  box-shadow: var(--shadow-sm, none) !important;
+}
+
 /* Opt-out for icon-prefixed wrappers that provide their own chrome */
 [data-vertical="wellness"] input.naked-input,
 [data-vertical="wellness"] input.naked-input:focus,

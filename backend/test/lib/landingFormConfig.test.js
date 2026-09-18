@@ -80,6 +80,7 @@ describe('resolveLandingWebFormId', () => {
     return {
       tenantSetting: {
         findUnique: vi.fn().mockResolvedValue(setting ? { value: setting } : null),
+        findFirst: vi.fn().mockResolvedValue(null),
       },
       webForm: {
         findFirst: vi.fn().mockImplementation(async (args) => {
@@ -127,5 +128,43 @@ describe('resolveLandingWebFormId', () => {
   test('nothing selectable → null', async () => {
     const prisma = mockPrisma({});
     await expect(lib.resolveLandingWebFormId(prisma, 1)).resolves.toBeNull();
+  });
+});
+
+describe('public database configuration', () => {
+  test('reads deterministically and normalizes the stored envelope', async () => {
+    const prisma = { tenantSetting: { findFirst: vi.fn().mockResolvedValue({
+      value: JSON.stringify({ tenantId: 7, activeWebFormId: 9, emails: ['Owner@Example.com'] }),
+    }) } };
+
+    await expect(lib.readPublicConfig(prisma)).resolves.toEqual({
+      tenantId: 7,
+      activeWebFormId: 9,
+      emails: ['Owner@Example.com'],
+    });
+    expect(prisma.tenantSetting.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      orderBy: [{ updatedAt: 'desc' }, { tenantId: 'asc' }],
+    }));
+  });
+
+  test('synchronizes historical copies before upserting the selected tenant', async () => {
+    const prisma = { tenantSetting: {
+      updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+      upsert: vi.fn().mockResolvedValue({ id: 1 }),
+    } };
+
+    const result = await lib.writePublicConfig(prisma, {
+      tenantId: 7,
+      activeWebFormId: 9,
+      emails: [' Owner@Example.com ', 'owner@example.com'],
+    });
+
+    expect(result).toEqual({ tenantId: 7, activeWebFormId: 9, emails: ['owner@example.com'] });
+    expect(prisma.tenantSetting.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { key: lib.PUBLIC_CONFIG_KEY },
+    }));
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_key: { tenantId: 7, key: lib.PUBLIC_CONFIG_KEY } },
+    }));
   });
 });

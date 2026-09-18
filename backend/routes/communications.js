@@ -4,6 +4,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 
 const crypto = require("crypto");
 const multer = require("multer");
+const sanitizeHtml = require("sanitize-html");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -62,6 +63,70 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, m => map[m]);
 }
 
+const COMPOSE_HTML_TAGS = [
+  "p", "br", "div", "span", "strong", "b", "em", "i", "u", "s", "strike", "font",
+  "ul", "ol", "li", "a", "img", "small", "sub", "sup", "blockquote",
+];
+const COMPOSE_HTML_TAG_RE = /<\/?(?:p|br|div|span|strong|b|em|i|u|s|strike|font|ul|ol|li|a|img|small|sub|sup|blockquote)(?:\s[^>]*)?>/i;
+const ESCAPED_COMPOSE_HTML_TAG_RE = /&lt;\/?(?:p|br|div|span|strong|b|em|i|u|s|strike|font|ul|ol|li|a|img|small|sub|sup|blockquote)(?:\s[^&]*?)?&gt;/i;
+const ENTITY_DECODE_RE = /&(amp|lt|gt|quot|#x27|#39);/g;
+const ENTITY_DECODE_MAP = { amp: "&", lt: "<", gt: ">", quot: '"', "#x27": "'", "#39": "'" };
+
+function sanitizeComposeHtml(input) {
+  if (typeof input !== "string" || !input) return "";
+  return sanitizeHtml(input, {
+    allowedTags: COMPOSE_HTML_TAGS,
+    allowedAttributes: {
+      a: ["href", "target", "rel", "title"],
+      font: ["face", "size", "color"],
+      img: ["src", "alt", "title", "width", "height"],
+      "*": ["style"],
+    },
+    allowedSchemes: ["http", "https", "mailto"],
+    allowedSchemesByTag: { img: ["http", "https"] },
+    allowedStyles: {
+      "*": {
+        "text-align": [/^left$/, /^right$/, /^center$/, /^justify$/],
+        "font-size": [/^\d+(\.\d+)?(px|pt|em|rem|%)$/],
+        "font-weight": [/^(normal|bold|bolder|lighter|\d{3})$/i],
+        "font-style": [/^(italic|normal)$/i],
+        "text-decoration": [/^(underline|none|line-through)$/i],
+        color: [/^#?[0-9a-f]{3,8}$/i, /^rgb\(/i, /^[a-z]+$/i],
+      },
+    },
+    transformTags: {
+      a: (tagName, attribs) => {
+        const out = { ...attribs };
+        if (out.target === "_blank") out.rel = "noopener noreferrer";
+        return { tagName, attribs: out };
+      },
+    },
+  });
+}
+
+function decodeEscapedComposeHtml(input) {
+  const value = String(input || "");
+  if (!ESCAPED_COMPOSE_HTML_TAG_RE.test(value)) return value;
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:x27|39);/gi, "'");
+}
+
+function composeHtmlToText(input) {
+  const prepared = String(input || "")
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "• ")
+    .replace(/<\/(?:p|div|li|blockquote)>/gi, "\n");
+  return sanitizeHtml(prepared, {
+    allowedTags: [],
+    allowedAttributes: {},
+    textFilter: (text) => text.replace(ENTITY_DECODE_RE, (_, entity) => ENTITY_DECODE_MAP[entity] || _),
+  }).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 // Make bare URLs clickable in the HTML part of an email. Runs on the
 // ALREADY-escaped body, so it's XSS-safe: escapeHtml has neutralised quotes +
 // angle brackets (no attribute break-out), and we only ever match http(s):// —
@@ -91,11 +156,13 @@ async function sendSendGrid(to, subject, body, opts = {}) {
     return { sent: false, reason: "missing_subject_or_body" };
   }
 
-  // Escape the user-supplied body so any HTML they typed renders as text (not
-  // markup). The tracking pixel is RAW trusted HTML we control, so it must be
-  // appended AFTER escaping — otherwise the <img> tag itself gets escaped to
-  // &lt;img&gt; and shows up as visible literal text in the email body.
-  let htmlBody = linkifyHtml(escapeHtml(body).replace(/\n/g, "<br>"));
+  // Generic CRM passes an allowlisted editor HTML body through opts.htmlBody.
+  // Legacy callers keep the existing escaped/plain-text conversion. The
+  // tracking pixel is trusted HTML and is appended after the user body.
+  const hasFormattedHtml = typeof opts.htmlBody === "string" && opts.htmlBody.trim();
+  let htmlBody = hasFormattedHtml
+    ? opts.htmlBody
+    : linkifyHtml(escapeHtml(body).replace(/\n/g, "<br>"));
   if (typeof opts.trackingPixelHtml === "string" && opts.trackingPixelHtml) {
     htmlBody += opts.trackingPixelHtml;
   }
@@ -115,7 +182,7 @@ async function sendSendGrid(to, subject, body, opts = {}) {
     from: { email: FROM_EMAIL },
     subject: subject,
     content: [
-      { type: "text/plain", value: body },
+      { type: "text/plain", value: hasFormattedHtml ? (opts.textBody || composeHtmlToText(opts.htmlBody)) : body },
       { type: "text/html", value: htmlBody }
     ]
   };
@@ -376,15 +443,21 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
     // when the prisma.tenant surface is not available (some vitest mock
     // setups stub only the surfaces under test and the find() would hang).
     let retainMessages = true;
+    let isGenericCrm = false;
     if (prisma.tenant && typeof prisma.tenant.findUnique === 'function') {
       try {
         const tenantCfg = await prisma.tenant.findUnique({
           where: { id: req.user.tenantId },
-          select: { emailRetention: true },
+          select: { emailRetention: true, vertical: true },
         });
         if (tenantCfg && tenantCfg.emailRetention === false) retainMessages = false;
+        isGenericCrm = tenantCfg?.vertical === 'generic';
       } catch (_e) { /* default-on if config read fails */ }
     }
+    const composeBody = decodeEscapedComposeHtml(body);
+    const sanitizedHtml = isGenericCrm && COMPOSE_HTML_TAG_RE.test(composeBody)
+      ? sanitizeComposeHtml(composeBody)
+      : '';
 
     for (const recipient of deliverable) {
       let emailRecord = null;
@@ -417,8 +490,8 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
       }
 
       // Build the open-tracking pixel as raw HTML and hand it to sendSendGrid
-      // via opts so it's appended to the HTML body AFTER the user body is
-      // escaped. It's an invisible 1×1 image (display:none) — present for
+      // via opts so it's appended to the processed HTML body. It's an
+      // invisible 1×1 image (display:none) — present for
       // open-tracking but never shown as text. (Previously it was concatenated
       // into `body` and then escaped along with it, which rendered the <img>
       // tag as visible literal text in the recipient's inbox.)
@@ -438,6 +511,8 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
         cc: ccDeliverable,
         bcc: bccDeliverable,
         attachments: sendgridAttachments,
+        htmlBody: sanitizedHtml,
+        textBody: sanitizedHtml ? composeHtmlToText(sanitizedHtml) : body,
         trackingPixelHtml,
       });
 
@@ -625,3 +700,6 @@ module.exports.parseRecipients = parseRecipients;
 module.exports.isValidEmail = isValidEmail;
 module.exports.escapeHtml = escapeHtml;
 module.exports.linkifyHtml = linkifyHtml;
+module.exports.sanitizeComposeHtml = sanitizeComposeHtml;
+module.exports.composeHtmlToText = composeHtmlToText;
+module.exports.decodeEscapedComposeHtml = decodeEscapedComposeHtml;

@@ -63,6 +63,9 @@ const MANAGER_PERMISSIONS = [
   // Doctor / Nurse / Receptionist). Spec §2 MANAGER row.
   'patients.read',
   'appointments.read', 'appointments.assign',
+  // Preserve the call access MANAGER had before appointment calling was
+  // split into explicit RBAC actions.
+  'appointments.ai_call', 'appointments.manual_call',
   'services.read',
   'inventory.read',
   'pos.read',
@@ -113,6 +116,27 @@ const MANAGER_PERMISSIONS = [
   // Prescription renewal queue — manager triages and dispositions it.
   // Wellness-only; the vertical filter drops it on generic/travel.
   'prescription_requests.read', 'prescription_requests.update',
+];
+
+// Generic-only manager additions live outside the shared preset. A catalog
+// filter alone is insufficient because names such as `calendar` also exist on
+// wellness; explicit vertical selection keeps those role matrices unchanged.
+const GENERIC_MANAGER_PERMISSIONS = [
+  'cpq.read', 'cpq.write', 'cpq.update',
+  'playbooks.read', 'playbooks.write', 'playbooks.update',
+  'territories.read', 'territories.write', 'territories.update',
+  'live_chat.read', 'live_chat.write', 'live_chat.update',
+  'support.read', 'support.write', 'support.update',
+  'sla.read', 'sla.write', 'sla.update',
+  'social.read', 'social.write', 'social.update',
+  'document_templates.read', 'document_templates.write', 'document_templates.update',
+  'lead_scoring.read', 'lead_scoring.write', 'lead_scoring.update',
+  'deal_insights.read', 'deal_insights.write', 'deal_insights.update',
+  'calendar.read', 'calendar.write', 'calendar.update',
+  'ab_tests.read', 'ab_tests.write', 'ab_tests.update',
+  'booking_pages.read', 'booking_pages.write', 'booking_pages.update',
+  'web_forms.read', 'web_forms.write', 'web_forms.update',
+  'forecasting.read', 'quotas.read', 'sequences.read', 'settings.read',
 ];
 
 const CUSTOMER_PERMISSIONS = [
@@ -278,6 +302,7 @@ const NURSE_PERMISSIONS = [
 const RECEPTIONIST_PERMISSIONS = [
   'patients.read', 'patients.write',
   'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   // Post-split (v3.8.x): receptionist runs the booking workflow end-to-
   // end. `book_appointment.write` for the booking form, `waitlist.*` for
   // queue management (promote / disposition), `my_appointments.read` for
@@ -328,6 +353,7 @@ const TELECALLER_PERMISSIONS = [
   'leads.read', 'leads.write', 'leads.update',
   'contacts.read', 'contacts.write',
   'appointments.read', 'appointments.write', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   // Post-split (v3.8.x): telecaller books from outbound calls and works
   // the waitlist queue. `book_appointment.write` for the booking form,
   // `waitlist.*` for queue dispositioning (their primary surface).
@@ -657,7 +683,10 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     // creation. Subsequent boots leave the grant matrix alone so tenant admins'
     // revocations survive server restarts.
     if (managerCreated) {
-      await grantPermissionList(stats, managerRole.id, filterPermsToVertical(MANAGER_PERMISSIONS, vertical));
+      const managerPreset = vertical === 'generic'
+        ? [...MANAGER_PERMISSIONS, ...GENERIC_MANAGER_PERMISSIONS]
+        : MANAGER_PERMISSIONS;
+      await grantPermissionList(stats, managerRole.id, filterPermsToVertical(managerPreset, vertical));
     }
 
     const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {

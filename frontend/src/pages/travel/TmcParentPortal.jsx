@@ -8,6 +8,8 @@ import {
   Clock3,
   CreditCard,
   ExternalLink,
+  Eye,
+  FileText,
   Bell,
   LayoutDashboard,
   Loader2,
@@ -18,7 +20,10 @@ import {
   ReceiptText,
   RefreshCw,
   Search,
+  Send,
   Sun,
+  Star,
+  Upload,
   UserRound,
   WalletCards,
 } from "lucide-react";
@@ -165,12 +170,45 @@ const portalInteractionStyles = `
   }
 
   @media (max-width: 520px) {
+    [data-tmc-parent-portal="true"] [data-tmc-review-trip-select="true"],
+    [data-tmc-parent-portal="true"] [data-tmc-review-trip-select="true"] select {
+      width: 100%;
+      min-width: 0;
+    }
+
+    [data-tmc-parent-portal="true"] [data-tmc-review-rating="true"] {
+      grid-template-columns: minmax(130px, 1fr) max-content !important;
+      gap: 8px;
+    }
+
+    [data-tmc-parent-portal="true"] [data-tmc-review-rating="true"] [data-tmc-review-rating-label="true"] {
+      grid-column: 1 / -1;
+      margin: 0;
+    }
+
     [data-tmc-parent-portal="true"] [data-tmc-installment="true"] {
       grid-template-columns: 1fr !important;
     }
 
     [data-tmc-parent-portal="true"] [data-tmc-payment-overview="true"] {
       grid-template-columns: 1fr !important;
+    }
+  }
+
+  @media (max-width: 620px) {
+    [data-tmc-parent-portal="true"] [data-tmc-booking-card="true"] {
+      grid-template-columns: minmax(0, 1fr) !important;
+      align-items: stretch !important;
+      gap: 13px !important;
+    }
+
+    [data-tmc-parent-portal="true"] [data-tmc-booking-actions="true"] {
+      width: 100% !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      gap: 12px !important;
+      flex-wrap: wrap !important;
     }
   }
 `;
@@ -213,6 +251,22 @@ async function travelApi(path, token, { method = "GET", body } = {}) {
   return data;
 }
 
+async function uploadParentDocument(token, formData) {
+  const response = await fetch("/api/portal/tmc/parent/documents", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw Object.assign(new Error(data.error || "Upload failed"), {
+      status: response.status,
+      code: data.code,
+    });
+  }
+  return data;
+}
+
 function readTheme() {
   try {
     return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
@@ -230,6 +284,8 @@ export default function TmcParentPortal() {
     parentLinks: [],
     registrations: [],
     participants: [],
+    reviewTrips: [],
+    documents: [],
   });
   const [bookings, setBookings] = useState([]);
   const [activeView, setActiveView] = useState("dashboard");
@@ -250,7 +306,7 @@ export default function TmcParentPortal() {
     localStorage.removeItem(TOKEN_KEY);
     setToken("");
     setContact(null);
-    setPortalData({ trips: [], parentLinks: [], registrations: [], participants: [] });
+    setPortalData({ trips: [], parentLinks: [], registrations: [], participants: [], reviewTrips: [], documents: [] });
     setBookings([]);
     setSelectedBookingId(null);
     setActiveView("dashboard");
@@ -263,10 +319,12 @@ export default function TmcParentPortal() {
     if (!silent) setLoading(true);
     setError("");
     try {
-      const [meResult, tripsResult, bookingsResult] = await Promise.all([
+      const [meResult, tripsResult, bookingsResult, reviewsResult, documentsResult] = await Promise.all([
         api("/parent/me", token),
         api("/parent/trips", token),
         travelApi("/travel/bookings", token),
+        api("/parent/reviews", token),
+        api("/parent/documents", token),
       ]);
       setContact(meResult.contact || null);
       setPortalData({
@@ -274,6 +332,8 @@ export default function TmcParentPortal() {
         parentLinks: Array.isArray(tripsResult.parentLinks) ? tripsResult.parentLinks : [],
         registrations: Array.isArray(tripsResult.registrations) ? tripsResult.registrations : [],
         participants: Array.isArray(tripsResult.participants) ? tripsResult.participants : [],
+        reviewTrips: Array.isArray(reviewsResult.trips) ? reviewsResult.trips : [],
+        documents: Array.isArray(documentsResult.documents) ? documentsResult.documents : [],
       });
       setBookings(Array.isArray(bookingsResult) ? bookingsResult : []);
     } catch (err) {
@@ -409,6 +469,10 @@ export default function TmcParentPortal() {
       ? "Trips"
       : activeView === "bookings"
         ? "My Bookings"
+        : activeView === "documents"
+          ? "Travel Documents"
+        : activeView === "reviews"
+          ? "Reviews"
         : "My Profile";
 
   return (
@@ -424,6 +488,8 @@ export default function TmcParentPortal() {
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => setActiveView("dashboard")} />
           <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => setActiveView("trips")} />
           <PortalNavButton icon={ReceiptText} label="My Bookings" count={bookings.length} active={activeView === "bookings"} onClick={() => setActiveView("bookings")} />
+          <PortalNavButton icon={FileText} label="Travel Documents" count={portalData.documents.length} active={activeView === "documents"} onClick={() => setActiveView("documents")} />
+          <PortalNavButton icon={Star} label="Reviews" active={activeView === "reviews"} onClick={() => setActiveView("reviews")} />
         </nav>
         <div style={styles.sidebarFooter}>Use this portal to explore school trips, complete registrations, and keep track of payments.</div>
       </aside>
@@ -448,6 +514,8 @@ export default function TmcParentPortal() {
           {activeView === "dashboard" && <DashboardView contact={contact} trips={trips} bookings={bookings} registrations={portalData.registrations} onNavigate={setActiveView} onOpenBooking={(id) => { setActiveView("bookings"); setSelectedBookingId(id); }} />}
           {activeView === "trips" && <TripsView trips={trips} loading={loading} />}
           {activeView === "bookings" && (selectedBooking ? <BookingDetail booking={selectedBooking} onBack={() => setSelectedBookingId(null)} /> : <BookingsView bookings={bookings} loading={loading} onSelect={setSelectedBookingId} />)}
+          {activeView === "documents" && <ParentDocumentsView documents={portalData.documents} trips={trips} loading={loading} token={token} onRefresh={load} />}
+          {activeView === "reviews" && <ParentReviewsView trips={portalData.reviewTrips} loading={loading} token={token} onRefresh={load} />}
           {activeView === "profile" && <ParentProfileView contact={contact} />}
         </main>
       </div>
@@ -519,7 +587,7 @@ function ParentNotificationBell({ token, onNavigate }) {
   const openNotification = (notification) => {
     markRead(notification);
     setOpen(false);
-    if (["dashboard", "trips", "bookings", "profile"].includes(notification.link)) {
+    if (["dashboard", "trips", "bookings", "documents", "reviews", "profile"].includes(notification.link)) {
       onNavigate(notification.link);
     }
   };
@@ -574,6 +642,192 @@ function ParentNotificationBell({ token, onNavigate }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+const parentDocumentTypes = [
+  { value: "passport", label: "Passport" },
+  { value: "birth-certificate", label: "Birth certificate" },
+  { value: "consent-form", label: "Parental consent form" },
+  { value: "medical-form", label: "Medical form" },
+  { value: "school-id", label: "School ID" },
+  { value: "visa", label: "Visa document" },
+  { value: "other", label: "Other travel document" },
+];
+
+function documentTypeLabel(value) {
+  return parentDocumentTypes.find((type) => type.value === value)?.label || "Travel document";
+}
+
+function formatFileSize(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size <= 0) return "Size unavailable";
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function documentStatusLabel(status) {
+  if (status === "approved") return "Approved";
+  if (status === "rejected") return "Needs update";
+  return "In review";
+}
+
+function ParentDocumentsView({ documents, trips, loading, token, onRefresh }) {
+  const [documentType, setDocumentType] = useState(parentDocumentTypes[0].value);
+  const [tripId, setTripId] = useState("");
+  const [file, setFile] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [documentError, setDocumentError] = useState("");
+
+  const handleFileChange = (event) => {
+    const nextFile = event.target.files?.[0] || null;
+    setMessage("");
+    setDocumentError("");
+    if (!nextFile) {
+      setFile(null);
+      return;
+    }
+    const acceptedTypes = ["application/pdf", "image/jpeg", "image/png"];
+    if (!acceptedTypes.includes(nextFile.type)) {
+      setFile(null);
+      setDocumentError("Only JPG, PNG, or PDF files are allowed.");
+      return;
+    }
+    if (nextFile.size > 10 * 1024 * 1024) {
+      setFile(null);
+      setDocumentError("Files must be 10 MB or smaller.");
+      return;
+    }
+    setFile(nextFile);
+  };
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    setDocumentError("");
+    if (!file) {
+      setDocumentError("Choose a JPG, PNG, or PDF file first.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("documentType", documentType);
+      if (tripId) formData.append("tripId", tripId);
+      await uploadParentDocument(token, formData);
+      setFile(null);
+      setFileInputKey((current) => current + 1);
+      setMessage("Document uploaded. Our travel team will review it shortly.");
+      await onRefresh({ silent: true });
+    } catch (err) {
+      setDocumentError(err.message || "Unable to upload this document.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openDocument = async (document) => {
+    setDocumentError("");
+    try {
+      const result = await api(`/parent/documents/${document.id}/view-url`, token);
+      if (!result.url) throw new Error("Document link unavailable");
+      window.open(result.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setDocumentError(err.message || "Unable to open this document.");
+    }
+  };
+
+  return (
+    <div style={styles.contentStack}>
+      <section style={styles.pageIntro}>
+        <div>
+          <h2 style={styles.pageTitle}>Travel Documents</h2>
+          <p style={styles.muted}>Upload and view the documents needed for your child&apos;s school trips.</p>
+        </div>
+        <span style={styles.countPill}>{documents.length} {documents.length === 1 ? "document" : "documents"}</span>
+      </section>
+
+      <section style={styles.documentInfoCard}>
+        <div style={styles.documentInfoIcon}><FileText size={22} /></div>
+        <div>
+          <h2 style={styles.cardTitle}>Keep trip documents together</h2>
+          <p style={styles.muted}>Upload clear copies of passports, consent forms, medical forms, and other travel documents. Files are private to your parent account and shared with the travel team for review.</p>
+        </div>
+      </section>
+
+      <section style={styles.card} aria-labelledby="parent-document-upload-heading">
+        <div style={styles.cardHeader}>
+          <div>
+            <h2 id="parent-document-upload-heading" style={styles.cardTitle}>Upload a document</h2>
+            <p style={styles.muted}>JPG, PNG, or PDF files up to 10 MB.</p>
+          </div>
+          <Upload size={19} color={styles.colors.primary} aria-hidden="true" />
+        </div>
+        <form onSubmit={submit} style={styles.documentForm}>
+          <div data-tmc-parent-grid="true" style={styles.documentUploadGrid}>
+            <label htmlFor="parent-document-type" style={styles.label}>
+              Document type
+              <select id="parent-document-type" aria-label="Document type" value={documentType} onChange={(event) => setDocumentType(event.target.value)} style={styles.input}>
+                {parentDocumentTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+              </select>
+            </label>
+            <label htmlFor="parent-document-trip" style={styles.label}>
+              <span style={styles.labelText}>Related trip <span style={styles.optionalLabel}>(optional)</span></span>
+              <select id="parent-document-trip" aria-label="Related trip" value={tripId} onChange={(event) => setTripId(event.target.value)} style={styles.input}>
+                <option value="">All trips / general document</option>
+                {trips.map((row) => {
+                  const trip = row.trip || row;
+                  const id = trip.id || row.tripId;
+                  return <option key={id} value={String(id)}>{trip.destination || trip.tripCode || "School trip"}</option>;
+                })}
+              </select>
+            </label>
+          </div>
+          <label htmlFor={`parent-document-file-${fileInputKey}`} style={styles.label}>
+            Choose file
+            <input key={fileInputKey} id={`parent-document-file-${fileInputKey}`} aria-label="Choose travel document" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={handleFileChange} style={styles.fileInput} />
+          </label>
+          {file && <span style={styles.documentSelectedFile}>{file.name} · {formatFileSize(file.size)}</span>}
+          {documentError && <div role="alert" style={styles.error}>{documentError}</div>}
+          {message && <div role="status" style={styles.successMessage}>{message}</div>}
+          <div style={styles.documentFormFooter}>
+            <button type="submit" disabled={saving} style={styles.primary}><Upload size={15} /> {saving ? "Uploading..." : "Upload document"}</button>
+          </div>
+        </form>
+      </section>
+
+      <section style={styles.card} aria-labelledby="parent-documents-heading">
+        <div style={styles.cardHeader}>
+          <div>
+            <h2 id="parent-documents-heading" style={styles.cardTitle}>Your uploaded documents</h2>
+            <p style={styles.muted}>Open a document to view the private file.</p>
+          </div>
+        </div>
+        {loading && documents.length === 0 ? <LoadingState /> : documents.length === 0 ? (
+          <EmptyState icon={FileText} title="No documents uploaded yet" text="Upload the documents requested for your child&apos;s upcoming trips." />
+        ) : (
+          <div style={styles.documentList}>
+            {documents.map((document) => (
+              <div key={document.id} data-tmc-parent-document={document.id} style={styles.documentRow}>
+                <div style={styles.documentIcon}><FileText size={19} /></div>
+                <div style={styles.documentMain}>
+                  <strong style={styles.documentName}>{document.filename}</strong>
+                  <span style={styles.documentMeta}>{documentTypeLabel(document.documentType)} · {document.trip?.destination || "General travel document"} · {formatFileSize(document.fileSize)}</span>
+                  {document.notes && <span style={styles.documentNote}>{document.notes}</span>}
+                </div>
+                <div style={styles.documentActions}>
+                  <span style={styles.documentStatus}>{documentStatusLabel(document.status)}</span>
+                  <button type="button" onClick={() => openDocument(document)} style={styles.secondary} aria-label={`View ${document.filename}`}><Eye size={14} /> View</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -689,6 +943,182 @@ function TripCard({ row }) {
   );
 }
 
+function ParentReviewsView({ trips, loading, token, onRefresh }) {
+  const [selectedTripId, setSelectedTripId] = useState(null);
+  const [rating, setRating] = useState(0);
+  const [experience, setExperience] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [reviewError, setReviewError] = useState("");
+  const [submittedReviews, setSubmittedReviews] = useState({});
+
+  const selectedTrip = trips.find((trip) => String(trip.id) === String(selectedTripId)) || null;
+  const selectedReview = selectedTrip
+    ? submittedReviews[selectedTrip.id] || selectedTrip.review
+    : null;
+
+  useEffect(() => {
+    setSelectedTripId((currentId) => {
+      const currentTripStillExists = currentId != null && trips.some((trip) => String(trip.id) === String(currentId));
+      return currentTripStillExists ? currentId : null;
+    });
+  }, [trips]);
+
+  useEffect(() => {
+    if (!selectedTrip) return;
+    setRating(Number(selectedReview?.overallRating) || 0);
+    setExperience(selectedReview?.answers?.experience || "");
+    setMessage("");
+    setReviewError("");
+  }, [selectedTrip, selectedReview]);
+
+  const submitReview = async (event) => {
+    event.preventDefault();
+    setReviewError("");
+    setMessage("");
+    if (!rating || !experience.trim()) {
+      setReviewError("Please choose a star rating and tell us about your experience.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await api(`/parent/trips/${selectedTrip.id}/review`, token, {
+        method: "POST",
+        body: { answers: { rating, experience: experience.trim() } },
+      });
+      const saved = {
+        status: "submitted",
+        overallRating: result.overallRating || rating,
+        answers: { parent_rating: rating, experience: experience.trim() },
+        submittedAt: new Date().toISOString(),
+      };
+      setSubmittedReviews((current) => ({ ...current, [selectedTrip.id]: saved }));
+      setMessage("Thank you for sharing your experience.");
+      if (result.externalReview?.url) {
+        window.location.assign(result.externalReview.url);
+      }
+      onRefresh({ silent: true });
+    } catch (err) {
+      setReviewError(err.message || "Unable to submit your review.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={styles.contentStack}>
+      <section style={styles.pageIntro}>
+        <div>
+          <h2 style={styles.pageTitle}>Reviews</h2>
+          <p style={styles.muted}>Share your experience after a completed school trip.</p>
+        </div>
+        <span style={styles.countPill}>{trips.length} {trips.length === 1 ? "completed trip" : "completed trips"}</span>
+      </section>
+
+      <section style={styles.card} aria-labelledby="parent-review-trips-heading">
+        <div style={styles.cardHeader}>
+          <div>
+            <h2 id="parent-review-trips-heading" style={styles.cardTitle}>Choose a trip to review</h2>
+            <p style={styles.muted}>Reviews are available once your trip is marked completed.</p>
+          </div>
+          {trips.length > 0 && (
+            <label data-tmc-review-trip-select="true" style={styles.reviewTripSelectWrap}>
+              <span style={styles.reviewTripSelectLabel}>Select trip</span>
+              <select
+                aria-label="Select a trip to review"
+                value={selectedTripId == null ? "" : String(selectedTripId)}
+                onChange={(event) => setSelectedTripId(event.target.value)}
+                style={styles.reviewTripSelect}
+              >
+                <option value="" disabled>Select a completed trip</option>
+                {trips.map((trip) => <option key={trip.id} value={String(trip.id)}>{trip.destination || trip.tripCode || "School trip"}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        {loading && trips.length === 0 ? <LoadingState /> : trips.length === 0 ? (
+          <EmptyState icon={Star} title="No completed trips yet" text="Your completed school trips will appear here when they are ready for feedback." />
+        ) : selectedTrip ? (
+          <div style={styles.reviewTripList}>
+            <div style={{ ...styles.reviewTripButton, ...styles.reviewTripButtonActive }}>
+              <span style={styles.reviewTripMain}>
+                <span style={styles.reviewTripCopy}>
+                  <strong>{selectedTrip.destination || selectedTrip.tripCode || "School trip"}</strong>
+                  <span style={styles.reviewTripMeta}><CalendarDays size={14} /> {formatDateRange(selectedTrip.departDate, selectedTrip.returnDate)}</span>
+                </span>
+              </span>
+              <span style={styles.reviewTripStatusGroup}>
+                <span style={selectedReview ? styles.reviewSubmittedPill : styles.reviewCompletedPill}>
+                  <CheckCircle2 size={14} aria-hidden="true" /> {selectedReview ? "Reviewed" : "Completed"}
+                </span>
+                <span style={styles.reviewTripSelectedText}>Selected</span>
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div style={styles.reviewTripPrompt} role="status">Select a completed trip above to start your review.</div>
+        )}
+      </section>
+
+      {selectedTrip && (
+        <section style={styles.card} aria-labelledby="parent-review-form-heading">
+          <div style={styles.cardHeader}>
+            <div>
+              <h2 id="parent-review-form-heading" style={styles.cardTitle}>Your experience of {selectedTrip.destination || "this trip"}</h2>
+              <p style={styles.muted}>Your feedback helps us make future school trips better.</p>
+            </div>
+            {selectedReview && <span style={styles.reviewSubmittedPill}>Submitted</span>}
+          </div>
+
+          {selectedReview ? (
+            <div style={styles.reviewThankYou} role="status">
+              <CheckCircle2 size={20} />
+              <div><strong>Thank you for your review.</strong><p style={styles.muted}>You rated this trip {selectedReview.overallRating}/5.</p></div>
+            </div>
+          ) : (
+            <form onSubmit={submitReview} style={styles.reviewForm}>
+              <div data-tmc-review-rating="true" role="group" aria-labelledby="parent-review-rating-label" style={styles.reviewRatingRow}>
+                <span data-tmc-review-rating-label="true" id="parent-review-rating-label" style={styles.reviewRatingLabel}>Overall rating <span style={styles.requiredMark} aria-hidden="true">*</span></span>
+                <div style={styles.reviewRatingControl}>
+                  <div style={styles.starPicker} aria-label="Trip rating out of 5 stars">
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setRating(value)}
+                        aria-label={`Rate ${value} out of 5 stars`}
+                        aria-pressed={rating === value}
+                        style={styles.starButton}
+                      >
+                        <Star size={30} fill={value <= rating ? "#F5B301" : "none"} color={value <= rating ? "#F5B301" : "var(--tmc-parent-muted)"} />
+                      </button>
+                    ))}
+                  </div>
+                  <span style={styles.ratingHint}>Select a rating</span>
+                </div>
+                {rating > 0 && <span style={styles.ratingScore}>{rating} out of 5</span>}
+              </div>
+              <div style={styles.reviewDivider} />
+              <div style={styles.experienceField}>
+                <label htmlFor="parent-review-experience" style={styles.label}><span style={styles.labelText}>Tell us about your experience <span style={styles.requiredMark} aria-hidden="true">*</span></span></label>
+                <div style={styles.textareaWrap}>
+                  <textarea id="parent-review-experience" aria-label="Tell us about your experience" value={experience} onChange={(event) => setExperience(event.target.value)} maxLength={500} rows={4} placeholder="What did your family enjoy about the trip? Share your thoughts, highlights or suggestions..." style={styles.textarea} required />
+                  <span style={styles.characterCount} aria-live="polite">{experience.length}/500</span>
+                </div>
+              </div>
+              {reviewError && <div role="alert" style={styles.error}>{reviewError}</div>}
+              {message && <div role="status" style={styles.successMessage}>{message}</div>}
+              <div style={styles.reviewFormFooter}>
+                <button type="submit" disabled={saving} style={{ ...styles.primary, ...styles.reviewSubmitButton }}><Send size={15} aria-hidden="true" /> {saving ? "Submitting..." : "Submit review"}</button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function BookingsView({ bookings, loading, onSelect }) {
   const [query, setQuery] = useState("");
   const filteredBookings = useMemo(() => {
@@ -709,7 +1139,27 @@ function BookingsView({ bookings, loading, onSelect }) {
 
 function BookingCard({ booking, onSelect }) {
   const summary = getPaymentSummary(booking);
-  return <button type="button" onClick={() => onSelect(booking.id)} aria-label={`View ${booking.destination || "booking"} details`} style={styles.bookingCard}><div><strong>{booking.destination || "School trip"}</strong><span>{formatDateRange(booking.startDate, booking.endDate)}</span><b>{formatMoney(summary.total, booking.currency)}</b></div><div style={styles.bookingCardRight}><span style={styles.textButton}>View details <ChevronRight size={15} /></span></div></button>;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(booking.id)}
+      aria-label={`View ${booking.destination || "booking"} details`}
+      data-tmc-booking-card="true"
+      style={styles.bookingCard}
+    >
+      <div data-tmc-booking-content="true" style={styles.bookingCardContent}>
+        <strong style={styles.bookingCardTitle}>{booking.destination || "School trip"}</strong>
+        <span style={styles.bookingCardDate}>{formatDateRange(booking.startDate, booking.endDate)}</span>
+      </div>
+      <div data-tmc-booking-actions="true" style={styles.bookingCardRight}>
+        <div style={styles.bookingCardTotal}>
+          <span style={styles.bookingCardTotalLabel}>Total trip cost</span>
+          <strong style={styles.bookingCardTotalValue}>{formatMoney(summary.total, booking.currency)}</strong>
+        </div>
+        <span style={{ ...styles.textButton, ...styles.bookingCardAction }}>View details <ChevronRight size={15} /></span>
+      </div>
+    </button>
+  );
 }
 
 function BookingDetail({ booking, onBack }) {
@@ -879,12 +1329,61 @@ const styles = {
   card: { minWidth: 0, padding: 20, border: "1px solid var(--tmc-parent-border)", borderRadius: 14, background: "var(--tmc-parent-surface)" },
   cardHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 15 },
   cardTitle: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 17 },
+  documentInfoCard: { display: "flex", alignItems: "flex-start", gap: 13, padding: 18, border: "1px solid var(--tmc-parent-border)", borderRadius: 14, background: "linear-gradient(115deg, var(--tmc-parent-surface) 0%, var(--tmc-parent-surface-soft) 100%)" },
+  documentInfoIcon: { flex: "0 0 auto", display: "grid", placeItems: "center", width: 42, height: 42, borderRadius: 11, background: "var(--tmc-parent-profile-bg)", color: "var(--tmc-parent-primary)" },
+  documentForm: { display: "grid", gap: 13 },
+  documentUploadGrid: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 13 },
+  optionalLabel: { color: "var(--tmc-parent-muted)", fontSize: 11, fontWeight: 500 },
+  fileInput: { width: "100%", boxSizing: "border-box", padding: "8px 10px", border: "1px dashed var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)", fontSize: 13 },
+  documentSelectedFile: { color: "var(--tmc-parent-subtle)", fontSize: 12 },
+  documentFormFooter: { display: "flex", justifyContent: "flex-end", gap: 10 },
+  documentList: { display: "grid", gap: 10 },
+  documentRow: { display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", alignItems: "center", gap: 12, minWidth: 0, padding: "13px 14px", border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-surface)" },
+  documentIcon: { display: "grid", placeItems: "center", width: 36, height: 36, borderRadius: 9, background: "var(--tmc-parent-profile-bg)", color: "var(--tmc-parent-primary)" },
+  documentMain: { display: "grid", gap: 4, minWidth: 0 },
+  documentName: { minWidth: 0, overflow: "hidden", color: "var(--tmc-parent-heading)", fontSize: 13, textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  documentMeta: { minWidth: 0, overflow: "hidden", color: "var(--tmc-parent-muted)", fontSize: 11, textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  documentNote: { color: "var(--tmc-parent-danger)", fontSize: 11 },
+  documentActions: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minWidth: 0 },
+  documentStatus: { padding: "6px 9px", borderRadius: 999, background: "var(--tmc-parent-pending-bg)", color: "var(--tmc-parent-pending)", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
   pageIntro: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 },
   pageTitle: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 25 },
   countPill: { flex: "0 0 auto", padding: "7px 11px", borderRadius: 999, background: "var(--tmc-parent-profile-bg)", color: "var(--tmc-parent-heading)", fontSize: 12, fontWeight: 700 },
   searchWrap: { display: "flex", alignItems: "center", gap: 9, padding: "0 12px", border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-muted)" },
   searchInput: { flex: 1, minWidth: 0, padding: "10px 0", border: 0, outline: 0, background: "transparent", color: "var(--tmc-parent-text)", fontSize: 14 },
   list: { display: "grid", gap: 11 },
+  reviewTripList: { display: "grid", gap: 10 },
+  reviewTripButton: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, minWidth: 0, padding: "12px 14px", border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "default", textAlign: "left" },
+  reviewTripButtonActive: { borderColor: "var(--tmc-parent-primary)", boxShadow: "0 0 0 2px var(--tmc-parent-profile-bg)" },
+  reviewTripMain: { display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 },
+  reviewTripCopy: { display: "grid", gap: 6, minWidth: 0, overflow: "hidden", color: "var(--tmc-parent-heading)" },
+  reviewTripMeta: { display: "inline-flex", alignItems: "center", gap: 5, minWidth: 0, color: "var(--tmc-parent-muted)", fontSize: 12, fontWeight: 500 },
+  reviewTripSelectWrap: { display: "grid", gap: 4, flex: "0 0 auto", color: "var(--tmc-parent-subtle)", fontSize: 11, fontWeight: 700 },
+  reviewTripSelectLabel: { paddingLeft: 2 },
+  reviewTripSelect: { minWidth: 190, padding: "8px 30px 8px 10px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-heading)", cursor: "pointer", fontSize: 12, fontWeight: 700 },
+  reviewTripStatusGroup: { display: "inline-flex", alignItems: "center", gap: 12, flex: "0 0 auto", color: "var(--tmc-parent-primary)" },
+  reviewSubmittedPill: { display: "inline-flex", alignItems: "center", gap: 5, flex: "0 0 auto", padding: "6px 10px", borderRadius: 999, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 11, fontWeight: 750 },
+  reviewCompletedPill: { display: "inline-flex", alignItems: "center", gap: 5, flex: "0 0 auto", padding: "6px 10px", borderRadius: 999, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 11, fontWeight: 750 },
+  reviewTripSelectedText: { color: "var(--tmc-parent-primary)", fontSize: 12, fontWeight: 750, whiteSpace: "nowrap" },
+  reviewTripPrompt: { padding: "18px 14px", border: "1px dashed var(--tmc-parent-border-strong)", borderRadius: 10, color: "var(--tmc-parent-muted)", fontSize: 13, textAlign: "center" },
+  reviewForm: { display: "grid", gap: 16 },
+  reviewRatingRow: { display: "grid", gridTemplateColumns: "150px max-content max-content", alignItems: "start", columnGap: 28, rowGap: 2, minWidth: 0 },
+  reviewRatingLabel: { display: "inline-flex", alignItems: "center", gap: 3, margin: "7px 0 0", padding: 0, color: "var(--tmc-parent-subtle)", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" },
+  reviewRatingControl: { display: "grid", gap: 2 },
+  starPicker: { display: "flex", alignItems: "center", gap: 3 },
+  starButton: { display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 1, border: 0, borderRadius: 6, background: "transparent", cursor: "pointer" },
+  ratingHint: { color: "var(--tmc-parent-muted)", fontSize: 12 },
+  ratingScore: { display: "inline-flex", alignItems: "center", alignSelf: "start", marginTop: 2, padding: "7px 10px", borderRadius: 6, background: "var(--tmc-parent-surface-soft)", color: "var(--tmc-parent-muted)", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" },
+  requiredMark: { color: "#dc4b4b" },
+  reviewDivider: { height: 1, background: "var(--tmc-parent-border-light)" },
+  experienceField: { display: "grid", gap: 7 },
+  textareaWrap: { position: "relative" },
+  textarea: { width: "100%", minHeight: 96, boxSizing: "border-box", padding: "12px 13px 28px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)", fontSize: 14, lineHeight: 1.45, resize: "vertical", fontFamily: "inherit" },
+  characterCount: { position: "absolute", right: 12, bottom: 8, color: "var(--tmc-parent-muted)", fontSize: 11 },
+  reviewFormFooter: { display: "flex", alignItems: "stretch", justifyContent: "flex-end", gap: 14, flexWrap: "wrap" },
+  reviewSubmitButton: { minWidth: 150, padding: "11px 17px", whiteSpace: "nowrap" },
+  successMessage: { padding: "10px 13px", border: "1px solid var(--tmc-parent-success)", borderRadius: 9, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 13 },
+  reviewThankYou: { display: "flex", alignItems: "flex-start", gap: 10, padding: 14, borderRadius: 10, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)" },
   tripCard: { display: "flex", alignItems: "center", gap: 14, minWidth: 0, padding: 15, border: "1px solid var(--tmc-parent-border)", borderRadius: 12, background: "var(--tmc-parent-surface)" },
   tripCardIcon: { flex: "0 0 auto", width: 44, height: 44, display: "grid", placeItems: "center", borderRadius: "50%", background: "var(--tmc-parent-primary)", color: "var(--tmc-parent-accent)" },
   tripCardContent: { flex: 1, minWidth: 0 },
@@ -894,8 +1393,15 @@ const styles = {
   tripMetaItem: { display: "inline-flex", alignItems: "center", gap: 5 },
   tripAction: { flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 11px", borderRadius: 8, background: "var(--tmc-parent-accent)", color: "var(--tmc-parent-accent-contrast)", fontSize: 12, fontWeight: 750, textDecoration: "none" },
   unavailable: { flex: "0 0 auto", color: "var(--tmc-parent-muted)", fontSize: 11 },
-  bookingCard: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "14px 12px", border: "1px solid var(--tmc-parent-border)", borderRadius: 11, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "pointer", textAlign: "left" },
-  bookingCardRight: { display: "grid", justifyItems: "end", gap: 9, flex: "0 0 auto" },
+  bookingCard: { width: "100%", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: 24, minWidth: 0, padding: "16px 18px", border: "1px solid var(--tmc-parent-border)", borderRadius: 11, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "pointer", textAlign: "left" },
+  bookingCardContent: { minWidth: 0, display: "grid", gap: 6 },
+  bookingCardTitle: { display: "block", minWidth: 0, overflowWrap: "anywhere", color: "var(--tmc-parent-heading)", fontSize: 14, lineHeight: 1.35 },
+  bookingCardDate: { display: "block", minWidth: 0, color: "var(--tmc-parent-muted)", fontSize: 12, lineHeight: 1.4 },
+  bookingCardRight: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 22, minWidth: 0, flex: "0 0 auto" },
+  bookingCardTotal: { display: "grid", justifyItems: "end", gap: 3, minWidth: 0 },
+  bookingCardTotalLabel: { color: "var(--tmc-parent-muted)", fontSize: 11, lineHeight: 1.2 },
+  bookingCardTotalValue: { color: "var(--tmc-parent-heading)", fontSize: 15, lineHeight: 1.25, whiteSpace: "nowrap" },
+  bookingCardAction: { whiteSpace: "nowrap" },
   textButton: { display: "inline-flex", alignItems: "center", gap: 4, border: 0, background: "transparent", color: "var(--tmc-parent-primary)", cursor: "pointer", fontSize: 12, fontWeight: 700 },
   summaryButton: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: 12, border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "pointer", textAlign: "left" },
   summaryButtonMain: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
@@ -940,6 +1446,7 @@ const styles = {
   secondary: { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-primary)", cursor: "pointer", fontSize: 12, fontWeight: 700 },
   iconButton: { position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 35, height: 35, border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-heading)", cursor: "pointer" },
   label: { display: "grid", gap: 4, color: "var(--tmc-parent-subtle)", fontSize: 13, fontWeight: 700 },
+  labelText: { display: "inline-flex", alignItems: "center", gap: 3, lineHeight: 1.2 },
   input: { width: "100%", boxSizing: "border-box", padding: "10px 12px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)", fontSize: 14 },
   authPage: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 24, boxSizing: "border-box", background: "var(--tmc-parent-bg)", color: "var(--tmc-parent-text)" },
   authCard: { width: "min(100%, 420px)", display: "grid", gap: 17, padding: 30, border: "1px solid var(--tmc-parent-border)", borderRadius: 16, background: "var(--tmc-parent-surface)", boxShadow: "var(--tmc-parent-shadow)" },

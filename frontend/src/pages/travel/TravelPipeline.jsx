@@ -15,10 +15,10 @@
 // optional totalAmount + optional dates). On success navigates to the new
 // itinerary's detail page (/travel/itineraries/:id).
 
-import { useContext, useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, Link, useLocation, useSearchParams } from "react-router-dom";
 import {
-  Plane, Plus, Upload, Download, RefreshCw, Pencil, Trash2, X, ArrowUpDown, ChevronUp, ChevronDown,
+  Plane, Plus, Upload, RefreshCw, Pencil, Trash2, X, ArrowUpDown, ChevronUp, ChevronDown,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -26,6 +26,7 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
 import CountBadge from "../../components/CountBadge";
+import Pagination from "../../components/ui/Pagination";
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -42,6 +43,15 @@ const SUB_BRAND_OPTIONS = [
   { value: "visasure", label: "Visa Sure" },
 ];
 const LAST_LIST_URL_KEY = "travel.pipeline.lastListUrl";
+const DEFAULT_PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
+const MAX_PAGE_SIZE = 200;
+const EMPTY_PIPELINE_TOTALS = {
+  totalValue: 0,
+  wonValue: 0,
+  negotiationValue: 0,
+  lostValue: 0,
+};
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
@@ -54,12 +64,6 @@ const STATUS_OPTIONS = [
   { value: "rejected", label: "Rejected" },
   { value: "expired", label: "Expired" },
 ];
-const STATUS_SORT_RANK = new Map(
-  STATUS_OPTIONS
-    .filter((option) => option.value)
-    .map((option, index) => [option.value, index]),
-);
-
 // Editable statuses — the inline dropdown only shows these so advisors
 // can advance/withdraw a quote without accidentally setting edge-case
 // terminal statuses via a mis-click.
@@ -190,6 +194,18 @@ function fmtDate(d) {
 
 // ─── Export helper ────────────────────────────────────────────────────────
 
+function readPageParam(params) {
+  return Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
+}
+
+function readPageSizeParam(params) {
+  const value = parseInt(
+    params.get("pageSize") || String(DEFAULT_PAGE_SIZE),
+    10,
+  );
+  return Math.min(MAX_PAGE_SIZE, Math.max(1, value || DEFAULT_PAGE_SIZE));
+}
+
 function exportCsv(rows) {
   const headers = ["ID", "Destination", "Contact", "Sub-brand", "Total amount", "Currency", "Status", "Travel date", "Created"];
   const lines = [
@@ -232,19 +248,24 @@ export default function TravelPipeline() {
   const notify = useNotify();
   const navigate = useNavigate();
   const theme = useTravelTheme();
+  const page = readPageParam(searchParams);
 
   // Data
   const [itineraries, setItineraries] = useState([]);
   const [total, setTotal]             = useState(0);
+  const [pipelineTotals, setPipelineTotals] = useState(EMPTY_PIPELINE_TOTALS);
   const [loading, setLoading]         = useState(true);
-  const [offset, setOffset]           = useState(0);
-  const LIMIT = 100;
+  const [exporting, setExporting]     = useState(false);
+  const [pageSize, setPageSize] = useState(() => readPageSizeParam(searchParams));
+  const requestSeqRef = useRef(0);
 
   // Filters
   const [filterSubBrand,   setFilterSubBrand]   = useState(searchParams.get("subBrand") || activeSubBrand || "");
   const [filterStatus,     setFilterStatus]     = useState(searchParams.get("status") || "");
   const [search,           setSearch]           = useState(searchParams.get("search") || "");
   const [filterContact,  setFilterContact]  = useState(searchParams.get("contact") || "");
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  const [debouncedContact, setDebouncedContact] = useState(filterContact);
   const [sortKey, setSortKey] = useState(searchParams.get("sortKey") || null);
   const [sortDirection, setSortDirection] = useState(searchParams.get("sortDirection") || null);
   const updateSubBrandFilter = (value) => {
@@ -252,12 +273,26 @@ export default function TravelPipeline() {
     const next = new URLSearchParams(searchParams);
     if (value) next.set("subBrand", value);
     else next.delete("subBrand");
+    next.set("page", "1");
     setSearchParams(next, { replace: true });
   };
 
-  const updateListParam = (key, value) => {
+  const updateListParam = (key, value, { resetPage = false } = {}) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value); else next.delete(key);
+    if (resetPage) next.set("page", "1");
+    setSearchParams(next, { replace: true });
+  };
+
+  const setPage = (nextPage) => {
+    updateListParam("page", Math.max(1, nextPage));
+  };
+
+  const setPageSizeAndReset = (nextPageSize) => {
+    setPageSize(nextPageSize);
+    const next = new URLSearchParams(searchParams);
+    next.set("page", "1");
+    next.set("pageSize", String(nextPageSize));
     setSearchParams(next, { replace: true });
   };
 
@@ -268,6 +303,7 @@ export default function TravelPipeline() {
     setSortDirection(direction);
     if (direction) { next.set("sortKey", key); next.set("sortDirection", direction); }
     else { next.delete("sortKey"); next.delete("sortDirection"); }
+    next.set("page", "1");
     setSearchParams(next, { replace: true });
   };
 
@@ -279,7 +315,17 @@ export default function TravelPipeline() {
 
   useEffect(() => {
     if (!searchParams.get("subBrand")) setFilterSubBrand(activeSubBrand || "");
-  }, [activeSubBrand]);
+  }, [activeSubBrand, searchParams]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedContact(filterContact.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [filterContact]);
 
   useEffect(() => {
     if (location.pathname !== "/travel/pipeline") return;
@@ -314,48 +360,68 @@ export default function TravelPipeline() {
   }, [creating]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load itineraries ────────────────────────────────────────────────
-  const load = (resetOffset = true) => {
-    setLoading(true);
+  const buildListQuery = ({ limit = pageSize, offset = (page - 1) * pageSize } = {}) => {
     const qs = new URLSearchParams();
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
-    if (filterStatus)   qs.set("status", filterStatus);
-    const newOffset = resetOffset ? 0 : offset;
-    qs.set("limit", String(LIMIT));
-    qs.set("offset", String(newOffset));
-    fetchApi(`/api/travel/itineraries?${qs.toString()}`)
-      .then((res) => {
-        const rows = Array.isArray(res?.itineraries) ? res.itineraries : [];
-        setItineraries(resetOffset ? rows : (prev) => [...prev, ...rows]);
-        setTotal(typeof res?.total === "number" ? res.total : rows.length);
-        if (resetOffset) setOffset(0);
-      })
-      .catch((e) => {
-        notify.error(e?.body?.error || "Failed to load pipeline");
-        setItineraries([]);
-      })
-      .finally(() => setLoading(false));
+    if (filterStatus) qs.set("status", filterStatus);
+    if (debouncedSearch) qs.set("destination", debouncedSearch);
+    if (debouncedContact) qs.set("contact", debouncedContact);
+    if (sortKey && sortDirection) {
+      qs.set("sortKey", sortKey);
+      qs.set("sortDirection", sortDirection);
+    }
+    qs.set("limit", String(limit));
+    qs.set("offset", String(offset));
+    return qs;
   };
 
-  useEffect(() => { load(true); }, [filterSubBrand, filterStatus]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const loadMore = () => {
-    const newOffset = offset + LIMIT;
-    setOffset(newOffset);
+  const load = async () => {
+    const requestId = ++requestSeqRef.current;
     setLoading(true);
-    const qs = new URLSearchParams();
-    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
-    if (filterStatus)   qs.set("status", filterStatus);
-    qs.set("limit", String(LIMIT));
-    qs.set("offset", String(newOffset));
-    fetchApi(`/api/travel/itineraries?${qs.toString()}`)
-      .then((res) => {
-        const rows = Array.isArray(res?.itineraries) ? res.itineraries : [];
-        setItineraries((prev) => [...prev, ...rows]);
-        setTotal(typeof res?.total === "number" ? res.total : total);
-      })
-      .catch((e) => notify.error(e?.body?.error || "Failed to load more"))
-      .finally(() => setLoading(false));
+    try {
+      const res = await fetchApi(`/api/travel/itineraries?${buildListQuery().toString()}`);
+      if (requestSeqRef.current !== requestId) return;
+      const rows = Array.isArray(res?.itineraries) ? res.itineraries : [];
+      setItineraries(rows);
+      setTotal(typeof res?.total === "number" ? res.total : rows.length);
+      if (res?.pipelineTotals) {
+        setPipelineTotals({
+          totalValue: Number(res.pipelineTotals.totalValue) || 0,
+          wonValue: Number(res.pipelineTotals.wonValue) || 0,
+          negotiationValue: Number(res.pipelineTotals.negotiationValue) || 0,
+          lostValue: Number(res.pipelineTotals.lostValue) || 0,
+        });
+      } else {
+        setPipelineTotals(rows.reduce((totals, row) => {
+          const amount = Number(row.totalAmount) || 0;
+          totals.totalValue += amount;
+          if (WON_STATUSES.has(row.status)) totals.wonValue += amount;
+          if (NEGOTIATION_STATUSES.has(row.status)) totals.negotiationValue += amount;
+          if (LOST_STATUSES.has(row.status)) totals.lostValue += amount;
+          return totals;
+        }, { ...EMPTY_PIPELINE_TOTALS }));
+      }
+    } catch (e) {
+      if (requestSeqRef.current !== requestId) return;
+      notify.error(e?.body?.error || "Failed to load pipeline");
+      setItineraries([]);
+      setTotal(0);
+      setPipelineTotals(EMPTY_PIPELINE_TOTALS);
+    } finally {
+      if (requestSeqRef.current === requestId) setLoading(false);
+    }
   };
+
+  useEffect(() => {
+    load();
+    return () => { requestSeqRef.current += 1; };
+  }, [filterSubBrand, filterStatus, debouncedSearch, debouncedContact, page, pageSize, sortKey, sortDirection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
+
+  useEffect(() => {
+    if (total > 0 && page > pageCount) setPage(pageCount);
+  }, [page, pageCount, total]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Filtered rows (client-side search on top of server-side filters) ─
   const visible = useMemo(() => {
@@ -370,38 +436,30 @@ export default function TravelPipeline() {
     if (cq) rows = rows.filter((r) =>
       (r.contact?.name || "").toLowerCase().includes(cq),
     );
-    if (sortKey) {
-      const getValue = (row) => {
-        if (sortKey === "company") return row.contact?.company || row.company || "";
-        if (sortKey === "contact") return row.contact?.name || "";
-        if (sortKey === "amount") return Number(row.totalAmount || 0);
-        if (sortKey === "status") {
-          const status = String(row.status || "draft").trim().toLowerCase();
-          return STATUS_SORT_RANK.get(status) ?? STATUS_SORT_RANK.size;
-        }
-        return row[sortKey] || "";
-      };
-      rows = [...rows].sort((a, b) => {
-        const left = getValue(a); const right = getValue(b);
-        const result = typeof left === "number" ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
-        return sortDirection === "desc" ? -result : result;
-      });
-    }
     return rows;
-  }, [itineraries, search, filterContact, sortKey, sortDirection]);
+  }, [itineraries, search, filterContact]);
 
-  // ── KPI tiles ───────────────────────────────────────────────────────
-  const kpis = useMemo(() => {
-    let totalVal = 0, wonVal = 0, negotiationVal = 0, lostVal = 0;
-    for (const r of itineraries) {
-      const amt = Number(r.totalAmount) || 0;
-      totalVal += amt;
-      if (WON_STATUSES.has(r.status))         wonVal         += amt;
-      if (NEGOTIATION_STATUSES.has(r.status)) negotiationVal += amt;
-      if (LOST_STATUSES.has(r.status))        lostVal        += amt;
+  const exportAll = async () => {
+    setExporting(true);
+    try {
+      const rows = [];
+      let offset = 0;
+      let expectedTotal = null;
+      do {
+        const res = await fetchApi(`/api/travel/itineraries?${buildListQuery({ limit: MAX_PAGE_SIZE, offset }).toString()}`);
+        const batch = Array.isArray(res?.itineraries) ? res.itineraries : [];
+        rows.push(...batch);
+        expectedTotal = typeof res?.total === "number" ? res.total : rows.length;
+        offset += batch.length;
+        if (batch.length < MAX_PAGE_SIZE) break;
+      } while (offset < expectedTotal);
+      exportCsv(rows);
+    } catch (error) {
+      notify.error(error?.body?.error || "Failed to export pipeline");
+    } finally {
+      setExporting(false);
     }
-    return { totalVal, wonVal, negotiationVal, lostVal };
-  }, [itineraries]);
+  };
 
   // ── Inline status update ─────────────────────────────────────────────
   const updateStatus = async (id, newStatus) => {
@@ -418,6 +476,7 @@ export default function TravelPipeline() {
       setItineraries((prev) =>
         prev.map((r) => (r.id === id ? { ...r, status: newStatus } : r)),
       );
+      await load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to update status");
     } finally {
@@ -438,8 +497,7 @@ export default function TravelPipeline() {
     try {
       await fetchApi(`/api/travel/itineraries/${row.id}`, { method: "DELETE" });
       notify.success("Itinerary deleted");
-      setItineraries((prev) => prev.filter((r) => r.id !== row.id));
-      setTotal((t) => t - 1);
+      await load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to delete");
     } finally {
@@ -455,6 +513,21 @@ export default function TravelPipeline() {
     });
     setCreating(true);
   };
+
+  useEffect(() => {
+    if (searchParams.get("newDeal") !== "1") return;
+    const contactId = searchParams.get("contactId") || "";
+    setForm({
+      ...EMPTY_FORM,
+      contactId,
+      subBrand: defaultSubBrandFor(user, "") || "travelstall",
+    });
+    setCreating(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("newDeal");
+    next.delete("contactId");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, user]);
 
   const submitCreate = async (e) => {
     e.preventDefault();
@@ -480,16 +553,28 @@ export default function TravelPipeline() {
       setCreating(false);
       // Navigate to the new itinerary's detail page
       const newId = res?.id || res?.itinerary?.id;
-      if (newId) {
+      const returnTo = searchParams.get("returnTo");
+      if (returnTo && returnTo.startsWith("/contacts/") && !returnTo.startsWith("//")) {
+        navigate(returnTo);
+      } else if (newId) {
         navigate(`/travel/itineraries/${newId}`);
       } else {
-        load(true);
+        load();
       }
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to create");
     } finally {
       setSaving(false);
     }
+  };
+
+  const closeCreate = () => {
+    const returnTo = searchParams.get("returnTo");
+    if (returnTo && returnTo.startsWith("/contacts/") && !returnTo.startsWith("//")) {
+      navigate(returnTo);
+      return;
+    }
+    setCreating(false);
   };
 
   // ── Sub-brand badge ─────────────────────────────────────────────────
@@ -525,8 +610,8 @@ export default function TravelPipeline() {
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>
             Travel Pipeline
             <CountBadge
-              count={visible.length}
-              title={`${visible.length.toLocaleString()} deals in view`}
+              count={total}
+              title={`${total.toLocaleString()} total deals`}
               style={{ marginLeft: 8 }}
             />
           </h1>
@@ -534,12 +619,13 @@ export default function TravelPipeline() {
         <div style={{ display: "flex", gap: 10 }}>
           <button
             type="button"
-            onClick={() => exportCsv(visible)}
+            onClick={exportAll}
+            disabled={exporting}
             style={secondaryBtn}
             aria-label="Export pipeline as CSV"
             title="Export to CSV"
           >
-            <Upload size={14} /> Export
+            <Upload size={14} /> {exporting ? "Exporting…" : "Export"}
           </button>
           <button
             type="button"
@@ -586,7 +672,7 @@ export default function TravelPipeline() {
         </select>
         <select
           value={filterStatus}
-          onChange={(e) => { setFilterStatus(e.target.value); updateListParam("status", e.target.value); }}
+          onChange={(e) => { setFilterStatus(e.target.value); updateListParam("status", e.target.value, { resetPage: true }); }}
           style={selectStyle}
           aria-label="Filter by status"
         >
@@ -597,7 +683,7 @@ export default function TravelPipeline() {
         <input
           type="search"
           value={search}
-          onChange={(e) => { setSearch(e.target.value); updateListParam("search", e.target.value); }}
+          onChange={(e) => { setSearch(e.target.value); updateListParam("search", e.target.value, { resetPage: true }); }}
           placeholder="Filter by tour title..."
           aria-label="Filter by tour title"
           style={{ ...selectStyle, minWidth: 180 }}
@@ -605,14 +691,14 @@ export default function TravelPipeline() {
         <input
           type="search"
           value={filterContact}
-          onChange={(e) => { setFilterContact(e.target.value); updateListParam("contact", e.target.value); }}
+          onChange={(e) => { setFilterContact(e.target.value); updateListParam("contact", e.target.value, { resetPage: true }); }}
           placeholder="Filter by contact name..."
           aria-label="Filter by contact name"
           style={{ ...selectStyle, minWidth: 170 }}
         />
         <button
           type="button"
-          onClick={() => load(true)}
+          onClick={load}
           style={secondaryBtn}
           title="Refresh"
           aria-label="Refresh pipeline"
@@ -628,10 +714,10 @@ export default function TravelPipeline() {
         gap: 12, marginBottom: 20,
       }}>
         {[
-          { label: "Total pipeline value", val: kpis.totalVal,         color: "var(--text-primary)" },
-          { label: "Won",                   val: kpis.wonVal,           color: "#4fd48a" },
-          { label: "In negotiation",        val: kpis.negotiationVal,   color: "#e8b34a" },
-          { label: "Lost",                  val: kpis.lostVal,          color: "#f06a6a" },
+          { label: "Total pipeline value", val: pipelineTotals.totalValue,       color: "var(--text-primary)" },
+          { label: "Won",                   val: pipelineTotals.wonValue,         color: "#4fd48a" },
+          { label: "In negotiation",        val: pipelineTotals.negotiationValue, color: "#e8b34a" },
+          { label: "Lost",                  val: pipelineTotals.lostValue,        color: "#f06a6a" },
         ].map((tile) => (
           <div key={tile.label} style={{
             background: "var(--surface-color)",
@@ -793,12 +879,51 @@ export default function TravelPipeline() {
           </TopScrollSync>
         )}
 
-        {/* Load more */}
-        {!loading && itineraries.length < total && (
-          <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border-light)", textAlign: "center" }}>
-            <button type="button" onClick={loadMore} style={secondaryBtn}>
-              Load more ({total - itineraries.length} remaining)
-            </button>
+        {!loading && total > 0 && (
+          <div
+            data-testid="pipeline-pager"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.75rem",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0.85rem 1rem",
+              borderTop: "1px solid var(--border-color)",
+              fontSize: "0.85rem",
+            }}
+          >
+            <div style={{ color: "var(--text-secondary)" }}>
+              Showing{" "}
+              <strong style={{ color: "var(--text-primary)" }}>
+                {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)}
+              </strong>{" "}
+              of <strong style={{ color: "var(--text-primary)" }}>{total}</strong>{" "}
+              deals
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", color: "var(--text-secondary)" }}>
+                Per page:
+                <select
+                  aria-label="Deals per page"
+                  value={pageSize}
+                  onChange={(e) => setPageSizeAndReset(Number(e.target.value))}
+                  style={{ ...selectStyle, minWidth: 70, padding: "0.3rem 0.55rem" }}
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </label>
+              <Pagination
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                onChange={setPage}
+                showRangeLabel={false}
+                style={{ margin: 0, padding: 0 }}
+              />
+            </div>
           </div>
         )}
         {loading && itineraries.length > 0 && (
@@ -811,7 +936,7 @@ export default function TravelPipeline() {
       {/* Create drawer */}
       {creating && (
         <div
-          onClick={(e) => { if (e.target === e.currentTarget) setCreating(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
           style={overlayStyle}
         >
           <form
@@ -824,7 +949,7 @@ export default function TravelPipeline() {
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>New Deal</h2>
-              <button type="button" onClick={() => setCreating(false)} style={closeBtn} aria-label="Close">
+              <button type="button" onClick={closeCreate} style={closeBtn} aria-label="Close">
                 <X size={16} />
               </button>
             </div>

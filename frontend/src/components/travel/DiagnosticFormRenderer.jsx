@@ -341,9 +341,6 @@ function normalizeLogoSize(value) {
 
 function Shell({ theme, styling, children, preview, embedded = false }) {
   const normalizedBgUrl = normalizeImageUrl(styling.bgImageUrl);
-  const bgImage = normalizedBgUrl
-    ? { backgroundImage: `url("${normalizedBgUrl}")` }
-    : {};
   const overlayOpacity = styling.bgOverlayOpacity ?? 0;
   const overlayColor = styling.bgOverlayColor || "#000000";
 
@@ -358,13 +355,24 @@ function Shell({ theme, styling, children, preview, embedded = false }) {
           "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
         padding: embedded ? 0 : "24px 16px",
         boxSizing: "border-box",
-        backgroundSize: normalizeBackgroundSize(styling.bgImageSize),
-        backgroundPosition: styling.bgImagePosition || "center",
-        backgroundRepeat: styling.bgImageRepeat || "no-repeat",
-        ...(embedded ? {} : bgImage),
         position: "relative",
       }}
     >
+      {!embedded && normalizedBgUrl && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: preview ? "absolute" : "fixed",
+            inset: 0,
+            backgroundImage: `url("${normalizedBgUrl}")`,
+            backgroundSize: normalizeBackgroundSize(styling.bgImageSize),
+            backgroundPosition: styling.bgImagePosition || "center",
+            backgroundRepeat: "no-repeat",
+            zIndex: 0,
+            pointerEvents: "none",
+          }}
+        />
+      )}
       {!embedded && styling.bgImageUrl && overlayOpacity > 0 && (
         <div
           style={{

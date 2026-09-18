@@ -268,6 +268,8 @@ describe("<Settings /> — page shell + representative card pin", () => {
   it("renders the three theme options under the Appearance card and clicking one calls setTheme + notify.success", async () => {
     const user = userEvent.setup();
     renderSettings();
+    expect(screen.getByRole("heading", { name: "Appearance" }).closest(".card"))
+      .toHaveAttribute("data-tour", "settings-appearance");
     await waitFor(() =>
       expect(screen.getByText("Light mode")).toBeInTheDocument(),
     );
@@ -1341,4 +1343,3 @@ describe("<Settings /> — Theme Color branding column", () => {
     );
   });
 });
-

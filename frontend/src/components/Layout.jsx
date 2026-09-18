@@ -5,7 +5,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2, Sun, Moon, Monitor, Info } from "lucide-react";
+import { LogOut, Menu, Building2, Sun, Moon, Monitor, Info, CircleHelp } from "lucide-react";
 import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
@@ -18,7 +18,6 @@ import TravelKeyboardShortcuts, {
 import SupportChatWidget from "./SupportChatWidget";
 import NotificationBell from "./NotificationBell";
 import Avatar from "./Avatar";
-import TrialBanner from "./TrialBanner";
 // SubscriptionExpiryModal removed — its dismissible "Remind Later" escape
 // violated the hard-paywall contract. Once the trial / subscription is
 // actually expired the new SubscriptionGate component takes over and the
@@ -29,6 +28,7 @@ import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
+import { useProductTour } from "../tours/useProductTour";
 
 // #555 (HI-06) — Option C: lock to single tenant per session. The chip is
 // read-only; clicking it does NOT dispatch a tenant switch. To switch
@@ -154,6 +154,7 @@ const Layout = () => {
   const notify = useNotify();
   const navigate = useNavigate();
   const location = useLocation();
+  const { isAvailable: toursAvailable, effectiveEnabled: toursEnabled, currentFeature, startCurrentTour } = useProductTour();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
@@ -268,8 +269,6 @@ const Layout = () => {
   useEffect(() => {
     if (!isMobileViewport && sidebarOpen) setSidebarOpen(false);
   }, [isMobileViewport, sidebarOpen]);
-
-  const [daysRemaining, setDaysRemaining] = useState(null);
   // trialEndsAt state was consumed by the old SubscriptionExpiryModal —
   // removed alongside the move to the hard SubscriptionGate paywall.
 
@@ -283,26 +282,6 @@ const Layout = () => {
   useEffect(() => {
     document.title = tenant?.name ? `${tenant.name} — CRM` : "Globussoft CRM";
   }, [tenant?.name]);
-
-  // Fetch subscription status to show trial banner and modal
-  useEffect(() => {
-    const fetchSubStatus = async () => {
-      try {
-        const data = await fetchApi("/api/subscriptions/status", {
-          silent: true,
-        });
-        if (data) {
-          setDaysRemaining(data.daysRemaining);
-        }
-      } catch {
-        // silently fail
-      }
-    };
-
-    if (user) {
-      fetchSubStatus();
-    }
-  }, [user]);
 
   const handleLogout = async () => {
     const confirmed = await notify.confirm({
@@ -477,6 +456,32 @@ const Layout = () => {
           </div>
           <TenantChip tenant={tenant} />
           <NotificationBell />
+          {toursAvailable && toursEnabled && currentFeature && (
+            <button
+              type="button"
+              onClick={startCurrentTour}
+              title={`Tour ${currentFeature.label}`}
+              aria-label={`Tour this page: ${currentFeature.label}`}
+              data-tour="tour-launcher"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: "none",
+                border: "1px solid var(--border-color)",
+                cursor: "pointer",
+                color: "var(--text-primary)",
+                padding: "8px 12px",
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <CircleHelp size={17} />
+              <span>Tour this page</span>
+            </button>
+          )}
           <button
             onClick={() => navigate("/profile")}
             style={{
@@ -578,16 +583,8 @@ const Layout = () => {
             <LogOut size={16} />
           </button>
         </header>
-        {/* #730 — guard with `> 0`, NOT bare `daysRemaining`. The native
-            `&&` short-circuit renders the falsy left-hand operand when it's a
-            number — so `daysRemaining === 0` (last day of trial / expired)
-            previously rendered a literal "0" text node between the header and
-            main, visible on every authenticated page. `daysRemaining > 0`
-            short-circuits to `false`, which React correctly renders as nothing.
-            The reverse intent here is "only render the banner when there's a
-            countdown to show" — a zero-day banner would also be useless. */}
-        {daysRemaining > 0 && <TrialBanner daysRemaining={daysRemaining} />}
         <main
+          data-tour="page-content"
           className="page-fade-in"
           style={{
             flex: 1,

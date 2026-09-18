@@ -19,21 +19,48 @@ const { requireTravelTenant, getSubBrandAccessSet, canAccessSubBrand } = require
 const { buildForm, validateSubmission } = require("../lib/travelReviewQuestions");
 const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 
+async function requireTmcStaffAccess(req, res, next) {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, "tmc")) {
+      return res.status(403).json({
+        error: "TMC sub-brand access required",
+        code: "SUB_BRAND_DENIED",
+      });
+    }
+    next();
+  } catch (error) {
+    console.error("[travel-reviews] TMC access check error:", error.message);
+    res.status(500).json({
+      error: "Access check failed",
+      code: "ACCESS_CHECK_FAILED",
+    });
+  }
+}
+
 // ── PUBLIC — fetch the form (by review token) ────────────────────────
 router.get("/reviews/public/:token", async (req, res) => {
   try {
     const token = String(req.params.token || "");
     const review = await prisma.travelTripReview.findUnique({
       where: { token },
-      select: { id: true, status: true, itineraryId: true, overallRating: true },
+      select: { id: true, status: true, itineraryId: true, tmcTripId: true, overallRating: true, tenantId: true },
     });
     if (!review) return res.status(404).json({ error: "Review link not found", code: "NOT_FOUND" });
 
-    const itin = await prisma.itinerary.findUnique({
-      where: { id: review.itineraryId },
-      select: { destination: true },
-    });
-    const destination = (itin && itin.destination) || "your trip";
+    const itin = review.itineraryId
+      ? await prisma.itinerary.findUnique({
+        where: { id: review.itineraryId },
+        select: { destination: true },
+      })
+      : null;
+    const tmcTrip = !itin && review.tmcTripId
+      ? await prisma.tmcTrip.findFirst({
+        where: { id: review.tmcTripId, tenantId: review.tenantId },
+        select: { destination: true },
+      })
+      : null;
+    const destination = itin?.destination || tmcTrip?.destination || "your trip";
     res.json({
       destination,
       status: review.status, // "requested" | "submitted"
@@ -66,15 +93,17 @@ router.post("/reviews/public/:token/submit", async (req, res) => {
     const reviewRow = await prisma.travelTripReview.update({
       where: { id: review.id },
       data: { status: "submitted", overallRating, answersJson: JSON.stringify(clean), submittedAt: new Date() },
-      select: { tenantId: true, itineraryId: true },
+      select: { tenantId: true, itineraryId: true, tmcTripId: true },
     });
-    const itin = await prisma.itinerary.findUnique({
-      where: { id: reviewRow.itineraryId },
-      select: { destination: true },
-    });
+    const itin = reviewRow.itineraryId
+      ? await prisma.itinerary.findUnique({ where: { id: reviewRow.itineraryId }, select: { destination: true } })
+      : null;
+    const tmcTrip = !itin && reviewRow.tmcTripId
+      ? await prisma.tmcTrip.findFirst({ where: { id: reviewRow.tmcTripId, tenantId: reviewRow.tenantId }, select: { destination: true } })
+      : null;
     const externalReview = await buildExternalReviewCta({
       tenantId: reviewRow.tenantId,
-      destination: itin?.destination || "your trip",
+      destination: itin?.destination || tmcTrip?.destination || "your trip",
       overallRating,
       answers: clean,
     });
@@ -85,6 +114,70 @@ router.post("/reviews/public/:token/submit", async (req, res) => {
   }
 });
 
+// ── ADVISOR — list teacher tour reports ────────────────────────────────
+// Teacher reports are separate from customer reviews but live beside them in
+// the travel admin area. All joins remain tenant-scoped because the report
+// model intentionally stores only the stable trip/contact ids.
+router.get("/teacher-reviews", verifyToken, requireTravelTenant, requireTmcStaffAccess, async (req, res) => {
+  try {
+    const tenantId = req.travelTenant.id;
+    const reports = await prisma.tmcTripTeacherReview.findMany({
+      where: { tenantId },
+      orderBy: { submittedAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        tripId: true,
+        teacherContactId: true,
+        reportDate: true,
+        institution: true,
+        tourDestination: true,
+        coordinator: true,
+        grade: true,
+        travelRating: true,
+        foodRating: true,
+        activitiesRating: true,
+        careSupportRating: true,
+        overallRating: true,
+        feedback: true,
+        studentCount: true,
+        staffCount: true,
+        totalPassengers: true,
+        signature: true,
+        submittedAt: true,
+        updatedAt: true,
+      },
+    });
+    const tripIds = [...new Set(reports.map((report) => report.tripId))];
+    const teacherIds = [...new Set(reports.map((report) => report.teacherContactId))];
+    const [trips, teachers] = await Promise.all([
+      tripIds.length
+        ? prisma.tmcTrip.findMany({
+          where: { tenantId, id: { in: tripIds } },
+          select: { id: true, tripCode: true, destination: true, tripType: true, departDate: true, returnDate: true, status: true },
+        })
+        : [],
+      teacherIds.length
+        ? prisma.contact.findMany({
+          where: { tenantId, id: { in: teacherIds }, deletedAt: null },
+          select: { id: true, name: true, email: true, phone: true },
+        })
+        : [],
+    ]);
+    const tripById = Object.fromEntries(trips.map((trip) => [trip.id, trip]));
+    const teacherById = Object.fromEntries(teachers.map((teacher) => [teacher.id, teacher]));
+    const out = reports.map((report) => ({
+      ...report,
+      trip: tripById[report.tripId] || null,
+      teacher: teacherById[report.teacherContactId] || null,
+    }));
+    res.json({ reports: out, total: out.length });
+  } catch (e) {
+    console.error("[travel-reviews] teacher report list error:", e.message);
+    res.status(500).json({ error: "Failed to list teacher reports" });
+  }
+});
+
 // ── ADVISOR — list submitted reviews (sub-brand scoped) ──────────────
 router.get("/reviews", verifyToken, requireTravelTenant, async (req, res) => {
   try {
@@ -92,16 +185,24 @@ router.get("/reviews", verifyToken, requireTravelTenant, async (req, res) => {
       where: { tenantId: req.travelTenant.id, status: "submitted" },
       orderBy: { submittedAt: "desc" },
       take: 200,
-      select: { id: true, itineraryId: true, contactId: true, overallRating: true, answersJson: true, submittedAt: true },
+      select: { id: true, itineraryId: true, tmcTripId: true, contactId: true, overallRating: true, answersJson: true, submittedAt: true },
     });
     // Enrich with the itinerary's destination + sub-brand AND the reviewer's
     // contact details (name/email — so the advisor sees WHO left it), then
     // filter by the caller's sub-brand access.
-    const itinIds = [...new Set(reviews.map((r) => r.itineraryId))];
+    const itinIds = [...new Set(reviews.map((r) => r.itineraryId).filter(Boolean))];
     const itins = itinIds.length
       ? await prisma.itinerary.findMany({ where: { id: { in: itinIds } }, select: { id: true, destination: true, subBrand: true } })
       : [];
     const itinById = Object.fromEntries(itins.map((i) => [i.id, i]));
+    const tmcTripIds = [...new Set(reviews.map((r) => r.tmcTripId).filter(Boolean))];
+    const tmcTrips = tmcTripIds.length
+      ? await prisma.tmcTrip.findMany({
+        where: { tenantId: req.travelTenant.id, id: { in: tmcTripIds } },
+        select: { id: true, tripCode: true, destination: true, tripType: true, departDate: true, returnDate: true, status: true },
+      })
+      : [];
+    const tmcTripById = Object.fromEntries(tmcTrips.map((trip) => [trip.id, trip]));
     const contactIds = [...new Set(reviews.map((r) => r.contactId).filter(Boolean))];
     const contacts = contactIds.length
       ? await prisma.contact.findMany({ where: { id: { in: contactIds } }, select: { id: true, name: true, email: true, phone: true } })
@@ -111,11 +212,15 @@ router.get("/reviews", verifyToken, requireTravelTenant, async (req, res) => {
     const out = reviews
       .map((r) => {
         const it = itinById[r.itineraryId] || {};
+        const tmcTrip = tmcTripById[r.tmcTripId] || {};
         const c = contactById[r.contactId] || {};
         return {
           ...r,
-          destination: it.destination || null,
-          subBrand: it.subBrand || null,
+          destination: it.destination || tmcTrip.destination || null,
+          subBrand: it.subBrand || (r.tmcTripId ? "tmc" : null),
+          tripCode: tmcTrip.tripCode || null,
+          tripType: tmcTrip.tripType || null,
+          trip: r.tmcTripId ? tmcTrip : null,
           contactName: c.name || null,
           contactEmail: c.email || null,
           contactPhone: c.phone || null,
@@ -131,6 +236,5 @@ router.get("/reviews", verifyToken, requireTravelTenant, async (req, res) => {
 });
 
 module.exports = router;
-
 
 

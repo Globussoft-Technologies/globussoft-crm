@@ -150,7 +150,6 @@ export default function Payables() {
   const [supplierCategory, setSupplierCategory] = useState(initialSearchParams.get("supplierCategory") || "");
   const [dueFrom, setDueFrom] = useState(initialSearchParams.get("dueFrom") || "");
   const [dueTo, setDueTo] = useState(initialSearchParams.get("dueTo") || "");
-  const today = new Date().toISOString().slice(0, 10);
   const payablesRef = useRef([]);
   const offsetRef = useRef(0);
   const loadingRef = useRef(false);
@@ -328,15 +327,17 @@ export default function Payables() {
   };
 
   return (
-    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
-          <Wallet size={26} aria-hidden /> All Payables
+    <div className="finance-page" style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
+      <header className="finance-page__header" style={{ marginBottom: 16 }}>
+        <div>
+        <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+          <Wallet size={26} aria-hidden /> Payables
           <CountBadge count={filtered.length} title={`${filtered.length.toLocaleString()} payables in view`} />
         </h1>
-        <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
+        <p className="finance-page__subtitle" style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
           Cross-supplier A/P ledger — every payable across every supplier in one view.
         </p>
+        </div>
       </header>
 
       {/* KPI cards — counts + amounts grouped by status, read from
@@ -359,7 +360,7 @@ export default function Payables() {
       {/* Filter chrome — status chips + sub-brand + category + supplier
           search + date range. */}
       <div
-        className="glass"
+        className="glass finance-page__filters"
         style={{
           padding: 12,
           marginBottom: 16,
@@ -376,13 +377,13 @@ export default function Payables() {
               <button
                 key={c.value || "all"}
                 type="button"
+                className="payables-status-chip"
                 onClick={() => { setStatus(c.value); updateListParam("status", c.value); }}
                 aria-pressed={active}
                 aria-label={`Filter by status: ${c.label}`}
                 style={{
                   ...chipStyle,
-                  background: "transparent",
-                  color: active ? "#fff" : "var(--text-primary)",
+                  "--payables-chip-accent": primaryTint,
                   borderColor: active ? primaryTint : "var(--border-color)",
                 }}
               >
@@ -481,7 +482,7 @@ export default function Payables() {
       </div>
 
       {/* Table */}
-      <div className="glass" onScroll={handleTableScroll} style={tableFrame}>
+      <div className="glass finance-page__table-card" onScroll={handleTableScroll} style={tableFrame}>
         {loading && payables.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : filtered.length === 0 ? (

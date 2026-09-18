@@ -42,6 +42,7 @@ import RoleHistoryDialog from "../components/RoleHistoryDialog";
 import { SUB_BRAND_IDS, subBrandShortLabel, subBrandBackground } from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEffectiveBrand";
+import ProductTourSettings from "../components/ProductTourSettings";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -928,7 +929,6 @@ export default function Settings() {
           </Link>
         )} */}
       </header>
-
       {/* Cards flow through a CSS multi-column container so heights balance
           automatically across the two columns instead of pooling into two
           fixed lists (which left a tall empty gutter on the right whenever
@@ -937,9 +937,11 @@ export default function Settings() {
           bottom margin via the `.settings-grid > .card` rule in index.css.
           Below ~720px the columns collapse to a single column. */}
       <div className="settings-grid">
+          {isGenericVertical && <ProductTourSettings />}
           {/* Organization Card */}
           <div
             className="card"
+            data-tour="settings-organization"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
             <h3
@@ -1192,6 +1194,7 @@ export default function Settings() {
           {/* Appearance Card */}
           <div
             className="card"
+            data-tour="settings-appearance"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
             <h3
@@ -4423,6 +4426,4 @@ function NotificationPreferencesCard({ notify }) {
     </div>
   );
 }
-
-
 

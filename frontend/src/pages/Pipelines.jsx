@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { GitBranch, Plus, Edit, Trash2, Check, ExternalLink, Star, X } from 'lucide-react';
+import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, ExternalLink, Star, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -107,13 +107,18 @@ const Pipelines = () => {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <GitBranch size={24} style={{ color: 'var(--accent-color)' }} />
-          <div>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Sales Pipelines</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-              Manage multiple deal pipelines for different sales workflows.
-            </p>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.75rem' }}>
+          <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={backButton}>
+            <ArrowLeft size={16} /> Back
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <GitBranch size={24} style={{ color: 'var(--accent-color)' }} />
+            <div>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Sales Pipelines</h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                Manage multiple deal pipelines for different sales workflows.
+              </p>
+            </div>
           </div>
         </div>
         <button
@@ -354,6 +359,19 @@ const iconBtn = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: '0.3rem',
+};
+
+const backButton = {
+  padding: '0.45rem 0.7rem',
+  borderRadius: '7px',
+  border: '1px solid var(--border-color)',
+  background: 'var(--surface-color)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+  fontSize: '0.8rem',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '0.35rem',
 };
 
 const labelStyle = {

@@ -14,12 +14,13 @@
  *   2. Mount fires GET /api/expenses (component does NOT load /api/contacts).
  *   3. Empty list renders "No expenses recorded yet." + "0 total expenses".
  *   4. Each row renders title + $-formatted amount + CategoryBadge +
- *      StatusBadge + user-name-or-email-or-em-dash + formatted date.
+ *      StatusBadge + user-name-or-email-or-em-dash + formatted date; long
+ *      payment/category values expose their full text as native tooltips.
  *   5. Category dropdown lists the canonical 21-item CATEGORY_OPTIONS with
  *      default "Building Rent".
  *   6. Submit POSTs /api/expenses with the canonical body shape (title +
  *      description + amount-as-float + category + expenseDate + notes +
- *      status:Pending), then notify.success + reload.
+ *      status:Pending), then closes the modal + notify.success + reload.
  *   7. Required-field validators fire notify.error WITHOUT POSTing.
  *   8. Payment-method total mismatch fires notify.error WITHOUT POSTing;
  *      matching breakdown encodes into notes as JSON.
@@ -78,7 +79,7 @@ const sampleExpenses = [
     category: 'Stationery',
     status: 'Draft',
     expenseDate: '2026-04-01',
-    notes: '',
+    notes: JSON.stringify({ payment: { cash: 60, card: 40, online: 20, upi: 10 } }),
     user: { id: 7, name: 'Priya Kapoor', email: 'priya@x.test' },
   },
   {
@@ -236,6 +237,18 @@ describe('<Expenses /> — page surface', () => {
     expect(screen.getByText('2026-03-31')).toBeInTheDocument();
   });
 
+  it('shows payment methods without amounts and preserves the category tooltip', async () => {
+    renderExpenses();
+
+    const paymentLabel = await screen.findByText('Cash, Card, Online, UPI');
+    expect(paymentLabel).toHaveAttribute('title', 'View expense details');
+    expect(screen.queryByText(/Cash \(\$60\.00\)/)).not.toBeInTheDocument();
+    expect(screen.getByText('Software/Tech Expenses')).toHaveAttribute(
+      'title',
+      'Software/Tech Expenses',
+    );
+  });
+
   it('Category dropdown defaults to "Building Rent" and lists the canonical 21-item CATEGORY_OPTIONS', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
@@ -314,6 +327,8 @@ describe('<Expenses /> — page surface', () => {
         expect.stringMatching(/Expense created as Pending/i),
       );
     });
+    expect(screen.queryByRole('dialog', { name: /Create Expense/i })).toBeNull();
+    expect(screen.getByRole('heading', { name: /Expense Management/i })).toBeInTheDocument();
     // loadData() refetch after success.
     await waitFor(() => {
       const refetch = fetchApiMock.mock.calls.filter(

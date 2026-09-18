@@ -1,422 +1,288 @@
-/**
- * Pipeline.test.jsx — vitest + RTL coverage for the Sales Pipeline table page.
- *
- * The page was revamped from a kanban board to a flat table layout. Contracts
- * pinned here:
- *
- *   1. Page chrome: "Sales Pipeline" heading + "Live Sync Active" badge + Export + Add Deal
- *   2. Loading state: "Loading deals…" shown while fetches are in-flight
- *   3. Table renders deal rows with columns: Deal title, Contact, Company, Amount,
- *      Expected close, Stage (inline select), Prob., Actions
- *   4. Empty state: no deals → "No deals yet" message
- *   5. Stage filter + text search filter visible rows
- *   6. Inline stage update: changing the stage <select> PATCHes /api/deals/:id via PUT
- *   7. Delete: clicking trash → confirm → DELETE /api/deals/:id, row disappears
- *   8. Add Deal modal: opens, validates title-required, POSTs on valid submit
- *   9. Sub-brand filter only renders for travel tenants
- *  10. Sub-brand URL-param sync: seeds from ?subBrand=, writes back on change,
- *      removes param on "All sub-brands", re-syncs on external URL change
- *  11. KPI tiles: Total pipeline value / Won / In negotiation / Lost
- *  12. slugifyStageName + deduplication still exported correctly
- *
- * Backend contract pinned:
- *   GET  /api/deals          → 200 Array<Deal>
- *   GET  /api/contacts       → 200 Array<Contact>
- *   GET  /api/pipeline_stages → 200 Array<PipelineStage>
- *   PUT  /api/deals/:id      → 200 updated deal
- *   DELETE /api/deals/:id    → 200
- *   POST /api/deals          → 201 created deal
- */
-
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { AuthContext } from '../App';
 
-// ── Stable notify mock ────────────────────────────────────────────────────────
 const notifyObj = {
   error: vi.fn(),
   success: vi.fn(),
   info: vi.fn(),
   confirm: vi.fn(),
 };
+
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
-vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
-vi.mock('../utils/money', () => ({
-  formatMoney: (n) => (n != null ? `$${Number(n).toLocaleString('en-US')}` : '—'),
-  currencySymbol: () => '$',
-}));
+vi.mock('../utils/api', () => ({ fetchApi: vi.fn(), getAuthToken: () => 'test-token' }));
 vi.mock('socket.io-client', () => ({
-  io: () => ({ on: vi.fn(), disconnect: vi.fn() }),
+  io: () => ({ on: vi.fn(), emit: vi.fn(), disconnect: vi.fn() }),
+}));
+vi.mock('../utils/money', () => ({
+  formatMoney: (value) => `$${Number(value || 0).toLocaleString('en-US')}`,
 }));
 vi.mock('../components/DealModal', () => ({ default: () => null }));
+vi.mock('../components/contact/ActionModals', () => ({
+  DealModal: ({ onClose }) => (
+    <div role="dialog" aria-label="Add deal dialog">
+      <button type="button" onClick={onClose}>Cancel</button>
+    </div>
+  ),
+}));
 
 import { fetchApi } from '../utils/api';
-import Pipeline, { slugifyStageName, VIRTUALIZATION_THRESHOLD } from '../pages/Pipeline';
+import Pipeline, { KANBAN_COLUMN_MIN_WIDTH, normalizePipelineStages, slugifyStageName, VIRTUALIZATION_THRESHOLD } from '../pages/Pipeline';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const STAGES = [
+  { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+  { id: 2, name: 'Won', color: '#10b981', position: 1 },
+  { id: 3, name: 'Lost', color: '#ef4444', position: 2 },
+];
 
-function mockApi({ deals = [], contacts = [], stages = [] }) {
-  fetchApi.mockImplementation((url) => {
-    if (url.startsWith('/api/deals')) return Promise.resolve(deals);
-    if (url.startsWith('/api/contacts')) return Promise.resolve(contacts);
+const DEALS = [
+  { id: 1, title: 'Acme Corp Renewal', company: 'Acme', contactName: 'Alice', ownerId: 11, ownerName: 'Anita', amount: 50000, probability: 25, stage: 'new-lead', expectedClose: '2026-09-01T00:00:00.000Z' },
+  { id: 2, title: 'Globex Expansion', company: 'Globex', contactName: 'Bob', ownerId: 12, ownerName: 'Vikram', amount: 90000, probability: 100, stage: 'won', expectedClose: null },
+  { id: 3, title: 'Initech Deal', company: 'Initech', contactName: 'Carol', ownerId: 11, ownerName: 'Anita', amount: 30000, probability: 10, stage: 'lost', expectedClose: null },
+];
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function mockApi({ deals = DEALS, stages = STAGES, pipelines = [] } = {}) {
+  fetchApi.mockImplementation((url, options) => {
+    if (options?.method === 'DELETE') return Promise.resolve({ ok: true });
+    if (options?.method === 'PUT') return Promise.resolve({ ok: true });
+    if (url.startsWith('/api/ai_scoring/score/')) return Promise.resolve({ probability: 73 });
+    if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: deals.length, byStage: [] });
+    if (url.startsWith('/api/deals?')) {
+      const params = new URL(url, 'http://localhost').searchParams;
+      const query = String(params.get('search') || '').toLowerCase();
+      const filtered = deals.filter((deal) =>
+        (!query || [deal.title, deal.company, deal.contactName, deal.ownerName].some((value) => String(value || '').toLowerCase().includes(query)))
+        && (!params.get('stage') || deal.stage === params.get('stage'))
+        && (!params.get('ownerId') || String(deal.ownerId) === params.get('ownerId')),
+      );
+      return Promise.resolve({ data: filtered, total: filtered.length, page: 1, limit: 50, totalPages: 1 });
+    }
+    if (url.startsWith('/api/deals/')) return Promise.resolve(deals.find((deal) => String(deal.id) === url.split('/').pop()) || deals[0]);
     if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(stages);
+    if (url.startsWith('/api/pipelines')) return Promise.resolve(pipelines);
+    if (url.startsWith('/api/staff')) return Promise.resolve([{ id: 11, name: 'Anita' }, { id: 12, name: 'Vikram' }]);
     return Promise.resolve([]);
   });
 }
 
-function renderPipeline(user = null) {
-  const ctx = user ? { user } : { user: null };
+function renderPipeline(initialEntry = '/pipeline') {
   return render(
-    <AuthContext.Provider value={ctx}>
-      <MemoryRouter>
-        <Pipeline />
-      </MemoryRouter>
+    <AuthContext.Provider value={{ user: { tenant: { vertical: 'generic' } } }}>
+      <MemoryRouter initialEntries={[initialEntry]}><Pipeline /></MemoryRouter>
     </AuthContext.Provider>,
   );
 }
 
-const STAGES = [
-  { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
-  { id: 2, name: 'Won',      color: '#10b981', position: 1 },
-  { id: 3, name: 'Lost',     color: '#ef4444', position: 2 },
-];
-
-const DEALS = [
-  { id: 1, title: 'Acme Corp Renewal', company: 'Acme', contactName: 'Alice', amount: 50000, probability: 25, stage: 'new-lead', expectedCloseDate: '2026-09-01T00:00:00.000Z' },
-  { id: 2, title: 'Globex Expansion',  company: 'Globex', contactName: 'Bob', amount: 90000, probability: 100, stage: 'won', expectedCloseDate: null },
-  { id: 3, title: 'Initech Deal',      company: 'Initech', contactName: 'Carol', amount: 30000, probability: 10, stage: 'lost', expectedCloseDate: null },
-];
-
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   notifyObj.confirm.mockResolvedValue(true);
-  mockApi({ deals: DEALS, stages: STAGES });
+  mockApi();
 });
 
-// ── 1. Page chrome ────────────────────────────────────────────────────────────
-describe('Pipeline page chrome', () => {
-  it('renders heading, Live Sync badge, Export and Add Deal buttons', async () => {
+describe('Deals and Pipelines page', () => {
+  it('renders the current page heading and primary actions', async () => {
     renderPipeline();
-    expect(await screen.findByText('Sales Pipeline')).toBeInTheDocument();
-    expect(screen.getByText(/live sync active/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /export/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /add deal/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Deals and Pipelines' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /refresh/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /add deal/i }).length).toBeGreaterThan(0);
   });
-});
 
-// ── 2. Loading state ──────────────────────────────────────────────────────────
-describe('Pipeline loading state', () => {
-  it('shows loading text while fetches are in-flight', () => {
+  it('shows a toast after refreshing deals successfully', async () => {
+    renderPipeline();
+    await screen.findByText('Acme Corp Renewal');
+
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith('Deals refreshed'));
+  });
+
+  it('shows the loading state while the API requests are pending', () => {
     fetchApi.mockImplementation(() => new Promise(() => {}));
     renderPipeline();
     expect(screen.getByText(/loading deals/i)).toBeInTheDocument();
   });
-});
 
-// ── 3. Table rows ─────────────────────────────────────────────────────────────
-describe('Pipeline table rows', () => {
-  it('renders column headers', async () => {
+  it('renders deals in their pipeline stages', async () => {
     renderPipeline();
-    await screen.findByText('Acme Corp Renewal');
-    expect(screen.getByText('Deal title')).toBeInTheDocument();
-    expect(screen.getByText('Contact')).toBeInTheDocument();
-    expect(screen.getByText('Company')).toBeInTheDocument();
-    expect(screen.getByText('Amount')).toBeInTheDocument();
-    expect(screen.getByText('Stage')).toBeInTheDocument();
-    expect(screen.getByText('Actions')).toBeInTheDocument();
-  });
-
-  it('renders one row per deal with title, contact, and company', async () => {
-    renderPipeline();
-    await screen.findByText('Acme Corp Renewal');
+    expect(await screen.findByText('Acme Corp Renewal')).toBeInTheDocument();
     expect(screen.getByText('Globex Expansion')).toBeInTheDocument();
     expect(screen.getByText('Initech Deal')).toBeInTheDocument();
     expect(screen.getByText('Alice')).toBeInTheDocument();
-    expect(screen.getByText('Bob')).toBeInTheDocument();
-    expect(screen.getByText('Acme')).toBeInTheDocument();
-    expect(screen.getByText('Globex')).toBeInTheDocument();
+    expect(screen.getAllByText('Anita').length).toBeGreaterThan(0);
   });
 
-  it('renders probability badge per row', async () => {
+  it('keeps a ten-stage board readable with horizontal scrolling and removes duplicate stage columns', async () => {
+    const manyStages = Array.from({ length: 10 }, (_, index) => ({
+      id: index + 1,
+      name: `Stage ${index + 1}`,
+      color: '#3b82f6',
+      position: index,
+    }));
+    manyStages.push({ id: 99, name: ' Stage 1 ', color: '#ef4444', position: 99 });
+    mockApi({ stages: manyStages });
+
+    renderPipeline();
+    const board = await screen.findByLabelText('Deal pipeline board');
+
+    expect(board).toHaveStyle({
+      gridTemplateColumns: `repeat(10, minmax(${KANBAN_COLUMN_MIN_WIDTH}px, 1fr))`,
+      overflowX: 'auto',
+      overflowY: 'hidden',
+    });
+    expect(screen.getAllByRole('heading', { name: 'Stage 1' })).toHaveLength(1);
+  });
+
+  it('shows all pipelines by default when the URL does not specify one', async () => {
+    mockApi({ pipelines: [
+      { id: 41, name: 'Default Sales', isDefault: true },
+      { id: 42, name: 'Secondary', isDefault: false },
+    ] });
+
+    renderPipeline();
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /pipeline/i })).toHaveValue(''));
+    expect(fetchApi).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/deals\?(?!.*pipelineId=)/));
+  });
+
+  it('preserves an explicitly selected pipeline from the URL', async () => {
+    mockApi({ pipelines: [
+      { id: 41, name: 'Default Sales', isDefault: true },
+      { id: 42, name: 'Secondary', isDefault: false },
+    ] });
+
+    renderPipeline('/pipeline?pipelineId=42');
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /pipeline/i })).toHaveValue('42'));
+    expect(fetchApi).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/deals\?.*pipelineId=42/));
+  });
+
+  it('switches to List view and renders the list columns', async () => {
     renderPipeline();
     await screen.findByText('Acme Corp Renewal');
-    expect(screen.getByText('25%')).toBeInTheDocument();
-    expect(screen.getByText('100%')).toBeInTheDocument();
-    expect(screen.getByText('10%')).toBeInTheDocument();
-  });
-});
-
-// ── 4. Empty state ────────────────────────────────────────────────────────────
-describe('Pipeline empty state', () => {
-  it('shows empty message when no deals are returned', async () => {
-    mockApi({ deals: [], stages: STAGES });
-    renderPipeline();
-    await screen.findByText(/no deals yet/i);
+    fireEvent.click(screen.getByRole('button', { name: /list/i }));
+    expect(screen.getByText('Deal')).toBeInTheDocument();
+    expect(screen.getByText('Contact')).toBeInTheDocument();
+    expect(screen.getByText('Stage')).toBeInTheDocument();
+    expect(screen.getByText('Owner')).toBeInTheDocument();
+    expect(screen.getByText('Probability')).toBeInTheDocument();
   });
 
-  it('shows filter-empty message when deals exist but filters exclude all', async () => {
+  it('filters deals by title and company search', async () => {
     renderPipeline();
     await screen.findByText('Acme Corp Renewal');
-    const searchInput = screen.getByRole('searchbox', { name: /search deals/i });
-    fireEvent.change(searchInput, { target: { value: 'zzznomatch' } });
-    expect(screen.getByText(/no deals match/i)).toBeInTheDocument();
-  });
-});
-
-// ── 5. Stage filter + text search ────────────────────────────────────────────
-describe('Pipeline filters', () => {
-  it('stage filter hides rows not matching selected stage', async () => {
-    renderPipeline();
-    await screen.findByText('Acme Corp Renewal');
-    const stageFilter = screen.getByRole('combobox', { name: /filter by stage/i });
-    fireEvent.change(stageFilter, { target: { value: 'won' } });
-    // Won deal visible, others hidden
+    const search = screen.getByRole('textbox', { name: /search deals/i });
+    fireEvent.change(search, { target: { value: 'globex' } });
+    await waitFor(() => expect(screen.queryByText('Acme Corp Renewal')).not.toBeInTheDocument());
     expect(screen.getByText('Globex Expansion')).toBeInTheDocument();
-    expect(screen.queryByText('Acme Corp Renewal')).not.toBeInTheDocument();
-    expect(screen.queryByText('Initech Deal')).not.toBeInTheDocument();
-  });
-
-  it('search filters by deal title', async () => {
-    renderPipeline();
-    await screen.findByText('Acme Corp Renewal');
-    const searchInput = screen.getByRole('searchbox', { name: /search deals/i });
-    fireEvent.change(searchInput, { target: { value: 'globex' } });
-    expect(screen.getByText('Globex Expansion')).toBeInTheDocument();
-    expect(screen.queryByText('Acme Corp Renewal')).not.toBeInTheDocument();
-  });
-
-  it('search filters by company name', async () => {
-    renderPipeline();
-    await screen.findByText('Acme Corp Renewal');
-    const searchInput = screen.getByRole('searchbox', { name: /search deals/i });
-    fireEvent.change(searchInput, { target: { value: 'initech' } });
+    fireEvent.change(search, { target: { value: 'initech' } });
+    await waitFor(() => expect(screen.queryByText('Globex Expansion')).not.toBeInTheDocument());
     expect(screen.getByText('Initech Deal')).toBeInTheDocument();
-    expect(screen.queryByText('Acme Corp Renewal')).not.toBeInTheDocument();
   });
-});
 
-// ── 6. Inline stage update ────────────────────────────────────────────────────
-describe('Pipeline inline stage update', () => {
-  it('PUTs /api/deals/:id when stage dropdown changes', async () => {
-    fetchApi.mockImplementation((url, opts) => {
-      if (opts?.method === 'PUT') return Promise.resolve({ ...DEALS[0], stage: 'won' });
-      if (url.startsWith('/api/deals')) return Promise.resolve(DEALS);
-      if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(STAGES);
-      return Promise.resolve([]);
-    });
+  it('filters deals by stage and owner', async () => {
     renderPipeline();
     await screen.findByText('Acme Corp Renewal');
-    const stageDropdowns = screen.getAllByRole('combobox', { name: /change stage/i });
-    fireEvent.change(stageDropdowns[0], { target: { value: 'won' } });
-    await waitFor(() => {
-      const putCall = fetchApi.mock.calls.find((c) => c[1]?.method === 'PUT');
-      expect(putCall).toBeTruthy();
-      expect(putCall[0]).toMatch(/\/api\/deals\/1/);
-      expect(JSON.parse(putCall[1].body)).toMatchObject({ stage: 'won' });
-    });
+    fireEvent.click(screen.getByRole('button', { name: /more filters/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /stage/i }), { target: { value: 'won' } });
+    await waitFor(() => expect(screen.queryByText('Acme Corp Renewal')).not.toBeInTheDocument());
+    expect(screen.getByText('Globex Expansion')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: /owner/i }), { target: { value: '12' } });
+    expect(screen.getByText('Globex Expansion')).toBeInTheDocument();
   });
-});
 
-// ── 7. Delete ─────────────────────────────────────────────────────────────────
-describe('Pipeline delete', () => {
-  it('DELETEs the deal and removes it from the table', async () => {
-    fetchApi.mockImplementation((url, opts) => {
-      if (opts?.method === 'DELETE') return Promise.resolve({ ok: true });
-      if (url.startsWith('/api/deals')) return Promise.resolve(DEALS);
-      if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(STAGES);
-      return Promise.resolve([]);
-    });
+  it('deletes a deal only after CRM confirmation', async () => {
     renderPipeline();
     await screen.findByText('Acme Corp Renewal');
-    const deleteBtns = screen.getAllByRole('button', { name: /delete deal/i });
-    fireEvent.click(deleteBtns[0]);
-    await waitFor(() => {
-      const delCall = fetchApi.mock.calls.find((c) => c[1]?.method === 'DELETE');
-      expect(delCall).toBeTruthy();
-      expect(delCall[0]).toMatch(/\/api\/deals\/1/);
-    });
+    fireEvent.click(screen.getByRole('button', { name: /delete deal Acme Corp Renewal/i }));
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/deals/1', expect.objectContaining({ method: 'DELETE' })));
     expect(notifyObj.success).toHaveBeenCalledWith('Deal deleted');
-    await waitFor(() => {
-      expect(screen.queryByText('Acme Corp Renewal')).not.toBeInTheDocument();
-    });
   });
-});
 
-// ── 8. Add Deal modal ─────────────────────────────────────────────────────────
-describe('Pipeline Add Deal modal', () => {
-  it('opens on button click and closes via Cancel', async () => {
+  it('updates the displayed probability when a deal score is generated', async () => {
     renderPipeline();
-    await screen.findByText('Sales Pipeline');
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /add deal/i }));
-    expect(screen.getByRole('dialog', { name: /add new deal/i })).toBeInTheDocument();
+    await screen.findByText('Acme Corp Renewal');
+    fireEvent.click(screen.getByRole('button', { name: /generate deal score for Acme Corp Renewal/i }));
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/ai_scoring/score/1'));
+    expect(notifyObj.success).toHaveBeenCalledWith('Deal score updated');
+  });
+
+  it('opens and closes the Add Deal dialog', async () => {
+    renderPipeline();
+    await screen.findByText('Acme Corp Renewal');
+    fireEvent.click(screen.getAllByRole('button', { name: /add deal/i })[0]);
+    expect(screen.getByRole('dialog', { name: /add deal dialog/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /add deal dialog/i })).not.toBeInTheDocument();
   });
 
-  it('shows title-required error when submitted empty', async () => {
-    renderPipeline();
-    await screen.findByText('Sales Pipeline');
-    fireEvent.click(screen.getByRole('button', { name: /add deal/i }));
-    await screen.findByRole('dialog');
-    // HTML5 required prevents submit, but we can test the explicit check by
-    // calling submit via button click with empty value
-    const titleInput = screen.getByPlaceholderText(/Acme Corp Annual/i);
-    fireEvent.change(titleInput, { target: { value: '   ' } });
-    fireEvent.click(screen.getByRole('button', { name: /save deal/i }));
-    await waitFor(() => {
-      expect(notifyObj.error).toHaveBeenCalledWith('Title is required');
-    });
-  });
-
-  it('POSTs /api/deals with valid form data', async () => {
-    fetchApi.mockImplementation((url, opts) => {
-      if (opts?.method === 'POST') return Promise.resolve({ id: 99, title: 'New Deal', stage: 'new-lead' });
-      if (url.startsWith('/api/deals')) return Promise.resolve(DEALS);
+  it('pages through the complete server result instead of capping at 500 rows', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 75, byStage: [] });
+      if (url.startsWith('/api/deals?')) {
+        const page = new URL(url, 'http://localhost').searchParams.get('page');
+        const data = page === '2' ? [{ ...DEALS[0], id: 75, title: 'Deal on page two' }] : DEALS;
+        return Promise.resolve({ data, total: 75, page: Number(page), limit: 50, totalPages: 2 });
+      }
       if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(STAGES);
+      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
       return Promise.resolve([]);
     });
+
     renderPipeline();
-    await screen.findByText('Sales Pipeline');
-    fireEvent.click(screen.getByRole('button', { name: /add deal/i }));
-    await screen.findByRole('dialog');
-    fireEvent.change(screen.getByPlaceholderText(/Acme Corp Annual/i), { target: { value: 'New Deal' } });
-    fireEvent.click(screen.getByRole('button', { name: /save deal/i }));
-    await waitFor(() => {
-      const postCall = fetchApi.mock.calls.find((c) => c[1]?.method === 'POST');
-      expect(postCall).toBeTruthy();
-      const body = JSON.parse(postCall[1].body);
-      expect(body.title).toBe('New Deal');
+    expect(await screen.findByText('Showing 1–50 of 75 deals')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByText('Deal on page two')).toBeInTheDocument();
+    expect(screen.getByText('Showing 51–75 of 75 deals')).toBeInTheDocument();
+  });
+
+  it('ignores an older pipeline response that arrives after the latest selection', async () => {
+    const older = deferred();
+    const newer = deferred();
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 1, byStage: [] });
+      if (url.startsWith('/api/deals?')) {
+        const selected = new URL(url, 'http://localhost').searchParams.get('pipelineId');
+        if (selected === '1') return older.promise;
+        if (selected === '2') return newer.promise;
+        return Promise.resolve({ data: DEALS, total: 3, page: 1, limit: 50, totalPages: 1 });
+      }
+      if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(STAGES);
+      if (url.startsWith('/api/pipelines')) return Promise.resolve([{ id: 1, name: 'Older' }, { id: 2, name: 'Latest' }]);
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
+      return Promise.resolve([]);
     });
-    expect(notifyObj.success).toHaveBeenCalledWith('Deal created');
-  });
-});
 
-// ── 9. Sub-brand filter — travel tenants only ─────────────────────────────────
-describe('Pipeline sub-brand filter', () => {
-  it('does NOT render sub-brand select for non-travel tenants', async () => {
-    renderPipeline({ tenant: { vertical: 'generic' } });
-    await screen.findByText('Sales Pipeline');
-    expect(screen.queryByLabelText('Filter by sub-brand')).not.toBeInTheDocument();
-  });
-
-  it('renders sub-brand select for travel tenants', async () => {
-    renderPipeline({ tenant: { vertical: 'travel' } });
-    await screen.findByText('Sales Pipeline');
-    expect(screen.getByLabelText('Filter by sub-brand')).toBeInTheDocument();
-  });
-});
-
-// ── 10. Sub-brand URL-param sync ──────────────────────────────────────────────
-function LocationProbe() {
-  const loc = useLocation();
-  return <div data-testid="location-probe">{`${loc.pathname}${loc.search}`}</div>;
-}
-
-function renderTravelPipelineAt(initialUrl) {
-  const travelUser = { tenant: { vertical: 'travel' } };
-  return render(
-    <AuthContext.Provider value={{ user: travelUser }}>
-      <MemoryRouter initialEntries={[initialUrl]}>
-        <Routes>
-          <Route
-            path="/pipeline"
-            element={<><Pipeline /><LocationProbe /></>}
-          />
-        </Routes>
-      </MemoryRouter>
-    </AuthContext.Provider>,
-  );
-}
-
-describe('Pipeline sub-brand URL-param persistence', () => {
-  beforeEach(() => {
-    mockApi({ deals: [], stages: STAGES });
-  });
-
-  it('seeds dropdown from ?subBrand=tmc on mount', async () => {
-    renderTravelPipelineAt('/pipeline?subBrand=tmc');
-    await screen.findByText('Sales Pipeline');
-    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('tmc');
-    expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=tmc');
-  });
-
-  it('updates URL to ?subBrand=rfu on dropdown change', async () => {
-    renderTravelPipelineAt('/pipeline');
-    await screen.findByText('Sales Pipeline');
-    fireEvent.change(screen.getByLabelText('Filter by sub-brand'), { target: { value: 'rfu' } });
-    await waitFor(() => {
-      expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=rfu');
-    });
-  });
-
-  it('removes subBrand param when "All sub-brands" selected', async () => {
-    renderTravelPipelineAt('/pipeline?subBrand=tmc');
-    await screen.findByText('Sales Pipeline');
-    fireEvent.change(screen.getByLabelText('Filter by sub-brand'), { target: { value: '' } });
-    await waitFor(() => {
-      expect(screen.getByTestId('location-probe').textContent).not.toContain('subBrand');
-    });
-  });
-
-  it('falls back to "" for unknown ?subBrand=garbage', async () => {
-    renderTravelPipelineAt('/pipeline?subBrand=garbage');
-    await screen.findByText('Sales Pipeline');
-    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('');
-  });
-});
-
-// ── 11. KPI tiles ─────────────────────────────────────────────────────────────
-describe('Pipeline KPI tiles', () => {
-  it('renders four KPI tiles with correct labels', async () => {
     renderPipeline();
-    await screen.findByText('Total pipeline value');
-    // 'Won' and 'Lost' appear in subline, stage select options, and KPI labels
-    expect(screen.getAllByText('Won').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('In negotiation')).toBeInTheDocument();
-    expect(screen.getAllByText('Lost').length).toBeGreaterThanOrEqual(1);
+    await screen.findByText('Acme Corp Renewal');
+    const pipeline = screen.getByRole('combobox', { name: /pipeline/i });
+    fireEvent.change(pipeline, { target: { value: '1' } });
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(expect.stringContaining('pipelineId=1')));
+    fireEvent.change(pipeline, { target: { value: '2' } });
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(expect.stringContaining('pipelineId=2')));
+
+    await act(async () => newer.resolve({ data: [{ ...DEALS[0], id: 202, title: 'Latest pipeline deal' }], total: 1, page: 1, limit: 50, totalPages: 1 }));
+    expect(await screen.findByText('Latest pipeline deal')).toBeInTheDocument();
+    await act(async () => older.resolve({ data: [{ ...DEALS[0], id: 101, title: 'Stale pipeline deal' }], total: 1, page: 1, limit: 50, totalPages: 1 }));
+    expect(screen.queryByText('Stale pipeline deal')).not.toBeInTheDocument();
+    expect(screen.getByText('Latest pipeline deal')).toBeInTheDocument();
   });
 
-  it('computes KPI totals from deals', async () => {
-    // DEALS: won=90000, lost=30000, active(won stage)=90000, total=170000
-    renderPipeline();
-    await screen.findByText('Total pipeline value');
-    // just verify the tiles are present and show numbers — exact formatting
-    // varies by tenant currency, so we check numeric portions
-    const tileValues = screen.getAllByText(/\d/).map((n) => n.textContent);
-    expect(tileValues.some((t) => t.match(/90/))).toBe(true);
-  });
-});
-
-// ── 12. slugifyStageName export ───────────────────────────────────────────────
-describe('slugifyStageName (exported utility)', () => {
-  it('lowercases and kebab-cases stage names', () => {
+  it('exports the stage-name utility and virtualization threshold', () => {
     expect(slugifyStageName('New Lead')).toBe('new-lead');
-    expect(slugifyStageName('Diagnostic Complete')).toBe('diagnostic-complete');
     expect(slugifyStageName('WON')).toBe('won');
-  });
-
-  it('returns empty string for null/undefined', () => {
     expect(slugifyStageName(null)).toBe('');
-    expect(slugifyStageName(undefined)).toBe('');
-  });
-
-  it('VIRTUALIZATION_THRESHOLD is exported as 100', () => {
+    expect(normalizePipelineStages([{ id: 1, name: 'New Lead' }, { id: 2, name: ' new lead ' }])).toHaveLength(1);
     expect(VIRTUALIZATION_THRESHOLD).toBe(100);
-  });
-});
-
-// ── Refresh button ─────────────────────────────────────────────────────────────
-describe('Pipeline refresh', () => {
-  it('refresh button re-fetches deals', async () => {
-    renderPipeline();
-    await screen.findByText('Sales Pipeline');
-    const prevCount = fetchApi.mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: /refresh deals/i }));
-    await waitFor(() => {
-      expect(fetchApi.mock.calls.length).toBeGreaterThan(prevCount);
-    });
   });
 });

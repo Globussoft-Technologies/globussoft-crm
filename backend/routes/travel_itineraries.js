@@ -349,6 +349,22 @@ const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { ensureCostCentre } = require("../lib/travelTallyMasters");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
+
+async function prepareItineraryCostCentre(tenantId, itinerary) {
+  if (!itinerary?.id) return null;
+  try {
+    return await ensureCostCentre({
+      tenantId,
+      itineraryId: itinerary.id,
+      tripCode: `TRIP-${itinerary.id}`,
+      destination: itinerary.destination,
+    });
+  } catch (error) {
+    // Trip creation is the primary action. This master can be retried later.
+    console.warn("[travel-itin] Tally cost-centre auto-create failed:", error.message);
+    return null;
+  }
+}
 // const { resolveForSubBrand } = require("../lib/subBrandConfig"); // (was used for the legacy Q9 wabaId log; superseded by the connected WhatsApp Web client)
 // WhatsApp dispatch goes through the CONNECTED WhatsApp Web client (the
 // QR-linked number used by the /travel/whatsapp Threads page) — NOT the legacy
@@ -375,6 +391,7 @@ const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const { quote: composeQuote } = require("../lib/travelPricing");
 const listProjection = require("../lib/listProjection");
 const { writeAudit } = require("../lib/audit");
+const { createTravelInvoiceWithNumber } = require("../lib/travelInvoiceNumber");
 // G124 (Master PRD A3 residual) — per-document view/download/share audit
 // helper. Drops a discrete DOCUMENT_VIEW / DOCUMENT_DOWNLOAD / DOCUMENT_SHARE
 // row alongside the entity-shaped writeAudit rows so the audit-viewer can
@@ -536,21 +553,6 @@ async function notifyCustomerPaymentConfirmation(itin, paidMajor, balanceDue, po
   }
 }
 
-// Per-tenant sequential invoice number — TINV-YYYY-NNNN. Mirrors
-// routes/travel_invoices.js nextInvoiceNum so the public-payment invoices share
-// the same series/format as operator-created ones (4-digit zero-pad keeps the
-// invoiceNum-desc ordering correct).
-async function nextTravelInvoiceNum(tenantId) {
-  const year = new Date().getFullYear();
-  const latest = await prisma.travelInvoice.findFirst({
-    where: { tenantId, invoiceNum: { startsWith: `TINV-${year}-` } },
-    orderBy: { invoiceNum: "desc" },
-    select: { invoiceNum: true },
-  });
-  const latestSerial = latest ? parseInt(String(latest.invoiceNum).split("-")[2], 10) || 0 : 0;
-  return `TINV-${year}-${String(latestSerial + 1).padStart(4, "0")}`;
-}
-
 // Create / refresh the Invoices-ledger record for an itinerary payment — ONE
 // evolving invoice per itinerary (found via the itineraryId link):
 //   - first payment → creates a TravelInvoice (status Partial when a balance
@@ -589,32 +591,23 @@ async function upsertPaymentInvoice(itin, paidMajor, balanceDue) {
       return;
     }
 
-    // First payment → mint a new invoice. Retry on the (rare) invoiceNum race.
-    let invoice = null;
-    for (let attempt = 0; attempt < 4 && !invoice; attempt += 1) {
-      const invoiceNum = await nextTravelInvoiceNum(itin.tenantId);
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        invoice = await prisma.travelInvoice.create({
-          data: {
-            tenantId: itin.tenantId,
-            subBrand: itin.subBrand,
-            contactId: itin.contactId,
-            itineraryId: itin.id,
-            invoiceNum,
-            status: fullyPaid ? "Paid" : "Partial",
-            totalAmount: total,
-            currency: cur,
-            docType: "TaxInvoice",
-            dueDate: fullyPaid ? null : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-            paidAt: fullyPaid ? now : null,
-          },
-        });
-      } catch (e) {
-        if (e.code !== "P2002") throw e; // not a dup-invoiceNum race → bubble to outer catch
-      }
-    }
-    if (!invoice) return;
+    // First payment → mint a new invoice from the same atomic tenant/year
+    // sequence used by operator-created and quote-created invoices.
+    const invoice = await createTravelInvoiceWithNumber(
+      prisma,
+      itin.tenantId,
+      {
+        subBrand: itin.subBrand,
+        contactId: itin.contactId,
+        itineraryId: itin.id,
+        status: fullyPaid ? "Paid" : "Partial",
+        totalAmount: total,
+        currency: cur,
+        docType: "TaxInvoice",
+        dueDate: fullyPaid ? null : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        paidAt: fullyPaid ? now : null,
+      },
+    );
 
     // One line describing what was booked (the chosen flight / trip).
     const items = await prisma.itineraryItem.findMany({ where: { itineraryId: itin.id } }).catch(() => []);
@@ -752,6 +745,14 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       const cid = parseInt(req.query.contactId, 10);
       if (Number.isFinite(cid)) where.contactId = cid;
     }
+    const destination = String(req.query.destination || "").trim();
+    if (destination) {
+      where.destination = { contains: destination };
+    }
+    const contact = String(req.query.contact || "").trim();
+    if (contact) {
+      where.contact = { name: { contains: contact } };
+    }
     if (req.query.from || req.query.to) {
       const from = req.query.from
         ? new Date(`${String(req.query.from)}T00:00:00.000`)
@@ -781,13 +782,47 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       ];
     }
 
-    const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-    const skip = parseInt(req.query.offset, 10) || 0;
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const parsedOffset = parseInt(req.query.offset, 10);
+    const take = Math.min(
+      Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50,
+      200,
+    );
+    const skip = Number.isInteger(parsedOffset) && parsedOffset > 0
+      ? parsedOffset
+      : 0;
+
+    const sortDirection = req.query.sortDirection === "asc" ? "asc" : "desc";
+    const sortKey = String(req.query.sortKey || "").trim();
+    const scalarSortFields = {
+      destination: "destination",
+      amount: "totalAmount",
+      startDate: "startDate",
+      status: "status",
+    };
+    let orderBy = [{ createdAt: "desc" }, { id: "desc" }];
+    if (sortKey) {
+      if (sortKey === "contact") {
+        orderBy = [{ contact: { name: sortDirection } }, { id: sortDirection }];
+      } else if (sortKey === "company") {
+        orderBy = [{ contact: { company: sortDirection } }, { id: sortDirection }];
+      } else if (scalarSortFields[sortKey]) {
+        orderBy = [
+          { [scalarSortFields[sortKey]]: sortDirection },
+          { id: sortDirection },
+        ];
+      } else {
+        return res.status(400).json({
+          error: "invalid sort key",
+          code: "INVALID_SORT_KEY",
+        });
+      }
+    }
 
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy,
       take,
       skip,
     };
@@ -799,11 +834,38 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
         contact: { select: { id: true, name: true, email: true } },
       };
     }
-    const [itineraries, total] = await Promise.all([
+    const [itineraries, total, totalsByStatus] = await Promise.all([
       prisma.itinerary.findMany(findManyArgs),
       prisma.itinerary.count({ where }),
+      prisma.itinerary.groupBy({
+        by: ["status"],
+        where,
+        _sum: { totalAmount: true },
+      }),
     ]);
-    res.json({ itineraries, total, limit: take, offset: skip });
+    const pipelineTotals = {
+      totalValue: 0,
+      wonValue: 0,
+      negotiationValue: 0,
+      lostValue: 0,
+    };
+    const wonStatuses = new Set(["accepted", "advance_paid", "fully_paid"]);
+    const negotiationStatuses = new Set(["sent", "revised"]);
+    const lostStatuses = new Set(["rejected", "expired"]);
+    for (const row of totalsByStatus) {
+      const value = Number(row?._sum?.totalAmount) || 0;
+      pipelineTotals.totalValue += value;
+      if (wonStatuses.has(row.status)) pipelineTotals.wonValue += value;
+      if (negotiationStatuses.has(row.status)) pipelineTotals.negotiationValue += value;
+      if (lostStatuses.has(row.status)) pipelineTotals.lostValue += value;
+    }
+    res.json({
+      itineraries,
+      total,
+      limit: take,
+      offset: skip,
+      pipelineTotals,
+    });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] list error:", e.message);
@@ -930,6 +992,11 @@ router.post("/itineraries/build", verifyToken, requireTravelTenant, async (req, 
         items: { create: itemRows },
       },
       select: { id: true },
+    });
+
+    await prepareItineraryCostCentre(req.travelTenant.id, {
+      id: itin.id,
+      destination: destinationLabel,
     });
 
     res.status(201).json({
@@ -1168,16 +1235,7 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     // Ledger masters are created only through the Tally screens/actions.
     // Trip creation must not create customer or service ledgers implicitly.
     const tallyMasters = null;
-    try {
-      await ensureCostCentre({
-        tenantId: req.travelTenant.id,
-        itineraryId: itinerary.id,
-        tripCode: itinerary.id ? `TRIP-${itinerary.id}` : null,
-        destination: itinerary.destination,
-      });
-    } catch (tallyError) {
-      console.warn("[travel-itin] Tally master auto-create failed:", tallyError.message);
-    }
+    await prepareItineraryCostCentre(req.travelTenant.id, itinerary);
 
     // G049 — bump template usage metrics on clone-from-template event.
     // Non-fatal: a metric-bump failure must NOT roll back the itinerary
@@ -4123,6 +4181,7 @@ router.post(
         where: { id: created.id },
         include: { items: { orderBy: { position: "asc" } } },
       });
+      await prepareItineraryCostCentre(req.travelTenant.id, withItems || created);
       res.status(201).json(withItems);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -5263,6 +5322,8 @@ router.put("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
       },
       include: { items: { orderBy: { position: "asc" } } },
     });
+
+    await prepareItineraryCostCentre(req.travelTenant.id, newItin);
 
     // This PUT is the "redesign" path — it mints a new REVISED version. Notify
     // the customer their trip plan was updated (newItin carries contactId/dest).
@@ -8617,6 +8678,8 @@ router.post(
         },
         include: { items: { orderBy: { position: "asc" } } },
       });
+
+      await prepareItineraryCostCentre(req.travelTenant.id, itinerary);
 
       // 11. Audit-log emission. PRD FR-3.6 (d) needs to be traceable when
       //     an operator materialises an LLM suggestion into committed rows.

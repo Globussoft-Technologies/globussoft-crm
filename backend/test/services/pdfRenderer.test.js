@@ -12,11 +12,11 @@
 // inflate every stream and decode the hex segments back to characters.
 // See `extractPdfText` below — it isn't a full PDF parser, just enough
 // to recover ASCII text our renderers emit.
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
 
-const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
+const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalWellnessInvoicePdf, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -721,6 +721,32 @@ describe('renderConsentPdf', () => {
     expect(txt).toContain('Service:');
   });
 
+  test('maps a business document name to the matching consent wording', async () => {
+    const buf = await renderConsentPdf(
+      { templateName: 'Hair Transplant Consent' },
+      patientFixture(),
+      { name: 'Hair Transplant' },
+      clinicFixture(),
+      null,
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('hairtransplantprocedure');
+  });
+
+  test('renders the linked visit date when supplied', async () => {
+    const buf = await renderConsentPdf(
+      { templateName: 'general' },
+      patientFixture(),
+      null,
+      clinicFixture(),
+      null,
+      { visit: { visitDate: '2026-08-28T09:00:00Z' } },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Visit:');
+    expect(txt).toContain('Aug 2026');
+  });
+
   test('omits Service: line when service not provided', async () => {
     const buf = await renderConsentPdf(
       { templateName: 'general' },
@@ -1006,6 +1032,100 @@ describe('renderBrandedInvoicePdf', () => {
     const txt = extractPdfText(buf);
     expect(txt).toContain('hello@enhancedwellness.in');
     expect(txt).toContain('+919999000011');
+  });
+});
+
+describe('renderProfessionalWellnessInvoicePdf', () => {
+  test('renders the complete branded customer, visit, line-item, payment and totals layout', async () => {
+    const buf = await renderProfessionalWellnessInvoicePdf(
+      {
+        invoiceNum: 'WLV-2026-0042',
+        amount: 2000,
+        status: 'PAID',
+        createdAt: 'not-a-date',
+        dueDate: '2026-09-23',
+        customerName: 'Duke Patient',
+        customerPhone: '+918850236910',
+        customerEmail: 'duke@example.com',
+        customerAddress: '12 Patient Lane, Bengaluru',
+        billingAddress: '12 Patient Lane, Bengaluru',
+        shippingAddress: 'Enhanced Wellness, Bengaluru',
+        gstin: '29ABCDE1234F1Z5',
+        paymentMode: 'upi',
+        lineItemsJson: JSON.stringify([
+          {
+            type: 'service',
+            name: 'Laser Hair Reduction - Suprano Titanium - Upper Lip',
+            description: 'Upper lip session',
+            quantity: 1,
+            unitPrice: 2000,
+            amount: 2000,
+          },
+        ]),
+        visit: {
+          visitDate: '2026-09-20',
+          service: { name: 'Laser Hair Reduction - Suprano Titanium - Upper Lip' },
+        },
+      },
+      { name: 'Duke Patient' },
+      clinicFixture(),
+      {
+        tenant: {
+          name: 'Dr Enhanced Wellness',
+          brandColor: '#265855',
+          defaultCurrency: 'INR',
+          locale: 'en-IN',
+        },
+        settings: [
+          { key: 'invoice.tagline', value: 'Care that feels personal' },
+          { key: 'invoice.notes', value: 'Please retain this invoice for your records.' },
+        ],
+      },
+    );
+
+    const text = extractPdfText(buf);
+    const normalizedText = text.replace(/\s+/g, ' ');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect((buf.toString('latin1').match(/\/Type\s+\/Page\b/g) || []).length).toBe(1);
+    expect(text).toContain('Dr Enhanced Wellness');
+    expect(text).toContain('Care that feels personal');
+    expect(text).toContain('ENTERPRISE INVOICE');
+    expect(text).toContain('Duke Patient');
+    expect(text).toContain('+918850236910');
+    expect(text).toContain('duke@example.com');
+    expect(text).toContain('GSTIN');
+    expect(text).toContain('12 Patient Lane, Bengaluru');
+    expect(text).toContain('20/09/2026');
+    expect(text).toContain('Laser Hair Reduction');
+    expect(text).toContain('Suprano Titanium');
+    expect(normalizedText).toContain('Upper Lip');
+    expect(text).toContain('Upper lip session');
+    expect(text).toContain('PAYMENT MODE');
+    expect(text).toContain('UPI');
+    expect(text).toContain('Tax (GST 0%)');
+    expect(text).toContain('Grand Total');
+    expect(text).toContain('Please retain this invoice');
+    expect(text).toContain('For any queries, contact');
+    expect(text).toContain('Thank you for choosing Dr Enhanced Wellness');
+    expect(text).not.toContain('Invalid Date');
+    expect(text).not.toContain('...');
+  });
+});
+
+describe('resolveProfessionalInvoiceLogo', () => {
+  test('uses the tenant-configured remote logo through the shared fetch seam', async () => {
+    const logo = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const fetchSpy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(logo);
+    await expect(resolveProfessionalInvoiceLogo('https://cdn.example.com/logo.png')).resolves.toBe(logo);
+    expect(fetchSpy).toHaveBeenCalledWith('https://cdn.example.com/logo.png');
+    fetchSpy.mockRestore();
+  });
+
+  test('does not substitute a shared logo when the tenant has no configured logo', async () => {
+    await expect(resolveProfessionalInvoiceLogo()).resolves.toBeNull();
   });
 });
 

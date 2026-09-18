@@ -41,6 +41,7 @@ const { isValidPhoneOrEmpty } = require("../lib/validators");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { buildTmcParentRegistrationUrl } = require("../lib/tmcRegistrationContext");
 const visaDocStore = require("../lib/visaDocStore");
+const { normalizeTripType, tripRequiresPassport } = require("../lib/travelDocumentPolicy");
 
 
 
@@ -69,6 +70,20 @@ async function purgeLegacyContactTombstone(email, tenantId) {
     select: { id: true },
   });
   if (existing) await hardDeleteContact(prisma, existing.id);
+}
+
+// Email is an indexed lookup, not a unique Contact key. Landing-page
+// submissions must still update the existing person when they return through
+// the same page flow, so keep the old upsert semantics at the application
+// layer without relying on a database uniqueness constraint.
+async function upsertContactByEmail({ email, tenantId, update, create }) {
+  const existing = await prisma.contact.findFirst({
+    where: { email, tenantId, deletedAt: null },
+  });
+  if (existing) {
+    return prisma.contact.update({ where: { id: existing.id }, data: update });
+  }
+  return prisma.contact.create({ data: create });
 }
 
 
@@ -1506,7 +1521,8 @@ router.get("/public/featured-full", async (req, res) => {
 
     }
 
-    let parsedContent = page.content;
+    const publicPage = await preparePublicLandingPage(page);
+    let parsedContent = publicPage.content;
 
     if (typeof parsedContent === "string") {
 
@@ -1522,7 +1538,7 @@ router.get("/public/featured-full", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1593,7 +1609,8 @@ router.get("/public/by-slug/:slug", async (req, res) => {
 
     }
 
-    let parsedContent = page.content;
+    const publicPage = await preparePublicLandingPage(page);
+    let parsedContent = publicPage.content;
 
     if (typeof parsedContent === "string") {
 
@@ -1609,7 +1626,7 @@ router.get("/public/by-slug/:slug", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1693,7 +1710,8 @@ router.get("/public/by-id/:id", async (req, res) => {
 
     }
 
-    let parsedContent = page.content;
+    const publicPage = await preparePublicLandingPage(page);
+    let parsedContent = publicPage.content;
 
     if (typeof parsedContent === "string") {
 
@@ -1709,7 +1727,7 @@ router.get("/public/by-id/:id", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1794,7 +1812,8 @@ router.get("/public/by-trip/:tripId", async (req, res) => {
 
     }
 
-    let parsedContent = page.content;
+    const publicPage = await preparePublicLandingPage(page);
+    let parsedContent = publicPage.content;
 
     if (typeof parsedContent === "string") {
 
@@ -1810,7 +1829,7 @@ router.get("/public/by-trip/:tripId", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1853,8 +1872,9 @@ router.get("/public/featured-html", async (req, res) => {
 
     if (!page) return res.status(404).json({ error: "No featured page.", code: "NO_FEATURED_PAGE" });
 
+    const publicPage = await preparePublicLandingPage(page);
     const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
-    const html = renderPage({ ...page, tmcParentRegistrationUrl }, { tmcParentRegistrationUrl });
+    const html = renderPage({ ...publicPage, tmcParentRegistrationUrl }, { tmcParentRegistrationUrl });
 
     res.set("Content-Type", "text/html");
 
@@ -5700,7 +5720,7 @@ publicRouter.get("/published/json", async (req, res) => {
 
       orderBy: { featuredAt: "desc" },
 
-      select: { content: true },
+      select: { content: true, tripId: true, tenantId: true },
 
     });
 
@@ -5716,7 +5736,8 @@ publicRouter.get("/published/json", async (req, res) => {
 
     }
 
-    let parsedContent = page.content;
+    const publicPage = await preparePublicLandingPage(page);
+    let parsedContent = publicPage.content;
 
     if (typeof parsedContent === "string") {
 
@@ -5778,6 +5799,8 @@ publicRouter.get("/:slug/json", async (req, res) => {
         updatedAt: true,
 
         content: true,
+        tripId: true,
+        tenantId: true,
 
       },
 
@@ -5795,7 +5818,8 @@ publicRouter.get("/:slug/json", async (req, res) => {
 
     }
 
-    let parsedContent = page.content;
+    const publicPage = await preparePublicLandingPage(page);
+    let parsedContent = publicPage.content;
 
     if (typeof parsedContent === "string") {
 
@@ -5828,7 +5852,8 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" } });
     const fields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : {};
     if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
-    if (String(fields.passport_status || "").toLowerCase() !== "valid passport") {
+    const tripType = await resolveLandingPageTripType(page);
+    if (tripRequiresPassport(tripType) && String(fields.passport_status || "").toLowerCase() !== "valid passport") {
       return res.status(400).json({ error: "A valid passport is required for document upload", code: "PASSPORT_REQUIRED" });
     }
     const draftToken = crypto.randomBytes(24).toString("hex");
@@ -5869,6 +5894,9 @@ publicRouter.post("/:slug/registration-documents", (req, res, next) => {
 }, async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" }, select: { id: true, tripId: true, tenantId: true, content: true } });
+    if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
+    const tripType = await resolveLandingPageTripType(page);
+    const isDomesticTrip = !tripRequiresPassport(tripType);
     const token = String(req.body?.draftToken || "").trim();
     const fields = safeJsonParse(req.body?.fields, {});
     let draft = token ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken: token } }) : null;
@@ -5884,12 +5912,8 @@ publicRouter.post("/:slug/registration-documents", (req, res, next) => {
         },
       });
     }
-    if (!page || !draft || draft.tripId !== page.tripId || draft.draftTokenExpiresAt < new Date()) return res.status(400).json({ error: "Registration draft is invalid or expired", code: "INVALID_DRAFT" });
+    if (!draft || draft.tripId !== page.tripId || draft.draftTokenExpiresAt < new Date()) return res.status(400).json({ error: "Registration draft is invalid or expired", code: "INVALID_DRAFT" });
     const files = req.files || {};
-    const pageConfig = safeJsonParse(page.content, {});
-    const configuredTripType = pageConfig.register?.tripType || pageConfig.meta?.tripType || "";
-    const normalizedTripType = String(configuredTripType).trim().toLowerCase().replace(/[- ]/g, "_");
-    const isDomesticTrip = normalizedTripType === "domestic" || normalizedTripType === "day_trip";
     const required = [
       ...(isDomesticTrip ? [] : ["passport"]),
       "aadhaar", "parentConsent", "medicalConsent",
@@ -6149,8 +6173,9 @@ publicRouter.get("/:slug", async (req, res) => {
 
 
 
+    const publicPage = await preparePublicLandingPage(page);
     const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
-    const html = renderPage({ ...page, tmcParentRegistrationUrl }, { tmcParentRegistrationUrl });
+    const html = renderPage({ ...publicPage, tmcParentRegistrationUrl }, { tmcParentRegistrationUrl });
 
     res.set("Content-Type", "text/html");
 
@@ -6859,6 +6884,56 @@ function safeJsonParse(value, fallback = {}) {
   }
 }
 
+async function resolveLandingPageTripType(page) {
+  const configured = safeJsonParse(page?.content, {});
+  const fallback = normalizeTripType(configured.register?.tripType || configured.meta?.tripType);
+  if (!page?.tripId) return fallback;
+  try {
+    const trip = await prisma.tmcTrip.findFirst({
+      where: { id: page.tripId, tenantId: page.tenantId || 1 },
+      select: { tripType: true },
+    });
+    return normalizeTripType(trip?.tripType || fallback);
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function removePassportFromLandingConfig(config, tripType) {
+  if (!config || typeof config !== "object" || Array.isArray(config) || tripRequiresPassport(tripType)) return config;
+  const next = { ...config };
+  if (next.register && typeof next.register === "object" && !Array.isArray(next.register)) {
+    const register = { ...next.register, tripType: normalizeTripType(tripType) };
+    if (Array.isArray(register.steps)) {
+      register.steps = register.steps
+        .map((step) => {
+          if (!step || typeof step !== "object") return step;
+          const title = String(step.title || "").toLowerCase();
+          if (String(step.id || "").toLowerCase() === "passport" || title.includes("passport")) return null;
+          if (!Array.isArray(step.fields)) return step;
+          const fields = step.fields.filter((field) => !String(field?.name || "").toLowerCase().includes("passport"));
+          return fields.length === step.fields.length ? step : { ...step, fields };
+        })
+        .filter(Boolean);
+    }
+    register.subtitle = "Two quick steps - Student and Parent.";
+    next.register = register;
+  }
+  next.meta = { ...(next.meta && typeof next.meta === "object" ? next.meta : {}), tripType: normalizeTripType(tripType) };
+  return next;
+}
+
+async function preparePublicLandingPage(page) {
+  const tripType = await resolveLandingPageTripType(page);
+  const parsed = typeof page?.content === "string" ? safeJsonParse(page.content, null) : page?.content;
+  const content = removePassportFromLandingConfig(parsed, tripType);
+  return {
+    ...page,
+    tripType,
+    content: content && content !== parsed ? JSON.stringify(content) : page.content,
+  };
+}
+
 function verifyRazorpayCheckoutSignature({ orderId, paymentId, signature, keySecret }) {
   if (!orderId || !paymentId || !signature || !keySecret) return false;
   const expected = crypto
@@ -7009,6 +7084,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   const tenantId = page.tenantId || 1;
   const paymentConfig = getLandingPagePaymentConfig(page);
+  const requiresPassport = tripRequiresPassport(await resolveLandingPageTripType(page));
 
   // The wizard's per-step values arrive flattened under `fields`
 
@@ -7087,6 +7163,23 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
 
 
+  const submittedExtras = extras ? { ...extras } : null;
+  if (submittedExtras?.documents && typeof submittedExtras.documents === "object" && !Array.isArray(submittedExtras.documents) && !requiresPassport) {
+    submittedExtras.documents = { ...submittedExtras.documents };
+    delete submittedExtras.documents.passport;
+  }
+  const passportData = requiresPassport ? {
+    passportNumber: passport.number || flat.passport_number || null,
+    passportExpiry: parseDateOrNull(passport.expiry || flat.passport_expiry),
+    passportNationality: passport.nationality || flat.passport_nationality || null,
+    passportPlaceOfIssue: passport.placeOfIssue || flat.passport_place_of_issue || null,
+  } : {
+    passportNumber: null,
+    passportExpiry: null,
+    passportNationality: null,
+    passportPlaceOfIssue: null,
+  };
+
   const draft = isResumedDraft ? existingDraft : await prisma.pendingTripRegistration.create({
 
     data: {
@@ -7115,15 +7208,9 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
       parentRelation: parent.relation || flat.parent_relation || null,
 
-      passportNumber: passport.number || flat.passport_number || null,
+      ...passportData,
 
-      passportExpiry: parseDateOrNull(passport.expiry || flat.passport_expiry),
-
-      passportNationality: passport.nationality || flat.passport_nationality || null,
-
-      passportPlaceOfIssue: passport.placeOfIssue || flat.passport_place_of_issue || null,
-
-      extrasJson: extras ? JSON.stringify(extras) : null,
+      extrasJson: submittedExtras ? JSON.stringify(submittedExtras) : null,
 
       audience: typeof req.body.audience === "string" ? req.body.audience : (formProps.audience || null),
 
@@ -7164,9 +7251,10 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     const contactSource = "tmc_registration";
     await purgeLegacyContactTombstone(parentEmail, tenantId);
 
-    const contact = await prisma.contact.upsert({
+    const contact = await upsertContactByEmail({
 
-      where: { email_tenantId: { email: parentEmail, tenantId } },
+      email: parentEmail,
+      tenantId,
 
       update: { source: contactSource },
 
@@ -7224,6 +7312,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
         parent_phone: flat.parent_phone || resolvedParentPhone,
       },
       req.body,
+      { includePassportStatus: requiresPassport },
     );
     if (participant) {
       await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
@@ -7303,7 +7392,7 @@ function parseDateOrNull(v) {
 
 // Trips participants tab in sync with the inbound lead/deal pipeline.
 
-async function createParticipantFromLeadSubmission(tripId, tenantId, formFields, body) {
+async function createParticipantFromLeadSubmission(tripId, tenantId, formFields, body, options = {}) {
 
   const pick = (key) =>
 
@@ -7347,7 +7436,9 @@ async function createParticipantFromLeadSubmission(tripId, tenantId, formFields,
 
   const city = pick("city") || pick("student_city") || pick("studentCity") || null;
 
-  const passportStatus = pick("passport_status") || pick("passportStatus") || null;
+  const passportStatus = options.includePassportStatus === false
+    ? null
+    : pick("passport_status") || pick("passportStatus") || null;
 
 
 
@@ -7590,9 +7681,10 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
     // Upsert contact with unique constraint on email + tenantId
     await purgeLegacyContactTombstone(contactEmail, tenantId);
 
-    const contact = await prisma.contact.upsert({
+    const contact = await upsertContactByEmail({
 
-      where: { email_tenantId: { email: contactEmail, tenantId } },
+      email: contactEmail,
+      tenantId,
 
       update: {
 
@@ -7968,9 +8060,10 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     await purgeLegacyContactTombstone(contactEmail, tenantId);
 
-    const contact = await prisma.contact.upsert({
+    const contact = await upsertContactByEmail({
 
-      where: { email_tenantId: { email: contactEmail, tenantId } },
+      email: contactEmail,
+      tenantId,
 
       update: {
 

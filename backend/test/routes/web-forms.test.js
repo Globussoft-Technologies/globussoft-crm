@@ -27,6 +27,11 @@ const emailSender = requireCJS('../../lib/emailSender');
 
 emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true });
 
+const s3Service = requireCJS('../../services/s3Service');
+s3Service.uploadImage = vi.fn();
+s3Service.isOciUrl = vi.fn();
+s3Service.isLocalUrl = vi.fn();
+
 
 prisma.webForm = prisma.webForm || {};
 
@@ -83,6 +88,8 @@ prisma.user.findFirst = vi.fn();
 
 
 const webFormsRouter = requireCJS('../../routes/web_forms');
+const { buildEmbedCode } = webFormsRouter;
+prisma.webFormSubmission.count = vi.fn();
 
 
 const TENANT_ID = 11;
@@ -152,7 +159,23 @@ beforeEach(() => {
   prisma.user.findFirst.mockResolvedValue(null);
 
   emailSender.sendEmail.mockClear();
+  s3Service.uploadImage.mockReset();
+  s3Service.uploadImage.mockResolvedValue('https://objectstorage.example.com/n/ns/b/forms/o/travel/web-forms/11/logos/logo.png');
+  s3Service.isOciUrl.mockReset();
+  s3Service.isOciUrl.mockReturnValue(true);
+  s3Service.isLocalUrl.mockReset();
+  s3Service.isLocalUrl.mockReturnValue(false);
 
+});
+
+describe('web-form embed sizing', () => {
+  test('generates a content-sized iframe without a fixed minimum or internal scroll cap', () => {
+    const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' }, 'https://crm.example.com');
+
+    expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
+    expect(code).not.toContain('min-height:760px');
+    expect(code).toContain('source!=="gbs-web-form"');
+  });
 });
 
 
@@ -337,8 +360,118 @@ describe('POST /api/forms', () => {
 
 });
 
+describe('POST /api/forms/logo-upload', () => {
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  );
+
+  test('uploads a travel form logo through the OCS-aware storage service', async () => {
+    const res = await request(makeApp('travel'))
+      .post('/api/forms/logo-upload?scope=travel')
+      .attach('image', PNG, 'travel-logo.png');
+
+    expect(res.status).toBe(201);
+    expect(s3Service.uploadImage).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      'travel-logo.png',
+      'image/png',
+      'travel/web-forms/11/logos',
+    );
+    expect(res.body).toMatchObject({
+      storage: 'ocs',
+      originalName: 'travel-logo.png',
+      mimeType: 'image/png',
+    });
+  });
+
+  test('does not expose the travel logo endpoint to other CRM verticals', async () => {
+    const res = await request(makeApp('generic'))
+      .post('/api/forms/logo-upload?scope=travel')
+      .attach('image', PNG, 'travel-logo.png');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FORM_SCOPE_FORBIDDEN');
+    expect(s3Service.uploadImage).not.toHaveBeenCalled();
+  });
+});
+
 
 describe('PUT /api/forms/:id', () => {
+
+  test('persists metadata, fields, styles, and settings together', async () => {
+    const updatedFields = [
+      { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Full name', required: true, hidden: false, width: 'full', options: [] },
+    ];
+    const updatedStyle = {
+      backgroundColor: '#112233',
+      formColor: '#F4F5F6',
+      titleColor: '#223344',
+      fieldLabelColor: '#334455',
+      buttonColor: '#99B177',
+    };
+    const updatedSettings = {
+      formTitle: 'Updated public title',
+      submitButtonLabel: 'Send request',
+      successMessage: 'Received',
+      optInEnabled: true,
+    };
+
+    prisma.webForm.findFirst.mockResolvedValueOnce({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: 'Before',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({}),
+    });
+    prisma.webForm.update.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Updated form',
+      slug: 'contact-us',
+      description: 'After',
+      isActive: false,
+      fieldsJson: JSON.stringify(updatedFields),
+      styleJson: JSON.stringify(updatedStyle),
+      settingsJson: JSON.stringify(updatedSettings),
+    });
+
+    const res = await request(makeApp()).put('/api/forms/1').send({
+      name: 'Updated form',
+      slug: 'contact-us',
+      description: 'After',
+      isActive: false,
+      fields: updatedFields,
+      style: updatedStyle,
+      settings: updatedSettings,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(expect.objectContaining({
+      name: 'Updated form',
+      description: 'After',
+      isActive: false,
+      fields: expect.arrayContaining([expect.objectContaining({ label: 'Full name' })]),
+      style: expect.objectContaining({ buttonColor: '#99B177' }),
+      settings: expect.objectContaining({ submitButtonLabel: 'Send request' }),
+    }));
+    expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Updated form',
+        description: 'After',
+        isActive: false,
+        fieldsJson: expect.stringContaining('Full name'),
+        styleJson: expect.stringContaining('#99B177'),
+        settingsJson: expect.stringContaining('Send request'),
+      }),
+    }));
+  });
 
   test('renames a form without touching the slug so shared links keep working', async () => {
 
@@ -472,6 +605,8 @@ describe('GET /api/forms/public/:slug', () => {
     expect(res.status).toBe(200);
 
     expect(res.body.slug).toBe('contact-us');
+
+    expect(res.headers['cache-control']).toBe('no-store');
 
     expect(res.body.embedCode).toContain('/embed/web-form.html?id=1');
 
@@ -941,7 +1076,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
         title: 'Sales Manager',
         company: 'Acme Corp',
         companySize: '51-200',
-        source: 'Referral',
+        source: 'website-form',
+        medium: 'Referral',
       }),
     }));
     // Nothing left for the custom-field writer — no definitions needed.
@@ -949,4 +1085,36 @@ describe('POST /api/forms/public/:slug/submit', () => {
   });
 
 
+});
+
+describe('Generic web form leads popup API', () => {
+  test('scopes pagination and search to the form and tenant, preserving submitted values', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({ id: 7, fieldsJson: JSON.stringify([
+      { id: 's', sourceKind: 'contact', sourceKey: 'source', label: 'Source' },
+      { id: 'm', sourceKind: 'lead_custom', sourceKey: 'medium', label: 'Medium' },
+      { id: 'x', sourceKind: 'custom', sourceKey: 'message', label: 'Message' },
+    ]) });
+    prisma.webFormSubmission.count.mockResolvedValue(26);
+    prisma.webFormSubmission.findMany.mockResolvedValue([{ id: 9,
+      payloadJson: JSON.stringify({ source: 'Website', medium: 'Google', 'custom:message': '  hello  ' }),
+      filesJson: null, contact: { id: 3, createdAt: '2026-01-01', updatedAt: '2026-02-01' },
+    }]);
+    const res = await request(makeApp()).get('/api/forms/7/leads?page=2&limit=25&search=Google');
+    expect(res.status).toBe(200);
+    expect(res.body.leads[0]).toMatchObject({ values: ['Website', 'Google', '  hello  '], createdAt: '2026-01-01', updatedAt: '2026-02-01' });
+    expect(prisma.webForm.findFirst).toHaveBeenCalledWith({ where: { id: 7, tenantId: TENANT_ID, scope: 'generic' } });
+    const query = prisma.webFormSubmission.findMany.mock.calls[0][0];
+    expect(query).toMatchObject({ skip: 25, take: 25, where: { webFormId: 7, tenantId: TENANT_ID, scope: 'generic', contact: { is: { tenantId: TENANT_ID } } } });
+    expect(query.where.OR).toContainEqual({ payloadJson: { contains: 'Google' } });
+    expect(prisma.webFormSubmission.count).toHaveBeenCalledWith({ where: query.where });
+  });
+  test.each(['wellness', 'travel'])('denies %s access', async (vertical) => {
+    expect((await request(makeApp(vertical)).get('/api/forms/7/leads')).status).toBe(403);
+    expect(prisma.webFormSubmission.findMany).not.toHaveBeenCalled();
+  });
+  test('rejects invalid and inaccessible forms', async () => {
+    expect((await request(makeApp()).get('/api/forms/no/leads')).status).toBe(400);
+    expect((await request(makeApp()).get('/api/forms/7/leads')).status).toBe(404);
+    expect(prisma.webFormSubmission.findMany).not.toHaveBeenCalled();
+  });
 });

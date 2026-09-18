@@ -33,6 +33,21 @@ function channelFromContactSource(source) {
   return canonicaliseChannel(source.slice("inbound:".length));
 }
 
+function addDealSearch(where, rawSearch) {
+  const search = String(rawSearch || '').trim().slice(0, 200);
+  if (!search) return where;
+  const clause = {
+    OR: [
+      { title: { contains: search } },
+      { company: { contains: search } },
+      { contact: { is: { name: { contains: search } } } },
+      { owner: { is: { name: { contains: search } } } },
+    ],
+  };
+  where.AND = [...(Array.isArray(where.AND) ? where.AND : []), clause];
+  return where;
+}
+
 router.use(verifyToken);
 
 // #188: short-circuit non-numeric :id so requests like GET /api/deals/funnel
@@ -58,7 +73,7 @@ async function audit(action, entityId, userId, tenantId, details) {
 // filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
-    const { stage, ownerId, pipelineId, contactId, subBrand, from, to, channel } = req.query;
+    const { stage, ownerId, pipelineId, contactId, subBrand, from, to, channel, search } = req.query;
     let where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
@@ -96,6 +111,7 @@ router.get("/", async (req, res) => {
       if (to) where.createdAt.lte = new Date(to);
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
+    addDealSearch(where, search);
 
     // Travel vertical: check subBrandAccess first to determine filtering behavior
     const allowed = await getSubBrandAccessSet(req.user.userId);
@@ -223,8 +239,23 @@ router.get("/", async (req, res) => {
 router.get("/stats", async (req, res) => {
   try {
     const tid = req.user.tenantId;
-    const where = { tenantId: tid, deletedAt: null };
+    let where = { tenantId: tid, deletedAt: null };
+    if (req.query.stage) where.stage = String(req.query.stage);
+    if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
+    if (req.query.ownerId) where.ownerId = parseInt(req.query.ownerId);
+    if (req.query.subBrand) where.subBrand = String(req.query.subBrand);
+    addDealSearch(where, req.query.search);
     if (req.user.role === "USER") where.ownerId = req.user.userId;
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (allowed instanceof Set && allowed.size > 0) {
+      where = {
+        AND: [
+          where,
+          { OR: [{ subBrand: { in: [...allowed] } }, { subBrand: null }] },
+        ],
+      };
+    }
     const deals = await prisma.deal.findMany({ where });
 
     const totalDeals = deals.length;
@@ -257,9 +288,10 @@ router.get("/stats", async (req, res) => {
     // Group by stage
     const stageMap = {};
     deals.forEach((d) => {
-      if (!stageMap[d.stage]) stageMap[d.stage] = { stage: d.stage, count: 0, value: 0 };
+      if (!stageMap[d.stage]) stageMap[d.stage] = { stage: d.stage, count: 0, value: 0, expectedValue: 0 };
       stageMap[d.stage].count++;
       stageMap[d.stage].value += d.amount || 0;
+      stageMap[d.stage].expectedValue += (d.amount || 0) * (Number(d.probability || 0) / 100);
     });
     const byStage = Object.values(stageMap);
 
@@ -290,6 +322,40 @@ router.get("/stats", async (req, res) => {
 });
 
 // ─── GET /:id — single deal with full relations ─────────────────────
+router.get("/:id/activities", async (req, res) => {
+  try {
+    const deal = await prisma.deal.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      select: { contactId: true, deletedAt: true },
+    });
+    if (!deal || (deal.deletedAt && req.query.includeDeleted !== "true")) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const skip = (page - 1) * limit;
+    const where = { contactId: deal.contactId, tenantId: req.user.tenantId };
+    const [activities, total] = await Promise.all([
+      deal.contactId
+        ? prisma.activity.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip, take: limit })
+        : [],
+      deal.contactId ? prisma.activity.count({ where }) : 0,
+    ]);
+
+    return res.json({
+      data: activities,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (error) {
+    console.error("[deals] get activities error:", error.message);
+    return res.status(500).json({ error: "Failed to fetch deal activities" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const includeDeleted = req.query.includeDeleted === "true";
@@ -315,7 +381,8 @@ router.get("/:id", async (req, res) => {
     if (deal.contactId) {
       activities = await prisma.activity.findMany({
         where: { contactId: deal.contactId, tenantId: req.user.tenantId },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 10,
       });
     }
 
@@ -432,7 +499,7 @@ router.post("/", async (req, res) => {
     await audit("CREATE", deal.id, req.user.userId, req.user.tenantId, { title: deal.title, amount: deal.amount, stage: deal.stage });
     try { require("../lib/eventBus").emitEvent("deal.created", { dealId: deal.id, title: deal.title, amount: deal.amount, stage: deal.stage, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.status(201).json(deal);
   } catch (error) {
     console.error("[deals] create error:", error.message);
@@ -564,7 +631,7 @@ router.put("/:id", async (req, res) => {
       }
     } catch (_) { /* event bus failures must not break the update */ }
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.json(deal);
   } catch (error) {
     console.error("[deals] update error:", error.message);
@@ -642,7 +709,7 @@ router.put("/:id/stage", async (req, res) => {
       }
     }
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.json(deal);
   } catch (error) {
     console.error("[deals] stage-update error:", error.message);
@@ -684,7 +751,7 @@ router.post("/:id/won", async (req, res) => {
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "won", from: existing.stage });
     try { await require("../lib/eventBus").emitEvent("deal.won", { dealId: deal.id, title: deal.title, amount: deal.amount, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.json(deal);
   } catch (error) {
     console.error("[deals] mark-won error:", error.message);
@@ -728,7 +795,7 @@ router.post("/:id/lost", async (req, res) => {
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "lost", from: existing.stage, lostReason });
     try { require("../lib/eventBus").emitEvent("deal.lost", { dealId: deal.id, title: deal.title, amount: deal.amount, lostReason, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.json(deal);
   } catch (error) {
     console.error("[deals] mark-lost error:", error.message);
@@ -756,7 +823,7 @@ router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       data: { deletedAt: new Date() },
     });
 
-    if (req.io) req.io.emit("deal_deleted", existing.id);
+    if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_deleted", existing.id);
     res.json({ ...deal, success: true, softDeleted: true });
   } catch (error) {
     console.error("[deals] delete error:", error.message);
@@ -780,7 +847,7 @@ router.post("/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
       data: { deletedAt: null },
       include: { contact: true, owner: true },
     });
-    if (req.io) req.io.emit("deal_updated", deal);
+    if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.json({ ...deal, restored: true });
   } catch (error) {
     console.error("[deals] restore error:", error.message);

@@ -918,10 +918,25 @@ export default function CancellationPolicies() {
                           fontFamily: "monospace",
                           fontSize: 12,
                           color: "var(--text-secondary)",
+                          width: 360,
                           maxWidth: 360,
+                          overflow: "hidden",
+                          verticalAlign: "middle",
                         }}
                       >
-                        {preview}
+                        <div
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            maxWidth: 360,
+                            whiteSpace: "normal",
+                            overflowWrap: "anywhere",
+                            wordBreak: "break-word",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {preview}
+                        </div>
                       </td>
                       <td style={td}>
                         <span

@@ -411,6 +411,49 @@ test.describe("Travel CSV — seasons", () => {
     expect(r.status()).toBe(403);
   });
 
+  test("export validates date ranges and includes only overlapping seasons", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const marker = `${RUN_TAG}-date-filter`;
+    const imported = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/seasons/import.csv`, {
+        headers: csvHeaders(token),
+        data: [
+          "subBrand,seasonName,startDate,endDate,multiplier",
+          `tmc,${marker},2098-03-01,2098-03-31,1.2`,
+        ].join("\r\n"),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(imported.status()).toBe(200);
+
+    const included = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/seasons/export.csv?from=2098-03-15&to=2098-03-15`, {
+        headers: jsonHeaders(token), timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(included.status()).toBe(200);
+    expect(await included.text()).toContain(marker);
+
+    const excluded = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/seasons/export.csv?from=2099-01-01`, {
+        headers: jsonHeaders(token), timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(excluded.status()).toBe(200);
+    expect(await excluded.text()).not.toContain(marker);
+
+    for (const query of ["from=not-a-date", "from=2098-04-01&to=2098-03-01"]) {
+      const invalid = await retryOn5xx(() =>
+        request.get(`${BASE_URL}/api/travel/seasons/export.csv?${query}`, {
+          headers: jsonHeaders(token), timeout: REQUEST_TIMEOUT,
+        }),
+      );
+      expect(invalid.status()).toBe(400);
+      expect((await invalid.json()).code).toBe("INVALID_DATE_RANGE");
+    }
+  });
+
   test("import 400 NO_CSV without body", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token) test.skip(true, "travel admin login unavailable");
@@ -493,6 +536,49 @@ test.describe("Travel CSV — markup-rules", () => {
     );
     expect(r.status()).toBe(400);
     expect((await r.json()).code).toBe("INVALID_SCOPE");
+  });
+
+  test("export validates and applies the createdAt date range", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const marker = `${RUN_TAG}-dated-rule`;
+    const matchKey = JSON.stringify({ marker });
+    const imported = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/markup-rules/import.csv`, {
+        headers: csvHeaders(token),
+        data: [
+          "subBrand,scope,matchKeyJson,markupPct,markupFlat,priority",
+          `tmc,hotel,"${matchKey.replace(/"/g, '""')}",0.12,,91`,
+        ].join("\r\n"),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(imported.status()).toBe(200);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const included = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/markup-rules/export.csv?from=${today}&to=${today}`, {
+        headers: jsonHeaders(token), timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(included.status()).toBe(200);
+    expect(await included.text()).toContain(marker);
+
+    const excluded = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/markup-rules/export.csv?to=2000-01-01`, {
+        headers: jsonHeaders(token), timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(excluded.status()).toBe(200);
+    expect(await excluded.text()).not.toContain(marker);
+
+    const invalid = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/markup-rules/export.csv?to=2026-02-30`, {
+        headers: jsonHeaders(token), timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(invalid.status()).toBe(400);
+    expect((await invalid.json()).code).toBe("INVALID_DATE_RANGE");
   });
 
   test("import enforces EXACTLY_ONE markupPct / markupFlat invariant + upserts by (subBrand, scope, matchKeyJson)", async ({ request }) => {

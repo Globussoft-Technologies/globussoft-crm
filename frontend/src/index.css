@@ -229,6 +229,77 @@
   color: var(--text-primary);
 }
 
+/* Payables status chips use an explicit selected treatment. A transparent
+   active chip with white text is readable on the dark surface, but disappears
+   on the light surface. Keep the brand tint while switching to dark accent
+   text over a pale tint in light mode. */
+.payables-status-chip {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .payables-status-chip[aria-pressed="true"] {
+  background: color-mix(
+    in srgb,
+    var(--payables-chip-accent, var(--primary-color, var(--accent-color))) 12%,
+    var(--surface-color)
+  );
+  color: var(--payables-chip-accent, var(--primary-color, var(--accent-color)));
+}
+
+[data-theme="dark"] .payables-status-chip[aria-pressed="true"] {
+  background: color-mix(
+    in srgb,
+    var(--payables-chip-accent, var(--primary-color, var(--accent-color))) 26%,
+    var(--surface-color)
+  );
+  color: var(--text-primary);
+}
+
+/* Keep accidental page-wide overflow from creating a second horizontal
+   scrollbar. Components that genuinely need horizontal scrolling (such as
+   dense data tables) own an explicit nested overflow container. */
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Keep the application frame and page roots from becoming additional
+   horizontal scroll containers. Data tables provide their own nested scroll
+   area when their columns cannot fit. */
+.app-shell,
+.app-main,
+.app-main > main,
+.travel-content-frame,
+.expenses-page {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden !important;
+}
+
+.expenses-page > .card,
+.expenses-page .card {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden !important;
+}
+
+.cost-master-required {
+  color: var(--danger-color, #dc2626);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cost-master-optional {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 [data-theme="light"] body {
   background-color: var(--bg-color);
   color: var(--text-primary);
@@ -305,6 +376,299 @@ a {
 button {
   cursor: pointer;
   font-family: inherit;
+}
+
+/* Travel Tally: cost-centres master page */
+.tally-cost-centres-page {
+  width: min(100% - 48px, 1392px);
+  max-width: 1392px;
+  margin: 0 auto;
+  padding: 24px 0 48px;
+  color: #24213a;
+}
+
+.tally-cost-centres-page > h1 {
+  margin: 20px 0 2px;
+  color: #211e37;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.8px;
+  line-height: 1.2;
+}
+
+.tally-cost-centres-description {
+  margin: 0;
+  color: #5d6373;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.tally-cost-centres-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 59px;
+  margin: 19px 0 25px;
+  padding: 12px 16px;
+  border: 1px solid #d9dce1;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(27, 34, 48, 0.02);
+}
+
+.tally-cost-centres-form label {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  color: #29263e;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tally-cost-centres-form select {
+  width: 286px;
+  height: 30px;
+  margin-left: 0;
+  padding: 3px 8px;
+  border: 1px solid #8e8e8e;
+  border-radius: 0;
+  background: #fff;
+  color: #24213a;
+  font: inherit;
+  font-size: 13px;
+}
+
+.tally-cost-centres-form button {
+  height: 30px;
+  padding: 3px 8px;
+  border: 1px solid #c8cbd1;
+  border-radius: 3px;
+  background: #fff;
+  color: #26233b;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.tally-cost-centres-form button:hover {
+  border-color: #8d91a0;
+  background: #f5f6f8;
+}
+
+.tally-cost-centres-message,
+.tally-cost-centres-error {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.tally-cost-centres-message { color: #21865d; }
+.tally-cost-centres-error { color: #c53030; }
+
+.tally-cost-centres-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.tally-cost-centres-table {
+  width: 850px;
+  max-width: 100%;
+  border-collapse: collapse;
+  color: #28253d;
+  font-size: 15px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.tally-cost-centres-table th {
+  padding: 4px 10px 5px 0;
+  color: #252239;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tally-cost-centres-table td {
+  padding: 4px 10px 4px 0;
+  white-space: nowrap;
+}
+
+.tally-cost-centres-table th:nth-child(1),
+.tally-cost-centres-table td:nth-child(1) { width: 60px; }
+.tally-cost-centres-table th:nth-child(2),
+.tally-cost-centres-table td:nth-child(2) { width: 315px; }
+.tally-cost-centres-table th:nth-child(3),
+.tally-cost-centres-table td:nth-child(3) { width: 255px; }
+.tally-cost-centres-table th:nth-child(4),
+.tally-cost-centres-table td:nth-child(4) { width: 80px; }
+
+@media (max-width: 760px) {
+  .tally-cost-centres-page {
+    width: min(100% - 32px, 1392px);
+    padding-top: 16px;
+  }
+
+  .tally-cost-centres-page > h1 { font-size: 27px; }
+
+  .tally-cost-centres-form {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .tally-cost-centres-form label {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .tally-cost-centres-form select {
+    width: 100%;
+  }
+}
+
+.tally-cost-centres-eyebrow {
+  margin: 1px 0 16px;
+  color: #4f46e5;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+}
+
+.tally-cost-centres-page > h1 {
+  font-size: 36px;
+  letter-spacing: -1.2px;
+}
+
+.tally-cost-centres-form {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-height: 108px;
+  margin-top: 19px;
+  padding: 20px;
+}
+
+.tally-cost-centres-form label {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 7px;
+  white-space: normal;
+}
+
+.tally-cost-centres-form label span {
+  color: #3d4660;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tally-cost-centres-form select {
+  width: 100%;
+  height: 43px;
+  padding: 8px 12px;
+  border: 1px solid #d9dce1;
+  border-radius: 9px;
+  font-size: 14px;
+}
+
+.tally-cost-centres-form button {
+  height: 43px;
+  align-self: end;
+  padding: 0 16px;
+  border-radius: 9px;
+  border-color: #d7d9e1;
+  color: #29304a;
+  font-weight: 600;
+}
+
+.tally-cost-centres-table-wrap {
+  margin-top: 25px;
+  border: 1px solid #dfe1e6;
+  border-radius: 16px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.tally-cost-centres-table {
+  width: 100%;
+  max-width: none;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+.tally-cost-centres-table th {
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid #dfe1e6;
+  background: #fcfcfd;
+  color: #3d4660;
+  font-size: 12px;
+}
+
+.tally-cost-centres-table td {
+  height: 58px;
+  padding: 0 12px;
+  border-bottom: 1px solid #e1e3e7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tally-cost-centres-table tbody tr:last-child td { border-bottom: 0; }
+.tally-cost-centres-table th:nth-child(1), .tally-cost-centres-table td:nth-child(1) { width: 12%; }
+.tally-cost-centres-table th:nth-child(2), .tally-cost-centres-table td:nth-child(2) { width: 23%; }
+.tally-cost-centres-table th:nth-child(3), .tally-cost-centres-table td:nth-child(3) { width: 28%; }
+.tally-cost-centres-table th:nth-child(4), .tally-cost-centres-table td:nth-child(4) { width: 12%; }
+.tally-cost-centres-table th:nth-child(5), .tally-cost-centres-table td:nth-child(5) { width: 17%; }
+.tally-cost-centres-table th:nth-child(6), .tally-cost-centres-table td:nth-child(6) { width: 8%; }
+
+.tally-cost-centres-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.tally-cost-centres-badge--active {
+  background: #e5f2ed;
+  color: #168061;
+}
+
+.tally-cost-centres-badge--sync {
+  background: #f3eee7;
+  color: #976c23;
+}
+
+.tally-cost-centres-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.tally-cost-centres-pagination button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+}
+
+.tally-cost-centres-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 760px) {
+  .tally-cost-centres-form { min-height: 0; }
+  .tally-cost-centres-table-wrap { overflow-x: auto; }
+  .tally-cost-centres-table { width: 900px; }
 }
 
 /* Tally company setup gate */
@@ -1124,6 +1488,144 @@ button {
   text-align: center;
 }
 
+/* Tally sync history */
+.tally-history-table {
+  table-layout: auto;
+}
+
+.tally-history-table th:first-child,
+.tally-history-table td:first-child {
+  min-width: 145px;
+}
+
+.tally-history-date,
+.tally-history-secondary {
+  white-space: nowrap;
+}
+
+.tally-history-date small,
+.tally-history-secondary {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--text-secondary);
+  font-size: 0.73rem;
+}
+
+.tally-history-view {
+  min-width: 92px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.tally-history-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(15, 23, 42, 0.62);
+  backdrop-filter: blur(3px);
+}
+
+.tally-history-modal {
+  width: min(960px, 100%);
+  max-height: min(88vh, 900px);
+  overflow-y: auto;
+  padding: 1.4rem;
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.3);
+}
+
+.tally-history-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tally-history-modal-header h2 {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.tally-history-modal-header p {
+  margin: 0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.tally-history-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  margin: 1rem 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--border-color);
+}
+
+.tally-history-detail {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.85rem;
+  background: var(--surface-color);
+}
+
+.tally-history-detail span {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tally-history-detail strong {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.tally-history-payloads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.tally-history-payload {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.tally-history-payload h3 {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-hover);
+  font-size: 0.85rem;
+}
+
+.tally-history-payload pre {
+  max-height: 300px;
+  margin: 0;
+  overflow: auto;
+  padding: 0.9rem;
+  background: var(--input-bg, #0f172a);
+  color: var(--text-primary, #f8fafc);
+  font: 0.76rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 560px) {
   .tally-setup-card {
     flex-direction: column;
@@ -1149,6 +1651,14 @@ button {
 
   .tally-sync-filters {
     grid-template-columns: 1fr;
+  }
+
+  .tally-history-payloads {
+    grid-template-columns: 1fr;
+  }
+
+  .tally-history-modal {
+    padding: 1rem;
   }
 }
 
@@ -1576,6 +2086,16 @@ select option {
   color: #1a1a2e;
 }
 
+/* Toolbar date filters should use the current application surface instead of
+   the browser/light-theme default white select treatment. */
+select.invoice-date-range-filter {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 6px;
+  color: var(--text-primary) !important;
+  box-shadow: var(--shadow-sm, none);
+}
+
 .nav-link {
   position: relative;
   overflow: hidden;
@@ -1710,14 +2230,16 @@ body[data-vertical="travel"] .travel-sidebar-collapse {
   margin-left: auto;
   border: 0;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, white);
+  /* Mix the brand colour into the current theme surface. Using a literal
+     white base made this control look like a bright patch in dark mode. */
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, var(--surface-color));
   color: var(--text-primary);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 body[data-vertical="travel"] .travel-sidebar-collapse:hover {
-  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, white);
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 22%, var(--surface-color));
   color: var(--primary-color, var(--accent-color));
 }
 
@@ -2318,6 +2840,8 @@ table.stable-table td {
 .settings-grid {
   columns: 360px 2;
   column-gap: 1.5rem;
+  width: 100%;
+  min-width: 0;
   /* Tell the browser to balance column heights rather than fill column 1
      before column 2. */
   column-fill: balance;
@@ -2331,6 +2855,39 @@ table.stable-table td {
      inside the column context and the heading sits next to the previous
      card. Block restores the expected stacked-card behaviour. */
   display: block;
+  min-width: 0;
+}
+
+/* Tour dialogs must be opaque even though normal cards use glassmorphism. */
+[data-tour-surface="true"] {
+  background-color: #ffffff !important;
+}
+[data-theme="dark"] [data-tour-surface="true"],
+html[data-theme="dark"] [data-tour-surface="true"] {
+  background-color: #171a21 !important;
+}
+
+/* Keep tour dialog geometry stable while controls are hovered/focused. The
+   application-wide button hover lift is intentionally preserved elsewhere;
+   it must not make the walkthrough card jump or appear to resize. */
+[data-tour-surface="true"] {
+  box-sizing: border-box;
+  contain: layout;
+}
+[data-tour-surface="true"] .btn-primary:hover,
+[data-tour-surface="true"] .btn-primary:focus-visible,
+[data-tour-surface="true"] .btn-secondary:hover,
+[data-tour-surface="true"] .btn-secondary:focus-visible {
+  transform: none;
+}
+
+/* The multicolumn minimum is useful on desktop but overflows the app content
+   area in a local browser or narrow laptop window. Stack cards before the two
+   360px columns can force horizontal clipping. */
+@media (max-width: 900px) {
+  .settings-grid {
+    columns: 1;
+  }
 }
 
 /* Suggest Itinerary modal — force an opaque panel surface across themes.
@@ -2910,6 +3467,14 @@ table.leads-table thead th {
   box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
+/* Both panes already begin below a 16px scrollbar/spacer. Their headers are
+   sticky within those offset panes, so another top offset either overlaps the
+   first scrollable row or shifts the frozen Name column down by 16px. */
+.leads-table-frozen-pane table.leads-table thead th,
+.leads-table-scroll-pane table.leads-table thead th {
+  top: 0;
+}
+
 /* Generic CRM: the top scrollbar is removed, so the sticky header docks
    flush to the top of the scroll viewport (no 16px gap strip). Scoped to
    the --no-topbar modifier — all other usages keep top: 16px. */
@@ -3020,6 +3585,187 @@ table.leads-table tbody tr:hover td {
   overflow: visible;
 }
 
+/* Contacts follows the Leads page structure: filters at the top, a flexible
+   table viewport in the middle, and one readable pagination footer below it.
+   The old compact pill is kept out of the visual flow while the new footer
+   provides the same page controls on desktop and mobile. */
+.contacts-page {
+  width: 100%;
+  min-height: 100%;
+}
+
+.contacts-page-card {
+  display: flex;
+  flex-direction: column;
+  min-height: max(320px, calc(100vh - 10rem));
+  min-height: max(320px, calc(100dvh - 10rem));
+}
+
+.contacts-page-card > .contacts-filters-bar {
+  flex: 0 0 auto;
+}
+
+.contacts-page-card > .contacts-split-table {
+  flex: 1 1 auto;
+  min-height: 320px;
+  max-height: none;
+}
+
+.contacts-pagination-legacy {
+  display: none !important;
+}
+
+.contacts-pagination-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.contacts-pagination-summary {
+  white-space: nowrap;
+}
+
+.contacts-pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.contacts-pagination-controls > label,
+.contacts-pagination-page-form > label,
+.contacts-pagination-page-form > span {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.contacts-pagination-controls select,
+.contacts-pagination-page-form input {
+  box-sizing: border-box;
+  height: 2rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
+
+.contacts-pagination-controls select {
+  width: auto !important;
+  min-width: 4.5rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.contacts-pagination-page-form {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.contacts-pagination-page-form input {
+  width: 3.5rem;
+  padding: 0.35rem 0.4rem;
+  text-align: center;
+}
+
+.contacts-pagination-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.contacts-pagination-icon:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.contacts-pagination-icon:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+@media (max-width: 768px) {
+  .contacts-page-card {
+    min-height: max(360px, calc(100vh - 4rem));
+    min-height: max(360px, calc(100dvh - 4rem));
+  }
+
+  .contacts-filters-bar {
+    gap: 0.75rem !important;
+  }
+
+  .contacts-pagination-footer {
+    align-items: flex-start;
+  }
+
+  .contacts-pagination-summary,
+  .contacts-pagination-controls {
+    width: 100%;
+  }
+
+  .contacts-pagination-controls {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .contacts-page-card > .contacts-split-table {
+    min-height: 280px;
+  }
+
+  .contacts-pagination-controls {
+    gap: 0.35rem;
+  }
+}
+
+/* Remove native scrollbar arrow buttons from the split-table sync bars so
+   the track begins exactly at the frozen/scrollable pane boundary. */
+.leads-split-table .top-scroll-sync__top::-webkit-scrollbar-button,
+.leads-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button,
+.contacts-split-table .top-scroll-sync__top::-webkit-scrollbar-button,
+.contacts-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background: transparent !important;
+}
+
+/* Windows Chromium exposes the horizontal decrement/increment buttons as
+   directional pseudo-elements. Hide each explicit variant as well so the
+   thumb starts directly at the scroll pane edge instead of leaving a
+   misleading gap beside the frozen column. */
+.leads-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:decrement,
+.leads-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:increment,
+.leads-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:decrement,
+.leads-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:increment,
+.contacts-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:decrement,
+.contacts-split-table .top-scroll-sync__top::-webkit-scrollbar-button:horizontal:increment,
+.contacts-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:decrement,
+.contacts-split-table .top-scroll-sync__bottom::-webkit-scrollbar-button:horizontal:increment {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
 .contacts-split-table table.stable-table thead tr {
   height: 50px;
 }
@@ -3084,6 +3830,32 @@ table.leads-table--fit {
   width: 100%;
 }
 
+/* Travel Leads: give the column heading enough breathing room for the
+   label, select checkbox, and column-menu controls. The body remains
+   compact, while the split-table row synchronizer keeps both panes aligned. */
+.leads-split-table table.leads-table--fit thead tr {
+  height: 64px;
+}
+
+.leads-split-table table.leads-table--fit thead th {
+  padding: 1rem 0.75rem !important;
+  font-size: 0.875rem;
+  line-height: 1.3;
+}
+
+.leads-split-table table.leads-table--fit thead th > div {
+  min-height: 24px;
+}
+
+/* Keep the frozen Name heading and its rows on the same horizontal grid.
+   Header cells otherwise use 12px side padding while body cells use 8px,
+   which shifts the checkbox and label apart by four pixels. */
+.leads-split-table table.leads-table--fit.leads-table--frozen th:first-child,
+.leads-split-table table.leads-table--fit.leads-table--frozen td:first-child {
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
+}
+
 table.leads-table--fit th,
 table.leads-table--fit td {
   box-sizing: border-box;
@@ -3105,6 +3877,42 @@ table.leads-table--fit td:last-child {
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
+}
+
+/* Keep long source labels inside their pill instead of letting the nested
+   inline editor clip the pill at a hard edge. The full value remains
+   available on hover through the title attribute. */
+table.leads-table .leads-source-col > .inline-cell-editor-display {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+table.leads-table .leads-source-badge {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The assignment control follows the same left content edge as every other
+   cell and scales down with the column on smaller screens. */
+table.leads-table .leads-assignee-control {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+table.leads-table .leads-assignee-control > select.input-field {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* Generic Leads compact mode: trim horizontal padding so custom fields get
@@ -5694,4 +6502,174 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 @media (prefers-reduced-motion: reduce) {
   .geofence-pulse-ring { animation: none; stroke-opacity: 0.85; }
   .geofence-spin { animation: none; }
+}
+.duplicates-dialog {
+  width: min(1080px, calc(100vw - 32px)) !important;
+  max-width: calc(100vw - 32px);
+  height: min(80vh, calc(100vh - 32px));
+  box-sizing: border-box;
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden !important;
+  padding: 0 !important;
+}
+
+.duplicates-dialog__header {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 1.5rem 2rem 1rem;
+  margin: 0 0 1.5rem !important;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent !important;
+}
+
+.duplicates-dialog__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+  padding: 0 2rem 2rem;
+}
+
+.duplicates-dialog__content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.duplicates-dialog__content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.duplicates-dialog__content::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.duplicates-list {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.duplicates-contact-row {
+  display: grid !important;
+  grid-template-columns: 72px minmax(190px, 1.15fr) minmax(240px, 1.45fr) minmax(160px, 1fr) 82px;
+  align-items: start !important;
+  gap: 12px !important;
+  min-width: 790px;
+}
+
+.duplicates-contact-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.duplicates-contact-row__role,
+.duplicates-contact-row__score {
+  white-space: nowrap;
+}
+
+.duplicates-contact-row__score {
+  margin-left: 0 !important;
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .duplicates-dialog__header { padding: 1rem 1rem .75rem; }
+  .duplicates-dialog__content { padding: 0 1rem 1rem; }
+  .duplicates-dialog > div:first-child { margin-bottom: 1rem !important; }
+  .duplicates-dialog h3 { font-size: 1rem !important; }
+}
+
+/* Brochure logo placement controls: scoped so other CRM range inputs keep
+   their existing appearance. */
+.brochure-logo-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  height: 22px;
+  border: 0;
+  outline: none;
+  background: transparent;
+}
+
+.brochure-logo-slider::-webkit-slider-runnable-track {
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--primary-color, var(--accent-color)) 0%,
+    var(--primary-color, var(--accent-color)) var(--brochure-slider-progress),
+    color-mix(in srgb, var(--border-color) 78%, var(--surface-color)) var(--brochure-slider-progress),
+    color-mix(in srgb, var(--border-color) 78%, var(--surface-color)) 100%
+  );
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.13);
+}
+
+.brochure-logo-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -6.5px;
+  border: 4px solid var(--surface-color, #fff);
+  border-radius: 50%;
+  background: var(--primary-color, var(--accent-color));
+  box-shadow: 0 2px 7px rgba(15, 23, 42, 0.28), 0 0 0 1px color-mix(in srgb, var(--primary-color, var(--accent-color)) 35%, transparent);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.brochure-logo-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.08);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.32), 0 0 0 4px color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent);
+}
+
+.brochure-logo-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 2px 7px rgba(15, 23, 42, 0.28), 0 0 0 5px color-mix(in srgb, var(--primary-color, var(--accent-color)) 22%, transparent);
+}
+
+.brochure-logo-slider::-moz-range-track {
+  height: 7px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border-color) 78%, var(--surface-color));
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.13);
+}
+
+.brochure-logo-slider::-moz-range-progress {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--primary-color, var(--accent-color));
+}
+
+.brochure-logo-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 4px solid var(--surface-color, #fff);
+  border-radius: 50%;
+  background: var(--primary-color, var(--accent-color));
+  box-shadow: 0 2px 7px rgba(15, 23, 42, 0.28);
+}
+@keyframes brochure-loading-rotate {
+  to { transform: rotate(360deg); }
+}
+@keyframes brochure-loading-sweep {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(110%); }
+}
+.brochure-loading-spinner { animation: brochure-loading-rotate 1s linear infinite; }
+.brochure-generating { position: relative; overflow: hidden; }
+.brochure-generating::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.28), transparent);
+  animation: brochure-loading-sweep 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brochure-loading-spinner, .brochure-generating::after { animation: none; }
 }

@@ -122,8 +122,23 @@ const GENERIC_BASE_PERMS = [
   'audit.read', 'developer.read', 'settings.read', 'settings.manage',
   'contacts.read', 'deals.read', 'pipeline.read', 'tickets.read',
   'reports.read', 'leads.read',
+  'communications.read', 'tasks.read', 'projects.read', 'whatsapp.read',
+  'live_chat.read', 'deal_insights.read', 'playbooks.read',
+  'booking_pages.read', 'web_forms.read', 'marketing.read',
+  'signatures.read', 'document_templates.read', 'documents.read',
+  'invoices.read', 'estimates.read', 'expenses.read', 'contracts.read',
+  'forecasting.read', 'quotas.read', 'dashboards.read', 'analytics.read',
+  'sequences.read', 'surveys.read', 'social.read', 'sla.read',
+  'payments.read', 'lead_scoring.read', 'cpq.read', 'territories.read',
+  'calendar.read',
 ];
-function permsForRole(role) {
+const GENERIC_USER_PERMS = [
+  'contacts.read', 'deals.read', 'leads.read', 'tasks.read', 'projects.read',
+  'pipeline.read', 'reports.read', 'communications.read', 'tickets.read',
+  'surveys.read', 'documents.read', 'contracts.read', 'estimates.read',
+];
+function permsForRole(role, vertical) {
+  if (vertical === 'generic' && role === 'USER') return new Set(GENERIC_USER_PERMS);
   if (role === 'ADMIN') {
     return new Set([...GENERIC_BASE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_ADMIN_EXTRAS]);
   }
@@ -205,7 +220,7 @@ function renderSidebar({
   // RBAC migration — every permission-gated <Link> consults
   // usePermissions().hasPermission. Capture the per-render permission
   // set so the closure-backed mock returns role-appropriate grants.
-  currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role);
+  currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role, vertical);
   if (activeSubBrand == null) window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   else window.sessionStorage.setItem(ACTIVE_SUB_BRAND_STORAGE_KEY, activeSubBrand);
 
@@ -297,7 +312,7 @@ describe('Sidebar — load-bearing render surface', () => {
       // Core links visible to all roles — pin a representative few.
       expect(screen.getByText('Dashboard')).toBeTruthy();
       expect(screen.getByText('Contacts')).toBeTruthy();
-      expect(screen.getByText('Pipeline')).toBeTruthy();
+      expect(screen.getByText('Deals and Pipeline')).toBeTruthy();
       // "Leads" label appears as both the nav label and possibly badge text;
       // accept either by checking we have at least one match.
       expect(screen.getAllByText('Leads').length).toBeGreaterThanOrEqual(1);
@@ -521,6 +536,13 @@ describe('Sidebar — load-bearing render surface', () => {
       const link = screen.getByText('Landing Pages').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/landing-pages');
+    });
+
+    it('renders Web Forms at the travel-scoped route used by global search', () => {
+      renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['marketing.read'] });
+      const link = screen.getByText('Web Forms').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/forms');
     });
 
     it('renders the Leads link under Sales', () => {
@@ -1427,14 +1449,11 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/settings');
     });
 
-    it('renders Settings nav for MANAGER under generic (manager-block bottom)', () => {
-      // For MANAGER role, the bottom block `!isAdmin && isManager` renders
-      // a single Settings link with no adminOnly gate (Link without
-      // `adminOnly` so it always shows for MANAGER).
+    it('shows only generic destinations granted to the manager', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      const link = screen.getByText('Settings').closest('a');
-      expect(link).toBeTruthy();
-      expect(link.getAttribute('href')).toBe('/settings');
+      expect(screen.getByText('Settings').closest('a')).toHaveAttribute('href', '/settings');
+      expect(screen.getByText('Revenue Goals').closest('a')).toHaveAttribute('href', '/revenue-goals');
+      expect(screen.queryByText('Import / Export')).toBeNull();
     });
 
     it('renders Notification Settings (not Settings) for USER under generic', () => {
@@ -1882,4 +1901,3 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 });
-

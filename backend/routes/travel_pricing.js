@@ -53,6 +53,38 @@ function parseListOffset(input) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function parseListDateRange(query) {
+  const parseDateOnly = (value, field) => {
+    if (!value) return null;
+    const raw = String(value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const err = new Error(`${field} must be a valid date (YYYY-MM-DD)`);
+      err.status = 400;
+      err.code = "INVALID_DATE_RANGE";
+      throw err;
+    }
+    const date = new Date(`${raw}T00:00:00.000Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== raw) {
+      const err = new Error(`${field} must be a valid date (YYYY-MM-DD)`);
+      err.status = 400;
+      err.code = "INVALID_DATE_RANGE";
+      throw err;
+    }
+    return date;
+  };
+
+  const from = parseDateOnly(query.from, "from");
+  const to = parseDateOnly(query.to, "to");
+  if (from && to && from > to) {
+    const err = new Error("from must be on or before to");
+    err.status = 400;
+    err.code = "INVALID_DATE_RANGE";
+    throw err;
+  }
+  const toExclusive = to ? new Date(to.getTime() + 86_400_000) : null;
+  return { from, toExclusive };
+}
+
 // ─── Seasons ─────────────────────────────────────────────────────────
 
 router.get("/seasons", verifyToken, requireTravelTenant, async (req, res) => {
@@ -62,9 +94,14 @@ router.get("/seasons", verifyToken, requireTravelTenant, async (req, res) => {
       assertValidSubBrand(String(req.query.subBrand));
       where.subBrand = String(req.query.subBrand);
     }
+    const { from, toExclusive } = parseListDateRange(req.query);
+    // A season matches when any part of its active period overlaps the
+    // selected inclusive calendar-date range.
+    if (from) where.endDate = { gte: from };
+    if (toExclusive) where.startDate = { lt: toExclusive };
     const rows = await prisma.travelSeasonCalendar.findMany({
       where,
-      orderBy: [{ subBrand: "asc" }, { startDate: "asc" }],
+      orderBy: [{ subBrand: "asc" }, { startDate: "asc" }, { id: "asc" }],
       take: parseListLimit(req.query.limit),
       skip: parseListOffset(req.query.offset),
     });
@@ -242,10 +279,16 @@ router.get("/markup-rules", verifyToken, requireTravelTenant, async (req, res) =
     }
     if (req.query.active === "true") where.isActive = true;
     if (req.query.active === "false") where.isActive = false;
+    const { from, toExclusive } = parseListDateRange(req.query);
+    if (from || toExclusive) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = from;
+      if (toExclusive) where.createdAt.lt = toExclusive;
+    }
 
     const rows = await prisma.travelMarkupRule.findMany({
       where,
-      orderBy: [{ subBrand: "asc" }, { priority: "asc" }],
+      orderBy: [{ subBrand: "asc" }, { priority: "asc" }, { id: "asc" }],
       take: parseListLimit(req.query.limit),
       skip: parseListOffset(req.query.offset),
     });

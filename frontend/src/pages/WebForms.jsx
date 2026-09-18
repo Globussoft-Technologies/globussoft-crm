@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import WebFormLeadsModal from "../components/WebFormLeadsModal";
 import { createPortal } from "react-dom";
 import { Navigate } from "react-router-dom";
 
@@ -23,7 +24,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowDown, ArrowUp, ChevronDown, Code2, Copy, Eye, GripVertical, Hash,
   Link2, ListChecks, Paperclip, Plus, Save, Search, Trash2, Type,
-  Upload, Info, X,
+  Upload, Info, X, CheckCircle2,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -6440,6 +6441,9 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
 export default function WebForms({ scope = "generic" }) {
+  const auth = useContext(AuthContext);
+  const [leadsForm, setLeadsForm] = useState(null);
+  const canViewFormLeads = scope === "generic" && (auth?.tenant?.vertical || auth?.user?.vertical || "generic") === "generic";
 
 
 
@@ -6622,6 +6626,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
   const [saving, setSaving] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
 
 
@@ -6678,6 +6683,27 @@ export default function WebForms({ scope = "generic" }) {
 
 
   const [showPreview, setShowPreview] = useState(false);
+  const previewFrameRef = useRef(null);
+
+  useEffect(() => {
+    if (!showPreview) return undefined;
+    const handlePreviewMessage = (event) => {
+      const frame = previewFrameRef.current;
+      if (
+        !frame ||
+        event.source !== frame.contentWindow ||
+        !event.data ||
+        event.data.source !== "gbs-web-form" ||
+        event.data.type !== "size"
+      ) return;
+      const height = Number(event.data.height);
+      if (!Number.isFinite(height) || height <= 0) return;
+      frame.style.height = `${Math.ceil(height)}px`;
+      frame.style.minHeight = "0px";
+    };
+    window.addEventListener("message", handlePreviewMessage);
+    return () => window.removeEventListener("message", handlePreviewMessage);
+  }, [showPreview]);
 
 
 
@@ -7250,8 +7276,7 @@ export default function WebForms({ scope = "generic" }) {
       .catch(() => {
         if (!cancelled) setCanManageLandingForm(false);
       });
-    fetch("/api/landing-form-config", { headers: { Accept: "application/json" } })
-      .then((res) => (res.ok ? res.json() : null))
+    fetchApi("/api/landing-form-config/mine", { silent: true })
       .then((data) => {
         if (cancelled) return;
         const id = Number.parseInt(data && data.webFormId, 10);
@@ -7707,7 +7732,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-  const handleLogoUpload = (event) => {
+  const handleLogoUpload = async (event) => {
 
 
 
@@ -7740,6 +7765,26 @@ export default function WebForms({ scope = "generic" }) {
 
 
     if (!file) return;
+
+    if (formScope === "travel") {
+      setUploadingLogo(true);
+      try {
+        const body = new FormData();
+        body.append("image", file);
+        const uploaded = await fetchApi("/api/forms/logo-upload?scope=travel", {
+          method: "POST",
+          body,
+        });
+        applyDraft({ style: { ...selectedForm.style, logoUrl: uploaded.url } });
+        notifyRef.current.success(uploaded.storage === "ocs" ? "Logo uploaded to OCS." : "Logo uploaded.");
+      } catch (error) {
+        notifyRef.current.error(error?.data?.error || error?.message || "Failed to upload form logo.");
+      } finally {
+        setUploadingLogo(false);
+        if (event.target) event.target.value = "";
+      }
+      return;
+    }
 
 
 
@@ -17379,9 +17424,12 @@ export default function WebForms({ scope = "generic" }) {
                     <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowEmbed(true); }}>Embed</button>
                     <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowPreview(true); }}>Preview</button>
                     <button type="button" className="btn-secondary wf-danger-action" onClick={() => deleteForm(form)}><Trash2 size={15} style={{ marginRight: 6, verticalAlign: "middle" }} />Delete</button>
+                    {canViewFormLeads && <button type="button" className="btn-secondary" onClick={() => setLeadsForm(form)}>View All Leads</button>}
                     {isGenericScope && canManageLandingForm ? (
                       String(landingFormId) === String(form.id) ? (
-                        <span className="wf-status-pill active wf-tip" data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">On landing page</span>
+                        <span className="wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 8 }} data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">
+                          On landing page<CheckCircle2 size={20} aria-hidden="true" style={{ color: "var(--success-color)", flexShrink: 0 }} />
+                        </span>
                       ) : (
                         <label className="wf-landing-checkbox wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} data-tip={`Use ${form.name} as the public landing page form`} title={`Use this form in landing page: ${form.name}`}>
                           <input type="checkbox" checked={String(landingFormId) === String(form.id)} disabled={settingLandingFormId === form.id} onChange={() => setAsLandingForm(form)} aria-label={`Use this form in landing page: ${form.name}`} />
@@ -17397,6 +17445,7 @@ export default function WebForms({ scope = "generic" }) {
         </section>
       ) : null}
 
+      {canViewFormLeads && leadsForm && <WebFormLeadsModal key={leadsForm.id} form={leadsForm} onClose={() => setLeadsForm(null)} />}
       {builderOpen ? (
         <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
   <main style={{ display: "grid", gap: 16, minWidth: 0 }}>
@@ -17458,8 +17507,8 @@ export default function WebForms({ scope = "generic" }) {
 
                         <input ref={logoUploadRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleLogoUpload} />
                       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                   <button type="button" className="btn-secondary" onClick={() => logoUploadRef.current?.click()}>
-                     <Upload size={16} style={{ marginRight: 6, verticalAlign: "middle" }} /> Upload
+                   <button type="button" className="btn-secondary" disabled={uploadingLogo} onClick={() => logoUploadRef.current?.click()}>
+                     <Upload size={16} style={{ marginRight: 6, verticalAlign: "middle" }} /> {uploadingLogo ? "Uploading..." : "Upload"}
                         </button>
                    {selectedForm.style.logoUrl ? <button type="button" className="btn-secondary" onClick={() => applyDraft({ style: { ...selectedForm.style, logoUrl: "" } })}>Remove</button> : null}
                  </div>
@@ -17667,7 +17716,7 @@ export default function WebForms({ scope = "generic" }) {
               <button type="button" className="btn-secondary" onClick={() => setShowPreview(false)}><X size={16} /></button>
             </div>
             <div style={{ padding: 16 }}>
-              <iframe title="Web form preview" src={previewSrc} style={{ width: "100%", border: 0, minHeight: 820, background: "transparent" }} />
+              <iframe ref={previewFrameRef} title="Web form preview" src={previewSrc} style={{ width: "100%", height: "auto", minHeight: 0, border: 0, display: "block", background: "transparent" }} />
             </div>
           </div>
         </div>

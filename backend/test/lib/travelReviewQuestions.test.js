@@ -67,3 +67,27 @@ describe("travelReviewQuestions — validateSubmission", () => {
     expect(r.clean.highlight.length).toBe(2000);
   });
 });
+
+describe("travelReviewQuestions — parent review", () => {
+  it("builds the short parent form", () => {
+    expect(q.buildParentForm("Darjeeling")).toEqual(expect.objectContaining({
+      formTitle: "How was your trip to Darjeeling?",
+      fields: expect.arrayContaining([
+        expect.objectContaining({ id: "rating", type: "rating", max: 5 }),
+        expect.objectContaining({ id: "experience", type: "text", required: true }),
+      ]),
+    }));
+  });
+
+  it("requires one 1–5 rating and a non-empty experience", () => {
+    const result = q.validateParentSubmission({ rating: 4, experience: "  Smooth and enjoyable trip.  " });
+    expect(result).toMatchObject({ ok: true, overallRating: 4, clean: { parent_rating: 4, experience: "Smooth and enjoyable trip." } });
+  });
+
+  it("rejects ratings outside 1–5 and blank experience", () => {
+    const result = q.validateParentSubmission({ rating: 6, experience: "   " });
+    expect(result.ok).toBe(false);
+    expect(result.errors.rating).toBeTruthy();
+    expect(result.errors.experience).toBeTruthy();
+  });
+});

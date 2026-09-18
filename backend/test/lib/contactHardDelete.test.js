@@ -37,6 +37,7 @@ describe("contactHardDelete", () => {
       data: { teacherContactId: null },
     });
     expect(tx.activity.deleteMany).toHaveBeenCalledWith({ where: { contactId: 42 } });
+    expect(tx.tmcParentDocument.deleteMany).toHaveBeenCalledWith({ where: { parentContactId: 42 } });
     expect(tx.contact.deleteMany).toHaveBeenNthCalledWith(1, { where: { id: 42 } });
     expect(tx.contact.deleteMany).toHaveBeenNthCalledWith(2, { where: { id: 43 } });
   });
@@ -54,5 +55,17 @@ describe("contactHardDelete", () => {
 
     await expect(hardDeleteContact(db, 91)).resolves.toBe(1);
     expect(tx.contact.deleteMany).toHaveBeenCalledWith({ where: { id: 91 } });
+  });
+
+  test("deletes the contact when optional TMC relations are absent from an older Prisma client", async () => {
+    const tx = buildTransactionMock();
+    delete tx.tmcParentTrip;
+    const validationError = new Error("Unknown argument `teacherContactId`.");
+    validationError.name = "PrismaClientValidationError";
+    tx.tmcTrip.updateMany.mockRejectedValueOnce(validationError);
+    const db = { $transaction: vi.fn(async (callback) => callback(tx)) };
+
+    await expect(hardDeleteContact(db, 38)).resolves.toBe(1);
+    expect(tx.contact.deleteMany).toHaveBeenCalledWith({ where: { id: 38 } });
   });
 });

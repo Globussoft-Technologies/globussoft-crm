@@ -1,52 +1,11 @@
-/**
- * ContactDetail.jsx — contact-centric detail page (NOT to be confused with
- * ContactsDetail.jsx, which is a separate similar file used by a different
- * route). This page renders at /contacts/:id and is the generic CRM's
- * contact-drilldown view; it aggregates the contact's overview card,
- * deals snapshot, attachments, and activity timeline.
- *
- * Endpoints consumed:
- *   - GET    /api/contacts/:id              -> contact + nested deals + activities
- *   - GET    /api/contacts/:id/attachments  -> attachment list
- *   - POST   /api/uploads/images            -> batch image upload to S3
- *   - POST   /api/uploads/documents         -> batch document upload to S3
- *   - POST   /api/contacts/:id/attachments  -> persist uploaded attachment metadata
- *   - DELETE /api/contacts/attachments/:id  -> remove attachment
- *
- * Mock stability: fetchApi is a stable vi.fn() reference; the per-test
- * setup resets and re-implements via mockImplementation so the URL
- * dispatcher can swap branches. Per CLAUDE.md feedback rule, NEVER
- * recreate the mock object per call site.
- *
- * Contracts pinned:
- *   1. Loading state renders before the contact GET resolves.
- *   2. Header + email + phone render after contact load.
- *   3. Status chip + AI score chip render.
- *   4. Title-at-company subtitle renders ONLY when title or company set;
- *      the orphan-preposition guard (#189B) keeps the chip out when both
- *      are empty.
- *   5. Source line renders only when contact.source is set.
- *   6. Deals snapshot renders one row per deal with currency-aware money.
- *   7. Phone fallback "No phone number" renders when phone is empty.
- *   8. "Back to Contacts" link points to /contacts.
- *   9. Empty attachments shows "No files attached." copy.
- *  10. Attachment list renders one row per attachment with delete button.
- *  11. Clicking the Add button opens the upload picker; Cancel closes it.
- *  12. Submitting selected files uploads them to the shared S3 endpoints,
- *      then POSTs attachment metadata and re-fetches the attachment list.
- *  13. Clicking the trash button DELETEs the attachment and re-fetches.
- *  14. Empty activity timeline renders the "No activities recorded yet." copy.
- *  15. Activity timeline renders one row per activity with type chip.
- */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
-vi.mock("../utils/api", () => ({
+vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
-  getAuthToken: () => "test-token",
+  getAuthToken: () => 'test-token',
 }));
 
 const notifyObj = {
@@ -55,63 +14,53 @@ const notifyObj = {
   info: vi.fn(),
   confirm: vi.fn(() => Promise.resolve(true)),
 };
-vi.mock("../utils/notify", () => ({
-  useNotify: () => notifyObj,
-}));
+vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
-import ContactDetail from "../pages/ContactDetail";
+import ContactDetail from '../pages/ContactDetail';
+import ContactDetailsDrawer from '../components/contact/ContactDetailsDrawer';
+import { AuthContext } from '../appContexts';
 
 const BASE_CONTACT = {
   id: 42,
-  name: "Priya Sharma",
-  email: "priya.sharma@example.com",
-  phone: "+91-9000000001",
-  title: "VP Marketing",
-  company: "Acme Retail",
-  status: "Customer",
+  name: 'Priya Sharma',
+  email: 'priya.sharma@example.com',
+  phone: '+91-9000000001',
+  title: 'VP Marketing',
+  company: 'Acme Retail',
+  status: 'Customer',
   aiScore: 85,
-  source: "Website",
+  source: 'Website',
   deals: [
-    { id: 11, title: "Q3 Renewal", amount: 145000, currency: "INR", stage: "won" },
-    { id: 12, title: "Add-on package", amount: 60000, currency: "INR", stage: "negotiation" },
+    { id: 11, title: 'Q3 Renewal', amount: 145000, currency: 'INR', stage: 'won' },
+    { id: 12, title: 'Add-on package', amount: 60000, currency: 'INR', stage: 'negotiation' },
   ],
   activities: [
-    { id: 1, type: "Email", description: "Sent renewal quote", createdAt: "2026-05-20T10:00:00.000Z" },
-    { id: 2, type: "Call", description: "Followed up on quote", createdAt: "2026-05-22T11:30:00.000Z" },
+    { id: 1, type: 'Email', description: 'Sent renewal quote', createdAt: '2026-05-20T10:00:00.000Z' },
+    { id: 2, type: 'Call', description: 'Followed up on quote', createdAt: '2026-05-22T11:30:00.000Z' },
   ],
 };
 
-const ATTACHMENTS = [
-  { id: 501, filename: "renewal-quote.pdf", fileUrl: "https://files.example.com/501", createdAt: "2026-05-20T10:00:00.000Z" },
-  { id: 502, filename: "signed-msa.pdf", fileUrl: "https://files.example.com/502", createdAt: "2026-05-21T10:00:00.000Z" },
-];
-
-/**
- * Build a fetchApi mock dispatcher. Pass `overrides` to swap branches.
- */
 function makeFetchImpl(overrides = {}) {
-  const o = {
-    contact: { kind: "ok", data: BASE_CONTACT },
-    attachments: { kind: "ok", data: ATTACHMENTS },
-    upload: { kind: "ok", data: { id: 999 } },
-    uploadDocuments: { kind: "ok", data: { success: true, count: 1, urls: [{ url: "https://s3.example.com/msa-2026.pdf", fileName: "msa-2026.pdf", size: 7 }] } },
-    uploadImages: { kind: "ok", data: { success: true, count: 1, urls: [{ url: "https://s3.example.com/screenshot.png", fileName: "screenshot.png", size: 9 }] } },
-    delete: { kind: "ok", data: { ok: true } },
+  const options = {
+    contact: { kind: 'ok', data: BASE_CONTACT },
+    activities: { kind: 'ok', data: { data: BASE_CONTACT.activities, total: 2, page: 1, limit: 10, totalPages: 1 } },
+    sms: { kind: 'ok', data: [{ id: 601, contactId: 42, body: 'Hello from SMS', direction: 'INBOUND', fromNumber: '+919000000002', contactName: 'Priya Sharma', createdAt: '2026-05-23T10:00:00.000Z' }] },
+    emailThreads: { kind: 'ok', data: [{ subject: 'Renewal', messages: [{ id: 701, contactId: 42, body: 'Sent renewal quote', direction: 'OUTBOUND', to: BASE_CONTACT.email, contactName: 'Priya Sharma', createdAt: '2026-05-22T10:00:00.000Z' }] }] },
+    staff: { kind: 'ok', data: [] },
     ...overrides,
   };
-  const handle = (slot) => {
-    if (slot.kind === "throw") return Promise.reject(slot.error || new Error("boom"));
+  const resolve = (slot) => {
+    if (slot.kind === 'throw') return Promise.reject(slot.error || new Error('boom'));
     return Promise.resolve(slot.data);
   };
   return (url, opts) => {
-    const method = (opts && opts.method) || "GET";
-    if (/^\/api\/contacts\/\d+$/.test(url) && method === "GET") return handle(o.contact);
-    if (/^\/api\/contacts\/\d+\/attachments$/.test(url) && method === "GET") return handle(o.attachments);
-    if (url === "/api/uploads/documents" && method === "POST") return handle(o.uploadDocuments);
-    if (url === "/api/uploads/images" && method === "POST") return handle(o.uploadImages);
-    if (/^\/api\/contacts\/\d+\/attachments$/.test(url) && method === "POST") return handle(o.upload);
-    if (/^\/api\/contacts\/attachments\/\d+$/.test(url) && method === "DELETE") return handle(o.delete);
-    return Promise.resolve({});
+    const method = opts?.method || 'GET';
+    if (url === '/api/staff?fields=summary') return resolve(options.staff);
+    if (/^\/api\/contacts\/\d+\/activities\?/.test(url)) return resolve(options.activities);
+    if (/^\/api\/sms\/messages\?/.test(url)) return resolve(options.sms);
+    if (url === '/api/email/threads') return resolve(options.emailThreads);
+    if (/^\/api\/contacts\/\d+$/.test(url) && method === 'GET') return resolve(options.contact);
+    return Promise.resolve([]);
   };
 }
 
@@ -124,270 +73,161 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42 } = {}) {
+function renderPage({ contactId = 42, state } = {}) {
   return render(
-    <MemoryRouter initialEntries={[`/contacts/${contactId}`]}>
+    <MemoryRouter initialEntries={[state ? { pathname: `/contacts/${contactId}`, state } : `/contacts/${contactId}`]}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/contacts" element={<div data-testid="contacts-list-stub">Contacts list stub</div>} />
+        <Route path="/travel/diagnostics" element={<div data-testid="diagnostics-list-stub">Diagnostics list stub</div>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
 }
 
-describe("ContactDetail — page contract", () => {
-  it("renders the Loading… placeholder before the contact GET resolves", () => {
-    // Return a never-resolving promise for contact so the loading branch sticks.
-    fetchApiMock.mockImplementation((url) => {
-      if (/^\/api\/contacts\/\d+$/.test(url) && !url.includes("attachments")) return new Promise(() => {});
-      return Promise.resolve([]);
+async function getProfile() {
+  return within(await screen.findByLabelText('Contact profile'));
+}
+
+describe('ContactDetail — current profile contract', () => {
+  it('renders the loading placeholder before the contact GET resolves', () => {
+    fetchApiMock.mockImplementation((url) => (
+      /^\/api\/contacts\/\d+$/.test(url) ? new Promise(() => {}) : Promise.resolve([])
+    ));
+    renderPage();
+    expect(screen.getByText('Loading contact…')).toBeInTheDocument();
+  });
+
+  it('renders the contact header, contact links, score, and current profile tabs', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    const profile = await getProfile();
+    expect(profile.getByText('Priya Sharma', { exact: true })).toBeInTheDocument();
+    expect(profile.getAllByRole('link', { name: BASE_CONTACT.email }).length).toBeGreaterThan(0);
+    expect(profile.getAllByRole('link', { name: BASE_CONTACT.phone }).length).toBeGreaterThan(0);
+    expect(profile.getByText('85', { exact: true })).toBeInTheDocument();
+    expect(profile.getByText(/VP Marketing.*Acme Retail/)).toBeInTheDocument();
+    for (const tab of ['Overview', 'Contact details', 'Conversation', 'Activities']) {
+      expect(profile.getByRole('button', { name: tab })).toBeInTheDocument();
+    }
+  });
+
+  it('uses the originating diagnostics URL when closing the profile', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ state: { backTo: '/travel/diagnostics?page=2' } });
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
+    expect(await screen.findByTestId('diagnostics-list-stub')).toBeInTheDocument();
+  });
+
+  it('returns to Contacts when the profile has no originating route', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
+    expect(await screen.findByTestId('contacts-list-stub')).toBeInTheDocument();
+  });
+
+  it('shows the current lifecycle stage and score for the contact', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    const profile = await getProfile();
+    expect(profile.getByText('Qualified', { exact: true })).toBeInTheDocument();
+    expect(profile.getByText('85', { exact: true })).toBeInTheDocument();
+  });
+
+  it('does not render an orphan title/company separator when both values are empty', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, title: '', company: '' } },
+    }));
+    renderPage();
+    const profile = await getProfile();
+    expect(profile.getByText('Priya Sharma', { exact: true })).toBeInTheDocument();
+    expect(profile.queryByText(/VP Marketing/)).toBeNull();
+    expect(profile.queryByText(/Acme Retail/)).toBeNull();
+  });
+
+  it('shows the empty phone value in the overview when no phone is available', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, phone: '' } },
+    }));
+    renderPage();
+    const profile = await getProfile();
+    expect(profile.queryByRole('link', { name: BASE_CONTACT.phone })).toBeNull();
+    expect(profile.getAllByText('Not available').length).toBeGreaterThan(0);
+  });
+
+  it('renders the contact deals in the overview', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    const profile = await getProfile();
+    expect(profile.getByText('Q3 Renewal')).toBeInTheDocument();
+    expect(profile.getByText('Add-on package')).toBeInTheDocument();
+    expect(profile.getAllByRole('button', { name: 'Add deal' }).length).toBeGreaterThan(0);
+  });
+
+  it('renders actual SMS and email messages in the Conversation tab with the person name', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Conversation' }));
+    expect(await profile.findByText('Conversation (2)')).toBeInTheDocument();
+    expect(profile.getByText('Hello from SMS')).toBeInTheDocument();
+    expect(profile.getByText('Sent renewal quote')).toBeInTheDocument();
+    expect(profile.getAllByText('Priya Sharma', { exact: true }).length).toBeGreaterThan(0);
+    expect(profile.queryByRole('button', { name: /WhatsApp/i })).toBeNull();
+  });
+
+  it('keeps activities separate and paginated from conversations', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Activities' }));
+    expect(await profile.findByText('Activities (2)')).toBeInTheDocument();
+    expect(profile.getByText('Sent renewal quote')).toBeInTheDocument();
+    expect(profile.getByText('Followed up on quote')).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts/42/activities?page=1&limit=10',
+      expect.objectContaining({ silent: true }),
+    );
+  });
+
+  it('shows the empty activity state when the activity API returns no records', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      activities: { kind: 'ok', data: { data: [], total: 0, page: 1, limit: 10, totalPages: 1 } },
+    }));
+    renderPage();
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Activities' }));
+    expect(await profile.findByText('No activities recorded yet.')).toBeInTheDocument();
+  });
+});
+
+describe('Generic CRM contact tags', () => {
+  it('selects an existing tag and creates a new tag without duplicates', async () => {
+    const saveTags = vi.fn().mockResolvedValue(undefined);
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      if (url === '/api/contacts/tags' && options.method === 'POST') return Promise.resolve({ name: 'Renewal', color: '#db2777' });
+      if (url === '/api/contacts/tags') return Promise.resolve({ tags: [{ name: 'VIP', color: '#2563eb' }, { name: 'Prospect', color: '#059669' }] });
+      return Promise.resolve({});
     });
-    renderPage();
-    expect(screen.getByText(/Loading\.\.\./)).toBeTruthy();
-  });
-
-  it("renders the contact name, email, and phone after the GET resolves", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    renderPage();
-    expect(await screen.findByText(/Priya Sharma/)).toBeTruthy();
-    expect(screen.getByText(/priya\.sharma@example\.com/)).toBeTruthy();
-    expect(screen.getByText(/\+91-9000000001/)).toBeTruthy();
-  });
-
-  it("returns to Diagnostics when opened from a diagnostic entry", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
     render(
-      <MemoryRouter initialEntries={[{
-        pathname: '/contacts/42',
-        state: { backTo: '/travel/diagnostics?subBrand=tmc&page=2', backLabel: 'Back to diagnostics' },
-      }]}>
-        <Routes>
-          <Route path="/contacts/:id" element={<ContactDetail />} />
-        </Routes>
-      </MemoryRouter>,
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer inline genericTagsEnabled contact={{ ...BASE_CONTACT, tags: ['VIP'] }} onFieldSave={saveTags} />
+      </AuthContext.Provider>,
     );
 
-    const backLink = await screen.findByRole('link', { name: /Back to diagnostics/i });
-    expect(backLink).toHaveAttribute('href', '/travel/diagnostics?subBrand=tmc&page=2');
-  });
+    fireEvent.click(await screen.findByRole('button', { name: '+ Add tag' }));
+    const picker = await screen.findByRole('dialog', { name: 'Tag selector' });
+    const vipLabel = within(picker).getByText('VIP', { exact: true });
+    expect(vipLabel.closest('button')).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(within(picker).getByText('Prospect', { exact: true }));
+    fireEvent.change(within(picker).getByRole('textbox', { name: 'New tag name' }), { target: { value: 'Renewal' } });
+    fireEvent.click(within(picker).getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/tags', expect.objectContaining({ method: 'POST' })));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Apply tags' }));
 
-  it("renders the status chip and AI score chip", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    renderPage();
-    expect(await screen.findByText(/Customer/)).toBeTruthy();
-    expect(screen.getByText(/85\/100/)).toBeTruthy();
-  });
-
-  it("renders the title-at-company subtitle when both are set", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    renderPage();
-    // The subtitle concatenates "VP Marketing at Acme Retail" — match any
-    // node containing both halves (jsx whitespace between spans may split).
-    await waitFor(() => {
-      const matches = screen.queryAllByText((_, node) => {
-        if (!node) return false;
-        const txt = node.textContent || "";
-        return /VP Marketing/.test(txt) && / at /.test(txt) && /Acme Retail/.test(txt);
-      });
-      expect(matches.length).toBeGreaterThan(0);
-    });
-  });
-
-  it("omits the title-at-company subtitle when BOTH title and company are empty (#189B)", async () => {
-    fetchApiMock.mockImplementation(
-      makeFetchImpl({
-        contact: { kind: "ok", data: { ...BASE_CONTACT, title: "", company: "" } },
-      }),
-    );
-    renderPage();
-    await screen.findByText(/Priya Sharma/);
-    // The orphan-preposition guard: no " at " separator should leak into the DOM.
-    // Use a regex that requires the standalone " at " token (with spaces).
-    expect(screen.queryByText(/ at /)).toBeNull();
-  });
-
-  it("renders the source line only when contact.source is set", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    const { unmount } = renderPage();
-    expect(await screen.findByText(/Source: Website/)).toBeTruthy();
-    unmount();
-
-    fetchApiMock.mockReset();
-    fetchApiMock.mockImplementation(
-      makeFetchImpl({ contact: { kind: "ok", data: { ...BASE_CONTACT, source: null } } }),
-    );
-    renderPage();
-    await screen.findByText(/Priya Sharma/);
-    expect(screen.queryByText(/Source:/)).toBeNull();
-  });
-
-  it("renders the phone fallback when phone is empty", async () => {
-    fetchApiMock.mockImplementation(
-      makeFetchImpl({ contact: { kind: "ok", data: { ...BASE_CONTACT, phone: "" } } }),
-    );
-    renderPage();
-    expect(await screen.findByText(/No phone number/)).toBeTruthy();
-  });
-
-  it("renders the deals snapshot with one row per deal", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    renderPage();
-    expect(await screen.findByText(/Q3 Renewal/)).toBeTruthy();
-    expect(screen.getByText(/Add-on package/)).toBeTruthy();
-    expect(screen.getByText(/Deals \(2\)/)).toBeTruthy();
-  });
-
-  it("renders the Back to Contacts link pointing at /contacts", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    renderPage();
-    const link = (await screen.findByText(/Back to Contacts/)).closest("a");
-    expect(link).toBeTruthy();
-    expect(link.getAttribute("href")).toBe("/contacts");
-  });
-
-  it("renders the empty attachments copy when none exist", async () => {
-    fetchApiMock.mockImplementation(
-      makeFetchImpl({ attachments: { kind: "ok", data: [] } }),
-    );
-    renderPage();
-    await screen.findByText(/Priya Sharma/);
-    expect(await screen.findByText(/No files attached\./)).toBeTruthy();
-    expect(screen.getByText(/Files \(0\)/)).toBeTruthy();
-  });
-
-  it("renders an attachment row per attachment with file name link", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    renderPage();
-    expect(await screen.findByText(/renewal-quote\.pdf/)).toBeTruthy();
-    expect(screen.getByText(/signed-msa\.pdf/)).toBeTruthy();
-    expect(screen.getByText(/Files \(2\)/)).toBeTruthy();
-    const firstLink = screen.getByText(/renewal-quote\.pdf/).closest("a");
-    expect(firstLink.getAttribute("href")).toBe("https://files.example.com/501");
-  });
-
-  it("opens the upload picker when Add is clicked and closes via Cancel", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByText(/Priya Sharma/);
-
-    // Picker is absent before Add is clicked.
-    expect(screen.queryByLabelText(/Upload files/)).toBeNull();
-
-    const addBtn = screen.getByRole("button", { name: /Add/ });
-    await user.click(addBtn);
-
-    expect(await screen.findByLabelText(/Upload files/)).toBeTruthy();
-
-    const cancelBtn = screen.getByRole("button", { name: /Cancel/ });
-    await user.click(cancelBtn);
-
-    await waitFor(() => {
-      expect(screen.queryByLabelText(/Upload files/)).toBeNull();
-    });
-  });
-
-  it("submitting selected files uploads to S3, persists attachment metadata, and re-fetches the list", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByText(/Priya Sharma/);
-
-    await user.click(screen.getByRole("button", { name: /Add/ }));
-    const input = await screen.findByLabelText(/Upload files/);
-    const file = new File(["1234567"], "msa-2026.pdf", { type: "application/pdf" });
-    await user.upload(input, file);
-
-    const beforeCalls = fetchApiMock.mock.calls.length;
-    await user.click(screen.getByRole("button", { name: /^Upload$/ }));
-
-    await waitFor(() => {
-      const uploadCall = fetchApiMock.mock.calls.find(
-        (c) => c[0] === "/api/uploads/documents" && c[1] && c[1].method === "POST",
-      );
-      expect(uploadCall).toBeTruthy();
-      expect(uploadCall[1].body).toBeInstanceOf(FormData);
-    });
-
-    await waitFor(() => {
-      const postCall = fetchApiMock.mock.calls.find(
-        (c) => c[0] === "/api/contacts/42/attachments" && c[1] && c[1].method === "POST",
-      );
-      expect(postCall).toBeTruthy();
-      const body = JSON.parse(postCall[1].body);
-      expect(body.filename).toBe("msa-2026.pdf");
-      expect(body.fileUrl).toBe("https://s3.example.com/msa-2026.pdf");
-      expect(body.mimeType).toBe("application/pdf");
-    });
-
-    await waitFor(() => {
-      const refetch = fetchApiMock.mock.calls
-        .slice(beforeCalls)
-        .filter((c) => c[0] === "/api/contacts/42/attachments" && (!c[1] || c[1].method === undefined || c[1].method === "GET"));
-      expect(refetch.length).toBeGreaterThan(0);
-    });
-  });
-
-  it("clicking the trash button DELETEs the attachment and re-fetches the list", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByText(/renewal-quote\.pdf/);
-
-    // Find the row's delete button. The row contains the filename anchor and a trash button.
-    const row = screen.getByText(/renewal-quote\.pdf/).closest("div");
-    expect(row).toBeTruthy();
-    // The trash button is the only <button> in that attachment row.
-    const trashBtn = row.parentElement.querySelector("button");
-    expect(trashBtn).toBeTruthy();
-
-    const beforeCalls = fetchApiMock.mock.calls.length;
-    await user.click(trashBtn);
-
-    await waitFor(() => {
-      const delCall = fetchApiMock.mock.calls.find(
-        (c) => /^\/api\/contacts\/attachments\/\d+$/.test(c[0]) && c[1] && c[1].method === "DELETE",
-      );
-      expect(delCall).toBeTruthy();
-      expect(delCall[0]).toBe("/api/contacts/attachments/501");
-    });
-    // Re-fetch should have followed the delete.
-    await waitFor(() => {
-      const refetch = fetchApiMock.mock.calls
-        .slice(beforeCalls)
-        .filter((c) => c[0] === "/api/contacts/42/attachments" && (!c[1] || c[1].method === undefined || c[1].method === "GET"));
-      expect(refetch.length).toBeGreaterThan(0);
-    });
-  });
-
-  it("renders the empty activity timeline copy when no activities exist", async () => {
-    fetchApiMock.mockImplementation(
-      makeFetchImpl({ contact: { kind: "ok", data: { ...BASE_CONTACT, activities: [] } } }),
-    );
-    renderPage();
-    expect(await screen.findByText(/No activities recorded yet\./)).toBeTruthy();
-    expect(screen.getByText(/Activity Timeline \(0\)/)).toBeTruthy();
-  });
-
-  it("renders an activity timeline row per activity with the type chip", async () => {
-    fetchApiMock.mockImplementation(makeFetchImpl());
-    renderPage();
-    expect(await screen.findByText(/Sent renewal quote/)).toBeTruthy();
-    expect(screen.getByText(/Followed up on quote/)).toBeTruthy();
-    expect(screen.getByText(/Activity Timeline \(2\)/)).toBeTruthy();
-    // Each activity carries a type chip; "Email" + "Call" appear in this fixture.
-    expect(screen.getByText(/^Email$/)).toBeTruthy();
-    expect(screen.getByText(/^Call$/)).toBeTruthy();
-  });
-
-  it("tolerates the attachments GET returning a non-array without crashing", async () => {
-    // Source defensively coerces to [] when not array — pin that contract.
-    fetchApiMock.mockImplementation(
-      makeFetchImpl({ attachments: { kind: "ok", data: { error: "weird shape" } } }),
-    );
-    renderPage();
-    await screen.findByText(/Priya Sharma/);
-    // The empty-state copy stands in for the coerced [] outcome.
-    expect(await screen.findByText(/No files attached\./)).toBeTruthy();
+    await waitFor(() => expect(saveTags).toHaveBeenCalledWith({ key: 'tags' }, ['VIP', 'Prospect', 'Renewal']));
   });
 });

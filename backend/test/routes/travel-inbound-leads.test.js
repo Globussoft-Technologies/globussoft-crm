@@ -753,7 +753,7 @@ describe('POST /api/travel/inbound/leads/:channel — slice 9 dedup on ingest', 
 
   test('email match (phone absent) → 200 + action=merged via secondary key', async () => {
     // No phone-match candidates returned (findMany default is []).
-    prisma.contact.findUnique.mockResolvedValueOnce({
+    prisma.contact.findFirst.mockResolvedValueOnce({
       id: 779,
       phone: null,
       email: 'duplicate@example.com',
@@ -773,9 +773,9 @@ describe('POST /api/travel/inbound/leads/:channel — slice 9 dedup on ingest', 
     expect(res.body.contactId).toBe(779);
     expect(prisma.contact.create).not.toHaveBeenCalled();
     // Verify the compound finder shape (PRD §3.2.2's email+tenantId key).
-    expect(prisma.contact.findUnique).toHaveBeenCalledWith(
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { email_tenantId: { email: 'duplicate@example.com', tenantId: 42 } },
+        where: { email: 'duplicate@example.com', tenantId: 42, deletedAt: null },
       }),
     );
   });
@@ -1549,6 +1549,7 @@ describe('POST /inbound/leads/:channel — G002 idempotency', () => {
     // The race-recovery findFirst (separate mock-call sequence) returns the winner.
     prisma.contact.findFirst
       .mockResolvedValueOnce(null) // initial idemHit probe — no hit pre-create
+      .mockResolvedValueOnce(null) // email dedup probe — no existing lead
       .mockResolvedValueOnce({ id: 8888 }); // race-recovery lookup
 
     const res = await request(makeApp())
@@ -1598,7 +1599,7 @@ describe('POST /inbound/leads/:channel — G006 envelope', () => {
 
   test('merged branch envelope shape (cross-channel) — action=merged', async () => {
     // Email-only dedup (no phone), prior contact in webform channel
-    prisma.contact.findUnique.mockResolvedValueOnce({
+    prisma.contact.findFirst.mockResolvedValueOnce({
       id: 333,
       phone: null,
       email: 'merged@example.com',
@@ -1620,7 +1621,7 @@ describe('POST /inbound/leads/:channel — G006 envelope', () => {
   });
 
   test('merged branch same-channel → action=touchpoint_appended', async () => {
-    prisma.contact.findUnique.mockResolvedValueOnce({
+    prisma.contact.findFirst.mockResolvedValueOnce({
       id: 333,
       phone: null,
       email: 'same@example.com',

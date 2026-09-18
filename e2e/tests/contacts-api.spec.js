@@ -135,6 +135,7 @@ async function del(request, token, path) {
 // Push every contact id we create. afterAll hard-deletes them as admin;
 // already-removed rows simply return 404.
 const createdContactIds = [];
+const createdViewIds = [];
 
 test.afterAll(async ({ request }) => {
   const { token } = await getAdmin(request);
@@ -142,10 +143,42 @@ test.afterAll(async ({ request }) => {
   for (const id of createdContactIds) {
     await del(request, token, `/api/contacts/${id}`).catch(() => {});
   }
+  for (const id of createdViewIds) {
+    await del(request, token, `/api/contact-views/${id}`).catch(() => {});
+  }
 });
 
-// Email is globally unique on the Contact table (across tenants). Use the
-// RUN_TAG plus a random suffix to keep collisions out of repeated CI runs.
+test.describe('Contacts API — Generic tag catalog', () => {
+  test('catalog routes are registered at startup and persist tenant-scoped tags', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    test.skip(!token, 'admin token unavailable');
+    const tag = `${RUN_TAG}_catalog`;
+
+    const initial = await get(request, token, '/api/contacts/tags');
+    expect(initial.status()).toBe(200);
+    expect(Array.isArray((await initial.json()).tags)).toBe(true);
+
+    const created = await post(request, token, '/api/contacts/tags', { name: tag, color: '#2563eb' });
+    expect([200, 201]).toContain(created.status());
+    expect(await created.json()).toMatchObject({ name: tag, color: '#2563eb' });
+
+    const afterCreate = await get(request, token, '/api/contacts/tags');
+    expect(afterCreate.status()).toBe(200);
+    expect((await afterCreate.json()).tags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: tag, color: '#2563eb' }),
+    ]));
+
+    const cleanup = await request.delete(`${BASE_URL}/api/contacts/tags`, {
+      headers: headers(token),
+      data: { tag },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(cleanup.status()).toBe(200);
+  });
+});
+
+// Use the RUN_TAG plus a random suffix so application-level duplicate
+// detection remains deterministic across repeated CI runs.
 function uniqueEmail(label) {
   const rnd = Math.random().toString(36).slice(2, 8);
   return `e2e+${label}.${rnd}.${RUN_TAG.toLowerCase()}@example.com`;
@@ -614,6 +647,52 @@ test.describe('Contacts API — GET /', () => {
     if (a.length === 2 && b.length >= 1) {
       expect(b[0].id).not.toBe(a[0].id);
     }
+  });
+
+  test('paginated score filtering and sorting apply to the complete result set', async ({ request }) => {
+    const marker = `server-page-${Date.now()}`;
+    const low = await createContact(request, { label: `${marker}-low`, aiScore: 20 });
+    const tiedFirst = await createContact(request, { label: `${marker}-tie-a`, aiScore: 80 });
+    const tiedSecond = await createContact(request, { label: `${marker}-tie-b`, aiScore: 80 });
+    const { token } = await getAdmin(request);
+
+    const params = new URLSearchParams({
+      page: '1',
+      limit: '10',
+      q: marker,
+      scoreMin: '76',
+      scoreMax: '100',
+      sortBy: 'aiScore',
+      sortDirection: 'desc',
+    });
+    const res = await get(request, token, `/api/contacts?${params}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+
+    expect(body.total).toBe(2);
+    expect(body.data.map((contact) => contact.id)).toEqual([tiedSecond.id, tiedFirst.id]);
+    expect(body.data.some((contact) => contact.id === low.id)).toBe(false);
+  });
+
+  test('saved-view membership is tenant-validated and applied before pagination', async ({ request }) => {
+    const included = await createContact(request, { label: `view-in-${Date.now()}` });
+    const excluded = await createContact(request, { label: `view-out-${Date.now()}` });
+    const { token } = await getAdmin(request);
+    const createView = await post(request, token, '/api/contact-views', {
+      name: `${RUN_TAG} page-view-${Date.now()}`,
+      contactIds: [included.id],
+    });
+    const createViewText = await createView.text();
+    expect(createView.status(), createViewText).toBe(201);
+    const view = JSON.parse(createViewText);
+    createdViewIds.push(view.id);
+
+    const res = await get(request, token, `/api/contacts?page=1&limit=10&viewId=${view.id}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.total).toBe(1);
+    expect(body.data.map((contact) => contact.id)).toEqual([included.id]);
+    expect(body.data.some((contact) => contact.id === excluded.id)).toBe(false);
   });
 
   test('hard-deleted contacts are absent from the default list', async ({ request }) => {

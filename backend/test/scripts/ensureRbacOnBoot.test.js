@@ -181,6 +181,47 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
     expect(keys).toContain('TELECALLER');
   });
 
+  test('fresh wellness caller roles receive both appointment call modes', async () => {
+    await provisionTenantRbac(9, { vertical: 'wellness' });
+
+    const createdRoles = new Map(
+      mockPrisma.role.create.mock.calls.map((call, index) => [call[0].data.key, 100 + index]),
+    );
+
+    for (const roleKey of ['ADMIN', 'MANAGER', 'RECEPTIONIST', 'TELECALLER']) {
+      const roleId = createdRoles.get(roleKey);
+      const grants = mockPrisma.rolePermission.create.mock.calls
+        .filter((call) => call[0].data.roleId === roleId)
+        .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+
+      expect(grants, `${roleKey} should receive AI calling`).toContain('appointments.ai_call');
+      expect(grants, `${roleKey} should receive manual calling`).toContain('appointments.manual_call');
+    }
+  });
+
+  test('fresh generic and travel roles do not receive wellness call modes', async () => {
+    for (const [tenantId, vertical] of [[10, 'generic'], [11, 'travel']]) {
+      vi.clearAllMocks();
+      let idSeq = 100;
+      mockPrisma.role.findFirst.mockResolvedValue(null);
+      mockPrisma.rolePermission.findFirst.mockResolvedValue(null);
+      mockPrisma.userRole.findUnique.mockResolvedValue(null);
+      mockPrisma.userRole.count.mockResolvedValue(0);
+      mockPrisma.user.findMany.mockResolvedValue([]);
+      mockPrisma.role.create.mockImplementation(({ data }) => Promise.resolve({ id: idSeq++, ...data }));
+      mockPrisma.rolePermission.create.mockResolvedValue({});
+      mockPrisma.userRole.create.mockResolvedValue({});
+      mockPrisma.roleWidget.create.mockResolvedValue({});
+
+      await provisionTenantRbac(tenantId, { vertical });
+
+      const grants = mockPrisma.rolePermission.create.mock.calls
+        .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+      expect(grants).not.toContain('appointments.ai_call');
+      expect(grants).not.toContain('appointments.manual_call');
+    }
+  });
+
   test('legacy opts.isWellness === true behaves like vertical = wellness', async () => {
     // Back-compat: the older auth.js signup path passes `{ isWellness }`.
     // provisionTenantRbac maps true  'wellness'. The clinical roles
@@ -373,6 +414,40 @@ describe('MANAGER permission backfill - seed-on-creation only', () => {
     expect(managerPermCreates.length).toBeGreaterThan(0);
   });
 
+  test('fresh generic MANAGER receives generic page grants without delete access', async () => {
+    await provisionTenantRbac(202, { vertical: 'generic' });
+
+    const managerId = managerIdFromCalls();
+    const grants = mockPrisma.rolePermission.create.mock.calls
+      .filter((call) => call[0].data.roleId === managerId)
+      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+
+    expect(grants).toContain('cpq.read');
+    expect(grants).toContain('web_forms.write');
+    expect(grants).toContain('calendar.update');
+    expect(grants).toContain('forecasting.read');
+    expect(grants).toContain('quotas.read');
+    expect(grants).toContain('sequences.read');
+    expect(grants).toContain('settings.read');
+    expect(grants).not.toContain('cpq.delete');
+    expect(grants).not.toContain('patients.read');
+    expect(grants).not.toContain('itineraries.read');
+  });
+
+  test('generic manager additions do not leak through shared module names', async () => {
+    await provisionTenantRbac(203, { vertical: 'wellness' });
+
+    const managerId = managerIdFromCalls();
+    const grants = mockPrisma.rolePermission.create.mock.calls
+      .filter((call) => call[0].data.roleId === managerId)
+      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+
+    expect(grants).not.toContain('calendar.update');
+    expect(grants).not.toContain('forecasting.read');
+    expect(grants).not.toContain('sequences.read');
+    expect(grants).not.toContain('settings.read');
+  });
+
   test('existing MANAGER does NOT receive grants on subsequent boot', async () => {
     const PRE_EXISTING_MANAGER_ID = 555;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {
@@ -403,4 +478,3 @@ describe('MANAGER permission backfill - seed-on-creation only', () => {
     ).toHaveLength(0);
   });
 });
-

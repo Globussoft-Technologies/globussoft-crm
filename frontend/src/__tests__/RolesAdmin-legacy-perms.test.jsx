@@ -292,6 +292,38 @@ describe('Bug 2 — Delete button is disabled for system roles', () => {
 });
 
 describe('Bug 5 / Step-6 — Table badge count matches editor count', () => {
+  it('keeps Users and Permissions icons at a fixed size for different counts', async () => {
+    const roles = [0, 1, 2, 12].map((count, index) => ({
+      ...dirtyRoleFromList,
+      id: 100 + index,
+      key: `COUNT_${count}`,
+      name: `Count ${count}`,
+      userCount: count,
+      visiblePermissionCount: count,
+    }));
+    renderPage({ roles });
+
+    for (const count of [0, 1, 2, 12]) {
+      const usersBadge = await screen.findByRole('button', {
+        name: `View ${count} users in Count ${count}`,
+      });
+      const permissionsBadge = screen.getByRole('button', {
+        name: `View permissions for Count ${count}`,
+      });
+
+      for (const badge of [usersBadge, permissionsBadge]) {
+        const icon = badge.querySelector('svg');
+        expect(badge).toHaveStyle({ minWidth: '3.25rem', justifyContent: 'center' });
+        expect(icon).toHaveStyle({
+          width: '14px',
+          height: '14px',
+          minWidth: '14px',
+          flex: '0 0 14px',
+        });
+      }
+    }
+  });
+
   it('renders the visible count from the API (not the raw count) on the table badge', async () => {
     renderPage();
     // The dirty role has permissionCount=6 but visiblePermissionCount=3.
@@ -301,7 +333,7 @@ describe('Bug 5 / Step-6 — Table badge count matches editor count', () => {
     expect(badge.textContent).not.toMatch(/\b6\b/);
   });
 
-  it('does NOT render an inline "(+N hidden)" indicator or mention "hidden" in the tooltip', async () => {
+  it('does not disclose legacy permissions in the table or permissions editor', async () => {
     renderPage();
     const badge = await screen.findByRole('button', { name: /View permissions for Manager/i });
     // The chip was removed per the post-cleanup UI follow-up. The
@@ -309,12 +341,13 @@ describe('Bug 5 / Step-6 — Table badge count matches editor count', () => {
     // dropped along with the legacy-perms modal (no surface for the
     // admin to act on the hidden count, so naming it just confused
     // testers into thinking it was cross-tenant leakage).
-    expect(badge.textContent).toMatch(/3\s*\+3 hidden/i);
-    expect(badge.getAttribute('title')).toMatch(/3 visible permissions; 3 hidden legacy permissions/i);
+    expect(badge.textContent.trim()).toBe('3');
+    expect(badge.getAttribute('title')).toBe('3 permissions');
+    expect(badge.getAttribute('aria-label')).toBe('View permissions for Manager');
     fireEvent.click(badge);
-    expect(await screen.findByTestId('hidden-permissions-banner')).toHaveTextContent(
-      'patients.read, appointments.write, consents.delete',
-    );
+    expect(await screen.findByText('Permissions: Manager')).toBeInTheDocument();
+    expect(screen.queryByTestId('hidden-permissions-banner')).toBeNull();
+    expect(screen.queryByText(/hidden legacy|outside this tenant/i)).toBeNull();
   });
 });
 

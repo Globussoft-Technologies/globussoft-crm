@@ -170,6 +170,8 @@ jobs:
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \
+            tests/web-form-leads-api.spec.js \
+            tests/sales-teams-api.spec.js \
             tests/geocode-api.spec.js \
             tests/wellness-location-assignments-api.spec.js \
             tests/wellness-geofence-zones-api.spec.js \
@@ -285,6 +287,9 @@ jobs:
             tests/wellness-consent-archive-api.spec.js \
             tests/travel-diagnostics-api.spec.js \
             tests/travel-tmc-diagnostic-api.spec.js \
+            tests/tmc-parent-reviews-api.spec.js \
+            tests/tmc-parent-documents-api.spec.js \
+            tests/travel-tmc-parent-link-api.spec.js \
             tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
             tests/travel-itinerary-template-html-api.spec.js \
@@ -350,6 +355,7 @@ jobs:
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
             tests/landing-form-config-api.spec.js \
+            tests/tour-progress-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/callified-campaign-api.spec.js \
             tests/wellness-callified-api.spec.js \

@@ -27,6 +27,8 @@ import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
 import {
   filterSidebarPages,
+  canUseGenericSidebarPage,
+  getGenericAccessByPath,
   getGenericSidebarPages,
   mergePagesByPath,
 } from "../utils/sidebarSearch";
@@ -78,8 +80,9 @@ const ENTITY_SECTIONS = [
     border: "rgba(168, 85, 247, 0.25)",
     render: (p) => ({
       primary: p.label,
-      secondary: p.description || p.category || p.path,
-      to: p.path,
+      secondary: p.description || (p.parent ? `${p.parent} · ${p.path}` : p.category || p.path),
+      to: p.path || p.route,
+      actionTarget: p.actionTarget,
     }),
   },
   {
@@ -293,15 +296,29 @@ const ENTITY_SECTIONS = [
 function scorePageMatch(page, q) {
   if (!page || !q) return -1;
   const needle = q.toLowerCase();
-  const fields = [page.label, page.description, page.category, page.path];
+  const fields = [
+    page.label,
+    page.title,
+    page.name,
+    page.description,
+    page.parent,
+    page.category,
+    page.path,
+    page.route,
+  ];
   let best = -1;
   for (const f of fields) {
     if (!f) continue;
     const idx = f.toLowerCase().indexOf(needle);
     if (idx === -1) continue;
     // Earlier match in label > later match in description.
-    const fieldWeight =
-      f === page.label ? 0 : f === page.description ? 100 : 200;
+    const fieldWeight = f === page.label || f === page.title || f === page.name
+      ? 0
+      : f === page.description
+        ? 100
+        : f === page.parent
+          ? 150
+          : 200;
     const candidate = fieldWeight + idx;
     if (best === -1 || candidate < best) best = candidate;
   }
@@ -340,7 +357,7 @@ export default function Omnibar() {
     fetchApi("/api/pages/me", { silent: true })
       .then((res) => {
         if (cancelled) return;
-        setPagesIndex(Array.isArray(res?.pages) ? res.pages : []);
+        setPagesIndex(Array.isArray(res) ? res : (Array.isArray(res?.pages) ? res.pages : []));
       })
       .catch(() => {
         if (cancelled) return;
@@ -349,7 +366,7 @@ export default function Omnibar() {
     const onInvalidate = () => {
       fetchApi("/api/pages/me", { silent: true })
         .then((res) =>
-          setPagesIndex(Array.isArray(res?.pages) ? res.pages : []),
+            setPagesIndex(Array.isArray(res) ? res : (Array.isArray(res?.pages) ? res.pages : [])),
         )
         .catch(() => {});
     };
@@ -359,6 +376,22 @@ export default function Omnibar() {
       window.removeEventListener("sidebar:pages-changed", onInvalidate);
     };
   }, []);
+
+  // Generic Pages are queried server-side as the user types. This keeps the
+  // API's permission-filtered page catalog as the search source while the
+  // existing local merge remains available for Generic sidebar-only links.
+  useEffect(() => {
+    if (tenant?.vertical !== "generic" || query.trim().length < 2) return undefined;
+    let cancelled = false;
+    fetchApi(`/api/pages/me?q=${encodeURIComponent(query.trim())}`, { silent: true })
+      .then((res) => {
+        if (!cancelled && (Array.isArray(res) || Array.isArray(res?.pages))) setPagesIndex(Array.isArray(res) ? res : res.pages);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [query, tenant?.vertical]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -432,7 +465,9 @@ export default function Omnibar() {
   }, [query]);
 
   // Client-side page match. The catalog is small (~70 entries) so a linear
-  // scan + sort per keystroke is cheap.
+  // scan + sort per keystroke is cheap. Keep every matching sidebar page in
+  // the scrollable panel; an arbitrary eight-item cap made broad searches
+  // hide valid destinations.
   const visiblePagesIndex = useMemo(
     () => {
       const genericSidebarPages =
@@ -444,16 +479,33 @@ export default function Omnibar() {
               hasPermission,
             })
           : [];
-      const mergedPages = mergePagesByPath(pagesIndex, genericSidebarPages);
+      // The API catalog is normally permission-filtered, but keep the client
+      // side merge defensive: a stale response must not reintroduce a generic
+      // page that the current role cannot access (notably Settings).
+      const permissionFilteredPages =
+        tenant?.vertical === "generic"
+          ? pagesIndex.filter((page) => {
+              const spec = getGenericAccessByPath(page?.path);
+              return !spec || canUseGenericSidebarPage(spec, {
+                isAdmin,
+                isManager,
+                permissionsReady,
+                hasPermission,
+              });
+            })
+          : pagesIndex;
+      const mergedPages = mergePagesByPath(permissionFilteredPages, genericSidebarPages);
       return filterSidebarPages(mergedPages, {
         vertical: tenant?.vertical || null,
         activeSubBrand,
+        subBrandAccess: user?.subBrandAccess,
       });
     },
     [
       pagesIndex,
       tenant?.vertical,
       activeSubBrand,
+      user?.subBrandAccess,
       isAdmin,
       isManager,
       permissionsReady,
@@ -469,7 +521,7 @@ export default function Omnibar() {
       if (score >= 0) scored.push({ page: p, score });
     }
     scored.sort((a, b) => a.score - b.score);
-    return scored.slice(0, 8).map((s) => s.page);
+    return scored.map((s) => s.page);
   }, [query, visiblePagesIndex]);
 
   // Merge pages (client) + backend results into a single resultSet that the
@@ -503,8 +555,9 @@ export default function Omnibar() {
   }, [resultSet]);
 
   const handleRowClick = useCallback(
-    (to) => {
+    ({ to, actionTarget } = {}) => {
       if (to) navigate(to);
+      else if (actionTarget) document.querySelector(actionTarget)?.click();
       setIsFocused(false);
       inputRef.current?.blur();
     },
@@ -552,7 +605,7 @@ export default function Omnibar() {
     }
     if (e.key === "Enter" && activeIndex >= 0) {
       e.preventDefault();
-      handleRowClick(flatResults[activeIndex]?.rendered?.to);
+      handleRowClick(flatResults[activeIndex]?.rendered);
     }
   };
 
@@ -560,6 +613,7 @@ export default function Omnibar() {
     <div
       ref={containerRef}
       data-testid="omnibar-root"
+      data-tour="welcome-global-search"
       style={{
         position: "relative",
         // Left-aligned, fixed-but-comfortable width. Earlier shape was
@@ -744,7 +798,7 @@ export default function Omnibar() {
                           type="button"
                           role="option"
                           aria-selected={isActive}
-                          onClick={() => handleRowClick(r.to)}
+                          onClick={() => handleRowClick(r)}
                           style={{
                             display: "flex",
                             alignItems: "center",
@@ -880,5 +934,3 @@ export default function Omnibar() {
     </div>
   );
 }
-
-

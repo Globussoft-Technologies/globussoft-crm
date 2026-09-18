@@ -84,8 +84,24 @@ const MANAGER_PERMISSIONS = [
   'documents.read', 'documents.write', 'documents.update',
   'contracts.read', 'contracts.write', 'contracts.update',
   'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
+  'cpq.read', 'cpq.write', 'cpq.update',
+  'playbooks.read', 'playbooks.write', 'playbooks.update',
+  'territories.read', 'territories.write', 'territories.update',
+  'live_chat.read', 'live_chat.write', 'live_chat.update',
+  'support.read', 'support.write', 'support.update',
+  'sla.read', 'sla.write', 'sla.update',
+  'social.read', 'social.write', 'social.update',
+  'document_templates.read', 'document_templates.write', 'document_templates.update',
+  'lead_scoring.read', 'lead_scoring.write', 'lead_scoring.update',
+  'deal_insights.read', 'deal_insights.write', 'deal_insights.update',
+  'calendar.read', 'calendar.write', 'calendar.update',
+  'ab_tests.read', 'ab_tests.write', 'ab_tests.update',
+  'booking_pages.read', 'booking_pages.write', 'booking_pages.update',
+  'web_forms.read', 'web_forms.write', 'web_forms.update',
+  'forecasting.read', 'quotas.read', 'sequences.read', 'settings.read',
   'patients.read',
   'appointments.read', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   'services.read',
   'inventory.read',
   'pos.read',
@@ -186,6 +202,7 @@ const NURSE_PERMISSIONS = [
 const RECEPTIONIST_PERMISSIONS = [
   'patients.read', 'patients.write',
   'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   'book_appointment.write',
   'waitlist.read', 'waitlist.write',
   'my_appointments.read',
@@ -218,6 +235,7 @@ const TELECALLER_PERMISSIONS = [
   'leads.read', 'leads.write', 'leads.update',
   'contacts.read', 'contacts.write',
   'appointments.read', 'appointments.write', 'appointments.assign',
+  'appointments.ai_call', 'appointments.manual_call',
   'book_appointment.write',
   'waitlist.read', 'waitlist.write',
   'my_appointments.read',
@@ -259,8 +277,28 @@ function buildAdminPermissions() {
 // permissionCatalog.js, so granting it elsewhere would write a row that is
 // not even a valid permission for that tenant.
 const WELLNESS_ONLY_GRANTS = new Set([
+  'appointments.ai_call',
+  'appointments.manual_call',
   'call_history.read',
   'call_history.read_all',
+]);
+
+const GENERIC_ONLY_GRANTS = new Set([
+  'cpq.read', 'cpq.write', 'cpq.update',
+  'playbooks.read', 'playbooks.write', 'playbooks.update',
+  'territories.read', 'territories.write', 'territories.update',
+  'live_chat.read', 'live_chat.write', 'live_chat.update',
+  'support.read', 'support.write', 'support.update',
+  'sla.read', 'sla.write', 'sla.update',
+  'social.read', 'social.write', 'social.update',
+  'document_templates.read', 'document_templates.write', 'document_templates.update',
+  'lead_scoring.read', 'lead_scoring.write', 'lead_scoring.update',
+  'deal_insights.read', 'deal_insights.write', 'deal_insights.update',
+  'calendar.read', 'calendar.write', 'calendar.update',
+  'ab_tests.read', 'ab_tests.write', 'ab_tests.update',
+  'booking_pages.read', 'booking_pages.write', 'booking_pages.update',
+  'web_forms.read', 'web_forms.write', 'web_forms.update',
+  'forecasting.read', 'quotas.read', 'sequences.read', 'settings.read',
 ]);
 
 const ROLE_GRANTS = {
@@ -357,10 +395,11 @@ async function main() {
       // Strip wellness-only grants on every other vertical. Matched by role
       // KEY above, so a generic tenant with a hand-made DOCTOR role is caught
       // here too, not just the canonical MANAGER / USER pair.
-      const wanted =
-        tenant.vertical === 'wellness'
-          ? allGrants
-          : allGrants.filter((perm) => !WELLNESS_ONLY_GRANTS.has(perm));
+      const wanted = allGrants.filter((perm) => {
+        if (WELLNESS_ONLY_GRANTS.has(perm)) return tenant.vertical === 'wellness';
+        if (GENERIC_ONLY_GRANTS.has(perm)) return tenant.vertical === 'generic';
+        return true;
+      });
 
       const existing = await prisma.rolePermission.findMany({
         where: { roleId: role.id },

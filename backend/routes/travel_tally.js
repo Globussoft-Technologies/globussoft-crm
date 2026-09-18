@@ -49,9 +49,20 @@ const BUILT_IN_GROUP_MEMBERS = {
 };
 const TALLY_BANK_DETAILS_KEY = "travel.tally.bank_details";
 const TALLY_MASTER_DETAILS_KEY = "travel.tally.master_details";
+const COST_CENTRE_LIST_LIMIT = 50;
+const COST_CENTRE_SOURCE_LIMIT = 100;
+const COST_CENTRE_MAX_LIMIT = 100;
+const COST_CENTRE_MAX_PAGE = 1_000_000;
+const COST_CENTRE_SOURCE_TYPES = new Set(["ITINERARY", "TMC_TRIP", "QUOTE"]);
 const auditTally = (req, action, entityId, metadata = {}) =>
   writeAudit("TravelTally", action, entityId || 0, req.user.userId, req.travelTenant.id, metadata)
     .catch((error) => console.warn("[travel-tally] audit write failed:", error.message));
+
+const boundedPositiveInt = (value, fallback, maximum = COST_CENTRE_MAX_LIMIT) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, maximum);
+};
 
 const emptyBankDetails = {
   bankName: "",
@@ -472,8 +483,42 @@ router.post("/tally/ledger-groups", verifyToken, requireTravelTenant, requirePer
 
 router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermission("tally", "read"), async (req, res) => {
   try {
-    const rows = await prisma.travelTallyCostCentre.findMany({ where: { tenantId: req.travelTenant.id }, include: { itinerary: { select: { id: true, destination: true, subBrand: true } } }, orderBy: { createdAt: "desc" } });
-    res.json({ costCentres: rows });
+    const tenantId = req.travelTenant.id;
+    const page = boundedPositiveInt(req.query.page, 1, COST_CENTRE_MAX_PAGE);
+    const limit = boundedPositiveInt(req.query.limit, COST_CENTRE_LIST_LIMIT);
+    const sourcePage = boundedPositiveInt(req.query.sourcePage, 1, COST_CENTRE_MAX_PAGE);
+    const sourceLimit = boundedPositiveInt(req.query.sourceLimit, COST_CENTRE_SOURCE_LIMIT);
+    const rowSkip = (page - 1) * limit;
+    const sourceSkip = (sourcePage - 1) * sourceLimit;
+    const [rows, itineraries, tmcTrips, quotes] = await Promise.all([
+      prisma.travelTallyCostCentre.findMany({
+        where: { tenantId },
+        include: {
+          itinerary: { select: { id: true, destination: true, subBrand: true } },
+          tmcTrip: { select: { id: true, tripCode: true, destination: true } },
+          quote: { select: { id: true, subBrand: true, contact: { select: { name: true } } } },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip: rowSkip,
+        take: limit + 1,
+      }),
+      prisma.itinerary.findMany({ where: { tenantId }, select: { id: true, destination: true, subBrand: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
+      prisma.tmcTrip.findMany({ where: { tenantId }, select: { id: true, tripCode: true, destination: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
+      prisma.travelQuote.findMany({ where: { tenantId, itineraryId: null }, select: { id: true, subBrand: true, contact: { select: { name: true } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
+    ]);
+    const hasMoreRows = rows.length > limit;
+    const hasMoreSources = [itineraries, tmcTrips, quotes].some((items) => items.length > sourceLimit);
+    const sources = [
+      ...itineraries.slice(0, sourceLimit).map((row) => ({ sourceType: "ITINERARY", sourceId: row.id, code: `TRIP-${row.id}`, label: row.destination || "Itinerary", subBrand: row.subBrand })),
+      ...tmcTrips.slice(0, sourceLimit).map((row) => ({ sourceType: "TMC_TRIP", sourceId: row.id, code: `TMC-TRIP-${row.id}`, label: row.tripCode ? `${row.tripCode} - ${row.destination}` : row.destination || "TMC trip", subBrand: "tmc" })),
+      ...quotes.slice(0, sourceLimit).map((row) => ({ sourceType: "QUOTE", sourceId: row.id, code: `QUOTE-${row.id}`, label: row.contact?.name ? `Quote for ${row.contact.name}` : `Quote #${row.id}`, subBrand: row.subBrand })),
+    ];
+    res.json({
+      costCentres: rows.slice(0, limit),
+      sources,
+      pagination: { page, limit, hasMore: hasMoreRows },
+      sourcePagination: { page: sourcePage, limit: sourceLimit, hasMore: hasMoreSources },
+    });
   } catch (error) {
     console.error("[travel-tally] cost centres read failed:", error.message);
     res.status(500).json({ error: "Failed to load cost centres", code: "TALLY_COST_CENTRES_ERROR" });
@@ -482,16 +527,74 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
 
 router.post("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermission("tally", "update"), async (req, res) => {
   try {
-    const itineraryId = Number(req.body?.itineraryId);
-    if (!Number.isInteger(itineraryId) || itineraryId <= 0) return res.status(400).json({ error: "Valid itineraryId is required", code: "INVALID_ID" });
-    const itinerary = await prisma.itinerary.findFirst({ where: { id: itineraryId, tenantId: req.travelTenant.id }, select: { id: true, destination: true, subBrand: true } });
-    if (!itinerary) return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
-    const row = await ensureCostCentre({ tenantId: req.travelTenant.id, itineraryId, tripCode: `TRIP-${itinerary.id}`, destination: itinerary.destination });
-    await auditTally(req, "UPSERT_COST_CENTRE", row.id, { itineraryId, destination: itinerary.destination });
+    const sourceType = String(req.body?.sourceType || "ITINERARY").trim().toUpperCase();
+    const sourceId = Number(req.body?.sourceId || req.body?.itineraryId);
+    if (!Number.isInteger(sourceId) || sourceId <= 0 || !COST_CENTRE_SOURCE_TYPES.has(sourceType)) {
+      return res.status(400).json({ error: "Valid sourceType and sourceId are required", code: "INVALID_COST_CENTRE_SOURCE" });
+    }
+    const tenantId = req.travelTenant.id;
+    let source;
+    if (sourceType === "TMC_TRIP") {
+      source = await prisma.tmcTrip.findFirst({ where: { id: sourceId, tenantId }, select: { id: true, tripCode: true, destination: true } });
+    } else if (sourceType === "QUOTE") {
+      source = await prisma.travelQuote.findFirst({ where: { id: sourceId, tenantId, itineraryId: null }, select: { id: true, contact: { select: { name: true } } } });
+    } else {
+      source = await prisma.itinerary.findFirst({ where: { id: sourceId, tenantId }, select: { id: true, destination: true } });
+    }
+    if (!source) return res.status(404).json({ error: "Trip or quote not found", code: "COST_CENTRE_SOURCE_NOT_FOUND" });
+    const code = sourceType === "TMC_TRIP" ? `TMC-TRIP-${source.id}` : sourceType === "QUOTE" ? `QUOTE-${source.id}` : `TRIP-${source.id}`;
+    const destination = sourceType === "QUOTE" ? `Quote for ${source.contact?.name || `#${source.id}`}` : source.destination;
+    const row = await ensureCostCentre({ tenantId, sourceType, sourceId, tripCode: source.tripCode || code, destination });
+    await auditTally(req, "UPSERT_COST_CENTRE", row.id, { sourceType, sourceId, destination });
     res.status(201).json({ costCentre: row });
   } catch (error) {
     console.error("[travel-tally] cost centre save failed:", error.message);
     res.status(500).json({ error: "Failed to save cost centre", code: "TALLY_COST_CENTRE_ERROR" });
+  }
+});
+
+router.post("/tally/cost-centres/prepare-missing", verifyToken, requireTravelTenant, requirePermission("tally", "update"), async (req, res) => {
+  try {
+    const tenantId = req.travelTenant.id;
+    const sourceType = String(req.body?.sourceType || "").trim().toUpperCase();
+    const afterSourceId = req.body?.afterSourceId == null ? 0 : Number(req.body.afterSourceId);
+    const limit = boundedPositiveInt(req.body?.limit, COST_CENTRE_SOURCE_LIMIT);
+    if (!COST_CENTRE_SOURCE_TYPES.has(sourceType) || !Number.isInteger(afterSourceId) || afterSourceId < 0) {
+      return res.status(400).json({ error: "Valid sourceType and non-negative afterSourceId are required", code: "INVALID_COST_CENTRE_SOURCE" });
+    }
+
+    const sourceWhere = { tenantId, id: { gt: afterSourceId } };
+    let rows;
+    if (sourceType === "TMC_TRIP") {
+      rows = await prisma.tmcTrip.findMany({ where: sourceWhere, select: { id: true, tripCode: true, destination: true }, orderBy: { id: "asc" }, take: limit });
+    } else if (sourceType === "QUOTE") {
+      rows = await prisma.travelQuote.findMany({ where: { tenantId, id: { gt: afterSourceId }, itineraryId: null }, select: { id: true, contact: { select: { name: true } } }, orderBy: { id: "asc" }, take: limit });
+    } else {
+      rows = await prisma.itinerary.findMany({ where: sourceWhere, select: { id: true, destination: true }, orderBy: { id: "asc" }, take: limit });
+    }
+
+    const candidates = rows.map((row) => ({
+      sourceType,
+      sourceId: row.id,
+      tripCode: sourceType === "TMC_TRIP" ? row.tripCode || `TMC-TRIP-${row.id}` : sourceType === "QUOTE" ? `QUOTE-${row.id}` : `TRIP-${row.id}`,
+      destination: sourceType === "QUOTE" ? `Quote for ${row.contact?.name || `#${row.id}`}` : row.destination,
+    }));
+    const sourceIds = candidates.map((row) => row.sourceId);
+    const existing = sourceIds.length
+      ? await prisma.travelTallyCostCentre.findMany({ where: { tenantId, sourceType, sourceId: { in: sourceIds } }, select: { sourceType: true, sourceId: true } })
+      : [];
+    const existingKeys = new Set(existing.map((row) => `${row.sourceType}:${row.sourceId}`));
+    const missing = candidates.filter((row) => !existingKeys.has(`${row.sourceType}:${row.sourceId}`));
+    for (const candidate of missing) {
+      await ensureCostCentre({ tenantId, ...candidate });
+    }
+    const nextAfterSourceId = rows.at(-1)?.id || afterSourceId;
+    const done = rows.length < limit;
+    await auditTally(req, "PREPARE_MISSING_COST_CENTRES", 0, { sourceType, created: missing.length, processed: rows.length });
+    res.status(201).json({ sourceType, created: missing.length, processed: rows.length, nextAfterSourceId, done });
+  } catch (error) {
+    console.error("[travel-tally] prepare missing cost centres failed:", error.message);
+    res.status(500).json({ error: "Failed to prepare missing cost centres", code: "TALLY_COST_CENTRE_PREPARE_ERROR" });
   }
 });
 

@@ -40,6 +40,15 @@ require('node:module')._cache[libPath] = {
 
 import prisma from '../../lib/prisma.js';
 prisma.subscriptionPlan = { findMany: vi.fn() };
+prisma.tenant = prisma.tenant || {};
+prisma.webForm = prisma.webForm || {};
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenant.findFirst = vi.fn();
+prisma.webForm.findFirst = vi.fn();
+prisma.tenantSetting.findFirst = vi.fn();
+prisma.tenantSetting.findUnique = vi.fn();
+prisma.tenantSetting.updateMany = vi.fn();
+prisma.tenantSetting.upsert = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -63,6 +72,38 @@ beforeEach(() => {
   mockSuperAdminCancelPlatformSubscription.mockReset();
   mockGetSuperAdminRevenueSummary.mockReset();
   prisma.subscriptionPlan.findMany.mockReset();
+  prisma.tenant.findFirst.mockReset();
+  prisma.webForm.findFirst.mockReset();
+  prisma.tenantSetting.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.tenantSetting.upsert.mockReset().mockResolvedValue({ id: 1 });
+});
+
+describe('PUT /landing-form', () => {
+  test('uses the non-stripped siteTenantId and persists one synchronized public selection', async () => {
+    prisma.tenant.findFirst.mockResolvedValue({ id: 5 });
+    prisma.webForm.findFirst.mockResolvedValue({ id: 9, name: 'Public contact' });
+
+    const res = await request(makeApp())
+      .put('/api/super-admin/tenant-management/landing-form')
+      .send({ tenantId: 999, siteTenantId: 5, webFormId: 9, emails: ' Owner@Example.com ' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.tenant.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 5, vertical: 'generic', isActive: true },
+    }));
+    expect(prisma.webForm.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 9, tenantId: 5, scope: 'generic', isActive: true },
+    }));
+    expect(prisma.tenantSetting.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { key: 'landing.public.config' },
+    }));
+    const publicWrite = prisma.tenantSetting.upsert.mock.calls.at(-1)[0];
+    expect(JSON.parse(publicWrite.create.value)).toEqual({
+      tenantId: 5, activeWebFormId: 9, emails: ['owner@example.com'],
+    });
+  });
 });
 
 describe('GET /tenants', () => {

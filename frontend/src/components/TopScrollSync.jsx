@@ -59,7 +59,7 @@ const TopScrollSync = ({
       top.removeEventListener("scroll", onTopScroll);
       bottom.removeEventListener("scroll", onBottomScroll);
     };
-  }, []);
+  }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar]);
 
   useEffect(() => {
     if (scrollWidth !== undefined) return undefined;

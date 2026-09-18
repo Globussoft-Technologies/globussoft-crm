@@ -79,6 +79,22 @@ const { rankQuotes } = require("../lib/quoteRanker");
 const listProjection = require("../lib/listProjection");
 const ratehawkClient = require("../services/ratehawkClient");
 const bookingExpediaClient = require("../services/bookingExpediaClient");
+const { createTravelInvoiceWithNumber } = require("../lib/travelInvoiceNumber");
+const { ensureCostCentre } = require("../lib/travelTallyMasters");
+
+async function prepareQuoteCostCentre(tenantId, quote) {
+  if (!quote?.id) return null;
+  return ensureCostCentre({
+    tenantId,
+    sourceType: "QUOTE",
+    sourceId: quote.id,
+    tripCode: `QUOTE-${quote.id}`,
+    destination: `Quote for ${quote.contact?.name || `#${quote.id}`}`,
+  }).catch((error) => {
+    console.warn("[travel-quotes] Tally cost-centre auto-create failed:", error.message);
+    return null;
+  });
+}
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -2563,6 +2579,15 @@ router.post(
           status: "confirmed",
         },
       });
+      await ensureCostCentre({
+        tenantId: req.travelTenant.id,
+        sourceType: "TMC_TRIP",
+        sourceId: trip.id,
+        tripCode: trip.tripCode,
+        destination: trip.destination,
+      }).catch((error) => {
+        console.warn("[travel-quotes] Tally TMC cost-centre auto-create failed:", error.message);
+      });
       const result = { trip, alreadyCreated: false };
       if (!result.alreadyCreated) {
         await writeAudit(
@@ -2807,6 +2832,8 @@ router.post(
           tripDate: parsedTripDate,
         },
       });
+
+      await prepareQuoteCostCentre(req.travelTenant.id, created);
 
       await writeAudit(
         "TravelQuote",
@@ -3545,6 +3572,8 @@ router.post(
         },
       });
 
+      await prepareQuoteCostCentre(req.travelTenant.id, created);
+
       // Clone line items from source quote into the duplicate. Composite
       // quotes (with line items) are duplicated as a complete unit —
       // operators copying a TMC trip package across to RFU expect the
@@ -3853,41 +3882,23 @@ router.post(
         });
       }
 
-      // Generate invoiceNum (mirror nextInvoiceNum in travel_invoices.js).
-      const year = new Date().getFullYear();
-      const invoiceNum = await prisma.$transaction(async (tx) => {
-        const latest = await tx.travelInvoice.findFirst({
-          where: {
-            tenantId: req.travelTenant.id,
-            invoiceNum: { startsWith: `TINV-${year}-` },
-          },
-          orderBy: { invoiceNum: "desc" },
-          select: { invoiceNum: true },
-        });
-        const latestSerial = latest
-          ? parseInt(latest.invoiceNum.split("-")[2], 10)
-          : 0;
-        const next = String(latestSerial + 1).padStart(4, "0");
-        return `TINV-${year}-${next}`;
-      });
-
       // Default dueDate = today + 30 days; operator edits later on
       // the invoice surface before issuing.
       const dueDate = new Date(Date.now() + 30 * 86_400_000);
 
-      const created = await prisma.travelInvoice.create({
-        data: {
-          tenantId: req.travelTenant.id,
+      const created = await createTravelInvoiceWithNumber(
+        prisma,
+        req.travelTenant.id,
+        {
           subBrand: quote.subBrand,
           contactId: quote.contactId,
           quoteId: quote.id,
-          invoiceNum,
           status: "Draft",
           totalAmount: quote.totalAmount,
           currency: quote.currency,
           dueDate,
         },
-      });
+      );
 
       // Copy line items from the quote into the new invoice. The two
       // line tables have parallel shapes (lineType / description /

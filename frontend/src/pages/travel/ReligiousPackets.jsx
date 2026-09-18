@@ -223,7 +223,7 @@ export default function ReligiousPackets() {
           <div style={empty}>No packets in this filter.</div>
         ) : (
           <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -248,14 +248,14 @@ export default function ReligiousPackets() {
                       {p.isActive ? "Active" : "Inactive"}
                     </span>
                   </td>
-                  <td style={{ ...td, width: 0 }}>
+                  <td style={{ ...td, width: 46, minWidth: 46, padding: "10px 6px", textAlign: "center" }}>
                     {isAdmin && (
                       <button type="button" onClick={() => startEdit(p)} style={iconBtn} aria-label={`Edit packet ${p.title}`}>
                         <Pencil size={16} />
                       </button>
                     )}
                   </td>
-                  <td style={{ ...td, width: 0 }}>
+                  <td style={{ ...td, width: 46, minWidth: 46, padding: "10px 6px", textAlign: "center" }}>
                     {isAdmin && (
                       <button type="button" onClick={() => remove(p)} style={{ ...iconBtn, color: "var(--danger-color)" }} aria-label={`Delete packet ${p.title}`}>
                         <Trash2 size={16} />
@@ -460,7 +460,8 @@ const secondaryBtn = {
   border: "1px solid var(--border-color)", cursor: "pointer",
 };
 const iconBtn = {
-  padding: 6, borderRadius: 4,
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 32, minWidth: 32, height: 32, padding: 0, flex: "0 0 32px", borderRadius: 6,
   background: "transparent", color: "var(--text-secondary)",
   border: "none", cursor: "pointer",
 };

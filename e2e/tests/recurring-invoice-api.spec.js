@@ -323,6 +323,28 @@ async function seedRecurringInvoice(request, token, contactId, opts = {}) {
   return await rRes.json();
 }
 
+// The recurring engine must continue to handle historical wellness invoices
+// that pre-date the patient/line-item snapshot fields. Seed that legacy row
+// directly so this tenant-isolation test does not depend on today's wellness
+// invoice-creation contract (which correctly requires patientId + lineItems).
+function seedLegacyWellnessRecurringInvoice(contactId, tenantId, opts = {}) {
+  const dueDate = new Date(Date.now() + 30 * 86400000).toISOString();
+  const nextRecurDate = new Date(Date.now() + 30 * 86400000).toISOString();
+  const invoiceNum = `E2E-REC-WELL-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  const amount = Number(opts.amount ?? 250);
+  const recurFrequency = opts.recurFrequency || 'monthly';
+  return runPrismaScript(
+    `return prisma.invoice.create({ data: {` +
+      `invoiceNum: ${JSON.stringify(invoiceNum)}, ` +
+      `amount: ${amount}, status: 'UNPAID', ` +
+      `dueDate: new Date(${JSON.stringify(dueDate)}), ` +
+      `contactId: ${Number(contactId)}, tenantId: ${Number(tenantId)}, ` +
+      `isRecurring: true, recurFrequency: ${JSON.stringify(recurFrequency)}, ` +
+      `nextRecurDate: new Date(${JSON.stringify(nextRecurDate)})` +
+    ` } });`
+  );
+}
+
 async function runRecurring(request, token) {
   return authPost(request, token, '/billing/recurring/run', {});
 }
@@ -570,7 +592,10 @@ test.describe('Recurring Invoice Engine — tenant isolation', () => {
 
     // Seed a past-due recurring invoice on the WELLNESS tenant.
     const contact = await seedContact(request, tokens.wellnessAdmin, 'wellness-iso', createdWellnessContactIds);
-    const inv = await seedRecurringInvoice(request, tokens.wellnessAdmin, contact.id, { amount: 7777, recurFrequency: 'monthly' });
+    const inv = seedLegacyWellnessRecurringInvoice(contact.id, tenantIds.wellnessAdmin, {
+      amount: 7777,
+      recurFrequency: 'monthly',
+    });
     createdWellnessInvoiceIds.push(inv.id);
 
     const past = new Date(Date.now() - 3600 * 1000).toISOString();

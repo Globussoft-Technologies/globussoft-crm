@@ -295,6 +295,61 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
+  it('offers a separate product lead when the email already belongs to a lead', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (opts?.method === 'POST' && url === '/api/contacts') {
+        return Promise.reject({
+          body: {
+            code: 'DUPLICATE_CONTACT',
+            matchedBy: 'email',
+            existingContactId: 42,
+            contact: {
+              id: 42,
+              name: 'Existing Lead',
+              email: 'alice@acme.test',
+              status: 'Lead',
+            },
+          },
+        });
+      }
+      if (opts?.method === 'POST' && url === '/api/contacts?force=true') {
+        return Promise.resolve({ id: 1000, name: 'Alice Smith' });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderLeads();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+    fillForm({ name: 'Alice Smith', email: 'alice@acme.test' });
+    submitForm();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/registering for another product/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /Create separate product lead/i }),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Create separate product lead/i }),
+    );
+
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([url, opts]) => url === '/api/contacts?force=true' && opts?.method === 'POST',
+        ),
+      ).toBe(true);
+      expect(notifySuccess).toHaveBeenCalledWith(
+        'Separate product lead created successfully',
+      );
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('input fields carry the correct maxLength attributes', async () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
@@ -419,10 +474,10 @@ describe('Leads Freshsales-style list UI affordances', () => {
     renderLeads(authValue);
 
     const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
-    expect(aliceLink).toHaveAttribute('href', '/contacts/101');
+    expect(aliceLink).toHaveAttribute('href', '/leads/101');
 
     fireEvent.click(aliceLink);
-    expect(navigateMock).toHaveBeenCalledWith('/contacts/101');
+    expect(navigateMock).toHaveBeenCalledWith('/leads/101');
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
   });
 
@@ -746,10 +801,21 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
         expect(frozenHeader).toBeTruthy();
         expect(scrollHeader).toBeTruthy();
+        expect(frozenHeader).toHaveClass('leads-table-header-row');
+        expect(scrollHeader).toHaveClass('leads-table-header-row');
+        if (_label === 'travel') {
+          expect(frozenHeader.closest('table')).toHaveClass('leads-table--fit', 'leads-table--frozen');
+          expect(frozenHeader.firstElementChild.querySelector('div')).toHaveStyle({
+            gap: '0.8rem',
+          });
+        }
         expect(frozenHeader.style.height).toBe('66px');
         expect(scrollHeader.style.height).toBe('66px');
         expect(frozenRows.length).toBeGreaterThan(0);
         expect(frozenRows.length).toBe(scrollRows.length);
+        expect(frozenRows.map((row) => row.dataset.leadRowId)).toEqual(
+          scrollRows.map((row) => row.dataset.leadRowId),
+        );
         frozenRows.forEach((row) => {
           expect(row.style.height).toBe('66px');
         });
@@ -1092,6 +1158,32 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(sourceBadge.style.border).toBe('1px solid var(--border-color)');
   });
 
+  it('keeps source pills and assignment controls aligned inside their columns', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    const sourceBadge = screen
+      .getAllByText('Organic')
+      .map(node => node.closest('span'))
+      .find(node => node?.classList.contains('leads-source-badge'));
+    expect(sourceBadge).toBeInTheDocument();
+    expect(sourceBadge).toHaveStyle({
+      maxWidth: '100%',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    });
+    expect(sourceBadge).toHaveAttribute('title', 'Organic');
+
+    const assignment = screen.getByLabelText(/Assign Alice Smith to staff/i);
+    expect(assignment.parentElement).toHaveClass('leads-assignee-control');
+    expect(assignment).toHaveStyle({
+      width: '100%',
+      minWidth: '0px',
+      boxSizing: 'border-box',
+    });
+  });
+
   it('opens the Source column menu and applies a source-only filter query', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
@@ -1256,6 +1348,83 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       expect(screen.getByText('Alice Smith')).toBeInTheDocument();
       expect(screen.getByText('Bob Jones')).toBeInTheDocument();
       expect(screen.getByText('Carol Diaz')).toBeInTheDocument();
+    });
+  });
+
+  it('queries Generic lead search on the server and reloads the full list when cleared', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    const searchInput = screen.getByPlaceholderText('Search leads...');
+    fireEvent.change(searchInput, { target: { value: 'globex' } });
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        typeof url === 'string' && url.includes('/api/contacts?status=Lead') && url.includes('q=globex'),
+      )).toBe(true);
+    });
+
+    fetchApiMock.mockClear();
+    fireEvent.change(searchInput, { target: { value: '' } });
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !url.includes('&q='),
+      )).toBe(true);
+    });
+  });
+
+  it('ignores an older Generic lead-search response that resolves after the latest query', async () => {
+    let resolveAlice;
+    let resolveBob;
+    const aliceRequest = new Promise((resolve) => { resolveAlice = resolve; });
+    const bobRequest = new Promise((resolve) => { resolveBob = resolve; });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        if (url.includes('q=alice')) return aliceRequest;
+        if (url.includes('q=bob')) return bobRequest;
+        return Promise.resolve(SAMPLE_LEADS);
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    const searchInput = screen.getByPlaceholderText('Search leads...');
+
+    fireEvent.change(searchInput, { target: { value: 'alice' } });
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string' && url.includes('q=alice'),
+    )).toBe(true));
+    fireEvent.change(searchInput, { target: { value: 'bob' } });
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string' && url.includes('q=bob'),
+    )).toBe(true));
+
+    resolveBob([SAMPLE_LEADS[1]]);
+    await waitFor(() => expect(screen.getByText('Bob Jones')).toBeInTheDocument());
+    resolveAlice([SAMPLE_LEADS[0]]);
+    await waitFor(() => {
+      expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+      expect(screen.queryByText('Alice Smith')).toBeNull();
+    });
+  });
+
+  it('sends matching Callified campaign ids with the Generic server search', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/integrations/callified/config' && !opts) return Promise.resolve({ isActive: true });
+      if (url === '/api/callified/campaigns/with-lead-counts' && !opts) {
+        return Promise.resolve({ campaigns: [{ id: 42, name: 'Growth Campaign' }] });
+      }
+      return leadsFetchMock(url, opts);
+    });
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/callified/campaigns/with-lead-counts'));
+
+    fireEvent.change(screen.getByPlaceholderText('Search leads...'), { target: { value: 'growth' } });
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        typeof url === 'string' && url.includes('q=growth') && url.includes('callifiedCampaignIds=42'),
+      )).toBe(true);
     });
   });
 

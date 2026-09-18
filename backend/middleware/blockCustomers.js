@@ -16,7 +16,10 @@ function blockCustomers(req, res, next) {
   }
 
   // Block CUSTOMER usertype
-  if (req.user.userType === 'CUSTOMER') {
+  if (
+    String(req.user.userType || '').toUpperCase() === 'CUSTOMER' ||
+    String(req.user.role || '').toUpperCase() === 'CUSTOMER'
+  ) {
     return res.status(403).json({
       error: 'Access denied: customers cannot access this endpoint',
       code: 'CUSTOMER_ACCESS_DENIED',

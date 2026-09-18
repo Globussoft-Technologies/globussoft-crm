@@ -50,7 +50,7 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'gift_cards',       actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'patient_wallets',  actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
   { module: 'patients',      actions: ['read', 'write', 'update', 'delete', 'export', 'manage'] },
-  { module: 'appointments',     actions: ['read', 'write', 'update', 'delete', 'export'] },
+  { module: 'appointments',     actions: ['read', 'write', 'update', 'delete', 'export', 'assign', 'ai_call', 'manual_call'] },
   { module: 'my_appointments',  actions: ['read'] },
   { module: 'book_appointment', actions: ['write'] },
   { module: 'waitlist',         actions: ['read', 'write'] },
@@ -66,6 +66,10 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'staff',         actions: ['read', 'write', 'update', 'delete', 'manage'] },
   { module: 'roles',         actions: ['read', 'manage'] },
   { module: 'settings',      actions: ['read', 'manage'] },
+  // Generic CRM page modules. The live catalog is authoritative; these keep
+  // the modal useful while an older backend is still serving the fallback.
+  ...['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms']
+    .map((module) => ({ module, actions: ['read', 'write', 'update', 'delete'] })),
 ];
 
 // Domain grouping shown in the Permissions modal. Mirrors PERMISSION_DOMAINS
@@ -86,6 +90,7 @@ const PERMISSION_DOMAINS_FALLBACK = [
   { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'my_appointments', 'book_appointment', 'waitlist', 'services', 'prescriptions', 'my_prescriptions', 'consents', 'visits'] },
   { domain: 'Wellness Inventory', modules: ['products', 'inventory', 'pos'] },
   { domain: 'Admin & Platform',   modules: ['staff', 'roles', 'settings', 'audit', 'integrations', 'developer'] },
+  { domain: 'Generic CRM Pages',  modules: ['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms'] },
 ];
 
 // One-line description per module so admins know what each permission box
@@ -199,6 +204,23 @@ const MODULE_DESCRIPTIONS = {
   // Travel — Marketing
   flyer_studio:         'Marketing Flyer Studio — design and publish sub-brand flyers.',
   flyer_templates:      'Reusable flyer templates and brand-kit defaults.',
+  // Generic CRM page modules
+  cpq:                 'Configure-price-quote builder and quote calculations.',
+  playbooks:           'Reusable sales playbooks and guided processes.',
+  territories:         'Sales territory mapping and assignment.',
+  live_chat:           'Live-chat conversations and visitor handoff.',
+  support:             'Customer support workspace and case handling.',
+  sla:                 'Support service-level policies and targets.',
+  social:              'Social publishing and connected social channels.',
+  field_permissions:   'Role-level field visibility and edit rules.',
+  sandbox:             'Safe workspace for testing CRM operations.',
+  document_templates:  'Reusable document templates.',
+  custom_objects:      'Custom CRM objects and their records.',
+  lead_scoring:        'Lead scoring rules and score review.',
+  deal_insights:       'AI-powered deal insights and recommendations.',
+  ab_tests:            'Marketing A/B tests and experiment results.',
+  booking_pages:       'Public booking pages and appointment capture.',
+  web_forms:           'Embedded lead-capture forms and submissions.',
 };
 
 // Per-vertical description overrides for COMMON modules where the
@@ -436,12 +458,20 @@ function PermissionSeverityBadge({ severity, module, action, onClick }) {
 // deals" both grant the same shape of access, so a single canonical
 // description keeps the modal compact instead of N×6 per-cell strings.
 const ACTION_DESCRIPTIONS = {
+  ai_call: 'Start a Callified AI call from an appointment.',
+  manual_call: 'Start a Callified browser call and speak to the patient.',
+  assign: 'Assign an appointment to a practitioner.',
   read:   'View records and lists in this module.',
   write:  'Create new records in this module.',
   update: 'Edit existing records in this module.',
   delete: 'Remove records in this module (typically soft-delete).',
   export: 'Download or export module data to CSV / PDF / Excel.',
   manage: 'Full administrative control — settings, bulk ops, and destructive admin actions.',
+};
+
+const ACTION_LABELS = {
+  ai_call: 'AI call',
+  manual_call: 'Manual call',
 };
 
 export default function RolesAdmin() {
@@ -786,7 +816,8 @@ export default function RolesAdmin() {
                       style={linkBtn}
                       aria-label={`View ${r.userCount ?? 0} users in ${r.name}`}
                     >
-                      <Users size={14} /> {r.userCount ?? 0}
+                      <Users size={14} style={countBadgeIconStyle} aria-hidden="true" />
+                      <span style={countBadgeValueStyle}>{r.userCount ?? 0}</span>
                     </button>
                   </Td>
                   <Td>
@@ -800,26 +831,16 @@ export default function RolesAdmin() {
                       const visible = typeof r.visiblePermissionCount === 'number'
                         ? r.visiblePermissionCount
                         : raw;
-                      const hidden = typeof r.hiddenPermissionCount === 'number'
-                        ? r.hiddenPermissionCount
-                        : Math.max(0, (r.permissionCount ?? raw) - visible);
-                      const title = hidden > 0
-                        ? `${visible} visible permission${visible === 1 ? '' : 's'}; ${hidden} hidden legacy permission${hidden === 1 ? '' : 's'} (outside this vertical's catalog)`
-                        : `${visible} permission${visible === 1 ? '' : 's'}`;
                       return (
                         <button
                           type="button"
                           onClick={() => setPermRole(r)}
                           style={linkBtn}
-                          aria-label={`View permissions for ${r.name}${hidden > 0 ? ` (${visible} visible, ${hidden} hidden legacy)` : ''}`}
-                          title={title}
+                          aria-label={`View permissions for ${r.name}`}
+                          title={`${visible} permission${visible === 1 ? '' : 's'}`}
                         >
-                          <Shield size={14} /> {visible}
-                          {hidden > 0 && (
-                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                              +{hidden} hidden
-                            </span>
-                          )}
+                          <Shield size={14} style={countBadgeIconStyle} aria-hidden="true" />
+                          <span style={countBadgeValueStyle}>{visible}</span>
                         </button>
                       );
                     })()}
@@ -1106,7 +1127,7 @@ function TmcTeacherShareableLinkPanel() {
                     <span style={{ minWidth: 0 }}>
                       <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{teacher.name || 'Unnamed teacher'}</strong>
                       <span style={{ display: 'block', marginTop: '0.2rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{teacher.email || 'No email provided'}</span>
-                      <span style={{ display: 'block', marginTop: '0.12rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{teacher.phone ? `· ${teacher.phone}` : 'Phone not provided'}</span>
+                      {teacher.phone && <span style={{ display: 'block', marginTop: '0.12rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>· {teacher.phone}</span>}
                     </span>
                   </span>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}>{String(selectedTeacherId) === String(teacher.id) ? 'Selected' : 'View details'} <ChevronRight size={15} /></span>
@@ -1774,15 +1795,6 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
     return visible;
   }, [role, catalogKeys]);
 
-  const hiddenPermissions = useMemo(() => {
-    const hidden = [];
-    (role.permissions || []).forEach((p) => {
-      const key = p?.module && p?.action ? `${p.module}.${p.action}` : '';
-      if (key && !catalogKeys.has(key)) hidden.push(key);
-    });
-    return hidden;
-  }, [role, catalogKeys]);
-
   const [selected, setSelected] = useState(initial);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -2071,30 +2083,6 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
         </div>
       </div>
 
-      {hiddenPermissions.length > 0 && (
-        <div
-          role="status"
-          data-testid="hidden-permissions-banner"
-          style={{
-            margin: '0 0 0.85rem',
-            padding: '0.75rem 0.9rem',
-            borderRadius: 8,
-            background: 'rgba(245, 158, 11, 0.1)',
-            border: '1px solid rgba(245, 158, 11, 0.45)',
-            color: 'var(--text-primary)',
-            fontSize: '0.82rem',
-          }}
-        >
-          <strong>{hiddenPermissions.length} hidden legacy permission{hiddenPermissions.length === 1 ? '' : 's'} detected.</strong>
-          <div style={{ marginTop: '0.3rem', color: 'var(--text-secondary)' }}>
-            These grants are stored on the role but are outside this tenant&apos;s active {vertical} catalog, so they have no checkbox in the matrix. Saving this role will remove them from the role.
-          </div>
-          <code style={{ display: 'block', marginTop: '0.45rem', wordBreak: 'break-word' }}>
-            {hiddenPermissions.join(', ')}
-          </code>
-        </div>
-      )}
-
       <div
         style={{
           padding: '0.25rem',
@@ -2320,7 +2308,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                                   cursor: readOnly ? 'not-allowed' : 'pointer',
                                 }}
                               />
-                              {a}
+                              {ACTION_LABELS[a] || a}
                               {/* Severity badge — sits at the right
                                   edge via marginLeft:'auto' in its
                                   inline style. Renders only when the
@@ -3389,9 +3377,31 @@ const linkBtn = {
   cursor: 'pointer',
   display: 'inline-flex',
   alignItems: 'center',
+  justifyContent: 'center',
   gap: '0.3rem',
   fontSize: '0.8rem',
+  lineHeight: 1,
+  minWidth: '3.25rem',
+  whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
   color: 'inherit',
+};
+
+// Count text changes width as values move from one to multiple digits. Keep
+// the icon on a fixed flex basis so narrow table cells and browser zoom never
+// squeeze the SVG or render its strokes at inconsistent fractional sizes.
+const countBadgeIconStyle = {
+  width: 14,
+  height: 14,
+  minWidth: 14,
+  flex: '0 0 14px',
+};
+
+const countBadgeValueStyle = {
+  display: 'inline-block',
+  minWidth: '1ch',
+  textAlign: 'center',
+  lineHeight: 1,
 };
 
 const errBoxStyle = {

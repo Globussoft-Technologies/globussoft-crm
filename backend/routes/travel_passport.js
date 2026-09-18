@@ -63,6 +63,7 @@ const { writeAudit } = require("../lib/audit");
 const passportFileStore = require("../lib/passportFileStore");
 const { removeScanFromEnvelopeJson } = passportFileStore;
 const visaDocStore = require("../lib/visaDocStore");
+const { tripRequiresPassport } = require("../lib/travelDocumentPolicy");
 const { findPassportIdentityCandidates, persistPassportIdentity } = require("../lib/passportIdentityLinker");
 
 async function safeFindPassportIdentityCandidates(args, context = "travel-passport") {
@@ -197,7 +198,7 @@ async function buildPassportListRows(tenantId, opts = {}) {
   const [tripRows, customerRows] = await Promise.all([
     prisma.tripParticipant.findMany({
       where: {
-        trip: { tenantId },
+        trip: { tenantId, tripType: "international" },
         OR: [
           { passportExtractedAt: { not: null } },
           { passportVerifiedAt: { not: null } },
@@ -205,7 +206,7 @@ async function buildPassportListRows(tenantId, opts = {}) {
         ],
       },
       include: {
-        trip: { select: { id: true, tripCode: true, destination: true } },
+        trip: { select: { id: true, tripCode: true, destination: true, tripType: true } },
       },
       orderBy: { updatedAt: "desc" },
       take: 5000,
@@ -344,8 +345,8 @@ async function buildPassportListRows(tenantId, opts = {}) {
 async function loadBulkMatchCandidates(tenantId) {
   const [tripRows, customerRows] = await Promise.all([
     prisma.tripParticipant.findMany({
-      where: { trip: { tenantId } },
-      include: { trip: { select: { id: true, tripCode: true, destination: true } } },
+      where: { trip: { tenantId, tripType: "international" } },
+      include: { trip: { select: { id: true, tripCode: true, destination: true, tripType: true } } },
       take: 5000,
     }),
     prisma.customerTraveller.findMany({
@@ -608,12 +609,21 @@ async function loadParticipant(req) {
       id: pid,
       trip: { tenantId: req.travelTenant.id },
     },
-    include: { trip: { select: { id: true, tenantId: true, tripCode: true, destination: true } } },
+    include: { trip: { select: { id: true, tenantId: true, tripCode: true, destination: true, tripType: true } } },
   });
   if (!participant) {
     const err = new Error("Participant not found"); err.status = 404; err.code = "PARTICIPANT_NOT_FOUND"; throw err;
   }
   return participant;
+}
+
+function requirePassportForTrip(participant) {
+  if (!tripRequiresPassport(participant?.trip?.tripType)) {
+    const err = new Error("Passport is not required for this trip");
+    err.status = 400;
+    err.code = "PASSPORT_NOT_REQUIRED";
+    throw err;
+  }
 }
 
 // ─── POST /participants/:id/passport-upload ───────────────────────────
@@ -625,12 +635,20 @@ router.post(
   requireTmcAccess,
   uploadHandler,
   async (req, res) => {
+    let uncommittedScan = null;
     try {
       let participant;
       try {
         participant = await loadParticipant(req);
       } catch (e) {
         // loadParticipant runs AFTER multer wrote the file — clean it up.
+        unlinkUploadedScan(req);
+        throw e;
+      }
+
+      try {
+        requirePassportForTrip(participant);
+      } catch (e) {
         unlinkUploadedScan(req);
         throw e;
       }
@@ -673,7 +691,13 @@ router.post(
       // passportExtractionJson.imageFilename for the operator UI.
       // /api/uploads (not bare /uploads): in production only /api/* is proxied
       // to the backend, so a bare /uploads link 404s to the SPA host.
-      const fileUrl = `/api/uploads/passport-ocr/${req.file.filename}`;
+      // Keep the disk-backed multer file only as OCR input. The shared
+      // passport store writes the durable copy to OCI when configured and
+      // falls back to local disk when cloud credentials are unavailable.
+      const scanBuffer = await fs.promises.readFile(req.file.path);
+      uncommittedScan = await passportFileStore.storeScan(scanBuffer, req.file.mimetype);
+      await fs.promises.unlink(req.file.path).catch(() => {});
+      const fileUrl = uncommittedScan.url;
 
       // Augment the extraction envelope with the image path so the
       // verification UI can render a "View image" link without a separate
@@ -681,7 +705,9 @@ router.post(
       // number) so audit-log safety is preserved.
       const persistedEnvelope = {
         ...result,
-        imageFilename: req.file.filename,
+        storage: uncommittedScan.storage,
+        imageKey: uncommittedScan.key,
+        imageFilename: uncommittedScan.imageFilename,
         imageUrl: fileUrl,
         originalName: req.file.originalname || null,
       };
@@ -705,9 +731,12 @@ router.post(
         },
       });
 
+      const committedScan = uncommittedScan;
+      uncommittedScan = null;
+
       // Supersede the previous scan so a re-upload doesn't orphan it. Awaited
       // so the delete completes before we respond (no leak on a sudden restart).
-      await removeScanFromEnvelopeJson(participant.passportExtractionJson, req.file.filename);
+      await removeScanFromEnvelopeJson(participant.passportExtractionJson, committedScan.key);
 
       // Audit: field NAMES only, never field VALUES.
       writeAudit(
@@ -731,13 +760,15 @@ router.post(
         provider: result.provider,
         extractedAt: updated.passportExtractedAt,
         imageUrl: fileUrl,
+        storage: committedScan.storage,
         identityCandidates,
       });
     } catch (e) {
+      unlinkUploadedScan(req);
+      if (uncommittedScan) await passportFileStore.removeScan(uncommittedScan);
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       // Multer 413/415 are handled in uploadHandler before this runs. Anything
       // reaching here is a handler-level failure — clean up the stored scan.
-      unlinkUploadedScan(req);
       console.error("[travel-passport] upload error:", e.message);
       res.status(500).json({ error: "Failed to process passport upload" });
     }
@@ -922,10 +953,10 @@ router.get(
           where: {
             passportExtractedAt: { not: null },
             passportVerifiedAt: null,
-            trip: { tenantId: req.travelTenant.id },
+            trip: { tenantId: req.travelTenant.id, tripType: "international" },
           },
           include: {
-            trip: { select: { id: true, tripCode: true, destination: true } },
+            trip: { select: { id: true, tripCode: true, destination: true, tripType: true } },
           },
           orderBy: { passportExtractedAt: "asc" },
           take: 200,
@@ -1014,6 +1045,7 @@ router.post(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
 
       if (participant.passportExtractedAt) {
         return res.status(409).json({
@@ -1149,6 +1181,7 @@ router.post(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
 
       if (!participant.passportExtractedAt) {
         return res.status(409).json({
@@ -1304,6 +1337,7 @@ router.delete(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
       await prisma.tripParticipant.update({
         where: { id: participant.id },
         data: {
@@ -1384,6 +1418,7 @@ router.get(
   async (req, res) => {
     try {
       const participant = await loadParticipant(req);
+      requirePassportForTrip(participant);
       return respondWithPassportViewUrl(res, participant);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

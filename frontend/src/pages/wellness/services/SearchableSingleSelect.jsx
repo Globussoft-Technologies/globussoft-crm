@@ -17,6 +17,8 @@ export default function SearchableSingleSelect({
   placeholder = 'Search...',
   noneLabel = '— none —',
   disabled,
+  onSearchChange,
+  loading = false,
   'aria-label': ariaLabel,
   'aria-labelledby': ariaLabelledBy,
 }) {
@@ -113,7 +115,9 @@ const inputValue = search || selectedOption?.label || '';
           setIsOpen(true);
         }}
         onChange={(e) => {
-          setSearch(e.target.value);
+          const nextSearch = e.target.value;
+          setSearch(nextSearch);
+          onSearchChange?.(nextSearch);
           setActiveIndex(-1);
           setIsOpen(true);
         }}
@@ -254,7 +258,19 @@ const inputValue = search || selectedOption?.label || '';
               }}
             >
               <div style={{ overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
-                {visibleOptions.map((opt, idx) => {
+                {loading && (
+                  <div
+                    role="status"
+                    style={{
+                      padding: '0.65rem 1rem',
+                      color: 'var(--text-secondary)',
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    Loading options…
+                  </div>
+                )}
+                {!loading && visibleOptions.map((opt, idx) => {
                   const isSelected = String(opt.value) === normalizedValue;
                   const isActive = idx === activeIndex;
                   return (

@@ -57,6 +57,10 @@ prisma.travelInvoice = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.travelInvoiceSequence = {
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
 prisma.travelInvoiceLine = {
   findMany: vi.fn().mockResolvedValue([]),
   findFirst: vi.fn(),
@@ -153,6 +157,8 @@ function sourceLine(idSuffix, overrides = {}) {
 beforeEach(() => {
   prisma.travelInvoice.findFirst.mockReset();
   prisma.travelInvoice.create.mockReset();
+  prisma.travelInvoiceSequence.findUnique.mockReset().mockResolvedValue({ lastSerial: 0 });
+  prisma.travelInvoiceSequence.upsert.mockReset().mockResolvedValue({ lastSerial: 1 });
   prisma.travelInvoiceLine.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoiceLine.createMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
@@ -165,11 +171,8 @@ beforeEach(() => {
 
 describe('POST /api/travel/invoices/:id/clone-as-recurring — duplicate template for next billing cycle', () => {
   test('happy path: Issued source → 201, new Draft invoice with same currency + subBrand + contactId + docType', async () => {
-    // nextInvoiceNum: findFirst inside $transaction (latest with TINV-YYYY-)
-    // returns null → serial 0001.
     prisma.travelInvoice.findFirst
-      .mockResolvedValueOnce(sourceInvoice({ id: 600 })) // loadParentInvoice
-      .mockResolvedValueOnce(null); // nextInvoiceNum's latest lookup
+      .mockResolvedValueOnce(sourceInvoice({ id: 600 })); // loadParentInvoice
     prisma.travelInvoice.create.mockImplementation(async ({ data }) => ({
       id: 9000, ...data, createdAt: new Date(), updatedAt: new Date(),
     }));

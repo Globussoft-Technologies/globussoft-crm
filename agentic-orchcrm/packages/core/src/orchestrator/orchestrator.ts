@@ -504,7 +504,8 @@ export class Orchestrator {
                   // gets a chance to preflight or render. 12k is ample for a
                   // carefully paginated 6-10 page HTML document. The provider
                   // adapter still clamps it lower for models with smaller caps.
-                  const ladder = [12000];
+                  const isLayoutRepair = brief.startsWith('LAYOUT_REPAIR_CSS_ONLY');
+                  const ladder = [isLayoutRepair ? 3000 : 12000];
                   let lastErr: unknown;
                   for (const maxTokens of ladder) {
                     try {
@@ -514,7 +515,7 @@ export class Orchestrator {
                         // Leave enough of the five-minute run for deterministic
                         // fallback layout, print preflight and Chromium PDF export
                         // even if a selected model is unusually slow or wedged.
-                        timeoutMs: 150_000,
+                        timeoutMs: isLayoutRepair ? 60_000 : 180_000,
                       });
                       const usage = buildUsageRecord({
                         provider: resp.provider,

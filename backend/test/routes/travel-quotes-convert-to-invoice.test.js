@@ -57,8 +57,13 @@ prisma.travelQuoteLine = {
   delete: vi.fn(),
 };
 prisma.travelInvoice = {
+  findMany: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
+};
+prisma.travelInvoiceSequence = {
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
 };
 prisma.travelInvoiceLine = {
   createMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -112,7 +117,10 @@ beforeEach(() => {
   prisma.travelQuote.findFirst.mockReset();
   prisma.travelQuoteLine.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findFirst.mockReset();
+  prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.create.mockReset();
+  prisma.travelInvoiceSequence.findUnique.mockReset().mockResolvedValue({ lastSerial: 0 });
+  prisma.travelInvoiceSequence.upsert.mockReset().mockResolvedValue({ lastSerial: 1 });
   prisma.travelInvoiceLine.createMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.$transaction.mockReset();
   prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
@@ -185,13 +193,6 @@ describe('POST /api/travel/quotes/:id/convert-to-invoice', () => {
       { id: 1001, quoteId: 42, tenantId: 1, lineType: 'hotel', description: 'Hilton', quantity: 3, unitPrice: '4000.00', amount: '12000.00', currency: 'INR', sortOrder: 0, notes: null },
       { id: 1002, quoteId: 42, tenantId: 1, lineType: 'service', description: 'Visa fee', quantity: 1, unitPrice: '500.00', amount: '500.00', currency: 'INR', sortOrder: 1, notes: null },
     ]);
-    // $transaction returns the latest serial → next becomes 0001.
-    prisma.$transaction.mockImplementation(async (cb) => {
-      const tx = {
-        travelInvoice: { findFirst: vi.fn().mockResolvedValue(null) },
-      };
-      return cb(tx);
-    });
     prisma.travelInvoice.create.mockResolvedValue({
       id: 7777, tenantId: 1, subBrand: 'tmc', contactId: 5001,
       quoteId: 42, invoiceNum: `TINV-${new Date().getFullYear()}-0001`,
@@ -263,10 +264,6 @@ describe('POST /api/travel/quotes/:id/convert-to-invoice', () => {
     });
     prisma.travelInvoice.findFirst.mockResolvedValue(null);
     prisma.travelQuoteLine.findMany.mockResolvedValue([]); // No lines.
-    prisma.$transaction.mockImplementation(async (cb) => {
-      const tx = { travelInvoice: { findFirst: vi.fn().mockResolvedValue(null) } };
-      return cb(tx);
-    });
     prisma.travelInvoice.create.mockResolvedValue({
       id: 8000, tenantId: 1, subBrand: 'tmc', contactId: 5001,
       quoteId: 50, invoiceNum: `TINV-${new Date().getFullYear()}-0001`,
@@ -291,10 +288,6 @@ describe('POST /api/travel/quotes/:id/convert-to-invoice', () => {
     });
     prisma.travelInvoice.findFirst.mockResolvedValue(null);
     prisma.travelQuoteLine.findMany.mockResolvedValue([]);
-    prisma.$transaction.mockImplementation(async (cb) => {
-      const tx = { travelInvoice: { findFirst: vi.fn().mockResolvedValue(null) } };
-      return cb(tx);
-    });
     prisma.travelInvoice.create.mockResolvedValue({
       id: 9000, tenantId: 1, quoteId: 60, status: 'Draft',
       invoiceNum: 'TINV-2026-0001', dueDate: new Date(),

@@ -118,6 +118,50 @@ test("Tally read endpoints return their pagination-safe envelopes", async ({ req
   }
 });
 
+test("Tally cost centres are authenticated, travel-only, tenant-scoped, and paginated", async ({ request }) => {
+  const unauthenticated = await request.get(`${BASE_URL}/api/travel/tally/cost-centres`, { timeout: REQUEST_TIMEOUT });
+  expect([401, 403]).toContain(unauthenticated.status());
+
+  const genericToken = await genericAdmin(request);
+  if (!genericToken) test.skip(true, "generic admin login unavailable");
+  const wrongVertical = await request.get(`${BASE_URL}/api/travel/tally/cost-centres`, {
+    headers: headers(genericToken),
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(wrongVertical.status()).toBe(403);
+  expect((await wrongVertical.json()).code).toBe("WRONG_VERTICAL");
+
+  const token = await travelAdmin(request);
+  if (!token) test.skip(true, "travel admin login unavailable");
+  const response = await request.get(`${BASE_URL}/api/travel/tally/cost-centres?limit=5&sourceLimit=5`, {
+    headers: headers(token),
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(response.status()).toBe(200);
+  const body = await response.json();
+  expect(Array.isArray(body.costCentres)).toBe(true);
+  expect(Array.isArray(body.sources)).toBe(true);
+  expect(body.costCentres.length).toBeLessThanOrEqual(5);
+  expect(body.pagination).toMatchObject({ page: 1, limit: 5 });
+  expect(body.sourcePagination).toMatchObject({ page: 1, limit: 5 });
+
+  const foreignSource = await request.post(`${BASE_URL}/api/travel/tally/cost-centres`, {
+    headers: headers(token),
+    data: { sourceType: "TMC_TRIP", sourceId: 2147483647 },
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(foreignSource.status()).toBe(404);
+  expect((await foreignSource.json()).code).toBe("COST_CENTRE_SOURCE_NOT_FOUND");
+
+  const invalidBatch = await request.post(`${BASE_URL}/api/travel/tally/cost-centres/prepare-missing`, {
+    headers: headers(token),
+    data: { sourceType: "UNSUPPORTED" },
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(invalidBatch.status()).toBe(400);
+  expect((await invalidBatch.json()).code).toBe("INVALID_COST_CENTRE_SOURCE");
+});
+
 test("payment accounts reject malformed and unknown ledger ids without writing", async ({ request }) => {
   const token = await travelAdmin(request);
   if (!token) test.skip(true, "travel admin login unavailable");

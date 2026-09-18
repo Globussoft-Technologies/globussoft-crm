@@ -312,6 +312,57 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(screen.getAllByText(/Options \(4\)/i).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('allows the required TMC trip-type labels to be edited without changing their category identity', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
+        return Promise.resolve({
+          banks: [{
+            id: 77,
+            version: 3,
+            subBrand: 'tmc',
+            templateName: 'TMC Website',
+            isActive: true,
+            questionsJson: JSON.stringify({
+              questions: [{
+                id: 'preferred_trip_types',
+                text: 'Which types of trips do you prefer?',
+                type: 'multi-select',
+                required: true,
+                minSelections: 1,
+                systemManaged: true,
+                options: [{
+                  value: 'overnight_adventure',
+                  label: 'OVERNIGHT ADVENTURE',
+                  category: 'OVERNIGHT ADVENTURE',
+                  weight: 0,
+                }],
+              }],
+            }),
+            scoringRulesJson: JSON.stringify({
+              method: 'weighted-sum',
+              bands: [{ minScore: 0, maxScore: 99, classification: 'level_1', label: 'Ready', recommendedTier: 'standard' }],
+            }),
+          }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    const labelInput = await screen.findByDisplayValue('OVERNIGHT ADVENTURE');
+    expect(labelInput).not.toBeDisabled();
+    fireEvent.change(labelInput, { target: { value: 'Overnight camps and adventure trips' } });
+
+    openJsonEditor();
+    const questions = JSON.parse(screen.getByLabelText(/Questions JSON/i).value);
+    expect(questions.questions[0].options[0]).toMatchObject({
+      value: 'overnight_adventure',
+      label: 'Overnight camps and adventure trips',
+      category: 'OVERNIGHT ADVENTURE',
+      weight: 0,
+    });
+  });
+
   it('Editing an option weight propagates into the qJson', () => {
     renderPage();
     // Both Q1 and Q2 have an "Option 1 weight" aria-label — disambiguate

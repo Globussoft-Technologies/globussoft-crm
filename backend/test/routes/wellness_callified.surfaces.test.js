@@ -14,7 +14,7 @@
  * drops one surface is silent — the page just stops being able to call.
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
@@ -141,14 +141,78 @@ describe('route registration', () => {
     expect(registered).toContain(route);
   });
 
-  test('every call route sits behind the same gate', () => {
-    // callGate = verifyToken + verifyWellnessRole + requirePermission. A route
-    // registered without it would be an open calling endpoint.
+  test('every call route has authentication and authorization middleware', () => {
     const callRoutes = router.stack.filter(
       (l) => l.route && /\/callified\/(visits|patients|leads)\//.test(l.route.path),
     );
     expect(callRoutes).toHaveLength(9);
-    const gateSizes = new Set(callRoutes.map((l) => l.route.stack.length));
-    expect(gateSizes.size).toBe(1);
+    for (const route of callRoutes) {
+      expect(route.route.stack.length).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  test('appointment AI permission grants only the appointment AI route', async () => {
+    const permissions = requireCJS('../../middleware/requirePermission');
+    const original = permissions.getUserPermissions;
+    permissions.getUserPermissions = vi.fn().mockResolvedValue(
+      new Set(['appointments.ai_call']),
+    );
+    permissions.PERMISSION_CACHE.set('7::55', {
+      permissions: new Set(['appointments.ai_call']),
+      timestamp: Date.now(),
+    });
+
+    const authMiddlewareFor = (method, path) => {
+      const layer = router.stack.find(
+        (candidate) => candidate.route?.path === path && candidate.route.methods[method],
+      );
+      // Skip verifyToken (already represented by req.user) and the final
+      // business handler; execute every authorization layer in between.
+      return layer.route.stack.slice(1, -1).map((entry) => entry.handle);
+    };
+    const req = {
+      user: {
+        userId: 55,
+        tenantId: 7,
+        role: 'USER',
+        wellnessRole: 'custom_caller',
+        vertical: 'wellness',
+      },
+    };
+    const response = () => {
+      const res = { status: vi.fn() };
+      res.status.mockReturnValue(res);
+      res.json = vi.fn().mockReturnValue(res);
+      return res;
+    };
+    const authorize = async (method, path, res) => {
+      const middleware = authMiddlewareFor(method, path);
+      let index = 0;
+      const next = async () => {
+        const handler = middleware[index++];
+        if (handler) await handler(req, res, next);
+      };
+      await next();
+      return index > middleware.length;
+    };
+
+    try {
+      expect(await authorize(
+        'post',
+        '/callified/visits/:visitId/ai-call',
+        response(),
+      )).toBe(true);
+
+      const manualRes = response();
+      await authorize('post', '/callified/visits/:visitId/manual-call', manualRes);
+      expect(manualRes.status).toHaveBeenCalledWith(403);
+
+      const leadRes = response();
+      await authorize('post', '/callified/leads/:leadId/ai-call', leadRes);
+      expect(leadRes.status).toHaveBeenCalledWith(403);
+    } finally {
+      permissions.PERMISSION_CACHE.delete('7::55');
+      permissions.getUserPermissions = original;
+    }
   });
 });

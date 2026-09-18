@@ -207,7 +207,7 @@ const PRO_POPULATED = {
 const LOC_POPULATED = {
   totals: { visits: 200, revenue: 1500000 },
   rows: [
-    { id: 'l1', name: 'Bandra Flagship', city: 'Mumbai', state: 'MH', patients: 130, visits: 150, revenue: 1200000, isActive: true },
+    { id: 'l1', name: 'Bandra Flagship', city: 'Mumbai', state: 'MH', patients: 130, visits: 150, revenue: 1200000, isActive: true, invoiceIds: [101] },
     { id: 'l2', name: 'Andheri Annex', city: 'Mumbai', state: 'MH', patients: 40, visits: 50, revenue: 300000, isActive: true },
     { id: 'l3', name: 'Old Pune Branch', city: 'Pune', state: 'MH', patients: 0, visits: 0, revenue: 0, isActive: false },
   ],
@@ -216,7 +216,7 @@ const LOC_POPULATED = {
 const ATT_POPULATED = {
   totals: { leads: 220, junk: 40, qualified: 180, revenue: 1234567 },
   rows: [
-    { source: 'IndiaMART', leads: 120, junkRate: 18.5, conversionRate: 22.4, revenue: 800000, revenuePerLead: 6667 },
+    { source: 'IndiaMART', leads: 120, junkRate: 18.5, conversionRate: 22.4, revenue: 800000, revenuePerLead: 6667, invoiceIds: [101] },
     { source: 'Instagram Ads', leads: 100, junkRate: 75.0, conversionRate: 4.0, revenue: 434567, revenuePerLead: 4346 },
   ],
 };
@@ -224,6 +224,38 @@ const ATT_POPULATED = {
 const ATT_EMPTY_ROWS = {
   totals: { leads: 0, junk: 0, qualified: 0, revenue: 0 },
   rows: [],
+};
+
+const CUSTOMER_POPULATED = {
+  totals: { customers: 2, invoices: 3, visits: 4, sales: 13998 },
+  rows: [
+    { id: 'patient:1', name: 'Aarav Shah', invoices: 2, visits: 3, sales: 7998, averageSale: 3999, invoiceIds: [101, 102] },
+    { id: 'patient:2', name: 'Meera Kapoor', invoices: 1, visits: 1, sales: 6000, averageSale: 6000, invoiceIds: [103] },
+  ],
+};
+
+const PRODUCT_SUMMARY_POPULATED = {
+  totals: { products: 2, unitsSold: 12, sales: 3600, stockValue: 24000, lowStock: 1 },
+  rows: [
+    { id: 1, name: 'Vitamin C Serum', sku: 'VCS-01', category: 'Skin Care', stockOnHand: 2, reorderLevel: 5, unitsSold: 8, sales: 2400, stockValue: 4000, lowStock: true, invoiceIds: [101] },
+    { id: 2, name: 'Sunscreen SPF 50', sku: 'SUN-50', category: 'Skin Care', stockOnHand: 20, reorderLevel: 5, unitsSold: 4, sales: 1200, stockValue: 20000, lowStock: false, invoiceIds: [] },
+  ],
+};
+
+const PAYMENTS_POPULATED = {
+  totals: { transactions: 3, amount: 13998, posAmount: 7998, invoiceAmount: 6000 },
+  rows: [
+    { id: 'upi', mode: 'UPI', transactions: 2, amount: 9998, averageAmount: 4999, posAmount: 7998, invoiceAmount: 2000, invoiceIds: [101] },
+    { id: 'cash', mode: 'Cash', transactions: 1, amount: 4000, averageAmount: 4000, posAmount: 0, invoiceAmount: 4000, invoiceIds: [102, 103] },
+  ],
+};
+
+const EXPENSE_SUMMARY_POPULATED = {
+  totals: { expenses: 3, amount: 8500, approvedAmount: 5000, pendingAmount: 3500 },
+  rows: [
+    { id: 'supplies', category: 'Supplies', expenses: 2, amount: 5000, approvedAmount: 5000, pendingAmount: 0 },
+    { id: 'rent', category: 'Rent', expenses: 1, amount: 3500, approvedAmount: 0, pendingAmount: 3500 },
+  ],
 };
 
 // Per Product carries a `source` discriminator the other four tabs don't:
@@ -294,6 +326,10 @@ function installFetchMock({
   loc = LOC_POPULATED,
   prod = PROD_LIVE,
   att = ATT_POPULATED,
+  cust = CUSTOMER_POPULATED,
+  summary = PRODUCT_SUMMARY_POPULATED,
+  pay = PAYMENTS_POPULATED,
+  exp = EXPENSE_SUMMARY_POPULATED,
 } = {}) {
   fetchApiMock.mockImplementation((url) => {
     if (url.startsWith('/api/wellness/reports/pnl-by-service')) {
@@ -315,6 +351,18 @@ function installFetchMock({
     }
     if (url.startsWith('/api/wellness/reports/attribution')) {
       return att instanceof Error ? Promise.reject(att) : Promise.resolve(att);
+    }
+    if (url.startsWith('/api/wellness/reports/sales-by-customer')) {
+      return cust instanceof Error ? Promise.reject(cust) : Promise.resolve(cust);
+    }
+    if (url.startsWith('/api/wellness/reports/product-summary')) {
+      return summary instanceof Error ? Promise.reject(summary) : Promise.resolve(summary);
+    }
+    if (url.startsWith('/api/wellness/reports/payments-by-mode')) {
+      return pay instanceof Error ? Promise.reject(pay) : Promise.resolve(pay);
+    }
+    if (url.startsWith('/api/wellness/reports/expense-summary')) {
+      return exp instanceof Error ? Promise.reject(exp) : Promise.resolve(exp);
     }
     return Promise.resolve(null);
   });
@@ -349,26 +397,66 @@ afterEach(() => {
 });
 
 describe('<WellnessReports /> — page chrome + tab strip', () => {
-  it('renders heading + five tab buttons synchronously', async () => {
+  it('renders heading + required report tab buttons synchronously', async () => {
     renderWithRouter();
     expect(
       screen.getByRole('heading', { name: /^Reports$/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /P&L by Service/i }),
+      screen.getByRole('button', { name: /Sales by Services/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Per Professional/i }),
+      screen.getByRole('button', { name: /Sales by Staff/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Per Location/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Per Product/i }),
+      screen.getByRole('button', { name: /Sales by Products/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Sales by Customers/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Product Summary/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Payments by Mode/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Expense Summary/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Marketing Attribution/i }),
     ).toBeInTheDocument();
+    const inactiveTab = screen.getByRole('button', { name: /Sales by Staff/i });
+    expect(inactiveTab.style.padding).toBe('0.5rem 1rem');
+    expect(inactiveTab.style.minHeight).toBe('36px');
+    expect(inactiveTab.style.background).toBe('var(--surface-color)');
+    expect(inactiveTab.style.border).toContain('var(--border-color)');
+    const activeTab = screen.getByRole('button', { name: /Sales by Services/i });
+    expect(activeTab.style.background).toBe('var(--accent-color)');
+    expect(activeTab.style.border).toContain('var(--accent-color)');
+    const reportControls = screen.getByTestId('reports-controls');
+    const reportTabs = screen.getByTestId('reports-tabs');
+    const dateFilter = reportControls.querySelector('select');
+    const csvExport = reportControls.querySelector('[aria-label="Export this report as CSV"]');
+    expect(dateFilter).toBeInTheDocument();
+    expect(dateFilter).toHaveClass('reports-date-filter');
+    expect(dateFilter.style.padding).toBe('0.4rem 0.6rem');
+    expect(dateFilter.style.minHeight).toBe('36px');
+    expect(dateFilter.style.background).toBe('var(--surface-color)');
+    expect(dateFilter.style.border).toContain('var(--border-color)');
+    expect(csvExport).toBeInTheDocument();
+    expect(csvExport.style.padding).toBe('0.45rem 0.85rem');
+    expect(csvExport.style.minHeight).toBe('36px');
+    expect(csvExport.style.background).toBe('var(--surface-color)');
+    expect(csvExport.style.border).toContain('var(--border-color)');
+    expect(csvExport.style.boxShadow).toBe('var(--shadow-sm, none)');
+    expect(reportTabs.style.marginBottom).toBe('1.5rem');
+    expect(reportControls.style.marginTop).toBe('0px');
+    expect(reportControls.style.marginBottom).toBe('1.5rem');
+    expect(reportTabs.compareDocumentPosition(reportControls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // SUT drift: date inputs were replaced by the shared DateRangeFilter
     // component (preset buttons + calendar popover, no native type=date
     // inputs). Just settle the mount-time fetch and move on.
@@ -413,7 +501,7 @@ describe('<WellnessReports /> — lazy-per-tab fetching', () => {
   it('switching to Per Professional tab fires GET /api/wellness/reports/per-professional', async () => {
     renderWithRouter();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
-    fireEvent.click(screen.getByRole('button', { name: /Per Professional/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Sales by Staff/i }));
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
       expect(urls.some((u) => u.startsWith('/api/wellness/reports/per-professional'))).toBe(true);
@@ -433,7 +521,7 @@ describe('<WellnessReports /> — lazy-per-tab fetching', () => {
   it('switching to Per Product tab fires GET /api/wellness/reports/per-product', async () => {
     renderWithRouter();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
-    fireEvent.click(screen.getByRole('button', { name: /Per Product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Sales by Products/i }));
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
       expect(urls.some((u) => u.startsWith('/api/wellness/reports/per-product'))).toBe(true);
@@ -449,6 +537,109 @@ describe('<WellnessReports /> — lazy-per-tab fetching', () => {
       expect(urls.some((u) => u.startsWith('/api/wellness/reports/attribution'))).toBe(true);
     }, WAIT_OPTS);
   });
+});
+
+describe('<WellnessReports /> — required report endpoints', () => {
+  const switchAndAssert = async (label, endpoint) => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(label, 'i') }));
+    await waitFor(() => {
+      const urls = fetchApiMock.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith(endpoint))).toBe(true);
+    }, WAIT_OPTS);
+  };
+
+  it('loads Sales by Customers', async () => {
+    await switchAndAssert('Sales by Customers', '/api/wellness/reports/sales-by-customer');
+  });
+
+  it('loads Product Summary', async () => {
+    await switchAndAssert('Product Summary', '/api/wellness/reports/product-summary');
+  });
+
+  it('loads Payments by Mode', async () => {
+    await switchAndAssert('Payments by Mode', '/api/wellness/reports/payments-by-mode');
+  });
+
+  it('loads Expense Summary', async () => {
+    await switchAndAssert('Expense Summary', '/api/wellness/reports/expense-summary');
+  });
+});
+
+describe('<WellnessReports /> — required report content + invoice drill-down', () => {
+  it('renders Sales by Customers and invoice drill-down actions', async () => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    fireEvent.click(screen.getByRole('button', { name: /Sales by Customers/i }));
+    expect(await screen.findByText('Aarav Shah', {}, WAIT_OPTS)).toBeInTheDocument();
+    expect(screen.getByText('Meera Kapoor')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /View 2 underlying invoices/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Average sale/i })).toBeInTheDocument();
+  });
+
+  it('renders Product Summary inventory and low-stock status', async () => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    fireEvent.click(screen.getByRole('button', { name: /Product Summary/i }));
+    expect(await screen.findByText('Vitamin C Serum', {}, WAIT_OPTS)).toBeInTheDocument();
+    expect(screen.getByText('Sunscreen SPF 50')).toBeInTheDocument();
+    expect(screen.getAllByText('Low stock').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('In stock')).toBeInTheDocument();
+  });
+
+  it('renders Payments by Mode totals and payment rows', async () => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    fireEvent.click(screen.getByRole('button', { name: /Payments by Mode/i }));
+    expect(await screen.findByText('UPI', {}, WAIT_OPTS)).toBeInTheDocument();
+    expect(screen.getByText('Cash')).toBeInTheDocument();
+    expect(screen.getByText(/^Amount collected$/i)).toBeInTheDocument();
+  });
+
+  it('renders Expense Summary categories and approval totals', async () => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    fireEvent.click(screen.getByRole('button', { name: /Expense Summary/i }));
+    expect(await screen.findByText('Supplies', {}, WAIT_OPTS)).toBeInTheDocument();
+    expect(screen.getByText('Rent')).toBeInTheDocument();
+    expect(screen.getAllByText(/^Approved$/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^Pending$/i).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('<WellnessReports /> — table alignment', () => {
+  it('keeps every header and body cell left aligned on every report tab', async () => {
+    const tabs = [
+      ['Sales by Services', '/api/wellness/reports/pnl-by-service'],
+      ['Sales by Staff', '/api/wellness/reports/per-professional'],
+      ['Sales by Products', '/api/wellness/reports/per-product'],
+      ['Sales by Customers', '/api/wellness/reports/sales-by-customer'],
+      ['Product Summary', '/api/wellness/reports/product-summary'],
+      ['Payments by Mode', '/api/wellness/reports/payments-by-mode'],
+      ['Expense Summary', '/api/wellness/reports/expense-summary'],
+      ['Per Location', '/api/wellness/reports/per-location'],
+      ['Marketing Attribution', '/api/wellness/reports/attribution'],
+    ];
+
+    for (const [label, endpoint] of tabs) {
+      const view = renderWithRouter();
+      await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument(), WAIT_OPTS);
+      if (label !== 'Sales by Services') {
+        fireEvent.click(screen.getByRole('button', { name: label }));
+        await waitFor(() => {
+          const urls = fetchApiMock.mock.calls.map(([url]) => url);
+          expect(urls.some((url) => url.startsWith(endpoint))).toBe(true);
+        }, WAIT_OPTS);
+        await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument(), WAIT_OPTS);
+      }
+
+      const cells = Array.from(screen.getByRole('table').querySelectorAll('th, td'));
+      expect(cells.length).toBeGreaterThan(0);
+      expect(cells.every((cell) => cell.style.textAlign === 'left')).toBe(true);
+      view.unmount();
+    }
+  }, 20000);
 });
 
 describe('<WellnessReports /> — P&L tab content', () => {
@@ -491,7 +682,7 @@ describe('<WellnessReports /> — Per Professional tab content', () => {
   it('renders staff row with name + wellnessRole (capitalised via CSS) + visits + revenue', async () => {
     renderWithRouter();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
-    fireEvent.click(screen.getByRole('button', { name: /Per Professional/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Sales by Staff/i }));
     expect(await screen.findByText('Dr. Harsh Sharma', {}, WAIT_OPTS)).toBeInTheDocument();
     expect(screen.getByText('Priya Nair')).toBeInTheDocument();
     // wellnessRole rendered as-is (CSS capitalises) — DOM text is the raw value.
@@ -521,6 +712,7 @@ describe('<WellnessReports /> — Per Location tab content', () => {
     // City + state composite rendering ("Mumbai, MH").
     const mumbaiRows = screen.getAllByText(/^Mumbai, MH$/);
     expect(mumbaiRows.length).toBe(2);
+    expect(screen.getByRole('button', { name: /View 1 underlying invoice/i })).toBeInTheDocument();
     // Status emoji — active rows show 🟢, inactive shows ⚪.
     expect(screen.getAllByText(/🟢 Active/).length).toBe(2);
     expect(screen.getByText(/⚪ Inactive/)).toBeInTheDocument();
@@ -531,7 +723,7 @@ describe('<WellnessReports /> — Per Product tab content', () => {
   const openProductTab = async () => {
     renderWithRouter();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
-    fireEvent.click(screen.getByRole('button', { name: /Per Product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Sales by Products/i }));
   };
 
   it('renders per-product rows with HSN + the full gross → discount → net → tax → total column set', async () => {
@@ -651,7 +843,7 @@ describe('<WellnessReports /> — Per Product tab content', () => {
     expect(
       screen.queryByRole('button', { name: /Import product sales from a CSV or Excel file/i }),
     ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Per Product/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Sales by Products/i }));
     expect(
       await screen.findByRole(
         'button',
@@ -684,6 +876,7 @@ describe('<WellnessReports /> — Marketing Attribution tab content', () => {
     // conversionRate 22.4 → "22.4%" (over the >10 threshold → success colour).
     expect(screen.getByText('22.4%')).toBeInTheDocument();
     expect(screen.getByText('4.0%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /View 1 underlying invoice/i })).toBeInTheDocument();
   });
 
   it('renders Attribution empty-state copy when rows=[]', async () => {

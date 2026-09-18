@@ -36,6 +36,11 @@ const { resolveCancellationPolicyForForm } = require("../lib/travelDiagnosticCan
 const diagnosticNotifications = require("../lib/diagnosticNotifications");
 const diagnosticEmbedSettings = require("../lib/diagnosticEmbedSettings");
 const { getRecommendationTopK } = require("../lib/diagnosticRecommendationSettings");
+const {
+  ensureTmcTripTypeBank,
+  matchesSelectedTripType,
+  selectedTripTypes,
+} = require("../lib/tmcTripTypePreference");
 
 const {
   getReadinessLevel,
@@ -265,7 +270,7 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
         .json({ error: "Public form not found", code: "FORM_NOT_FOUND" });
     }
 
-    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+    let bank = await prisma.travelDiagnosticQuestionBank.findFirst({
       where: { tenantId: tenant.id, subBrand, isActive: true },
       orderBy: { version: "desc" },
     });
@@ -274,6 +279,7 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
         .status(404)
         .json({ error: "No active question bank", code: "BANK_NOT_FOUND" });
     }
+    bank = await ensureTmcTripTypeBank({ prisma, bank });
 
     let questions;
     let identityFields = null;
@@ -425,7 +431,7 @@ router.post(
           .json({ error: "Public form not found", code: "FORM_NOT_FOUND" });
       }
 
-      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+      let bank = await prisma.travelDiagnosticQuestionBank.findFirst({
         where: { tenantId: tenant.id, subBrand, isActive: true },
         orderBy: { version: "desc" },
       });
@@ -434,6 +440,7 @@ router.post(
           .status(404)
           .json({ error: "No active question bank", code: "BANK_NOT_FOUND" });
       }
+      bank = await ensureTmcTripTypeBank({ prisma, bank });
 
       if (interestOnly) {
         const safeInterest = catalogueInterest && typeof catalogueInterest === "object"
@@ -553,6 +560,7 @@ router.post(
       }
 
       const safeAnswers = normalizeAnswers(answers, parsed.questions);
+      const preferredTripTypes = selectedTripTypes(safeAnswers, parsed);
 
       const missingRequired = findUnansweredRequiredQuestion(parsed.questions, safeAnswers);
       if (missingRequired) {
@@ -727,6 +735,7 @@ router.post(
           curriculumFit,
           ragRecommendations: ragResult?.recommendations?.recommendedTrips,
           limit: await getRecommendationTopK({ tenantId: tenant.id, subBrand }),
+          preferredTripTypes,
         }),
       }).catch((e) => {
         console.warn("[diag-public-form] PDF failed (non-fatal):", e.message);
@@ -834,6 +843,7 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
       ragRecommendations: ragResult?.recommendations?.recommendedTrips,
       limit: recommendationLimit,
+      preferredTripTypes: selectedTripTypes(answers),
     });
 
     // Resolve readiness only after the final persisted RAG payload has been
@@ -1013,7 +1023,7 @@ function getBankIdentityFields(questionsJson, legacyForm) {
 // evidence, but they do not create a separate recommendation experience:
 // Travel Knowledge fills the remaining relevant places from the diagnostic's
 // answer-aware RAG ranking. Never pad with unrelated catalogue entries.
-function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit }) {
+function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit, preferredTripTypes = [] }) {
   const max = Math.max(1, Number(limit) || 10);
   const seen = new Set();
   const out = [];
@@ -1032,6 +1042,7 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
     return 'A well-rounded educational journey selected for its place-based learning and shared discovery opportunities.';
   };
   const add = (item) => {
+    if (!matchesSelectedTripType(item.category, preferredTripTypes)) return;
     const hasFitScore = item.fitScore !== null && item.fitScore !== undefined && item.fitScore !== '';
     const fitScore = Number(item.fitScore);
     // A zero or negative score is an explicit non-match, never a customer

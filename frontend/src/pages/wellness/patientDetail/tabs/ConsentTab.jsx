@@ -1,215 +1,291 @@
-import { useEffect, useRef, useState } from 'react';
-import { Download } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Download, Eye, FileSignature } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 import { labelStyle, inputStyle } from '../shared/helpers';
 import SearchableSingleSelect from '../../services/SearchableSingleSelect';
 
-// ── Consent tab with signature canvas ─────────────────────────────
-export default function ConsentTab({ patient, services, onSaved }) {
+function parseServiceIds(raw) {
+  if (Array.isArray(raw)) return raw.map(Number).filter(Number.isInteger);
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
+function formatDateTime(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch (_err) {
+    return iso;
+  }
+}
+
+function formatVisit(visit) {
+  if (!visit) return '—';
+  const date = visit.visitDate ? formatDateTime(visit.visitDate) : `Visit #${visit.id}`;
+  return `${date} — ${visit.service?.name || 'Consultation'}`;
+}
+
+// Consent PDFs are produced by the e-signature flow. This tab intentionally
+// has no template/canvas/create form: selecting a visit + service finds the
+// signed request that already belongs to that exact clinical context.
+export default function ConsentTab({ patient, services }) {
   const notify = useNotify();
-  const canvasRef = useRef(null);
-  const [templateName, setTemplateName] = useState('hair-transplant');
+  const visits = Array.isArray(patient?.visits) ? patient.visits : [];
+  const serviceOptions = useMemo(
+    () => (Array.isArray(services) ? services : []).map((service) => ({
+      value: String(service.id),
+      label: service.name,
+    })),
+    [services],
+  );
+  const [visitId, setVisitId] = useState('');
   const [serviceId, setServiceId] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [templates, setTemplates] = useState([]);
+  const [signatureRequests, setSignatureRequests] = useState([]);
+  const [loadingRequests, setLoadingRequests] = useState(true);
+  const [requestError, setRequestError] = useState('');
+  const [busyId, setBusyId] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const [consentFilter, setConsentFilter] = useState(EMPTY_DATE_FILTER);
+
   useEffect(() => {
-    fetchApi('/api/wellness/consent-templates')
-      .then((res) => {
-        const list = Array.isArray(res) ? res.filter((t) => t.isActive !== false) : [];
-        setTemplates(list);
-        if (list.length > 0 && !list.some((t) => t.key === templateName)) {
-          setTemplateName(list[0].key);
-        }
+    setVisitId('');
+    setServiceId('');
+  }, [patient?.id]);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingRequests(true);
+    setRequestError('');
+    fetchApi(`/api/signatures?patientId=${encodeURIComponent(patient.id)}&status=SIGNED&fields=patient-consent`)
+      .then((data) => {
+        if (active) setSignatureRequests(Array.isArray(data) ? data : []);
       })
-      .catch(() => { /* fall back to legacy hardcoded options below */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const selectedTemplate = templates.find((t) => t.key === templateName) || null;
-  const [hasStrokes, setHasStrokes] = useState(false);
+      .catch((err) => {
+        if (!active) return;
+        setSignatureRequests([]);
+        setRequestError(err?.message || 'Could not load signed e-signatures.');
+      })
+      .finally(() => {
+        if (active) setLoadingRequests(false);
+      });
+    return () => { active = false; };
+  }, [patient.id]);
 
-  const [downloadingId, setDownloadingId] = useState(null);
+  const selectedVisit = visits.find((visit) => String(visit.id) === String(visitId));
+  const linkedRequests = signatureRequests.filter((request) => {
+    if (String(request.visitId) !== String(visitId) || !serviceId) return false;
+    return parseServiceIds(request.serviceIds).includes(Number(serviceId));
+  });
 
-  const downloadConsentPdf = async (c) => {
-    setDownloadingId(c.id);
+  const handleVisitChange = (nextVisitId) => {
+    setVisitId(nextVisitId);
+    const visit = visits.find((item) => String(item.id) === String(nextVisitId));
+    const visitServiceId = visit?.service?.id ?? visit?.serviceId;
+    setServiceId(visitServiceId == null ? '' : String(visitServiceId));
+  };
+
+  const fetchPdf = async (requestId) => {
+    const token = getAuthToken();
+    const response = await fetch(`/api/signatures/${requestId}/pdf`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body?.error || 'PDF download failed');
+    }
+    return URL.createObjectURL(await response.blob());
+  };
+
+  const viewPdf = async (request) => {
+    setBusyId(request.id);
+    try {
+      const url = await fetchPdf(request.id);
+      setViewing({ title: request.documentName || 'Consent form', url });
+    } catch (err) {
+      notify.error(`Could not view consent form: ${err.message}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const downloadPdf = async (request) => {
+    setBusyId(request.id);
+    try {
+      const url = await fetchPdf(request.id);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `consent-${request.id}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notify.error(`Could not download consent form: ${err.message}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const downloadLegacyPdf = async (consent) => {
+    setBusyId(`legacy-${consent.id}`);
     try {
       const token = getAuthToken();
-      const res = await fetch(`/api/wellness/consents/${c.id}/pdf`, {
+      const response = await fetch(`/api/wellness/consents/${consent.id}/pdf`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      console.warn(`[PDF Download] Status: ${res.status}, Content-Type: ${res.headers.get('content-type')}`);
-      if (!res.ok) throw new Error(`PDF download failed (${res.status})`);
-      const blob = await res.blob();
-      console.warn(`[PDF Download] Blob size: ${blob.size} bytes, type: ${blob.type}`);
-      if (blob.size === 0) throw new Error('PDF blob is empty');
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank', 'noopener');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      if (!response.ok) throw new Error('PDF download failed');
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `consent-${consent.id}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('[PDF Download Error]', err);
-      notify.error(err.message || 'Failed to download consent PDF.');
+      notify.error(`Could not download consent form: ${err.message}`);
     } finally {
-      setDownloadingId(null);
+      setBusyId(null);
     }
   };
 
-  const startDraw = (e) => {
-    setIsDrawing(true);
-    setHasStrokes(true);
-    const ctx = canvasRef.current.getContext('2d');
-    const cssColor = getComputedStyle(canvasRef.current).getPropertyValue('--text-primary').trim();
-    ctx.strokeStyle = cssColor || '#1f2937';
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    const { x, y } = getCoords(e);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-  };
-  const draw = (e) => {
-    if (!isDrawing) return;
-    const ctx = canvasRef.current.getContext('2d');
-    const { x, y } = getCoords(e);
-    ctx.lineTo(x, y);
-    ctx.stroke();
-  };
-  const endDraw = () => setIsDrawing(false);
-  const getCoords = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
-  };
-  const clearSig = () => {
-    const c = canvasRef.current;
-    c.getContext('2d').clearRect(0, 0, c.width, c.height);
-    setHasStrokes(false);
+  const closeViewer = () => {
+    if (viewing?.url) URL.revokeObjectURL(viewing.url);
+    setViewing(null);
   };
 
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!hasStrokes) {
-      notify.error('Please capture the patient signature before saving the consent.');
-      return;
-    }
-    setSaving(true);
-    try {
-      const signatureSvg = canvasRef.current.toDataURL('image/png');
-      await fetchApi('/api/wellness/consents', {
-        method: 'POST',
-        body: JSON.stringify({
-          patientId: patient.id,
-          serviceId: serviceId || null,
-          templateName,
-          signatureSvg,
-          captureMethod: 'tablet-handoff',
-        }),
-      });
-      clearSig();
-      onSaved();
-      notify.success('Consent captured.');
-    } catch (_err) { /* fetchApi already toasted */ } finally { setSaving(false); }
-  };
-
-  const allPriorConsents = Array.isArray(patient?.consents) ? patient.consents : [];
-  const [consentFilter, setConsentFilter] = useState(EMPTY_DATE_FILTER);
-  const [consentRangeStart, consentRangeEnd] = resolveDateRange(consentFilter);
-  const priorConsents = (consentRangeStart && consentRangeEnd)
-    ? allPriorConsents.filter((c) => {
-      const ts = new Date(c.signedAt).getTime();
-      return ts >= consentRangeStart.getTime() && ts <= consentRangeEnd.getTime();
+  const allLegacyConsents = Array.isArray(patient?.consents) ? patient.consents : [];
+  const [rangeStart, rangeEnd] = resolveDateRange(consentFilter);
+  const legacyConsents = rangeStart && rangeEnd
+    ? allLegacyConsents.filter((consent) => {
+      const timestamp = new Date(consent.signedAt).getTime();
+      return timestamp >= rangeStart.getTime() && timestamp <= rangeEnd.getTime();
     })
-    : allPriorConsents;
-  const formatPriorDate = (iso) => {
-    if (!iso) return '';
-    try {
-      return new Date(iso).toLocaleString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit',
-      });
-    } catch {
-      return iso;
-    }
-  };
+    : allLegacyConsents;
 
   return (
-    <form onSubmit={submit} className="glass" style={{ padding: '1.5rem' }}>
+    <div className="glass" style={{ padding: '1.5rem' }}>
       <section
-        data-testid="prior-consents"
+        data-testid="consent-selection"
         style={{
-          marginBottom: '1.5rem',
-          padding: '1rem',
+          marginBottom: '1.5rem', padding: '1rem',
           background: 'var(--card-bg, rgba(0,0,0,0.04))',
           border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
           borderRadius: 8,
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-          <h3 style={{ margin: 0, fontSize: '1rem' }}>Recent consents</h3>
-          {allPriorConsents.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <DateRangeFilter value={consentFilter} onChange={setConsentFilter} label={null} />
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                {priorConsents.length === allPriorConsents.length
-                  ? `${allPriorConsents.length}`
-                  : `${priorConsents.length} of ${allPriorConsents.length}`}
-              </span>
-            </div>
-          )}
+        <h3 style={{ margin: '0 0 0.35rem', fontSize: '1.05rem' }}>Find consent PDF</h3>
+        <p style={{ margin: '0 0 1rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+          Select the visit and service used when the patient signed the e-signature request.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+          <div>
+            <label style={labelStyle} htmlFor="consent-visit">Visit</label>
+            <select
+              id="consent-visit"
+              aria-label="Visit"
+              value={visitId}
+              onChange={(event) => handleVisitChange(event.target.value)}
+              style={inputStyle}
+            >
+              <option value="">— select visit —</option>
+              {visits.map((visit) => (
+                <option key={visit.id} value={visit.id}>{formatVisit(visit)}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Service</label>
+            <SearchableSingleSelect
+              value={serviceId}
+              onChange={setServiceId}
+              options={serviceOptions}
+              placeholder="Search service..."
+              aria-label="Service"
+              disabled={!visitId}
+            />
+          </div>
         </div>
-        {allPriorConsents.length === 0 ? (
-          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            No prior consents on file.
-          </p>
-        ) : priorConsents.length === 0 ? (
-          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            No consents in the selected range.
-          </p>
+      </section>
+
+      <section
+        data-testid="linked-consents"
+        style={{
+          marginBottom: '1.5rem', padding: '1rem',
+          background: 'var(--card-bg, rgba(0,0,0,0.04))',
+          border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          borderRadius: 8,
+        }}
+      >
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <FileSignature size={17} /> Signed e-signatures
+        </h3>
+        {loadingRequests ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)' }}>Loading signed e-signatures...</p>
+        ) : requestError ? (
+          <p role="alert" style={{ margin: 0, color: '#ef4444' }}>{requestError}</p>
+        ) : !visitId || !serviceId ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)' }}>Select a visit and service to find its signed consent PDF.</p>
+        ) : linkedRequests.length === 0 ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No signed e-signature found for this visit and service.</p>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {priorConsents.map((c) => (
-              <li
-                key={c.id}
-                style={{
-                  padding: '0.4rem 0',
-                  borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: '0.5rem',
-                  alignItems: 'baseline',
-                }}
-              >
-                <strong>{c.templateName}</strong>
-                <span style={{ color: 'var(--text-secondary)' }}>·</span>
-                <span style={{ color: 'var(--text-secondary)' }}>{formatPriorDate(c.signedAt)} IST</span>
-                {c.service?.name && (
-                  <>
-                    <span style={{ color: 'var(--text-secondary)' }}>·</span>
-                    <span style={{ color: 'var(--text-secondary)' }}>{c.service.name}</span>
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={() => downloadConsentPdf(c)}
-                  disabled={downloadingId === c.id}
-                  title="Download signed consent PDF"
-                  style={{
-                    marginLeft: 'auto', background: 'transparent',
-                    border: '1px solid var(--primary-color, var(--accent-color))',
-                    color: 'var(--primary-color, var(--accent-color))',
-                    padding: '0.2rem 0.6rem', borderRadius: 6, fontSize: '0.75rem',
-                    cursor: downloadingId === c.id ? 'wait' : 'pointer',
-                    display: 'flex', alignItems: 'center', gap: '0.3rem',
-                  }}
-                >
-                  <Download size={12} />
-                  {downloadingId === c.id ? 'Downloading...' : 'PDF'}
+            {linkedRequests.map((request) => (
+              <li key={request.id} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                <strong>{request.documentName || `Consent #${request.id}`}</strong>
+                <span style={{ color: 'var(--text-secondary)' }}>— signed {formatDateTime(request.signedAt)} IST</span>
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
+                  <button type="button" onClick={() => viewPdf(request)} disabled={busyId === request.id} style={actionButtonStyle}>
+                    <Eye size={12} /> View
+                  </button>
+                  <button type="button" onClick={() => downloadPdf(request)} disabled={busyId === request.id} style={actionButtonStyle}>
+                    <Download size={12} /> PDF
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {selectedVisit && linkedRequests.length > 0 && (
+          <p style={{ margin: '0.75rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+            Visit: {formatVisit(selectedVisit)}
+          </p>
+        )}
+      </section>
+
+      <section data-testid="prior-consents" style={{ padding: '1rem', background: 'var(--card-bg, rgba(0,0,0,0.04))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', borderRadius: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <h3 style={{ margin: 0, fontSize: '1.05rem' }}>Existing consent records</h3>
+          {allLegacyConsents.length > 0 && <DateRangeFilter value={consentFilter} onChange={setConsentFilter} label={null} />}
+        </div>
+        <p style={{ margin: '0 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+          Older consent records remain available here. New consent PDFs are linked from signed e-signatures above.
+        </p>
+        {allLegacyConsents.length === 0 ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No older consent records on file.</p>
+        ) : legacyConsents.length === 0 ? (
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No consent records in the selected range.</p>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {legacyConsents.map((consent) => (
+              <li key={consent.id} style={{ padding: '0.45rem 0', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                <strong>Consent record #{consent.id}</strong>
+                <span style={{ color: 'var(--text-secondary)' }}>— {formatDateTime(consent.signedAt)} IST</span>
+                {consent.service?.name && <span style={{ color: 'var(--text-secondary)' }}>— {consent.service.name}</span>}
+                <button type="button" onClick={() => downloadLegacyPdf(consent)} disabled={busyId === `legacy-${consent.id}`} style={{ ...actionButtonStyle, marginLeft: 'auto' }}>
+                  <Download size={12} /> PDF
                 </button>
               </li>
             ))}
@@ -217,100 +293,37 @@ export default function ConsentTab({ patient, services, onSaved }) {
         )}
       </section>
 
-      <h3 style={{ marginBottom: '1rem' }}>Capture consent</h3>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
-        <div>
-          <label style={labelStyle}>Template</label>
-          <select value={templateName} onChange={(e) => setTemplateName(e.target.value)} style={inputStyle}>
-            {templates.length > 0 ? (
-              templates.map((t) => <option key={t.id} value={t.key}>{t.label}</option>)
-            ) : (
-              <>
-                <option value="hair-transplant">Hair Transplant</option>
-                <option value="botox-fillers">Botox / Fillers</option>
-                <option value="laser">Laser Treatment</option>
-                <option value="chemical-peel">Chemical Peel</option>
-                <option value="general">General Procedure</option>
-              </>
-            )}
-          </select>
-        </div>
-        <div>
-          <label style={labelStyle}>Service (optional)</label>
-          <SearchableSingleSelect
-            value={serviceId}
-            onChange={setServiceId}
-            options={(services || []).map((s) => ({ value: String(s.id), label: s.name }))}
-            placeholder="Search service..."
-            aria-label="Service"
-          />
-        </div>
-      </div>
-
-      <section
-        data-testid="consent-template-body"
-        style={{
-          marginBottom: '1rem',
-          padding: '0.85rem 1rem',
-          maxHeight: 240,
-          overflowY: 'auto',
-          background: 'var(--card-bg, rgba(0,0,0,0.04))',
-          border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-          borderRadius: 8,
-          fontSize: '0.85rem',
-          lineHeight: 1.5,
-          whiteSpace: 'pre-wrap',
-        }}
-      >
-        <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>
-          {selectedTemplate?.label || templateName}
-        </div>
-        {selectedTemplate?.body ? (
-          <div>{selectedTemplate.body}</div>
-        ) : (
-          <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-            This template has no body text on file. Ask your administrator to
-            add the consent wording (purpose, data categories, retention, jurisdiction)
-            via Settings → Consent templates so DPDP §15 disclosures appear here.
+      {viewing && typeof document !== 'undefined' && createPortal(
+        <div role="dialog" aria-modal="true" style={modalBackdropStyle}>
+          <div style={modalStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexShrink: 0 }}>
+              <h3 style={{ margin: 0 }}>{viewing.title}</h3>
+              <button type="button" onClick={closeViewer} aria-label="Close PDF" style={{ ...actionButtonStyle, fontSize: '1rem' }}>×</button>
+            </div>
+            <iframe title="Consent form PDF" src={viewing.url} style={{ width: '100%', flex: '1 1 auto', height: 'auto', minHeight: 0, border: '1px solid var(--border-color)', borderRadius: 8 }} />
           </div>
-        )}
-      </section>
-
-      <div style={{ marginBottom: '1rem' }}>
-        <label style={labelStyle}>Patient signature (sign below)</label>
-        <canvas
-          ref={canvasRef}
-          width={600}
-          height={180}
-          style={{ width: '100%', maxWidth: 600, height: 180, background: 'var(--card-bg, rgba(0,0,0,0.04))', border: '2px dashed var(--accent-color, #C9A063)', borderRadius: 8, touchAction: 'none', cursor: 'crosshair' }}
-          onMouseDown={startDraw}
-          onMouseMove={draw}
-          onMouseUp={endDraw}
-          onMouseLeave={endDraw}
-          onTouchStart={startDraw}
-          onTouchMove={draw}
-          onTouchEnd={endDraw}
-        />
-        <button type="button" onClick={clearSig} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.3rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.75rem', marginTop: '0.5rem' }}>
-          Clear signature
-        </button>
-      </div>
-
-      <button
-        type="submit"
-        disabled={saving || !hasStrokes}
-        title={!hasStrokes ? 'Patient must sign before saving' : ''}
-        style={{
-          padding: '0.55rem 1.25rem',
-          background: hasStrokes ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
-          color: '#fff', border: 'none', borderRadius: 8,
-          cursor: hasStrokes && !saving ? 'pointer' : 'not-allowed',
-          opacity: hasStrokes ? 1 : 0.6,
-        }}
-      >
-        {saving ? 'Saving…' : 'Save consent'}
-      </button>
-    </form>
+        </div>,
+        document.body,
+      )}
+    </div>
   );
 }
+
+const actionButtonStyle = {
+  padding: '0.35rem 0.65rem', fontSize: '0.75rem', background: 'transparent',
+  color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--border-color)',
+  borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem',
+};
+
+const modalBackdropStyle = {
+  position: 'fixed', inset: 0, zIndex: 10000, width: '100vw', height: '100dvh',
+  boxSizing: 'border-box', overflow: 'hidden', background: 'rgba(0,0,0,0.6)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+};
+
+const modalStyle = {
+  width: 'min(900px, 100%)', height: 'min(90dvh, 800px, calc(100dvh - 2rem))',
+  maxHeight: 'calc(100dvh - 2rem)', overflow: 'hidden', boxSizing: 'border-box',
+  display: 'flex', flexDirection: 'column',
+  background: 'var(--modal-bg, var(--surface-color))', borderRadius: 12, padding: '1rem',
+};

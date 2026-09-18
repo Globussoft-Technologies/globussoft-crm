@@ -6,7 +6,7 @@
  *   - For generic scope + allowlisted login (authed
  *     GET /api/landing-form-config/access → { canManage: true }), each form
  *     card shows either an "On landing page" badge (current selection from
- *     the public GET /api/landing-form-config) or a "Use this form in landing page"
+ *     the authenticated tenant GET /api/landing-form-config/mine) or a "Use this form in landing page"
  *     button that PUTs the choice and moves the badge.
  *   - Non-allowlisted logins see neither control.
  */
@@ -72,6 +72,9 @@ describe('WebForms landing-page control', () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/landing-form-config/access') {
         return Promise.resolve({ canManage });
+      }
+      if (url === '/api/landing-form-config/mine') {
+        return Promise.resolve({ webFormId: 9, webFormName: 'Landing Page' });
       }
       if (url === '/api/forms' && !opts) {
         return Promise.resolve(FORMS);

@@ -279,6 +279,47 @@ test.describe("Travel itineraries API — create + list", () => {
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe("INVALID_STATUS");
   });
+
+  test("GET /itineraries applies filtered server sorting, stable pages, and full-result totals", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const marker = `${RUN_TAG}_paged_${Math.random().toString(36).slice(2, 8)}`;
+    const fixtures = [
+      { suffix: "high", amount: 900, status: "accepted" },
+      { suffix: "low", amount: 100, status: "sent" },
+      { suffix: "mid", amount: 500, status: "rejected" },
+    ];
+    for (const fixture of fixtures) {
+      const response = await post(request, token, "/api/travel/itineraries", {
+        subBrand: "rfu",
+        contactId: testContactId,
+        destination: `${marker}_${fixture.suffix}`,
+        totalAmount: fixture.amount,
+        status: fixture.status,
+      });
+      expect(response.status(), `create fixture: ${await response.text()}`).toBe(201);
+      created.itineraryIds.push((await response.json()).id);
+    }
+
+    const baseQuery = `destination=${encodeURIComponent(marker)}&sortKey=amount&sortDirection=asc&limit=2`;
+    const first = await get(request, token, `/api/travel/itineraries?${baseQuery}&offset=0`);
+    const second = await get(request, token, `/api/travel/itineraries?${baseQuery}&offset=2`);
+    expect(first.status()).toBe(200);
+    expect(second.status()).toBe(200);
+    const firstBody = await first.json();
+    const secondBody = await second.json();
+    const rows = [...firstBody.itineraries, ...secondBody.itineraries];
+
+    expect(firstBody.total).toBe(3);
+    expect(rows.map((row) => Number(row.totalAmount))).toEqual([100, 500, 900]);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(3);
+    expect(firstBody.pipelineTotals).toEqual({
+      totalValue: 1500,
+      wonValue: 900,
+      negotiationValue: 100,
+      lostValue: 500,
+    });
+  });
 });
 
 // ─── PRD §4.1 diagnostic-first guard ────────────────────────────────

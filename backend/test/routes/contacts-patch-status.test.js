@@ -119,6 +119,11 @@ prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.contact.findUnique = vi.fn();
 prisma.contact.update = vi.fn();
+prisma.activity = prisma.activity || {};
+prisma.activity.create = vi.fn();
+prisma.activity.findMany = vi.fn();
+prisma.activity.count = vi.fn();
+prisma.$transaction = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tenant = prisma.tenant || {};
@@ -168,6 +173,10 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.update.mockReset();
+  prisma.activity.create.mockReset().mockResolvedValue({});
+  prisma.activity.findMany.mockReset().mockResolvedValue([]);
+  prisma.activity.count.mockReset().mockResolvedValue(0);
+  prisma.$transaction.mockReset().mockImplementation(async (callback) => callback(prisma));
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'wellness' });
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
@@ -261,5 +270,62 @@ describe('PATCH /api/contacts/:id — revert a converted lead', () => {
     const stageCall = deliverWebhooksMock.mock.calls.find((c) => c[0] === 'lead.stage_changed');
     expect(stageCall[1].previousStatus).toBe('Prospect');
     expect(stageCall[1].status).toBe('Lead');
+  });
+
+  test('case 7: every lifecycle transition is recorded in Activities', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.contact.update.mockResolvedValueOnce({ ...prospect, status: 'Customer' });
+
+    const res = await request(makeApp())
+      .patch(`/api/contacts/${CONTACT_ID}`)
+      .send({ status: 'Customer' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.activity.create).toHaveBeenCalledWith({
+      data: {
+        type: 'Lead Status updated',
+        description: 'Updated from Prospect to Customer',
+        contactId: CONTACT_ID,
+        userId: USER_ID,
+        tenantId: TENANT_ID,
+      },
+    });
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+  });
+
+  test('case 8: status mutation and lifecycle Activity share one transaction', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.contact.update.mockResolvedValueOnce({ ...prospect, status: 'Customer' });
+
+    await request(makeApp())
+      .patch(`/api/contacts/${CONTACT_ID}`)
+      .send({ status: 'Customer' });
+
+    const transactionBody = prisma.$transaction.mock.calls[0][0];
+    expect(transactionBody).toBeTypeOf('function');
+    expect(prisma.contact.update).toHaveBeenCalledOnce();
+    expect(prisma.activity.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('GET /api/contacts/:id/activities — deterministic pagination', () => {
+  test('uses tenant scope, a unique ordering tie-breaker, and a total envelope', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findMany.mockResolvedValueOnce([{ id: 12 }, { id: 11 }]);
+    prisma.activity.count.mockResolvedValueOnce(12);
+
+    const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=2&limit=5`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 12, page: 2, limit: 5, totalPages: 3 });
+    expect(prisma.activity.findMany).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 5,
+      skip: 5,
+    });
+    expect(prisma.activity.count).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID },
+    });
   });
 });

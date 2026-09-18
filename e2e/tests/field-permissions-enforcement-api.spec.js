@@ -448,7 +448,7 @@ test.describe('Field-Level Permissions — Invoice write enforcement (#577)', ()
 });
 
 test.describe('Field-Level Permissions — Quote read enforcement (#577)', () => {
-  test('USER GET /api/cpq/quotes/:dealId strips Quote.totalAmount when canRead=false', async ({ request }) => {
+  test('authorized ADMIN GET /api/cpq/quotes/:dealId strips Quote.totalAmount when canRead=false', async ({ request }) => {
     // Need a deal first.
     const deal = await createDeal(request, { title: 'quote-fixture' });
     // Create the quote via admin.
@@ -460,10 +460,13 @@ test.describe('Field-Level Permissions — Quote read enforcement (#577)', () =>
     expect(qRes.status(), `create quote: ${await qRes.text()}`).toBe(201);
     const quote = await qRes.json();
     const rule = await createRule(request, {
-      role: 'USER', entity: 'Quote', field: 'totalAmount', canRead: false, canWrite: false,
+      role: 'ADMIN', entity: 'Quote', field: 'totalAmount', canRead: false, canWrite: false,
     });
     try {
-      const r = await userGet(request, `/api/cpq/quotes/${deal.id}`);
+      // CPQ is a manager/admin module. Use an authorized caller here so this
+      // assertion reaches the Quote field filter instead of correctly being
+      // rejected by the outer generic permission gate.
+      const r = await adminGet(request, `/api/cpq/quotes/${deal.id}`);
       expect(r.status()).toBe(200);
       const list = await r.json();
       const me = list.find((q) => q.id === quote.id);

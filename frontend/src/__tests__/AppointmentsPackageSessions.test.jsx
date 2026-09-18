@@ -34,6 +34,11 @@ vi.mock('../components/CallifiedCallDialog', () => ({ default: () => null }));
 import { AuthContext } from '../App';
 import Appointments from '../pages/wellness/Appointments';
 
+const ADMIN_WITH_CALLS = {
+  role: 'ADMIN',
+  permissions: ['appointments.ai_call', 'appointments.manual_call'],
+};
+
 const PACKAGE_SESSION = {
   id: 4300,
   visitDate: '2026-08-29T05:30:00.000Z',
@@ -94,13 +99,19 @@ function paginated(visits, { page = 1, total = visits.length, pages = Math.max(1
 }
 
 function renderPage(visits = [PACKAGE_SESSION, WALK_IN], options = {}) {
+  const {
+    callifiedStatus = {},
+    user = ADMIN_WITH_CALLS,
+    ...paginationOptions
+  } = options;
   fetchApiMock.mockImplementation((url) => {
-    if (url.startsWith('/api/wellness/visits')) return Promise.resolve(paginated(visits, options));
+    if (url.startsWith('/api/wellness/visits')) return Promise.resolve(paginated(visits, paginationOptions));
     if (url === '/api/staff') return Promise.resolve([]);
+    if (url === '/api/wellness/callified/status') return Promise.resolve(callifiedStatus);
     return Promise.resolve({});
   });
   return render(
-    <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { name: 'Dr. Enhanced Wellness' } }}>
+    <AuthContext.Provider value={{ user, tenant: { name: 'Dr. Enhanced Wellness' } }}>
       <MemoryRouter>
         <Appointments />
       </MemoryRouter>
@@ -114,6 +125,50 @@ beforeEach(() => {
 });
 
 describe('<Appointments /> — package sessions', () => {
+  it('shows the permitted Call action and explains when Callified is not configured', async () => {
+    renderPage([WALK_IN]);
+
+    const call = await screen.findByTestId('appointments-call-4301');
+    expect(call).toBeDisabled();
+    expect(call).toHaveAccessibleName('Callified is not configured for this clinic');
+  });
+
+  it('hides Call after both explicit appointment call permissions are revoked', async () => {
+    renderPage([WALK_IN], {
+      user: { role: 'ADMIN', permissions: [] },
+      callifiedStatus: { configured: true, enabled: true },
+    });
+
+    await waitFor(() => expect(screen.getByText('Basic FUE')).toBeInTheDocument());
+    expect(screen.queryByTestId('appointments-call-4301')).not.toBeInTheDocument();
+  });
+
+  it('enables the permitted Call action when Callified is configured and enabled', async () => {
+    renderPage([WALK_IN], {
+      callifiedStatus: { configured: true, enabled: true },
+    });
+
+    const call = await screen.findByTestId('appointments-call-4301');
+    await waitFor(() => expect(call).toBeEnabled());
+    expect(call).toHaveAccessibleName('Call Mohit das');
+  });
+
+  it('keeps calling disabled and labels the actual problem when the patient has no phone', async () => {
+    renderPage([
+      {
+        ...WALK_IN,
+        patient: { ...WALK_IN.patient, phone: null },
+      },
+    ], {
+      callifiedStatus: { configured: true, enabled: true },
+    });
+
+    const call = await screen.findByTestId('appointments-call-4301');
+    expect(call).toBeDisabled();
+    expect(call).toHaveTextContent('No phone');
+    expect(call).toHaveAccessibleName('No valid phone number on file');
+  });
+
   it('marks a package session with which sitting it is, and leaves walk-ins bare', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Basic FUE')).toBeInTheDocument());
@@ -153,7 +208,7 @@ describe('<Appointments /> — package sessions', () => {
       );
     });
     render(
-      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { name: 'Dr. Enhanced Wellness' } }}>
+      <AuthContext.Provider value={{ user: ADMIN_WITH_CALLS, tenant: { name: 'Dr. Enhanced Wellness' } }}>
         <MemoryRouter>
           <Appointments />
         </MemoryRouter>
@@ -212,7 +267,7 @@ describe('<Appointments /> — package sessions', () => {
       );
     });
     render(
-      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { name: 'Dr. Enhanced Wellness' } }}>
+      <AuthContext.Provider value={{ user: ADMIN_WITH_CALLS, tenant: { name: 'Dr. Enhanced Wellness' } }}>
         <MemoryRouter>
           <Appointments />
         </MemoryRouter>
@@ -244,7 +299,7 @@ describe('<Appointments /> — package sessions', () => {
       );
     });
     render(
-      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { name: 'Dr. Enhanced Wellness' } }}>
+      <AuthContext.Provider value={{ user: ADMIN_WITH_CALLS, tenant: { name: 'Dr. Enhanced Wellness' } }}>
         <MemoryRouter>
           <Appointments />
         </MemoryRouter>
@@ -274,7 +329,7 @@ describe('<Appointments /> — package sessions', () => {
     });
 
     render(
-      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { name: 'Dr. Enhanced Wellness' } }}>
+      <AuthContext.Provider value={{ user: ADMIN_WITH_CALLS, tenant: { name: 'Dr. Enhanced Wellness' } }}>
         <MemoryRouter>
           <Appointments />
         </MemoryRouter>
@@ -307,7 +362,7 @@ describe('<Appointments /> — package sessions', () => {
     });
 
     render(
-      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { name: 'Dr. Enhanced Wellness' } }}>
+      <AuthContext.Provider value={{ user: ADMIN_WITH_CALLS, tenant: { name: 'Dr. Enhanced Wellness' } }}>
         <MemoryRouter>
           <Appointments />
         </MemoryRouter>

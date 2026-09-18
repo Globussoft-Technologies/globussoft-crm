@@ -47,6 +47,7 @@ export default function CallifiedCallDialog({
   endpoints,
   onClose,
   onCalled,
+  allowedModes = { ai: true, manual: true },
 }) {
   const notify = useNotify();
   const placingRef = useRef(false);
@@ -353,7 +354,7 @@ export default function CallifiedCallDialog({
             </label>
 
             <div style={{ display: 'grid', gap: '0.6rem', margin: '1rem 0' }}>
-              <CallModeCard
+              {allowedModes.ai && <CallModeCard
                 testId="callified-call-mode-ai"
                 icon={<Bot size={20} />}
                 emoji="🤖"
@@ -363,8 +364,8 @@ export default function CallifiedCallDialog({
                 busyLabel={progress}
                 disabled={!canCall}
                 onClick={() => placeCall('ai')}
-              />
-              <CallModeCard
+              />}
+              {allowedModes.manual && <CallModeCard
                 testId="callified-call-mode-manual"
                 icon={<User size={20} />}
                 emoji="👤"
@@ -374,7 +375,7 @@ export default function CallifiedCallDialog({
                 busyLabel={progress}
                 disabled={!canCall}
                 onClick={() => placeCall('manual')}
-              />
+              />}
             </div>
 
             {autoPicked && selectedCampaignId && (

@@ -20,20 +20,20 @@ const landingFormConfig = require("../lib/landingFormConfig");
 const router = express.Router();
 
 async function loadPublicForm() {
+  const config = await landingFormConfig.readPublicConfig(prisma);
   const tenantSlug = landingFormConfig.resolvePublicLeadTenantSlug();
-  if (!tenantSlug) {
-    const err = new Error("Public lead tenant is not configured (PUBLIC_LEAD_TENANT_SLUG)");
-    err.statusCode = 503;
-    err.code = "LANDING_FORM_NOT_CONFIGURED";
-    throw err;
+  if (!config && !tenantSlug) {
+    throw Object.assign(new Error("Public lead tenant is not configured"), { statusCode: 503, code: "LANDING_FORM_NOT_CONFIGURED" });
   }
   const tenant = await prisma.tenant.findFirst({
-    where: { slug: tenantSlug, vertical: "generic", isActive: true },
+    where: config
+      ? { id: config.tenantId, vertical: "generic", isActive: true }
+      : { slug: tenantSlug, vertical: "generic", isActive: true },
     select: { id: true },
   });
   if (!tenant) throw Object.assign(new Error("Public lead tenant is unavailable"), { statusCode: 503, code: "LANDING_FORM_NOT_CONFIGURED" });
   const tenantId = tenant.id;
-  const webFormId = await landingFormConfig.resolveLandingWebFormId(prisma, tenantId);
+  const webFormId = config?.activeWebFormId || await landingFormConfig.resolveLandingWebFormId(prisma, tenantId);
   if (!webFormId) {
     const err = new Error("No active web form available for the landing page");
     err.statusCode = 503;
@@ -41,10 +41,13 @@ async function loadPublicForm() {
     throw err;
   }
   const form = await prisma.webForm.findFirst({
-    where: { id: webFormId },
+    where: { id: webFormId, tenantId, scope: "generic", isActive: true },
     select: { id: true, name: true },
   });
-  return { tenantId, webFormId, webFormName: form ? form.name : "" };
+  if (!form) {
+    throw Object.assign(new Error("The configured landing-page form is unavailable"), { statusCode: 503, code: "LANDING_FORM_UNAVAILABLE" });
+  }
+  return { tenantId, webFormId, webFormName: form.name };
 }
 
 // Resolve the caller's email from the DB and check the allowlist.
@@ -53,7 +56,7 @@ async function callerCanManage(userId) {
     where: { id: userId },
     select: { email: true },
   });
-  return landingFormConfig.isLandingFormAdminEmail(user && user.email);
+  return landingFormConfig.isPublicConfigAdmin(prisma, user && user.email);
 }
 
 router.get("/", async (req, res) => {
@@ -79,6 +82,20 @@ router.get("/access", verifyToken, async (req, res) => {
   }
 });
 
+router.get("/mine", verifyToken, async (req, res) => {
+  try {
+    const tenantId = Number(req.user.tenantId);
+    const config = await landingFormConfig.readPublicConfig(prisma);
+    // Checkbox state is global: never fall back to a tenant-local setting.
+    const webFormId = config?.activeWebFormId || null;
+    const form = webFormId ? await prisma.webForm.findFirst({ where: { id: webFormId, tenantId, scope: "generic", isActive: true }, select: { id: true, name: true } }) : null;
+    res.json({ webFormId: form?.id || null, webFormName: form?.name || "" });
+  } catch (err) {
+    console.error("[landing-form-config] account resolve failed:", err && err.message);
+    res.status(500).json({ error: "Failed to resolve account landing form", code: "LANDING_FORM_RESOLVE_FAILED" });
+  }
+});
+
 router.put("/", verifyToken, async (req, res) => {
   try {
     const canManage = await callerCanManage(req.user.userId);
@@ -92,20 +109,9 @@ router.put("/", verifyToken, async (req, res) => {
     if (!Number.isInteger(webFormId) || webFormId <= 0) {
       return res.status(400).json({ error: "webFormId must be a positive integer", code: "INVALID_WEB_FORM_ID" });
     }
-    const tenantSlug = landingFormConfig.resolvePublicLeadTenantSlug();
-    const tenantRow = tenantSlug && await prisma.tenant.findFirst({
-      where: { slug: tenantSlug, vertical: "generic", isActive: true },
-      select: { id: true },
-    });
-    const tenantId = tenantRow?.id;
-    if (!tenantId) {
-      return res.status(503).json({
-        error: "Public lead tenant is not configured (PUBLIC_LEAD_TENANT_SLUG)",
-        code: "LANDING_FORM_NOT_CONFIGURED",
-      });
-    }
+    const tenantId = Number(req.user.tenantId);
     const form = await prisma.webForm.findFirst({
-      where: { id: webFormId },
+      where: { id: webFormId, tenantId, scope: "generic", isActive: true },
       select: { id: true, name: true, tenantId: true, isActive: true, scope: true },
     });
     if (!landingFormConfig.isSelectableLandingForm(form, tenantId)) {
@@ -114,18 +120,17 @@ router.put("/", verifyToken, async (req, res) => {
         code: "INVALID_WEB_FORM",
       });
     }
+    // Replace the single global active form configuration.
+    const publicConfig = await landingFormConfig.readPublicConfig(prisma);
     await prisma.tenantSetting.upsert({
       where: { tenantId_key: { tenantId, key: landingFormConfig.LANDING_FORM_SETTING_KEY } },
-      create: {
-        tenantId,
-        key: landingFormConfig.LANDING_FORM_SETTING_KEY,
-        value: JSON.stringify({ webFormId: form.id, updatedByUserId: req.user.userId, updatedAt: new Date().toISOString() }),
-        category: "landing",
-      },
-      update: {
-        value: JSON.stringify({ webFormId: form.id, updatedByUserId: req.user.userId, updatedAt: new Date().toISOString() }),
-        category: "landing",
-      },
+      create: { tenantId, key: landingFormConfig.LANDING_FORM_SETTING_KEY, value: JSON.stringify({ webFormId: form.id, updatedByUserId: req.user.userId }), category: "landing" },
+      update: { value: JSON.stringify({ webFormId: form.id, updatedByUserId: req.user.userId }), category: "landing" },
+    });
+    await landingFormConfig.writePublicConfig(prisma, {
+      tenantId,
+      activeWebFormId: form.id,
+      emails: publicConfig?.emails || [...landingFormConfig.getLandingFormAdminEmails()],
     });
     res.json({ webFormId: form.id, webFormName: form.name });
   } catch (err) {

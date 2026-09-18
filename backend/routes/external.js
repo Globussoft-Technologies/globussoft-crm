@@ -452,8 +452,8 @@ router.post("/leads", async (req, res) => {
     }
 
     // Dedupe: if a real email was supplied and a contact already exists under
-    // this tenant, reuse it (the Contact_email_tenantId_key constraint would
-    // otherwise throw P2002 on every duplicate Meta/Google webhook delivery).
+    // this tenant, reuse it so retries remain idempotent. Contact email is
+    // indexed rather than globally unique to support separate product leads.
     // Contacts without an email get a synthetic unique address, so they can
     // never collide and always create fresh.
     const resolvedEmail = email || `lead-${Date.now()}@inbound.local`;

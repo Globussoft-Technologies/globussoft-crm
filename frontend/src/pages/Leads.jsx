@@ -56,6 +56,7 @@ import {
 import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer";
 import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
+import DuplicateContactModal from "../components/DuplicateContactModal";
 
 const SOURCE_OPTIONS = [
   "Organic",
@@ -66,6 +67,7 @@ const SOURCE_OPTIONS = [
   "Event",
   "Other",
 ];
+
 // Built-in lead columns available for auto-campaign assignment rules.
 const BUILTIN_RULE_COLUMNS = [
   { key: "source", label: "Source" },
@@ -139,17 +141,28 @@ const FIELD_LIMITS = {
   billingStateCode: 10,
   firstTouchSource: 191,
   lastTouchSource: 191,
+  medium: 191,
   treatmentOfInterest: 191,
   gst: 15,
 };
-const LEADS_PAGE_SIZE_OPTIONS = [ 10, 25, 50, 100];
-const LEADS_AUTO_REFRESH_MS = 15000;
+const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
 const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
 const LEADS_NAME_COLUMN_MAX_WIDTH = 380;
 const LEADS_ACTIONS_COLUMN_WIDTH = 176;
+const LEADS_SOURCE_COLUMN_MIN_WIDTH = 190;
+const LEADS_ASSIGNED_COLUMN_MIN_WIDTH = 190;
+const LEAD_CHECKBOX_STYLE = {
+  width: "16px",
+  height: "16px",
+  minWidth: "16px",
+  margin: 0,
+  cursor: "pointer",
+  flexShrink: 0,
+  verticalAlign: "middle",
+};
 const LEADS_HEADER_MENU_WIDTH = 300;
 const LEADS_HEADER_MENU_SUBMENU_WIDTH = 320;
 const LEADS_HEADER_MENU_GAP = 6;
@@ -161,6 +174,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "aiScore",
   "source",
   "webForm",
+  "medium",
   "subBrand",
   "tags",
   "assignedTo",
@@ -177,7 +191,8 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   company: 190,
   phone: 150,
   aiScore: 118,
-  source: 150,
+  source: LEADS_SOURCE_COLUMN_MIN_WIDTH,
+  medium: 150,
   webForm: 170,
   tags: 190,
   campaign: 190,
@@ -186,7 +201,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   callifiedScore: 128,
   subBrand: 130,
   amount: 130,
-  assignedTo: 170,
+  assignedTo: LEADS_ASSIGNED_COLUMN_MIN_WIDTH,
   createdAt: 145,
   status: 130,
   title: 180,
@@ -215,6 +230,8 @@ const inlineBuiltinCellStyle = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: "0.35rem",
+  width: "100%",
+  minWidth: 0,
   minHeight: "1.35rem",
   maxWidth: "100%",
   padding: "0.15rem 0.3rem",
@@ -230,10 +247,16 @@ const inlineBuiltinEmptyStyle = {
 const sourceBadgeStyle = {
   display: "inline-flex",
   alignItems: "center",
+  minWidth: 0,
+  maxWidth: "100%",
   padding: "0.25rem 0.65rem",
   borderRadius: "999px",
   fontSize: "0.75rem",
   fontWeight: 600,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  boxSizing: "border-box",
   backgroundColor: "var(--source-badge-bg, rgba(139, 92, 246, 0.16))",
   color: "var(--source-badge-text, var(--text-primary))",
   border: "1px solid var(--border-color)",
@@ -308,9 +331,7 @@ function cleanLeadTagInput(raw) {
 
 function removeLeadTagFromList(rawTags, tagKey) {
   const currentTags = normalizeLeadTags(rawTags);
-  const nextTags = currentTags.filter(
-    (tag) => tag.toLowerCase() !== tagKey,
-  );
+  const nextTags = currentTags.filter((tag) => tag.toLowerCase() !== tagKey);
   return nextTags.length === currentTags.length ? null : nextTags;
 }
 
@@ -544,7 +565,10 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                   aria-label="Selected tags"
                 >
                   {draftTags.map((tag) => (
-                    <span key={tag} className="lead-tag-chip lead-tag-chip--selected">
+                    <span
+                      key={tag}
+                      className="lead-tag-chip lead-tag-chip--selected"
+                    >
                       <span className="lead-tag-chip__label">{tag}</span>
                       <button
                         type="button"
@@ -604,7 +628,8 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                   >
                     {options.length === 0 ? (
                       <span className="lead-tags-search-empty">
-                        No saved tags yet. Switch to Add new to create the first one.
+                        No saved tags yet. Switch to Add new to create the first
+                        one.
                       </span>
                     ) : optionRows.length === 0 ? (
                       trimmedSearch ? (
@@ -695,11 +720,13 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                     </button>
                   </form>
                   <div className="lead-tags-create-tip">
-                    Add a new tag here, then click Save to apply it to this lead.
+                    Add a new tag here, then click Save to apply it to this
+                    lead.
                   </div>
                   {trimmedNewTag && exactNewTagMatch && (
                     <div className="lead-tags-search-empty">
-                      That tag already exists in saved tags. Use Search existing if you want to apply it from the catalog.
+                      That tag already exists in saved tags. Use Search existing
+                      if you want to apply it from the catalog.
                     </div>
                   )}
                 </>
@@ -754,7 +781,10 @@ const leadWebFormName = (lead) =>
 // Contact.name — first whitespace-separated token vs the remainder. Single
 // token → last name empty (cell renders "—"). No schema backing needed.
 const splitLeadName = (fullName) => {
-  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  const parts = String(fullName || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   if (parts.length === 0) return { firstName: "", lastName: "" };
   if (parts.length === 1) return { firstName: parts[0], lastName: "" };
   return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
@@ -948,12 +978,18 @@ function BuiltInInlineCellEditor({
         title={editOnDisplayClick ? `Click to edit ${label}` : undefined}
         style={{
           ...inlineBuiltinCellStyle,
-          cursor: editOnDisplayClick ? inlineBuiltinCellStyle.cursor : "default",
+          cursor: editOnDisplayClick
+            ? inlineBuiltinCellStyle.cursor
+            : "default",
         }}
       >
         <span
           style={{
+            display: "block",
+            flex: "1 1 auto",
+            width: 0,
             minWidth: 0,
+            maxWidth: "100%",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -1079,6 +1115,8 @@ const Leads = () => {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const leadRequestSequenceRef = useRef(0);
+  const previousGenericSearchRef = useRef("");
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
   const [pageInput, setPageInput] = useState("1");
@@ -1141,6 +1179,8 @@ const Leads = () => {
   // #892  Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
+  const [leadDuplicate, setLeadDuplicate] = useState(null);
+  const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
   const [sourceFilter, setSourceFilter] = useState("");
   const [subBrandFilter, setSubBrandFilter] = useState(
     isTravel ? activeSubBrand || "" : "",
@@ -1245,7 +1285,12 @@ const Leads = () => {
     if (assignee) setAssigneeFilter(assignee);
     if (webForm) {
       setAdvancedFilters((prev) =>
-        prev.some((f) => f?.field === "webForm") ? prev : [...prev, { field: "webForm", operator: "contains", values: [webForm] }],
+        prev.some((f) => f?.field === "webForm")
+          ? prev
+          : [
+              ...prev,
+              { field: "webForm", operator: "contains", values: [webForm] },
+            ],
       );
     }
     // Read once per URL — re-running on every render would fight the user's
@@ -1271,7 +1316,9 @@ const Leads = () => {
     fetchApi("/api/table-column-prefs/leads", { silent: true })
       .then((data) => {
         if (cancelled) return;
-        setLeadColumnCatalog(Array.isArray(data?.availableColumns) ? data.availableColumns : []);
+        setLeadColumnCatalog(
+          Array.isArray(data?.availableColumns) ? data.availableColumns : [],
+        );
         if (Array.isArray(data?.visible)) {
           setVisibleColumns(data.visible);
         }
@@ -1294,31 +1341,40 @@ const Leads = () => {
   );
   const getColumnDefaultWidth = (key) =>
     LEADS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith("cf_") ? 150 : 140);
-  const getColumnWidth = (key) =>
-    columnLayout.collapsed?.[key]
-      ? LEADS_COLUMN_COLLAPSED_WIDTH
-      : key === "actions"
-        ? Math.max(
-          Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
-          LEADS_ACTIONS_COLUMN_WIDTH,
-        )
-        : key === "name"
-          ? Math.max(
-            LEADS_NAME_COLUMN_MIN_WIDTH,
-            Math.min(
-              Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
-              LEADS_NAME_COLUMN_MAX_WIDTH,
-            ),
-          )
-          : Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
+  const getColumnWidth = (key) => {
+    if (columnLayout.collapsed?.[key]) return LEADS_COLUMN_COLLAPSED_WIDTH;
+    const configuredWidth =
+      Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
+    if (key === "actions") {
+      return Math.max(configuredWidth, LEADS_ACTIONS_COLUMN_WIDTH);
+    }
+    if (key === "name") {
+      return Math.max(
+        LEADS_NAME_COLUMN_MIN_WIDTH,
+        Math.min(configuredWidth, LEADS_NAME_COLUMN_MAX_WIDTH),
+      );
+    }
+    if (key === "source") {
+      return Math.max(configuredWidth, LEADS_SOURCE_COLUMN_MIN_WIDTH);
+    }
+    if (key === "assignedTo") {
+      return Math.max(configuredWidth, LEADS_ASSIGNED_COLUMN_MIN_WIDTH);
+    }
+    return configuredWidth;
+  };
   const setColumnWidth = (key, width) => {
     const minWidth =
       key === "actions"
         ? LEADS_ACTIONS_COLUMN_WIDTH
         : key === "name"
           ? LEADS_NAME_COLUMN_MIN_WIDTH
-          : LEADS_COLUMN_MIN_WIDTH;
-    const maxWidth = key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
+          : key === "source"
+            ? LEADS_SOURCE_COLUMN_MIN_WIDTH
+            : key === "assignedTo"
+              ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
+              : LEADS_COLUMN_MIN_WIDTH;
+    const maxWidth =
+      key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
     const nextWidth = Math.max(minWidth, Math.min(Math.round(width), maxWidth));
     setColumnLayout((prev) => ({
       widths: { ...(prev.widths || {}), [key]: nextWidth },
@@ -1378,16 +1434,31 @@ const Leads = () => {
   });
 
   const fetchLeads = async ({ background = false } = {}) => {
+    const requestSequence = ++leadRequestSequenceRef.current;
     if (!background) setLoading(true);
     try {
       const filtersQs =
         advancedFilters.length > 0
           ? `&filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
           : "";
+      const genericSearchQs = isGeneric && searchTerm.trim()
+        ? `&q=${encodeURIComponent(searchTerm.trim())}`
+        : "";
+      const matchingCampaignIds = isGeneric && searchTerm.trim()
+        ? callifiedCampaigns
+          .filter((campaign) => String(campaign?.name || "").toLowerCase().includes(searchTerm.trim().toLowerCase()))
+          .map((campaign) => Number(campaign.id))
+          .filter((campaignId) => Number.isInteger(campaignId) && campaignId > 0)
+          .slice(0, 100)
+        : [];
+      const campaignSearchQs = matchingCampaignIds.length
+        ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
+        : "";
       const data = await fetchApi(
-        `/api/contacts?status=Lead&limit=500${filtersQs}`,
+        `/api/contacts?status=Lead&limit=500${genericSearchQs}${campaignSearchQs}${filtersQs}`,
       );
       const rows = Array.isArray(data) ? data : [];
+      if (requestSequence !== leadRequestSequenceRef.current) return rows;
       let mergedRows = rows;
       setLeads((previousRows) => {
         const previousById = new Map(previousRows.map((row) => [row.id, row]));
@@ -1411,16 +1482,22 @@ const Leads = () => {
       });
       return mergedRows;
     } catch {
-      if (!background) notify.error("Failed to load leads");
+      if (requestSequence === leadRequestSequenceRef.current && !background) {
+        notify.error("Failed to load leads");
+      }
       return [];
     } finally {
-      if (!background) setLoading(false);
+      if (requestSequence === leadRequestSequenceRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   const loadLeadTagCatalog = useCallback(async () => {
     try {
-      const data = await fetchApi("/api/contacts/filter-values/tags?status=Lead");
+      const data = await fetchApi(
+        "/api/contacts/filter-values/tags?status=Lead",
+      );
       const rows = Array.isArray(data?.values)
         ? data.values
         : Array.isArray(data)
@@ -1482,9 +1559,9 @@ const Leads = () => {
       const enabled = !!d?.enabled;
       const rules = Array.isArray(d?.rules)
         ? d.rules.map((r, idx) => ({
-          ...r,
-          id: r.id || `rule-${idx}-${Date.now()}`,
-        }))
+            ...r,
+            id: r.id || `rule-${idx}-${Date.now()}`,
+          }))
         : [];
       setAutoCampaignRulesEnabled(enabled);
       setAutoCampaignRules(rules);
@@ -1534,8 +1611,8 @@ const Leads = () => {
       } catch (err) {
         notify.error(
           err?.body?.error ||
-          err?.message ||
-          "Failed to save auto-assign rules",
+            err?.message ||
+            "Failed to save auto-assign rules",
         );
       } finally {
         setAutoCampaignRulesSaving(false);
@@ -1773,41 +1850,6 @@ const Leads = () => {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    let stopped = false;
-    let inFlight = false;
-
-    const refreshVisibleLeads = async () => {
-      if (stopped || inFlight) return;
-      if (
-        typeof document !== "undefined" &&
-        document.visibilityState === "hidden"
-      )
-        return;
-      inFlight = true;
-      try {
-        await fetchLeads({ background: true });
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    const intervalId = window.setInterval(
-      refreshVisibleLeads,
-      LEADS_AUTO_REFRESH_MS,
-    );
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshVisibleLeads();
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      stopped = true;
-      window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Refetch (server-side) whenever the FilterPanel's filter set changes.
   // Skips the very first render — the mount effect above already fetched
   // once with the (empty) initial advancedFilters.
@@ -1819,6 +1861,20 @@ const Leads = () => {
     }
     fetchLeads();
   }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Generic CRM lead search is server-backed. Keep the existing local
+  // filtering/rendering behavior intact while exposing the typed value as
+  // `q` in the contacts API request.
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    const normalizedSearch = searchTerm.trim();
+    if (normalizedSearch === previousGenericSearchRef.current) return undefined;
+    previousGenericSearchRef.current = normalizedSearch;
+    const timer = setTimeout(() => {
+      fetchLeads({ background: true });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [isGeneric, searchTerm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response
@@ -2208,7 +2264,10 @@ const Leads = () => {
   useEffect(() => {
     if (!creating) return undefined;
     const onKey = (e) => {
-      if (e.key === "Escape") setCreating(false);
+      if (e.key === "Escape") {
+        setCreating(false);
+        setLeadDuplicate(null);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -2223,7 +2282,51 @@ const Leads = () => {
   }, [aiSettingsOpen]);
 
   const openCreate = () => setCreating(true);
-  const closeCreate = () => setCreating(false);
+  const closeCreate = () => {
+    setCreating(false);
+    setLeadDuplicate(null);
+  };
+
+  const createSeparateProductLead = async () => {
+    const phoneOut = isWellness
+      ? String(newLead.phone || "").trim()
+      : newLead.phone
+        ? `${newLead.countryCode} ${newLead.phone}`
+        : "";
+    setCreatingDuplicateLead(true);
+    try {
+      await fetchApi("/api/contacts?force=true", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...newLead,
+          name: String(newLead.name || "").trim(),
+          phone: phoneOut,
+          countryCode: undefined,
+          skipInitialAssignee: isGeneric ? true : undefined,
+        }),
+      });
+      setNewLead({
+        name: "",
+        email: "",
+        company: "",
+        title: "",
+        countryCode: "+1",
+        phone: "",
+        source: "Organic",
+        status: "Lead",
+        customFields: {},
+      });
+      setLeadDuplicate(null);
+      setCreating(false);
+      notify.success("Separate product lead created successfully");
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to create lead");
+    } finally {
+      setCreatingDuplicateLead(false);
+      fetchLeads({ background: true });
+    }
+  };
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
@@ -2372,7 +2475,19 @@ const Leads = () => {
       });
       // #892  close the drawer on successful create; the list refresh
       // below puts the new row at the top so the user sees the result.
-      setCreating(false);
+      closeCreate();
+    } catch (err) {
+      if (err?.body?.code === "DUPLICATE_CONTACT") {
+        setLeadDuplicate({
+          existingContactId: err.body.existingContactId,
+          matchedBy: err.body.matchedBy,
+          contact: err.body.contact,
+        });
+      } else {
+        notify.error(
+          err?.body?.error || err?.message || "Failed to create lead",
+        );
+      }
     } finally {
       fetchLeads({ background: true });
     }
@@ -2430,15 +2545,15 @@ const Leads = () => {
         prev.map((row) =>
           row.id === editing.id
             ? {
-              ...row,
-              name: editForm.name.trim(),
-              email: editForm.email.trim(),
-              company: editForm.company.trim(),
-              title: editForm.title.trim(),
-              source: editForm.source,
-              customFields: editForm.customFields || {},
-              updatedAt: savedUpdatedAt,
-            }
+                ...row,
+                name: editForm.name.trim(),
+                email: editForm.email.trim(),
+                company: editForm.company.trim(),
+                title: editForm.title.trim(),
+                source: editForm.source,
+                customFields: editForm.customFields || {},
+                updatedAt: savedUpdatedAt,
+              }
             : row,
         ),
       );
@@ -2515,13 +2630,17 @@ const Leads = () => {
       const deletedCount = Number.isFinite(Number(res?.deleted))
         ? Number(res.deleted)
         : selectedLeads.length;
-      notify.success(`Deleted ${deletedCount} lead${deletedCount === 1 ? "" : "s"}`);
+      notify.success(
+        `Deleted ${deletedCount} lead${deletedCount === 1 ? "" : "s"}`,
+      );
       setSelectedLeads([]);
       setBulkAgent("");
       setBulkCampaignDropdownOpen(false);
       fetchLeads({ background: true });
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to delete leads");
+      notify.error(
+        err?.body?.error || err?.message || "Failed to delete leads",
+      );
     }
   };
 
@@ -2596,9 +2715,9 @@ const Leads = () => {
         prev.map((l) =>
           l.id === lead.id
             ? {
-              ...l,
-              callifiedCampaignId: previousId ? Number(previousId) : null,
-            }
+                ...l,
+                callifiedCampaignId: previousId ? Number(previousId) : null,
+              }
             : l,
         ),
       );
@@ -2816,19 +2935,19 @@ const Leads = () => {
         prev.map((l) =>
           l.id === lead.id
             ? {
-              ...l,
-              callifiedLeadStatus: result?.callifiedLeadStatus ?? status,
-              callifiedLeadStatusSource:
-                result?.callifiedLeadStatusSource ?? "manual",
-              callifiedLeadStatusReason:
-                result?.callifiedLeadStatusReason ??
-                "Status changed manually by user.",
-              callifiedLeadStatusUpdatedAt:
-                result?.callifiedLeadStatusUpdatedAt ??
-                new Date().toISOString(),
-              assignedToId: result?.assignedToId ?? l.assignedToId,
-              assignedTo: result?.assignedTo ?? l.assignedTo,
-            }
+                ...l,
+                callifiedLeadStatus: result?.callifiedLeadStatus ?? status,
+                callifiedLeadStatusSource:
+                  result?.callifiedLeadStatusSource ?? "manual",
+                callifiedLeadStatusReason:
+                  result?.callifiedLeadStatusReason ??
+                  "Status changed manually by user.",
+                callifiedLeadStatusUpdatedAt:
+                  result?.callifiedLeadStatusUpdatedAt ??
+                  new Date().toISOString(),
+                assignedToId: result?.assignedToId ?? l.assignedToId,
+                assignedTo: result?.assignedTo ?? l.assignedTo,
+              }
             : l,
         ),
       );
@@ -2857,7 +2976,9 @@ const Leads = () => {
     setDrillParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        ["callStatus", "source", "assignee", "webForm"].forEach((key) => next.delete(key));
+        ["callStatus", "source", "assignee", "webForm"].forEach((key) =>
+          next.delete(key),
+        );
         return next;
       },
       { replace: true },
@@ -2940,7 +3061,8 @@ const Leads = () => {
     );
   };
   const customFieldByKey = useMemo(
-    () => new Map(customFieldDefs.map((field) => [`cf_${field.fieldKey}`, field])),
+    () =>
+      new Map(customFieldDefs.map((field) => [`cf_${field.fieldKey}`, field])),
     [customFieldDefs],
   );
   const leadColumnKeySet = useMemo(
@@ -2952,9 +3074,9 @@ const Leads = () => {
       Array.isArray(visibleColumns)
         ? visibleColumns
         : [
-          ...LEADS_DEFAULT_VISIBLE_COLUMNS,
-          ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
-        ],
+            ...LEADS_DEFAULT_VISIBLE_COLUMNS,
+            ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
+          ],
     [customFieldDefs, visibleColumns],
   );
   const leadUserColumnDefs = preferredVisibleColumns
@@ -2966,6 +3088,7 @@ const Leads = () => {
         key === "phone" ||
         key === "aiScore" ||
         key === "source" ||
+        key === "medium" ||
         // Web Form is generic-CRM only (wellness/travel never see it).
         (key === "webForm" && isGeneric) ||
         // Sub-brand is generic+travel — the web-form Sub-brand field
@@ -3006,6 +3129,7 @@ const Leads = () => {
       if (key === "phone") return { key, label: "Phone" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
+      if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
       if (key === "tags") return { key, label: "Tags" };
@@ -3022,13 +3146,16 @@ const Leads = () => {
       if (key === "description") return { key, label: "Note" };
       if (key === "stateCode") return { key, label: "State" };
       if (key === "lastUpdated") return { key, label: "Last Updated" };
-      if (key === "firstTouchSource") return { key, label: "First Touch Source" };
+      if (key === "firstTouchSource")
+        return { key, label: "First Touch Source" };
       if (key === "lastTouchSource") return { key, label: "Last Touch Source" };
-      if (key === "treatmentOfInterest") return { key, label: "Treatment Of Interest" };
+      if (key === "treatmentOfInterest")
+        return { key, label: "Treatment Of Interest" };
       if (key === "birthDate") return { key, label: "Birth Date" };
       if (key === "anniversary") return { key, label: "Anniversary" };
       if (key === "gst") return { key, label: "GSTIN" };
-      if (key === "billingStateCode") return { key, label: "Billing State Code" };
+      if (key === "billingStateCode")
+        return { key, label: "Billing State Code" };
       const field = customFieldByKey.get(key);
       return {
         key,
@@ -3040,17 +3167,17 @@ const Leads = () => {
   const leadFixedExtraColumnDefs = [
     ...(isGeneric
       ? [
-        { key: "campaign", label: "Callified Campaign" },
-        { key: "callStatus", label: "Call Status" },
-        { key: "callifiedAi", label: "Callified AI call" },
-        { key: "callifiedScore", label: "Callified Score" },
-      ]
+          { key: "campaign", label: "Callified Campaign" },
+          { key: "callStatus", label: "Call Status" },
+          { key: "callifiedAi", label: "Callified AI call" },
+          { key: "callifiedScore", label: "Callified Score" },
+        ]
       : []),
     ...(isTravel
       ? [
-        { key: "subBrand", label: "Sub-brand" },
-        { key: "amount", label: "Amount" },
-      ]
+          { key: "subBrand", label: "Sub-brand" },
+          { key: "amount", label: "Amount" },
+        ]
       : []),
   ];
   const isLeadFixedColumnVisible = (key) =>
@@ -3076,19 +3203,33 @@ const Leads = () => {
       case "email":
         return { fieldKey: "email", label: "Email", kind: "text" };
       case "company":
-        return { fieldKey: "company", label: isTravel ? "Category" : "Company", kind: "text" };
+        return {
+          fieldKey: "company",
+          label: isTravel ? "Category" : "Company",
+          kind: "text",
+        };
       case "phone":
         return { fieldKey: "phone", label: "Phone", kind: "text" };
       case "source":
         return { fieldKey: "source", label: "Source", kind: "text" };
+      case "medium":
+        return { fieldKey: "medium", label: "Medium", kind: "text" };
       case "webForm":
         // Generic-only column (never rendered for wellness/travel), so the
         // menu — and this filter entry — is unreachable outside generic.
         return { fieldKey: "webForm", label: "Web Form", kind: "text" };
       case "campaign":
-        return { fieldKey: "callifiedCampaignId", label: "Callified Campaign", kind: "id" };
+        return {
+          fieldKey: "callifiedCampaignId",
+          label: "Callified Campaign",
+          kind: "id",
+        };
       case "callStatus":
-        return { fieldKey: "callifiedLeadStatus", label: "Call Status", kind: "text" };
+        return {
+          fieldKey: "callifiedLeadStatus",
+          label: "Call Status",
+          kind: "text",
+        };
       case "tags":
         return { fieldKey: "tags", label: "Tags", kind: "text" };
       case "aiScore":
@@ -3100,11 +3241,23 @@ const Leads = () => {
       case "lastUpdated":
         return { fieldKey: "updatedAt", label: "Last Updated", kind: "date" };
       case "firstTouchSource":
-        return { fieldKey: "firstTouchSource", label: "First Touch Source", kind: "text" };
+        return {
+          fieldKey: "firstTouchSource",
+          label: "First Touch Source",
+          kind: "text",
+        };
       case "lastTouchSource":
-        return { fieldKey: "lastTouchSource", label: "Last Touch Source", kind: "text" };
+        return {
+          fieldKey: "lastTouchSource",
+          label: "Last Touch Source",
+          kind: "text",
+        };
       case "treatmentOfInterest":
-        return { fieldKey: "treatmentOfInterest", label: "Treatment Of Interest", kind: "text" };
+        return {
+          fieldKey: "treatmentOfInterest",
+          label: "Treatment Of Interest",
+          kind: "text",
+        };
       case "birthDate":
         return { fieldKey: "birthDate", label: "Birth Date", kind: "date" };
       case "anniversary":
@@ -3112,7 +3265,11 @@ const Leads = () => {
       case "gst":
         return { fieldKey: "gst", label: "GSTIN", kind: "text" };
       case "billingStateCode":
-        return { fieldKey: "billingStateCode", label: "Billing State Code", kind: "text" };
+        return {
+          fieldKey: "billingStateCode",
+          label: "Billing State Code",
+          kind: "text",
+        };
       case "subBrand":
         return { fieldKey: "subBrand", label: "Sub-brand", kind: "text" };
       default:
@@ -3149,7 +3306,9 @@ const Leads = () => {
       label: column.label,
       customField: Boolean(column.customField),
       field: column.field || null,
-      fixedExtra: leadFixedExtraColumnDefs.some((item) => item.key === column.key),
+      fixedExtra: leadFixedExtraColumnDefs.some(
+        (item) => item.key === column.key,
+      ),
       locked: column.key === "name",
       rect: {
         left: rect.left,
@@ -3225,7 +3384,8 @@ const Leads = () => {
     }));
   };
   const addColumnAdjacent = async (targetKey, side, selectedKey) => {
-    if (!isGeneric || !targetKey || !selectedKey || selectedKey === "name") return;
+    if (!isGeneric || !targetKey || !selectedKey || selectedKey === "name")
+      return;
     const base =
       targetKey === "name"
         ? ["name", ...currentVisibleLeadColumns]
@@ -3295,7 +3455,9 @@ const Leads = () => {
       if (!lead) return "";
       if (key && key.startsWith("cf_")) {
         const customField = customFieldByKey.get(key);
-        return customField ? lead.customFields?.[customField.fieldKey] ?? "" : "";
+        return customField
+          ? (lead.customFields?.[customField.fieldKey] ?? "")
+          : "";
       }
       switch (key) {
         case "name":
@@ -3332,7 +3494,10 @@ const Leads = () => {
           return campaign?.name || "";
         }
         case "callStatus":
-          return getCallStatusMeta(normalizeCallStatus(lead.callifiedLeadStatus)).label || "";
+          return (
+            getCallStatusMeta(normalizeCallStatus(lead.callifiedLeadStatus))
+              .label || ""
+          );
         case "callifiedAi":
           return Number(callifiedSummaries[lead.id]?.callCount || 0);
         case "callifiedScore":
@@ -3347,7 +3512,10 @@ const Leads = () => {
             return Number(tmcEntry.paidTotal);
           }
           const deals = dealsByContact[lead.id] || [];
-          return deals.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0);
+          return deals.reduce(
+            (sum, deal) => sum + (Number(deal.amount) || 0),
+            0,
+          );
         }
         default:
           return lead[key] ?? "";
@@ -3373,7 +3541,8 @@ const Leads = () => {
     });
   };
   const renderHeaderMenuTrigger = (column) => {
-    if (!column || column.key === "select" || column.key === "actions") return null;
+    if (!column || column.key === "select" || column.key === "actions")
+      return null;
     const isActive = headerMenuState?.key === column.key;
     return (
       <button
@@ -3396,7 +3565,9 @@ const Leads = () => {
           padding: 0,
           borderRadius: 6,
           border: "1px solid var(--border-color)",
-          background: isActive ? "var(--surface-hover)" : "var(--surface-color)",
+          background: isActive
+            ? "var(--surface-hover)"
+            : "var(--surface-color)",
           color: "var(--text-secondary)",
           cursor: "pointer",
         }}
@@ -3480,15 +3651,25 @@ const Leads = () => {
     }
 
     syncTablePairHeight(frozenHeaderRow, scrollHeaderRow);
+    const scrollRowsByLeadId = new Map(
+      scrollRows
+        .map((row) => [row.dataset.leadRowId, row])
+        .filter(([leadId]) => leadId),
+    );
     frozenRows.forEach((frozenRow, index) => {
-      const scrollRow = scrollRows[index];
+      const scrollRow =
+        (frozenRow.dataset.leadRowId &&
+          scrollRowsByLeadId.get(frozenRow.dataset.leadRowId)) ||
+        scrollRows[index];
       if (!scrollRow) return;
       syncTablePairHeight(frozenRow, scrollRow);
     });
   }, [leadsRowSyncEnabled, syncTablePairHeight]);
   const genericHeaderSyncEnabled = isGeneric;
   const genericHeaderSyncSignature = genericHeaderSyncEnabled
-    ? tableColumnDefs.map((column) => `${column.key}:${column.label}`).join("::")
+    ? tableColumnDefs
+        .map((column) => `${column.key}:${column.label}`)
+        .join("::")
     : "";
   const syncGenericHeaderHeight = useCallback(() => {
     if (!genericHeaderSyncEnabled) return;
@@ -3503,7 +3684,8 @@ const Leads = () => {
 
   const leadDetailPath = (lead) => {
     if (isTravel) return `/travel/leads/${lead.id}`;
-    return `/contacts/${lead.id}`;
+    if (!isGeneric) return `/contacts/${lead.id}`;
+    return `/leads/${lead.id}`;
   };
 
   const leadTagOptions = Array.from(
@@ -3572,20 +3754,20 @@ const Leads = () => {
       prev.map((row) =>
         row.id === lead.id
           ? {
-            ...row,
-            [field]: value,
-            updatedAt: updatedLead?.updatedAt || row.updatedAt,
-          }
+              ...row,
+              [field]: value,
+              updatedAt: updatedLead?.updatedAt || row.updatedAt,
+            }
           : row,
       ),
     );
     setPreviewLead((current) =>
       current?.id === lead.id
         ? {
-          ...current,
-          [field]: value,
-          updatedAt: updatedLead?.updatedAt || current.updatedAt,
-        }
+            ...current,
+            [field]: value,
+            updatedAt: updatedLead?.updatedAt || current.updatedAt,
+          }
         : current,
     );
     if (field === "tags" && Array.isArray(value)) {
@@ -3648,7 +3830,13 @@ const Leads = () => {
   };
 
   const filteredLeads = leads.filter((lead) => {
-    if (!matchesSource(isGeneric ? leadSourceLabel(lead, true) : lead.source, sourceFilter)) return false;
+    if (
+      !matchesSource(
+        isGeneric ? leadSourceLabel(lead, true) : lead.source,
+        sourceFilter,
+      )
+    )
+      return false;
     if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter)
       return false;
     if (isTravel && !leadMatchesStage(lead)) return false;
@@ -3713,12 +3901,7 @@ const Leads = () => {
       }
       return collator.compare(String(aValue), String(bValue)) * direction;
     });
-  }, [
-    filteredLeads,
-    getLeadSortValue,
-    sortConfig.direction,
-    sortConfig.key,
-  ]);
+  }, [filteredLeads, getLeadSortValue, sortConfig.direction, sortConfig.key]);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   // Batch-load Callified call summaries for visible leads (counts + last score).
@@ -3785,10 +3968,10 @@ const Leads = () => {
               prev.map((l) =>
                 l.id === lead.id
                   ? {
-                    ...l,
-                    assignedToId: result.assignedToId,
-                    assignedTo: result.assignedTo,
-                  }
+                      ...l,
+                      assignedToId: result.assignedToId,
+                      assignedTo: result.assignedTo,
+                    }
                   : l,
               ),
             );
@@ -3826,38 +4009,40 @@ const Leads = () => {
     sortedLeads.length === 0
       ? 0
       : Math.min(
-        sortedLeads.length,
-        currentLeadsPage * leadsPageSize + leadsPageSize,
-      );
+          sortedLeads.length,
+          currentLeadsPage * leadsPageSize + leadsPageSize,
+        );
   const paginatedLeads = sortedLeads.slice(
     currentLeadsPage * leadsPageSize,
     currentLeadsPage * leadsPageSize + leadsPageSize,
   );
   const leadsRowSyncSignature = leadsRowSyncEnabled
     ? paginatedLeads
-      .map((lead) =>
-        [
-          lead.id,
-          lead.name,
-          lead.email,
-          lead.company,
-          lead.phone,
-          lead.source,
-          Array.isArray(lead.tags) ? lead.tags.join(",") : String(lead.tags || ""),
-          lead.assignedToId ?? "",
-          lead.createdAt ?? "",
-          lead.subBrand ?? "",
-          lead.aiScore ?? "",
-          lead.status ?? "",
-          lead.callifiedLeadStatus ?? "",
-          lead.callifiedCampaignId ?? "",
-        ].join("|"),
-      )
-      .concat(
-        isGeneric
-          ? `::${genericHeaderSyncSignature}::${JSON.stringify(columnLayout)}`
-          : "",
-      )
+        .map((lead) =>
+          [
+            lead.id,
+            lead.name,
+            lead.email,
+            lead.company,
+            lead.phone,
+            lead.source,
+            Array.isArray(lead.tags)
+              ? lead.tags.join(",")
+              : String(lead.tags || ""),
+            lead.assignedToId ?? "",
+            lead.createdAt ?? "",
+            lead.subBrand ?? "",
+            lead.aiScore ?? "",
+            lead.status ?? "",
+            lead.callifiedLeadStatus ?? "",
+            lead.callifiedCampaignId ?? "",
+          ].join("|"),
+        )
+        .concat(
+          isGeneric
+            ? `::${genericHeaderSyncSignature}::${JSON.stringify(columnLayout)}`
+            : "",
+        )
     : "";
 
   useLayoutEffect(() => {
@@ -3866,15 +4051,43 @@ const Leads = () => {
     const scrollableTable = leadsScrollableTableRef.current;
     if (!frozenTable || !scrollableTable) return undefined;
     syncSplitTableRowHeights();
+    let frameId = null;
+    const syncAfterLayout = () => {
+      if (frameId !== null) return;
+      if (typeof window.requestAnimationFrame !== "function") {
+        syncSplitTableRowHeights();
+        return;
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        syncSplitTableRowHeights();
+      });
+    };
+    let resizeObserver;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(syncAfterLayout);
+      [frozenTable, scrollableTable].forEach((table) => {
+        resizeObserver.observe(table);
+        table
+          .querySelectorAll("thead tr, tbody tr")
+          .forEach((row) => resizeObserver.observe(row));
+      });
+    }
+    syncAfterLayout();
     return () => {
+      if (
+        frameId !== null &&
+        typeof window.cancelAnimationFrame === "function"
+      ) {
+        window.cancelAnimationFrame(frameId);
+      }
+      resizeObserver?.disconnect();
       frozenTable?.querySelectorAll("thead tr, tbody tr").forEach((row) => {
         row.style.height = "";
       });
-      scrollableTable
-        ?.querySelectorAll("thead tr, tbody tr")
-        .forEach((row) => {
-          row.style.height = "";
-        });
+      scrollableTable?.querySelectorAll("thead tr, tbody tr").forEach((row) => {
+        row.style.height = "";
+      });
     };
   }, [leadsRowSyncEnabled, leadsRowSyncSignature, syncSplitTableRowHeights]);
 
@@ -4092,7 +4305,7 @@ const Leads = () => {
             display: "flex",
             alignItems: "center",
             justifyContent: "flex-start",
-            gap: "0.4rem",
+            gap: key === "name" && leadingControls ? "0.8rem" : "0.5rem",
             minWidth: 0,
           }}
         >
@@ -4114,7 +4327,9 @@ const Leads = () => {
             {label}
           </span>
           {controls && (
-            <span style={{ display: "inline-flex", flexShrink: 0 }}>{controls}</span>
+            <span style={{ display: "inline-flex", flexShrink: 0 }}>
+              {controls}
+            </span>
           )}
         </div>
         {!locked && (
@@ -4150,8 +4365,10 @@ const Leads = () => {
     renderValue,
     required = false,
     onSave = updateLeadInlineValue,
+    className,
   }) => (
     <td
+      className={className}
       style={getBodyCellStyle(field, extraStyle)}
       onClick={(e) => e.stopPropagation()}
     >
@@ -4176,9 +4393,9 @@ const Leads = () => {
       { paddingRight: "2rem" },
       column.customField
         ? {
-          key: column.field?.id || column.key,
-          className: "leads-custom-field-col",
-        }
+            key: column.field?.id || column.key,
+            className: "leads-custom-field-col",
+          }
         : {},
       renderHeaderMenuTrigger(column),
     );
@@ -4206,13 +4423,13 @@ const Leads = () => {
                 prev.map((l) =>
                   l.id === lead.id
                     ? {
-                      ...l,
-                      customFields: {
-                        ...(l.customFields || {}),
-                        [field.fieldKey]: newValue,
-                      },
-                      updatedAt: updatedAt || l.updatedAt,
-                    }
+                        ...l,
+                        customFields: {
+                          ...(l.customFields || {}),
+                          [field.fieldKey]: newValue,
+                        },
+                        updatedAt: updatedAt || l.updatedAt,
+                      }
                     : l,
                 ),
               );
@@ -4286,10 +4503,30 @@ const Leads = () => {
           value: leadSourceLabel(lead, isGeneric),
           type: "select",
           options: sourceFilterOptions,
+          className: "leads-source-col",
           renderValue: (displayValue) => (
-            <span style={sourceBadgeStyle}>{displayValue}</span>
+            <span
+              className="leads-source-badge"
+              style={sourceBadgeStyle}
+              title={displayValue || "Source"}
+            >
+              {displayValue}
+            </span>
           ),
         });
+      case "medium": {
+        // Web-form Medium — free-text Contact scalar, inline-editable.
+        // Kept separate from Source (Source=Website, Medium=Google).
+        return renderBuiltInLeadCell({
+          lead,
+          field: "medium",
+          label: "Medium",
+          value: lead.medium,
+          extraStyle: { color: "var(--text-secondary)" },
+          renderValue: (displayValue) =>
+            displayValue ? String(displayValue) : "",
+        });
+      }
       case "webForm": {
         // Read-only: which web form this lead came through (generic only).
         const formName = leadWebFormName(lead);
@@ -4324,7 +4561,8 @@ const Leads = () => {
           label: "Sub-brand",
           value: lead.subBrand,
           extraStyle: { color: "var(--text-secondary)" },
-          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+          renderValue: (displayValue) =>
+            displayValue ? String(displayValue) : "",
         });
       }
       case "tags":
@@ -4349,25 +4587,29 @@ const Leads = () => {
             onClick={(e) => e.stopPropagation()}
           >
             {isAdmin || isTravel ? (
-              <select
-                className="input-field"
-                value={lead.assignedToId || ""}
-                onChange={(e) => handleAssign(lead.id, e.target.value)}
-                style={{
-                  padding: "0.375rem 0.5rem",
-                  fontSize: "0.8rem",
-                  minWidth: "130px",
-                  background: "var(--input-bg)",
-                }}
-                aria-label={`Assign ${lead.name || "lead"} to staff`}
-              >
-                <option value="">Unassigned</option>
-                {assignableStaff(lead).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {staffOptionLabel(s)}
-                  </option>
-                ))}
-              </select>
+              <div className="leads-assignee-control">
+                <select
+                  className="input-field"
+                  value={lead.assignedToId || ""}
+                  onChange={(e) => handleAssign(lead.id, e.target.value)}
+                  style={{
+                    width: "100%",
+                    minWidth: 0,
+                    boxSizing: "border-box",
+                    padding: "0.375rem 0.5rem",
+                    fontSize: "0.8rem",
+                    background: "var(--input-bg)",
+                  }}
+                  aria-label={`Assign ${lead.name || "lead"} to staff`}
+                >
+                  <option value="">Unassigned</option>
+                  {assignableStaff(lead).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {staffOptionLabel(s)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             ) : (
               <span
                 style={{
@@ -4432,7 +4674,8 @@ const Leads = () => {
               ? "var(--text-primary)"
               : "var(--text-secondary)",
           },
-          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+          renderValue: (displayValue) =>
+            displayValue ? String(displayValue) : "",
           onSave: async (row, _field, part) => {
             const current = splitLeadName(row.name);
             const next = isFirst
@@ -4447,7 +4690,9 @@ const Leads = () => {
         if (column.key === "website" && isGeneric) {
           const raw = String(lead.website || "").trim();
           const href = raw
-            ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`)
+            ? /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)
+              ? raw
+              : `https://${raw}`
             : "";
           return renderBuiltInLeadCell({
             lead,
@@ -4474,7 +4719,9 @@ const Leads = () => {
         if (column.key === "website" && !isGeneric) {
           const rawWebsite = String(lead.website || "").trim();
           const hrefWebsite = rawWebsite
-            ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawWebsite) ? rawWebsite : `https://${rawWebsite}`)
+            ? /^[a-z][a-z0-9+.-]*:\/\//i.test(rawWebsite)
+              ? rawWebsite
+              : `https://${rawWebsite}`
             : "";
           return (
             <td
@@ -4486,7 +4733,13 @@ const Leads = () => {
               onClick={(e) => e.stopPropagation()}
             >
               {hrefWebsite ? (
-                <a href={hrefWebsite} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--accent-color)" }}>
+                <a
+                  href={hrefWebsite}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ color: "var(--accent-color)" }}
+                >
                   {rawWebsite}
                 </a>
               ) : (
@@ -4498,7 +4751,9 @@ const Leads = () => {
         if (column.key === "linkedin") {
           const rawLinkedin = String(lead.linkedin || "").trim();
           const hrefLinkedin = rawLinkedin
-            ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawLinkedin) ? rawLinkedin : `https://${rawLinkedin}`)
+            ? /^[a-z][a-z0-9+.-]*:\/\//i.test(rawLinkedin)
+              ? rawLinkedin
+              : `https://${rawLinkedin}`
             : "";
           return renderBuiltInLeadCell({
             lead,
@@ -4508,7 +4763,13 @@ const Leads = () => {
             extraStyle: { color: "var(--text-secondary)" },
             renderValue: () =>
               hrefLinkedin ? (
-                <a href={hrefLinkedin} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--accent-color)" }}>
+                <a
+                  href={hrefLinkedin}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ color: "var(--accent-color)" }}
+                >
                   {rawLinkedin}
                 </a>
               ) : (
@@ -4517,14 +4778,19 @@ const Leads = () => {
           });
         }
         return (
-          <td style={getBodyCellStyle(column.key, { color: "var(--text-secondary)", fontSize: "0.875rem" })}>
+          <td
+            style={getBodyCellStyle(column.key, {
+              color: "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+          >
             {lead.website || "—"}
           </td>
         );
       }
-        // Read-only link cell — prepends https:// when the stored value
-        // has no scheme so the anchor actually navigates.
-        /* const raw = String(lead[column.key] || "").trim();
+      // Read-only link cell — prepends https:// when the stored value
+      // has no scheme so the anchor actually navigates.
+      /* const raw = String(lead[column.key] || "").trim();
         const href = raw ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`) : "";
         return (
           <td
@@ -4562,14 +4828,21 @@ const Leads = () => {
             label: "No Of Employee",
             value: lead.companySize,
             extraStyle: { color: "var(--text-secondary)" },
-            renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+            renderValue: (displayValue) =>
+              displayValue ? String(displayValue) : "",
           });
         }
-        const value = column.key === "lastUpdated"
-          ? (lead.updatedAt || lead.createdAt)
-          : lead.updatedAt;
+        const value =
+          column.key === "lastUpdated"
+            ? lead.updatedAt || lead.createdAt
+            : lead.updatedAt;
         return (
-          <td style={getBodyCellStyle(column.key, { color: value ? "var(--text-primary)" : "var(--text-secondary)", fontSize: "0.875rem" })}>
+          <td
+            style={getBodyCellStyle(column.key, {
+              color: value ? "var(--text-primary)" : "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+          >
             {value ? formatDate(value) : "—"}
           </td>
         );
@@ -4594,13 +4867,34 @@ const Leads = () => {
           treatmentOfInterest: "Treatment Of Interest",
           gst: "GSTIN",
         };
+        const noteActivity =
+          column.key === "description"
+            ? (lead.activities || [])
+                .filter(
+                  (activity) =>
+                    activity.type === "Note" && activity.description,
+                )
+                .reduce(
+                  (latest, activity) =>
+                    !latest ||
+                    new Date(activity.createdAt) > new Date(latest.createdAt)
+                      ? activity
+                      : latest,
+                  null,
+                )
+            : null;
+        const displayValue =
+          column.key === "description"
+            ? noteActivity?.description || lead.description
+            : lead[column.key];
         return renderBuiltInLeadCell({
           lead,
           field: column.key,
           label: scalarLabels[column.key] || column.label,
-          value: lead[column.key],
+          value: displayValue,
           extraStyle: { color: "var(--text-secondary)" },
-          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+          renderValue: (displayValue) =>
+            displayValue ? String(displayValue) : "",
         });
       }
       case "birthDate":
@@ -4659,49 +4953,54 @@ const Leads = () => {
     ? Math.max(12, headerMenuRect.bottom + LEADS_HEADER_MENU_GAP)
     : 0;
   const headerMenuBottom = headerMenuRect
-    ? Math.max(12, window.innerHeight - headerMenuRect.top + LEADS_HEADER_MENU_GAP)
+    ? Math.max(
+        12,
+        window.innerHeight - headerMenuRect.top + LEADS_HEADER_MENU_GAP,
+      )
     : 0;
   const headerMenuLeft = headerMenuRect
     ? Math.max(
-      12,
-      Math.min(
-        window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
-        headerMenuRect.left,
-      ),
-    )
+        12,
+        Math.min(
+          window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
+          headerMenuRect.left,
+        ),
+      )
     : 0;
   const headerMenuMaxHeight = headerMenuRect
     ? Math.max(
-      220,
-      Math.min(
-        headerMenuOpenUp
-          ? headerMenuRect.top - 12
-          : window.innerHeight - headerMenuRect.bottom - 12,
-        420,
-      ),
-    )
+        220,
+        Math.min(
+          headerMenuOpenUp
+            ? headerMenuRect.top - 12
+            : window.innerHeight - headerMenuRect.bottom - 12,
+          420,
+        ),
+      )
     : 0;
   const headerSubmenuLeft = headerMenuRect
     ? Math.max(
-      12,
-      Math.min(
-        window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
-        headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
-      ),
-    )
+        12,
+        Math.min(
+          window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
+          headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
+        ),
+      )
     : 0;
   const headerSubmenuOpenLeft =
     headerMenuRect &&
     headerMenuLeft +
-    LEADS_HEADER_MENU_WIDTH +
-    LEADS_HEADER_MENU_SUBMENU_WIDTH +
-    (LEADS_HEADER_MENU_GAP * 2) >
-    window.innerWidth;
+      LEADS_HEADER_MENU_WIDTH +
+      LEADS_HEADER_MENU_SUBMENU_WIDTH +
+      LEADS_HEADER_MENU_GAP * 2 >
+      window.innerWidth;
   const headerSubmenuFallbackLeft = headerMenuRect
     ? Math.max(
-      12,
-      headerMenuLeft - LEADS_HEADER_MENU_SUBMENU_WIDTH - LEADS_HEADER_MENU_GAP,
-    )
+        12,
+        headerMenuLeft -
+          LEADS_HEADER_MENU_SUBMENU_WIDTH -
+          LEADS_HEADER_MENU_GAP,
+      )
     : 0;
   const headerSubmenuActualLeft = headerSubmenuOpenLeft
     ? headerSubmenuFallbackLeft
@@ -4781,6 +5080,7 @@ const Leads = () => {
             </button>
             <button
               type="button"
+              data-tour="leads-create"
               className="btn-primary"
               aria-label="Create a new lead"
               onClick={openCreate}
@@ -4853,9 +5153,23 @@ const Leads = () => {
                 title="Configure rules to automatically assign Callified campaigns to new leads"
               >
                 <Settings size={14} />
-                <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.05 }}>
+                <span
+                  style={{
+                    display: "inline-flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    lineHeight: 1.05,
+                  }}
+                >
                   <span>Auto-assign</span>
-                  <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>Callified Campaigns</span>
+                  <span
+                    style={{
+                      fontSize: "0.7rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Callified Campaigns
+                  </span>
                 </span>
                 {autoCampaignRulesEnabled && (
                   <span
@@ -4882,10 +5196,14 @@ const Leads = () => {
                     style={{
                       position: "absolute",
                       top: "calc(100% + 4px)",
-                      right: 0,
+                      // Anchor to the toolbar's right edge without allowing
+                      // the popup to be pushed outside the viewport.
+                      left: 0,
                       zIndex: 51,
-                      minWidth: 520,
-                      maxWidth: 560,
+                      width: "min(560px, calc(100vw - 24px))",
+                      minWidth: 0,
+                      maxWidth: "calc(100vw - 24px)",
+                      boxSizing: "border-box",
                       padding: "1rem",
                       boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
                       background: "var(--bg-color)",
@@ -4991,12 +5309,12 @@ const Leads = () => {
                           const columnOptions = catalogOptions.length
                             ? catalogOptions
                             : [
-                              ...BUILTIN_RULE_COLUMNS,
-                              ...customFieldDefs.map((f) => ({
-                                key: `cf_${f.fieldKey}`,
-                                label: f.label,
-                              })),
-                            ];
+                                ...BUILTIN_RULE_COLUMNS,
+                                ...customFieldDefs.map((f) => ({
+                                  key: `cf_${f.fieldKey}`,
+                                  label: f.label,
+                                })),
+                              ];
                           const ruleIsSaved = savedAutoCampaignRuleIds.has(
                             rule.id,
                           );
@@ -5147,8 +5465,8 @@ const Leads = () => {
                                     fontSize: "0.75rem",
                                     cursor:
                                       isAdmin &&
-                                        ruleIsValid &&
-                                        !autoCampaignRulesSaving
+                                      ruleIsValid &&
+                                      !autoCampaignRulesSaving
                                         ? "pointer"
                                         : "not-allowed",
                                     opacity: ruleIsValid ? 1 : 0.5,
@@ -5292,7 +5610,11 @@ const Leads = () => {
                 {selectedCampaignIds.length === 0
                   ? "Select campaigns to dial"
                   : `${selectedCampaignIds.length} campaign${selectedCampaignIds.length === 1 ? "" : "s"} selected`}
-                {campaignDropdownOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {campaignDropdownOpen ? (
+                  <ChevronUp size={14} />
+                ) : (
+                  <ChevronDown size={14} />
+                )}
               </button>
               {campaignDropdownOpen && (
                 <>
@@ -5343,9 +5665,7 @@ const Leads = () => {
                         >
                           <input
                             type="checkbox"
-                            checked={selectedCampaignIds.includes(
-                              String(c.id),
-                            )}
+                            checked={selectedCampaignIds.includes(String(c.id))}
                             onChange={() => {
                               setSelectedCampaignIds((prev) =>
                                 prev.includes(String(c.id))
@@ -5436,7 +5756,11 @@ const Leads = () => {
           >
             <SlidersHorizontal size={14} />
             Bulk actions
-            {leadBulkActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {leadBulkActionsOpen ? (
+              <ChevronUp size={14} />
+            ) : (
+              <ChevronDown size={14} />
+            )}
             {selectedLeads.length > 0 && (
               <span
                 style={{
@@ -6012,6 +6336,7 @@ const Leads = () => {
                 }}
               />
               <input
+                data-tour="leads-search"
                 type="search"
                 className="input-field"
                 placeholder="Search leads..."
@@ -6028,15 +6353,23 @@ const Leads = () => {
                 }}
               />
             </div>
-            
+
             <FilterPanel
               fieldsUrl="/api/contacts/filter-fields?status=Lead"
-              valuesUrl={(field) => `/api/contacts/filter-values/${field}?status=Lead`}
+              valuesUrl={(field) =>
+                `/api/contacts/filter-values/${field}?status=Lead`
+              }
               filters={advancedFilters}
               onChange={setAdvancedFilters}
               triggerLabel="Filter by"
               triggerIcon={
-                <span style={{ display: "inline-flex", alignItems: "center", gap: "0.15rem" }}>
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.15rem",
+                  }}
+                >
                   <Filter size={14} />
                   <ChevronDown size={12} />
                 </span>
@@ -6420,19 +6753,19 @@ const Leads = () => {
                                         const minutes =
                                           dnpIntervalHours === 0
                                             ? Math.max(
-                                              5,
-                                              Math.min(
-                                                59,
-                                                Number(e.target.value) || 0,
-                                              ),
-                                            )
+                                                5,
+                                                Math.min(
+                                                  59,
+                                                  Number(e.target.value) || 0,
+                                                ),
+                                              )
                                             : Math.max(
-                                              0,
-                                              Math.min(
-                                                59,
-                                                Number(e.target.value) || 0,
-                                              ),
-                                            );
+                                                0,
+                                                Math.min(
+                                                  59,
+                                                  Number(e.target.value) || 0,
+                                                ),
+                                              );
                                         const nextMinutes =
                                           dnpIntervalHours * 60 + minutes;
                                         setDnpIntervalMinutes(nextMinutes);
@@ -6743,7 +7076,9 @@ const Leads = () => {
           >
             {/* 16px offset matching the top scrollbar height — only needed
                 when the top bar is rendered (non-generic). */}
-            {showLeadsTopScrollbar && <div className="leads-table-frozen-spacer" />}
+            {showLeadsTopScrollbar && (
+              <div className="leads-table-frozen-spacer" />
+            )}
             <table
               ref={leadsFrozenTableRef}
               className={`${leadsTableClassName} leads-table--frozen`}
@@ -6766,6 +7101,7 @@ const Leads = () => {
               </colgroup>
               <thead>
                 <tr
+                  className="leads-table-header-row"
                   style={{
                     backgroundColor: "var(--table-header-bg)",
                   }}
@@ -6786,11 +7122,7 @@ const Leads = () => {
                         onChange={toggleSelectAll}
                         onClick={(e) => e.stopPropagation()}
                         aria-label="Select all leads"
-                        style={{
-                          cursor: "pointer",
-                          flexShrink: 0,
-                          margin: 0,
-                        }}
+                        style={LEAD_CHECKBOX_STYLE}
                       />
                     ) : null,
                   )}
@@ -6807,6 +7139,7 @@ const Leads = () => {
                   paginatedLeads.map((lead) => (
                     <tr
                       key={lead.id}
+                      data-lead-row-id={String(lead.id)}
                       style={{
                         cursor: "pointer",
                       }}
@@ -6833,11 +7166,7 @@ const Leads = () => {
                               onChange={() => toggleSelect(lead.id)}
                               onClick={(e) => e.stopPropagation()}
                               aria-label={`Select ${lead.name || "lead"}`}
-                              style={{
-                                cursor: "pointer",
-                                flexShrink: 0,
-                                margin: 0,
-                              }}
+                              style={LEAD_CHECKBOX_STYLE}
                             />
                           )}
                           <div style={{ minWidth: 0, flex: 1 }}>
@@ -6868,10 +7197,12 @@ const Leads = () => {
                                     textDecoration: "none",
                                   }}
                                   onMouseEnter={(e) => {
-                                    e.currentTarget.style.textDecoration = "underline";
+                                    e.currentTarget.style.textDecoration =
+                                      "underline";
                                   }}
                                   onMouseLeave={(e) => {
-                                    e.currentTarget.style.textDecoration = "none";
+                                    e.currentTarget.style.textDecoration =
+                                      "none";
                                   }}
                                 >
                                   {name || "Unnamed lead"}
@@ -6918,6 +7249,7 @@ const Leads = () => {
                 </colgroup>
                 <thead>
                   <tr
+                    className="leads-table-header-row"
                     style={{
                       backgroundColor: "var(--table-header-bg)",
                     }}
@@ -6988,7 +7320,10 @@ const Leads = () => {
                         "Amount",
                         { paddingRight: "2rem" },
                         {},
-                        renderHeaderMenuTrigger({ key: "amount", label: "Amount" }),
+                        renderHeaderMenuTrigger({
+                          key: "amount",
+                          label: "Amount",
+                        }),
                       )}
                     {renderColumnHeaderCell("actions", "Actions", {
                       padding: "1rem 0.5rem",
@@ -7027,6 +7362,7 @@ const Leads = () => {
                     paginatedLeads.map((lead) => (
                       <tr
                         key={lead.id}
+                        data-lead-row-id={String(lead.id)}
                         style={{
                           cursor: "pointer",
                         }}
@@ -7081,7 +7417,7 @@ const Leads = () => {
                                 queueItem &&
                                 (queueItem.status === "calling" ||
                                   queueItem.status ===
-                                  "waiting_for_completion");
+                                    "waiting_for_completion");
                               if (isConnected) {
                                 return (
                                   <span
@@ -7570,7 +7906,10 @@ const Leads = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    setSortConfig({ key: headerMenuState.key, direction: "asc" });
+                    setSortConfig({
+                      key: headerMenuState.key,
+                      direction: "asc",
+                    });
                     closeHeaderMenu();
                   }}
                   style={{
@@ -7595,7 +7934,10 @@ const Leads = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    setSortConfig({ key: headerMenuState.key, direction: "desc" });
+                    setSortConfig({
+                      key: headerMenuState.key,
+                      direction: "desc",
+                    });
                     closeHeaderMenu();
                   }}
                   style={{
@@ -7639,7 +7981,13 @@ const Leads = () => {
                       }}
                       className="table-row-hover"
                     >
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem" }}>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.55rem",
+                        }}
+                      >
                         <Plus size={15} />
                         <span>Add column to the right</span>
                       </span>
@@ -7666,7 +8014,13 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                       >
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem" }}>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.55rem",
+                          }}
+                        >
                           <Plus size={15} />
                           <span>Add column to the left</span>
                         </span>
@@ -7696,7 +8050,13 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                       >
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem" }}>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.55rem",
+                          }}
+                        >
                           <ChevronLeft size={15} />
                           <span>
                             {columnLayout.collapsed?.[headerMenuState.key]
@@ -7709,7 +8069,9 @@ const Leads = () => {
                     {headerMenuState.key !== "name" && (
                       <button
                         type="button"
-                        onClick={() => removeColumnFromTable(headerMenuState.key)}
+                        onClick={() =>
+                          removeColumnFromTable(headerMenuState.key)
+                        }
                         style={{
                           width: "100%",
                           display: "flex",
@@ -7778,7 +8140,9 @@ const Leads = () => {
                     border: "none",
                     background: "transparent",
                     color: "var(--text-primary)",
-                    cursor: headerMenuState.customField ? "pointer" : "not-allowed",
+                    cursor: headerMenuState.customField
+                      ? "pointer"
+                      : "not-allowed",
                     borderRadius: 8,
                     fontSize: "0.88rem",
                     textAlign: "left",
@@ -7813,164 +8177,99 @@ const Leads = () => {
                     <span>Add as filter</span>
                   </button>
                 )}
-                {headerMenuSubmenu && isGeneric && !headerMenuState.fixedExtra && (
-                  <div
-                    role="menu"
-                    aria-label={`${headerMenuState.label} add column submenu`}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    style={{
-                      position: "fixed",
-                      left: headerSubmenuActualLeft,
-                      top: headerMenuOpenUp ? undefined : headerMenuTop,
-                      bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
-                      width: LEADS_HEADER_MENU_SUBMENU_WIDTH,
-                      maxHeight: headerSubmenuMaxHeight,
-                      overflowY: "auto",
-                      zIndex: 1096,
-                      background: "var(--bg-color)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: 12,
-                      boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
-                      padding: "0.35rem",
-                    }}
-                  >
+                {headerMenuSubmenu &&
+                  isGeneric &&
+                  !headerMenuState.fixedExtra && (
                     <div
+                      role="menu"
+                      aria-label={`${headerMenuState.label} add column submenu`}
+                      onMouseDown={(e) => e.stopPropagation()}
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: "0.5rem",
-                        padding: "0.25rem 0.4rem 0.45rem",
-                        borderBottom: "1px solid var(--border-color)",
-                        marginBottom: "0.25rem",
+                        position: "fixed",
+                        left: headerSubmenuActualLeft,
+                        top: headerMenuOpenUp ? undefined : headerMenuTop,
+                        bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
+                        width: LEADS_HEADER_MENU_SUBMENU_WIDTH,
+                        maxHeight: headerSubmenuMaxHeight,
+                        overflowY: "auto",
+                        zIndex: 1096,
+                        background: "var(--bg-color)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 12,
+                        boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
+                        padding: "0.35rem",
                       }}
                     >
-                      <strong
+                      <div
                         style={{
-                          fontSize: "0.85rem",
-                          color: "var(--text-primary)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "0.5rem",
+                          padding: "0.25rem 0.4rem 0.45rem",
+                          borderBottom: "1px solid var(--border-color)",
+                          marginBottom: "0.25rem",
                         }}
                       >
-                        Select field
-                      </strong>
-                      <button
-                        type="button"
-                        onClick={openColumnPickerFromMenu}
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          color: "var(--accent-color)",
-                          cursor: "pointer",
-                          fontSize: "0.8rem",
-                          fontWeight: 600,
-                        }}
-                      >
-                        Edit all columns
-                      </button>
-                    </div>
-                    <div style={{ padding: "0.4rem 0.45rem 0.35rem" }}>
-                      <div style={{ position: "relative" }}>
-                        <Search
-                          size={14}
+                        <strong
                           style={{
-                            position: "absolute",
-                            left: "0.6rem",
-                            top: "50%",
-                            transform: "translateY(-50%)",
-                            color: "var(--text-secondary)",
-                          }}
-                        />
-                        <input
-                          value={headerMenuSearch}
-                          onChange={(e) => setHeaderMenuSearch(e.target.value)}
-                          placeholder="Search fields..."
-                          aria-label="Search column fields"
-                          className="input-field"
-                          style={{
-                            padding: "0.4rem 0.6rem 0.4rem 1.9rem",
                             fontSize: "0.85rem",
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div style={{ overflowY: "auto", maxHeight: "280px" }}>
-                      {(leadColumnCatalog.length === 0 ? [] : leadColumnCatalog)
-                        .filter((column) => column.key !== "name")
-                        .filter((column) => column.key !== headerMenuState.key)
-                        .filter((column) => {
-                          const term = headerMenuSearch.trim().toLowerCase();
-                          if (!term) return true;
-                          return (
-                            column.label.toLowerCase().includes(term) ||
-                            column.key.toLowerCase().includes(term)
-                          );
-                        })
-                        .map((column) => (
-                          <button
-                            type="button"
-                            key={column.key}
-                            onClick={() =>
-                              addColumnAdjacent(
-                                headerMenuState.key,
-                                headerMenuSubmenu.side,
-                                column.key,
-                              )
-                            }
-                            style={{
-                              width: "100%",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              gap: "0.5rem",
-                              padding: "0.5rem 0.45rem",
-                              border: "none",
-                              background: "transparent",
-                              color: "var(--text-primary)",
-                              cursor: "pointer",
-                              borderRadius: 8,
-                              fontSize: "0.88rem",
-                              textAlign: "left",
-                            }}
-                            className="table-row-hover"
-                          >
-                            <span
-                              style={{
-                                minWidth: 0,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {column.label}
-                            </span>
-                            {currentVisibleLeadColumns.includes(column.key) && (
-                              <span
-                                style={{
-                                  fontSize: "0.72rem",
-                                  color: "var(--text-secondary)",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                Visible
-                              </span>
-                            )}
-                          </button>
-                        ))}
-                      {leadColumnCatalog.length === 0 && (
-                        <div
-                          style={{
-                            padding: "0.75rem 0.45rem",
-                            color: "var(--text-secondary)",
-                            fontSize: "0.85rem",
+                            color: "var(--text-primary)",
                           }}
                         >
-                          Loading fields...
+                          Select field
+                        </strong>
+                        <button
+                          type="button"
+                          onClick={openColumnPickerFromMenu}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "var(--accent-color)",
+                            cursor: "pointer",
+                            fontSize: "0.8rem",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Edit all columns
+                        </button>
+                      </div>
+                      <div style={{ padding: "0.4rem 0.45rem 0.35rem" }}>
+                        <div style={{ position: "relative" }}>
+                          <Search
+                            size={14}
+                            style={{
+                              position: "absolute",
+                              left: "0.6rem",
+                              top: "50%",
+                              transform: "translateY(-50%)",
+                              color: "var(--text-secondary)",
+                            }}
+                          />
+                          <input
+                            value={headerMenuSearch}
+                            onChange={(e) =>
+                              setHeaderMenuSearch(e.target.value)
+                            }
+                            placeholder="Search fields..."
+                            aria-label="Search column fields"
+                            className="input-field"
+                            style={{
+                              padding: "0.4rem 0.6rem 0.4rem 1.9rem",
+                              fontSize: "0.85rem",
+                            }}
+                          />
                         </div>
-                      )}
-                      {leadColumnCatalog.length > 0 &&
-                        leadColumnCatalog
+                      </div>
+                      <div style={{ overflowY: "auto", maxHeight: "280px" }}>
+                        {(leadColumnCatalog.length === 0
+                          ? []
+                          : leadColumnCatalog
+                        )
                           .filter((column) => column.key !== "name")
-                          .filter((column) => column.key !== headerMenuState.key)
+                          .filter(
+                            (column) => column.key !== headerMenuState.key,
+                          )
                           .filter((column) => {
                             const term = headerMenuSearch.trim().toLowerCase();
                             if (!term) return true;
@@ -7978,7 +8277,61 @@ const Leads = () => {
                               column.label.toLowerCase().includes(term) ||
                               column.key.toLowerCase().includes(term)
                             );
-                          }).length === 0 && (
+                          })
+                          .map((column) => (
+                            <button
+                              type="button"
+                              key={column.key}
+                              onClick={() =>
+                                addColumnAdjacent(
+                                  headerMenuState.key,
+                                  headerMenuSubmenu.side,
+                                  column.key,
+                                )
+                              }
+                              style={{
+                                width: "100%",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: "0.5rem",
+                                padding: "0.5rem 0.45rem",
+                                border: "none",
+                                background: "transparent",
+                                color: "var(--text-primary)",
+                                cursor: "pointer",
+                                borderRadius: 8,
+                                fontSize: "0.88rem",
+                                textAlign: "left",
+                              }}
+                              className="table-row-hover"
+                            >
+                              <span
+                                style={{
+                                  minWidth: 0,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {column.label}
+                              </span>
+                              {currentVisibleLeadColumns.includes(
+                                column.key,
+                              ) && (
+                                <span
+                                  style={{
+                                    fontSize: "0.72rem",
+                                    color: "var(--text-secondary)",
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  Visible
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        {leadColumnCatalog.length === 0 && (
                           <div
                             style={{
                               padding: "0.75rem 0.45rem",
@@ -7986,12 +8339,38 @@ const Leads = () => {
                               fontSize: "0.85rem",
                             }}
                           >
-                            No matching fields.
+                            Loading fields...
                           </div>
                         )}
+                        {leadColumnCatalog.length > 0 &&
+                          leadColumnCatalog
+                            .filter((column) => column.key !== "name")
+                            .filter(
+                              (column) => column.key !== headerMenuState.key,
+                            )
+                            .filter((column) => {
+                              const term = headerMenuSearch
+                                .trim()
+                                .toLowerCase();
+                              if (!term) return true;
+                              return (
+                                column.label.toLowerCase().includes(term) ||
+                                column.key.toLowerCase().includes(term)
+                              );
+                            }).length === 0 && (
+                            <div
+                              style={{
+                                padding: "0.75rem 0.45rem",
+                                color: "var(--text-secondary)",
+                                fontSize: "0.85rem",
+                              }}
+                            >
+                              No matching fields.
+                            </div>
+                          )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
               </div>
             </>,
             document.body,
@@ -7999,7 +8378,9 @@ const Leads = () => {
         {headerFilterRequest && (
           <FilterPanel
             fieldsUrl="/api/contacts/filter-fields?status=Lead"
-            valuesUrl={(field) => `/api/contacts/filter-values/${field}?status=Lead`}
+            valuesUrl={(field) =>
+              `/api/contacts/filter-values/${field}?status=Lead`
+            }
             filters={advancedFilters}
             onChange={setAdvancedFilters}
             fieldKey={headerFilterRequest.fieldKey}
@@ -8366,7 +8747,9 @@ const Leads = () => {
                 >
                   Source
                 </div>
-                <strong>{leadSourceLabel(previewLeadCurrent, isGeneric)}</strong>
+                <strong>
+                  {leadSourceLabel(previewLeadCurrent, isGeneric)}
+                </strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
                 <div
@@ -8708,21 +9091,21 @@ const Leads = () => {
               >
                 {isWellness
                   ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))
-                  : isTravel
-                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
                       </option>
                     ))
+                  : isTravel
+                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))
                     : SOURCE_OPTIONS.map((src) => (
-                      <option key={src} value={src}>
-                        {src}
-                      </option>
-                    ))}
+                        <option key={src} value={src}>
+                          {src}
+                        </option>
+                      ))}
               </select>
 
               {/* #600  wellness extras: treatment of interest (dropdown of
@@ -8781,29 +9164,29 @@ const Leads = () => {
                   {staff.filter(
                     (s) => (s.wellnessRole || "").toLowerCase() === "doctor",
                   ).length > 0 && (
-                      <select
-                        className="input-field"
-                        name="preferredPractitionerId"
-                        value={newLead.preferredPractitionerId}
-                        onChange={(e) =>
-                          handleChange("preferredPractitionerId", e.target.value)
-                        }
-                      >
-                        <option value="">
-                          Preferred practitioner (optional)
-                        </option>
-                        {staff
-                          .filter(
-                            (s) =>
-                              (s.wellnessRole || "").toLowerCase() === "doctor",
-                          )
-                          .map((doc) => (
-                            <option key={doc.id} value={doc.id}>
-                              {doc.name || doc.email}
-                            </option>
-                          ))}
-                      </select>
-                    )}
+                    <select
+                      className="input-field"
+                      name="preferredPractitionerId"
+                      value={newLead.preferredPractitionerId}
+                      onChange={(e) =>
+                        handleChange("preferredPractitionerId", e.target.value)
+                      }
+                    >
+                      <option value="">
+                        Preferred practitioner (optional)
+                      </option>
+                      {staff
+                        .filter(
+                          (s) =>
+                            (s.wellnessRole || "").toLowerCase() === "doctor",
+                        )
+                        .map((doc) => (
+                          <option key={doc.id} value={doc.id}>
+                            {doc.name || doc.email}
+                          </option>
+                        ))}
+                    </select>
+                  )}
                 </>
               )}
 
@@ -8846,6 +9229,19 @@ const Leads = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {leadDuplicate && (
+        <DuplicateContactModal
+          existingContactId={leadDuplicate.existingContactId}
+          matchedBy={leadDuplicate.matchedBy}
+          contact={leadDuplicate.contact}
+          creating={creatingDuplicateLead}
+          createAnywayLabel="Create separate product lead"
+          creatingLabel="Creating separate lead…"
+          onEditDetails={() => setLeadDuplicate(null)}
+          onCreateAnyway={createSeparateProductLead}
+        />
       )}
 
       {editing && (
@@ -8961,21 +9357,21 @@ const Leads = () => {
               >
                 {isWellness
                   ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))
-                  : isTravel
-                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
                       </option>
                     ))
+                  : isTravel
+                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))
                     : SOURCE_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
               </select>
               {renderCustomFieldInputs(
                 editForm.customFields,

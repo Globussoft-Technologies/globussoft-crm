@@ -14,6 +14,7 @@ import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
+import { isRichTextMarkup, RichText } from "../utils/richText";
 
 function getInboxPageSize() {
   if (typeof window === "undefined") return 24;
@@ -245,7 +246,16 @@ function formatStaffOptionLabel(staff) {
 
 export default function Inbox() {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
+  const isTravel = tenant?.vertical === "travel";
+  const isWellness = tenant?.vertical === "wellness";
+  const isGeneric = !isTravel && !isWellness;
+  const travelComposeTo = isTravel && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("travelComposeTo")
+    : "";
+  const travelScheduleContactId = isTravel && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("travelScheduleContactId")
+    : "";
   const canAssignMeetingStaff = user?.role === "ADMIN";
   const [emails, setEmails] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -254,14 +264,14 @@ export default function Inbox() {
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
 
-  const [showCompose, setShowCompose] = useState(false);
-  const [composeData, setComposeData] = useState({
-    to: "",
+  const [showCompose, setShowCompose] = useState(Boolean(isTravel && travelComposeTo));
+  const [composeData, setComposeData] = useState(() => ({
+    to: travelComposeTo || "",
     cc: "",
     bcc: "",
     subject: "",
     body: "",
-  });
+  }));
   const [composeTone, setComposeTone] = useState("professional");
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false);
@@ -298,6 +308,21 @@ export default function Inbox() {
   });
 
   const [detail, setDetail] = useState(null);
+
+  useEffect(() => {
+    if (!isTravel || !travelComposeTo) return;
+    setComposeData((current) => ({
+      ...current,
+      to: travelComposeTo,
+    }));
+    setShowCompose(true);
+  }, [isTravel, travelComposeTo]);
+
+  useEffect(() => {
+    if (!isTravel || !travelScheduleContactId) return;
+    setMeetData((current) => ({ ...current, contactId: travelScheduleContactId }));
+    setShowMeet(true);
+  }, [isTravel, travelScheduleContactId]);
 
   // Opening an email marks it read: optimistic local update (clears the
   // blue dot immediately) + persist via POST /api/communications/inbox/:id/read
@@ -1054,7 +1079,7 @@ export default function Inbox() {
                         overflowWrap: "anywhere",
                       }}
                     >
-                      {email.body}
+                      {isGeneric && isRichTextMarkup(email.body) ? <RichText as="span" value={email.body} /> : email.body}
                     </p>
                   </div>
 
@@ -1667,10 +1692,10 @@ export default function Inbox() {
                   onChange={(e) => setMeetData({ ...meetData, contactId: e.target.value })}
                 >
                   <option value="">-- Choose Contact --</option>
-                  {contacts.filter((c) => c.email).length > 0 && (
+                  {contacts.filter((c) => c.email || String(c.id) === String(travelScheduleContactId)).length > 0 && (
                     <optgroup label="Contacts">
                       {contacts
-                        .filter((c) => c.email)
+                        .filter((c) => c.email || String(c.id) === String(travelScheduleContactId))
                         .map((c) => (
                           <option key={`c-${c.id}`} value={c.id}>
                             {c.email}
@@ -2011,7 +2036,7 @@ export default function Inbox() {
                 }}
               >
                 {detail.body ? (
-                  renderTextWithLinks(detail.body)
+                  isGeneric && isRichTextMarkup(detail.body) ? <RichText value={detail.body} /> : renderTextWithLinks(detail.body)
                 ) : (
                   <em style={{ color: "var(--text-secondary)" }}>(empty body)</em>
                 )}

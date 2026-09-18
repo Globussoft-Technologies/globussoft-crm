@@ -34,7 +34,8 @@ const {
 const {
   renderPrescriptionPdf,
   renderConsentPdf,
-  renderBrandedInvoicePdf,
+  renderProfessionalWellnessInvoicePdf,
+  resolveProfessionalInvoiceLogo,
   renderPatientSummaryPdf,
   // -glyph fix for the route-level landscape report PDF below.
   applyRupeeCapableFonts,
@@ -668,6 +669,7 @@ async function attachInvoiceStateToVisits(visits, tenantId) {
           id: invoice.id,
           status: invoice.status,
           paidAt: invoice.paidAt,
+          amount: invoice.amount,
         },
       ]),
     );
@@ -1110,7 +1112,7 @@ router.get("/patients", phiReadGate, async (req, res) => {
       where,
       take: Math.min(parseInt(limit, 10) || 50, 200),
       skip: parseInt(offset, 10) || 0,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     };
     if (wantFullShape) {
       findManyArgs.include = {
@@ -3354,6 +3356,16 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     if (
       amountCharged != null &&
       amountCharged !== "" &&
+      !Number.isFinite(Number(amountCharged))
+    ) {
+      return res.status(400).json({
+        error: "amountCharged must be a number",
+        code: "AMOUNT_INVALID",
+      });
+    }
+    if (
+      amountCharged != null &&
+      amountCharged !== "" &&
       Number(amountCharged) < 0
     ) {
       return res.status(400).json({
@@ -3626,7 +3638,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     // #277: same per-visit cap as POST  reject overflow updates.
     if (data.amountCharged != null && data.amountCharged !== "") {
       const amt = Number(data.amountCharged);
-      if (Number.isNaN(amt))
+      if (!Number.isFinite(amt))
         return res.status(400).json({
           error: "amountCharged must be a number",
           code: "AMOUNT_INVALID",
@@ -8932,6 +8944,97 @@ function canonicalVisitTotals(visits) {
   };
 }
 
+// Report drill-down helpers. Wellness invoices are deliberately loaded by
+// their tenant and then narrowed by visit/line-item ownership; report rows
+// expose only invoice ids/numbers, never customer contact details.
+const REPORT_INVOICE_SELECT = {
+  id: true,
+  invoiceNum: true,
+  amount: true,
+  status: true,
+  issuedDate: true,
+  paidAt: true,
+  paymentMode: true,
+  patientId: true,
+  visitId: true,
+  customerName: true,
+  lineItemsJson: true,
+};
+
+async function loadReportInvoicesForVisits(tenantId, visitIds) {
+  const ids = [...new Set((visitIds || []).map(Number).filter(Number.isFinite))];
+  if (ids.length === 0) return new Map();
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      tenantId,
+      visitId: { in: ids },
+      status: { notIn: ["VOIDED", "CREDIT_NOTE"] },
+    },
+    select: REPORT_INVOICE_SELECT,
+  });
+  const byVisit = new Map();
+  for (const invoice of invoices) {
+    if (!byVisit.has(invoice.visitId)) byVisit.set(invoice.visitId, []);
+    byVisit.get(invoice.visitId).push(invoice);
+  }
+  return byVisit;
+}
+
+async function loadReportInvoicesInWindow(tenantId, from, to) {
+  return prisma.invoice.findMany({
+    where: {
+      tenantId,
+      issuedDate: { gte: from, lte: to },
+      status: { notIn: ["VOIDED", "CREDIT_NOTE"] },
+    },
+    select: REPORT_INVOICE_SELECT,
+  });
+}
+
+async function loadPaidReportInvoicesInWindow(tenantId, from, to) {
+  return prisma.invoice.findMany({
+    where: {
+      tenantId,
+      status: "PAID",
+      paidAt: { gte: from, lte: to },
+    },
+    select: REPORT_INVOICE_SELECT,
+  });
+}
+
+function parseReportInvoiceLineItems(invoice) {
+  if (!invoice || typeof invoice.lineItemsJson !== "string") return [];
+  try {
+    const parsed = JSON.parse(invoice.lineItemsJson);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function lineItemMatches(item, type, id, name) {
+  const itemType = String(item?.type || item?.lineType || "").toUpperCase();
+  if (itemType !== String(type || "").toUpperCase()) return false;
+  const itemId = Number(item?.itemId ?? item?.refId);
+  if (Number.isFinite(Number(id)) && Number.isFinite(itemId)) {
+    return itemId === Number(id);
+  }
+  return !!name && String(item?.name || "").trim().toLowerCase() === String(name).trim().toLowerCase();
+}
+
+function invoiceIdsForLineItemRows(rows, invoices, type, idField) {
+  const idsByRow = new Map();
+  for (const row of rows) {
+    const ids = invoices
+      .filter((invoice) => parseReportInvoiceLineItems(invoice).some((item) => (
+        lineItemMatches(item, type, row[idField], row.name)
+      )))
+      .map((invoice) => invoice.id);
+    idsByRow.set(row[idField] ?? row.name, [...new Set(ids)]);
+  }
+  return idsByRow;
+}
+
 // #227: each report's calc body is extracted into a pure helper so the JSON
 // endpoint AND the new CSV/PDF export endpoints can share a single source of
 // truth. Helpers return the same shape the JSON endpoint sent, plus a
@@ -9001,6 +9104,10 @@ async function computePnlByService(req) {
       (visitIdToCost[c.visitId] || 0) + c.qty * c.unitCost;
   }
 
+  const invoiceByVisitId = await loadReportInvoicesForVisits(
+    tenantId,
+    visits.map((visit) => visit.id),
+  );
   const acc = {};
   for (const v of visits) {
     if (!v.serviceId) continue;
@@ -9015,13 +9122,21 @@ async function computePnlByService(req) {
         count: 0,
         revenue: 0,
         productCost: 0,
+        invoiceIds: [],
       };
     acc[s.id].count += 1;
     acc[s.id].revenue += parseFloat(v.amountCharged) || 0;
     acc[s.id].productCost += visitIdToCost[v.id || -1] || 0;
+    for (const invoice of invoiceByVisitId.get(v.id) || []) {
+      acc[s.id].invoiceIds.push(invoice.id);
+    }
   }
   const rows = Object.values(acc)
-    .map((r) => ({ ...r, contribution: r.revenue - r.productCost }))
+    .map((r) => ({
+      ...r,
+      invoiceIds: [...new Set(r.invoiceIds)],
+      contribution: r.revenue - r.productCost,
+    }))
     .sort((a, b) => b.revenue - a.revenue);
 
   // #281 fix: header KPI cards must equal the sum of the displayed
@@ -9095,6 +9210,7 @@ async function computePerProfessional(req) {
     // status required because pnlSumCompleted re-applies the filter
     // defensively. See comment at computePnlByService.
     select: {
+      id: true,
       status: true,
       doctorId: true,
       amountCharged: true,
@@ -9112,6 +9228,10 @@ async function computePerProfessional(req) {
     },
   });
 
+  const invoiceByVisitId = await loadReportInvoicesForVisits(
+    tenantId,
+    visits.map((visit) => visit.id),
+  );
   const acc = {};
   for (const v of visits) {
     if (!v.doctorId) continue;
@@ -9125,11 +9245,18 @@ async function computePerProfessional(req) {
         wellnessRole: d.wellnessRole,
         visits: 0,
         revenue: 0,
+        invoiceIds: [],
       };
     acc[d.id].visits += 1;
     acc[d.id].revenue += parseFloat(v.amountCharged) || 0;
+    for (const invoice of invoiceByVisitId.get(v.id) || []) {
+      acc[d.id].invoiceIds.push(invoice.id);
+    }
   }
-  const rows = Object.values(acc).sort((a, b) => b.revenue - a.revenue);
+  const rows = Object.values(acc).map((row) => ({
+    ...row,
+    invoiceIds: [...new Set(row.invoiceIds)],
+  })).sort((a, b) => b.revenue - a.revenue);
   const canonical = canonicalVisitTotals(visits);
   const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
   const paginated = paginateReportRows(rows, req, "id");
@@ -9157,8 +9284,12 @@ async function computeAttribution(req) {
   });
   const visits = await prisma.visit.findMany({
     where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
-    select: { amountCharged: true, patient: { select: { source: true } } },
+    select: { id: true, amountCharged: true, patient: { select: { source: true } } },
   });
+  const invoiceByVisitId = await loadReportInvoicesForVisits(
+    tenantId,
+    visits.map((visit) => visit.id),
+  );
 
   // #268: filter out junk-source values (test-* / e2e-* / qa-* / rbac-*
   // prefixes + 4 canonical exact values) from attribution aggregations.
@@ -9177,7 +9308,7 @@ async function computeAttribution(req) {
     if (isJunkSource(rawSrc)) continue;
     const k = bucket(rawSrc);
     if (!acc[k])
-      acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0 };
+      acc[k] = { source: k, leads: 0, junk: 0, qualified: 0, revenue: 0, invoiceIds: [] };
     acc[k].leads += 1;
     if (l.status === "Junk") acc[k].junk += 1;
     if (l.status !== "Junk" && l.status !== "Lead") acc[k].qualified += 1;
@@ -9193,10 +9324,14 @@ async function computeAttribution(req) {
     const k = bucket(rawSrc);
     if (!acc[k]) continue;
     acc[k].revenue += parseFloat(v.amountCharged) || 0;
+    for (const invoice of invoiceByVisitId.get(v.id) || []) {
+      acc[k].invoiceIds.push(invoice.id);
+    }
   }
   const rows = Object.values(acc)
     .map((r) => ({
       ...r,
+      invoiceIds: [...new Set(r.invoiceIds || [])],
       junkRate: r.leads ? Math.round((r.junk / r.leads) * 100) : 0,
       conversionRate: r.leads ? Math.round((r.qualified / r.leads) * 100) : 0,
       revenuePerLead: r.leads ? Math.round(r.revenue / r.leads) : 0,
@@ -9226,8 +9361,12 @@ async function computePerLocation(req) {
   const visits = await prisma.visit.findMany({
     where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
     // status required for canonicalVisitTotals  see comment at computePnlByService.
-    select: { status: true, locationId: true, amountCharged: true },
+    select: { id: true, status: true, locationId: true, amountCharged: true },
   });
+  const invoiceByVisitId = await loadReportInvoicesForVisits(
+    tenantId,
+    visits.map((visit) => visit.id),
+  );
   const patients = await prisma.patient.groupBy({
     by: ["locationId"],
     where: { tenantId },
@@ -9241,9 +9380,12 @@ async function computePerLocation(req) {
   const visitAcc = {};
   for (const v of visits) {
     const k = v.locationId ?? 0;
-    if (!visitAcc[k]) visitAcc[k] = { visits: 0, revenue: 0 };
+    if (!visitAcc[k]) visitAcc[k] = { visits: 0, revenue: 0, invoiceIds: [] };
     visitAcc[k].visits += 1;
     visitAcc[k].revenue += parseFloat(v.amountCharged) || 0;
+    for (const invoice of invoiceByVisitId.get(v.id) || []) {
+      visitAcc[k].invoiceIds.push(invoice.id);
+    }
   }
   const rows = locations
     .map((l) => ({
@@ -9254,6 +9396,7 @@ async function computePerLocation(req) {
       isActive: l.isActive,
       visits: visitAcc[l.id]?.visits || 0,
       revenue: visitAcc[l.id]?.revenue || 0,
+      invoiceIds: [...new Set(visitAcc[l.id]?.invoiceIds || [])],
       patients: patients.find((p) => p.locationId === l.id)?._count?._all || 0,
     }))
     .sort((a, b) => b.revenue - a.revenue);
@@ -9550,6 +9693,23 @@ async function computePerProduct(req) {
     }
   }
 
+  // Link catalog-backed invoice line items when the clinic used the invoice
+  // flow instead of POS. Imported snapshots intentionally have no invoice
+  // ids, so they simply keep an empty drill-down list.
+  if (rows.length > 0) {
+    const invoices = await loadReportInvoicesInWindow(tenantId, from, to);
+    const invoiceIdsByProduct = invoiceIdsForLineItemRows(
+      rows,
+      invoices,
+      "PRODUCT",
+      "productId",
+    );
+    rows = rows.map((row) => ({
+      ...row,
+      invoiceIds: invoiceIdsByProduct.get(row.productId ?? row.name) || [],
+    }));
+  }
+
   const totals = sumProductTotals(rows);
   const paginated = paginateReportRows(rows, req, "key");
   return {
@@ -9573,6 +9733,566 @@ async function computePerProduct(req) {
     pagination: paginated.pagination,
   };
 }
+
+// ── Additional wellness reports required by the clinic reporting brief ──
+
+const PAYMENT_MODE_LABELS = {
+  cash: "Cash",
+  upi: "UPI",
+  card: "Card",
+  bank_transfer: "Bank transfer",
+  wallet: "Wallet",
+  giftcard: "Gift card",
+  combined: "Combined",
+  cashback: "Cashback",
+  paylater: "Pay later",
+  online: "Online",
+  other: "Other",
+};
+
+function normalizeReportPaymentMode(value) {
+  const mode = String(value || "other").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return PAYMENT_MODE_LABELS[mode] ? mode : "other";
+}
+
+function addCustomerReportRow(acc, key, details, amount, invoice) {
+  if (!acc[key]) {
+    acc[key] = {
+      id: key,
+      patientId: details.patientId || null,
+      name: details.name || "Walk-in customer",
+      invoices: 0,
+      visits: 0,
+      sales: 0,
+      invoiceIds: [],
+    };
+  }
+  const row = acc[key];
+  const value = Number(amount) || 0;
+  row.sales += value;
+  if (invoice) {
+    row.invoices += 1;
+    row.invoiceIds.push(invoice.id);
+  }
+}
+
+async function computeSalesByCustomer(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+
+  const visits = await prisma.visit.findMany({
+    where: {
+      tenantId,
+      visitDate: { gte: from, lte: to },
+      status: "completed",
+    },
+    select: {
+      id: true,
+      patientId: true,
+      amountCharged: true,
+      patient: { select: { id: true, name: true } },
+    },
+  });
+  const visitIds = visits.map((visit) => visit.id);
+  const invoicesByVisit = await loadReportInvoicesForVisits(tenantId, visitIds);
+  const windowInvoices = await loadReportInvoicesInWindow(tenantId, from, to);
+  const includedInvoiceIds = new Set();
+  const includedVisitIds = new Set(visitIds);
+  const acc = {};
+
+  for (const visit of visits) {
+    const invoices = invoicesByVisit.get(visit.id) || [];
+    const patientId = visit.patientId || visit.patient?.id || null;
+    const name = visit.patient?.name || "Walk-in customer";
+    const key = patientId ? `patient:${patientId}` : `customer:${name.toLowerCase()}`;
+    const rowBefore = acc[key];
+    if (invoices.length > 0) {
+      for (const invoice of invoices) {
+        addCustomerReportRow(acc, key, { patientId, name }, invoice.amount, invoice);
+        includedInvoiceIds.add(invoice.id);
+      }
+    } else {
+      addCustomerReportRow(acc, key, { patientId, name }, visit.amountCharged, null);
+    }
+    if (!rowBefore && acc[key]) acc[key].visits = 0;
+    if (acc[key]) acc[key].visits += 1;
+  }
+
+  // Include manually raised wellness invoices that are not linked to a visit.
+  // Linked invoices already represented by a visit are counted exactly once,
+  // even when their issued date falls inside the report window.
+  for (const invoice of windowInvoices) {
+    if (includedInvoiceIds.has(invoice.id)) continue;
+    if (invoice.visitId && includedVisitIds.has(invoice.visitId)) continue;
+    const patientId = invoice.patientId || null;
+    const name = invoice.customerName || "Walk-in customer";
+    const key = patientId ? `patient:${patientId}` : `customer:${name.toLowerCase()}`;
+    addCustomerReportRow(acc, key, { patientId, name }, invoice.amount, invoice);
+  }
+
+  const rows = Object.values(acc).map((row) => ({
+    ...row,
+    invoiceIds: [...new Set(row.invoiceIds)],
+    averageSale: row.invoices > 0 ? row.sales / row.invoices : row.sales / Math.max(1, row.visits),
+    revenue: row.sales,
+  }));
+  const paginated = paginateReportRows(rows, req, "id");
+  return {
+    window: { from, to },
+    totals: {
+      customers: rows.length,
+      invoices: rows.reduce((sum, row) => sum + row.invoices, 0),
+      visits: rows.reduce((sum, row) => sum + row.visits, 0),
+      sales: rows.reduce((sum, row) => sum + row.sales, 0),
+    },
+    rows: paginated.rows,
+    pagination: paginated.pagination,
+  };
+}
+
+async function computeProductSummary(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+  const products = await prisma.product.findMany({
+    where: { tenantId },
+    select: {
+      id: true,
+      name: true,
+      sku: true,
+      currentStock: true,
+      threshold: true,
+      purchasePrice: true,
+      category: { select: { name: true } },
+    },
+  });
+  const lineItems = await prisma.saleLineItem.findMany({
+    where: {
+      tenantId,
+      lineType: "PRODUCT",
+      sale: {
+        tenantId,
+        status: "COMPLETED",
+        createdAt: { gte: from, lte: to },
+      },
+    },
+    select: {
+      refId: true,
+      name: true,
+      quantity: true,
+      unitPrice: true,
+      lineDiscount: true,
+      lineTotal: true,
+    },
+  });
+  const soldByProduct = new Map();
+  for (const line of lineItems) {
+    const key = line.refId ? `p:${line.refId}` : `n:${String(line.name || "Unknown product").toLowerCase()}`;
+    const current = soldByProduct.get(key) || { unitsSold: 0, sales: 0 };
+    const quantity = Number(line.quantity) || 0;
+    const lineTotal = Number.isFinite(Number(line.lineTotal)) && Number(line.lineTotal) !== 0
+      ? Number(line.lineTotal)
+      : quantity * (Number(line.unitPrice) || 0) - (Number(line.lineDiscount) || 0);
+    current.unitsSold += quantity;
+    current.sales += lineTotal;
+    soldByProduct.set(key, current);
+  }
+  const invoices = await loadReportInvoicesInWindow(tenantId, from, to);
+  const invoiceIdsByProduct = invoiceIdsForLineItemRows(
+    products.map((product) => ({ ...product, name: product.name })),
+    invoices,
+    "PRODUCT",
+    "id",
+  );
+  const rows = products.map((product) => {
+    const key = `p:${product.id}`;
+    const sold = soldByProduct.get(key) || { unitsSold: 0, sales: 0 };
+    const stockOnHand = Number(product.currentStock) || 0;
+    const reorderLevel = Number(product.threshold) || 0;
+    const purchasePrice = Number(product.purchasePrice) || 0;
+    return {
+      id: product.id,
+      name: product.name,
+      sku: product.sku || "—",
+      category: product.category?.name || "Uncategorised",
+      stockOnHand,
+      reorderLevel,
+      unitsSold: sold.unitsSold,
+      sales: sold.sales,
+      stockValue: stockOnHand * purchasePrice,
+      lowStock: reorderLevel > 0 && stockOnHand <= reorderLevel,
+      invoiceIds: invoiceIdsByProduct.get(product.id) || [],
+      revenue: sold.sales,
+    };
+  });
+  const knownKeys = new Set(products.map((product) => `p:${product.id}`));
+  for (const line of lineItems) {
+    const key = line.refId ? `p:${line.refId}` : `n:${String(line.name || "Unknown product").toLowerCase()}`;
+    if (knownKeys.has(key)) continue;
+    const sold = soldByProduct.get(key);
+    rows.push({
+      id: key,
+      name: line.name || "Unknown product",
+      sku: "—",
+      category: "Uncategorised",
+      stockOnHand: 0,
+      reorderLevel: 0,
+      unitsSold: sold?.unitsSold || 0,
+      sales: sold?.sales || 0,
+      stockValue: 0,
+      lowStock: false,
+      invoiceIds: [],
+      revenue: sold?.sales || 0,
+    });
+    knownKeys.add(key);
+  }
+  const paginated = paginateReportRows(rows, req, "id");
+  return {
+    window: { from, to },
+    totals: {
+      products: rows.length,
+      unitsSold: rows.reduce((sum, row) => sum + row.unitsSold, 0),
+      sales: rows.reduce((sum, row) => sum + row.sales, 0),
+      stockValue: rows.reduce((sum, row) => sum + row.stockValue, 0),
+      lowStock: rows.filter((row) => row.lowStock).length,
+    },
+    rows: paginated.rows,
+    pagination: paginated.pagination,
+  };
+}
+
+async function computePaymentsByMode(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+  const sales = await prisma.sale.findMany({
+    where: { tenantId, status: "COMPLETED", createdAt: { gte: from, lte: to } },
+    select: {
+      id: true,
+      invoiceNumber: true,
+      paidAmount: true,
+      paymentMethod: true,
+      paymentBreakdownJson: true,
+    },
+  });
+  const invoices = await loadPaidReportInvoicesInWindow(tenantId, from, to);
+  const acc = {};
+  const add = (mode, amount, source, invoiceId) => {
+    const key = normalizeReportPaymentMode(mode);
+    if (!acc[key]) {
+      acc[key] = {
+        id: key,
+        mode: PAYMENT_MODE_LABELS[key],
+        transactions: 0,
+        amount: 0,
+        posTransactions: 0,
+        invoiceTransactions: 0,
+        posAmount: 0,
+        invoiceAmount: 0,
+        invoiceIds: [],
+      };
+    }
+    const row = acc[key];
+    const value = Number(amount) || 0;
+    row.transactions += 1;
+    row.amount += value;
+    if (source === "pos") {
+      row.posTransactions += 1;
+      row.posAmount += value;
+    } else {
+      row.invoiceTransactions += 1;
+      row.invoiceAmount += value;
+      if (invoiceId) row.invoiceIds.push(invoiceId);
+    }
+  };
+  for (const sale of sales) {
+    const paidAmount = Number(sale.paidAmount);
+    // A completed POS sale may intentionally be put on credit with paidAmount
+    // zero. It is a sale, but it is not a payment and must not inflate this
+    // report with the sale total.
+    if (!Number.isFinite(paidAmount) || paidAmount <= 0) continue;
+
+    if (String(sale.paymentMethod || "").toUpperCase() === "COMBINED") {
+      let breakdown = null;
+      try {
+        breakdown = JSON.parse(sale.paymentBreakdownJson || "null");
+      } catch (_e) {}
+      const tenders = Array.isArray(breakdown)
+        ? breakdown
+            .map((tender) => ({
+              mode: tender?.method,
+              amount: Number.isFinite(Number(tender?.amount))
+                ? Number(tender.amount)
+                : Number(tender?.amountCents) / 100,
+            }))
+            .filter((tender) => Number.isFinite(tender.amount) && tender.amount > 0)
+        : [];
+      const allocated = tenders.reduce((sum, tender) => sum + tender.amount, 0);
+      if (tenders.length > 0 && Math.abs(allocated - paidAmount) <= 0.01) {
+        for (const tender of tenders) add(tender.mode, tender.amount, "pos");
+        continue;
+      }
+    }
+    add(sale.paymentMethod, paidAmount, "pos");
+  }
+  for (const invoice of invoices) {
+    add(invoice.paymentMode, invoice.amount, "invoice", invoice.id);
+  }
+  const rows = Object.values(acc).map((row) => ({
+    ...row,
+    invoiceIds: [...new Set(row.invoiceIds)],
+    averageAmount: row.transactions > 0 ? row.amount / row.transactions : 0,
+    revenue: row.amount,
+  }));
+  const paginated = paginateReportRows(rows, req, "id");
+  return {
+    window: { from, to },
+    totals: {
+      transactions: rows.reduce((sum, row) => sum + row.transactions, 0),
+      amount: rows.reduce((sum, row) => sum + row.amount, 0),
+      posTransactions: rows.reduce((sum, row) => sum + row.posTransactions, 0),
+      invoiceTransactions: rows.reduce((sum, row) => sum + row.invoiceTransactions, 0),
+      posAmount: rows.reduce((sum, row) => sum + row.posAmount, 0),
+      invoiceAmount: rows.reduce((sum, row) => sum + row.invoiceAmount, 0),
+    },
+    rows: paginated.rows,
+    pagination: paginated.pagination,
+  };
+}
+
+async function computeExpenseSummary(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+  const expenses = await prisma.expense.findMany({
+    where: { tenantId, expenseDate: { gte: from, lte: to } },
+    select: { id: true, category: true, amount: true, status: true },
+  });
+  const acc = {};
+  for (const expense of expenses) {
+    const status = String(expense.status || "Pending").toUpperCase();
+    if (status === "REJECTED" || status === "CANCELLED") continue;
+    const category = String(expense.category || "General").trim() || "General";
+    const key = category.toLowerCase();
+    if (!acc[key]) {
+      acc[key] = {
+        id: key,
+        category,
+        expenses: 0,
+        amount: 0,
+        approvedAmount: 0,
+        pendingAmount: 0,
+        expenseIds: [],
+      };
+    }
+    const row = acc[key];
+    const amount = Number(expense.amount) || 0;
+    row.expenses += 1;
+    row.amount += amount;
+    row.expenseIds.push(expense.id);
+    if (["APPROVED", "REIMBURSED"].includes(status)) row.approvedAmount += amount;
+    else row.pendingAmount += amount;
+  }
+  const rows = Object.values(acc).map((row) => ({ ...row, revenue: row.amount }));
+  const paginated = paginateReportRows(rows, req, "id");
+  return {
+    window: { from, to },
+    totals: {
+      expenses: rows.reduce((sum, row) => sum + row.expenses, 0),
+      amount: rows.reduce((sum, row) => sum + row.amount, 0),
+      approvedAmount: rows.reduce((sum, row) => sum + row.approvedAmount, 0),
+      pendingAmount: rows.reduce((sum, row) => sum + row.pendingAmount, 0),
+    },
+    rows: paginated.rows,
+    pagination: paginated.pagination,
+  };
+}
+
+const additionalReportReadGate = verifyWellnessRole(["admin", "manager"]);
+
+const ADDITIONAL_REPORT_DEFINITIONS = [
+  {
+    slug: "sales-by-customer",
+    title: "Sales by Customer",
+    compute: computeSalesByCustomer,
+    headers: ["Customer", "Invoices", "Visits", "Sales", "Average sale"],
+    toRow: (row) => [
+      row.name,
+      row.invoices,
+      row.visits,
+      fmtMoney(row.sales),
+      fmtMoney(row.averageSale),
+    ],
+    totalRow: (totals) => [
+      "TOTAL",
+      totals.invoices,
+      totals.visits,
+      fmtMoney(totals.sales),
+      "",
+    ],
+    pdfWeights: [2.6, 0.9, 0.8, 1.2, 1.3],
+  },
+  {
+    slug: "product-summary",
+    title: "Product Summary",
+    compute: computeProductSummary,
+    headers: ["Product", "SKU", "Category", "Stock on hand", "Units sold", "Sales", "Stock value", "Status"],
+    toRow: (row) => [
+      row.name,
+      row.sku,
+      row.category,
+      row.stockOnHand,
+      row.unitsSold,
+      fmtMoney(row.sales),
+      fmtMoney(row.stockValue),
+      row.lowStock ? "Low stock" : "In stock",
+    ],
+    totalRow: (totals) => [
+      "TOTAL",
+      "",
+      "",
+      "",
+      totals.unitsSold,
+      fmtMoney(totals.sales),
+      fmtMoney(totals.stockValue),
+      `${totals.lowStock} low stock`,
+    ],
+    pdfWeights: [2.3, 1.1, 1.4, 1.0, 0.9, 1.0, 1.1, 1.0],
+  },
+  {
+    slug: "payments-by-mode",
+    title: "Payments by Payment Mode",
+    compute: computePaymentsByMode,
+    headers: ["Payment mode", "Transactions", "Amount", "Average amount", "POS amount", "Invoice amount"],
+    toRow: (row) => [
+      row.mode,
+      row.transactions,
+      fmtMoney(row.amount),
+      fmtMoney(row.averageAmount),
+      fmtMoney(row.posAmount),
+      fmtMoney(row.invoiceAmount),
+    ],
+    totalRow: (totals) => [
+      "TOTAL",
+      totals.transactions,
+      fmtMoney(totals.amount),
+      "",
+      fmtMoney(totals.posAmount),
+      fmtMoney(totals.invoiceAmount),
+    ],
+    pdfWeights: [2.0, 1.0, 1.2, 1.3, 1.2, 1.3],
+  },
+  {
+    slug: "expense-summary",
+    title: "Expense Summary",
+    compute: computeExpenseSummary,
+    headers: ["Category", "Expenses", "Amount", "Approved", "Pending"],
+    toRow: (row) => [
+      row.category,
+      row.expenses,
+      fmtMoney(row.amount),
+      fmtMoney(row.approvedAmount),
+      fmtMoney(row.pendingAmount),
+    ],
+    totalRow: (totals) => [
+      "TOTAL",
+      totals.expenses,
+      fmtMoney(totals.amount),
+      fmtMoney(totals.approvedAmount),
+      fmtMoney(totals.pendingAmount),
+    ],
+    pdfWeights: [2.4, 1.0, 1.3, 1.3, 1.3],
+  },
+];
+
+function registerAdditionalReport(definition) {
+  router.get(
+    `/reports/${definition.slug}`,
+    additionalReportReadGate,
+    async (req, res) => {
+      try {
+        const result = await definition.compute(req);
+        if (result.error) return res.status(result.error.status).json(result.error);
+        res.json(result);
+      } catch (e) {
+        console.error(`[reports] ${definition.slug}:`, e.message);
+        res.status(500).json({ error: `Failed to compute ${definition.title}` });
+      }
+    },
+  );
+
+  router.get(
+    `/reports/${definition.slug}.csv`,
+    additionalReportReadGate,
+    async (req, res) => {
+      try {
+        const result = await definition.compute(req);
+        if (result.error) return res.status(result.error.status).json(result.error);
+        const rows = result.rows.map(definition.toRow);
+        rows.push([]);
+        rows.push(definition.totalRow(result.totals));
+        sendCsv(res, definition.slug, result.window, rowsToCsv(definition.headers, rows));
+      } catch (e) {
+        console.error(`[reports] ${definition.slug}.csv:`, e.message);
+        res.status(500).json({ error: `Failed to export ${definition.title} CSV` });
+      }
+    },
+  );
+
+  router.get(
+    `/reports/${definition.slug}.xlsx`,
+    additionalReportReadGate,
+    async (req, res) => {
+      try {
+        const result = await definition.compute(req);
+        if (result.error) return res.status(result.error.status).json(result.error);
+        const rows = result.rows.map(definition.toRow);
+        rows.push([]);
+        rows.push(definition.totalRow(result.totals));
+        sendXlsxReport(res, definition.slug, result.window, definition.title, definition.headers, rows);
+      } catch (e) {
+        console.error(`[reports] ${definition.slug}.xlsx:`, e.message);
+        res.status(500).json({ error: `Failed to export ${definition.title} XLSX` });
+      }
+    },
+  );
+
+  router.get(
+    `/reports/${definition.slug}.pdf`,
+    additionalReportReadGate,
+    async (req, res) => {
+      try {
+        const result = await definition.compute(req);
+        if (result.error) return res.status(result.error.status).json(result.error);
+        const branding = await loadReportPdfBranding(req.user.tenantId);
+        const rows = result.rows.map(definition.toRow);
+        rows.push(definition.totalRow(result.totals));
+        const buf = await renderReportPdf(
+          definition.title,
+          definition.headers,
+          rows,
+          result.window,
+          branding.clinic,
+          {
+            columns: definition.pdfWeights.map((weight) => ({ weight })),
+            branding,
+          },
+        );
+        sendPdf(res, definition.slug, result.window, buf);
+      } catch (e) {
+        console.error(`[reports] ${definition.slug}.pdf:`, e.message);
+        res.status(500).json({ error: `Failed to export ${definition.title} PDF` });
+      }
+    },
+  );
+}
+
+for (const definition of ADDITIONAL_REPORT_DEFINITIONS) registerAdditionalReport(definition);
 
 router.get(
   "/reports/pnl-by-service",
@@ -9693,6 +10413,9 @@ function sendCsv(res, baseName, window, csvText) {
 // Generic tabular PDF  a renderer matching the prescription/consent style:
 // clinic letterhead, centered title, range subtitle, and a paginated table.
 async function renderReportPdf(title, columns, rows, range, clinic, options = {}) {
+  if (options.branding) {
+    return renderBrandedReportPdf(title, columns, rows, range, clinic, options);
+  }
   const PDFDocument = require("pdfkit");
   const doc = new PDFDocument({ size: "A4", margin: 40, layout: "landscape" });
   applyRupeeCapableFonts(doc); //  glyph fix
@@ -9852,6 +10575,379 @@ async function renderReportPdf(title, columns, rows, range, clinic, options = {}
   return bufPromise;
 }
 
+function reportSettingValue(settings, keys) {
+  const values = new Map(
+    (Array.isArray(settings) ? settings : []).map((setting) => [
+      setting?.key,
+      setting?.value,
+    ]),
+  );
+  for (const key of keys) {
+    const value = values.get(key);
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
+
+function reportColor(value, fallback) {
+  const raw = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw;
+  if (/^#[0-9a-f]{3}$/i.test(raw)) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`;
+  }
+  return fallback;
+}
+
+function mixReportColors(first, second, secondWeight) {
+  const a = reportColor(first, "#000000").slice(1);
+  const b = reportColor(second, "#FFFFFF").slice(1);
+  const weight = Math.min(1, Math.max(0, Number(secondWeight) || 0));
+  const channel = (index) => {
+    const value = Math.round(
+      parseInt(a.slice(index, index + 2), 16) * (1 - weight) +
+        parseInt(b.slice(index, index + 2), 16) * weight,
+    );
+    return value.toString(16).padStart(2, "0");
+  };
+  return `#${channel(0)}${channel(2)}${channel(4)}`;
+}
+
+async function loadReportPdfBranding(tenantId) {
+  const [{ tenant, logoBuffer }, settings, clinic] = await Promise.all([
+    loadTenantBrandAssets(tenantId, { invoice: true }),
+    loadTenantInvoiceSettings(tenantId),
+    primaryClinic(tenantId),
+  ]);
+  return { tenant, logoBuffer, settings, clinic };
+}
+
+async function renderBrandedReportPdf(title, columns, rows, range, clinic, options = {}) {
+  const PDFDocument = require("pdfkit");
+  const branding = options.branding || {};
+  const tenant = branding.tenant || {};
+  const settings = branding.settings || [];
+  const tenantClinic = clinic || branding.clinic || {};
+  const doc = new PDFDocument({
+    size: "A4",
+    margin: 36,
+    layout: "landscape",
+    bufferPages: true,
+  });
+  applyRupeeCapableFonts(doc);
+  const chunks = [];
+  const bufPromise = new Promise((resolve, reject) => {
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  const clinicAddress = [
+    tenantClinic.addressLine,
+    [tenantClinic.city, tenantClinic.state, tenantClinic.pincode]
+      .filter(Boolean)
+      .join(", "),
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const brandName =
+    reportSettingValue(settings, [
+      "invoice.brandName",
+      "branding.name",
+      "company.name",
+    ]) ||
+    tenant.name ||
+    tenantClinic.name ||
+    "Clinic";
+  const tagline = reportSettingValue(settings, [
+    "invoice.tagline",
+    "branding.tagline",
+  ]);
+  const address =
+    reportSettingValue(settings, [
+      "invoice.companyAddress",
+      "invoice.address",
+      "branding.address",
+      "company.address",
+      "businessAddress",
+    ]) || clinicAddress;
+  const phone =
+    reportSettingValue(settings, [
+      "invoice.companyPhone",
+      "branding.phone",
+      "company.phone",
+    ]) ||
+    tenantClinic.phone ||
+    "";
+  const email =
+    reportSettingValue(settings, [
+      "invoice.companyEmail",
+      "branding.email",
+      "company.email",
+    ]) ||
+    tenantClinic.email ||
+    tenant.ownerEmail ||
+    "";
+  const website = reportSettingValue(settings, [
+    "invoice.companyWebsite",
+    "branding.website",
+    "company.website",
+  ]);
+  const accent = reportColor(
+    reportSettingValue(settings, [
+      "invoice.brandColor",
+      "branding.color",
+      "branding.primaryColor",
+    ]) ||
+      tenant.brandColor ||
+      reportSettingValue(settings, ["invoice.themeColor", "branding.themeColor"]) ||
+      tenant.themeColor,
+    "#C9A063",
+  );
+  const headerColor = reportColor(
+    reportSettingValue(settings, [
+      "invoice.themeColor",
+      "branding.themeColor",
+      "branding.primaryColor",
+    ]) || tenant.themeColor,
+    mixReportColors(accent, "#173A35", 0.68),
+  );
+  const pageBackground = mixReportColors(headerColor, "#FFFFFF", 0.975);
+  const alternateRow = mixReportColors(headerColor, "#FFFFFF", 0.93);
+  const totalBackground = mixReportColors(accent, "#FFFFFF", 0.84);
+  const borderColor = mixReportColors(headerColor, "#FFFFFF", 0.72);
+  const mutedColor = mixReportColors(headerColor, "#FFFFFF", 0.42);
+  const textColor = mixReportColors(headerColor, "#000000", 0.88);
+  const logoBuffer = branding.logoBuffer;
+
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const printW = right - left;
+  const headerTop = 26;
+  // Keep footer text inside PDFKit's writable area. A y-position below
+  // page.maxY() makes PDFKit's text wrapper append an automatic page, which
+  // previously produced blank pages while the buffered footers were drawn.
+  const footerY = doc.page.height - doc.page.margins.bottom - 12;
+  const contentBottom = footerY - 18;
+  const configuredColumns = Array.isArray(options.columns) ? options.columns : [];
+  const weights = columns.map((_, i) => {
+    const weight = Number(configuredColumns[i]?.weight);
+    return weight > 0 ? weight : 1;
+  });
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || columns.length;
+  const colWidths = weights.map((weight) => (printW * weight) / totalWeight);
+  const colLefts = colWidths.reduce((acc, width, i) => {
+    acc.push(i === 0 ? left : acc[i - 1] + colWidths[i - 1]);
+    return acc;
+  }, []);
+  const cellPadX = 6;
+  const cellPadY = 6;
+  const lineH = 11;
+  const formatDate = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return isoDay(value);
+    try {
+      return date.toLocaleDateString(tenant.locale || "en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    } catch {
+      return isoDay(value);
+    }
+  };
+  const period =
+    range?.from && range?.to
+      ? `${formatDate(range.from)} - ${formatDate(range.to)}`
+      : "";
+  const safeText = (value) =>
+    value === null || value === undefined ? "" : String(value);
+
+  const drawPageBackground = () => {
+    doc.save();
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(pageBackground);
+    doc.restore();
+  };
+
+  const drawLetterhead = (isFirstPage) => {
+    drawPageBackground();
+    let brandX = left;
+    if (logoBuffer) {
+      doc.save();
+      doc.roundedRect(left, headerTop, 86, 64, 3).fillAndStroke("#FFFFFF", borderColor);
+      doc.image(logoBuffer, left + 8, headerTop + 7, {
+        fit: [70, 50],
+        align: "center",
+        valign: "center",
+      });
+      doc.restore();
+      brandX = left + 101;
+    }
+    doc.font("Helvetica-Bold").fontSize(20).fillColor(headerColor).text(brandName, brandX, headerTop + 1, {
+      width: right - brandX - 190,
+      lineBreak: false,
+    });
+    let detailY = headerTop + 28;
+    doc.font("Helvetica").fontSize(8.5).fillColor(mutedColor);
+    if (tagline) {
+      doc.text(tagline, brandX, detailY, { width: right - brandX - 190, lineBreak: false });
+      detailY += 12;
+    }
+    if (address) {
+      doc.text(address, brandX, detailY, { width: right - brandX - 190, lineBreak: false });
+      detailY += 12;
+    }
+    const contact = [phone, email, website].filter(Boolean).join("  |  ");
+    if (contact) {
+      doc.text(contact, brandX, detailY, { width: right - brandX - 190, lineBreak: false });
+    }
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor(accent).text(String(title).toUpperCase(), right - 170, headerTop + 27, {
+      width: 170,
+      align: "right",
+      lineBreak: false,
+    });
+    doc.moveTo(left, headerTop + 75).lineTo(right, headerTop + 75).lineWidth(1.2).strokeColor(accent).stroke();
+
+    if (!isFirstPage) {
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(headerColor).text(`${title} (continued)`, left, headerTop + 91, {
+        width: printW,
+        align: "center",
+        lineBreak: false,
+      });
+      return headerTop + 116;
+    }
+    doc.font("Helvetica-Bold").fontSize(18).fillColor(textColor).text(title, left, headerTop + 96, {
+      width: printW,
+      align: "center",
+      lineBreak: false,
+    });
+    if (period) {
+      doc.font("Helvetica").fontSize(9).fillColor(mutedColor).text(`Reporting period: ${period}`, left, headerTop + 119, {
+        width: printW,
+        align: "center",
+        lineBreak: false,
+      });
+    }
+    return headerTop + (period ? 149 : 137);
+  };
+
+  const drawTableHeader = (yPos) => {
+    doc.font("Helvetica-Bold").fontSize(8);
+    const headerHeights = columns.map((column, index) =>
+      doc.heightOfString(safeText(column), {
+        width: Math.max(12, colWidths[index] - cellPadX * 2),
+        lineGap: 1,
+        // Header measurement must not allow PDFKit to create a page while
+        // checking a wrapped label near the bottom of a page.
+        height: 1000,
+      }),
+    );
+    // Add vertical padding around wrapped labels such as "Product Count" or
+    // "Average amount", while retaining the compact single-line height.
+    const headerH = Math.max(27, Math.ceil(Math.max(14, ...headerHeights)) + 14);
+    doc.save();
+    doc.rect(left, yPos, printW, headerH).fill(headerColor);
+    doc.restore();
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#FFFFFF");
+    columns.forEach((column, index) => {
+      doc.text(safeText(column), colLefts[index] + cellPadX, yPos + 8, {
+        width: Math.max(12, colWidths[index] - cellPadX * 2),
+        lineBreak: false,
+        align: "left",
+      });
+    });
+    doc.moveTo(left, yPos + headerH).lineTo(right, yPos + headerH).lineWidth(1).strokeColor(accent).stroke();
+    return yPos + headerH;
+  };
+
+  const drawFooter = (pageIndex, pageCount) => {
+    const footerParts = [brandName, tenantClinic.city || tenantClinic.state].filter(Boolean);
+    doc.moveTo(left, footerY - 7).lineTo(right, footerY - 7).lineWidth(0.5).strokeColor(borderColor).stroke();
+    doc.font("Helvetica").fontSize(7.5).fillColor(mutedColor).text(footerParts.join(" • "), left, footerY, {
+      width: printW / 3,
+      lineBreak: false,
+    });
+    doc.text("Confidential business report", left + printW / 3, footerY, {
+      width: printW / 3,
+      align: "center",
+      lineBreak: false,
+    });
+    if (pageCount > 1) {
+      doc.text(`Page ${pageIndex + 1} of ${pageCount}`, right - printW / 3, footerY, {
+        width: printW / 3,
+        align: "right",
+        lineBreak: false,
+      });
+    }
+  };
+
+  let y = drawLetterhead(true);
+  y = drawTableHeader(y);
+  let rowIndex = 0;
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length === 0) {
+      y += 8;
+      continue;
+    }
+    doc.font("Helvetica").fontSize(8.5);
+    const rowH = Math.max(
+      lineH,
+      ...row.map((cell, index) =>
+        doc.heightOfString(safeText(cell), {
+          width: Math.max(12, colWidths[index] - cellPadX * 2),
+          lineGap: 1,
+          // Keep measurement side-effect free near the page bottom. Without
+          // an explicit height PDFKit's wrapper can create an automatic page
+          // while measuring a cell, before our manual pagination check runs.
+          height: 1000,
+        }),
+      ),
+    ) + cellPadY * 2;
+    if (y + rowH > contentBottom) {
+      doc.addPage({ size: "A4", margin: 36, layout: "landscape" });
+      y = drawLetterhead(false);
+      y = drawTableHeader(y);
+      rowIndex = 0;
+    }
+    const isTotal = safeText(row[0]).trim().toUpperCase() === "TOTAL";
+    const fill = isTotal ? totalBackground : rowIndex % 2 === 0 ? pageBackground : alternateRow;
+    doc.save();
+    doc.rect(left, y, printW, rowH).fillAndStroke(fill, borderColor);
+    doc.restore();
+    doc.font(isTotal ? "Helvetica-Bold" : "Helvetica").fontSize(8.5).fillColor(textColor);
+    row.forEach((cell, index) => {
+      doc.text(safeText(cell), colLefts[index] + cellPadX, y + cellPadY, {
+        width: Math.max(12, colWidths[index] - cellPadX * 2),
+        lineGap: 1,
+        lineBreak: false,
+        align: "left",
+      });
+    });
+    if (isTotal) {
+      doc.moveTo(left, y).lineTo(right, y).lineWidth(1).strokeColor(accent).stroke();
+    }
+    y += rowH;
+    rowIndex += 1;
+  }
+  if (rows.length === 0) {
+    doc.font("Helvetica").fontSize(9).fillColor(mutedColor).text("No data in this window.", left, y + 12, {
+      width: printW,
+      align: "center",
+      lineBreak: false,
+    });
+  }
+
+  const pageRange = doc.bufferedPageRange();
+  for (let index = 0; index < pageRange.count; index += 1) {
+    doc.switchToPage(pageRange.start + index);
+    drawFooter(index, pageRange.count);
+  }
+  doc.end();
+  return bufPromise;
+}
+
 function sendPdf(res, baseName, window, buf) {
   const filename = `${baseName}-${rangeLabel(window)}.pdf`;
   res.setHeader("Content-Type", "application/pdf");
@@ -9947,7 +11043,7 @@ router.get(
       const result = await computePnlByService(req);
       if (result.error)
         return res.status(result.error.status).json(result.error);
-      const clinic = await primaryClinic(req.user.tenantId);
+      const branding = await loadReportPdfBranding(req.user.tenantId);
       const columns = [
         "Service",
         "Category",
@@ -9980,7 +11076,7 @@ router.get(
         columns,
         rows,
         result.window,
-        clinic,
+        branding.clinic,
         {
           columns: [
             { weight: 2.6 },
@@ -9991,6 +11087,7 @@ router.get(
             { weight: 1.05 },
             { weight: 1.15 },
           ],
+          branding,
         },
       );
       sendPdf(res, "pnl-by-service", result.window, buf);
@@ -10092,7 +11189,7 @@ router.get(
       const result = await computePerProfessional(req);
       if (result.error)
         return res.status(result.error.status).json(result.error);
-      const clinic = await primaryClinic(req.user.tenantId);
+      const branding = await loadReportPdfBranding(req.user.tenantId);
       const columns = ["Staff", "Role", "Visits", "Revenue"];
       const rows = result.rows.map((r) => [
         r.name,
@@ -10111,7 +11208,7 @@ router.get(
         columns,
         rows,
         result.window,
-        clinic,
+        branding.clinic,
         {
           columns: [
             { weight: 2.2 },
@@ -10119,6 +11216,7 @@ router.get(
             { weight: 0.7 },
             { weight: 1 },
           ],
+          branding,
         },
       );
       sendPdf(res, "per-professional", result.window, buf);
@@ -10220,7 +11318,7 @@ router.get(
       const result = await computePerLocation(req);
       if (result.error)
         return res.status(result.error.status).json(result.error);
-      const clinic = await primaryClinic(req.user.tenantId);
+      const branding = await loadReportPdfBranding(req.user.tenantId);
       const columns = [
         "Location",
         "City",
@@ -10253,7 +11351,7 @@ router.get(
         columns,
         rows,
         result.window,
-        clinic,
+        branding.clinic,
         {
           columns: [
             { weight: 2.3 },
@@ -10264,6 +11362,7 @@ router.get(
             { weight: 1 },
             { weight: 0.85 },
           ],
+          branding,
         },
       );
       sendPdf(res, "per-location", result.window, buf);
@@ -10382,7 +11481,7 @@ router.get(
       const result = await computeAttribution(req);
       if (result.error)
         return res.status(result.error.status).json(result.error);
-      const clinic = await primaryClinic(req.user.tenantId);
+      const branding = await loadReportPdfBranding(req.user.tenantId);
       const columns = [
         "Source",
         "Leads",
@@ -10418,7 +11517,7 @@ router.get(
         columns,
         rows,
         result.window,
-        clinic,
+        branding.clinic,
         {
           columns: [
             { weight: 2.4 },
@@ -10430,6 +11529,7 @@ router.get(
             { weight: 1.1 },
             { weight: 1.1 },
           ],
+          branding,
         },
       );
       sendPdf(res, "attribution", result.window, buf);
@@ -10574,7 +11674,7 @@ router.get(
       const result = await computePerProduct(req);
       if (result.error)
         return res.status(result.error.status).json(result.error);
-      const clinic = await primaryClinic(req.user.tenantId);
+      const branding = await loadReportPdfBranding(req.user.tenantId);
       const rows = result.rows.map(perProductExportRow);
       rows.push(perProductTotalsRow(result.totals));
       const buf = await renderReportPdf(
@@ -10582,7 +11682,7 @@ router.get(
         PER_PRODUCT_EXPORT_HEADERS,
         rows,
         result.window,
-        clinic,
+        branding.clinic,
         {
           columns: [
             { weight: 3.0 },
@@ -10594,6 +11694,7 @@ router.get(
             { weight: 0.9 },
             { weight: 1.1 },
           ],
+          branding,
         },
       );
       sendPdf(res, "per-product", result.window, buf);
@@ -12930,13 +14031,69 @@ const __logoCache = new Map();
  * the hit and the "this path doesn't exist" miss so repeated calls
  * are free.
  */
-async function loadTenantBrandAssets(tenantId) {
+async function loadTenantBrandAssets(tenantId, options = {}) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true, name: true, logoUrl: true },
+    select: {
+      id: true,
+      name: true,
+      logoUrl: true,
+      brandColor: true,
+      themeColor: true,
+      defaultCurrency: true,
+      locale: true,
+      ownerEmail: true,
+    },
   });
-  const logoBuffer = await resolveLogoBuffer(tenant?.logoUrl);
+  const logoBuffer = options.invoice
+    ? await resolveProfessionalInvoiceLogo(tenant?.logoUrl)
+    : await resolveLogoBuffer(tenant?.logoUrl);
   return { tenant, logoBuffer };
+}
+
+async function loadTenantInvoiceSettings(tenantId) {
+  try {
+    return await prisma.tenantSetting.findMany({
+      where: {
+        tenantId,
+        key: {
+          in: [
+            "invoice.brandName",
+            "invoice.brandColor",
+            "invoice.themeColor",
+            "invoice.tagline",
+            "invoice.companyAddress",
+            "invoice.address",
+            "invoice.companyPhone",
+            "invoice.companyEmail",
+            "invoice.companyWebsite",
+            "invoice.notes",
+            "branding.name",
+            "branding.color",
+            "branding.primaryColor",
+            "branding.themeColor",
+            "branding.tagline",
+            "branding.address",
+            "branding.phone",
+            "branding.email",
+            "branding.website",
+            "branding.invoiceNotes",
+            "company.name",
+            "company.address",
+            "company.phone",
+            "company.email",
+            "company.website",
+            "businessAddress",
+          ],
+        },
+      },
+      select: { key: true, value: true },
+    });
+  } catch (_e) {
+    // Tenant and clinic values remain valid fallbacks when optional settings
+    // have not been configured on this deployment.
+    return [];
+  }
 }
 
 function loadCachedLogo(candidatePaths) {
@@ -14351,6 +15508,350 @@ router.get(
   },
 );
 
+// GET /portal/consents — the patient's own signed consent forms.
+//
+// This endpoint intentionally accepts both kinds of patient-portal token
+// handled by verifyPatientToken: the phone+OTP token used by the public
+// wellness portal and the regular CUSTOMER session token used by the CRM
+// customer experience. The CUSTOMER role's `consents.read` grant is the
+// single permission switch for both surfaces.
+function parsePortalServiceIds(raw) {
+  if (Array.isArray(raw)) return raw.map(Number).filter(Number.isInteger);
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
+router.get(
+  "/portal/consents",
+  verifyPatientToken,
+  requirePortalPermission("consents", "read"),
+  async (req, res) => {
+    try {
+      const consents = await prisma.consentForm.findMany({
+        where: {
+          patientId: req.patient.id,
+          tenantId: req.patient.tenantId,
+        },
+        orderBy: { signedAt: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          templateName: true,
+          signedAt: true,
+          patientId: true,
+          serviceId: true,
+          hasPdfBlob: true,
+          service: { select: { id: true, name: true } },
+          // EXCLUDED: signatureSvg, contentSnapshot, signedPdfBlob
+        },
+      });
+
+      // Patient e-signatures are the source of truth for new consent PDFs.
+      // Keep legacy ConsentForm rows in the response and add signed, linked
+      // Custom requests without rewriting or migrating either record type.
+      let signatureRequests = [];
+      if (prisma.signatureRequest?.findMany) {
+        try {
+          signatureRequests = await prisma.signatureRequest.findMany({
+            where: {
+              patientId: req.patient.id,
+              tenantId: req.patient.tenantId,
+              documentType: "Custom",
+              status: "SIGNED",
+              visitId: { not: null },
+            },
+            orderBy: { signedAt: "desc" },
+            take: 50,
+            select: {
+              id: true,
+              documentName: true,
+              signedAt: true,
+              patientId: true,
+              visitId: true,
+              serviceIds: true,
+            },
+          });
+        } catch (signatureErr) {
+          // Legacy ConsentForm records must remain readable if an older
+          // deployment has not yet applied the additive signature context.
+          console.warn("[wellness] portal signature list unavailable:", signatureErr.message);
+        }
+      }
+      if (!Array.isArray(signatureRequests)) signatureRequests = [];
+      const signatureServiceIds = [...new Set(
+        signatureRequests.flatMap((request) => parsePortalServiceIds(request.serviceIds)),
+      )];
+      let signatureServices = [];
+      if (signatureServiceIds.length && prisma.service?.findMany) {
+        try {
+          signatureServices = await prisma.service.findMany({
+            where: { id: { in: signatureServiceIds }, tenantId: req.patient.tenantId },
+            select: { id: true, name: true },
+          });
+        } catch (serviceErr) {
+          console.warn("[wellness] portal signature services unavailable:", serviceErr.message);
+        }
+      }
+      const serviceById = new Map(signatureServices.map((service) => [service.id, service]));
+      const signatureConsents = signatureRequests.map((request) => {
+        const linkedServices = parsePortalServiceIds(request.serviceIds)
+          .map((id) => serviceById.get(id))
+          .filter(Boolean);
+        return {
+          id: request.id,
+          templateName: request.documentName || "Consent form",
+          documentName: request.documentName || null,
+          signedAt: request.signedAt,
+          patientId: request.patientId,
+          visitId: request.visitId,
+          serviceId: linkedServices[0]?.id || null,
+          service: linkedServices[0] || null,
+          serviceIds: request.serviceIds,
+          source: "signature",
+          signatureRequestId: request.id,
+        };
+      });
+      const combinedConsents = [
+        ...consents.map((consent) => ({ ...consent, source: "consent" })),
+        ...signatureConsents,
+      ]
+        .sort((a, b) => new Date(b.signedAt || 0) - new Date(a.signedAt || 0))
+        .slice(0, 50);
+
+      try {
+        await writeAudit(
+          "ConsentForm",
+          "PATIENT_LIST_READ",
+          null,
+          null,
+          req.patient.tenantId,
+          {
+            count: combinedConsents.length,
+            source: "portal/consents",
+            patientId: req.patient.id,
+          },
+          { actorType: "patient", patientId: req.patient.id },
+        );
+      } catch (auditErr) {
+        console.warn("[wellness] audit portal/consents failed:", auditErr.message);
+      }
+      res.json(combinedConsents);
+    } catch (e) {
+      console.error("[wellness] portal consents error:", e.message);
+      res.status(500).json({ error: "Failed to load consent forms" });
+    }
+  },
+);
+
+// GET /portal/consents/:id/pdf — patient self-view/download of a consent PDF.
+//
+// The consent lookup is hard-scoped by patientId as well as id. A valid
+// portal token therefore cannot be used to pull another patient's clinical
+// document, even when the caller knows its numeric id.
+// GET /portal/signatures/:id/pdf — patient self-view/download of a signed
+// e-signature linked to this patient, visit, and service selection.
+// This stays separate from legacy ConsentForm PDFs because the two tables
+// have independent numeric id sequences; the explicit source in the URL
+// avoids an id collision and preserves every existing record.
+router.get(
+  "/portal/signatures/:id/pdf",
+  verifyPatientToken,
+  requirePortalPermission("consents", "read"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({ error: "Invalid signature request id" });
+      }
+
+      const signatureRequest = await prisma.signatureRequest.findFirst({
+        where: {
+          id,
+          patientId: req.patient.id,
+          tenantId: req.patient.tenantId,
+          documentType: "Custom",
+          status: "SIGNED",
+          visitId: { not: null },
+        },
+        select: {
+          id: true,
+          patientId: true,
+          visitId: true,
+          serviceIds: true,
+          documentName: true,
+          signedAt: true,
+          signature: true,
+        },
+      });
+      if (!signatureRequest) {
+        return res.status(404).json({ error: "Signature request not found" });
+      }
+
+      const [patient, visit] = await Promise.all([
+        prisma.patient.findFirst({
+          where: { id: req.patient.id, tenantId: req.patient.tenantId },
+          select: { id: true, name: true, email: true, phone: true },
+        }),
+        prisma.visit.findFirst({
+          where: {
+            id: signatureRequest.visitId,
+            patientId: req.patient.id,
+            tenantId: req.patient.tenantId,
+          },
+          select: {
+            id: true,
+            visitDate: true,
+            serviceId: true,
+            service: { select: { id: true, name: true } },
+          },
+        }),
+      ]);
+      if (!patient || !visit) return res.status(404).json({ error: "Linked patient visit not found" });
+
+      const serviceIds = [...new Set(
+        [...parsePortalServiceIds(signatureRequest.serviceIds), Number(visit.serviceId)]
+          .filter((serviceId) => Number.isInteger(serviceId) && serviceId > 0),
+      )];
+      const services = serviceIds.length && prisma.service?.findMany
+        ? await prisma.service.findMany({
+          where: { id: { in: serviceIds }, tenantId: req.patient.tenantId },
+          select: { id: true, name: true },
+        })
+        : [];
+      if (visit.service && !services.some((service) => service.id === visit.service.id)) {
+        services.push(visit.service);
+      }
+      const service = services.length > 1
+        ? { name: services.map((item) => item.name).join(", ") }
+        : services[0] || visit.service || null;
+      const clinic = await primaryClinic(req.patient.tenantId);
+      const buf = await renderConsentPdf(
+        {
+          templateName: signatureRequest.documentName || "general",
+          signedAt: signatureRequest.signedAt,
+        },
+        patient,
+        service,
+        clinic,
+        signatureRequest.signature,
+        { visit, services },
+      );
+
+      try {
+        await writeAudit(
+          "SignatureRequest",
+          "SIGNATURE_PDF_DOWNLOAD",
+          signatureRequest.id,
+          null,
+          req.patient.tenantId,
+          {
+            signatureRequestId: signatureRequest.id,
+            patientId: signatureRequest.patientId,
+            visitId: signatureRequest.visitId,
+            serviceIds,
+            source: "portal",
+          },
+          { actorType: "patient", patientId: req.patient.id },
+        );
+      } catch (auditErr) {
+        console.warn("[wellness] audit portal signature PDF failed:", auditErr.message);
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="consent-${id}.pdf"`);
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.send(buf);
+    } catch (e) {
+      console.error("[wellness] portal signature PDF error:", e.message);
+      res.status(500).json({ error: "Failed to render consent PDF" });
+    }
+  },
+);
+
+router.get(
+  "/portal/consents/:id/pdf",
+  verifyPatientToken,
+  requirePortalPermission("consents", "read"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "Invalid consent id" });
+      }
+
+      const consent = await prisma.consentForm.findFirst({
+        where: { id, patientId: req.patient.id, tenantId: req.patient.tenantId },
+        include: { patient: true, service: true },
+      });
+      if (!consent) return res.status(404).json({ error: "Consent not found" });
+
+      let buf;
+      let servedFromBlob = false;
+      if (consent.signedPdfBlob && consent.signedPdfBlob.length > 0) {
+        buf = Buffer.isBuffer(consent.signedPdfBlob)
+          ? consent.signedPdfBlob
+          : Buffer.from(consent.signedPdfBlob);
+        servedFromBlob = true;
+      } else {
+        const clinic = await primaryClinic(consent.tenantId);
+        buf = await renderConsentPdf(
+          consent,
+          consent.patient,
+          consent.service,
+          clinic,
+          consent.signatureSvg,
+        );
+      }
+
+      try {
+        await writeAudit(
+          "ConsentForm",
+          "CONSENT_PDF_DOWNLOAD",
+          consent.id,
+          null,
+          consent.tenantId,
+          {
+            consentId: consent.id,
+            patientId: consent.patientId,
+            serviceId: consent.serviceId,
+            templateName: consent.templateName,
+            servedFromBlob,
+            source: "portal",
+          },
+          { actorType: "patient", patientId: req.patient.id },
+        );
+      } catch (auditErr) {
+        console.warn(
+          "[wellness] audit portal CONSENT_PDF_DOWNLOAD failed:",
+          auditErr.message,
+        );
+      }
+
+      res.setHeader("Content-Type", consent.signedPdfMime || "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="consent-${id}.pdf"`,
+      );
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.send(buf);
+    } catch (e) {
+      console.error("[wellness] portal consent pdf error:", e.message);
+      res.status(500).json({ error: "Failed to render consent PDF" });
+    }
+  },
+);
+
 // POST /portal/export  patient self-DSAR (DPDP Act 15 / GDPR Article 15).
 // Closes v3.4.8 carry-over #2: prior to this endpoint, wellness-portal
 // patients had NO mechanism to obtain a copy of their own data  they
@@ -14519,7 +16020,20 @@ router.get("/invoices/:id/branded-pdf", async (req, res) => {
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
     const clinic = await primaryClinic(req.user.tenantId);
-    const buf = await renderBrandedInvoicePdf(invoice, invoice.contact, clinic);
+    const { tenant, logoBuffer } = await loadTenantBrandAssets(req.user.tenantId, { invoice: true });
+    const settings = await loadTenantInvoiceSettings(req.user.tenantId);
+    const buf = await renderProfessionalWellnessInvoicePdf(
+      invoice,
+      invoice.contact,
+      clinic,
+      {
+        tenant,
+        logoBuffer,
+        settings,
+        currency: tenant?.defaultCurrency || "INR",
+        locale: tenant?.locale || "en-IN",
+      },
+    );
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",

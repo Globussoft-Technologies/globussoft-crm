@@ -109,6 +109,22 @@ function makeFakePrisma() {
       create: vi.fn(async ({ data }) => ({ id: state.nextId++, ...data })),
     },
     contact: {
+      findFirst: vi.fn(async ({ where }) =>
+        state.contacts.find(
+          (c) => c.email === where.email && c.tenantId === where.tenantId,
+        ) || null,
+      ),
+      create: vi.fn(async ({ data }) => {
+        const row = { id: state.nextId++, ...data };
+        state.contacts.push(row);
+        return row;
+      }),
+      update: vi.fn(async ({ where, data }) => {
+        const row = state.contacts.find((c) => c.id === where.id);
+        if (!row) throw new Error('not found');
+        Object.assign(row, data);
+        return row;
+      }),
       findMany: vi.fn(async ({ where, take, select }) => {
         let rows = state.contacts.filter((c) => c.tenantId === where.tenantId);
         if (where.email && where.email.not !== undefined) {

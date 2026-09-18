@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useRef,
   Suspense,
+  lazy as reactLazy,
 } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -24,6 +25,7 @@ import ResetPassword from "./pages/ResetPassword";
 import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
+import GenericAccessGuard from "./components/GenericAccessGuard";
 import { NotifyProvider } from "./utils/notify";
 import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
@@ -43,6 +45,10 @@ import {
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
 
 const Landing = lazy(() => import("./pages/Landing"));
+// Keep the tour engine out of the already-tight application entry chunk. Use
+// React.lazy directly rather than the route-oriented lazyWithRetry wrapper:
+// this is an application provider, not a navigable page chunk.
+const ProductTourProvider = reactLazy(() => import("./tours/TourContext"));
 
 const THEME_STORAGE_KEY = "theme";
 const PUBLIC_LIGHT_THEME_ROUTES = new Set([
@@ -81,8 +87,10 @@ const Home = lazy(() => import("./pages/Home"));
 const Contacts = lazy(() => import("./pages/Contacts"));
 const ContactDetail = lazy(() => import("./pages/ContactDetail"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
+const DealDetails = lazy(() => import("./pages/DealDetails"));
 const Workflows = lazy(() => import("./pages/Workflows"));
 const Inbox = lazy(() => import("./pages/Inbox"));
+const EmailCompose = lazy(() => import("./pages/EmailCompose"));
 const Marketing = lazy(() => import("./pages/Marketing"));
 const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
@@ -126,6 +134,7 @@ const SuperAdminApiKeyManagement = lazy(
 const SuperAdminTenantManagement = lazy(
   () => import("./pages/superadmin/SuperAdminTenantManagement"),
 );
+const SuperAdminLandingForm = lazy(() => import("./pages/superadmin/SuperAdminLandingForm"));
 const SuperAdminRevenue = lazy(
   () => import("./pages/superadmin/SuperAdminRevenue"),
 );
@@ -199,6 +208,7 @@ const WellnessAttendanceCalendar = lazy(
   () => import("./pages/wellness/AttendanceCalendar"),
 );
 const Marketplace = lazy(() => import("./pages/Marketplace"));
+const MarketplaceLeads = lazy(() => import("./pages/MarketplaceLeads"));
 const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
 const CustomObjectView = lazy(() => import("./pages/CustomObjectView"));
@@ -208,6 +218,8 @@ const Tasks = lazy(() => import("./pages/Tasks"));
 const CallifiedData = lazy(() => import("./pages/CallifiedData"));
 const Tickets = lazy(() => import("./pages/Tickets"));
 const Staff = lazy(() => import("./pages/Staff"));
+const SalesTeams = lazy(() => import("./pages/SalesTeams"));
+const Users = lazy(() => import("./pages/Users"));
 const Invoices = lazy(() => import("./pages/Invoices"));
 const LeadScoring = lazy(() => import("./pages/LeadScoring"));
 const Leads = lazy(() => import("./pages/Leads"));
@@ -1467,7 +1479,8 @@ export default function App() {
           <NotifyProvider>
             <ActiveSubBrandProvider>
               <BrowserRouter>
-                <RouteErrorBoundary>
+                <ProductTourProvider>
+                  <RouteErrorBoundary>
                   <Suspense
                     fallback={
                       <div
@@ -1601,6 +1614,7 @@ export default function App() {
                     <Route path="ai-management/:tenantId" element={<SuperAdminAiManagement />} />
                     <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
                     <Route path="tenant-management/:tenantId" element={<SuperAdminTenantManagement />} />
+                    <Route path="landing-form" element={<SuperAdminLandingForm />} />
                     <Route path="revenue" element={<SuperAdminRevenue />} />
                   </Route>
                   {/* Travel customer portal — end-user (Contact) login + dashboard
@@ -1768,7 +1782,7 @@ export default function App() {
                     />
                     <Route
                       path="/*"
-                      element={token ? <Layout /> : <Navigate to="/login" />}
+                      element={token ? <GenericAccessGuard><Layout /></GenericAccessGuard> : <Navigate to="/login" />}
                     >
                       <Route
                         path="dashboard"
@@ -2514,6 +2528,7 @@ export default function App() {
                         element={<Navigate to="/invoices" replace />}
                       />
                       <Route path="contacts" element={<Contacts />} />
+                      <Route path="leads/:id" element={<ContactDetail />} />
                       <Route path="contacts/:id" element={<ContactDetail />} />
                       <Route
                         path="pipeline"
@@ -2523,7 +2538,16 @@ export default function App() {
                           </GenericOnly>
                         }
                       />
+                      <Route
+                        path="deals/:dealId"
+                        element={
+                          <GenericOnly>
+                            <DealDetails />
+                          </GenericOnly>
+                        }
+                      />
                       <Route path="inbox" element={<Inbox />} />
+                      <Route path="email/compose" element={<EmailCompose />} />
                       <Route
                         path="marketing"
                         element={
@@ -2572,6 +2596,14 @@ export default function App() {
                       />
                       <Route path="cpq" element={<CPQ />} />
                       <Route path="marketplace" element={<Marketplace />} />
+                      <Route
+                        path="marketplace-leads"
+                        element={
+                          <GenericOnly>
+                            <MarketplaceLeads />
+                          </GenericOnly>
+                        }
+                      />
                       <Route
                         path="channels"
                         element={
@@ -2645,12 +2677,9 @@ export default function App() {
                       <Route
                         path="settings"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Settings requires admin access."
-                          >
+                          <GenericAccessGuard path="/settings" message="Settings requires the settings.read permission.">
                             <Settings />
-                          </RoleGuard>
+                          </GenericAccessGuard>
                         }
                       />
                       {/* Manage Subscription Plans  Owner-only catalog editor.
@@ -2687,12 +2716,9 @@ export default function App() {
                       <Route
                         path="data-import-export"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN", "MANAGER"]}
-                            message="Import / Export requires admin or manager access."
-                          >
+                          <GenericAccessGuard path="/data-import-export" message="Import / Export requires admin or manager access.">
                             <DataImportExport />
-                          </RoleGuard>
+                          </GenericAccessGuard>
                         }
                       />
                       <Route path="expenses" element={<Expenses />} />
@@ -2712,6 +2738,7 @@ export default function App() {
                       <Route path="projects" element={<Projects />} />
                       <Route path="clients" element={<Clients />} />
                       <Route path="leads" element={<Leads />} />
+                      <Route path="sales-teams" element={<RoleGuard allow={["ADMIN", "MANAGER"]} message="Sales Teams requires manager access."><SalesTeams /></RoleGuard>} />
                       <Route
                         path="converted-leads"
                         element={<ConvertedLeads />}
@@ -2728,6 +2755,14 @@ export default function App() {
                             message="Staff requires admin access."
                           >
                             <Staff />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
+                        path="users"
+                        element={
+                          <RoleGuard allow={["ADMIN"]} message="Users requires admin access.">
+                            <Users />
                           </RoleGuard>
                         }
                       />
@@ -3000,12 +3035,9 @@ export default function App() {
                       <Route
                         path="revenue-goals"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN", "MANAGER", "USER"]}
-                            message="Revenue Goals requires staff access."
-                          >
+                          <GenericAccessGuard path="/revenue-goals" message="Revenue Goals requires staff access.">
                             <RevenueGoals />
-                          </RoleGuard>
+                          </GenericAccessGuard>
                         }
                       />
                       <Route path="lead-routing" element={<LeadRouting />} />
@@ -3873,7 +3905,8 @@ export default function App() {
                     </Route>
                     </Routes>
                   </Suspense>
-                </RouteErrorBoundary>
+                  </RouteErrorBoundary>
+                </ProductTourProvider>
               </BrowserRouter>
             </ActiveSubBrandProvider>
           </NotifyProvider>
@@ -3882,8 +3915,3 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
-
-
-
-
-

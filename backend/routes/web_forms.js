@@ -13,6 +13,7 @@ const { verifyToken } = require("../middleware/auth");
 const { sendEmail } = require("../lib/emailSender");
 const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
+const s3Service = require("../services/s3Service");
 
 const router = express.Router();
 
@@ -90,6 +91,28 @@ const upload = multer({
   },
 });
 
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mimeType = String(file.mimetype || "").toLowerCase();
+    if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mimeType)) {
+      return cb(null, true);
+    }
+    return cb(new Error("Unsupported logo type. Allowed: PNG, JPG, WebP or GIF"));
+  },
+}).single("image");
+
+function uploadLogoOrReject(req, res, next) {
+  logoUpload(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "Logo is too large (max 5 MB)", code: "INVALID_LOGO" });
+    }
+    return res.status(400).json({ error: error.message || "Invalid logo file", code: "INVALID_LOGO" });
+  });
+}
+
 const FIELD_TYPES = new Set([
   "text",
   "textarea",
@@ -138,6 +161,7 @@ const CONTACT_FIELDS = new Set([
   "company",
   "title",
   "source",
+  "medium",
   "status",
   "aiScore",
   "assignedToId",
@@ -167,7 +191,9 @@ const LEAD_CUSTOM_TO_CONTACT = {
   jobRoles: "title",
   organization: "company",
   numberOfEmployees: "companySize",
-  medium: "source",
+  // Medium writes to Contact.medium — NEVER to Contact.source. Source and
+  // Medium are two separate fields (e.g. Source=Website, Medium=Google).
+  medium: "medium",
 };
 const FORM_SCOPES = new Set(["generic", "travel"]);
 
@@ -552,7 +578,8 @@ function buildEmbedCode(form, origin) {
   return [
     "<!-- Globussoft CRM web form -->",
 
-    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
+    '<script>(function(frame){window.addEventListener("message",function(event){if(!frame||event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form"||event.data.type!=="size")return;var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}});})(document.currentScript.previousElementSibling);</script>',
   ].join("\n");
 }
 
@@ -809,6 +836,9 @@ router.get("/public/:slug", async (req, res) => {
 
     const origin = `${req.protocol}://${req.get("host")}`;
 
+    // Form configuration is editable by CRM users. Do not let an embedded
+    // browser reuse an older public configuration after a successful save.
+    res.set("Cache-Control", "no-store");
     res.json(shapeForm(form, 0, origin, true));
   } catch (err) {
     console.error("[web-forms/public] load error:", err && err.message);
@@ -938,6 +968,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         else if (field.sourceKey === "title") contactData.title = textOr(raw);
         else if (field.sourceKey === "source")
           contactData.source = textOr(raw, contactData.source);
+        else if (field.sourceKey === "medium")
+          contactData.medium = textOr(raw) || null;
         else if (field.sourceKey === "status")
           contactData.status = textOr(raw, contactData.status);
         else if (field.sourceKey === "aiScore") {
@@ -1023,6 +1055,51 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       contactData.name,
       contactData.email || contactData.phone || form.name || "Web form lead",
     );
+
+    // Validate canonical contact fields before creating/updating a lead.
+    // Keep this at the API boundary so browser-side validation cannot be
+    // bypassed by direct form submissions.
+    const nameValue = String(contactData.name || "").trim();
+    const emailValue = String(contactData.email || "").trim();
+    const phoneValue = String(contactData.phone || "").trim();
+    const companyValue = String(contactData.company || "").trim();
+    const isGenericForm = formScope === "generic";
+    const fieldErrors = {};
+    if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
+      fieldErrors.name = "Enter a valid name using letters, spaces, hyphens, or apostrophes";
+    }
+    if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailValue) || (isGenericForm && emailValue.includes("..")))) {
+      fieldErrors.email = "Enter a valid email address";
+    }
+    if (phoneValue) {
+      const digits = phoneValue.replace(/\D/g, "");
+      const normalizedPhone = phoneValue.replace(/[\s().-]/g, "");
+      const phoneIsValid = isGenericForm
+        ? /^\+[1-9]\d{7,14}$/.test(normalizedPhone)
+        : /^[+\d][\d\s().-]*$/.test(phoneValue) && digits.length >= 7 && digits.length <= 15;
+      if (!phoneIsValid) {
+        fieldErrors.phone = isGenericForm
+          ? "Enter a valid international phone number with country code, for example +919876543210"
+          : "Enter a valid phone number with 7-15 digits";
+        fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
+      }
+    }
+    if (phoneValue && isGenericForm) {
+      const normalizedGenericPhone = phoneValue.replace(/[\s().-]/g, "");
+      if (/^\+[1-9]\d{7,14}$/.test(normalizedGenericPhone)) {
+        contactData.phone = normalizedGenericPhone;
+        delete fieldErrors.phone;
+      } else {
+        fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
+      }
+    }
+    if (companyValue && (companyValue.length < 2 || companyValue.length > 150 || !/[\p{L}]/u.test(companyValue))) {
+      fieldErrors.company = "Enter a valid company name";
+    }
+    if (Object.keys(fieldErrors).length) {
+      const details = Object.entries(fieldErrors).map(([field, message]) => `${field[0].toUpperCase()}${field.slice(1)}: ${message}`).join("\n");
+      return res.status(400).json({ error: details, code: "INVALID_CONTACT_FIELDS", fields: fieldErrors });
+    }
 
     if (contactData.email === "") contactData.email = null;
 
@@ -1303,6 +1380,9 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 router.get("/", verifyToken, async (req, res) => {
   try {
     const scope = requestedScope(req);
+    // Web forms remain tenant-owned. Cross-organisation landing selection is
+    // handled by landing-form-config and must never copy or expose another
+    // organisation's forms in this tenant's CRUD list.
     let forms = await listWithCounts(req.user.tenantId, scope);
 
     if (forms.length === 0) {
@@ -1411,6 +1491,88 @@ router.post("/", verifyToken, async (req, res) => {
       error: err.statusCode ? err.message : "Failed to create form",
       ...(err.code ? { code: err.code } : {}),
     });
+  }
+});
+
+// Travel Web Forms builder logo upload. This is intentionally travel-scoped:
+// the generic CRM builder keeps its existing local-preview behaviour. The
+// shared storage service selects OCS automatically when OCI_* credentials are
+// configured, otherwise it uses the existing local-development fallback.
+router.post("/logo-upload", verifyToken, uploadLogoOrReject, async (req, res) => {
+  try {
+    requestedScope(req);
+    if (!req.file) {
+      return res.status(400).json({ error: "No logo image provided", code: "LOGO_REQUIRED" });
+    }
+
+    const url = await s3Service.uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      `travel/web-forms/${req.user.tenantId}/logos`,
+    );
+    return res.status(201).json({
+      url,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      storage: s3Service.isOciUrl(url) ? "ocs" : (s3Service.isLocalUrl(url) ? "local" : "s3"),
+    });
+  } catch (err) {
+    console.error("[web-forms] logo upload error:", err && err.message);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to upload form logo",
+      code: err.code || "FORM_LOGO_UPLOAD_FAILED",
+    });
+  }
+});
+
+router.get("/:id/leads", verifyToken, async (req, res) => {
+  try {
+    if ((req.user.vertical || "generic") !== "generic" || requestedScope(req) !== "generic") {
+      return res.status(403).json({ error: "Only available in Generic CRM", code: "FORM_SCOPE_FORBIDDEN" });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid form id", code: "INVALID_FORM_ID" });
+    }
+    const tenantId = req.user.tenantId;
+    const form = await prisma.webForm.findFirst({ where: { id, tenantId, scope: "generic" } });
+    if (!form) return res.status(404).json({ error: "Form not found", code: "FORM_NOT_FOUND" });
+    const page = Math.max(1, Math.min(1000000, parseInt(req.query.page, 10) || 1));
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 25));
+    const search = String(req.query.search || "").trim().slice(0, 200);
+    const where = {
+      tenantId, scope: "generic", webFormId: id,
+      contact: { is: { tenantId } },
+      ...(search ? { OR: [
+        { payloadJson: { contains: search } },
+        { filesJson: { contains: search } },
+        ...["name", "email", "phone", "company"].map((key) => ({ contact: { is: { [key]: { contains: search } } } })),
+      ] } : {}),
+    };
+    const [total, submissions] = await Promise.all([
+      prisma.webFormSubmission.count({ where }),
+      prisma.webFormSubmission.findMany({
+        where, skip: (page - 1) * limit, take: limit,
+        orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
+        select: { id: true, payloadJson: true, filesJson: true,
+          contact: { select: { id: true, createdAt: true, updatedAt: true } } },
+      }),
+    ]);
+    const fields = normalizeFields(form.fieldsJson);
+    res.json({ fields, total, page, limit, leads: submissions.map((row) => {
+      const payload = parseJson(row.payloadJson, {}) || {};
+      const files = parseJson(row.filesJson, []) || [];
+      return { id: row.id, contactId: row.contact.id,
+        createdAt: row.contact.createdAt, updatedAt: row.contact.updatedAt,
+        values: fields.map((field) => field.fieldType === "file"
+          ? files.filter((file) => file.fieldKey === field.sourceKey).map((file) => file.originalName)
+          : payload[field.sourceKind === "custom" ? `custom:${field.sourceKey}` : field.sourceKey] ?? null),
+      };
+    }) });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to load form leads", code: err.code || "FORM_LEADS_FAILED" });
   }
 });
 

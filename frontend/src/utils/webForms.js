@@ -45,7 +45,8 @@ export function buildWebFormEmbedCode(form, origin) {
   const title = escapeHtml(form?.name || 'Web form');
   return [
     '<!-- Globussoft CRM web form -->',
-    `<iframe src="${base}/embed/web-form.html?${query}" title="${title}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}" title="${title}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
+    '<script>(function(frame){window.addEventListener("message",function(event){if(!frame||event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form"||event.data.type!=="size")return;var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}});})(document.currentScript.previousElementSibling);</script>',
     `<p><a href="${buildPublicUrl(form, origin)}" target="_blank" rel="noopener noreferrer">Open public form</a></p>`,
   ].join('\n');
 }

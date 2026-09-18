@@ -81,6 +81,7 @@ model Tenant {
   // may opt out for storage / compliance reasons; existing tenants
   // pre-flag default to true at first read of the column.
   emailRetention     Boolean   @default(true)
+  productToursEnabled Boolean  @default(true)
   isActive           Boolean   @default(true)
   ownerEmail         String?
   adsgptLogin        String? // AdsGPT aMember username or email for SSO
@@ -111,6 +112,9 @@ model Tenant {
   updatedAt          DateTime  @updatedAt
 
   users                 User[]
+  userTourProgress      UserTourProgress[]
+  salesTeams            SalesTeam[]
+  salesTeamMembers      SalesTeamMember[]
   contacts              Contact[]
   activities            Activity[]
   deals                 Deal[]
@@ -212,6 +216,8 @@ model Tenant {
   travelMarkupRules                   TravelMarkupRule[]
   tmcTrips                            TmcTrip[]
   tmcParentTrips                      TmcParentTrip[]
+  tmcParentDocuments                  TmcParentDocument[]
+  tmcTripTeacherReviews               TmcTripTeacherReview[]
   webCheckins                         WebCheckin[]
   webCheckinAutomationRuns            WebCheckinAutomationRun[]
   travelTripReviews                   TravelTripReview[]
@@ -235,6 +241,7 @@ model Tenant {
   travelQuoteLines                    TravelQuoteLine[]
   travelQuoteTemplates                TravelQuoteTemplate[]
   travelInvoices                      TravelInvoice[]
+  travelInvoiceSequences              TravelInvoiceSequence[]
   travelInvoiceLines                  TravelInvoiceLine[]
   travelPaymentSchedules              TravelPaymentSchedule[]
   travelSuppliers                     TravelSupplier[]
@@ -653,6 +660,9 @@ model User {
   whatsappThreads    WhatsAppThread[]    @relation("WhatsAppThreadAssignee")
   pushSubscriptions  PushSubscription[]
   landingPages       LandingPage[]
+  teamMemberships     SalesTeamMember[]
+  salesTeamsCreated  SalesTeam[] @relation("SalesTeamCreator")
+  salesTeamsUpdated  SalesTeam[] @relation("SalesTeamUpdater")
 
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
@@ -715,6 +725,7 @@ model User {
 
   // Notification preferences
   notificationPreference NotificationPreference?
+  tourProgressRecords    UserTourProgress[]
 
   // Wave 3 — Staff availability blocks (breaks, leave, etc.)
   blockTimes BlockTime[] @relation("UserBlockTimes")
@@ -743,16 +754,41 @@ model User {
   @@index([tenantId, role])
 }
 
+// Generic CRM guided-tour preferences and per-tour completion state. The
+// composite key keeps progress isolated to one user inside one tenant.
+model UserTourProgress {
+  id              Int       @id @default(autoincrement())
+  tenantId        Int
+  userId          Int
+  preferencesJson String    @db.Text
+  progressJson    String    @db.LongText
+  progressResetAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+  @@index([userId])
+}
+
 model Contact {
   id                    Int       @id @default(autoincrement())
   name                  String
-  email                 String? // nullable (2026-06-19): WhatsApp auto-leads land WITHOUT an email — it's asked for in the chat + filled later. All other creators still set it. @@unique([email, tenantId]) tolerates multiple NULLs in MySQL.
+  email                 String? // nullable: some inbound leads arrive without an email; duplicates are checked at the route level so product-specific leads can share an email.
   emailVerifiedAt       DateTime? // set when a self-registered portal customer verified their email via OTP
   phone                 String?
   company               String?
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
   source                String?   @default("Organic")
+  // Web-form Medium (e.g. Google, Facebook Ads) — free-text channel detail
+  // kept SEPARATE from `source` (e.g. Website). Nullable so all pre-existing
+  // rows ignore it; written by routes/web_forms.js, surfaced as the Medium
+  // column in the Leads Customize-table picker.
+  medium                String?
   /// JSON-encoded array of free-text tags for lead/contact segmentation.
   /// Route layer exposes this as `tags: string[]`, sanitizes each value, and
   /// stores null when no tags are selected.
@@ -797,6 +833,11 @@ model Contact {
   companySize    String?
   linkedin       String?
   website        String?
+  // Social profile links (2026-09-08) — nullable URLs rendered as icons in
+  // the contact-profile header. A missing link renders blurred until added.
+  facebookUrl    String?
+  githubUrl      String?
+  twitterUrl     String?
   lastEnrichedAt DateTime?
 
   // Marketing attribution
@@ -994,9 +1035,13 @@ model Contact {
   assignedTmcTrips          TmcTrip[] @relation("TmcTripTeacher")
   tmcParentTrips            TmcParentTrip[] @relation("TmcParentTripParent")
   tmcTeacherParentTrips     TmcParentTrip[] @relation("TmcParentTripTeacher")
+  tmcTeacherReviews         TmcTripTeacherReview[] @relation("TmcTripTeacherReviewTeacher")
 
-  /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
-  @@unique([email, tenantId])
+  /// Email is indexed per tenant rather than database-unique so a person can
+  /// register separate product leads in the same CRM. The contact-creation
+  /// route still performs a duplicate preflight and requires explicit force
+  /// confirmation before creating a second lead.
+  @@index([tenantId, email])
   /// [GP-CRM integration] One Contact per externalId-per-tenant. NULL != NULL in
   /// MySQL unique indexes, so the many contacts with no externalId never collide;
   /// only partner-linked rows (e.g. GlobusPhone lead ULID) are deduplicated.
@@ -1725,6 +1770,21 @@ model Invoice {
   contactId Int
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Restrict)
 
+  // Wellness invoice customer snapshot. These fields are nullable and only
+  // populated by the wellness invoice flow; generic + travel invoices keep
+  // their existing shape. Snapshotting makes an issued invoice stable even
+  // when the patient profile changes later.
+  patientId         Int?
+  customerName      String?
+  customerPhone     String?
+  customerEmail     String?
+  customerAddress   String? @db.Text
+  gstin             String? @db.VarChar(15)
+  billingAddress    String? @db.Text
+  shippingAddress   String? @db.Text
+  paymentMode       String? // cash, upi, card, bank_transfer, other
+  lineItemsJson     String? @db.Text // [{type, itemId, name, quantity, unitPrice, amount}]
+
   // #601 — wellness visit linkage. Optional so generic CRM invoices don't
   // need it. SetNull on visit delete; Invoice itself stays Restrict-on-tenant.
   // Drives the per-visit revenue rollup on /api/wellness/reports/visit.
@@ -1737,6 +1797,7 @@ model Invoice {
   @@index([tenantId, nextRecurDate])
   @@index([tenantId, parentInvoiceId])
   @@index([tenantId, subBrand])
+  @@index([tenantId, patientId])
   @@index([visitId, status])
 }
 
@@ -3666,7 +3727,7 @@ model SignatureRequest {
   signerEmail  String
   signature    String?   @db.LongText // base64 data URL once signed
   signedAt     DateTime?
-  status       String    @default("PENDING") // PENDING, SIGNED, DECLINED, EXPIRED
+  status       String    @default("PENDING") // PENDING, SIGNED, DECLINED, EXPIRED, CANCELLED
   signToken    String    @unique // unique URL token for signer
   tenantId     Int       @default(1)
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -7463,6 +7524,9 @@ model TmcTrip {
   landingPage          LandingPage?
   pendingRegistrations PendingTripRegistration[]
   parentPortalLinks   TmcParentTrip[]
+  teacherReviews      TmcTripTeacherReview[]
+  parentReviews       TravelTripReview[]
+  travelTallyCostCentre TravelTallyCostCentre?
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
@@ -7492,6 +7556,70 @@ model TmcParentTrip {
   @@unique([tenantId, parentContactId, tripId])
   @@index([tenantId, teacherContactId])
   @@index([tenantId, tripId])
+}
+
+// Private travel documents uploaded from the TMC parent portal. The parent
+// contact and trip ids intentionally remain scalar-only, matching the
+// CustomerTraveller pattern: every portal query must enforce tenant + parent
+// ownership explicitly instead of relying on relation traversal.
+model TmcParentDocument {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int      @default(1)
+  parentContactId Int
+  tripId          Int?
+  documentType    String   // passport | birth-certificate | consent-form | medical-form | school-id | visa | other
+  filename        String
+  fileUrl         String   @db.Text
+  fileSize        Int?
+  mimeType        String?
+  storage         String?  // s3 | ocs | disk
+  storageKey      String?
+  status          String   @default("in_review") // in_review | approved | rejected
+  notes           String?  @db.Text
+  uploadedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, parentContactId, createdAt])
+  @@index([tenantId, tripId])
+}
+
+/// Teacher tour report submitted after a TMC trip is completed. This is kept
+/// separate from TravelTripReview because the latter is the customer-facing
+/// star-review flow and has a different question set and lifecycle.
+model TmcTripTeacherReview {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  tripId           Int
+  teacherContactId Int
+  reportDate       DateTime
+  institution      String
+  tourDestination  String
+  coordinator      String
+  grade            String
+  travelRating     String // excellent | good | fair | poor
+  foodRating       String // excellent | good | fair | poor
+  activitiesRating String // excellent | good | fair | poor
+  careSupportRating String // excellent | good | fair | poor
+  overallRating    String // excellent | good | fair | poor
+  feedback         String?  @db.Text
+  studentCount     Int      @default(0)
+  staffCount       Int      @default(0)
+  totalPassengers  Int      @default(0)
+  signature        String
+  submittedAt      DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant           Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip             TmcTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  teacher          Contact @relation("TmcTripTeacherReviewTeacher", fields: [teacherContactId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, tripId, teacherContactId])
+  @@index([tenantId, submittedAt])
+  @@index([tenantId, tripId])
+  @@index([tenantId, teacherContactId])
 }
 
 model TripParticipant {
@@ -7880,7 +8008,11 @@ model WebCheckinAutomationRun {
 model TravelTripReview {
   id            Int       @id @default(autoincrement())
   tenantId      Int       @default(1)
-  itineraryId   Int       @unique // one review per trip
+  // Generic travel reviews point at an Itinerary. TMC parent reviews point at
+  // a TmcTrip instead; keeping both nullable lets the admin list use one
+  // review surface while preserving one review per parent per school trip.
+  itineraryId   Int?      @unique // one review per itinerary
+  tmcTripId     Int?      // TMC school trip review target
   contactId     Int
   token         String    @unique // public review-link slug
   status        String    @default("requested") // requested | submitted
@@ -7889,9 +8021,12 @@ model TravelTripReview {
   requestedAt   DateTime  @default(now())
   submittedAt   DateTime?
   tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tmcTrip       TmcTrip?   @relation(fields: [tmcTripId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@unique([tenantId, tmcTripId, contactId])
+  @@index([tenantId, tmcTripId])
 }
 
 /// Travel customer-portal in-app notification inbox (2026-06-17). Contact-scoped
@@ -8528,16 +8663,23 @@ model TravelTallyLedgerGroup {
 model TravelTallyCostCentre {
   id          Int       @id @default(autoincrement())
   tenantId    Int       @default(1)
-  itineraryId Int       @unique
+  sourceType  String    @default("ITINERARY") @db.VarChar(30)
+  sourceId    Int
+  itineraryId Int?      @unique
+  tmcTripId   Int?      @unique
+  quoteId     Int?      @unique
   code        String    @db.VarChar(80)
   name        String    @db.VarChar(180)
   status      String    @default("ACTIVE") @db.VarChar(20)
   syncStatus  String    @default("NOT_CONNECTED") @db.VarChar(30)
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  itinerary   Itinerary? @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  tmcTrip     TmcTrip?  @relation(fields: [tmcTripId], references: [id], onDelete: Cascade)
+  quote       TravelQuote? @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   @@unique([tenantId, code])
+  @@unique([tenantId, sourceType, sourceId])
   @@index([tenantId, status])
 }
 
@@ -8741,6 +8883,7 @@ model TravelQuote {
   invoices             TravelInvoice[]
   snapshots            TravelQuoteSnapshot[]
   itinerary            Itinerary?            @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
+  travelTallyCostCentre TravelTallyCostCentre?
   tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
@@ -9023,6 +9166,20 @@ model TravelInvoice {
   // "all invoices for one contact" lookups that the UI hits on contact
   // detail pages.
   @@index([tenantId, contactId, status])
+}
+
+// Atomic allocator for canonical TINV-YYYY-NNNN numbers. One row per
+// tenant/year lets MySQL serialize concurrent increments without scanning the
+// TravelInvoice table or relying on a bounded unique-conflict retry loop.
+model TravelInvoiceSequence {
+  tenantId   Int
+  year       Int
+  lastSerial Int      @default(0)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([tenantId, year])
 }
 
 // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7.a cancellation-policy table.
@@ -10868,4 +11025,35 @@ model ProductSalesImportRow {
 
   @@index([tenantId, importId])
   @@index([tenantId, productName])
+}
+
+model SalesTeam {
+  id        Int               @id @default(autoincrement())
+  tenantId  Int               @default(1)
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  createdById Int?
+  updatedById Int?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  members   SalesTeamMember[]
+  createdBy User? @relation("SalesTeamCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("SalesTeamUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+}
+
+model SalesTeamMember {
+  id        Int       @id @default(autoincrement())
+  tenantId  Int       @default(1)
+  teamId    Int
+  userId    Int
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  team      SalesTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
+  @@unique([teamId, userId])
+  @@index([tenantId])
+  @@index([userId])
 }

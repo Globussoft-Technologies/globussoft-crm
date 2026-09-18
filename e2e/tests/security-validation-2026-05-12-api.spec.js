@@ -49,6 +49,10 @@ const API = `${BASE_URL}/api`;
 const REQUEST_TIMEOUT = 60000;
 
 const ADMIN = { email: 'admin@globussoft.com', password: 'password123' };
+const PASSWORD_TEST_ACCOUNT = {
+  email: `e2e-security-password-${Date.now()}-${process.pid}@e2e.local`,
+  password: 'password123',
+};
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -75,18 +79,51 @@ function authHeader(token) {
 // #711 — Password complexity policy on PUT /auth/me + reset-password
 // ═════════════════════════════════════════════════════════════════════
 test.describe('#711 — Change-password rejects weak input (PUT /api/auth/me)', () => {
-  let adminToken;
+  // This group changes a real password and therefore must use one worker.
+  // Mutating the seeded admin invalidates every cached admin JWT in the
+  // parallel API gate through User.sessionVersion.
+  test.describe.configure({ mode: 'serial' });
+
+  let accountToken;
+  let accountId;
 
   test.beforeAll(async ({ request }) => {
-    const r = await login(request, ADMIN);
-    adminToken = r.token;
+    const admin = await login(request, ADMIN);
+    expect(admin.token, 'admin login for password-test user setup').toBeTruthy();
+
+    const created = await request.post(`${API}/staff`, {
+      headers: authHeader(admin.token),
+      data: {
+        name: 'E2E Password Policy User',
+        email: PASSWORD_TEST_ACCOUNT.email,
+        password: PASSWORD_TEST_ACCOUNT.password,
+        role: 'USER',
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(created.status(), `staff setup body: ${await created.text()}`).toBe(201);
+    accountId = (await created.json()).id;
+
+    const account = await login(request, PASSWORD_TEST_ACCOUNT);
+    accountToken = account.token;
+    expect(accountToken, 'password-test user login').toBeTruthy();
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (!accountId) return;
+    const admin = await login(request, ADMIN);
+    if (!admin.token) return;
+    await request.delete(`${API}/staff/${accountId}`, {
+      headers: authHeader(admin.token),
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => {});
   });
 
   test('rejects 1-char password as WEAK_PASSWORD (#711)', async ({ request }) => {
-    test.skip(!adminToken, 'admin login fixture unavailable');
+    test.skip(!accountToken, 'password-test account unavailable');
     const r = await request.put(`${API}/auth/me`, {
-      headers: authHeader(adminToken),
-      data: { currentPassword: ADMIN.password, newPassword: 'a' },
+      headers: authHeader(accountToken),
+      data: { currentPassword: PASSWORD_TEST_ACCOUNT.password, newPassword: 'a' },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status(), `body: ${await r.text()}`).toBe(400);
@@ -96,10 +133,10 @@ test.describe('#711 — Change-password rejects weak input (PUT /api/auth/me)', 
   });
 
   test('rejects all-letters password (missing digit) as WEAK_PASSWORD (#711)', async ({ request }) => {
-    test.skip(!adminToken, 'admin login fixture unavailable');
+    test.skip(!accountToken, 'password-test account unavailable');
     const r = await request.put(`${API}/auth/me`, {
-      headers: authHeader(adminToken),
-      data: { currentPassword: ADMIN.password, newPassword: 'abcdefghij' },
+      headers: authHeader(accountToken),
+      data: { currentPassword: PASSWORD_TEST_ACCOUNT.password, newPassword: 'abcdefghij' },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status(), `body: ${await r.text()}`).toBe(400);
@@ -108,10 +145,10 @@ test.describe('#711 — Change-password rejects weak input (PUT /api/auth/me)', 
   });
 
   test('rejects all-digits password (missing letter) as WEAK_PASSWORD (#711)', async ({ request }) => {
-    test.skip(!adminToken, 'admin login fixture unavailable');
+    test.skip(!accountToken, 'password-test account unavailable');
     const r = await request.put(`${API}/auth/me`, {
-      headers: authHeader(adminToken),
-      data: { currentPassword: ADMIN.password, newPassword: '12345678' },
+      headers: authHeader(accountToken),
+      data: { currentPassword: PASSWORD_TEST_ACCOUNT.password, newPassword: '12345678' },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status(), `body: ${await r.text()}`).toBe(400);
@@ -120,12 +157,12 @@ test.describe('#711 — Change-password rejects weak input (PUT /api/auth/me)', 
   });
 
   test('rejects password longer than 72 chars (bcrypt truncation guard, #711)', async ({ request }) => {
-    test.skip(!adminToken, 'admin login fixture unavailable');
+    test.skip(!accountToken, 'password-test account unavailable');
     const r = await request.put(`${API}/auth/me`, {
-      headers: authHeader(adminToken),
+      headers: authHeader(accountToken),
       // 80 chars, complexity-valid (mix of letter+digit). Should still
       // be rejected on length alone.
-      data: { currentPassword: ADMIN.password, newPassword: 'A'.repeat(73) + '1' },
+      data: { currentPassword: PASSWORD_TEST_ACCOUNT.password, newPassword: 'A'.repeat(73) + '1' },
       timeout: REQUEST_TIMEOUT,
     });
     expect(r.status(), `body: ${await r.text()}`).toBe(400);
@@ -134,29 +171,28 @@ test.describe('#711 — Change-password rejects weak input (PUT /api/auth/me)', 
   });
 
   test('accepts complexity-passing newPassword + correct currentPassword (#711 happy path)', async ({ request }) => {
-    test.skip(!adminToken, 'admin login fixture unavailable');
-    // Set then immediately reset to original so other specs aren't disturbed.
-    // currentPassword is intentionally validated against the live hash; we
-    // round-trip to the original to leave demo state unchanged.
+    test.skip(!accountToken, 'password-test account unavailable');
     const set = await request.put(`${API}/auth/me`, {
-      headers: authHeader(adminToken),
-      data: { currentPassword: ADMIN.password, newPassword: 'NewSecure1Pass!' },
+      headers: authHeader(accountToken),
+      data: { currentPassword: PASSWORD_TEST_ACCOUNT.password, newPassword: 'NewSecure1Pass!' },
       timeout: REQUEST_TIMEOUT,
     });
     // 200 expected on success; 400 here would indicate the validator
     // is rejecting a complexity-valid password, which is the regression.
     expect(set.status(), `set body: ${await set.text()}`).toBe(200);
 
-    // After re-login with the new password, restore the original. This
-    // makes the spec idempotent — repeated runs won't accumulate state.
-    // We login fresh because the old bearer is still valid (JWT TTL is
-    // 7d, no revocation on password change today) but the test is
-    // clearer if we explicitly login with the rotated password.
-    const reloginRotated = await login(request, { ...ADMIN, password: 'NewSecure1Pass!' });
+    // Password updates increment sessionVersion, so re-login before restoring.
+    const reloginRotated = await login(request, {
+      ...PASSWORD_TEST_ACCOUNT,
+      password: 'NewSecure1Pass!',
+    });
     expect(reloginRotated.token, 'login with rotated password failed — state leak risk').toBeTruthy();
     const restore = await request.put(`${API}/auth/me`, {
       headers: authHeader(reloginRotated.token),
-      data: { currentPassword: 'NewSecure1Pass!', newPassword: ADMIN.password },
+      data: {
+        currentPassword: 'NewSecure1Pass!',
+        newPassword: PASSWORD_TEST_ACCOUNT.password,
+      },
       timeout: REQUEST_TIMEOUT,
     });
     expect(restore.status(), `restore body: ${await restore.text()}`).toBe(200);

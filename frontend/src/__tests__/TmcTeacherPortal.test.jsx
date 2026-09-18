@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import TmcTeacherPortal from "../pages/travel/TmcTeacherPortal";
 
 describe("TmcTeacherPortal", () => {
@@ -35,7 +35,35 @@ describe("TmcTeacherPortal", () => {
       if (url === "/api/portal/tmc/teacher/diagnostics") {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ diagnostics: [{ id: 12, createdAt: "2026-09-09T00:00:00.000Z", reportUrl: "/p/tmc/report/12" }] }),
+            json: () => Promise.resolve({ diagnostics: [{ id: 12, createdAt: "2026-09-09T00:00:00.000Z", reportPdfUrl: "/api/travel/diagnostics/12/readiness-report.pdf" }] }),
+        });
+      }
+      if (url === "/api/portal/tmc/teacher/reviews") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            trips: [{
+              id: 9,
+              tripCode: "TMC-009",
+              destination: "Mysore",
+              tripType: "day_trip",
+              departDate: "2026-09-01T00:00:00.000Z",
+              returnDate: "2026-09-01T00:00:00.000Z",
+              status: "completed",
+              review: null,
+              reviewSubmitted: false,
+            }, {
+              id: 10,
+              tripCode: "TMC-010",
+              destination: "Bengaluru",
+              tripType: "day_trip",
+              departDate: "2026-09-15T00:00:00.000Z",
+              returnDate: "2026-09-15T00:00:00.000Z",
+              status: "completed",
+              review: null,
+              reviewSubmitted: false,
+            }],
+          }),
         });
       }
       if (url === "/api/portal/tmc/teacher/trips/7/landing-page") {
@@ -74,13 +102,34 @@ describe("TmcTeacherPortal", () => {
       if (url === "/api/portal/tmc/teacher/trips/7/participants") {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ participants: [{ id: 55, fullName: "Manish", parentName: "Arijit" }] }),
+              json: () => Promise.resolve({ participants: [{ id: 55, fullName: "Manish", parentName: "Arijit", parentEmail: "arijit@example.com", parentPhone: "+91 90000 00001" }] }),
         });
       }
-      if (url === "/api/portal/tmc/teacher/trips/7/parent-link") {
+      if (url === "/api/portal/tmc/teacher/trips/9/review") {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ link: "https://example.com/parent-registration/7" }),
+          json: () => Promise.resolve({
+            ok: true,
+            review: {
+              id: 44,
+              tripId: 9,
+              reportDate: "2026-09-01T00:00:00.000Z",
+              institution: "Greenfield School",
+              tourDestination: "Mysore",
+              coordinator: "Aisha Teacher",
+              grade: "7",
+              travelRating: "excellent",
+              foodRating: "good",
+              activitiesRating: "good",
+              careSupportRating: "excellent",
+              overallRating: "good",
+              feedback: "Great trip.",
+              studentCount: 30,
+              staffCount: 3,
+              totalPassengers: 33,
+              signature: "Aisha Teacher",
+            },
+          }),
         });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
@@ -101,6 +150,18 @@ describe("TmcTeacherPortal", () => {
     expect(screen.getByText("Singapore")).toBeInTheDocument();
     expect(screen.getByText("Readiness report #12")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Parent portal links" })).not.toBeInTheDocument();
+  });
+
+  it("opens the authenticated native diagnostic from a dashboard report", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    const reportSection = screen.getByRole("heading", { name: "Diagnostic reports" }).closest("section");
+    fireEvent.click(within(reportSection).getByRole("button", { name: "Open diagnostic" }));
+
+    expect(await screen.findByRole("heading", { name: "Teacher diagnostic" })).toBeInTheDocument();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("/diagnostics/public/form/"))).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/diagnostic")).toBe(true);
   });
 
   it("filters assigned trips by destination or trip code", async () => {
@@ -144,6 +205,10 @@ describe("TmcTeacherPortal", () => {
     await screen.findByRole("heading", { name: "Singapore" });
     await waitFor(() => expect(screen.getByText("Participant")).toBeInTheDocument());
     expect(screen.getAllByText("Manish")).toHaveLength(1);
+    expect(screen.getByText("Child / student")).toBeInTheDocument();
+    expect(screen.getByText("Parent / guardian")).toBeInTheDocument();
+    expect(screen.getByText("Arijit")).toBeInTheDocument();
+    expect(screen.getByText("arijit@example.com")).toBeInTheDocument();
     expect(screen.queryByText("Registrations")).not.toBeInTheDocument();
     expect(screen.queryByText("CONVERTED")).not.toBeInTheDocument();
   });
@@ -162,14 +227,7 @@ describe("TmcTeacherPortal", () => {
     expect(screen.getByText("Review the trip information that parents will see.")).toBeInTheDocument();
   });
 
-  it("changes the copy button to Copied after the link is copied", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
-      writable: true,
-    });
-
+  it("does not let a teacher create a parent registration link", async () => {
     render(<TmcTeacherPortal />);
 
     await screen.findByRole("heading", { name: "Dashboard" });
@@ -177,15 +235,8 @@ describe("TmcTeacherPortal", () => {
     await screen.findByRole("heading", { name: "Your trips" });
     fireEvent.click(screen.getByRole("button", { name: /Singapore.*participants/ }));
     await screen.findByRole("heading", { name: "Singapore" });
-    fireEvent.click(screen.getByRole("button", { name: "Create parent link" }));
-
-    const copyButton = await screen.findByRole("button", { name: "Copy link" });
-    fireEvent.click(copyButton);
-
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith("https://example.com/parent-registration/7");
-      expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
-    });
+    expect(screen.queryByRole("button", { name: "Create parent link" })).not.toBeInTheDocument();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("/teacher/trips/7/parent-link"))).toBe(false);
   });
 
   it("opens the trips page when a trip assignment notification is selected", async () => {
@@ -196,5 +247,74 @@ describe("TmcTeacherPortal", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New trip assigned to you" }));
 
     expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
+  });
+
+  it("opens the review page from the trips screen", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    await screen.findByRole("heading", { name: "Your trips" });
+    fireEvent.click(screen.getByRole("button", { name: "Review a completed trip" }));
+
+    expect(await screen.findByRole("heading", { name: "Trip review", level: 2 })).toBeInTheDocument();
+  });
+
+  it("keeps the review form collapsed until a trip is selected and supports trip search", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Trip review" }));
+    expect(await screen.findByRole("heading", { name: "Trip review", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Select completed trip" })).toHaveValue("");
+    expect(screen.queryByRole("heading", { name: "Tour details" })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search trips" }), { target: { value: "Bengaluru" } });
+    expect(screen.getByRole("option", { name: /Bengaluru.*TMC-010/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Mysore.*TMC-009/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Select completed trip" }), { target: { value: "10" } });
+    expect(await screen.findByRole("heading", { name: "Tour details" })).toBeInTheDocument();
+  });
+
+  it("lets a teacher choose a completed trip and submit the tour report", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Trip review" }));
+    expect(await screen.findByRole("heading", { name: "Trip review", level: 2 })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Select completed trip" }), { target: { value: "9" } });
+
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-09-01" } });
+    fireEvent.change(screen.getByLabelText("Institution"), { target: { value: "Greenfield School" } });
+    fireEvent.change(screen.getByLabelText("Tour destination"), { target: { value: "Mysore" } });
+    fireEvent.change(screen.getByLabelText("Coordinator"), { target: { value: "Aisha Teacher" } });
+    fireEvent.change(screen.getByLabelText("Grade"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("No. of students"), { target: { value: "30" } });
+    fireEvent.change(screen.getByLabelText("No. of staff"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("Total passengers"), { target: { value: "33" } });
+    fireEvent.change(screen.getByLabelText("Signature (type your full name)"), { target: { value: "Aisha Teacher" } });
+    const rating = (row, option) => fireEvent.click(within(screen.getByRole("group", { name: row })).getByRole("radio", { name: option }));
+    rating("Travel", "Excellent");
+    rating("Food", "Good");
+    rating("Activities", "Good");
+    rating("Care & support", "Excellent");
+    rating("Overall", "Good");
+    fireEvent.click(screen.getByRole("button", { name: "Submit report" }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/teacher/trips/9/review",
+      expect.objectContaining({ method: "PUT" }),
+    ));
+    expect(await screen.findByRole("status")).toHaveTextContent("Your trip report has been submitted successfully.");
+    expect(JSON.parse(fetchSpy.mock.calls.find(([url]) => url === "/api/portal/tmc/teacher/trips/9/review")[1].body)).toMatchObject({
+      institution: "Greenfield School",
+      totalPassengers: "33",
+      overallRating: "good",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Update report" }));
+    await waitFor(() => expect(fetchSpy.mock.calls.filter(([url]) => url === "/api/portal/tmc/teacher/trips/9/review")).toHaveLength(2));
+    expect(await screen.findByRole("status")).toHaveTextContent("Your trip report has been updated successfully.");
   });
 });

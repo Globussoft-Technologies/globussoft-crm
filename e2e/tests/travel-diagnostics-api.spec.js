@@ -157,6 +157,14 @@ const sampleScoring = () => JSON.stringify({
   ],
 });
 
+// TMC banks are normalized at read/submission time with a system-managed,
+// required trip-type question. Keep legacy scoring fixtures focused on q1/q2
+// while satisfying that required preference with its stable option value.
+const withTmcTripType = (answers) => ({
+  preferred_trip_types: ['day_trips'],
+  ...answers,
+});
+
 // ── Cleanup tracking ─────────────────────────────────────────────────
 //
 // The current backend exposes no DELETE for banks or diagnostics by
@@ -358,7 +366,7 @@ test.describe('Travel diagnostics API — submission + scoring', () => {
     const res = await post(request, token, '/api/travel/diagnostics', {
       bankId,
       // High-tier answers: weight 5 + weight 5 = 10 → "level_3" band (8-99)
-      answers: { q1: 'many', q2: 'large' },
+      answers: withTmcTripType({ q1: 'many', q2: 'large' }),
     });
     expect(res.status(), `submit: ${await res.text()}`).toBe(201);
     const body = await res.json();
@@ -383,7 +391,7 @@ test.describe('Travel diagnostics API — submission + scoring', () => {
     if (!token || created.bankIds.length === 0) test.skip(true, 'no bank to submit against');
     const res = await post(request, token, '/api/travel/diagnostics', {
       bankId: created.bankIds[0],
-      answers: { q1: 'first', q2: 'small' },
+      answers: withTmcTripType({ q1: 'first', q2: 'small' }),
     });
     expect(res.status()).toBe(201);
     const body = await res.json();
@@ -397,7 +405,7 @@ test.describe('Travel diagnostics API — submission + scoring', () => {
     if (!token || created.bankIds.length === 0) test.skip(true, 'no bank to submit against');
     const res = await post(request, token, '/api/travel/diagnostics', {
       bankId: created.bankIds[0],
-      answers: { q1: 'many' }, // q2 unanswered
+      answers: withTmcTripType({ q1: 'many' }), // q2 unanswered
     });
     expect(res.status()).toBe(201);
     const body = await res.json();
@@ -917,12 +925,12 @@ test.describe('Travel diagnostics API — form-vs-call comparison (PRD §4.1)', 
   test('POST /diagnostics/:id/form-vs-call/compare happy path with matching call answers → 200', async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');
-    // The first diagnostic in the suite was created with { q1: 'many', q2: 'large' }
-    // (the high-tier submission). Sending identical callAnswers means every
-    // perFieldDiff entry must be matched=true.
+    // The first diagnostic in the suite includes the required TMC trip-type
+    // answer plus { q1: 'many', q2: 'large' }. Sending identical callAnswers
+    // means every perFieldDiff entry must be matched=true.
     const id = created.diagnosticIds[0];
     const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
-      callAnswers: { q1: 'many', q2: 'large' },
+      callAnswers: withTmcTripType({ q1: 'many', q2: 'large' }),
     });
     expect(res.status(), `compare: ${await res.text()}`).toBe(200);
     const body = await res.json();
@@ -936,11 +944,11 @@ test.describe('Travel diagnostics API — form-vs-call comparison (PRD §4.1)', 
     expect(body.scorePercent).toBe(85);
     expect(body.classification).toBe('match');
     expect(Array.isArray(body.perFieldDiff)).toBe(true);
-    expect(body.perFieldDiff.length).toBe(2);
+    expect(body.perFieldDiff.length).toBe(3);
     for (const row of body.perFieldDiff) {
       expect(typeof row.question).toBe('string');
       expect(row.matched).toBe(true);
-      expect(row.formValue).toBe(row.callValue);
+      expect(row.formValue).toStrictEqual(row.callValue);
     }
     expect(Number.isFinite(Date.parse(body.generatedAt))).toBe(true);
   });
@@ -951,11 +959,15 @@ test.describe('Travel diagnostics API — form-vs-call comparison (PRD §4.1)', 
     const id = created.diagnosticIds[0];
     // Send opposite-tier call answers so every diff row is matched=false.
     const res = await post(request, token, `/api/travel/diagnostics/${id}/form-vs-call/compare`, {
-      callAnswers: { q1: 'first', q2: 'small' },
+      callAnswers: {
+        preferred_trip_types: ['domestic'],
+        q1: 'first',
+        q2: 'small',
+      },
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.perFieldDiff.length).toBe(2);
+    expect(body.perFieldDiff.length).toBe(3);
     for (const row of body.perFieldDiff) {
       expect(row.matched).toBe(false);
       expect(row.formValue).not.toBe(row.callValue);

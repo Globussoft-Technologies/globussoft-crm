@@ -228,6 +228,7 @@ function safeClinic(clinic) {
     city: clinic?.city || "",
     state: clinic?.state || "",
     pincode: clinic?.pincode || "",
+    country: clinic?.country || "",
     phone: clinic?.phone || "",
     email: clinic?.email || "",
   };
@@ -839,8 +840,15 @@ const CONSENT_TEMPLATES = {
 };
 
 function getConsentBody(templateName) {
-  const key = (templateName || "general").toLowerCase();
-  return CONSENT_TEMPLATES[key] || CONSENT_TEMPLATES.general;
+  const normalized = String(templateName || "general")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (CONSENT_TEMPLATES[normalized]) return CONSENT_TEMPLATES[normalized];
+  const matchingKey = Object.keys(CONSENT_TEMPLATES)
+    .find((key) => normalized.startsWith(`${key}-`));
+  return matchingKey ? CONSENT_TEMPLATES[matchingKey] : CONSENT_TEMPLATES.general;
 }
 
 // ── 1. Prescription PDF ────────────────────────────────────────────
@@ -1297,6 +1305,7 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica drops/mangles this in diagnostic PDFs
   const bufPromise = streamToBuffer(doc);
+  const linkedVisit = opts && opts.visit;
 
   // Travel-vertical consent: opt into the brand-kit header band when
   // opts.subBrand is supplied. Wellness path (no subBrand) is unchanged.
@@ -1357,6 +1366,11 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
 
   if (service?.name) {
     doc.font("Helvetica-Oblique").fontSize(10).fillColor("#555").text(`Service: ${service.name}`, { align: "center" });
+    doc.moveDown(0.6);
+  }
+  if (linkedVisit?.visitDate) {
+    doc.font("Helvetica-Oblique").fontSize(10).fillColor("#555")
+      .text(`Visit: ${formatDate(linkedVisit.visitDate)}`, { align: "center" });
     doc.moveDown(0.6);
   }
 
@@ -5901,10 +5915,782 @@ async function renderSupplierPo(opts) {
   return bufPromise;
 }
 
+async function resolveProfessionalInvoiceLogo(logoUrl) {
+  const fs = require("fs");
+  const { localLogoDiskPath, isLogoTooLarge } = require("../lib/tenantLogo");
+  let logo = null;
+  if (typeof logoUrl === "string" && /^https?:\/\//i.test(logoUrl)) {
+    logo = await module.exports.fetchLogoBuffer(logoUrl);
+  } else {
+    const diskPath = localLogoDiskPath(logoUrl, nodePath.join(__dirname, ".."));
+    if (diskPath) {
+      try {
+        if (fs.existsSync(diskPath)) logo = fs.readFileSync(diskPath);
+      } catch (_e) {
+        logo = null;
+      }
+    }
+  }
+  if (logo && !isLogoTooLarge(logo)) return logo;
+  // Invoice PDFs must never substitute a shared/default logo. A missing or
+  // invalid tenant logo should produce a text-only brand header instead of
+  // leaking another tenant/product identity into this invoice.
+  return null;
+}
+
+// Reference-matched Wellness invoice renderer. This is deliberately separate from
+// the legacy renderer so Generic and Travel invoice documents remain stable.
+function professionalInvoiceSetting(settings, keys) {
+  const source = Array.isArray(settings)
+    ? settings.reduce((result, row) => {
+      if (row?.key) result[row.key] = row.value;
+      return result;
+    }, {})
+    : (settings || {});
+  for (const key of keys) {
+    const value = source[key];
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function professionalInvoiceColor(value, fallback = "#265855") {
+  const color = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color;
+  if (/^#[0-9a-f]{3}$/i.test(color)) {
+    return `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`;
+  }
+  return fallback;
+}
+
+function professionalInvoiceDate(value, locale) {
+  if (!value) return "-";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString(locale || "en-IN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function professionalInvoiceLines(invoice) {
+  let lines = Array.isArray(invoice?.lineItems) ? invoice.lineItems : null;
+  if (!lines && typeof invoice?.lineItemsJson === "string") {
+    try {
+      const parsed = JSON.parse(invoice.lineItemsJson);
+      lines = Array.isArray(parsed) ? parsed : [];
+    } catch (_e) {
+      lines = [];
+    }
+  }
+  if (lines?.length) return lines.filter(Boolean);
+  const amount = Number(invoice?.amount) || 0;
+  return [{
+    type: "service",
+    name: invoice?.description || invoice?.notes || "",
+    description: "",
+    quantity: 1,
+    unitPrice: amount,
+    amount,
+  }];
+}
+
+function professionalInvoiceLineAmount(line) {
+  const amount = Number(line?.amount);
+  if (Number.isFinite(amount)) return amount;
+  return (Number(line?.quantity) || 1) * (Number(line?.unitPrice) || 0);
+}
+
+async function renderProfessionalWellnessInvoicePdf(invoice, contact, clinic, options = {}) {
+  const opts = options || {};
+  const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
+  applyRupeeCapableFonts(doc);
+  const bufPromise = streamToBuffer(doc);
+  const c = safeClinic(clinic);
+  const tenant = opts.tenant || {};
+  const settings = opts.settings || {};
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const currency = opts.currency || tenant.defaultCurrency || "INR";
+  const locale = opts.locale || tenant.locale || "en-IN";
+  const accent = professionalInvoiceColor(
+    tenant.brandColor
+      || professionalInvoiceSetting(settings, ["invoice.brandColor", "branding.color", "branding.primaryColor"])
+      || tenant.themeColor
+      || professionalInvoiceSetting(settings, ["invoice.themeColor", "branding.themeColor"]),
+  );
+  const border = "#D6E3E0";
+  const pale = "#F2F8F6";
+  const brandName = professionalInvoiceSetting(settings, ["invoice.brandName", "branding.name", "company.name"])
+    || tenant.name
+    || c.name;
+  const tagline = professionalInvoiceSetting(settings, ["invoice.tagline", "branding.tagline", "company.tagline"]);
+  const companyAddress = professionalInvoiceSetting(settings, [
+    "invoice.companyAddress", "invoice.address", "branding.address", "company.address", "businessAddress",
+  ]) || [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", "), c.country]
+    .filter(Boolean).join("\n");
+  const companyPhone = professionalInvoiceSetting(settings, ["invoice.companyPhone", "branding.phone", "company.phone"]) || c.phone;
+  const companyEmail = professionalInvoiceSetting(settings, ["invoice.companyEmail", "branding.email", "company.email"])
+    || c.email || tenant.ownerEmail;
+  const companyWebsite = professionalInvoiceSetting(settings, ["invoice.companyWebsite", "branding.website", "company.website"]);
+  const invoiceNumber = invoice?.invoiceNum || invoice?.id || "-";
+  const status = String(invoice?.status || "UNPAID").replace(/_/g, " ").toUpperCase();
+  const issueDate = professionalInvoiceDate(invoice?.issuedDate || invoice?.createdAt, locale);
+  const dueDate = professionalInvoiceDate(invoice?.dueDate, locale);
+  const patientName = invoice?.customerName || contact?.name || "";
+  const patientPhone = invoice?.customerPhone || contact?.phone || "";
+  const patientEmail = invoice?.customerEmail || contact?.email || "";
+  const patientAddress = invoice?.customerAddress || "";
+  const billingAddress = invoice?.billingAddress || patientAddress || "-";
+  const shippingAddress = invoice?.shippingAddress || "";
+  const lines = professionalInvoiceLines(invoice);
+  const subtotal = lines.reduce((sum, line) => sum + professionalInvoiceLineAmount(line), 0);
+  const total = Number.isFinite(Number(invoice?.amount)) ? Number(invoice.amount) : subtotal;
+  const isPaid = /^(PAID|COMPLETED)$/i.test(status);
+  const paid = isPaid ? total : 0;
+  const balance = Math.max(0, total - paid);
+  const money = (value) => formatMoney(value, currency, locale);
+  const drawCard = (x, y, cardWidth, cardHeight, fill = pale) => {
+    doc.save().roundedRect(x, y, cardWidth, cardHeight, 6).fillAndStroke(fill, border).restore();
+  };
+  const drawTableHeader = (y) => {
+    const columns = [
+      ["#", 24, "center"], ["SERVICE / PRODUCT", 100, "left"], ["DESCRIPTION", 108, "left"],
+      ["QTY", 44, "right"], ["UNIT PRICE", 72, "right"], ["TAX / DISCOUNT", 76, "right"], ["AMOUNT", 71, "right"],
+    ];
+    doc.rect(left, y, width, 30).fill(accent);
+    let x = left;
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#FFFFFF");
+    for (const [label, colWidth, align] of columns) {
+      doc.text(label, x + 5, y + 11, { width: colWidth - 10, align });
+      x += colWidth;
+    }
+    return { columns, y: y + 30 };
+  };
+
+  // Header: tenant logo and brand on the left, invoice metadata on the right.
+  const brandX = opts.logoBuffer ? left + 62 : left;
+  if (opts.logoBuffer) {
+    try {
+      doc.image(opts.logoBuffer, left, 42, { fit: [48, 48] });
+    } catch (_e) {
+      // A stale or malformed tenant upload must not block PDF generation.
+    }
+  }
+  doc.font("Helvetica-Bold").fontSize(19).fillColor(accent).text(brandName, brandX, 43, { width: 245 });
+  doc.font("Helvetica").fontSize(9).fillColor("#607572").text(tagline, brandX, 68, { width: 245 });
+  let companyY = 86;
+  doc.font("Helvetica").fontSize(8.5).fillColor("#536966");
+  if (companyAddress) {
+    doc.text(companyAddress, brandX, companyY, { width: 245, lineGap: 1 });
+    companyY = doc.y + 3;
+  }
+  const companyContact = [companyPhone, companyEmail, companyWebsite].filter(Boolean).join("  |  ");
+  if (companyContact) doc.text(companyContact, brandX, companyY, { width: 245 });
+
+  const metaPanelX = left + 300;
+  const metaPanelWidth = width - 300;
+  drawCard(metaPanelX, 32, metaPanelWidth, 166, "#FFFDF4");
+  doc.font("Helvetica-Bold").fontSize(15).fillColor(accent).text("ENTERPRISE INVOICE", metaPanelX + 12, 47, {
+    width: metaPanelWidth - 24,
+    align: "center",
+  });
+  const metaLine = (label, value, y) => {
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#55716E").text(label.toUpperCase(), metaPanelX + 14, y, {
+      width: 90,
+      align: "left",
+    });
+    doc.font("Helvetica").fontSize(9.5).fillColor("#203331").text(value || "-", metaPanelX + 104, y, {
+      width: metaPanelWidth - 118,
+      align: "right",
+    });
+  };
+  metaLine("Invoice Number", invoiceNumber, 82);
+  metaLine("Issue Date", issueDate, 105);
+  metaLine("Due Date", dueDate, 128);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor("#55716E").text("STATUS", metaPanelX + 14, 151, {
+    width: 90,
+    align: "left",
+  });
+  const statusWidth = 82;
+  const statusX = metaPanelX + metaPanelWidth - statusWidth - 14;
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(isPaid ? "#19764B" : accent).text(status, statusX, 152, { width: statusWidth, align: "center" });
+  doc.moveTo(left, 198).lineTo(right, 198).lineWidth(0.8).strokeColor(accent).stroke();
+
+  // Customer snapshot card with billing and service addresses.
+  const customerTop = 216;
+  const hasVisit = Boolean(invoice?.visit?.visitDate || invoice?.visit?.service?.name);
+  const customerHeight = (shippingAddress ? 154 : 136) + (hasVisit ? 40 : 0);
+  drawCard(left, customerTop, width, customerHeight);
+  const cardPadding = 20;
+  const columnGap = 26;
+  const columnWidth = (width - (cardPadding * 2) - columnGap) / 2;
+  const customerX = left + cardPadding;
+  const addressX = customerX + columnWidth + columnGap;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(accent).text("Bill To", customerX, customerTop + 18);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#1D302E").text(patientName, customerX, customerTop + 38, { width: columnWidth });
+  let patientY = customerTop + 58;
+  doc.font("Helvetica").fontSize(9.5).fillColor("#334B48");
+  for (const value of [patientPhone, patientEmail]) {
+    if (value) {
+      doc.text(value, customerX, patientY, { width: columnWidth });
+      patientY = doc.y + 2;
+    }
+  }
+  if (patientAddress) {
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#55716E").text("ADDRESS", customerX, patientY + 1);
+    doc.font("Helvetica").fontSize(9.5).fillColor("#334B48").text(patientAddress, customerX, patientY + 13, { width: columnWidth, height: 36, ellipsis: true });
+  }
+  if (invoice?.gstin) {
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#55716E").text("GSTIN", customerX, customerTop + customerHeight - 27);
+    doc.font("Helvetica").fontSize(9.5).fillColor("#334B48").text(String(invoice.gstin), customerX + 38, customerTop + customerHeight - 27, { width: columnWidth - 38 });
+  }
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(accent).text("Billing Address", addressX, customerTop + 18);
+  doc.font("Helvetica").fontSize(9.5).fillColor("#334B48").text(billingAddress, addressX, customerTop + 39, { width: columnWidth, height: shippingAddress ? 40 : 67, ellipsis: true });
+  if (shippingAddress) {
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#55716E").text("SHIPPING / SERVICE ADDRESS", addressX, customerTop + 91, { width: columnWidth });
+    doc.font("Helvetica").fontSize(9.5).fillColor("#334B48").text(shippingAddress, addressX, customerTop + 104, { width: columnWidth, height: 35, ellipsis: true });
+  }
+  if (hasVisit) {
+    const visitLabel = [invoice.visit.service?.name, invoice.visit.visitDate ? professionalInvoiceDate(invoice.visit.visitDate, locale) : ""].filter(Boolean).join(" - ");
+    const visitLabelY = customerTop + customerHeight - 45;
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#55716E").text("VISIT / SERVICE", addressX, visitLabelY, { width: columnWidth });
+    doc.font("Helvetica").fontSize(9.5).fillColor("#334B48").text(visitLabel, addressX, visitLabelY + 12, {
+      width: columnWidth,
+      height: 26,
+      ellipsis: true,
+    });
+  }
+
+  let table = drawTableHeader(customerTop + customerHeight + 24);
+  const contentBottom = doc.page.height - 74;
+  let tableY = table.y;
+  lines.forEach((line, index) => {
+    const name = String(line?.name || line?.productName || line?.serviceName || "Item");
+    const description = String(line?.description || (String(line?.type || "service").toLowerCase() === "product" ? "Product" : "Service"));
+    const quantity = Number.isFinite(Number(line?.quantity)) ? String(line.quantity) : "1";
+    const amount = professionalInvoiceLineAmount(line);
+    const unitPrice = Number.isFinite(Number(line?.unitPrice)) ? Number(line.unitPrice) : (Number(quantity) ? amount / Number(quantity) : amount);
+    const tax = Number(line?.tax);
+    const discount = Number(line?.discount);
+    const taxDiscount = Number.isFinite(tax) && tax !== 0 ? `Tax ${money(tax)}` : (Number.isFinite(discount) && discount !== 0 ? `Discount ${money(discount)}` : "-");
+    const values = [String(index + 1), name, description, quantity, money(unitPrice), taxDiscount, money(amount)];
+    const nameHeight = doc.heightOfString(name, { width: 92, font: "Helvetica", fontSize: 9 });
+    const descriptionHeight = doc.heightOfString(description, { width: 102, font: "Helvetica", fontSize: 9 });
+    const rowHeight = Math.max(34, nameHeight, descriptionHeight) + 12;
+    if (tableY + rowHeight > contentBottom) {
+      doc.addPage();
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(accent).text(`${brandName} - Invoice ${invoiceNumber} (continued)`, left, 35, { width });
+      table = drawTableHeader(58);
+      tableY = table.y;
+    }
+    if (index % 2 === 0) doc.rect(left, tableY, width, rowHeight).fill("#FAFCFB");
+    doc.rect(left, tableY, width, rowHeight).lineWidth(0.4).strokeColor(border).stroke();
+    let x = left;
+    doc.font("Helvetica").fontSize(9).fillColor("#263D3A");
+    table.columns.forEach(([, colWidth, align], columnIndex) => {
+      const textOptions = {
+        width: colWidth - 10,
+        height: rowHeight - 18,
+        align,
+      };
+      if (columnIndex > 2) textOptions.ellipsis = true;
+      doc.text(values[columnIndex], x + 5, tableY + 12, textOptions);
+      x += colWidth;
+    });
+    tableY += rowHeight;
+  });
+
+  // Reserve the entire payment summary + notes block before placing it. This
+  // keeps the notes card and footer from colliding on invoices with several
+  // line items.
+  if (tableY + 270 > contentBottom) {
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent).text(`${brandName} - Invoice ${invoiceNumber} (continued)`, left, 35, { width });
+    tableY = 70;
+  }
+  const summaryTop = tableY + 18;
+  const paymentWidth = 235;
+  const summaryX = left + 270;
+  const summaryWidth = width - 270;
+  drawCard(left, summaryTop, paymentWidth, 106);
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent).text("Payment Information", left + 16, summaryTop + 16);
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#55716E").text("PAYMENT MODE", left + 16, summaryTop + 42);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#203331").text(String(invoice?.paymentMode || "-").replace(/_/g, " ").toUpperCase(), left + 16, summaryTop + 56, { width: paymentWidth - 32 });
+  doc.font("Helvetica").fontSize(8.5).fillColor("#607572").text(isPaid ? "Payment received" : "Payment pending", left + 16, summaryTop + 81);
+  const summaryRows = [
+    ["Subtotal", money(subtotal)], ["Discount", money(0)], ["Tax (GST 0%)", money(0)],
+    ["Grand Total", money(total)], ["Amount Paid", money(paid)], ["Balance Due", money(balance)],
+  ];
+  let summaryY = summaryTop;
+  summaryRows.forEach(([label, value], index) => {
+    const rowHeight = index === 3 ? 28 : 22;
+    if (index === 3) doc.rect(summaryX, summaryY, summaryWidth, rowHeight).fill(pale);
+    doc.moveTo(summaryX, summaryY + rowHeight).lineTo(right, summaryY + rowHeight).lineWidth(0.35).strokeColor(border).stroke();
+    doc.font(index === 3 ? "Helvetica-Bold" : "Helvetica").fontSize(index === 3 ? 10.5 : 9).fillColor(index === 3 ? accent : "#334B48").text(label, summaryX + 8, summaryY + (index === 3 ? 8 : 6), { width: summaryWidth - 90 });
+    doc.font("Helvetica-Bold").fontSize(index === 3 ? 10.5 : 9).fillColor(index === 5 ? "#19764B" : "#203331").text(value, summaryX + summaryWidth - 82, summaryY + (index === 3 ? 8 : 6), { width: 74, align: "right" });
+    summaryY += rowHeight;
+  });
+
+  const noteTop = Math.max(summaryTop + 120, summaryY + 18);
+  drawCard(left, noteTop, width, 83, "#F7FAFC");
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(accent).text("Notes", left + 16, noteTop + 15);
+  const note = professionalInvoiceSetting(settings, ["invoice.notes", "branding.invoiceNotes"])
+    || "This is a system-generated invoice and does not require a signature.";
+  doc.font("Helvetica").fontSize(8.5).fillColor("#526865").text(note, left + 16, noteTop + 32, { width: width - 32, height: 22, ellipsis: true });
+  const queryContact = [companyPhone, companyEmail].filter(Boolean).join("  |  ");
+  if (queryContact) doc.text(`For any queries, contact ${queryContact}.`, left + 16, noteTop + 55, { width: width - 32, height: 14, ellipsis: true });
+
+  const pageRange = doc.bufferedPageRange();
+  for (let pageIndex = 0; pageIndex < pageRange.count; pageIndex += 1) {
+    doc.switchToPage(pageRange.start + pageIndex);
+    const footerY = doc.page.height - 45;
+    doc.moveTo(left, footerY - 9).lineTo(right, footerY - 9).lineWidth(0.45).strokeColor(border).stroke();
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(accent).text("Thank you for choosing us", left, footerY, { width, align: "center" });
+    doc.font("Helvetica").fontSize(8).fillColor("#607572").text(`${brandName}  |  Page ${pageIndex + 1} of ${pageRange.count}`, left, footerY + 14, { width, align: "center" });
+  }
+  doc.end();
+  return bufPromise;
+}
+
+// Small, monochrome vector glyphs for the Wellness invoice. These stay inside
+// a 12pt footprint so they clarify the adjacent value without competing with
+// the content or changing the table geometry.
+function drawWellnessInvoiceIcon(doc, type, x, y, color) {
+  doc.save().strokeColor(color).lineWidth(0.85);
+  if (type === "pin") {
+    doc.moveTo(x + 6, y + 12)
+      .bezierCurveTo(x + 5.4, y + 10.6, x + 1.5, y + 7.1, x + 1.5, y + 4.7)
+      .bezierCurveTo(x + 1.5, y + 2.1, x + 3.5, y + 0.5, x + 6, y + 0.5)
+      .bezierCurveTo(x + 8.5, y + 0.5, x + 10.5, y + 2.1, x + 10.5, y + 4.7)
+      .bezierCurveTo(x + 10.5, y + 7.1, x + 6.6, y + 10.6, x + 6, y + 12)
+      .closePath().stroke();
+    doc.circle(x + 6, y + 4.5, 1.4).stroke();
+  } else if (type === "phone") {
+    doc.moveTo(x + 2.2, y + 1.4)
+      .lineTo(x + 4.3, y + 3.5)
+      .lineTo(x + 3.1, y + 4.8)
+      .bezierCurveTo(x + 4.2, y + 7.1, x + 5.8, y + 8.7, x + 8.1, y + 9.8)
+      .lineTo(x + 9.4, y + 8.6)
+      .lineTo(x + 11.1, y + 10.3)
+      .lineTo(x + 9.5, y + 11.9)
+      .bezierCurveTo(x + 4.8, y + 11.2, x + 1.2, y + 7.6, x + 0.5, y + 2.9)
+      .closePath().stroke();
+  } else if (type === "mail") {
+    doc.roundedRect(x, y + 2, 12, 8.5, 1).stroke();
+    doc.moveTo(x + 0.7, y + 2.8).lineTo(x + 6, y + 6.7).lineTo(x + 11.3, y + 2.8).stroke();
+  } else if (type === "calendar") {
+    doc.roundedRect(x + 0.5, y + 2, 11, 9.5, 1).stroke();
+    doc.moveTo(x + 0.5, y + 5).lineTo(x + 11.5, y + 5).stroke();
+    doc.moveTo(x + 3.2, y + 0.8).lineTo(x + 3.2, y + 3.6).stroke();
+    doc.moveTo(x + 8.8, y + 0.8).lineTo(x + 8.8, y + 3.6).stroke();
+  } else if (type === "tag") {
+    doc.moveTo(x + 0.5, y + 2.2)
+      .lineTo(x + 7.2, y + 2.2)
+      .lineTo(x + 11.5, y + 6.2)
+      .lineTo(x + 7.2, y + 10.2)
+      .lineTo(x + 0.5, y + 10.2)
+      .closePath().stroke();
+    doc.circle(x + 3, y + 5.3, 0.8).stroke();
+  } else if (type === "card") {
+    doc.roundedRect(x, y + 2, 13, 9, 1.3).stroke();
+    doc.moveTo(x + 1, y + 5).lineTo(x + 12, y + 5).stroke();
+  } else if (type === "file") {
+    doc.moveTo(x + 2, y + 0.5).lineTo(x + 8, y + 0.5).lineTo(x + 11, y + 3.5).lineTo(x + 11, y + 12).lineTo(x + 2, y + 12).closePath().stroke();
+    doc.moveTo(x + 8, y + 0.8).lineTo(x + 8, y + 3.5).lineTo(x + 10.5, y + 3.5).stroke();
+    doc.moveTo(x + 4, y + 6).lineTo(x + 9, y + 6).stroke();
+    doc.moveTo(x + 4, y + 8.5).lineTo(x + 9, y + 8.5).stroke();
+  }
+  doc.restore();
+}
+
+async function renderReferenceWellnessInvoicePdf(invoice, contact, clinic, options = {}) {
+  const opts = options || {};
+  const doc = new PDFDocument({ size: "A4", margin: 28, bufferPages: true });
+  applyRupeeCapableFonts(doc);
+  const bufPromise = streamToBuffer(doc);
+  const c = safeClinic(clinic);
+  const tenant = opts.tenant || {};
+  const settings = opts.settings || {};
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const currency = opts.currency || tenant.defaultCurrency || "INR";
+  const locale = opts.locale || tenant.locale || "en-IN";
+  const accent = professionalInvoiceColor(
+    tenant.brandColor
+      || professionalInvoiceSetting(settings, ["invoice.brandColor", "branding.color", "branding.primaryColor"])
+      || tenant.themeColor
+      || professionalInvoiceSetting(settings, ["invoice.themeColor", "branding.themeColor"]),
+    "#D4A300",
+  );
+  const navy = "#304258";
+  const border = "#E9DFC3";
+  const pale = "#FFFDF5";
+  const brandName = professionalInvoiceSetting(settings, ["invoice.brandName", "branding.name", "company.name"])
+    || tenant.name || c.name || "";
+  const tagline = professionalInvoiceSetting(settings, ["invoice.tagline", "branding.tagline", "company.tagline"]);
+  const companyAddress = professionalInvoiceSetting(settings, [
+    "invoice.companyAddress", "invoice.address", "branding.address", "company.address", "businessAddress",
+  ]) || [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", "), c.country]
+    .filter(Boolean).join("\n");
+  const companyPhone = professionalInvoiceSetting(settings, ["invoice.companyPhone", "branding.phone", "company.phone"]) || c.phone;
+  const companyEmail = professionalInvoiceSetting(settings, ["invoice.companyEmail", "branding.email", "company.email"])
+    || c.email || tenant.ownerEmail;
+  const companyWebsite = professionalInvoiceSetting(settings, ["invoice.companyWebsite", "branding.website", "company.website"]);
+  const invoiceNumber = invoice?.invoiceNum || invoice?.id || "-";
+  const status = String(invoice?.status || "-").replace(/_/g, " ").toUpperCase();
+  const issueDate = professionalInvoiceDate(invoice?.issuedDate || invoice?.createdAt, locale);
+  const dueDate = professionalInvoiceDate(invoice?.dueDate, locale);
+  const patientName = invoice?.customerName || contact?.name || "";
+  const patientPhone = invoice?.customerPhone || contact?.phone || "";
+  const patientEmail = invoice?.customerEmail || contact?.email || "";
+  const patientAddress = invoice?.customerAddress || "";
+  const billingAddress = invoice?.billingAddress || patientAddress || "-";
+  const shippingAddress = invoice?.shippingAddress || "";
+  const hasVisit = Boolean(invoice?.visit?.visitDate || invoice?.visit?.service?.name);
+  const lines = professionalInvoiceLines(invoice);
+  const symbol = { INR: "₹", USD: "$", GBP: "£", EUR: "€" }[currency] || currency;
+  const money = (value) => {
+    const amount = Number(value) || 0;
+    try {
+      return new Intl.NumberFormat(locale || "en-IN", {
+        style: "currency",
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch (_e) {
+      return `${symbol}${amount.toFixed(2)}`;
+    }
+  };
+  const lineAmount = (line) => professionalInvoiceLineAmount(line);
+  const subtotal = lines.reduce((sum, line) => sum + lineAmount(line), 0);
+  const total = Number.isFinite(Number(invoice?.amount)) ? Number(invoice.amount) : subtotal;
+  const isPaid = /^(PAID|COMPLETED)$/i.test(status);
+  const paid = isPaid ? total : 0;
+  const balance = Math.max(0, total - paid);
+  const drawCard = (x, y, cardWidth, cardHeight, fill = pale) => {
+    doc.save().roundedRect(x, y, cardWidth, cardHeight, 5).fillAndStroke(fill, border).restore();
+  };
+  const drawMetadataRow = (label, value, y, panelX, panelWidth) => {
+    doc.font("Helvetica-Bold").fontSize(7.8).fillColor(navy).text(label.toUpperCase(), panelX + 14, y, { width: 88 });
+    doc.font("Helvetica-Bold").fontSize(9.2).fillColor("#1E2C3D").text(value || "-", panelX + 100, y, {
+      width: panelWidth - 114,
+      align: "right",
+    });
+  };
+
+  // Soft gold curve from the reference artwork behind the invoice metadata.
+  doc.save().moveTo(left + 325, 0)
+    .bezierCurveTo(left + 330, 58, left + 362, 112, right - 82, 132)
+    .bezierCurveTo(right - 40, 140, right - 12, 141, right, 141)
+    .lineTo(right, 0).closePath().fill("#FFF9E9").restore();
+
+  const metadataX = left + 325;
+  const metadataWidth = width - 325;
+  const brandX = opts.logoBuffer ? left + 92 : left;
+  const brandMaxWidth = Math.max(120, metadataX - brandX - 18);
+  if (opts.logoBuffer) {
+    try {
+      doc.image(opts.logoBuffer, left + 2, 34, { fit: [78, 78] });
+    } catch (_e) {
+      // Tenant logo loading is fail-soft.
+    }
+  }
+  // The title must stay inside the left header column. Fit long, settings-
+  // driven brand names to the available width before rendering so they never
+  // overlap the invoice metadata panel on the right.
+  let brandFontSize = 21;
+  doc.font("Helvetica-Bold").fontSize(brandFontSize);
+  const measuredBrandWidth = doc.widthOfString(brandName);
+  if (measuredBrandWidth > brandMaxWidth) {
+    brandFontSize = Math.max(13, brandFontSize * brandMaxWidth / measuredBrandWidth);
+  }
+  doc.font("Helvetica-Bold").fontSize(brandFontSize).fillColor(accent).text(brandName, brandX, 30, {
+    width: brandMaxWidth,
+    lineBreak: false,
+  });
+  const taglineY = 30 + brandFontSize + 6;
+  if (tagline) doc.font("Helvetica").fontSize(10.5).fillColor(navy).text(tagline, brandX, taglineY, { width: brandMaxWidth });
+  let companyY = tagline ? taglineY + 19 : taglineY;
+  const companyInfoX = brandX + 17;
+  const companyInfoWidth = Math.max(100, brandMaxWidth - 17);
+  doc.font("Helvetica").fontSize(8.8).fillColor(navy);
+  if (companyAddress) {
+    drawWellnessInvoiceIcon(doc, "pin", brandX, companyY + 1, navy);
+    doc.text(companyAddress, companyInfoX, companyY, { width: companyInfoWidth, lineGap: 1 });
+    companyY = doc.y + 3;
+  }
+  if (companyPhone) {
+    drawWellnessInvoiceIcon(doc, "phone", brandX, companyY + 1, navy);
+    doc.text(companyPhone, companyInfoX, companyY, { width: companyInfoWidth });
+    companyY = doc.y + 3;
+  }
+  if (companyEmail) {
+    drawWellnessInvoiceIcon(doc, "mail", brandX, companyY + 1, navy);
+    doc.text(companyEmail, companyInfoX, companyY, { width: companyInfoWidth });
+  }
+
+  drawCard(metadataX, 18, metadataWidth, 123, "#FFF9E9");
+  doc.rect(metadataX, 18, metadataWidth, 4).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(11.5).fillColor(accent).text("ENTERPRISE INVOICE", metadataX + 12, 30, {
+    width: metadataWidth - 20,
+    align: "center",
+  });
+  doc.moveTo(metadataX + 12, 50).lineTo(right - 12, 50).lineWidth(0.45).strokeColor(border).stroke();
+  drawMetadataRow("Invoice Number", invoiceNumber, 58, metadataX, metadataWidth);
+  drawMetadataRow("Issue Date", issueDate, 78, metadataX, metadataWidth);
+  drawMetadataRow("Due Date", dueDate, 98, metadataX, metadataWidth);
+  doc.font("Helvetica-Bold").fontSize(7.8).fillColor(navy).text("STATUS", metadataX + 14, 118, { width: 88 });
+  const statusWidth = 62;
+  const statusX = metadataX + metadataWidth - statusWidth - 14;
+  // Keep status as a clean metadata value. The rounded red/pink shape made
+  // the header look like a form control and was especially distracting for
+  // unpaid invoices.
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(isPaid ? "#19764B" : "#D64545").text(status, statusX, 119, {
+    width: statusWidth,
+    align: "center",
+  });
+  doc.moveTo(left, 149).lineTo(right, 149).lineWidth(0.8).strokeColor(accent).stroke();
+
+  // Customer card: the visit block gets reserved space instead of overflowing
+  // over the card or the item table.
+  const customerTop = 159;
+  const separatorX = left + 253;
+  const customerX = left + 16;
+  const addressX = separatorX + 25;
+  const customerColumnWidth = separatorX - customerX - 22;
+  const addressColumnWidth = right - addressX - 14;
+  const visitService = invoice?.visit?.service?.name || "";
+  const visitServiceLabelWidth = 18;
+  doc.font("Helvetica").fontSize(9.2);
+  const visitServiceHeight = visitService
+    ? doc.heightOfString(visitService, { width: addressColumnWidth - visitServiceLabelWidth })
+    : 0;
+  const baseCustomerHeight = hasVisit ? (shippingAddress ? 190 : 150) : (shippingAddress ? 145 : 112);
+  const serviceStartOffset = shippingAddress ? 134 : 74;
+  const serviceTextOffset = serviceStartOffset + 42;
+  const serviceBottom = serviceTextOffset + Math.max(visitServiceHeight, 12);
+  const customerHeight = Math.max(
+    baseCustomerHeight,
+    hasVisit && visitService ? serviceBottom + 14 : baseCustomerHeight,
+  );
+  drawCard(left, customerTop, width, customerHeight);
+  doc.moveTo(separatorX, customerTop + 14).lineTo(separatorX, customerTop + customerHeight - 14).lineWidth(0.5).strokeColor(border).stroke();
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(accent).text("Bill To", customerX, customerTop + 18);
+  doc.font("Helvetica-Bold").fontSize(13.5).fillColor("#172536").text(patientName, customerX, customerTop + 40, { width: customerColumnWidth });
+  let patientY = customerTop + 64;
+  const customerRows = [
+    ["phone", patientPhone],
+    ["mail", patientEmail],
+    ["pin", patientAddress],
+  ];
+  for (const [iconType, value] of customerRows) {
+    if (!value) continue;
+    drawWellnessInvoiceIcon(doc, iconType, customerX, patientY + 1, navy);
+    doc.font("Helvetica").fontSize(9.5).fillColor(navy).text(value, customerX + 18, patientY, {
+      width: customerColumnWidth - 18,
+      height: 18,
+      ellipsis: true,
+    });
+    patientY += 22;
+  }
+  if (invoice?.gstin) {
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(navy).text("GSTIN", customerX, customerTop + customerHeight - 24);
+    doc.font("Helvetica").fontSize(9).fillColor(navy).text(String(invoice.gstin), customerX + 35, customerTop + customerHeight - 24, { width: customerColumnWidth - 35 });
+  }
+
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(accent).text("Billing Address", addressX, customerTop + 18);
+  drawWellnessInvoiceIcon(doc, "pin", addressX, customerTop + 40, navy);
+  doc.font("Helvetica").fontSize(9.5).fillColor(navy).text(billingAddress, addressX + 18, customerTop + 40, {
+    width: addressColumnWidth - 18,
+    height: 28,
+    ellipsis: true,
+  });
+  let serviceY = customerTop + 74;
+  if (shippingAddress) {
+    doc.moveTo(addressX, customerTop + 68).lineTo(right - 14, customerTop + 68).lineWidth(0.45).strokeColor(border).stroke();
+    doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent).text("Shipping / Service Address", addressX, customerTop + 77, { width: addressColumnWidth });
+    doc.font("Helvetica").fontSize(9.2).fillColor(navy).text(shippingAddress, addressX, customerTop + 96, { width: addressColumnWidth, height: 25, ellipsis: true });
+    serviceY = customerTop + 134;
+  } else if (hasVisit) {
+    doc.moveTo(addressX, customerTop + 61).lineTo(right - 14, customerTop + 61).lineWidth(0.45).strokeColor(border).stroke();
+  }
+  if (hasVisit) {
+    doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent).text("Visit / Service Details", addressX, serviceY, { width: addressColumnWidth });
+    if (invoice.visit.visitDate) {
+      drawWellnessInvoiceIcon(doc, "calendar", addressX, serviceY + 20, navy);
+      doc.font("Helvetica").fontSize(9.5).fillColor(navy).text(professionalInvoiceDate(invoice.visit.visitDate, locale), addressX + 18, serviceY + 20, { width: addressColumnWidth - 18 });
+    }
+    if (visitService) {
+      drawWellnessInvoiceIcon(doc, "tag", addressX, serviceY + 42, navy);
+      doc.font("Helvetica").fontSize(9.2).fillColor(navy).text(visitService, addressX + visitServiceLabelWidth, serviceY + 42, {
+        width: addressColumnWidth - visitServiceLabelWidth,
+        height: visitServiceHeight,
+      });
+    }
+  }
+
+  // Structured item table. Column widths total the available content width.
+  const tableTop = customerTop + customerHeight + 18;
+  const tableHeaderHeight = 34;
+  const columns = [
+    ["#", 30, "left"],
+    ["SERVICE / PRODUCT", 122, "left"],
+    ["DESCRIPTION", 117, "left"],
+    ["QTY", 44, "left"],
+    [`UNIT PRICE (${symbol})`, 82, "left"],
+    [`TAX /\nDISCOUNT (${symbol})`, 76, "left"],
+    [`AMOUNT (${symbol})`, 68, "left"],
+  ];
+  const drawTableHeader = (y) => {
+    doc.rect(left, y, width, tableHeaderHeight).fill(accent);
+    let x = left;
+    doc.font("Helvetica-Bold").fontSize(7.3).fillColor("#FFFFFF");
+    for (const [label, colWidth, align] of columns) {
+      doc.text(label, x + 5, y + (label.includes("\n") ? 6 : 12), { width: colWidth - 10, height: tableHeaderHeight - 6, align });
+      x += colWidth;
+    }
+    return y + tableHeaderHeight;
+  };
+  let tableY = drawTableHeader(tableTop);
+  const contentBottom = doc.page.height - 170;
+  lines.forEach((line, index) => {
+    const name = String(line?.name || line?.productName || line?.serviceName || invoice?.description || "");
+    const visitService = invoice?.visit?.service?.name || "";
+    let description = String(line?.description || line?.notes || "");
+    if (!description && visitService && name && visitService !== name && visitService.startsWith(name)) {
+      description = visitService.slice(name.length).replace(/^\s*[-–]\s*/, "");
+    }
+    if (!description && line?.type) description = String(line.type).replace(/^./, (character) => character.toUpperCase());
+    const quantity = Number.isFinite(Number(line?.quantity)) ? String(line.quantity) : "";
+    const amount = lineAmount(line);
+    const unitPrice = Number.isFinite(Number(line?.unitPrice)) ? Number(line.unitPrice) : (Number(quantity) ? amount / Number(quantity) : amount);
+    const tax = Number(line?.tax);
+    const discount = Number(line?.discount);
+    const taxDiscount = Number.isFinite(tax) && tax !== 0 ? money(tax) : (Number.isFinite(discount) && discount !== 0 ? money(discount) : "-");
+    const values = [String(index + 1), name, description, quantity, money(unitPrice), taxDiscount, money(amount)];
+    const nameHeight = doc.heightOfString(name || "-", { width: 112, font: "Helvetica", fontSize: 9.5 });
+    const descriptionHeight = doc.heightOfString(description || "-", { width: 107, font: "Helvetica", fontSize: 9.5 });
+    const rowHeight = Math.max(45, nameHeight, descriptionHeight) + 10;
+    if (tableY + rowHeight > contentBottom) {
+      doc.addPage();
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(accent).text(`${brandName} - Invoice ${invoiceNumber}`, left, 30, { width });
+      tableY = drawTableHeader(55);
+    }
+    if (index % 2 === 0) doc.rect(left, tableY, width, rowHeight).fill("#FFFDFC");
+    doc.rect(left, tableY, width, rowHeight).lineWidth(0.4).strokeColor(border).stroke();
+    let x = left;
+    doc.font("Helvetica").fontSize(9.5).fillColor(navy);
+    columns.forEach(([, colWidth, align], columnIndex) => {
+      const textOptions = { width: colWidth - 10, align };
+      if (columnIndex !== 1 && columnIndex !== 2) {
+        textOptions.height = rowHeight - 15;
+        textOptions.ellipsis = true;
+      }
+      doc.text(values[columnIndex] || "-", x + 5, tableY + 12, textOptions);
+      x += colWidth;
+    });
+    tableY += rowHeight;
+  });
+
+  // Keep the summary and notes on the first page whenever the available
+  // space is sufficient. The old fixed 300pt reservation pushed short
+  // invoices to a mostly empty second page.
+  const configuredNote = professionalInvoiceSetting(settings, ["invoice.notes", "branding.invoiceNotes"]);
+  const noteRows = configuredNote ? configuredNote.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) : [];
+  if (!noteRows.length) {
+    noteRows.push(
+      "This is a computer generated invoice and does not require a signature.",
+      "Please make the payment before the due date to avoid any inconvenience.",
+    );
+  }
+  const noteContact = [companyEmail, companyPhone].filter(Boolean).join(" or ");
+  if (noteContact && !noteRows.some((note) => /for any queries/i.test(note))) {
+    noteRows.push(`For any queries, contact ${noteContact}.`);
+  }
+  if (brandName && !noteRows.some((note) => /thank you for choosing/i.test(note))) {
+    noteRows.push(`Thank you for choosing ${brandName}.`);
+  }
+  const noteHeight = Math.max(76, 45 + (noteRows.length * 14));
+  const footerY = doc.page.height - doc.page.margins.bottom - 40;
+  const footerSafeBottom = footerY - 20;
+  const summaryAndNotesBottom = tableY + 185 + noteHeight;
+  if (summaryAndNotesBottom > footerSafeBottom) {
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent).text(`${brandName} - Invoice ${invoiceNumber}`, left, 30, { width });
+    tableY = 65;
+  }
+  const summaryTop = tableY + 18;
+  const paymentWidth = 258;
+  const summaryX = left + 282;
+  const summaryWidth = width - 282;
+  drawCard(left, summaryTop, paymentWidth, 145);
+  drawWellnessInvoiceIcon(doc, "card", left + 16, summaryTop + 19, accent);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(accent).text("Payment Information", left + 34, summaryTop + 21, { width: paymentWidth - 50 });
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(navy).text("PAYMENT MODE", left + 16, summaryTop + 49);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#172536").text(String(invoice?.paymentMode || "-").replace(/_/g, " ").toUpperCase(), left + 16, summaryTop + 63, { width: paymentWidth - 32 });
+  doc.moveTo(left + 16, summaryTop + 91).lineTo(left + paymentWidth - 16, summaryTop + 91).lineWidth(0.45).strokeColor(border).stroke();
+  doc.font("Helvetica").fontSize(9).fillColor(navy).text(isPaid ? "Payment received" : "Payment pending", left + 16, summaryTop + 101, { width: paymentWidth - 32 });
+
+  const summaryRows = [
+    ["Subtotal", money(subtotal)],
+    ["Discount", money(0)],
+    ["Tax (GST 0%)", money(0)],
+    ["Grand Total", money(total)],
+    ["Amount Paid", money(paid)],
+    ["Balance Due", money(balance)],
+  ];
+  const summaryHeight = 140;
+  drawCard(summaryX, summaryTop, summaryWidth, summaryHeight, "#FFFFFF");
+  let summaryY = summaryTop;
+  summaryRows.forEach(([label, value], index) => {
+    const rowHeight = index === 3 ? 30 : 22;
+    if (index === 3) doc.rect(summaryX + 1, summaryY, summaryWidth - 2, rowHeight).fill("#FFF7DF");
+    doc.moveTo(summaryX, summaryY + rowHeight).lineTo(right, summaryY + rowHeight).lineWidth(0.4).strokeColor(border).stroke();
+    doc.font(index === 3 ? "Helvetica-Bold" : "Helvetica").fontSize(index === 3 ? 11 : 9.5).fillColor(index === 3 ? accent : navy).text(label, summaryX + 14, summaryY + (index === 3 ? 8 : 6), { width: summaryWidth - 110 });
+    doc.font("Helvetica-Bold").fontSize(index === 3 ? 10.5 : 9.5).fillColor(index === 5 && balance > 0 ? "#D64545" : (index === 5 ? "#19764B" : navy)).text(value, right - 92, summaryY + (index === 3 ? 8 : 6), { width: 78, align: "right" });
+    summaryY += rowHeight;
+  });
+
+  const noteTop = Math.max(summaryTop + 167, summaryY + 18);
+  drawCard(left, noteTop, width, noteHeight, "#FFFDF5");
+  drawWellnessInvoiceIcon(doc, "file", left + 16, noteTop + 21, accent);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(accent).text("Notes", left + 34, noteTop + 22);
+  let noteY = noteTop + 43;
+  doc.font("Helvetica").fontSize(8.8).fillColor(navy);
+  noteRows.forEach((note, index) => {
+    doc.text(`${index + 1}.`, left + 16, noteY, { width: 14 });
+    doc.text(note, left + 38, noteY, { width: width - 54, height: 13, ellipsis: true });
+    noteY += 14;
+  });
+
+  const pageRange = doc.bufferedPageRange();
+  for (let pageIndex = 0; pageIndex < pageRange.count; pageIndex += 1) {
+    doc.switchToPage(pageRange.start + pageIndex);
+    // Keep footer text above PDFKit's bottom auto-pagination threshold.
+    doc.moveTo(left, footerY - 10).lineTo(right, footerY - 10).lineWidth(0.7).strokeColor(accent).stroke();
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(accent).text(brandName, left + 6, footerY, { width: 220 });
+    if (tagline) doc.font("Helvetica").fontSize(8.5).fillColor(navy).text(tagline, left + 6, footerY + 15, { width: 260 });
+    if (companyWebsite) {
+      doc.font("Helvetica").fontSize(8.5).fillColor(navy).text(companyWebsite, right - 112, footerY + 4, { width: 112, align: "right" });
+    }
+    if (pageRange.count > 1) doc.font("Helvetica").fontSize(7.5).fillColor(navy).text(`Page ${pageIndex + 1} of ${pageRange.count}`, left, footerY + 15, { width, align: "center" });
+  }
+  doc.end();
+  return bufPromise;
+}
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
   renderBrandedInvoicePdf,
+  renderProfessionalWellnessInvoicePdf: renderReferenceWellnessInvoicePdf,
+  renderLegacyWellnessInvoicePdf: renderProfessionalWellnessInvoicePdf,
+  resolveProfessionalInvoiceLogo,
   renderPatientSummaryPdf,
   generatePosReceiptPdf,
   // Shared ₹-glyph fix — register the embedded Poppins family under the

@@ -40,7 +40,7 @@ const patient = {
   bloodGroup: 'O+',
   source: 'walk-in',
   visits: [
-    { id: 11, visitDate: '2026-04-10T09:00:00Z', service: { name: 'Consultation' }, notes: 'First visit', amountCharged: 1500 },
+    { id: 11, visitDate: '2026-04-10T09:00:00Z', service: { id: 1, name: 'Consultation' }, notes: 'First visit', amountCharged: 1500 },
   ],
   prescriptions: [],
   treatmentPlans: [],
@@ -142,7 +142,7 @@ describe('<PatientDetail />', () => {
 
     // Switch to Consent form
     await user.click(screen.getByRole('button', { name: /Consent form/i }));
-    expect(screen.getByRole('heading', { name: /Capture consent/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Find consent PDF/i })).toBeInTheDocument();
   });
 
   it('prescription pad form fields exist (drug name, dosage, frequency, duration)', async () => {
@@ -169,11 +169,11 @@ describe('<PatientDetail />', () => {
 
       const priorSection = await screen.findByTestId('prior-consents');
       expect(priorSection).toBeInTheDocument();
-      expect(priorSection.textContent).toMatch(/Recent consents/i);
-      expect(priorSection.textContent).toMatch(/No prior consents on file/i);
+      expect(priorSection.textContent).toMatch(/Existing consent records/i);
+      expect(priorSection.textContent).toMatch(/No older consent records on file/i);
     });
 
-    it('renders each prior consent with templateName + signedAt + service.name', async () => {
+    it('renders each legacy consent with its id, signedAt, and service.name', async () => {
       const patientWithConsents = {
         ...patient,
         consents: [
@@ -205,11 +205,12 @@ describe('<PatientDetail />', () => {
       await user.click(screen.getByRole('button', { name: /Consent form/i }));
 
       const priorSection = await screen.findByTestId('prior-consents');
-      expect(priorSection.textContent).toMatch(/hair-transplant/);
+      expect(priorSection.textContent).toMatch(/Consent record #901/);
       expect(priorSection.textContent).toMatch(/FUE Hair Transplant/);
-      expect(priorSection.textContent).toMatch(/botox-fillers/);
+      expect(priorSection.textContent).toMatch(/Consent record #902/);
+      expect(priorSection.textContent).not.toMatch(/hair-transplant|botox-fillers/);
       // empty-state should NOT render when there is at least one prior consent
-      expect(priorSection.textContent).not.toMatch(/No prior consents on file/i);
+      expect(priorSection.textContent).not.toMatch(/No older consent records on file/i);
     });
   });
 
@@ -430,7 +431,7 @@ describe('<PatientDetail />', () => {
   // signature canvas; the QA retest 2026-05-07 flagged that the patient
   // had no surface showing the wording they were agreeing to.
   describe('Consent tab — template body at point of capture (#564)', () => {
-    it('renders the selected template body inline so the signer can read it before signing', async () => {
+    it.skip('renders the selected template body inline so the signer can read it before signing', async () => {
       const TPL_BODY = 'You are consenting to PRP scalp injection. Data retained 7 years. Jurisdiction: DPDP 2023, India.';
       fetchApi.mockReset();
       fetchApi.mockImplementation((url) => {
@@ -457,7 +458,7 @@ describe('<PatientDetail />', () => {
       expect(body.textContent).toMatch(/PRP Scalp/);
     });
 
-    it('shows fallback notice when the selected template has no body', async () => {
+    it.skip('shows fallback notice when the selected template has no body', async () => {
       fetchApi.mockReset();
       fetchApi.mockImplementation((url) => {
         if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
@@ -490,6 +491,105 @@ describe('<PatientDetail />', () => {
   // SKIP: drift — dedicated Prescriptions list tab + rx-list-tab/rx-row-* testids
   // not shipped. Current SUT only has "New prescription" capture tab + Case
   // history merged timeline.
+  describe('Consent tab — visit/service e-signature lookup', () => {
+    it('removes the template and signature-capture controls', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Consent form/i }));
+
+      expect(screen.getByRole('heading', { name: /Find consent PDF/i })).toBeInTheDocument();
+      expect(screen.getByRole('combobox', { name: /Visit/i })).toBeInTheDocument();
+      expect(screen.getByRole('combobox', { name: /Service/i })).toBeInTheDocument();
+      expect(screen.queryByText(/^Template$/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Save consent/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Clear signature/i })).not.toBeInTheDocument();
+    });
+
+    it('shows a signed e-signature only for the selected visit and service', async () => {
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        if (url.startsWith('/api/signatures?')) {
+          return Promise.resolve([{
+            id: 77,
+            documentType: 'Custom',
+            documentId: 11,
+            documentName: 'Hair Transplant Consent',
+            signerName: patient.name,
+            status: 'SIGNED',
+            signedAt: '2026-04-12T08:30:00Z',
+            patientId: patient.id,
+            visitId: 11,
+            serviceIds: '[1]',
+          }]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Consent form/i }));
+      await user.selectOptions(screen.getByRole('combobox', { name: /Visit/i }), '11');
+
+      expect(await screen.findByText('Hair Transplant Consent')).toBeInTheDocument();
+      expect(screen.getByText(/signed 12 Apr 2026/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^PDF$/i })).toBeInTheDocument();
+    });
+
+    it('keeps the consent PDF viewer centered in the viewport with scrolling inside the PDF frame', async () => {
+      const previousFetch = globalThis.fetch;
+      const previousCreateObjectURL = globalThis.URL.createObjectURL;
+      globalThis.fetch = vi.fn(() => Promise.resolve({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+      }));
+      globalThis.URL.createObjectURL = vi.fn(() => 'blob:consent-pdf');
+
+      fetchApi.mockImplementation((url) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        if (url.startsWith('/api/signatures?')) {
+          return Promise.resolve([{
+            id: 77,
+            documentType: 'Custom',
+            documentId: 11,
+            documentName: 'Hair Transplant Consent',
+            signerName: patient.name,
+            status: 'SIGNED',
+            signedAt: '2026-04-12T08:30:00Z',
+            patientId: patient.id,
+            visitId: 11,
+            serviceIds: '[1]',
+          }]);
+        }
+        return Promise.resolve([]);
+      });
+
+      try {
+        const user = userEvent.setup();
+        renderPage();
+        await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());
+        await user.click(screen.getByRole('button', { name: /Consent form/i }));
+        await user.selectOptions(screen.getByRole('combobox', { name: /Visit/i }), '11');
+        await screen.findByText('Hair Transplant Consent');
+        await user.click(screen.getByRole('button', { name: /^View$/i }));
+
+        const dialog = await screen.findByRole('dialog');
+        expect(dialog).toHaveStyle({ position: 'fixed', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' });
+        expect(dialog.firstElementChild).toHaveStyle({ display: 'flex', flexDirection: 'column', overflow: 'hidden' });
+        expect(screen.getByTitle('Consent form PDF')).toHaveStyle({ flex: '1 1 auto', minHeight: '0' });
+      } finally {
+        globalThis.fetch = previousFetch;
+        if (previousCreateObjectURL) globalThis.URL.createObjectURL = previousCreateObjectURL;
+        else delete globalThis.URL.createObjectURL;
+      }
+    });
+  });
+
   describe.skip('Prescriptions list tab (#838)', () => {
     // Helpers to build a Rx that's clearly active vs clearly past relative
     // to the test clock. Drug duration uses canonical "N days" / "N weeks"
@@ -1454,7 +1554,7 @@ describe('<PatientDetail />', () => {
       renderPage();
       // Consent surface heading is rendered on mount (no click needed)
       await waitFor(() =>
-        expect(screen.getByRole('heading', { name: /Capture consent/i })).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: /Find consent PDF/i })).toBeInTheDocument()
       );
     });
   });
@@ -1642,7 +1742,7 @@ describe('<PatientDetail />', () => {
     const tabs = [
       { name: /Case history/i,    anchor: () => screen.getByText(/First visit/) },
       { name: /New prescription/i, anchor: () => screen.getByRole('heading', { name: /New prescription/i }) },
-      { name: /Consent form/i,    anchor: () => screen.getByRole('heading', { name: /Capture consent/i }) },
+      { name: /Consent form/i,    anchor: () => screen.getByRole('heading', { name: /Find consent PDF/i }) },
       { name: /^Packages$/i, anchor: () => screen.getByText(/No packages yet/i) },
       { name: /Log visit/i,       anchor: () => screen.getByRole('heading', { name: /Log a visit/i }) },
       { name: /Photos/i,          anchor: () => screen.getByRole('heading', { name: /Visit photos/i }) },
@@ -1785,7 +1885,7 @@ describe('<PatientDetail />', () => {
   });
 
   describe('Consent tab — signature canvas validation', () => {
-    it('Save consent is disabled and has a title hint until the patient signs', async () => {
+    it.skip('Save consent is disabled and has a title hint until the patient signs', async () => {
       const user = userEvent.setup();
       renderPage();
       await waitFor(() => expect(screen.getByRole('button', { name: /Consent form/i })).toBeInTheDocument());

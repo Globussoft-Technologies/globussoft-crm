@@ -248,10 +248,15 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
 prisma.tenantSetting = prisma.tenantSetting || {};
 prisma.tenantSetting.findUnique = vi.fn();
+prisma.tenantSetting.upsert = vi.fn();
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findMany = vi.fn().mockResolvedValue([]);
 prisma.travelInvoice = prisma.travelInvoice || {};
 prisma.travelInvoice.findMany = vi.fn().mockResolvedValue([]);
+prisma.dismissedDuplicateGroup = prisma.dismissedDuplicateGroup || {};
+prisma.dismissedDuplicateGroup.findMany = vi.fn().mockResolvedValue([]);
+prisma.savedContactView = prisma.savedContactView || {};
+prisma.savedContactView.findFirst = vi.fn().mockResolvedValue(null);
 
 // Generic-vertical Lead custom fields (attachLeadCustomFields / Batch / write)
 prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
@@ -317,8 +322,11 @@ beforeEach(() => {
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.tenantSetting.findUnique.mockReset();
+  prisma.tenantSetting.upsert.mockReset().mockResolvedValue({});
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
+  prisma.dismissedDuplicateGroup.findMany.mockReset().mockResolvedValue([]);
+  prisma.savedContactView.findFirst.mockReset().mockResolvedValue(null);
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldValue.upsert.mockReset().mockResolvedValue({});
@@ -349,7 +357,7 @@ describe('GET /api/contacts — list', () => {
     expect(args.where.deletedAt).toBeNull();
     expect(args.take).toBe(100);
     expect(args.skip).toBe(0);
-    expect(args.orderBy).toEqual({ id: 'desc' });
+    expect(args.orderBy).toEqual([{ id: 'desc' }]);
   });
 
   test('?limit=2&offset=4 honored (#172 pagination)', async () => {
@@ -398,8 +406,10 @@ describe('GET /api/contacts — list', () => {
     expect(prisma.contact.count).not.toHaveBeenCalled();
   });
 
-  test('?q searches name/email/company server-side and composes with Customer count scope', async () => {
-    const res = await request(makeApp()).get('/api/contacts?status=Customer&q=Acme&count=1');
+  test('?q searches every Generic Leads row field and composes with Customer count scope', async () => {
+    const res = await request(makeApp()).get(
+      '/api/contacts?status=Customer&q=Acme&callifiedCampaignIds=41,42&count=1',
+    );
 
     expect(res.status).toBe(200);
     expect(prisma.contact.count).toHaveBeenCalledWith({
@@ -410,9 +420,101 @@ describe('GET /api/contacts — list', () => {
           { name: { contains: 'Acme' } },
           { email: { contains: 'Acme' } },
           { company: { contains: 'Acme' } },
+          { title: { contains: 'Acme' } },
+          { phone: { contains: 'Acme' } },
+          { source: { contains: 'Acme' } },
+          { firstTouchSource: { contains: 'Acme' } },
+          { tagsJson: { contains: 'Acme' } },
+          { callifiedLeadStatus: { contains: 'Acme' } },
+          {
+            assignedTo: {
+              is: {
+                tenantId: TENANT_ID,
+                OR: [
+                  { name: { contains: 'Acme' } },
+                  { email: { contains: 'Acme' } },
+                ],
+              },
+            },
+          },
+          { callifiedCampaignId: { in: [41, 42] } },
         ],
       }),
     });
+  });
+
+  test('?q keeps the narrower search contract for non-Generic tenants', async () => {
+    const res = await request(makeApp({ vertical: 'travel' }))
+      .get('/api/contacts?q=Acme&callifiedCampaignIds=41');
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany.mock.calls[0][0].where.OR).toEqual([
+      { name: { contains: 'Acme' } },
+      { email: { contains: 'Acme' } },
+      { company: { contains: 'Acme' } },
+      { title: { contains: 'Acme' } },
+    ]);
+  });
+
+  test('?q rejects malformed Generic Callified campaign ids', async () => {
+    const res = await request(makeApp())
+      .get('/api/contacts?q=Growth&callifiedCampaignIds=41,not-an-id');
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CAMPAIGN_IDS');
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test('score range and tenant-owned saved view are applied before count and pagination', async () => {
+    prisma.savedContactView.findFirst.mockResolvedValueOnce({ id: 27 });
+    prisma.contact.count.mockResolvedValueOnce(12);
+
+    const res = await request(makeApp()).get(
+      '/api/contacts?page=2&limit=5&scoreMin=51&scoreMax=75&viewId=27',
+    );
+
+    expect(res.status).toBe(200);
+    const expectedWhere = expect.objectContaining({
+      tenantId: TENANT_ID,
+      aiScore: { gte: 51, lte: 75 },
+      savedViewMemberships: { some: { viewId: 27 } },
+    });
+    expect(prisma.savedContactView.findFirst).toHaveBeenCalledWith({
+      where: { id: 27, tenantId: TENANT_ID },
+      select: { id: true },
+    });
+    expect(prisma.contact.findMany.mock.calls[0][0].where).toEqual(expectedWhere);
+    expect(prisma.contact.count).toHaveBeenCalledWith({ where: expectedWhere });
+    expect(res.body).toMatchObject({ total: 12, page: 2, totalPages: 3 });
+  });
+
+  test('sorts the full result in Prisma with a unique id tie-breaker', async () => {
+    const res = await request(makeApp()).get(
+      '/api/contacts?page=1&limit=10&sortBy=aiScore&sortDirection=desc',
+    );
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany.mock.calls[0][0].orderBy).toEqual([
+      { aiScore: 'desc' },
+      { id: 'desc' },
+    ]);
+  });
+
+  test('rejects invalid score, saved-view, and sort inputs before querying contacts', async () => {
+    expect((await request(makeApp()).get('/api/contacts?scoreMin=90&scoreMax=20')).status).toBe(400);
+    expect((await request(makeApp()).get('/api/contacts?viewId=not-a-number')).status).toBe(400);
+    expect((await request(makeApp()).get('/api/contacts?sortBy=tenantId&sortDirection=asc')).status).toBe(400);
+    expect((await request(makeApp()).get('/api/contacts?sortBy=name&sortDirection=sideways')).status).toBe(400);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test('does not allow a saved view from another tenant to filter contacts', async () => {
+    prisma.savedContactView.findFirst.mockResolvedValueOnce(null);
+    const res = await request(makeApp()).get('/api/contacts?page=1&viewId=27');
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('VIEW_NOT_FOUND');
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
 
   test('?q rejects blank and oversized search terms', async () => {
@@ -591,6 +693,96 @@ describe('PUT /api/contacts/:id/assign - travel agent reassignment', () => {
     });
     expect(prisma.contact.update).not.toHaveBeenCalled();
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+describe('GET /api/contacts/duplicates/find — duplicate scan', () => {
+  test('skips contacts with missing email and still returns valid duplicate matches', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      {
+        id: 1,
+        name: 'Legacy Contact',
+        email: null,
+        phone: null,
+        company: 'Acme',
+        status: 'Lead',
+        aiScore: 0,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      },
+      {
+        id: 2,
+        name: 'Aarav Sharma',
+        email: 'aarav@example.com',
+        phone: null,
+        company: 'Acme',
+        status: 'Lead',
+        aiScore: 80,
+        createdAt: new Date('2026-01-02T00:00:00Z'),
+      },
+      {
+        id: 3,
+        name: 'Aarav S',
+        email: 'aarav@example.com',
+        phone: null,
+        company: 'Acme Logistics',
+        status: 'Lead',
+        aiScore: 70,
+        createdAt: new Date('2026-01-03T00:00:00Z'),
+      },
+    ]);
+    prisma.dismissedDuplicateGroup.findMany.mockResolvedValueOnce([]);
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      primary: { id: 2, email: 'aarav@example.com' },
+      duplicates: [{ id: 3, email: 'aarav@example.com' }],
+      reason: 'Same email',
+    });
+  });
+
+  test('combines transitive email and phone matches into one stable group', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      {
+        id: 41, name: 'Alpha', email: 'shared@example.com', phone: null,
+        company: 'One', status: 'Lead', aiScore: 10, createdAt: new Date(),
+      },
+      {
+        id: 42, name: 'Beta', email: 'shared@example.com', phone: '9876543210',
+        company: 'Two', status: 'Lead', aiScore: 20, createdAt: new Date(),
+      },
+      {
+        id: 43, name: 'Gamma', email: 'gamma@example.com', phone: '+91 98765 43210',
+        company: 'Three', status: 'Lead', aiScore: 30, createdAt: new Date(),
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      primary: { id: 41 },
+      duplicates: [{ id: 42 }, { id: 43 }],
+      reason: 'Same email',
+    });
+    expect(res.body[0].groupKey).toBe('key:41,42,43');
+  });
+
+  test('returns a safe user-facing error when duplicate scanning fails', async () => {
+    prisma.contact.findMany.mockRejectedValueOnce(new Error('PrismaClientValidationError: internal field detail'));
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({
+      error: "We couldn't check for duplicate contacts right now. Please try again in a moment.",
+      code: 'DUPLICATE_SCAN_FAILED',
+    });
+    expect(JSON.stringify(res.body)).not.toMatch(/Prisma|internal field|database/i);
   });
 });
 
@@ -919,7 +1111,7 @@ describe('POST /api/contacts — create', () => {
       deletedAt: null,
     };
     findDuplicateMock.mockResolvedValueOnce(null);
-    prisma.contact.findUnique.mockResolvedValueOnce(deletedContact);
+    prisma.contact.findFirst.mockResolvedValueOnce(deletedContact);
     prisma.contact.create.mockResolvedValueOnce(created);
 
     const res = await request(makeApp())
@@ -988,6 +1180,39 @@ describe('POST /api/contacts — create', () => {
     // CRUCIALLY: contact.create NEVER fires on a dedup hit (PRD §4.5).
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  test('force=true creates a separate product lead after a duplicate confirmation', async () => {
+    const created = {
+      ...SAMPLE_CONTACT,
+      id: 9002,
+      name: 'Amita Rao - New Product',
+      email: SAMPLE_CONTACT.email,
+    };
+    prisma.contact.create.mockResolvedValueOnce(created);
+    findDuplicateMock.mockResolvedValueOnce({
+      matchedBy: 'email',
+      contact: SAMPLE_CONTACT,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/contacts?force=true')
+      .send({
+        name: 'Amita Rao - New Product',
+        email: SAMPLE_CONTACT.email,
+        status: 'Lead',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 9002, email: SAMPLE_CONTACT.email });
+    expect(findDuplicateMock).not.toHaveBeenCalled();
+    expect(prisma.contact.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: TENANT_ID,
+        email: SAMPLE_CONTACT.email,
+        name: 'Amita Rao - New Product',
+      }),
+    });
   });
 });
 
@@ -1436,6 +1661,84 @@ describe('DELETE /api/contacts/tags', () => {
     expect(prisma.contact.update.mock.calls[1][0]).toMatchObject({
       where: { id: 102 },
       data: { tagsJson: null },
+    });
+  });
+});
+
+describe('Generic contact tag catalog', () => {
+  test('GET /api/contacts/tags is registered at startup and reads only the tenant catalog', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify([
+        { name: 'VIP', color: '#2563EB' },
+        { name: 'Prospect', color: '#059669' },
+      ]),
+    });
+
+    const res = await request(makeApp()).get('/api/contacts/tags');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      tags: [
+        { name: 'Prospect', color: '#059669' },
+        { name: 'VIP', color: '#2563eb' },
+      ],
+    });
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.contactTagCatalog' } },
+      select: { value: true },
+    });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test('POST /api/contacts/tags persists the catalog for the authenticated tenant', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({ value: '[]' });
+
+    const res = await request(makeApp())
+      .post('/api/contacts/tags')
+      .send({ name: 'Renewal', color: '#DB2777' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ name: 'Renewal', color: '#db2777' });
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.contactTagCatalog' } },
+      create: {
+        tenantId: TENANT_ID,
+        key: 'generic.contactTagCatalog',
+        value: JSON.stringify([{ name: 'Renewal', color: '#db2777' }]),
+        category: 'general',
+      },
+      update: {
+        value: JSON.stringify([{ name: 'Renewal', color: '#db2777' }]),
+        category: 'general',
+      },
+    });
+  });
+
+  test('tag catalog endpoints are unavailable outside Generic CRM', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+
+    const res = await request(makeApp({ vertical: 'travel' })).get('/api/contacts/tags');
+
+    expect(res.status).toBe(404);
+    expect(prisma.tenantSetting.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/contacts/duplicates/find', () => {
+  test('handles contacts without email and still detects phone duplicates', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      { ...SAMPLE_CONTACT, id: 29, email: null, phone: '9876543210' },
+      { ...SAMPLE_CONTACT, id: 30, email: null, phone: '+91 98765 43210' },
+    ]);
+
+    const res = await request(makeApp()).get('/api/contacts/duplicates/find');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      primary: { id: 29 },
+      duplicates: [{ id: 30 }],
+      reason: 'Same phone',
     });
   });
 });

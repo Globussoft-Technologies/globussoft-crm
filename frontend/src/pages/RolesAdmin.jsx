@@ -816,7 +816,8 @@ export default function RolesAdmin() {
                       style={linkBtn}
                       aria-label={`View ${r.userCount ?? 0} users in ${r.name}`}
                     >
-                      <Users size={14} /> {r.userCount ?? 0}
+                      <Users size={14} style={countBadgeIconStyle} aria-hidden="true" />
+                      <span style={countBadgeValueStyle}>{r.userCount ?? 0}</span>
                     </button>
                   </Td>
                   <Td>
@@ -838,7 +839,8 @@ export default function RolesAdmin() {
                           aria-label={`View permissions for ${r.name}`}
                           title={`${visible} permission${visible === 1 ? '' : 's'}`}
                         >
-                          <Shield size={14} /> {visible}
+                          <Shield size={14} style={countBadgeIconStyle} aria-hidden="true" />
+                          <span style={countBadgeValueStyle}>{visible}</span>
                         </button>
                       );
                     })()}
@@ -3375,9 +3377,31 @@ const linkBtn = {
   cursor: 'pointer',
   display: 'inline-flex',
   alignItems: 'center',
+  justifyContent: 'center',
   gap: '0.3rem',
   fontSize: '0.8rem',
+  lineHeight: 1,
+  minWidth: '3.25rem',
+  whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
   color: 'inherit',
+};
+
+// Count text changes width as values move from one to multiple digits. Keep
+// the icon on a fixed flex basis so narrow table cells and browser zoom never
+// squeeze the SVG or render its strokes at inconsistent fractional sizes.
+const countBadgeIconStyle = {
+  width: 14,
+  height: 14,
+  minWidth: 14,
+  flex: '0 0 14px',
+};
+
+const countBadgeValueStyle = {
+  display: 'inline-block',
+  minWidth: '1ch',
+  textAlign: 'center',
+  lineHeight: 1,
 };
 
 const errBoxStyle = {

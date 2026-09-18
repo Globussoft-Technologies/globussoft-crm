@@ -30,7 +30,7 @@ export function injectHeroForm(mount, formId) {
   frame.setAttribute("src", heroFormEmbedSrc(formId));
   frame.setAttribute("title", "Globus CRM");
   frame.setAttribute("loading", "lazy");
-  frame.setAttribute("style", "width:100%;height:820px;min-height:820px;border:0;display:block;");
+  frame.setAttribute("style", "width:100%;height:auto;min-height:0;border:0;display:block;");
   root.appendChild(frame);
   return frame;
 }

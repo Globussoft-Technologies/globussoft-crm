@@ -45,6 +45,8 @@ describe('injectHeroForm', () => {
       const frame = injectHeroForm(mount, 11);
       expect(frame).toBeTruthy();
       expect(frame.getAttribute('src')).toBe('/embed/web-form.html?id=11');
+      expect(frame.style.height).toBe('auto');
+      expect(frame.style.minHeight).toBe('0px');
       expect(mount.shadowRoot).toBeNull();
       expect(mount.querySelector('iframe')).toBeNull();
     } finally {

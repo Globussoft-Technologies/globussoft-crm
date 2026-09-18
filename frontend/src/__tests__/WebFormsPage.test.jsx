@@ -360,7 +360,17 @@ describe('WebForms builder page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Preview form/i }));
 
-    expect(screen.getByTitle('Web form preview')).toBeInTheDocument();
+    const previewFrame = screen.getByTitle('Web form preview');
+    expect(previewFrame).toBeInTheDocument();
+    expect(previewFrame).toHaveStyle({ height: 'auto', minHeight: '0px' });
+
+    Object.defineProperty(previewFrame, 'contentWindow', { configurable: true, value: {} });
+    window.dispatchEvent(new MessageEvent('message', {
+      source: previewFrame.contentWindow,
+      data: { source: 'gbs-web-form', type: 'size', height: 1234.2 },
+    }));
+    expect(previewFrame.style.height).toBe('1235px');
+    expect(previewFrame.style.minHeight).toBe('0px');
 
   });
 
@@ -521,6 +531,34 @@ describe('WebForms builder page', () => {
 
     expect(notifySuccess).toHaveBeenCalledWith('Form saved');
 
+  });
+
+  test('saves edits across fields, settings, and colors in one request', async () => {
+    renderPage();
+
+    await openBuilder();
+
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Full name' } });
+    fireEvent.change(screen.getByDisplayValue('Submit'), { target: { value: 'Send request' } });
+    const formColorPicker = screen.getAllByLabelText('Form color *').find((element) => element.type === 'color');
+    const buttonColorPicker = screen.getAllByLabelText('Color of Submit button *').find((element) => element.type === 'color');
+    fireEvent.change(formColorPicker, { target: { value: '#F4F5F6' } });
+    fireEvent.change(buttonColorPicker, { target: { value: '#99B177' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      const body = JSON.parse(saveCall[1].body);
+      expect(body.fields[0]).toEqual(expect.objectContaining({ label: 'Full name' }));
+      expect(body.settings).toEqual(expect.objectContaining({ submitButtonLabel: 'Send request' }));
+      expect(body.style).toEqual(expect.objectContaining({ formColor: '#F4F5F6', buttonColor: '#99B177' }));
+    });
+
+    expect(notifySuccess).toHaveBeenCalledWith('Form saved');
   });
 
   test('custom choice fields expose an editable options textarea', async () => {

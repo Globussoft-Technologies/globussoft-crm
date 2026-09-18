@@ -73,6 +73,10 @@
  */
 const { test, expect } = require('@playwright/test');
 
+// The state-machine tests share a tenant-wide approval queue. Running them in
+// parallel lets approve/reject/delete operations invalidate count assertions.
+test.describe.configure({ mode: 'serial' });
+
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_APPROVALS_${Date.now()}_${process.pid}`;
@@ -251,16 +255,17 @@ test.describe('Approvals API — list + filter routes', () => {
   });
 
   test('C5: GET /pending-count returns {count:Number} and reflects new PENDING rows', async ({ request }) => {
-    const before = await aget(request, '/api/approvals/pending-count');
-    expect(before.status()).toBe(200);
-    const beforeBody = await before.json();
-    expect(typeof beforeBody.count).toBe('number');
-
-    await createApproval(request, { suffix: 'c5-pendingcount-bump' });
+    const created = await createApproval(request, { suffix: 'c5-pendingcount-bump' });
     const after = await aget(request, '/api/approvals/pending-count');
     expect(after.status()).toBe(200);
     const afterBody = await after.json();
-    expect(afterBody.count).toBeGreaterThanOrEqual(beforeBody.count + 1);
+    expect(typeof afterBody.count).toBe('number');
+    expect(afterBody.count).toBeGreaterThanOrEqual(1);
+
+    const pending = await aget(request, '/api/approvals?status=PENDING');
+    expect(pending.status()).toBe(200);
+    const pendingRows = await pending.json();
+    expect(pendingRows.some((row) => row.id === created.id)).toBe(true);
   });
 
   test('C6: GET /my-requests returns only requestedBy=me rows', async ({ request }) => {

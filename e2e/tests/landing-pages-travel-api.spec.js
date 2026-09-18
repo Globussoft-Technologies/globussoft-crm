@@ -121,19 +121,18 @@ test.describe('AI generator — POST /generate-from-destination', () => {
   });
 
   test('preview mode (autoCreate=false) returns blocks WITHOUT persisting a row', async ({ request }) => {
-    const beforeRes = await get(request, '/api/landing-pages');
-    const beforeList = await beforeRes.json();
-    const beforeCount = Array.isArray(beforeList) ? beforeList.length : 0;
+    const destination = `${RUN_TAG}-preview-${Date.now()}`;
 
     const res = await post(request, '/api/landing-pages/generate-from-destination', {
-      destination: `${RUN_TAG}-preview-${Date.now()}`,
+      destination,
       durationDays: 5, audience: 'travellers', subBrand: 'travelstall',
     });
     if (res.status() === 503) {
       const unavailable = await res.json();
       expect(unavailable.code).toBe('AI_NOT_CONFIGURED');
       const afterList = await (await get(request, '/api/landing-pages')).json();
-      expect(Array.isArray(afterList) ? afterList.length : 0).toBe(beforeCount);
+      const rows = Array.isArray(afterList) ? afterList : [];
+      expect(rows.some((row) => row.destination === destination)).toBe(false);
       return;
     }
     expect(res.status()).toBe(200);
@@ -151,8 +150,8 @@ test.describe('AI generator — POST /generate-from-destination', () => {
     // No page persisted.
     const afterRes = await get(request, '/api/landing-pages');
     const afterList = await afterRes.json();
-    const afterCount = Array.isArray(afterList) ? afterList.length : 0;
-    expect(afterCount).toBe(beforeCount);
+    const rows = Array.isArray(afterList) ? afterList : [];
+    expect(rows.some((row) => row.destination === destination || row.slug === body.suggestedSlug)).toBe(false);
   });
 
   test('autoCreate=true persists a DRAFT row with generatedByAi=true, templateType=wanderlux-v1 (premium default)', async ({ request }) => {

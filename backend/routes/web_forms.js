@@ -578,7 +578,8 @@ function buildEmbedCode(form, origin) {
   return [
     "<!-- Globussoft CRM web form -->",
 
-    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
+    '<script>(function(frame){window.addEventListener("message",function(event){if(!frame||event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form"||event.data.type!=="size")return;var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}});})(document.currentScript.previousElementSibling);</script>',
   ].join("\n");
 }
 
@@ -835,6 +836,9 @@ router.get("/public/:slug", async (req, res) => {
 
     const origin = `${req.protocol}://${req.get("host")}`;
 
+    // Form configuration is editable by CRM users. Do not let an embedded
+    // browser reuse an older public configuration after a successful save.
+    res.set("Cache-Control", "no-store");
     res.json(shapeForm(form, 0, origin, true));
   } catch (err) {
     console.error("[web-forms/public] load error:", err && err.message);

@@ -6683,6 +6683,27 @@ export default function WebForms({ scope = "generic" }) {
 
 
   const [showPreview, setShowPreview] = useState(false);
+  const previewFrameRef = useRef(null);
+
+  useEffect(() => {
+    if (!showPreview) return undefined;
+    const handlePreviewMessage = (event) => {
+      const frame = previewFrameRef.current;
+      if (
+        !frame ||
+        event.source !== frame.contentWindow ||
+        !event.data ||
+        event.data.source !== "gbs-web-form" ||
+        event.data.type !== "size"
+      ) return;
+      const height = Number(event.data.height);
+      if (!Number.isFinite(height) || height <= 0) return;
+      frame.style.height = `${Math.ceil(height)}px`;
+      frame.style.minHeight = "0px";
+    };
+    window.addEventListener("message", handlePreviewMessage);
+    return () => window.removeEventListener("message", handlePreviewMessage);
+  }, [showPreview]);
 
 
 
@@ -17695,7 +17716,7 @@ export default function WebForms({ scope = "generic" }) {
               <button type="button" className="btn-secondary" onClick={() => setShowPreview(false)}><X size={16} /></button>
             </div>
             <div style={{ padding: 16 }}>
-              <iframe title="Web form preview" src={previewSrc} style={{ width: "100%", border: 0, minHeight: 820, background: "transparent" }} />
+              <iframe ref={previewFrameRef} title="Web form preview" src={previewSrc} style={{ width: "100%", height: "auto", minHeight: 0, border: 0, display: "block", background: "transparent" }} />
             </div>
           </div>
         </div>

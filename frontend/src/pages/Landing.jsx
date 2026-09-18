@@ -43,7 +43,7 @@ function setupLandingInteractions(container, getHeroFrame) {
     if (!Number.isFinite(height) || height <= 0) return;
     const frameHeight = `${Math.ceil(height)}px`;
     heroFormFrame.style.height = frameHeight;
-    heroFormFrame.style.minHeight = frameHeight;
+    heroFormFrame.style.minHeight = "0";
   };
 
   const handleScroll = () => {

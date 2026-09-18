@@ -32,6 +32,9 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).toContain('https://crm.example.com/embed/web-form.html?slug=contact-us');
     expect(code.match(/https:\/\/crm\.example\.com\/embed\/web-form\.html\?slug=contact-us/g)).toHaveLength(2);
     expect(code).toContain('title="Contact Us"');
+    expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
+    expect(code).not.toContain('min-height:760px');
+    expect(code).toContain('source!=="gbs-web-form"');
   });
 
   test('escapes the iframe title safely', () => {
@@ -53,5 +56,21 @@ describe('public web form embed footer', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain('<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>');
+  });
+
+  test('does not cap long forms in an internal scroll container', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).not.toContain('grid-scroll');
+    expect(html).not.toContain('max-height:500px');
+    expect(html).not.toContain('overflow-y:auto;overflow-x:hidden');
+  });
+
+  test('applies configured form and submit-button colors through CSS variables', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('.panel{background:var(--gbs-form');
+    expect(html).toContain('.primary{background:var(--gbs-button');
+    expect(html).not.toContain('.primary{background:linear-gradient(135deg,#4f46e5,#7c3aed)');
   });
 });

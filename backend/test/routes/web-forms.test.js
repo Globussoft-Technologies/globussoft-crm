@@ -88,6 +88,7 @@ prisma.user.findFirst = vi.fn();
 
 
 const webFormsRouter = requireCJS('../../routes/web_forms');
+const { buildEmbedCode } = webFormsRouter;
 prisma.webFormSubmission.count = vi.fn();
 
 
@@ -165,6 +166,16 @@ beforeEach(() => {
   s3Service.isLocalUrl.mockReset();
   s3Service.isLocalUrl.mockReturnValue(false);
 
+});
+
+describe('web-form embed sizing', () => {
+  test('generates a content-sized iframe without a fixed minimum or internal scroll cap', () => {
+    const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' }, 'https://crm.example.com');
+
+    expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
+    expect(code).not.toContain('min-height:760px');
+    expect(code).toContain('source!=="gbs-web-form"');
+  });
 });
 
 
@@ -388,6 +399,80 @@ describe('POST /api/forms/logo-upload', () => {
 
 describe('PUT /api/forms/:id', () => {
 
+  test('persists metadata, fields, styles, and settings together', async () => {
+    const updatedFields = [
+      { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Full name', required: true, hidden: false, width: 'full', options: [] },
+    ];
+    const updatedStyle = {
+      backgroundColor: '#112233',
+      formColor: '#F4F5F6',
+      titleColor: '#223344',
+      fieldLabelColor: '#334455',
+      buttonColor: '#99B177',
+    };
+    const updatedSettings = {
+      formTitle: 'Updated public title',
+      submitButtonLabel: 'Send request',
+      successMessage: 'Received',
+      optInEnabled: true,
+    };
+
+    prisma.webForm.findFirst.mockResolvedValueOnce({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: 'Before',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({}),
+    });
+    prisma.webForm.update.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Updated form',
+      slug: 'contact-us',
+      description: 'After',
+      isActive: false,
+      fieldsJson: JSON.stringify(updatedFields),
+      styleJson: JSON.stringify(updatedStyle),
+      settingsJson: JSON.stringify(updatedSettings),
+    });
+
+    const res = await request(makeApp()).put('/api/forms/1').send({
+      name: 'Updated form',
+      slug: 'contact-us',
+      description: 'After',
+      isActive: false,
+      fields: updatedFields,
+      style: updatedStyle,
+      settings: updatedSettings,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(expect.objectContaining({
+      name: 'Updated form',
+      description: 'After',
+      isActive: false,
+      fields: expect.arrayContaining([expect.objectContaining({ label: 'Full name' })]),
+      style: expect.objectContaining({ buttonColor: '#99B177' }),
+      settings: expect.objectContaining({ submitButtonLabel: 'Send request' }),
+    }));
+    expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Updated form',
+        description: 'After',
+        isActive: false,
+        fieldsJson: expect.stringContaining('Full name'),
+        styleJson: expect.stringContaining('#99B177'),
+        settingsJson: expect.stringContaining('Send request'),
+      }),
+    }));
+  });
+
   test('renames a form without touching the slug so shared links keep working', async () => {
 
     prisma.webForm.findFirst
@@ -520,6 +605,8 @@ describe('GET /api/forms/public/:slug', () => {
     expect(res.status).toBe(200);
 
     expect(res.body.slug).toBe('contact-us');
+
+    expect(res.headers['cache-control']).toBe('no-store');
 
     expect(res.body.embedCode).toContain('/embed/web-form.html?id=1');
 

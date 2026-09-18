@@ -47,6 +47,10 @@
  */
 const { test, expect } = require('@playwright/test');
 
+// Manual engine ticks process every overdue ticket in the tenant. Keep the
+// suite serial so one test cannot consume another test's fixtures.
+test.describe.configure({ mode: 'serial' });
+
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
 

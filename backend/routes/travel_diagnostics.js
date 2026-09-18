@@ -92,6 +92,17 @@ function parseDateRangeBoundary(input, kind) {
   return parsed;
 }
 
+function diagnosticAnswersEqual(formValue, callValue) {
+  if (Array.isArray(formValue) || Array.isArray(callValue)) {
+    if (!Array.isArray(formValue) || !Array.isArray(callValue)) return false;
+    if (formValue.length !== callValue.length) return false;
+    const normalizedForm = formValue.map((value) => String(value)).sort();
+    const normalizedCall = callValue.map((value) => String(value)).sort();
+    return normalizedForm.every((value, index) => value === normalizedCall[index]);
+  }
+  return formValue === callValue;
+}
+
 function defaultBankTemplateName(subBrand) {
   return `${String(subBrand || "diagnostic").toUpperCase()} Template`;
 }
@@ -2758,7 +2769,7 @@ router.post(
           question: k,
           formValue,
           callValue,
-          matched: hasCallAnswers && formValue === callValue,
+          matched: hasCallAnswers && diagnosticAnswersEqual(formValue, callValue),
         };
       });
 

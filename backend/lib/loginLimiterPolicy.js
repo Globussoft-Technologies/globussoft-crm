@@ -7,6 +7,13 @@ const DEMO_LOGIN_HOSTS = new Set([
   "::1",
 ]);
 
+const LOGIN_IP_LIMIT = 5;
+const TEST_LOGIN_IP_LIMIT = 10000;
+
+function getLoginIpLimit(nodeEnv = process.env.NODE_ENV) {
+  return nodeEnv === "test" ? TEST_LOGIN_IP_LIMIT : LOGIN_IP_LIMIT;
+}
+
 function normalizeLoginHost(req) {
   const raw = String(req?.hostname || req?.get?.("host") || req?.headers?.host || "")
     .trim()
@@ -40,6 +47,9 @@ function loginIpKey(req) {
 
 module.exports = {
   DEMO_LOGIN_HOSTS,
+  LOGIN_IP_LIMIT,
+  TEST_LOGIN_IP_LIMIT,
+  getLoginIpLimit,
   normalizeLoginHost,
   shouldSkipLoginAccountLimiter,
   loginIpKey,

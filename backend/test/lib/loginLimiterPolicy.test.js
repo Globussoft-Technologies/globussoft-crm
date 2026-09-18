@@ -3,6 +3,9 @@ import {
   normalizeLoginHost,
   shouldSkipLoginAccountLimiter,
   loginIpKey,
+  getLoginIpLimit,
+  LOGIN_IP_LIMIT,
+  TEST_LOGIN_IP_LIMIT,
 } from '../../lib/loginLimiterPolicy.js';
 
 describe('normalizeLoginHost', () => {
@@ -23,6 +26,24 @@ describe('loginIpKey', () => {
 
   test('normalizes IPv6 addresses using express-rate-limit subnet semantics', () => {
     expect(loginIpKey({ ip: '2001:db8:abcd:1234::1' })).toBe('2001:db8:abcd:1200::/56');
+  });
+});
+
+describe('getLoginIpLimit', () => {
+  test('keeps the production brute-force ceiling at five attempts', () => {
+    expect(getLoginIpLimit('production')).toBe(5);
+    expect(LOGIN_IP_LIMIT).toBe(5);
+  });
+
+  test('raises only the test-environment ceiling for shared CI runner traffic', () => {
+    expect(getLoginIpLimit('test')).toBe(10000);
+    expect(TEST_LOGIN_IP_LIMIT).toBe(10000);
+  });
+
+  test('uses the production ceiling for development and unknown environments', () => {
+    expect(getLoginIpLimit('development')).toBe(LOGIN_IP_LIMIT);
+    expect(getLoginIpLimit('staging')).toBe(LOGIN_IP_LIMIT);
+    expect(getLoginIpLimit('')).toBe(LOGIN_IP_LIMIT);
   });
 });
 

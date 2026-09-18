@@ -342,7 +342,9 @@ jobs:
           #   - wellness-patient-timeline-api.spec.js (13 tests: routes/wellness.js patient timeline JSON + CSV  ticks #198/#200)
           #   - security-headers-api.spec.js ( 8 tests: #921 slice S4 FR-3.6 iframe-isolation  X-Frame-Options: DENY + CSP frame-ancestors 'none' + SRI build tags)
           #   - tmc-portal-api.spec.js       ( 4 tests: portal JWT + tenant/staff access contract)
-          # Total: ~1737 API tests run on every push.
+          # Total: ~5139 API tests run on every push. This local, deterministic
+          # gate uses no retries and four workers below; remote demo release
+          # validation keeps the retry policy from playwright.config.js.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -350,6 +352,9 @@ jobs:
             --project=chromium \
             --reporter=list \
             --no-deps \
+            --workers=4 \
+            --retries=0 \
+            --max-failures=20 \
             tests/ci-smoke.spec.js \
             tests/sms-api.spec.js \
             tests/marketing-api.spec.js \

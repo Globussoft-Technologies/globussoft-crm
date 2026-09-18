@@ -71,7 +71,11 @@ const rateLimit = require("express-rate-limit");
 // below — that's why this block sits up here, not down by the route mounts.
 const { validateNumericId } = require("./middleware/validateNumericId");
 const { resolveSubscriptionAccess } = require("./lib/subscriptionAccess");
-const { shouldSkipLoginAccountLimiter, loginIpKey } = require("./lib/loginLimiterPolicy");
+const {
+  shouldSkipLoginAccountLimiter,
+  loginIpKey,
+  getLoginIpLimit,
+} = require("./lib/loginLimiterPolicy");
 {
   const _RouterFactory = express.Router;
   // express.Router is a callable factory (not a class). Wrap it to attach
@@ -315,7 +319,11 @@ const apiLimiter = rateLimit({
 // is a separate endpoint with its own threat model.
 const loginIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 min
-  max: 5, // 5 wrong-password attempts per IP per 15 min
+  // CI runs thousands of API checks from one loopback IP, including
+  // intentional invalid-login cases. Keep the limiter wired (and its headers
+  // testable) without letting those negative tests lock out every later spec.
+  // Production remains capped at 5 failed attempts per IP per 15 minutes.
+  max: getLoginIpLimit(),
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,

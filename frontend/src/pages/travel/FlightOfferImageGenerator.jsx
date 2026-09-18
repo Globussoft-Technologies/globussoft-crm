@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useMemo, useRef, useState } from "react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { Upload, ChevronLeft, ChevronRight, Download, Plus, Trash2, Sparkles, Eye, X } from "lucide-react";
@@ -256,6 +256,7 @@ export default function FlightOfferImageGenerator() {
   const [generatingImage, setGeneratingImage] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [extractingPrices, setExtractingPrices] = useState(false);
+  const extractionInFlightRef = useRef(false);
   const [generatorError, setGeneratorError] = useState("");
 
   const pricedRows = useMemo(() => fareRows.map((row, index) => {
@@ -301,17 +302,20 @@ export default function FlightOfferImageGenerator() {
     setFareRows((prev) => (prev.length <= 1 ? prev : prev.filter((_, rowIndex) => rowIndex !== index)));
   };
 
-  const continueFromUpload = async () => {
-    if (uploadedScreenshots.length === 0) {
+  const extractUploadedScreenshots = async (files) => {
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) {
       setGeneratorError("Upload at least one screenshot before continuing.");
       notify.error("Upload at least one screenshot before continuing.");
       return;
     }
+    if (extractionInFlightRef.current) return;
+    extractionInFlightRef.current = true;
     setGeneratorError("");
     setExtractingPrices(true);
     try {
       const form = new FormData();
-      uploadedScreenshots.forEach((file) => form.append("images", file));
+      selectedFiles.forEach((file) => form.append("images", file));
       form.append("tripType", tripType);
       const result = await fetchApi("/api/v1/flight-plugin/extract-prices", { method: "POST", body: form });
       const rows = Array.isArray(result?.rows) ? result.rows : [];
@@ -352,10 +356,21 @@ export default function FlightOfferImageGenerator() {
       setGeneratorError(message);
       notify.error(message);
     } finally {
+      extractionInFlightRef.current = false;
       setExtractingPrices(false);
       setActiveStep(2);
     }
   };
+
+  const handleScreenshotSelection = (event) => {
+    const selectedFiles = Array.from(event.target.files || []);
+    setUploadedScreenshots(selectedFiles);
+    setGeneratedImageUrl("");
+    setGeneratedSvgMarkup("");
+    setQuoteMeta({});
+  };
+
+  const continueFromUpload = () => extractUploadedScreenshots(uploadedScreenshots);
 
   const generateImage = () => {
     setGeneratingImage(true);
@@ -452,7 +467,8 @@ export default function FlightOfferImageGenerator() {
               multiple
               accept="image/png,image/jpeg,image/webp,image/gif"
               aria-label="Upload screenshots"
-              onChange={(event) => setUploadedScreenshots(Array.from(event.target.files || []))}
+              onChange={handleScreenshotSelection}
+              disabled={extractingPrices}
               style={fieldStyle}
             />
             <div style={{ marginTop: 8, ...helper }}>
@@ -600,4 +616,3 @@ export default function FlightOfferImageGenerator() {
     </section>
   );
 }
-

@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useMemo, useRef, useState } from "react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { Hotel, Upload, ChevronLeft, ChevronRight, Download, Plus, Trash2, Sparkles, Eye, X } from "lucide-react";
@@ -302,6 +302,7 @@ export default function HotelOfferImageGenerator() {
   const [generatingImage, setGeneratingImage] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [extractingPrices, setExtractingPrices] = useState(false);
+  const extractionInFlightRef = useRef(false);
   const [generatorError, setGeneratorError] = useState("");
 
   const pricedRows = useMemo(() => hotelRows.map((row, index) => {
@@ -342,17 +343,19 @@ export default function HotelOfferImageGenerator() {
     setHotelRows((prev) => (prev.length <= 1 ? prev : prev.filter((_, rowIndex) => rowIndex !== index)));
   };
 
-  const continueFromUpload = async () => {
-    if (uploadedScreenshots.length === 0) {
+  const extractUploadedScreenshots = async (files = uploadedScreenshots) => {
+    if (files.length === 0) {
       setGeneratorError("Upload at least one screenshot before continuing.");
       notify.error("Upload at least one screenshot before continuing.");
       return;
     }
+    if (extractionInFlightRef.current) return;
+    extractionInFlightRef.current = true;
     setGeneratorError("");
     setExtractingPrices(true);
     try {
       const form = new FormData();
-      uploadedScreenshots.forEach((file) => form.append("images", file));
+      files.forEach((file) => form.append("images", file));
       const result = await fetchApi("/api/v1/flight-plugin/extract-hotel-prices", { method: "POST", body: form });
       const rows = Array.isArray(result?.rows) ? result.rows : [];
       if (rows.length > 0) {
@@ -389,10 +392,21 @@ export default function HotelOfferImageGenerator() {
       setGeneratorError(message);
       notify.error(message);
     } finally {
+      extractionInFlightRef.current = false;
       setExtractingPrices(false);
       setActiveStep(2);
     }
   };
+
+  const handleScreenshotSelection = (event) => {
+    const selectedFiles = Array.from(event.target.files || []);
+    setUploadedScreenshots(selectedFiles);
+    setGeneratedImageUrl("");
+    setGeneratedSvgMarkup("");
+    setQuoteMeta({});
+  };
+
+  const continueFromUpload = () => extractUploadedScreenshots(uploadedScreenshots);
 
   const generateImage = () => {
     setGeneratingImage(true);
@@ -488,7 +502,8 @@ export default function HotelOfferImageGenerator() {
               multiple
               accept="image/png,image/jpeg,image/webp,image/gif"
               aria-label="Upload hotel screenshots"
-              onChange={(event) => setUploadedScreenshots(Array.from(event.target.files || []))}
+              onChange={handleScreenshotSelection}
+              disabled={extractingPrices}
               style={fieldStyle}
             />
             <div style={{ marginTop: 8, ...helper }}>
@@ -648,7 +663,6 @@ export default function HotelOfferImageGenerator() {
     </section>
   );
 }
-
 
 
 

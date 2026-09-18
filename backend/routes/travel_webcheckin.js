@@ -52,6 +52,7 @@ const {
 } = require("../middleware/travelGuards");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const s3Service = require("../services/s3Service");
 // const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
 const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
@@ -1311,6 +1312,7 @@ router.post(
   requireTravelTenant,
   uploadBoardingPassOrReject,
   async (req, res) => {
+    let uploadedObjectKey = null;
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
@@ -1330,14 +1332,45 @@ router.post(
           code: "MISSING_FILE",
         });
       }
-      const url = `/uploads/boarding-passes/${req.file.filename}`;
+      let url = `/uploads/boarding-passes/${req.file.filename}`;
+      let storage = "disk";
+      let storageWarning = null;
+
+      if (s3Service.isOciConfigured()) {
+        try {
+          const fileBuffer = await fs.promises.readFile(req.file.path);
+          url = await s3Service.uploadFile(
+            fileBuffer,
+            req.file.originalname || req.file.filename,
+            req.file.mimetype,
+            `travel/web-checkins/${req.travelTenant.id}/boarding-passes`,
+          );
+          uploadedObjectKey = s3Service.extractKeyFromUrl(url);
+          storage = "ocs";
+          await fs.promises.unlink(req.file.path).catch(() => {});
+        } catch (storageError) {
+          console.error("[travel-webcheckin] OCS boarding-pass upload error:", storageError.message);
+          storageWarning = "Oracle Cloud upload failed; the boarding pass was stored on local disk.";
+        }
+      }
+
       const updated = await prisma.webCheckin.update({
         where: { id },
         data: { boardingPassUrl: url, status: "done" },
       });
-      res.json({ success: true, url, webcheckin: updated });
+      uploadedObjectKey = null;
+      res.json({
+        success: true,
+        url,
+        storage,
+        ...(storageWarning ? { storageWarning } : {}),
+        webcheckin: updated,
+      });
     } catch (e) {
       if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
+      if (uploadedObjectKey) {
+        await s3Service.deleteFile(uploadedObjectKey, { provider: "oci" }).catch(() => {});
+      }
       console.error("[travel-webcheckin] upload error:", e.message);
       res.status(500).json({ error: "Failed to upload boarding pass" });
     }

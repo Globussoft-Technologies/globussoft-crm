@@ -1035,11 +1035,12 @@ function SuggestedQuestionsPanel({ questions, onAdd, onClose }) {
 // Standard pill toggle switch — same visual pattern used across the travel
 // admin pages (e.g. CostMaster.jsx, DiagnosticPublicFormPanel.jsx). Kept
 // locally since no shared toggle component exists yet in this codebase.
-function PillToggle({ active, onChange, label }) {
+function PillToggle({ active, onChange, label, disabled = false }) {
   return (
     <button
       type="button"
       onClick={onChange}
+      disabled={disabled}
       role="switch"
       aria-checked={active}
       aria-label={label}
@@ -1047,7 +1048,8 @@ function PillToggle({ active, onChange, label }) {
         position: 'relative', width: 36, height: 20, borderRadius: 999,
         border: active ? '1px solid var(--success-color, #3ecf7e)' : '1px solid var(--border-color)',
         background: active ? 'rgba(62,207,126,0.18)' : 'var(--surface-color)',
-        cursor: 'pointer', padding: 0, flexShrink: 0,
+        cursor: disabled ? 'not-allowed' : 'pointer', padding: 0, flexShrink: 0,
+        opacity: disabled ? 0.65 : 1,
         transition: 'background .15s ease, border-color .15s ease',
       }}
     >
@@ -1063,6 +1065,7 @@ function PillToggle({ active, onChange, label }) {
 
 function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, onMoveDown }) {
   const opts = Array.isArray(question.options) ? question.options : [];
+  const systemManaged = question.systemManaged === true;
 
   const updateOption = (i, patch) =>
     onChange({ options: opts.map((o, j) => (j === i ? { ...o, ...patch } : o)) });
@@ -1090,24 +1093,27 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
           <div style={microHint}>This is what the customer will answer on the public diagnostic form.</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: question.required ? 'var(--success-color, #3ecf7e)' : 'var(--text-secondary)', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: question.required ? 'var(--success-color, #3ecf7e)' : 'var(--text-secondary)', cursor: systemManaged ? 'default' : 'pointer' }}>
             Required
             <PillToggle
               active={Boolean(question.required)}
               onChange={() => onChange({ required: !question.required })}
               label={`Question ${index + 1} required`}
+              disabled={systemManaged}
             />
           </label>
           <div style={{ display: 'flex', gap: 4 }}>
-            <IconBtn onClick={onMoveUp} disabled={index === 0} title="Move up" aria-label="Move question up">
+            <IconBtn onClick={onMoveUp} disabled={systemManaged || index === 0} title="Move up" aria-label="Move question up">
               <ChevronUp size={14} aria-hidden />
             </IconBtn>
-            <IconBtn onClick={onMoveDown} disabled={index === total - 1} title="Move down" aria-label="Move question down">
+            <IconBtn onClick={onMoveDown} disabled={systemManaged || index === total - 1} title="Move down" aria-label="Move question down">
               <ChevronDown size={14} aria-hidden />
             </IconBtn>
-            <IconBtn onClick={onRemove} title="Remove question" aria-label="Remove question" danger>
-              <Trash2 size={14} aria-hidden />
-            </IconBtn>
+            {!systemManaged && (
+              <IconBtn onClick={onRemove} title="Remove question" aria-label="Remove question" danger>
+                <Trash2 size={14} aria-hidden />
+              </IconBtn>
+            )}
           </div>
         </div>
       </div>
@@ -1121,6 +1127,7 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
             value={question.type || 'single-choice'}
             onChange={(e) => onChange({ type: e.target.value })}
             style={input}
+            disabled={systemManaged}
           >
             {QUESTION_TYPES.map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
@@ -1147,6 +1154,7 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
               });
             }}
             style={input}
+            disabled={systemManaged}
           />
         </Field>
       </div>
@@ -1155,16 +1163,20 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
           <div>
             <strong style={{ fontSize: 13 }}>Answer options ({opts.length})</strong>
-            <div style={microHint}>Each option has customer text and a score impact used by the diagnostic result.</div>
+            <div style={microHint}>
+              {systemManaged
+                ? 'Edit the customer-facing text. Each option stays linked to its Travel Knowledge category.'
+                : 'Each option has customer text and a score impact used by the diagnostic result.'}
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {!systemManaged && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button type="button" onClick={autoFillScores} disabled={!opts.length} style={secondaryBtnSmall} title="Fill simple 0-10 score impacts based on option order">
               <Lightbulb size={12} aria-hidden /> Auto-fill scores
             </button>
             <button type="button" onClick={addOption} style={addBtnSmall}>
               <Plus size={12} aria-hidden /> Add option
             </button>
-          </div>
+          </div>}
         </div>
         {opts.length === 0 ? (
           <p style={{ ...emptyHint, fontSize: 12 }}>No options yet.</p>
@@ -1192,7 +1204,9 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
                       (!o.label && /^option_\d+$/i.test(String(o.value)));
                     updateOption(i, {
                       label,
-                      value: shouldRefreshValue ? buildOptionValue(label, i) : o.value,
+                      value: systemManaged
+                        ? o.value
+                        : shouldRefreshValue ? buildOptionValue(label, i) : o.value,
                     });
                   }}
                   style={input}
@@ -1207,11 +1221,14 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
                   step={1}
                   onChange={(e) => updateOption(i, { weight: clampScoreImpact(e.target.value) })}
                   style={{ ...input, textAlign: 'center', fontWeight: 700 }}
+                  disabled={systemManaged}
                   aria-label={`Option ${i + 1} score impact`}
                 />
-                <IconBtn onClick={() => removeOption(i)} title="Remove option" aria-label={`Remove option ${i + 1}`} danger>
-                  <Trash2 size={14} aria-hidden />
-                </IconBtn>
+                {systemManaged ? <span /> : (
+                  <IconBtn onClick={() => removeOption(i)} title="Remove option" aria-label={`Remove option ${i + 1}`} danger>
+                    <Trash2 size={14} aria-hidden />
+                  </IconBtn>
+                )}
               </div>
             ))}
           </div>

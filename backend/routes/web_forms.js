@@ -13,6 +13,7 @@ const { verifyToken } = require("../middleware/auth");
 const { sendEmail } = require("../lib/emailSender");
 const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
+const s3Service = require("../services/s3Service");
 
 const router = express.Router();
 
@@ -89,6 +90,28 @@ const upload = multer({
     return cb(new Error("Unsupported attachment type"));
   },
 });
+
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mimeType = String(file.mimetype || "").toLowerCase();
+    if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mimeType)) {
+      return cb(null, true);
+    }
+    return cb(new Error("Unsupported logo type. Allowed: PNG, JPG, WebP or GIF"));
+  },
+}).single("image");
+
+function uploadLogoOrReject(req, res, next) {
+  logoUpload(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "Logo is too large (max 5 MB)", code: "INVALID_LOGO" });
+    }
+    return res.status(400).json({ error: error.message || "Invalid logo file", code: "INVALID_LOGO" });
+  });
+}
 
 const FIELD_TYPES = new Set([
   "text",
@@ -1463,6 +1486,39 @@ router.post("/", verifyToken, async (req, res) => {
     res.status(err.statusCode || 500).json({
       error: err.statusCode ? err.message : "Failed to create form",
       ...(err.code ? { code: err.code } : {}),
+    });
+  }
+});
+
+// Travel Web Forms builder logo upload. This is intentionally travel-scoped:
+// the generic CRM builder keeps its existing local-preview behaviour. The
+// shared storage service selects OCS automatically when OCI_* credentials are
+// configured, otherwise it uses the existing local-development fallback.
+router.post("/logo-upload", verifyToken, uploadLogoOrReject, async (req, res) => {
+  try {
+    requestedScope(req);
+    if (!req.file) {
+      return res.status(400).json({ error: "No logo image provided", code: "LOGO_REQUIRED" });
+    }
+
+    const url = await s3Service.uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      `travel/web-forms/${req.user.tenantId}/logos`,
+    );
+    return res.status(201).json({
+      url,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      storage: s3Service.isOciUrl(url) ? "ocs" : (s3Service.isLocalUrl(url) ? "local" : "s3"),
+    });
+  } catch (err) {
+    console.error("[web-forms] logo upload error:", err && err.message);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to upload form logo",
+      code: err.code || "FORM_LOGO_UPLOAD_FAILED",
     });
   }
 });

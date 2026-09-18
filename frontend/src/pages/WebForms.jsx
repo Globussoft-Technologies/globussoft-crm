@@ -6626,6 +6626,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
   const [saving, setSaving] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
 
 
@@ -7710,7 +7711,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-  const handleLogoUpload = (event) => {
+  const handleLogoUpload = async (event) => {
 
 
 
@@ -7743,6 +7744,26 @@ export default function WebForms({ scope = "generic" }) {
 
 
     if (!file) return;
+
+    if (formScope === "travel") {
+      setUploadingLogo(true);
+      try {
+        const body = new FormData();
+        body.append("image", file);
+        const uploaded = await fetchApi("/api/forms/logo-upload?scope=travel", {
+          method: "POST",
+          body,
+        });
+        applyDraft({ style: { ...selectedForm.style, logoUrl: uploaded.url } });
+        notifyRef.current.success(uploaded.storage === "ocs" ? "Logo uploaded to OCS." : "Logo uploaded.");
+      } catch (error) {
+        notifyRef.current.error(error?.data?.error || error?.message || "Failed to upload form logo.");
+      } finally {
+        setUploadingLogo(false);
+        if (event.target) event.target.value = "";
+      }
+      return;
+    }
 
 
 
@@ -17465,8 +17486,8 @@ export default function WebForms({ scope = "generic" }) {
 
                         <input ref={logoUploadRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleLogoUpload} />
                       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                   <button type="button" className="btn-secondary" onClick={() => logoUploadRef.current?.click()}>
-                     <Upload size={16} style={{ marginRight: 6, verticalAlign: "middle" }} /> Upload
+                   <button type="button" className="btn-secondary" disabled={uploadingLogo} onClick={() => logoUploadRef.current?.click()}>
+                     <Upload size={16} style={{ marginRight: 6, verticalAlign: "middle" }} /> {uploadingLogo ? "Uploading..." : "Upload"}
                         </button>
                    {selectedForm.style.logoUrl ? <button type="button" className="btn-secondary" onClick={() => applyDraft({ style: { ...selectedForm.style, logoUrl: "" } })}>Remove</button> : null}
                  </div>

@@ -60,6 +60,7 @@ const {
 // Hard cap on manually-entered options per quote (PRD §7 — "up to 4 flight
 // options"). Mirrored client-side in FlightQuoteAgent.jsx.
 const MAX_AGENT_OPTIONS = 4;
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 45_000;
 
 const FLIGHT_PLUGIN_PURPOSE = "flight-plugin";
 
@@ -72,6 +73,26 @@ function requireFlightPluginKey(req, res, next) {
     return res.status(403).json({ error: "API key is not scoped for the flight plugin", code: "WRONG_KEY_PURPOSE" });
   }
   next();
+}
+
+function extractionTimeoutMs() {
+  const configured = Number(process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_EXTRACTION_TIMEOUT_MS;
+}
+
+function withExtractionTimeout(promise) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error("Flight price extraction timed out");
+      error.code = "FLIGHT_EXTRACTION_TIMEOUT";
+      reject(error);
+    }, extractionTimeoutMs());
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function uploadHotelScreenshotsOrReject(req, res, next) {
@@ -91,11 +112,21 @@ router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScre
   try {
     const files = Array.isArray(req.files) ? req.files : [];
     const tripType = typeof req.body?.tripType === "string" ? req.body.tripType.trim().toLowerCase() : null;
-    const result = await flightOfferImageExtraction.extractFlightOfferPricing({ tenantId: req.user.tenantId, files, tripType });
+    // Screenshots are extraction inputs only. Do not persist raw supplier
+    // screenshots without a database owner and explicit retention policy.
+    const result = await withExtractionTimeout(
+      flightOfferImageExtraction.extractFlightOfferPricing({ tenantId: req.user.tenantId, files, tripType }),
+    );
     return res.status(200).json(result);
   } catch (e) {
     console.error("[flight-plugin] flight extract error:", e.message);
-    res.status(500).json({ error: "Failed to extract flight prices" });
+    if (e.code === "FLIGHT_EXTRACTION_TIMEOUT") {
+      return res.status(504).json({
+        error: "Flight price extraction took too long. Please retry or enter the fare manually.",
+        code: "FLIGHT_EXTRACTION_TIMEOUT",
+      });
+    }
+    res.status(500).json({ error: "Failed to extract flight prices", code: "FLIGHT_EXTRACTION_FAILED" });
   }
 });
 
@@ -450,4 +481,3 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
 });
 
 module.exports = router;
-

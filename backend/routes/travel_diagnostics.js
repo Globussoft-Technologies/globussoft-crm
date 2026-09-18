@@ -67,6 +67,11 @@ const {
   sanitizeText,
   sanitizeJsonForStringColumn,
 } = require("../lib/sanitizeJson");
+const {
+  ensureTmcTripTypeBank,
+  ensureTmcTripTypeQuestion,
+  loadTmcTripTypeCategories,
+} = require("../lib/tmcTripTypePreference");
 
 function parseDateRangeBoundary(input, kind) {
   if (!input) return null;
@@ -115,6 +120,16 @@ function injectBankTemplateName(questionsJson, templateName) {
   parsed.meta = parsed.meta && typeof parsed.meta === "object" ? parsed.meta : {};
   parsed.meta.templateName = templateName;
   return JSON.stringify(parsed);
+}
+
+function findUnansweredRequiredQuestion(questions, answers) {
+  return (questions || []).find((question) => {
+    if (!question?.required) return false;
+    const value = answers?.[question.id];
+    return value == null
+      || (typeof value === "string" && !value.trim())
+      || (Array.isArray(value) && value.length === 0);
+  }) || null;
 }
 
 const DIAGNOSTIC_SORT_ORDER = {
@@ -189,7 +204,10 @@ router.get(
         orderBy: [{ subBrand: "asc" }, { version: "desc" }],
         take: 100,
       });
-      res.json({ banks: banks.map(withBankTemplateName) });
+      const normalizedBanks = await Promise.all(
+        banks.map((bank) => ensureTmcTripTypeBank({ prisma, bank })),
+      );
+      res.json({ banks: normalizedBanks.map(withBankTemplateName) });
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -226,7 +244,8 @@ router.get(
           .status(403)
           .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
-      res.json(withBankTemplateName(bank));
+      const normalizedBank = await ensureTmcTripTypeBank({ prisma, bank });
+      res.json(withBankTemplateName(normalizedBank));
     } catch (e) {
       console.error("[travel-diag] get bank error:", e.message);
       res.status(500).json({ error: "Failed to get bank" });
@@ -292,10 +311,16 @@ router.post(
         typeof req.body?.templateName === "string" && req.body.templateName.trim()
           ? sanitizeText(req.body.templateName).slice(0, 120)
           : (latest ? readBankTemplateName(latest) : defaultBankTemplateName(subBrand));
-      const questionsJsonWithTemplate = injectBankTemplateName(
+      let questionsJsonWithTemplate = injectBankTemplateName(
         questionsJson,
         cleanTemplateName,
       );
+      if (String(subBrand).toLowerCase() === "tmc") {
+        const categories = await loadTmcTripTypeCategories(prisma, req.travelTenant.id);
+        questionsJsonWithTemplate = JSON.stringify(
+          ensureTmcTripTypeQuestion(JSON.parse(questionsJsonWithTemplate), categories),
+        );
+      }
 
       const created = await prisma.travelDiagnosticQuestionBank.create({
         data: {
@@ -950,7 +975,7 @@ router.post(
           .json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
       }
 
-      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+      let bank = await prisma.travelDiagnosticQuestionBank.findFirst({
         where: { id: bankIdNum, tenantId: req.travelTenant.id },
       });
       if (!bank) {
@@ -963,6 +988,7 @@ router.post(
           .status(409)
           .json({ error: "Bank is not active", code: "BANK_INACTIVE" });
       }
+      bank = await ensureTmcTripTypeBank({ prisma, bank });
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, bank.subBrand)) {
@@ -983,6 +1009,15 @@ router.post(
           error: "Bank JSON has become unparseable",
           code: "BANK_CORRUPTED",
           warnings: parseWarnings,
+        });
+      }
+
+      const missingRequired = findUnansweredRequiredQuestion(parsed.questions, answers);
+      if (missingRequired) {
+        return res.status(400).json({
+          error: `"${missingRequired.text}" is required.`,
+          code: "REQUIRED_QUESTION_MISSING",
+          questionId: missingRequired.id,
         });
       }
 
@@ -2844,7 +2879,7 @@ router.get("/diagnostics/public/banks", async (req, res) => {
         .json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
     }
 
-    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+    let bank = await prisma.travelDiagnosticQuestionBank.findFirst({
       where: {
         tenantId: tenant.id,
         subBrand: String(subBrand),
@@ -2860,6 +2895,7 @@ router.get("/diagnostics/public/banks", async (req, res) => {
           code: "BANK_NOT_FOUND",
         });
     }
+    bank = await ensureTmcTripTypeBank({ prisma, bank });
 
     let questions;
     try {
@@ -2879,6 +2915,9 @@ router.get("/diagnostics/public/banks", async (req, res) => {
       id: q.id,
       text: q.text,
       type: q.type,
+      required: q.required === true,
+      minSelections: Number.isInteger(q.minSelections) ? q.minSelections : undefined,
+      maxSelections: Number.isInteger(q.maxSelections) ? q.maxSelections : undefined,
       options: (q.options || []).map((o) => ({
         value: o.value,
         label: o.label,
@@ -2939,7 +2978,7 @@ router.post("/diagnostics/public/submit", async (req, res) => {
         .status(400)
         .json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
     }
-    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+    let bank = await prisma.travelDiagnosticQuestionBank.findFirst({
       where: {
         id: bankIdNum,
         tenantId: tenant.id,
@@ -2954,6 +2993,32 @@ router.post("/diagnostics/public/submit", async (req, res) => {
           error: "Bank not found or not active",
           code: "BANK_NOT_FOUND",
         });
+    }
+    bank = await ensureTmcTripTypeBank({ prisma, bank });
+
+    // Validate the full diagnostic before deduping or creating a Contact.
+    // Public clients may submit stale/incomplete answer sets after an active
+    // bank changes; those requests must not leave orphan CRM records behind.
+    const { bank: parsed, warnings: parseWarnings } = parseBank(
+      bank.questionsJson,
+      bank.scoringRulesJson,
+    );
+    if (!parsed) {
+      return res
+        .status(500)
+        .json({
+          error: "Bank JSON unparseable",
+          code: "BANK_CORRUPTED",
+          warnings: parseWarnings,
+        });
+    }
+    const missingRequired = findUnansweredRequiredQuestion(parsed.questions, answers);
+    if (missingRequired) {
+      return res.status(400).json({
+        error: `"${missingRequired.text}" is required.`,
+        code: "REQUIRED_QUESTION_MISSING",
+        questionId: missingRequired.id,
+      });
     }
 
     // PRD 4.5 dedup: try to attach to an existing Contact by email or
@@ -2994,20 +3059,7 @@ router.post("/diagnostics/public/submit", async (req, res) => {
       contactId = newContact.id;
     }
 
-    // Score the diagnostic.
-    const { bank: parsed, warnings: parseWarnings } = parseBank(
-      bank.questionsJson,
-      bank.scoringRulesJson,
-    );
-    if (!parsed) {
-      return res
-        .status(500)
-        .json({
-          error: "Bank JSON unparseable",
-          code: "BANK_CORRUPTED",
-          warnings: parseWarnings,
-        });
-    }
+    // All validation has completed; scoring and persistence may now proceed.
     const result = scoreDiagnostic(parsed, answers);
 
     const snapshot = JSON.stringify({

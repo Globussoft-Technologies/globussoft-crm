@@ -351,8 +351,8 @@ export default function SchoolTermCalendar() {
     }
   };
 
-  const handleCalendarUpload = async () => {
-    if (!calendarFile) {
+  const handleCalendarUpload = async (file = calendarFile) => {
+    if (!file) {
       notify.error("Choose a PDF or image first");
       return;
     }
@@ -360,7 +360,7 @@ export default function SchoolTermCalendar() {
     try {
       const token = getAuthToken();
       const formData = new FormData();
-      formData.append("file", calendarFile);
+      formData.append("file", file);
       if (uploadMeta.schoolName.trim()) formData.append("schoolName", uploadMeta.schoolName.trim());
       if (uploadMeta.board.trim()) formData.append("board", uploadMeta.board.trim());
       if (uploadMeta.label.trim()) formData.append("label", uploadMeta.label.trim());
@@ -381,6 +381,12 @@ export default function SchoolTermCalendar() {
     } finally {
       setUploadingCalendar(false);
     }
+  };
+
+  const handleCalendarFileSelection = (event) => {
+    const selectedFile = event.target.files?.[0] || null;
+    setCalendarFile(selectedFile);
+    if (selectedFile) void handleCalendarUpload(selectedFile);
   };
 
   const removeUpload = async (uploadId) => {
@@ -521,8 +527,8 @@ export default function SchoolTermCalendar() {
           <Field label="School"><input type="text" value={uploadMeta.schoolName} onChange={(e) => setUploadMeta({ ...uploadMeta, schoolName: e.target.value })} style={inp} placeholder="DPS Bangalore" /></Field>
           <Field label="Board"><input type="text" value={uploadMeta.board} onChange={(e) => setUploadMeta({ ...uploadMeta, board: e.target.value })} style={inp} placeholder="CBSE" /></Field>
           <Field label="Label"><input type="text" value={uploadMeta.label} onChange={(e) => setUploadMeta({ ...uploadMeta, label: e.target.value })} style={inp} placeholder="Academic Calendar 2027" /></Field>
-          <Field label="File"><input ref={uploadInputRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(e) => setCalendarFile(e.target.files?.[0] || null)} style={inp} /></Field>
-          <button type="button" onClick={handleCalendarUpload} disabled={uploadingCalendar || !calendarFile} style={{ ...btn, opacity: uploadingCalendar || !calendarFile ? 0.6 : 1 }}>
+          <Field label="File"><input ref={uploadInputRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={handleCalendarFileSelection} disabled={uploadingCalendar} style={inp} /></Field>
+          <button type="button" onClick={() => void handleCalendarUpload()} disabled={uploadingCalendar || !calendarFile} style={{ ...btn, opacity: uploadingCalendar || !calendarFile ? 0.6 : 1 }}>
             <Upload size={14} aria-hidden /> {uploadingCalendar ? "Uploading..." : "Upload file"}
           </button>
         </div>

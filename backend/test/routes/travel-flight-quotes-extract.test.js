@@ -120,6 +120,7 @@ describe('POST /extract-prices', () => {
     expect(arg.tenantId).toBe(5);
     expect(arg.tripType).toBe('domestic');
     expect(arg.files).toHaveLength(1);
+    expect(res.body.storage).toBeUndefined();
   });
 
   test('a blocked-AI stub result still returns 200 with the stub shape (graceful degrade)', async () => {
@@ -137,6 +138,27 @@ describe('POST /extract-prices', () => {
     expect(res.status).toBe(200);
     expect(res.body.stub).toBe(true);
     expect(res.body.note).toMatch(/not configured an AI provider/);
+  });
+
+  test('returns a structured 504 instead of leaving a slow extraction request pending', async () => {
+    const previousTimeout = process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS;
+    process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS = '10';
+    mockExtractFlight.mockReturnValue(new Promise(() => {}));
+
+    try {
+      const res = await request(makeApp())
+        .post('/api/v1/flight-plugin/extract-prices')
+        .attach('images', TINY_PNG, 'fare.png');
+
+      expect(res.status).toBe(504);
+      expect(res.body).toEqual({
+        error: 'Flight price extraction took too long. Please retry or enter the fare manually.',
+        code: 'FLIGHT_EXTRACTION_TIMEOUT',
+      });
+    } finally {
+      if (previousTimeout == null) delete process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS;
+      else process.env.FLIGHT_QUOTE_EXTRACTION_TIMEOUT_MS = previousTimeout;
+    }
   });
 });
 

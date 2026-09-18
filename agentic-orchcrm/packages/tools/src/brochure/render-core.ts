@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { searchPhotos, routeMapUrl, qrUrl, geocode, staticMapUrl } from '../assets.js';
+import { selectCoverPhoto, partitionEditorialPhotos, deduplicatePhotoTags } from './cover-selection.js';
 import { findCountry, renderCountryFramed, countryBbox, type LL, type Feat, type Rect, type TileColors } from './geomap.js';
 import type {
   BrochureCard,
@@ -1536,7 +1537,7 @@ export type DesignAuditFn = (
 export type DesignSalvageFn = (
   html: string,
   issues: string[],
-  opts?: { protectedLogoUrls?: string[] },
+  opts?: { protectedLogoUrls?: string[]; minPages?: number; maxPages?: number },
 ) => Promise<string | null>;
 
 export interface BrochureRenderOptions {
@@ -4984,7 +4985,7 @@ function tmcCoverLogosHtml(c: BrochureContent): string {
       ? `<img src="${esc(tmc)}" alt="The Modern Classroom" style="position:absolute;left:${(tp.x * 100).toFixed(1)}%;top:${(tp.y * 100).toFixed(1)}%;transform:translate(-50%,-50%);height:${(20 * tp.scale).toFixed(1)}mm;width:auto;max-width:60mm;object-fit:contain;z-index:5;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4))">`
       : '';
     const schoolImg = school
-      ? `<img src="${esc(school)}" alt="${esc(tmcSchoolName(c) || 'School')}" style="position:absolute;left:${(sp.x * 100).toFixed(1)}%;top:${(sp.y * 100).toFixed(1)}%;transform:translate(-50%,-50%);height:${(22 * sp.scale).toFixed(1)}mm;width:auto;max-width:60mm;object-fit:contain;z-index:5;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4))">`
+      ? `<img src="${esc(school)}" alt="${esc(tmcSchoolName(c) || 'School')}" style="position:absolute;left:${(sp.x * 100).toFixed(1)}%;top:${(sp.y * 100).toFixed(1)}%;transform:translate(-50%,-50%);height:${(20 * sp.scale).toFixed(1)}mm;width:auto;max-width:60mm;object-fit:contain;z-index:5;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4))">`
       : '';
     return tmcImg + schoolImg;
   }
@@ -5158,8 +5159,7 @@ img{display:block;max-width:100%}
 .tmc-foot-logos img{height:8mm;width:auto;object-fit:contain}
 .tmc-cover-logos{display:flex;align-items:center;gap:4mm}
 .tmc-cover-logos img{height:18mm;width:auto;object-fit:contain}
-.tmc-cover-logos .tmc-logo{height:20mm}
-.tmc-cover-logos .school-logo{height:22mm}
+.tmc-cover-logos .tmc-logo,.tmc-cover-logos .school-logo{height:20mm}
 .tmc-plus{width:6mm;height:.8mm;background:var(--tmc-cyan);border-radius:1mm}
 .tmc-cta-btn{display:inline-block;background:var(--tmc-accent);color:var(--tmc-on-accent);font-family:var(--display), Arial, sans-serif;font-size:13pt;text-transform:uppercase;letter-spacing:.04em;padding:4.5mm 9mm;border-radius:999px;text-decoration:none}
 .tmc-payment-btn{display:inline-block;background:var(--tmc-accent);color:var(--tmc-on-accent);font-family:var(--display), Arial, sans-serif;font-size:13pt;text-transform:uppercase;letter-spacing:.04em;padding:5mm 10mm;border-radius:999px;text-decoration:none}
@@ -5257,6 +5257,10 @@ img{display:block;max-width:100%}
 .tmc-socials{display:flex;gap:2.5mm;margin-top:2mm}
 .tmc-socials img{width:6mm;height:6mm}
 .tmc-action-box{padding:5mm;background:#F8FAFC;border-radius:2mm;display:flex;flex-direction:column;gap:4mm;align-items:flex-start;break-inside:avoid}
+.tmc-cancellation-box{margin-top:5mm;padding:5mm 6mm;background:color-mix(in srgb,var(--tmc-accent) 7%,#fff);border:1px solid color-mix(in srgb,var(--tmc-accent) 24%,#E2E8F0);border-left:4px solid var(--tmc-accent);border-radius:2.5mm;break-inside:avoid}
+.tmc-cancellation-box h3{margin-bottom:2.5mm}
+.tmc-cancellation-box ul{columns:2;column-gap:8mm}
+.tmc-cancellation-box li{break-inside:avoid;font-size:9.8pt;line-height:1.42;margin-bottom:1.4mm}
 .tmc-qr-row{display:flex;gap:8mm;align-items:flex-start;flex-wrap:wrap}
 .tmc-page-number{position:absolute;bottom:8mm;left:50%;transform:translateX(-50%);font-size:8pt;color:var(--tmc-muted)}
 `;
@@ -5385,6 +5389,17 @@ function isSchoolSafePhoto(alt?: string, source?: string): boolean {
   if (UNSAFE_PHOTO_ALT.test(caption)) return false;
   if (CURATED_PHOTO_SOURCES.has(String(source ?? '').toLowerCase())) return true;
   return !UNVETTED_PEOPLE_ALT.test(caption);
+}
+
+function isDayPhotoRelevant(alt: string | undefined, context: string): boolean {
+  const caption = String(alt || '').toLowerCase();
+  if (!caption) return false;
+  const stop = new Set([
+    'goa', 'india', 'day', 'visit', 'tour', 'trip', 'guided', 'students', 'student',
+    'transfer', 'relax', 'explore', 'experience', 'activity', 'activities', 'local',
+  ]);
+  const keywords = String(context || '').toLowerCase().match(/[a-z]{4,}/g) || [];
+  return keywords.some((word) => !stop.has(word) && caption.includes(word));
 }
 
 function sanitizeCityNames(list: unknown): string[] {
@@ -5881,6 +5896,17 @@ function buildTmcPracticalMeasuringHtml(
   );
 }
 
+function tmcCancellationHtml(raw: string | undefined): string {
+  const policy = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!policy) return '';
+  const points = policy.split(/\s*(?:;|\n|(?<=\.)\s+(?=[A-Z0-9]))\s*/).map((part) => part.trim()).filter(Boolean);
+  return `<div class="tmc-cancellation-box"><h3>Cancellation Policy</h3>` +
+    (points.length > 1
+      ? `<ul>${points.map((point) => `<li>${esc(point)}</li>`).join('')}</ul>`
+      : `<p>${esc(policy)}</p>`) +
+    `</div>`;
+}
+
 function buildTmcInvestmentAction(
   c: BrochureContent,
   generalQr: string,
@@ -5929,7 +5955,6 @@ function buildTmcInvestmentAction(
       : '') +
     (tmc?.finalPaymentDate ? `<div class="tmc-deadline"><b>Final payment:</b> ${esc(tmc.finalPaymentDate)}</div>` : '') +
     (tmc?.bookingDeadline ? `<div class="tmc-deadline"><b>Booking deadline:</b> ${esc(tmc.bookingDeadline)}</div>` : '') +
-    (tmc?.cancellation ? `<div class="tmc-prac-box"><h3>Cancellation</h3><p>${esc(tmc.cancellation)}</p></div>` : '') +
     `</div>` +
     `<div class="tmc-invest-col">` +
     `<div class="tmc-action-box">` +
@@ -5963,6 +5988,7 @@ function buildTmcInvestmentAction(
     `</div>` +
     `</div>` +
     `</div>` +
+    tmcCancellationHtml(tmc?.cancellation) +
     (showFinalPhoto ? `<div class="tmc-final-photo"><img src="${esc(photo)}" alt=""></div>` : '') +
     `<div class="tmc-foot-line">${tmcFooterLogosHtml(c)}<span>Page ${pageNum}</span></div>` +
     `</section>`
@@ -6034,7 +6060,9 @@ Verify the school and TMC logos, approved co-branding line, destination, dates, 
 function buildTmcDesignBrief(
   c: BrochureContent,
   assets: {
-    heroUrl: string; overviewPhotos: string[]; extraPhotos: string[]; mapUrl: string;
+    heroUrl: string; overviewPhotos: string[]; extraPhotos: string[];
+    dayPhotos: Array<{ dayNumber: number; url: string; context: string }>;
+    mapUrl: string;
     generalQrUrl: string; paymentQrUrl: string; tmcLogo: string; schoolLogo: string;
     accent: string; secondary: string; background: string; text: string; brandCyan: string;
     tmcLogoPlacement?: { x: number; y: number; scale: number };
@@ -6081,6 +6109,11 @@ function buildTmcDesignBrief(
   if (assets.heroUrl) { tokenMap.HERO_PHOTO = assets.heroUrl; photoLines.push('- HERO_PHOTO (use FULL-BLEED on the cover — edge to edge, no border/margin/letterboxing)'); }
   assets.overviewPhotos.forEach((u, i) => { const t = `OVERVIEW_PHOTO_${i + 1}`; tokenMap[t] = u; photoLines.push(`- ${t} (Overview page)`); });
   assets.extraPhotos.forEach((u, i) => { const t = `EXTRA_PHOTO_${i + 1}`; tokenMap[t] = u; photoLines.push(`- ${t} (use anywhere it strengthens the page — itinerary, route map, practical information, even the closing investment/action page can use one)`); });
+  assets.dayPhotos.forEach((photo) => {
+    const token = `DAY_${photo.dayNumber}_PHOTO`;
+    tokenMap[token] = photo.url;
+    photoLines.push(`- ${token} (verified search context for Day ${photo.dayNumber}: ${photo.context}; use only with Day ${photo.dayNumber} or omit it)`);
+  });
   if (assets.mapUrl) { tokenMap.ROUTE_MAP_IMAGE = assets.mapUrl; photoLines.push('- ROUTE_MAP_IMAGE (Route Map page)'); }
   if (assets.generalQrUrl) { tokenMap.GENERAL_QR_IMAGE = assets.generalQrUrl; photoLines.push('- GENERAL_QR_IMAGE'); }
   if (assets.paymentQrUrl) { tokenMap.PAYMENT_QR_IMAGE = assets.paymentQrUrl; photoLines.push('- PAYMENT_QR_IMAGE'); }
@@ -6096,7 +6129,15 @@ function buildTmcDesignBrief(
     return `${base} — the operator has FIXED this logo's placement: horizontal position ${Math.round(placement.x * 100)}% across the cover, vertical position ${Math.round(placement.y * 100)}% down the cover, at ${Math.round(placement.scale * 100)}% of the default size. Honor this position and size exactly; you still choose everything else about how it's framed (panel, spacing, safe zone).`;
   };
 
+  const modelAgnosticQualityRules = `MODEL-AGNOSTIC COMPOSITION REQUIREMENTS:
+- Never render an empty bordered card, empty panel, blank grid cell or placeholder-shaped box. If a practical-information category has no confirmed content, remove that module and rebalance the remaining cards.
+- Match itinerary imagery semantically to the day beside it. Only DAY_N_PHOTO may be used on itinerary pages, and each DAY_N_PHOTO may appear only beside its matching Day N content. HERO, OVERVIEW and EXTRA photos are never itinerary substitutes. If no DAY_N_PHOTO is supplied for a day, use a typographic treatment instead of an unrelated photograph.
+- Keep the TMC and school marks at comparable visible height with matching panel padding while preserving aspect ratios and the operator-set positions.
+- Cancellation wording is customer-critical copy. When supplied, give it a clearly titled, comfortably wide panel with readable line length and structured milestones or bullets where appropriate. Never squeeze the full policy into a footer, sidebar or narrow column beside contact details.`;
+
   const brief = `${TMC_BLOCK1_SYSTEM_PROMPT}
+
+${modelAgnosticQualityRules}
 
 MANDATORY TRIP-SPECIFIC PAGE BUDGET: this trip has ${itineraryDayCount} supplied days. Create at least ${minimumItineraryPages} itinerary pages and place no more than TWO Day cards on any page, without exceptions. The overview gets one short introduction, at most four compact learning outcomes, and at most two other modules. Split everything else onto additional A4 page shells.
 
@@ -6123,7 +6164,7 @@ BASE PRODUCTION REQUIREMENTS:
 3. Nothing overlaps — check every element's real position before finalizing.
 4. Curate the supplied photo library freely; use only the images that strengthen the design. Each photo token may be used AT MOST ONCE across the whole document — never place the same image (even cropped or resized) on two different pages; that reads as a mistake, not a callback. Never draw a decorative image frame, panel or placeholder box that ends up with no photo inside it — either put a real supplied photo in every frame you create, or don't create the frame.
 5. Prices, dates, facts, and both logos are exactly as supplied — never invented, never altered.
-5a. When ROUTE_MAP_IMAGE is available, use that exact asset for the route-map page. It is the only approved geographic map: never draw a speculative map, use a world or continent view, or add route pins beyond the approved itinerary.
+5a. When ROUTE_MAP_IMAGE is available, use that exact asset for the route-map page. It is the only approved geographic map: never draw a speculative map, use a world or continent view, or add route pins beyond the approved itinerary. Place it full content-width above route details, at its natural aspect ratio (width:100%; height:auto); never letterbox it inside a tall half-width card or crop away route pins. Put the route sequence below the map, not in a narrow sidebar beside a tiny map.
 5b. Unknown information is omitted completely. Do not expose internal data-completeness status, release workflow, editorial process, or explanations of factual gaps in the customer brochure.
 6. When two cards/panels sit side by side (a stat card next to a text card, an outcomes list next to a duration card, etc.), do not force them to equal height and leave the shorter one's remainder as visible dead space. Either let each card size to its own natural content height (tops aligned, bottom edges free to differ), or deliberately fill the shorter card with more generous type/line-height/padding proportional to ITS OWN content so it reads as intentionally spacious — never an arbitrary blank gap at the bottom of an otherwise-finished card.
 7. Any co-branding lockup that places two logos together (cover masthead, header strips) must size its container tightly around the logos plus real breathing room — never a wide bar with the two logos stranded at opposite edges and a large empty gap between them.
@@ -6146,6 +6187,8 @@ You are the sole creative director, editorial designer and production artist. Yo
 Silently form one distinctive art-direction concept from the destination's landscape, architecture, craft, climate, culture and itinerary. Commit to it as a leading international travel or culture publication would. The concept may be cinematic, refined, playful, experimental, minimal, maximal, typographic, photographic or illustration-led — choose entirely on creative merit. Do not explain it and do not print design notes.
 
 Treat available photographs as a curated library, not a checklist. Select, crop, layer and scale whichever images create the strongest brochure; using every photograph is not required. Never invent an asset URL. HERO_PHOTO is the full-bleed cover photograph and ROUTE_MAP_IMAGE is the route map when supplied. Logos are identity marks, never decorative photography: preserve their aspect ratio, colour and integrity, and balance them professionally. Honour exact operator-set logo placement when supplied. A photo you do use should be given real weight — a third of a page or more, filling its frame with confident cropping — never several equal small strips lined up side by side as a decorative row; that pattern reads as a stock-photo gallery widget, not editorial design, no matter how many you use.
+
+Within this creative direction, use ONE consistent itinerary card component throughout: full-width vertically stacked cards, matching heading/date/meal styles, padding, photo proportions and body typography from the first day to the last. Do not switch to side-by-side day cards on some pages. When a day has no approved photo, omit the photo slot and let its text flow naturally using the SAME component, never an empty image frame. Use readable 10.5pt or larger copy throughout, including practical and booking pages. On short practical/closing pages, enlarge the map within its aspect ratio, use generous readable type, and separate supplied cancellation/payment terms into clearly labelled blocks. Do not strand all content in the upper half or stretch empty cards; combine short sections when they fit. Never invent extra facts to fill space.
 
 Communicate every supplied fact a parent, student or school needs, but decide freely how those facts become a compelling editorial story. Combine, split, reorder or visually reinterpret sections whenever that improves clarity and beauty. Let the content determine the natural page count.
 
@@ -6183,6 +6226,7 @@ function guardDesignedHtml(
   requiredDayNumbers: number[] = [],
 ): string {
   let html = String(raw ?? '').trim();
+  let forcedCoverHero = false;
   // Strip a ```html ... ``` fence if the model wrapped its output despite instructions.
   const fenced = html.match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
   if (fenced?.[1]) html = fenced[1].trim();
@@ -6227,10 +6271,86 @@ function guardDesignedHtml(
     throw new Error('Designed HTML contains a raw object-serialization artifact ("[object Object]") instead of real text');
   }
 
-  // Make the supplied visual library available to the designer, but do not
-  // make placement a fatal contract. The creative model is deliberately free
-  // to curate the photos rather than forcing every asset into a crowded,
-  // repetitive layout.
+  // Day-specific search results are labelled for the model. Repair generic
+  // assets placed into itinerary content before validating the final pairing,
+  // so a local image-choice mistake does not discard a sound composition.
+  const assetContext = (index: number) => {
+    const sectionStart = html.lastIndexOf('<section', index);
+    const sectionEnd = html.indexOf('</section>', index);
+    return sectionStart >= 0 && sectionEnd > index
+      ? html.slice(sectionStart, sectionEnd + 10)
+      : html.slice(Math.max(0, index - 3500), index + 3500);
+  };
+  const nearestDayNumber = (index: number): number | null => {
+    const sectionStart = Math.max(0, html.lastIndexOf('<section', index));
+    const sectionEndAt = html.indexOf('</section>', index);
+    const sectionEnd = sectionEndAt > index ? sectionEndAt : Math.min(html.length, index + 3500);
+    const section = html.slice(sectionStart, sectionEnd);
+    const localIndex = index - sectionStart;
+    let nearest: { day: number; distance: number } | null = null;
+    for (const match of section.matchAll(/\bday\s*(\d+)\b/gi)) {
+      const day = Number(match[1]);
+      if (!Number.isInteger(day) || day <= 0 || match.index == null) continue;
+      const distance = Math.abs(match.index - localIndex);
+      if (!nearest || distance < nearest.distance) nearest = { day, distance };
+    }
+    return nearest?.day ?? null;
+  };
+
+  // Smaller models occasionally put an overview/hero/extra photo into an
+  // itinerary card even after being given DAY_N_PHOTO tokens. This is a local,
+  // deterministic asset-placement defect, not a reason to discard the whole
+  // composition or buy another model pass. Swap the image to the nearest
+  // matching day's verified photo; if none exists, omit the image and let the
+  // normal layout audit verify that the remaining composition still works.
+  html = html.replace(
+    /<img\b[^>]*\bsrc=(["'])((?:HERO|OVERVIEW|EXTRA)_PHOTO(?:_\d+)?)\1[^>]*>/gi,
+    (tag, _quote, _token, offset: number) => {
+      if (!/\bday\s*\d+\b/i.test(assetContext(offset))) return tag;
+      const dayNumber = nearestDayNumber(offset);
+      const replacement = dayNumber ? `DAY_${dayNumber}_PHOTO` : '';
+      if (!replacement || !tokenMap[replacement]) return '';
+      return tag.replace(/\bsrc=(["'])[^"']+\1/i, `src="${replacement}"`);
+    },
+  );
+  for (const token of Object.keys(tokenMap).filter((key) => /^DAY_\d+_PHOTO$/.test(key))) {
+    const dayNumber = Number(token.match(/^DAY_(\d+)_PHOTO$/)?.[1]);
+    const tokenIndex = html.indexOf(token);
+    if (tokenIndex < 0) continue;
+    const neighbourhood = assetContext(tokenIndex);
+    if (!new RegExp(`\\bday\\s*${dayNumber}\\b`, 'i').test(neighbourhood)) {
+      throw new Error(`Designed HTML placed ${token} away from its matching Day ${dayNumber} itinerary content`);
+    }
+  }
+  for (const token of Object.keys(tokenMap).filter((key) => /^(?:HERO|OVERVIEW|EXTRA)_PHOTO(?:_\d+)?$/.test(key))) {
+    let cursor = 0;
+    while (cursor < html.length) {
+      const tokenIndex = html.indexOf(token, cursor);
+      if (tokenIndex < 0) break;
+      if (!/\bday\s*\d+\b/i.test(assetContext(tokenIndex))) {
+        cursor = tokenIndex + token.length;
+        continue;
+      }
+      // Covers inline/background-image variants too. Ordinary <img> tags were
+      // already handled above, but a compact model may put the token in an
+      // inline style instead. Use the verified nearest-day asset where one is
+      // available; otherwise neutralise that decorative image rather than
+      // rejecting every other page in the brochure.
+      const dayNumber = nearestDayNumber(tokenIndex);
+      const dayToken = dayNumber ? `DAY_${dayNumber}_PHOTO` : '';
+      const replacement = dayToken && tokenMap[dayToken]
+        ? dayToken
+        : 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
+      html = html.slice(0, tokenIndex) + replacement + html.slice(tokenIndex + token.length);
+      cursor = tokenIndex + replacement.length;
+    }
+  }
+
+  // The cover hero and approved map are structural assets, not optional
+  // decoration. A missing map can be geographically misleading and remains a
+  // hard failure. A missing hero, however, is mechanically repairable: place
+  // the verified hero behind the first page instead of paying for another
+  // model attempt and eventually discarding an otherwise sound composition.
   const visualTokens = ['HERO_PHOTO', 'ROUTE_MAP_IMAGE'].filter((token) => tokenMap[token]);
   for (const token of visualTokens) {
     const asImage = new RegExp(`<img\\b[^>]*\\bsrc=["']${token}["']`, 'i').test(html);
@@ -6242,13 +6362,37 @@ function guardDesignedHtml(
     if (token === 'ROUTE_MAP_IMAGE' && !asImage) {
       throw new Error('Designed HTML omitted the approved ROUTE_MAP_IMAGE; do not invent a geographic route map');
     }
-    // Asset placement is a creative choice. Some otherwise valid model
-    // responses omit a supplied photo/map token (especially smaller models),
-    // and treating that as fatal caused every retry to fall through to the
-    // bland deterministic template. Keep the layout and content validation
-    // strict, but allow the designer to choose a text-led composition when it
-    // can still produce a complete, printable document.
-    if (!asImage) console.warn(`[tmc-brochure] Designed HTML did not place optional visual asset ${token}; keeping the AI composition`);
+    if (token === 'HERO_PHOTO' && !asImage) {
+      // CSS backgrounds are a valid full-bleed treatment even though the
+      // prompt recommends <img>. Do not reject a model merely for choosing
+      // that implementation.
+      const asBackground = new RegExp(`background(?:-image)?\\s*:[^;}]*${token}`, 'i').test(html);
+      if (asBackground) continue;
+
+      const bodyStart = html.search(/<body[^>]*>/i);
+      const afterBody = bodyStart >= 0
+        ? bodyStart + (html.slice(bodyStart).match(/^<body[^>]*>/i)?.[0].length || 0)
+        : -1;
+      if (afterBody < 0) throw new Error('Designed HTML has no body in which to repair the cover hero');
+
+      const tail = html.slice(afterBody);
+      // Prefer a semantic page shell. Smaller models sometimes emit div.page
+      // instead, so retain a conservative class-based fallback.
+      const pageMatch = tail.match(/<section\b[^>]*>/i)
+        || tail.match(/<(?:main|article|div)\b[^>]*class=["'][^"']*(?:\bcover\b|\bpage\b)[^"']*["'][^>]*>/i);
+      if (!pageMatch || pageMatch.index == null) {
+        throw new Error('Designed HTML omitted HERO_PHOTO and has no safe first-page shell for deterministic repair');
+      }
+
+      const openingTag = pageMatch[0];
+      const repairedTag = /\bclass=["']/i.test(openingTag)
+        ? openingTag.replace(/\bclass=(["'])([^"']*)\1/i, (_match, quote, classes) => `class=${quote}${classes} tmc-forced-cover-page${quote}`)
+        : openingTag.replace(/>$/, ' class="tmc-forced-cover-page">');
+      const hero = '<img class="tmc-forced-cover-hero" src="HERO_PHOTO" alt="" aria-hidden="true">';
+      const matchStart = afterBody + pageMatch.index;
+      html = html.slice(0, matchStart) + repairedTag + hero + html.slice(matchStart + openingTag.length);
+      forcedCoverHero = true;
+    }
   }
   for (const token of ['LOGO_TMC', 'LOGO_SCHOOL']) {
     if (!tokenMap[token]) continue;
@@ -6256,6 +6400,7 @@ function guardDesignedHtml(
     if (backgroundUse) throw new Error(`Designed HTML used ${token} as background artwork`);
   }
 
+  html = deduplicatePhotoTags(html, tokenMap);
   // Swap every ASSET_TOKEN the model wrote (e.g. src="HERO_PHOTO") for the
   // real, verbatim asset URL — byte-for-byte, no risk of the model having
   // mistyped a 200-character Pexels/Geoapify URL by hand. This is the fix
@@ -6269,7 +6414,12 @@ function guardDesignedHtml(
     html = html.replace(new RegExp(token, 'gi'), url);
   }
 
-  const forced = `<style>${tmcForcedPrintCss(fontCss)}</style>`;
+  const forcedCoverCss = forcedCoverHero
+    ? `.tmc-forced-cover-page{position:relative!important;overflow:hidden!important;background:#111!important}
+.tmc-forced-cover-page>.tmc-forced-cover-hero{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:cover!important;object-position:center!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;filter:brightness(.68) saturate(.94);z-index:0!important}
+.tmc-forced-cover-page>*:not(.tmc-forced-cover-hero){position:relative;z-index:1}`
+    : '';
+  const forced = `<style>${tmcForcedPrintCss(fontCss)}${forcedCoverCss}</style>`;
   html = /<head[^>]*>/i.test(html)
     ? html.replace(/<head([^>]*)>/i, `<head$1>${forced}`)
     : html.replace(/<html([^>]*)>/i, `<html$1><head>${forced}</head>`);
@@ -6347,8 +6497,15 @@ async function buildTmcBrochureHtml(
     ].filter(Boolean),
   );
   const galleryPool: string[] = [...(c.__brand?.imagePool ?? []).filter((u) => u && !knownLogoUrls.has(u))];
-  const fillGallery = async (query: string, count: number) => {
-    if (!query || galleryPool.length >= 12) return;
+  const uploadedPhotos = [...galleryPool];
+  const dayPhotosByNumber = new Map<number, { dayNumber: number; url: string; context: string }>();
+  const claimedDayPhotoUrls = new Set<string>();
+  const fillGallery = async (
+    query: string,
+    count: number,
+    dayContext?: { dayNumber: number; context: string },
+  ) => {
+    if (!query || (galleryPool.length >= 12 && !dayContext)) return;
     try {
       // NOTE: do NOT bolt scenery qualifiers onto the query — measured against
       // the live sources, "<place> landscape scenery view" returns ZERO results
@@ -6356,9 +6513,12 @@ async function buildTmcBrochureHtml(
       // The caption filter below is what keeps people out, not the query.
       const photos = await searchPhotos(query, count);
       for (const p of photos) {
-        if (!p.url || galleryPool.includes(p.url)) continue;
-        if (!isSchoolSafePhoto(p.alt, p.source)) continue;
-        galleryPool.push(p.url);
+        if (!p.url || !isSchoolSafePhoto(p.alt, p.source)) continue;
+        if (dayContext && isDayPhotoRelevant(p.alt, dayContext.context) && !dayPhotosByNumber.has(dayContext.dayNumber) && !claimedDayPhotoUrls.has(p.url)) {
+          dayPhotosByNumber.set(dayContext.dayNumber, { ...dayContext, url: p.url });
+          claimedDayPhotoUrls.add(p.url);
+        }
+        if (!galleryPool.includes(p.url) && galleryPool.length < 12) galleryPool.push(p.url);
       }
     } catch {}
   };
@@ -6376,6 +6536,9 @@ async function buildTmcBrochureHtml(
       : Promise.resolve('');
 
   if (galleryPool.length < 12) await fillGallery(heroQuery, 4);
+  // Only destination-search candidates may become the cover; day/activity
+  // search results collected below must not turn an airport into the hero.
+  const coverCandidates = galleryPool.filter((url) => !uploadedPhotos.includes(url));
   // Every remaining query (city names + day-activity diversification, added
   // to fix the "3 images that are really one image" repeat-photo problem) is
   // an INDEPENDENT network search — awaiting them one at a time, as before,
@@ -6396,27 +6559,39 @@ async function buildTmcBrochureHtml(
   // symptoms. Pull distinct queries from each day's actual activity so the
   // pool has genuinely different subjects (beach, fort, cuisine, wildlife...)
   // instead of one repeated destination-name search.
-  const dayQueries = Array.from(
-    new Set(
-      (c.tmc?.days || [])
-        .map((d) => stripDayPrefix(d.activities || d.route || '', d.dayNumber).split(/[.,;]/)[0]?.trim())
-        .filter((q): q is string => !!q && q.length >= 4),
-    ),
-  ).slice(0, 8);
-  if (galleryPool.length < 12) {
-    await Promise.all([
-      ...cityQueries.map((city) => fillGallery(city, 2)),
-      ...dayQueries.map((q) => fillGallery(`${heroQuery} ${q}`.trim(), 2)),
-    ]);
+  const dayQueries = (c.tmc?.days || []).slice(0, 8).map((day) => {
+    const route = stripDayPrefix(day.route || '', day.dayNumber).trim();
+    const activity = stripDayPrefix(day.activities || '', day.dayNumber).split(/[.;]/)[0]?.trim() || '';
+    const context = [route, activity].filter(Boolean).join(' - ');
+    return {
+      dayNumber: Number(day.dayNumber),
+      context: context || `Day ${day.dayNumber} in ${heroQuery}`,
+      query: [heroQuery, route, activity].filter(Boolean).join(' ').trim(),
+    };
+  }).filter((row) => Number.isInteger(row.dayNumber) && row.dayNumber > 0 && row.query.length >= 4);
+  await Promise.all([
+    ...(galleryPool.length < 12 ? cityQueries.map((city) => fillGallery(city, 2)) : []),
+    ...dayQueries.map((row) => fillGallery(row.query, 3, { dayNumber: row.dayNumber, context: row.context })),
+  ]);
+  // Long activity sentences can dilute place search. Retry only missing days,
+  // with their named route; retain the same relevance and uniqueness checks.
+  await Promise.all(dayQueries.filter(row => !dayPhotosByNumber.has(row.dayNumber)).map(row => {
+    const day = (c.tmc?.days || []).find(item => Number(item.dayNumber) === row.dayNumber);
+    const place = stripDayPrefix(day?.route || '', row.dayNumber).trim();
+    return place ? fillGallery(place, 4, {dayNumber: row.dayNumber, context: row.context}) : Promise.resolve();
+  }));
+  const dayPhotos = [...dayPhotosByNumber.values()].sort((a, b) => a.dayNumber - b.dayNumber);
+  const heroUrl = selectCoverPhoto(uploadedPhotos, coverCandidates) || galleryPool[0] || '';
+  if (heroUrl) {
+    galleryPool.splice(galleryPool.indexOf(heroUrl), 1);
+    galleryPool.unshift(heroUrl);
   }
-  const heroUrl = galleryPool[0] || '';
-  const overviewPhotos = galleryPool.slice(1, 4);
+  const { overviewPhotos, extraPhotos } = partitionEditorialPhotos(galleryPool, heroUrl, dayPhotos.map(photo => photo.url));
   // Extra photos beyond the cover + overview — handed to the design brief so
   // EVERY page (itinerary, route, practical, even investment/action) can
   // carry large, real imagery instead of staying pure text — the brief now
   // asks for photos to be used boldly and large, which needs more source
   // material than the old cap of 4 extras across 5+ remaining pages.
-  const extraPhotos = galleryPool.slice(4, 12);
   // routeMapUrl itself only needs >=1 successfully-geocoded point (a
   // single-destination trip still gets a real pinned map, not a placeholder)
   // — started above, concurrently with the gallery build; just collect it now.
@@ -6438,26 +6613,39 @@ async function buildTmcBrochureHtml(
 
   // ---- Hybrid AI-design step (optional) ----
   // Facts and assets are resolved deterministically, but the AI owns the full
-  // art direction and composition. The first design gets a deterministic
-  // overflow-salvage pass; if it is still invalid, use the reliable template
-  // instead of spending the run budget on another full HTML generation.
+  // art direction and composition. Every design gets a deterministic repair
+  // pass first. A second paid design pass is used only when that verified
+  // repair cannot make a rejected composition print-safe; successful models
+  // keep the existing single-pass path and output unchanged.
   if (designHtml) {
     const tmcLogo = tmcTmcLogo(c);
     const schoolLogo = tmcSchoolLogo(c);
-    // Keep the paid art-direction pass bounded. This leaves time for preflight
-    // and PDF export even on slower reasoning models.
-    const maxAttempts = 1;
+    // Keep the paid art-direction work bounded while giving smaller models one
+    // targeted correction opportunity. This is not an unconditional second
+    // pass: good first output (including the stronger-model path) returns above.
+    const maxAttempts = 2;
     try {
       const { brief, tokenMap } = buildTmcDesignBrief(c, {
-        heroUrl, overviewPhotos, extraPhotos, mapUrl, generalQrUrl, paymentQrUrl, tmcLogo, schoolLogo,
+        heroUrl, overviewPhotos, extraPhotos, dayPhotos, mapUrl, generalQrUrl, paymentQrUrl, tmcLogo, schoolLogo,
         accent, secondary: tmcSecondary(c), background: tmcBackground(c), text: tmcText(c), brandCyan,
         tmcLogoPlacement: c.__brand?.tmcLogoPlacement,
         schoolLogoPlacement: c.__brand?.schoolLogoPlacement,
       });
       let attemptBrief = brief;
+      let previousRaw = '';
+      let cssRepair = false;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
-          const raw = await designHtml(attemptBrief);
+          const response = await designHtml(attemptBrief);
+          let raw = response;
+          if (cssRepair) {
+            const css = response.replace(/^```(?:css)?\s*/i, '').replace(/```\s*$/, '').trim();
+            if (!css || /<\/?(?:style|script|html|body)\b/i.test(css) || /@import|url\s*\(/i.test(css)) {
+              throw new Error('Layout correction must contain CSS only, without new assets');
+            }
+            raw = previousRaw.replace(/<\/head>/i, `<style>${css}</style></head>`);
+          }
+          previousRaw = raw;
           const designed = guardDesignedHtml(
             raw,
             fontCss,
@@ -6475,14 +6663,14 @@ async function buildTmcBrochureHtml(
             });
             if (!audit.ok) {
               // Before spending a full paid redesign round-trip, try a free,
-              // deterministic, universally-safe fix: shrink just the
-              // offending page(s)' text until they fit, re-verified by the
-              // SAME audit. Only ships if the re-check comes back clean; a
-              // failure that isn't pure overflow (broken image, logo misuse)
-              // returns null immediately and falls through to a real retry.
+              // deterministic repair of overflow, broken optional imagery and
+              // mechanical logo placement defects, re-verified by the SAME
+              // audit. It ships only when that full re-check comes back clean.
               if (designSalvage) {
                 const salvaged = await designSalvage(designed, audit.issues, {
                   protectedLogoUrls: [tmcLogo, schoolLogo].filter(Boolean),
+                  minPages: 5,
+                  maxPages: 20,
                 });
                 // `salvaged` is Puppeteer's re-serialization of `designed` (which
                 // already went through guardDesignedHtml once — fonts injected,
@@ -6500,6 +6688,14 @@ async function buildTmcBrochureHtml(
         } catch (error) {
           if (attempt === maxAttempts - 1) throw error;
           const msg = (error as Error).message;
+          // A layout correction needs far less output than a complete rewrite.
+          // Retain every fact and asset from the completed first response.
+          if (msg.startsWith('Print preflight found:') && /<\/head>/i.test(previousRaw)) {
+            cssRepair = true;
+            attemptBrief = `LAYOUT_REPAIR_CSS_ONLY\nReturn only a short CSS stylesheet to correct these measured defects: ${msg}. Use existing selectors. Preserve all text, images, logos and page order. Stack short paired itinerary cards vertically; enlarge small body copy to at least 14px; size maps within their column. Keep A4 page shells and prevent overlap. Do not hide content or add decorative filler. No new URLs, HTML or explanation.\nEXISTING DOCUMENT:\n${previousRaw}`;
+            continue;
+          }
+          if (/timeout|aborted/i.test(msg)) throw error;
           // Tailor the retry guidance to what actually failed — generic overflow
           // advice read as nonsense noise when the real defect was, say, the two
           // logos overlapping, which made the feedback less useful than it looked.
@@ -6509,10 +6705,27 @@ async function buildTmcBrochureHtml(
               'Each overflow defect above states roughly how many millimetres of A4 the offending page overran, and that page\'s heading. A generic redesign that keeps the same content density there will very likely overflow again by a similar margin. Structurally address it: split that page\'s content across two pages, or materially reduce it there (smaller/fewer images, shorter lists, tighter type) — do not just re-attempt the same layout and hope the new arrangement happens to fit.',
             );
           }
+          if (/_is_sparse|_is_underfilled/.test(msg)) {
+            notes.push(
+              'One or more pages are visibly unfinished or use only a small strip of the available A4 canvas. Recompose those pages with an intentional editorial grid, appropriately scaled typography, useful supporting modules and supplied photography; remove any accidental blank page. Do not solve this by stretching a tiny text block or adding empty decorative boxes.',
+            );
+          }
+          if (/_contains_empty_panel/.test(msg)) {
+            notes.push('An empty bordered panel or blank grid cell was rendered. Remove it completely and reflow the remaining confirmed modules; never leave placeholder-shaped whitespace.');
+          }
+          if (/_has_narrow_long_copy/.test(msg)) {
+            notes.push('Long customer-facing copy was squeezed into an unreadably narrow column. Give it a full-width or comfortably wide card with normal line length; cancellation terms in particular must be a clearly titled readable panel.');
+          }
+          if (/no safe first-page shell for deterministic repair/.test(msg)) {
+            notes.push('Create one explicit first-page <section> cover shell. The renderer will safely inject HERO_PHOTO if you omit it, but it needs a real page container and cannot repair an unstructured body.');
+          }
           if (/logo_marks_overlap/.test(msg)) {
             notes.push(
               'The TMC and school logos overlapped each other — give them a real, explicit, measured gap wherever they appear together (cover, interior header marks); never place them close enough that rounding or a slightly larger asset could touch.',
             );
+          }
+          if (/logo_marks_unbalanced/.test(msg)) {
+            notes.push('The two cover identity marks were optically unbalanced. Keep both logos at comparable visible height and use matching panel padding, while preserving each logo\'s aspect ratio and the operator-selected positions.');
           }
           if (/logo_used_as_hero_artwork|logo_used_as_background/.test(msg)) {
             notes.push('A logo was used as oversized hero art or a background image — logos stay small, identity-mark sized, never stretched into decorative photography.');
@@ -6524,6 +6737,9 @@ async function buildTmcBrochureHtml(
           }
           if (/omitted itinerary day labels/.test(msg)) {
             notes.push('Represent every supplied day as a clearly labelled Day N card or section. Do not collapse days into unnamed stays, route summaries, or a generic programme overview.');
+          }
+          if (/DAY_\d+_PHOTO away from|non-itinerary asset .* itinerary page/.test(msg)) {
+            notes.push('Use only the matching DAY_N_PHOTO beside Day N. Do not place HERO, OVERVIEW or EXTRA assets on itinerary pages, and omit the image when no matching day-specific token exists.');
           }
           if (/omitted the approved ROUTE_MAP_IMAGE/.test(msg)) {
             notes.push('Use the supplied ROUTE_MAP_IMAGE as an actual <img> on the route page. Never substitute a world map, continent map, decorative linework, or an invented geographic illustration.');
@@ -6552,11 +6768,19 @@ async function buildTmcBrochureHtml(
   // preferred while they last.
   const photoPool = [...extraPhotos, ...overviewPhotos, heroUrl].filter(Boolean);
   const photoAt = (i: number): string => (photoPool.length ? photoPool[i % photoPool.length]! : '');
+  const itineraryPhotos = (c.tmc?.days || []).reduce<string[]>((out, day, index) => {
+    if (index % 2 !== 0) return out;
+    const pairedDay = c.tmc?.days?.[index + 1];
+    const matched = dayPhotos.find((photo) => photo.dayNumber === Number(day.dayNumber))
+      || (pairedDay ? dayPhotos.find((photo) => photo.dayNumber === Number(pairedDay.dayNumber)) : undefined);
+    out.push(matched?.url || photoAt(out.length));
+    return out;
+  }, []);
 
   const itinPages = buildTmcItineraryPages(
     c,
     accent,
-    photoPool.length ? Array.from({ length: 5 }, (_, i) => photoAt(i)) : [],
+    itineraryPhotos.length ? itineraryPhotos : (photoPool.length ? Array.from({ length: 5 }, (_, i) => photoAt(i)) : []),
   );
   const pages: string[] = [];
   pages.push(buildTmcCover(c, heroUrl, brandCyan, accent));

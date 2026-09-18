@@ -27,6 +27,11 @@ const emailSender = requireCJS('../../lib/emailSender');
 
 emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true });
 
+const s3Service = requireCJS('../../services/s3Service');
+s3Service.uploadImage = vi.fn();
+s3Service.isOciUrl = vi.fn();
+s3Service.isLocalUrl = vi.fn();
+
 
 prisma.webForm = prisma.webForm || {};
 
@@ -153,6 +158,12 @@ beforeEach(() => {
   prisma.user.findFirst.mockResolvedValue(null);
 
   emailSender.sendEmail.mockClear();
+  s3Service.uploadImage.mockReset();
+  s3Service.uploadImage.mockResolvedValue('https://objectstorage.example.com/n/ns/b/forms/o/travel/web-forms/11/logos/logo.png');
+  s3Service.isOciUrl.mockReset();
+  s3Service.isOciUrl.mockReturnValue(true);
+  s3Service.isLocalUrl.mockReset();
+  s3Service.isLocalUrl.mockReturnValue(false);
 
 });
 
@@ -336,6 +347,42 @@ describe('POST /api/forms', () => {
 
   });
 
+});
+
+describe('POST /api/forms/logo-upload', () => {
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  );
+
+  test('uploads a travel form logo through the OCS-aware storage service', async () => {
+    const res = await request(makeApp('travel'))
+      .post('/api/forms/logo-upload?scope=travel')
+      .attach('image', PNG, 'travel-logo.png');
+
+    expect(res.status).toBe(201);
+    expect(s3Service.uploadImage).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      'travel-logo.png',
+      'image/png',
+      'travel/web-forms/11/logos',
+    );
+    expect(res.body).toMatchObject({
+      storage: 'ocs',
+      originalName: 'travel-logo.png',
+      mimeType: 'image/png',
+    });
+  });
+
+  test('does not expose the travel logo endpoint to other CRM verticals', async () => {
+    const res = await request(makeApp('generic'))
+      .post('/api/forms/logo-upload?scope=travel')
+      .attach('image', PNG, 'travel-logo.png');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FORM_SCOPE_FORBIDDEN');
+    expect(s3Service.uploadImage).not.toHaveBeenCalled();
+  });
 });
 
 

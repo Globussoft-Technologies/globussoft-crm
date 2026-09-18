@@ -1065,6 +1065,7 @@ function LogoSlider({ label, value, min, max, step, onChange, format }) {
         <span style={{ minWidth: 42, textAlign: 'center', padding: '2px 7px', borderRadius: 999, background: 'color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent)', color: 'var(--primary-color, var(--accent-color))', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{displayValue}</span>
       </div>
       <input
+        className="brochure-logo-slider"
         type="range"
         min={min}
         max={max}
@@ -1074,9 +1075,8 @@ function LogoSlider({ label, value, min, max, step, onChange, format }) {
         aria-valuetext={String(displayValue)}
         onChange={(e) => onChange(Number(e.target.value))}
         style={{
-          width: '100%', height: 8, margin: 0, cursor: 'pointer', accentColor: 'var(--primary-color, var(--accent-color))',
-          background: `linear-gradient(90deg, var(--primary-color, var(--accent-color)) 0 ${percentage}%, var(--border-color) ${percentage}% 100%)`,
-          borderRadius: 999, outline: 'none',
+          width: '100%', margin: 0, cursor: 'pointer',
+          '--brochure-slider-progress': `${percentage}%`,
         }}
       />
     </div>
@@ -1744,6 +1744,7 @@ function TraceLine({ event }) {
   })();
   return (
     <div style={traceLine}>
+      {event.ts && <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{new Date(event.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
       <span style={traceType}>{type}</span>
       {agentKey && <span style={traceAgent}>{agentKey}</span>}
       {dataPreview && (
@@ -1753,6 +1754,36 @@ function TraceLine({ event }) {
       )}
     </div>
   );
+}
+
+function isUsefulTechnicalEvent(event) {
+  const type = String(event?.type || '');
+  const data = event?.data || {};
+  if (type === 'engine.log' && /^INFO \[providers\]/.test(String(data.line || ''))) return false;
+  if (type === 'run.started' || type === 'agent.started') return false;
+  if (type === 'agent.message' && data.final) return false;
+  if (type === 'agent.tool_call' && data.tool === 'render_pdf') return false;
+  return ['usage', 'agent.tool_result', 'run.completed', 'run.failed', 'run.cancelled', 'engine.log'].includes(type);
+}
+
+function traceProgressStage(events, running, result) {
+  if (result) return 4;
+  if (!running) return 0;
+  const types = new Set((events || []).map((event) => String(event?.type || '')));
+  if (types.has('agent.tool_call') || types.has('agent.tool_result')) return 3;
+  if (types.has('agent.started') || types.has('agent.message') || types.has('usage')) return 2;
+  return 1;
+}
+
+function traceProgressLabel(events, running, result) {
+  if (result) return 'Brochure ready';
+  if (!running) return 'Generation stopped';
+  const types = new Set((events || []).map((event) => String(event?.type || '')));
+  if (types.has('agent.tool_call')) return 'Rendering and checking the brochure…';
+  if (types.has('agent.message')) return 'Design complete. Preparing the PDF…';
+  if (types.has('agent.started')) return 'Designing the brochure pages…';
+  if (types.has('run.started')) return 'Preparing the brochure content…';
+  return 'Starting brochure generation…';
 }
 
 function StatusBadge({ status }) {
@@ -1828,6 +1859,35 @@ export default function BrochureEngine() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [tab, setTab] = useState('generate');
   const [step, setStep] = useState(1);
+  const pageRootRef = useRef(null);
+  const [floatingNavFrame, setFloatingNavFrame] = useState(null);
+  const technicalTraceEvents = useMemo(() => traceEvents.filter(isUsefulTechnicalEvent), [traceEvents]);
+  // The action bar is viewport-fixed, but must remain aligned with this page
+  // when the CRM sidebar expands/collapses or the viewport changes width.
+  useEffect(() => {
+    if (tab !== 'generate') return undefined;
+    const root = pageRootRef.current;
+    if (!root) return undefined;
+    const measure = () => {
+      const rect = root.getBoundingClientRect();
+      if (!rect.width) return;
+      const computed = window.getComputedStyle(root);
+      const leftPadding = Number.parseFloat(computed.paddingLeft) || 0;
+      const rightPadding = Number.parseFloat(computed.paddingRight) || 0;
+      setFloatingNavFrame({
+        left: rect.left + leftPadding,
+        width: Math.max(0, rect.width - leftPadding - rightPadding),
+      });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(root);
+    return () => {
+      window.removeEventListener('resize', measure);
+      observer?.disconnect();
+    };
+  }, [tab]);
   // Every step is long enough to scroll — landing at the bottom of the PREVIOUS
   // step's content after Next/Back (rather than the top of the new step) means
   // re-scrolling up by hand every single time. Scroll back to the step
@@ -2632,6 +2692,12 @@ export default function BrochureEngine() {
     setRunError(null);
     setResult(null);
     setTraceEvents([]);
+    // A raw trace opened for an earlier run must not flash internal provider,
+    // agent and tool plumbing as soon as the next paid generation starts.
+    setShowRawTrace(false);
+    setActiveRunId(null);
+    setActiveBrochureId(null);
+    activeBrochureIdRef.current = null;
 
     const brandPayload = {};
     if (brand.name?.trim()) brandPayload.name = brand.name.trim();
@@ -2859,7 +2925,10 @@ export default function BrochureEngine() {
 
   return (
     <FormTouchedContext.Provider value={touched}>
-    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
+    <div
+      ref={pageRootRef}
+      style={{ padding: 24, paddingBottom: tab === 'generate' ? 104 : 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}
+    >
       <div style={pageHeaderRow}>
         <div>
           <h1 style={pageTitle}><Sparkles size={28} aria-hidden /> Brochure Engine</h1>
@@ -3843,38 +3912,46 @@ export default function BrochureEngine() {
                   </div>
                 )}
 
-                <div style={floatingNavBar}>
-                  <button type="button" onClick={() => goToStep(4)} style={{ ...secondaryBtn, flex: '0 0 auto' }}>
-                    <ArrowLeft size={14} /> Back
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={running || aiError}
-                    style={(running || aiError) ? disabledPrimaryBtn : primaryBtn}
-                    data-testid="generate-brochure"
-                    title={!isFormValid && touched ? 'Fill all required fields' : ''}
-                  >
-                    {running ? <><Loader size={16} className="anim-spin" /> Generating…</> : <><Sparkles size={16} /> Generate brochure</>}
-                  </button>
+              </StepCard>
+            </div>
+
+            <div
+              data-testid="brochure-floating-navigation"
+              style={{
+                ...floatingNavBar,
+                ...(floatingNavFrame
+                  ? { left: floatingNavFrame.left, width: floatingNavFrame.width }
+                  : { left: 24, right: 24 }),
+              }}
+            >
+              <button type="button" onClick={() => goToStep(step - 1)} style={{ ...secondaryBtn, opacity: step === 1 ? 0.5 : 1 }} disabled={step === 1 || running}>
+                <ArrowLeft size={14} /> Back
+              </button>
+              {step < 5 ? (
+                <button type="button" onClick={() => goToStep(step + 1)} style={{ ...primaryBtn, width: 'auto' }} disabled={running} data-testid="next-step">
+                  Next <ArrowRight size={14} />
+                </button>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, minWidth: 0 }}>
                   {running && (
                     <button type="button" onClick={handleStop} data-testid="stop-brochure" style={{ ...secondaryBtn, borderColor: '#e06a5a', color: '#e06a5a' }}>
                       <X size={14} /> Stop
                     </button>
                   )}
+                  <button
+                    type="submit"
+                    disabled={running || aiError}
+                    style={{ ...((running || aiError) ? disabledPrimaryBtn : primaryBtn), width: 'auto' }}
+                    data-testid="generate-brochure"
+                    className={running ? 'brochure-generating' : undefined}
+                    aria-busy={running}
+                    title={!isFormValid && touched ? 'Fill all required fields' : ''}
+                  >
+                    {running ? <><Loader size={16} className="brochure-loading-spinner" /> Generating…</> : <><Sparkles size={16} /> Generate brochure</>}
+                  </button>
                 </div>
-              </StepCard>
+              )}
             </div>
-
-            {step < 5 && (
-              <div style={floatingNavBar}>
-                <button type="button" onClick={() => goToStep(step - 1)} style={{ ...secondaryBtn, opacity: step === 1 ? 0.5 : 1 }} disabled={step === 1 || running}>
-                  <ArrowLeft size={14} /> Back
-                </button>
-                <button type="button" onClick={() => goToStep(step + 1)} style={{ ...primaryBtn, width: 'auto' }} disabled={running} data-testid="next-step">
-                  Next <ArrowRight size={14} />
-                </button>
-              </div>
-            )}
           </form>
 
           {/* Trace / result */}
@@ -3883,17 +3960,33 @@ export default function BrochureEngine() {
               <div style={stepHeader}>
                 <div style={stepIcon}><Users size={20} /></div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Live trace</h3>
-                  <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-secondary)' }}>Run id: {activeRunId}</p>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Generation progress</h3>
+                  <p data-testid="brochure-progress-label" style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-secondary)' }}>
+                    {traceProgressLabel(traceEvents, running, result)}
+                  </p>
                 </div>
               </div>
               <div style={{ padding: '0 16px 16px' }}>
-                <button type="button" onClick={() => setShowRawTrace((v) => !v)} style={rawToggleBtn}>
-                  {showRawTrace ? '− Hide' : '+ Show'} raw event log ({traceEvents.length})
+                <div data-testid="brochure-progress-steps" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8, marginBottom: 12 }}>
+                  {['Preparing', 'Designing', 'Rendering', 'Ready'].map((label, index) => {
+                    const stage = traceProgressStage(traceEvents, running, result);
+                    const active = stage === index + 1;
+                    const complete = stage > index + 1;
+                    return (
+                      <div key={label} style={{ padding: '8px 10px', borderRadius: 8, textAlign: 'center', fontSize: 12, fontWeight: 700, border: `1px solid ${active || complete ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`, color: active || complete ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)', background: complete ? 'color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent)' : 'var(--surface-color)' }}>
+                        {complete ? '✓ ' : ''}{label}
+                      </div>
+                    );
+                  })}
+                </div>
+                <button data-testid="brochure-technical-details-toggle" type="button" onClick={() => setShowRawTrace((v) => !v)} style={rawToggleBtn}>
+                  {showRawTrace ? '− Hide' : '+ Show'} technical details ({technicalTraceEvents.length})
                 </button>
                 {showRawTrace && (
-                  <div style={traceBox}>
-                    {traceEvents.map((e, i) => <TraceLine key={i} event={e} />)}
+                  <div data-testid="brochure-technical-details" style={traceBox}>
+                    {technicalTraceEvents.length
+                      ? technicalTraceEvents.map((e, i) => <TraceLine key={e.id || `${e.type}-${i}`} event={e} />)
+                      : <div style={{ padding: 10, color: 'var(--text-secondary)', fontSize: 12 }}>No diagnostics yet. Generation is progressing normally.</div>}
                   </div>
                 )}
                 {runError && (
@@ -4039,21 +4132,19 @@ const stepHeader = { display: 'flex', alignItems: 'center', gap: 12, padding: '1
 const stepIcon = { width: 36, height: 36, borderRadius: 8, background: 'var(--subtle-bg-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary-color, var(--accent-color))' };
 
 const progressBar = { display: 'flex', gap: 4, marginBottom: 16, flexWrap: 'wrap' };
-// Keep navigation in normal document flow. A sticky bottom bar can overlap
-// the final form fields when the travel layout's main scroller is shorter
-// than the form, which makes labels and inputs appear behind the controls.
 const floatingNavBar = {
-  position: 'relative',
+  position: 'fixed',
+  bottom: 12,
+  zIndex: 80,
   display: 'flex',
+  alignItems: 'center',
   justifyContent: 'space-between',
   gap: 10,
-  marginTop: 16,
-  marginBottom: 16,
   padding: 12,
   background: 'var(--surface-color)',
   border: '1px solid var(--border-color)',
   borderRadius: 10,
-  boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+  boxShadow: '0 10px 30px rgba(15,23,42,0.2)',
   boxSizing: 'border-box',
 };
 const progressStep = { display: 'inline-flex', alignItems: 'center', padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', transition: 'all 0.15s ease' };

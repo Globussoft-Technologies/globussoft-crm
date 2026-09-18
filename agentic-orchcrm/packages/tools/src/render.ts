@@ -227,7 +227,67 @@ const LAYOUT_PROBE_JS = `(function(options){
       );
     }
     var text = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
-    if (text.length < 55 && !el.querySelector('img')) issues.push('page_' + (index + 1) + '_is_sparse');
+    // Day cards must use the same full-width reading order across the trip.
+    if (/itinerary/i.test(text)) {
+      var dayLabels = descendants.filter(function(child){
+        return !child.children.length && /^day\\s+\\d+$/i.test(String(child.innerText || '').trim());
+      });
+      if (dayLabels.some(function(label,i){
+        var a=label.getBoundingClientRect();
+        return dayLabels.slice(i+1).some(function(other){
+          var b=other.getBoundingClientRect();
+          return Math.abs(a.top-b.top)<35 && Math.abs(a.left-b.left)>r.width*.25;
+        });
+      })) issues.push('page_' + (index + 1) + '_itinerary_columns_inconsistent');
+    }
+    var meaningful = descendants.filter(function(child){
+      var tag = String(child.tagName || '').toLowerCase();
+      if (tag === 'style' || tag === 'script') return false;
+      var cr = child.getBoundingClientRect();
+      if (cr.width < 2 || cr.height < 2) return false;
+      // Measure content, not tall empty containers, footers or colour fields.
+      if (child.matches('header,footer,[data-underfill-art]') || child.closest('header,footer')) return false;
+      return tag === 'img' || (!child.children.length && String(child.innerText || '').trim().length > 0);
+    });
+    // A photographic background on the page itself is also cover artwork.
+    // Previously only descendants counted, rejecting short-title photo covers.
+    var largeVisual = String(cs.backgroundImage || '').indexOf('url(') >= 0 || descendants.some(function(child){
+      var cr = child.getBoundingClientRect();
+      var areaRatio = (cr.width * cr.height) / Math.max(1, r.width * r.height);
+      if (areaRatio < 0.16) return false;
+      var tag = String(child.tagName || '').toLowerCase();
+      var bg = String(getComputedStyle(child).backgroundImage || '');
+      return tag === 'img' || (bg && bg !== 'none');
+    });
+    if (text.length < 55 && !largeVisual) {
+      issues.push('page_' + (index + 1) + '_is_sparse');
+    } else if (index > 0 && meaningful.length) {
+      var minTop = Math.min.apply(null, meaningful.map(function(child){ return child.getBoundingClientRect().top; }));
+      var maxBottom = Math.max.apply(null, meaningful.map(function(child){ return child.getBoundingClientRect().bottom; }));
+      var usedHeightRatio = Math.max(0, maxBottom - minTop) / Math.max(1, r.height);
+      // Short content should be reflowed even when a small photo is present.
+      // Empty card height and decorative gradients must not mask unused space.
+      if (usedHeightRatio < 0.58 && text.length < 2200) {
+        issues.push('page_' + (index + 1) + '_is_underfilled');
+      }
+    }
+    var hasEmptyPanel = descendants.some(function(child){
+      var cr = child.getBoundingClientRect();
+      var ratio = (cr.width * cr.height) / Math.max(1, r.width * r.height);
+      if (ratio < 0.045 || ratio > 0.5) return false;
+      var childText = String(child.innerText || '').replace(/\s+/g, ' ').trim();
+      if (childText || child.querySelector('img,svg,canvas,video')) return false;
+      var style = getComputedStyle(child);
+      var framed = parseFloat(style.borderTopWidth || '0') > 0 || parseFloat(style.borderLeftWidth || '0') > 0;
+      return framed && style.visibility !== 'hidden' && style.display !== 'none';
+    });
+    if (hasEmptyPanel) issues.push('page_' + (index + 1) + '_contains_empty_panel');
+    var hasNarrowLongCopy = descendants.some(function(child){
+      var cr = child.getBoundingClientRect();
+      var childText = String(child.innerText || '').replace(/\s+/g, ' ').trim();
+      return cr.width > 0 && cr.width < r.width * 0.23 && cr.height > 70 && childText.length > 180;
+    });
+    if (hasNarrowLongCopy) issues.push('page_' + (index + 1) + '_has_narrow_long_copy');
   });
 
   var images = Array.prototype.slice.call(document.images);
@@ -243,6 +303,23 @@ const LAYOUT_PROBE_JS = `(function(options){
     logoRectsByUrl[url] = rects;
     rects.forEach(function(r){
       if (r.width > 300 || r.height > 180) issues.push('logo_used_as_hero_artwork');
+    });
+    images.filter(function(img){ return img.currentSrc === url || img.src === url; }).forEach(function(img){
+      var box = img.getBoundingClientRect();
+      var frame = img.parentElement;
+      if (frame && !frame.textContent.trim() && frame.querySelectorAll('img').length === 1) {
+        var frameBox = frame.getBoundingClientRect();
+        if (frameBox.width <= 300 && frameBox.height <= 180) box = frameBox;
+      }
+      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        var node = walker.currentNode;
+        if (!node.textContent.trim() || !node.parentElement || node.parentElement.closest('style,script')) continue;
+        var range = document.createRange(); range.selectNodeContents(node);
+        if (Array.from(range.getClientRects()).some(function(r){
+          return Math.min(r.right,box.right)-Math.max(r.left,box.left)>3 && Math.min(r.bottom,box.bottom)-Math.max(r.top,box.top)>3;
+        })) { issues.push('logo_overlaps_text'); break; }
+      }
     });
     all.forEach(function(el){
       if (String(getComputedStyle(el).backgroundImage || '').indexOf(url) !== -1) {
@@ -262,6 +339,20 @@ const LAYOUT_PROBE_JS = `(function(options){
           var overlapW = Math.min(a.right, b.right) - Math.max(a.left, b.left);
           var overlapH = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
           if (overlapW > 3 && overlapH > 3) issues.push('logo_marks_overlap');
+          var pageA = pages.findIndex(function(page){
+            var pr = page.getBoundingClientRect();
+            var cy = (a.top + a.bottom) / 2;
+            return cy >= pr.top && cy <= pr.bottom;
+          });
+          var pageB = pages.findIndex(function(page){
+            var pr = page.getBoundingClientRect();
+            var cy = (b.top + b.bottom) / 2;
+            return cy >= pr.top && cy <= pr.bottom;
+          });
+          if (pageA >= 0 && pageA === pageB) {
+            var heightRatio = Math.max(a.height, b.height) / Math.max(1, Math.min(a.height, b.height));
+            if (heightRatio > 1.55) issues.push('logo_marks_unbalanced');
+          }
         });
       });
     }
@@ -378,7 +469,27 @@ export async function shrinkOverflowingPages(
 ): Promise<string | null> {
   const overflowPageNums = new Set<number>();
   const failedImageNums = new Set<number>();
+  const underfilledPageNums = new Set<number>();
+  const sparsePageNums = new Set<number>();
+  const narrowCopyPageNums = new Set<number>();
+  const emptyPanelPageNums = new Set<number>();
+  const passesAudit = (result: { issues: string[]; pageCount: number }) =>
+    !result.issues.length && result.pageCount >= (opts.minPages ?? 1)
+    && result.pageCount <= (opts.maxPages ?? 20);
+  let repairProtectedLogos = false;
+  let repairHorizontalOverflow = false;
+  const unsupportedIssues: string[] = [];
   for (const issue of issues) {
+    const emptyMatch = issue.match(/^page_(\d+)_contains_empty_panel\b/);
+    if (emptyMatch) {
+      emptyPanelPageNums.add(Number(emptyMatch[1]));
+      continue;
+    }
+    const narrowMatch = issue.match(/^page_(\d+)_has_narrow_long_copy\b/);
+    if (narrowMatch) {
+      narrowCopyPageNums.add(Number(narrowMatch[1]));
+      continue;
+    }
     const m = issue.match(/^page_(\d+)_(?:clips_or_overflows|exceeds_a4)\b/);
     if (m) {
       overflowPageNums.add(parseInt(m[1]!, 10));
@@ -389,17 +500,47 @@ export async function shrinkOverflowingPages(
       failedImageNums.add(parseInt(imageMatch[1]!, 10));
       continue;
     }
+    const underfilledMatch = issue.match(/^page_(\d+)_(?:is_underfilled|itinerary_columns_inconsistent)\b/);
+    if (underfilledMatch) {
+      underfilledPageNums.add(parseInt(underfilledMatch[1]!, 10));
+      continue;
+    }
+    const sparseMatch = issue.match(/^page_(\d+)_is_sparse\b/);
+    if (sparseMatch) {
+      sparsePageNums.add(parseInt(sparseMatch[1]!, 10));
+      continue;
+    }
+    if (/^(?:logo_used_as_hero_artwork|logo_used_as_background|logo_marks_overlap|logo_marks_unbalanced|logo_overlaps_text)$/.test(issue)) {
+      repairProtectedLogos = true;
+      continue;
+    }
+    if (issue === 'document_has_horizontal_overflow') {
+      repairHorizontalOverflow = true;
+      continue;
+    }
     // Any issue that isn't overflow (or the purely cosmetic "sparse" note) needs
     // a real redesign — never salvage past a defect this fix can't address.
-    if (!/^page_\d+_is_sparse\b/.test(issue)) return null;
-    // A sparse page needs a redesign; shrinking cannot create missing content.
-    return null;
+    unsupportedIssues.push(issue);
   }
-  if (!overflowPageNums.size && !failedImageNums.size) return null;
+  if (unsupportedIssues.length) return null;
+  // A truly sparse page with no failed visual is a content/composition defect,
+  // not something mechanical salvage should disguise. When images failed,
+  // restoring those visual slots may resolve sparse/underfilled findings.
+  if (sparsePageNums.size && !failedImageNums.size) return null;
+  if (
+    !overflowPageNums.size
+    && !failedImageNums.size
+    && !underfilledPageNums.size
+    && !narrowCopyPageNums.size
+    && !emptyPanelPageNums.size
+    && !repairProtectedLogos
+    && !repairHorizontalOverflow
+  ) return null;
 
   const html = injectPrintHardening(sanitizeHtml(rawHtml));
-  const pageNumsJson = JSON.stringify([...overflowPageNums]);
+  let pageNumsJson = JSON.stringify([...overflowPageNums]);
   const failedImagesJson = JSON.stringify([...failedImageNums]);
+  const underfilledPageNumsJson = JSON.stringify([...underfilledPageNums]);
   let browser: any;
   try {
     const mod = (await import('puppeteer')) as unknown as { default: any };
@@ -428,20 +569,342 @@ export async function shrinkOverflowingPages(
       /* best-effort */
     }
 
-    // Remove only images that the audit proved unusable. A broken remote
-    // photo should not force an otherwise sound AI composition through four
-    // paid redesign attempts; the surrounding editorial layout remains intact.
+    // Preserve the failed photo's frame instead of removing it and collapsing
+    // the layout. A neutral labelled visual is safer than substituting an
+    // unrelated destination photo. Protected brand logos are never replaced.
     if (failedImageNums.size) {
       await page.evaluate(
-        `(function(imageNums){
+        `(function(imageNums, options){
+          ${LAYOUT_FIND_PAGES_JS}
           var images = Array.prototype.slice.call(document.images);
+          var protectedUrls = (options.protectedLogoUrls || []).filter(Boolean);
+          function isProtected(img){
+            return protectedUrls.some(function(url){ return img.currentSrc === url || img.src === url; });
+          }
+          function escXml(value){
+            return String(value || '').replace(/[&<>"']/g, function(ch){
+              return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'})[ch];
+            });
+          }
           imageNums.slice().sort(function(a,b){ return b-a; }).forEach(function(n){
             var img = images[n - 1];
-            if (img && img.parentNode) img.parentNode.removeChild(img);
+            // A transient image may have loaded on this second browser pass.
+            if (!img || (img.complete && img.naturalWidth >= 2 && img.naturalHeight >= 2) || isProtected(img)) return;
+            // Never substitute decorative artwork for functional maps/QRs.
+            if (/map|qr|logo/i.test(String(img.alt || '') + ' ' + String(img.className || ''))) return;
+            var owner = findPages().find(function(candidate){ return candidate.contains(img); });
+            var heading = owner && owner.querySelector('h1,h2,h3,h4');
+            var label = String((heading && heading.textContent) || img.alt || 'Journey highlight').trim().slice(0, 70);
+            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">' +
+              '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#14213d"/><stop offset=".55" stop-color="#1aafe0"/><stop offset="1" stop-color="#6d28d9"/></linearGradient></defs>' +
+              '<rect width="1200" height="800" fill="url(#g)"/><circle cx="1010" cy="120" r="230" fill="rgba(255,255,255,.10)"/><circle cx="170" cy="730" r="300" fill="rgba(255,255,255,.08)"/>' +
+              '<text x="70" y="675" fill="white" font-family="Arial,sans-serif" font-size="48" font-weight="700">' + escXml(label) + '</text></svg>';
+            img.removeAttribute('srcset');
+            img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            img.alt = label;
+            img.style.objectFit = img.style.objectFit || 'cover';
           });
-        })(${failedImagesJson})`,
+        })(${failedImagesJson}, ${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
+      );
+      await settleImages(page, 2_000);
+    }
+
+    if (emptyPanelPageNums.size) {
+      await page.evaluate(`(function(pageNums){
+        ${LAYOUT_FIND_PAGES_JS}
+        var pages=findPages();
+        pageNums.forEach(function(n){
+          var owner=pages[n-1]; if(!owner) return;
+          var pageRect=owner.getBoundingClientRect();
+          Array.from(owner.querySelectorAll('*')).reverse().forEach(function(el){
+            var r=el.getBoundingClientRect(), ratio=r.width*r.height/(pageRect.width*pageRect.height);
+            if(ratio<.045 || ratio>.5 || String(el.innerText||'').trim() || el.querySelector('img,svg,canvas,video')) return;
+            var style=getComputedStyle(el);
+            // Preserve intentional artwork, pseudo-elements and controls.
+            if(style.backgroundImage!=='none' || el.querySelector('input,button,a,iframe') ||
+              !['none','normal','""'].includes(getComputedStyle(el,'::before').content) ||
+              !['none','normal','""'].includes(getComputedStyle(el,'::after').content)) return;
+            if(parseFloat(style.borderTopWidth)>0 || parseFloat(style.borderLeftWidth)>0) el.remove();
+          });
+        });
+      })(${JSON.stringify([...emptyPanelPageNums])})`);
+    }
+
+    // Widen the nearest column layout containing long, pinched copy. This
+    // defect must not short-circuit unrelated overflow/image repairs.
+    if (narrowCopyPageNums.size) {
+      await page.evaluate(`(function(pageNums){
+        ${LAYOUT_FIND_PAGES_JS}
+        var pages=findPages();
+        pageNums.forEach(function(n){
+          var owner=pages[n-1]; if(!owner) return;
+          Array.from(owner.querySelectorAll('*')).forEach(function(el){
+            var r=el.getBoundingClientRect();
+            if(r.width<=0 || r.width>=owner.clientWidth*.23 || r.height<=70 || String(el.innerText||'').trim().length<=180) return;
+            var grid=el.parentElement;
+            while(grid && grid!==owner){
+              var style=getComputedStyle(grid);
+              if(style.display==='grid' || style.display==='flex') break;
+              grid=grid.parentElement;
+            }
+            if(!grid || grid===owner) return;
+            grid.style.setProperty('display','grid','important');
+            grid.style.setProperty('grid-template-columns','minmax(0,1fr)','important');
+            Array.from(grid.children).forEach(function(card){
+              card.style.setProperty('width','auto','important');
+              card.style.setProperty('max-width','none','important');
+              card.style.setProperty('min-width','0','important');
+            });
+          });
+        });
+      })(${JSON.stringify([...narrowCopyPageNums])})`);
+    }
+
+    // Reflow actual cards into readable vertical space. Every resulting page
+    // still passes the same audit, including overflow and density checks.
+    if (underfilledPageNums.size) {
+      await page.evaluate(
+        `(function(pageNums){
+          ${LAYOUT_FIND_PAGES_JS}
+          var pages = findPages();
+          pageNums.forEach(function(n){
+            var el = pages[n - 1];
+            if (!el) return;
+            Array.prototype.slice.call(el.querySelectorAll('[data-underfill-art]')).forEach(function(art){ art.remove(); });
+            // Stack paired cards on short pages. Preserve their content and
+            // photos; never fill empty space with an unrelated decoration.
+            Array.prototype.slice.call(el.querySelectorAll('*')).forEach(function(grid){
+              var style = getComputedStyle(grid);
+              if (grid.children.length < 2 || grid.children.length > 4) return;
+              if (style.display !== 'grid' && style.display !== 'flex') return;
+              var rect = grid.getBoundingClientRect();
+              if (rect.width < el.clientWidth * .65 || rect.height < 140) return;
+              grid.style.setProperty('display', 'grid', 'important');
+              grid.style.setProperty('grid-template-columns', 'minmax(0,1fr)', 'important');
+              grid.style.setProperty('gap', '24px', 'important');
+              Array.prototype.slice.call(grid.children).forEach(function(card){
+                card.style.setProperty('width','auto','important');
+                card.style.setProperty('min-width','0','important');
+              });
+            });
+            Array.prototype.slice.call(el.querySelectorAll('p,li')).forEach(function(text){
+              if (parseFloat(getComputedStyle(text).fontSize) < 18) {
+                text.style.setProperty('font-size','18px','important');
+                text.style.setProperty('line-height','1.6','important');
+              }
+            });
+          });
+        })(${underfilledPageNumsJson})`,
       );
     }
+
+    // Smaller models occasionally reuse a supplied logo token as a full-size
+    // photograph, put both identity marks at the same coordinates, or emit a
+    // logo as a CSS background. Repair those mechanical defects without asking
+    // the model to rewrite otherwise-good copy and composition. The repair is
+    // still accepted only when the complete print audit below passes.
+    if (repairProtectedLogos || repairHorizontalOverflow) {
+      await page.evaluate(
+        `(function(options){
+          ${LAYOUT_FIND_PAGES_JS}
+          var protectedUrls = (options.protectedLogoUrls || []).filter(Boolean);
+          var images = Array.prototype.slice.call(document.images);
+          function isProtected(img){
+            return protectedUrls.some(function(url){ return img.currentSrc === url || img.src === url; });
+          }
+          function pageFor(el){
+            return findPages().find(function(page){ return page === el || page.contains(el); }) || null;
+          }
+
+          protectedUrls.forEach(function(url){
+            var backgroundOwners = [];
+            Array.prototype.slice.call(document.querySelectorAll('*')).forEach(function(el){
+              if (String(getComputedStyle(el).backgroundImage || '').indexOf(url) !== -1) {
+                el.style.backgroundImage = 'none';
+                backgroundOwners.push(el);
+              }
+            });
+            var logoImages = images.filter(function(img){ return img.currentSrc === url || img.src === url; });
+            if (!logoImages.length && backgroundOwners.length) {
+              var restoredLogo = document.createElement('img');
+              restoredLogo.src = url;
+              restoredLogo.alt = 'Brand logo';
+              restoredLogo.style.cssText = 'position:absolute;right:24px;top:24px;width:112px;height:72px;object-fit:contain;z-index:20;';
+              var backgroundPage = pageFor(backgroundOwners[0]);
+              if (backgroundPage) backgroundPage.appendChild(restoredLogo);
+            }
+            logoImages.forEach(function(img){
+              var rect = img.getBoundingClientRect();
+              if (rect.width > 300 || rect.height > 180) {
+                img.style.setProperty('width', '112px', 'important');
+                img.style.setProperty('height', '72px', 'important');
+                img.style.setProperty('min-width', '0', 'important');
+                img.style.setProperty('min-height', '0', 'important');
+              }
+              img.removeAttribute('width');
+              img.removeAttribute('height');
+              img.style.setProperty('max-width', '180px', 'important');
+              img.style.setProperty('max-height', '110px', 'important');
+              img.style.setProperty('object-fit', 'contain', 'important');
+            });
+          });
+
+          images = Array.prototype.slice.call(document.images);
+          for (var aIndex = 0; aIndex < protectedUrls.length; aIndex++) {
+            for (var bIndex = aIndex + 1; bIndex < protectedUrls.length; bIndex++) {
+              var aImages = images.filter(function(img){ return img.currentSrc === protectedUrls[aIndex] || img.src === protectedUrls[aIndex]; });
+              var bImages = images.filter(function(img){ return img.currentSrc === protectedUrls[bIndex] || img.src === protectedUrls[bIndex]; });
+              aImages.forEach(function(a){
+                bImages.forEach(function(b){
+                  if (pageFor(a) !== pageFor(b)) return;
+                  var ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+                  var heightRatio = Math.max(ar.height, br.height) / Math.max(1, Math.min(ar.height, br.height));
+                  if (heightRatio > 1.55) {
+                    var balancedHeight = Math.max(38, Math.min(92, (ar.height + br.height) / 2));
+                    [a, b].forEach(function(img){
+                      img.removeAttribute('width');
+                      img.removeAttribute('height');
+                      img.style.setProperty('width', 'auto', 'important');
+                      img.style.setProperty('height', balancedHeight + 'px', 'important');
+                      img.style.setProperty('max-height', balancedHeight + 'px', 'important');
+                      img.style.setProperty('min-width', '0', 'important');
+                      img.style.setProperty('min-height', '0', 'important');
+                      img.style.setProperty('object-fit', 'contain', 'important');
+                    });
+                    ar = a.getBoundingClientRect();
+                    br = b.getBoundingClientRect();
+                  }
+                  var overlapW = Math.min(ar.right, br.right) - Math.max(ar.left, br.left);
+                  var overlapH = Math.min(ar.bottom, br.bottom) - Math.max(ar.top, br.top);
+                  if (overlapW <= 3 || overlapH <= 3) return;
+                  var ownerPage = pageFor(b);
+                  var pr = ownerPage ? ownerPage.getBoundingClientRect() : { left: 0, right: 794 };
+                  var rightShift = ar.right - br.left + 14;
+                  var leftShift = br.right - ar.left + 14;
+                  var shift = br.right + rightShift <= pr.right - 12 ? rightShift : -leftShift;
+                  b.style.position = 'relative';
+                  b.style.left = shift + 'px';
+                });
+              });
+            }
+          }
+
+          // Locate a free top-of-page position when a logo intersects copy.
+          images.filter(isProtected).forEach(function(img){
+            var owner = pageFor(img); if (!owner) return;
+            var textRects = [];
+            var walker = document.createTreeWalker(owner, NodeFilter.SHOW_TEXT);
+            while(walker.nextNode()) {
+              var node = walker.currentNode;
+              if (!node.textContent.trim() || node.parentElement.closest('style,script')) continue;
+              var range = document.createRange(); range.selectNodeContents(node);
+              textRects.push.apply(textRects, Array.from(range.getClientRects()));
+            }
+            function overlaps(a,b){ return Math.min(a.right,b.right)-Math.max(a.left,b.left)>3 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>3; }
+            var collisionBox = img.getBoundingClientRect(), frame = img.parentElement;
+            if (frame && !frame.textContent.trim() && frame.querySelectorAll('img').length === 1) {
+              var frameBox = frame.getBoundingClientRect();
+              if (frameBox.width <= 300 && frameBox.height <= 180) collisionBox = frameBox;
+            }
+            if (!textRects.some(function(r){return overlaps(collisionBox,r);})) return;
+            var pr = owner.getBoundingClientRect(), ir = img.getBoundingClientRect();
+            var others = images.filter(function(other){return other !== img && isProtected(other);}).map(function(other){return other.getBoundingClientRect();});
+            for(var y=24;y<180;y+=24) for(var x=24;x+ir.width<pr.width-24;x+=24) {
+              var candidate={left:pr.left+x,top:pr.top+y,right:pr.left+x+ir.width,bottom:pr.top+y+ir.height};
+              if (textRects.concat(others).some(function(r){return overlaps(candidate,{left:r.left-12,top:r.top-12,right:r.right+12,bottom:r.bottom+12});})) continue;
+              var previous=img.parentElement;
+              if(getComputedStyle(owner).position==='static') owner.style.position='relative';
+              owner.appendChild(img);
+              img.style.cssText='position:absolute!important;left:'+x+'px!important;top:'+y+'px!important;width:'+ir.width+'px!important;height:'+ir.height+'px!important;object-fit:contain;background:white;border-radius:8px;z-index:30;';
+              if(previous!==owner && !previous.textContent.trim() && !previous.querySelector('img,svg')) previous.remove();
+              return;
+            }
+          });
+          if (options.repairHorizontalOverflow) {
+            document.documentElement.style.maxWidth = '100%';
+            document.documentElement.style.overflowX = 'hidden';
+            document.body.style.maxWidth = '100%';
+            document.body.style.overflowX = 'hidden';
+            Array.prototype.slice.call(document.images).forEach(function(img){ img.style.maxWidth = img.style.maxWidth || '100%'; });
+          }
+        })(${JSON.stringify({
+          protectedLogoUrls: opts.protectedLogoUrls ?? [],
+          repairHorizontalOverflow,
+        })})`,
+      );
+      await settleImages(page, 3_000);
+    }
+
+    // Constrain oversized route/photo elements to their content column before
+    // shrinking text. Explicit map widths otherwise keep escaping sideways.
+    await page.evaluate(`(function(pageNums){
+      ${LAYOUT_FIND_PAGES_JS}
+      var pages = findPages();
+      pageNums.forEach(function(n){
+        var el = pages[n - 1];
+        if (!el) return;
+        Array.prototype.slice.call(el.querySelectorAll('img,svg,canvas')).forEach(function(image){
+          var parent = image.parentElement;
+          if (!parent) return;
+          var style = getComputedStyle(parent);
+          var available = parent.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+          if (available > 0 && image.getBoundingClientRect().width > available + 5) {
+            image.style.setProperty('max-width', available + 'px', 'important');
+            image.style.setProperty('height', 'auto', 'important');
+          }
+        });
+      });
+    })(${pageNumsJson})`);
+    // Preserve typography: balance overview columns and reclaim photo height
+    // before resorting to whole-page scaling.
+    await page.evaluate(`(function(pageNums){
+      ${LAYOUT_FIND_PAGES_JS}
+      var pages=findPages();
+      pageNums.forEach(function(n){
+        var owner=pages[n-1]; if(!owner) return;
+        if (/overview/i.test(String((owner.querySelector('h2')||{}).textContent||''))) {
+          Array.from(owner.querySelectorAll('*')).forEach(function(grid){
+            if(getComputedStyle(grid).display!=='grid' || grid.children.length!==2) return;
+            var cols=Array.from(grid.children);
+            if(!cols.every(function(col){return col.children.length>=2;})) return;
+            function bottom(col){return Math.max.apply(null,Array.from(col.children).map(function(c){return c.getBoundingClientRect().bottom;}));}
+            var a=bottom(cols[0]),b=bottom(cols[1]);
+            if(Math.abs(a-b)<180) return;
+            var short=a<b?cols[0]:cols[1], tall=a<b?cols[1]:cols[0];
+            var card=tall.lastElementChild, originalNext=card.nextSibling;
+            if(card.querySelector('img') || !card.textContent.trim()) return;
+            short.appendChild(card);
+            if(Math.abs(bottom(cols[0])-bottom(cols[1]))>=Math.abs(a-b)) tall.insertBefore(card,originalNext);
+            else card.style.setProperty('margin-top','24px');
+          });
+        }
+        var cards=owner.querySelectorAll('.day-card');
+        if(cards.length<1) return;
+        var r=owner.getBoundingClientRect();
+        var end=Math.max.apply(null,Array.from(cards).map(function(c){return c.getBoundingClientRect().bottom;}));
+        var excess=Math.max(end-r.bottom+24, owner.scrollHeight-owner.clientHeight+8);
+        var photos=Array.from(cards).flatMap(function(card){return Array.from(card.querySelectorAll('img'));});
+        if(excess<=0 || !photos.length) return;
+        var capacity=photos.reduce(function(sum,img){return sum+Math.max(0,img.getBoundingClientRect().height-120);},0);
+        if(capacity<excess) return;
+        photos.forEach(function(img){
+          var h=img.getBoundingClientRect().height;
+          img.style.setProperty('height',String(h-excess*Math.max(0,h-120)/capacity)+'px','important');
+          img.style.setProperty('object-fit','cover','important');
+        });
+      });
+    })(${pageNumsJson})`);
+    const repairedAudit = await page.evaluate(
+      `${LAYOUT_PROBE_JS}(${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
+    ) as { issues: string[]; pageCount: number };
+    if (passesAudit(repairedAudit)) return await page.content();
+    // Reflow can change which pages need splitting. Use the current geometry.
+    overflowPageNums.clear();
+    repairedAudit.issues.forEach((issue) => {
+      const match = issue.match(/^page_(\d+)_(?:clips_or_overflows|exceeds_a4)/);
+      if (match) overflowPageNums.add(Number(match[1]));
+    });
+    pageNumsJson = JSON.stringify([...overflowPageNums]);
 
     for (const zoom of [0.94, 0.9, 0.86, 0.82]) {
       await page.evaluate(
@@ -456,6 +919,7 @@ export async function shrinkOverflowingPages(
             // itself must stay at its real A4 box for print pagination to
             // stay correct. Later iterations reuse the same wrapper and just
             // change its zoom value.
+            if (el.querySelector('.day-card')) return;
             var wrap = el.querySelector('[data-shrink-wrap]');
             if (!wrap) {
               wrap = document.createElement('div');
@@ -470,8 +934,7 @@ export async function shrinkOverflowingPages(
       const recheck = (await page.evaluate(
         `${LAYOUT_PROBE_JS}(${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
       )) as { issues: string[]; pageCount: number };
-      const blocking = recheck.issues;
-      if (!blocking.length) return await page.content();
+      if (passesAudit(recheck)) return await page.content();
     }
 
     // Large overflows (the observed 187mm case is more than half a page) cannot
@@ -500,6 +963,12 @@ export async function shrinkOverflowingPages(
           var pr = pageEl.getBoundingClientRect();
           var candidates = Array.prototype.slice.call(pageEl.querySelectorAll('*')).filter(function(el){
             if (!el.children || el.children.length < 2) return false;
+            // Split the cards inside an oversized body, not the outer shell
+            // containing a header and that entire body. Moving the whole body
+            // merely reproduces the overflow on the next page.
+            if (Array.prototype.slice.call(el.children).some(function(child){
+              return child.children.length >= 2 && child.getBoundingClientRect().height > pageEl.clientHeight - 100;
+            })) return false;
             var tag = String(el.tagName || '').toLowerCase();
             if (tag === 'style' || tag === 'script' || tag === 'svg') return false;
             var maxBottom = 0;
@@ -571,7 +1040,7 @@ export async function shrinkOverflowingPages(
       const recheck = (await page.evaluate(
         `${LAYOUT_PROBE_JS}(${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
       )) as { issues: string[]; pageCount: number };
-      if (!recheck.issues.length && recheck.pageCount <= 20) return await page.content();
+      if (passesAudit(recheck)) return await page.content();
     }
     return null;
   } catch {

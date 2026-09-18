@@ -1181,6 +1181,29 @@ describe('POST /diagnostics/:id/form-vs-call/compare', () => {
     }));
   });
 
+  test('multi-select answers match by value regardless of selection order', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      id: 500, tenantId: 1, subBrand: 'tmc',
+      classification: 'level_2', classificationLabel: 'Premium',
+      answersJson: JSON.stringify({ preferred_trip_types: ['day_trips', 'domestic'] }),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/500/form-vs-call/compare')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({ callAnswers: { preferred_trip_types: ['domestic', 'day_trips'] } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.perFieldDiff).toEqual([
+      expect.objectContaining({
+        question: 'preferred_trip_types',
+        formValue: ['day_trips', 'domestic'],
+        callValue: ['domestic', 'day_trips'],
+        matched: true,
+      }),
+    ]);
+  });
+
   test('LLM text without a percentage → scorePercent null + classification unknown', async () => {
     prisma.travelDiagnostic.findFirst.mockResolvedValue({
       id: 500, tenantId: 1, subBrand: 'tmc',

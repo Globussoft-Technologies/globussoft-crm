@@ -44,12 +44,13 @@
  *   • req.user.userId vs req.user.id — irrelevant for this route; it only
  *     uses tenantId(req).
  *
- * RBAC: routes/social.js has NO verifyRole middleware. Every endpoint is
- * authenticated via the global guard but accepts any role. So there are no
- * 403-by-role assertions in this spec — only 401/403 unauth assertions.
+ * RBAC: the generic permission gate protects this route with social.*.
+ * Seeded ADMIN/MANAGER roles have that module; the basic USER role does not.
+ * The USER assertions below pin that direct API calls cannot bypass the
+ * permission-aware page access policy.
  *
- * Tenant: generic. admin@globussoft.com (ADMIN) drives most cases; user@crm.com
- * (USER) is used only for "any authenticated role works" assertions.
+ * Tenant: generic. admin@globussoft.com (ADMIN) drives the allowed cases;
+ * user@crm.com (USER) verifies missing social permissions are denied.
  *
  * Cleanup: every created post/mention/integration row is tagged with RUN_TAG
  * in its content/message field (or, for accounts, by tenant+provider) and
@@ -244,12 +245,15 @@ test.describe('Social API — GET /posts', () => {
     expect(list.every((p) => p.status === 'SCHEDULED')).toBe(true);
   });
 
-  test('USER role can list posts (no RBAC gate on this route)', async ({ request }) => {
+  test('USER role without social.read cannot list posts', async ({ request }) => {
     const { token } = await getUser(request);
     if (!token) test.skip(true, 'no regular USER token available');
     const res = await get(request, token, '/api/social/posts');
-    expect(res.status()).toBe(200);
-    expect(Array.isArray(await res.json())).toBe(true);
+    expect(res.status()).toBe(403);
+    expect(await res.json()).toMatchObject({
+      code: 'RBAC_DENIED',
+      required: 'social.read',
+    });
   });
 });
 
@@ -347,16 +351,18 @@ test.describe('Social API — POST /posts (create + validation)', () => {
     expect((await res.json()).error).toMatch(/content/i);
   });
 
-  test('USER role can create a post', async ({ request }) => {
+  test('USER role without social.write cannot create a post', async ({ request }) => {
     const { token } = await getUser(request);
     if (!token) test.skip(true, 'no regular USER token available');
     const res = await post(request, token, '/api/social/posts', {
       platform: 'twitter',
       content: `${RUN_TAG} user-create`,
     });
-    expect(res.status()).toBe(200);
-    const body = await res.json();
-    createdPostIds.add(body.id);
+    expect(res.status()).toBe(403);
+    expect(await res.json()).toMatchObject({
+      code: 'RBAC_DENIED',
+      required: 'social.write',
+    });
   });
 });
 

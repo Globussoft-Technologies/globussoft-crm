@@ -179,7 +179,7 @@ function findAuthCookie(res) {
 beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.findFirst.mockReset();
-  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.user.findMany.mockReset();
   prisma.user.count.mockReset();
   prisma.user.create.mockReset();
   prisma.user.update.mockReset();
@@ -224,6 +224,10 @@ beforeEach(() => {
   // findFirst delegate so every existing `prisma.user.findUnique.mockResolvedValue(...)`
   // assertion keeps working without per-test edits.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
+  prisma.user.findMany.mockImplementation(async (...args) => {
+    const user = await prisma.user.findUnique(...args);
+    return user ? [user] : [];
+  });
 });
 
 // ── POST /api/auth/public/lead-inquiry ──────────────────────────────
@@ -376,6 +380,101 @@ describe('POST /api/auth/login', () => {
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/invalid credentials/i);
     expect(res.body.token).toBeUndefined();
+  });
+
+  test('normalizes email and selects the exact composite identity when loginTenantId is supplied', async () => {
+    const hashed = await bcrypt.hash('password123', 10);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 17,
+      email: 'admin@example.com',
+      name: 'Tenant Admin',
+      password: hashed,
+      role: 'ADMIN',
+      twoFactorEnabled: false,
+      tenantId: 9,
+      tenant: { id: 9, name: 'Tenant Nine', slug: 'tenant-nine', isActive: true, vertical: 'generic' },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/login')
+      .send({ email: '  ADMIN@Example.COM  ', password: 'password123', loginTenantId: 9 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { email_tenantId: { email: 'admin@example.com', tenantId: 9 } },
+      include: { tenant: true },
+    });
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(res.body.tenant.id).toBe(9);
+  });
+
+  test('unscoped login checks every tenant candidate and accepts the unique password match', async () => {
+    const wrongHash = await bcrypt.hash('other-password123', 10);
+    const correctHash = await bcrypt.hash('password123', 10);
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 10, email: 'shared@example.com', name: 'Wrong Tenant', password: wrongHash,
+        role: 'ADMIN', twoFactorEnabled: false, tenantId: 1,
+        tenant: { id: 1, name: 'Tenant One', slug: 'tenant-one', isActive: true, vertical: 'generic' },
+      },
+      {
+        id: 20, email: 'shared@example.com', name: 'Right Tenant', password: correctHash,
+        role: 'ADMIN', twoFactorEnabled: false, tenantId: 2,
+        tenant: { id: 2, name: 'Tenant Two', slug: 'tenant-two', isActive: true, vertical: 'generic' },
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/auth/login')
+      .send({ email: 'shared@example.com', password: 'password123' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenant.id).toBe(2);
+    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ email: 'shared@example.com', deactivatedAt: null }),
+      orderBy: { id: 'asc' },
+    }));
+  });
+
+  test('returns tenant choices only after the password matches multiple tenant accounts', async () => {
+    const sharedHash = await bcrypt.hash('password123', 10);
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 10, email: 'shared@example.com', password: sharedHash, tenantId: 1,
+        tenant: { id: 1, name: 'Tenant One', slug: 'tenant-one', isActive: true },
+      },
+      {
+        id: 20, email: 'shared@example.com', password: sharedHash, tenantId: 2,
+        tenant: { id: 2, name: 'Tenant Two', slug: 'tenant-two', isActive: true },
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/auth/login')
+      .send({ email: 'shared@example.com', password: 'password123' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TENANT_SELECTION_REQUIRED');
+    expect(res.body.tenants).toEqual([
+      { id: 1, name: 'Tenant One', slug: 'tenant-one' },
+      { id: 2, name: 'Tenant Two', slug: 'tenant-two' },
+    ]);
+    expect(res.body.token).toBeUndefined();
+  });
+
+  test('does not expose tenant choices when the submitted password matches none of them', async () => {
+    const hashed = await bcrypt.hash('real-password123', 10);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 10, email: 'shared@example.com', password: hashed, tenantId: 1, tenant: { id: 1, isActive: true } },
+      { id: 20, email: 'shared@example.com', password: hashed, tenantId: 2, tenant: { id: 2, isActive: true } },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/auth/login')
+      .send({ email: 'shared@example.com', password: 'wrong-password' });
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'Invalid credentials' });
   });
 
   test('unknown email → 401 same envelope as wrong-password (anti-enumeration #192)', async () => {
@@ -935,6 +1034,39 @@ describe('POST /api/auth/forgot-password', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ack');
     expect(res.body.code).toBe('RESET_LINK_REQUESTED');
+  });
+
+  test('normalizes email and scopes reset lookup to the selected tenant', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7,
+      email: 'admin@example.com',
+      tenantId: 9,
+      tenant: { id: 9, isActive: true },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/forgot-password')
+      .send({ email: ' ADMIN@Example.com ', resetTenantId: 9 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { email_tenantId: { email: 'admin@example.com', tenantId: 9 } },
+      include: { tenant: true },
+    });
+  });
+
+  test('does not choose an arbitrary account when an unscoped reset email is duplicated', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      { id: 7, email: 'shared@example.com', tenantId: 1 },
+      { id: 8, email: 'shared@example.com', tenantId: 2 },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/auth/forgot-password')
+      .send({ email: 'shared@example.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ack', code: 'RESET_LINK_REQUESTED' });
   });
 });
 

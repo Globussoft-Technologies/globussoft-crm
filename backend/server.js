@@ -71,7 +71,7 @@ const rateLimit = require("express-rate-limit");
 // below — that's why this block sits up here, not down by the route mounts.
 const { validateNumericId } = require("./middleware/validateNumericId");
 const { resolveSubscriptionAccess } = require("./lib/subscriptionAccess");
-const { shouldSkipLoginAccountLimiter } = require("./lib/loginLimiterPolicy");
+const { shouldSkipLoginAccountLimiter, loginIpKey } = require("./lib/loginLimiterPolicy");
 {
   const _RouterFactory = express.Router;
   // express.Router is a callable factory (not a class). Wrap it to attach
@@ -313,14 +313,13 @@ const apiLimiter = rateLimit({
 // rotating IPs.
 // IMPORTANT: only applied to /api/auth/login itself — /api/auth/2fa/verify
 // is a separate endpoint with its own threat model.
-const { ipKeyGenerator } = require("express-rate-limit");
 const loginIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 min
   max: 5, // 5 wrong-password attempts per IP per 15 min
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: {
     error: "Too many login attempts from this IP, please try again later.",
   },
@@ -339,11 +338,11 @@ const loginUsernameLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req, res) => {
+  keyGenerator: (req) => {
     const email = (req.body?.email || "").toLowerCase().trim();
     // If no email in body (malformed request), fall back to IP so we don't
     // collapse all anonymous traffic onto a single shared bucket.
-    return email || `noemail:${ipKeyGenerator(req, res)}`;
+    return email || `noemail:${loginIpKey(req)}`;
   },
   message: {
     error: "Too many login attempts for this account, please try again later.",
@@ -376,7 +375,7 @@ const superAdminLoginIpLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: { error: "Too many Super Admin login attempts from this IP, please try again later." },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
@@ -404,7 +403,7 @@ const forgotPasswordIpLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 20, // 20 requests/hour/IP
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: {
     error:
       "Too many password-reset requests from this IP, please try again later.",
@@ -416,9 +415,9 @@ const forgotPasswordEmailLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 5, // 5 requests/hour/email
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => {
+  keyGenerator: (req) => {
     const email = (req.body?.email || "").toLowerCase().trim();
-    return email || `noemail:${ipKeyGenerator(req, res)}`;
+    return email || `noemail:${loginIpKey(req)}`;
   },
   message: {
     error:
@@ -441,7 +440,7 @@ const checkEmailIpLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 30, // 30 requests/15min/IP
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  keyGenerator: (req) => loginIpKey(req),
   message: { error: "Too many requests from this IP, please try again later." },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
@@ -450,9 +449,9 @@ const checkEmailEmailLimiter = rateLimit({
   max: process.env.NODE_ENV === "test" ? 10000 : 10, // 10 requests/hour/email
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  keyGenerator: (req, res) => {
+  keyGenerator: (req) => {
     const email = (req.body?.email || "").toLowerCase().trim();
-    return email || `noemail:${ipKeyGenerator(req, res)}`;
+    return email || `noemail:${loginIpKey(req)}`;
   },
   message: {
     error: "Too many requests for this email, please try again later.",

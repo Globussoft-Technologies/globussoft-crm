@@ -1,3 +1,5 @@
+const { ipKeyGenerator } = require("express-rate-limit");
+
 const DEMO_LOGIN_HOSTS = new Set([
   "crm.globusdemos.com",
   "localhost",
@@ -29,8 +31,16 @@ function shouldSkipLoginAccountLimiter(req) {
   return DEMO_LOGIN_HOSTS.has(host);
 }
 
+// express-rate-limit v8 expects an IP string, not the Express request object.
+// Keeping this in a tiny tested helper prevents a request-object Map key from
+// silently giving every login attempt its own rate-limit bucket.
+function loginIpKey(req) {
+  return ipKeyGenerator(String(req?.ip || ""));
+}
+
 module.exports = {
   DEMO_LOGIN_HOSTS,
   normalizeLoginHost,
   shouldSkipLoginAccountLimiter,
+  loginIpKey,
 };

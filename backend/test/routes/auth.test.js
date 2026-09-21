@@ -23,11 +23,11 @@
  *       (no full JWT issued)
  *   POST /api/auth/signup
  *     - 201 happy path: creates Tenant + User, returns { token, user, tenant }
- *     - 400 duplicate email
+ *     - 409 duplicate global login email
  *     - 400 weak password (no digit, <8 chars, etc.)
  *   POST /api/auth/register
  *     - 201 happy path mirrors /signup
- *     - 400 duplicate email
+ *     - 409 duplicate global login email
  *   GET  /api/auth/me
  *     - 401 without Authorization header (verifyToken gate)
  *     - 200 with valid Bearer: returns profile + features.smsConfigured
@@ -217,17 +217,10 @@ beforeEach(() => {
   prisma.roleWidget.create.mockReset().mockResolvedValue({});
   delete process.env.NODE_ENV;
 
-  // Schema-drift compat shim: User.email is now composite-unique with
-  // tenantId (@@unique([email, tenantId])), so login + signup + register +
-  // duplicate-email checks use findFirst not findUnique. The existing
-  // tests in this file pre-date the migration and mock findUnique. Have
-  // findFirst delegate so every existing `prisma.user.findUnique.mockResolvedValue(...)`
-  // assertion keeps working without per-test edits.
+  // Older tenant-scoped endpoints still use findFirst; delegate it to the
+  // per-test findUnique mock unless a test overrides the implementation.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
-  prisma.user.findMany.mockImplementation(async (...args) => {
-    const user = await prisma.user.findUnique(...args);
-    return user ? [user] : [];
-  });
+  prisma.user.findMany.mockResolvedValue([]);
 });
 
 // ── POST /api/auth/public/lead-inquiry ──────────────────────────────
@@ -382,7 +375,7 @@ describe('POST /api/auth/login', () => {
     expect(res.body.token).toBeUndefined();
   });
 
-  test('normalizes email and selects the exact composite identity when loginTenantId is supplied', async () => {
+  test('normalizes email and resolves the single global login identity', async () => {
     const hashed = await bcrypt.hash('password123', 10);
     prisma.user.findUnique.mockResolvedValue({
       id: 17,
@@ -397,84 +390,15 @@ describe('POST /api/auth/login', () => {
 
     const res = await request(makeApp())
       .post('/api/auth/login')
-      .send({ email: '  ADMIN@Example.COM  ', password: 'password123', loginTenantId: 9 });
+      .send({ email: '  ADMIN@Example.COM  ', password: 'password123' });
 
     expect(res.status).toBe(200);
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
-      where: { email_tenantId: { email: 'admin@example.com', tenantId: 9 } },
+      where: { email: 'admin@example.com' },
       include: { tenant: true },
     });
     expect(prisma.user.findMany).not.toHaveBeenCalled();
     expect(res.body.tenant.id).toBe(9);
-  });
-
-  test('unscoped login checks every tenant candidate and accepts the unique password match', async () => {
-    const wrongHash = await bcrypt.hash('other-password123', 10);
-    const correctHash = await bcrypt.hash('password123', 10);
-    prisma.user.findMany.mockResolvedValue([
-      {
-        id: 10, email: 'shared@example.com', name: 'Wrong Tenant', password: wrongHash,
-        role: 'ADMIN', twoFactorEnabled: false, tenantId: 1,
-        tenant: { id: 1, name: 'Tenant One', slug: 'tenant-one', isActive: true, vertical: 'generic' },
-      },
-      {
-        id: 20, email: 'shared@example.com', name: 'Right Tenant', password: correctHash,
-        role: 'ADMIN', twoFactorEnabled: false, tenantId: 2,
-        tenant: { id: 2, name: 'Tenant Two', slug: 'tenant-two', isActive: true, vertical: 'generic' },
-      },
-    ]);
-
-    const res = await request(makeApp())
-      .post('/api/auth/login')
-      .send({ email: 'shared@example.com', password: 'password123' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.tenant.id).toBe(2);
-    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ email: 'shared@example.com', deactivatedAt: null }),
-      orderBy: { id: 'asc' },
-    }));
-  });
-
-  test('returns tenant choices only after the password matches multiple tenant accounts', async () => {
-    const sharedHash = await bcrypt.hash('password123', 10);
-    prisma.user.findMany.mockResolvedValue([
-      {
-        id: 10, email: 'shared@example.com', password: sharedHash, tenantId: 1,
-        tenant: { id: 1, name: 'Tenant One', slug: 'tenant-one', isActive: true },
-      },
-      {
-        id: 20, email: 'shared@example.com', password: sharedHash, tenantId: 2,
-        tenant: { id: 2, name: 'Tenant Two', slug: 'tenant-two', isActive: true },
-      },
-    ]);
-
-    const res = await request(makeApp())
-      .post('/api/auth/login')
-      .send({ email: 'shared@example.com', password: 'password123' });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('TENANT_SELECTION_REQUIRED');
-    expect(res.body.tenants).toEqual([
-      { id: 1, name: 'Tenant One', slug: 'tenant-one' },
-      { id: 2, name: 'Tenant Two', slug: 'tenant-two' },
-    ]);
-    expect(res.body.token).toBeUndefined();
-  });
-
-  test('does not expose tenant choices when the submitted password matches none of them', async () => {
-    const hashed = await bcrypt.hash('real-password123', 10);
-    prisma.user.findMany.mockResolvedValue([
-      { id: 10, email: 'shared@example.com', password: hashed, tenantId: 1, tenant: { id: 1, isActive: true } },
-      { id: 20, email: 'shared@example.com', password: hashed, tenantId: 2, tenant: { id: 2, isActive: true } },
-    ]);
-
-    const res = await request(makeApp())
-      .post('/api/auth/login')
-      .send({ email: 'shared@example.com', password: 'wrong-password' });
-
-    expect(res.status).toBe(401);
-    expect(res.body).toEqual({ error: 'Invalid credentials' });
   });
 
   test('unknown email → 401 same envelope as wrong-password (anti-enumeration #192)', async () => {
@@ -564,13 +488,19 @@ describe('POST /api/auth/signup', () => {
     expect(createArg.data.password).toMatch(/^\$2[ab]\$/); // bcrypt prefix
   });
 
-  // DRIFT: User.email is now composite-unique with tenantId, so the
-  // signup route INTENTIONALLY no longer pre-checks for duplicate email
-  // (see routes/auth.js:217-220 comment — "same email is allowed to own
-  // multiple orgs"). The old "already exists" contract is gone. If a
-  // future migration restores a global email uniqueness the test below
-  // can be revived.
-  test.skip('duplicate email → 400 "User already exists" (SUT no longer dup-checks)', () => {});
+  test('duplicate global login email → 409 without creating a tenant', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 7, email: 'existing@example.com', tenantId: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({ email: ' Existing@Example.com ', password: 'password123', name: 'Existing' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('EMAIL_ALREADY_EXISTS');
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'existing@example.com' } });
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
 
   test('weak password (no digit) → 400 with complexity-error message', async () => {
     const res = await request(makeApp())
@@ -616,10 +546,18 @@ describe('POST /api/auth/register', () => {
     expect(res.body.tenant.themeColor).toBe('#C9A063');
   });
 
-  // DRIFT: same as /signup — the register route no longer pre-checks
-  // duplicate email (see routes/auth.js:217-220). Composite-unique
-  // [email, tenantId] makes the same email valid across orgs.
-  test.skip('duplicate email → 400 "User already exists" (SUT no longer dup-checks)', () => {});
+  test('duplicate global login email → 409 without creating a tenant', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 8, email: 'existing@example.com', tenantId: 2 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/register')
+      .send({ email: 'EXISTING@example.com', password: 'password123', name: 'Existing' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('EMAIL_ALREADY_EXISTS');
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
 
   test('persists themePreference when supplied', async () => {
     prisma.user.findUnique.mockResolvedValue(null);
@@ -671,8 +609,6 @@ describe('POST /api/auth/customer/register', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           email: 'dupe@example.com',
-          tenantId: 45,
-          deactivatedAt: null,
         }),
       }),
     );
@@ -760,11 +696,11 @@ describe('POST /api/auth/check-email', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ exists: true });
     expect(prisma.user.count).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ email: 'known@example.com', deactivatedAt: null }) })
+      expect.objectContaining({ where: { email: 'known@example.com' } })
     );
   });
 
-  test('known active email within a tenant → 200 { exists: true } scoped by registrationTenantId', async () => {
+  test('known global login email → 200 even when registrationTenantId differs', async () => {
     prisma.user.count.mockResolvedValue(1);
 
     const res = await request(makeApp())
@@ -777,8 +713,6 @@ describe('POST /api/auth/check-email', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           email: 'known@example.com',
-          tenantId: 42,
-          deactivatedAt: null,
         })
       })
     );
@@ -799,8 +733,6 @@ describe('POST /api/auth/check-email', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           email: 'duke@tafmail.com',
-          tenantId: 42,
-          deactivatedAt: null,
         })
       })
     );
@@ -1036,7 +968,7 @@ describe('POST /api/auth/forgot-password', () => {
     expect(res.body.code).toBe('RESET_LINK_REQUESTED');
   });
 
-  test('normalizes email and scopes reset lookup to the selected tenant', async () => {
+  test('normalizes email and resolves the single global reset identity', async () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 7,
       email: 'admin@example.com',
@@ -1046,27 +978,13 @@ describe('POST /api/auth/forgot-password', () => {
 
     const res = await request(makeApp())
       .post('/api/auth/forgot-password')
-      .send({ email: ' ADMIN@Example.com ', resetTenantId: 9 });
+      .send({ email: ' ADMIN@Example.com ' });
 
     expect(res.status).toBe(200);
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
-      where: { email_tenantId: { email: 'admin@example.com', tenantId: 9 } },
+      where: { email: 'admin@example.com' },
       include: { tenant: true },
     });
-  });
-
-  test('does not choose an arbitrary account when an unscoped reset email is duplicated', async () => {
-    prisma.user.findMany.mockResolvedValue([
-      { id: 7, email: 'shared@example.com', tenantId: 1 },
-      { id: 8, email: 'shared@example.com', tenantId: 2 },
-    ]);
-
-    const res = await request(makeApp())
-      .post('/api/auth/forgot-password')
-      .send({ email: 'shared@example.com' });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ack', code: 'RESET_LINK_REQUESTED' });
   });
 });
 

@@ -296,18 +296,13 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
 // Marketing /get-started wizard and customer-register preflight: check whether
 // an email already belongs to an active user. Returns { exists: boolean } so
 // the frontend can route existing users to /login and new users into the
-// register flow. When `registrationTenantId` is supplied we scope the lookup to
-// that tenant and broaden the check to the CRM identity tables that represent
-// a person in this flow (User, Contact, Patient), so customer registration can
-// fail fast before OTP is sent.
+// register flow. User is checked globally because it is the login identity;
+// Contact and Patient remain scoped to the selected tenant so ordinary CRM
+// records in another organization do not block registration.
 async function customerRegistrationEmailExists(email, tenantId) {
   const [userCount, contact, patient] = await Promise.all([
     prisma.user.count({
-      where: {
-        email,
-        tenantId,
-        deactivatedAt: null,
-      },
+      where: { email },
     }),
     prisma.contact.findFirst({
       where: {
@@ -354,10 +349,7 @@ router.post("/check-email", async (req, res) => {
         exists = await customerRegistrationEmailExists(email, scopedTenantId);
       } else {
         const count = await prisma.user.count({
-          where: {
-            email,
-            deactivatedAt: null,
-          },
+          where: { email },
         });
         exists = count > 0;
       }
@@ -640,7 +632,8 @@ router.post("/phone-otp/verify", otpVerifyLimiter, async (req, res) => {
 
 router.post("/register", registerLimiter, async (req, res) => {
   try {
-    const { email, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const { email: rawEmail, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -691,10 +684,13 @@ router.post("/register", registerLimiter, async (req, res) => {
       }
     }
 
-    // Org creation makes a brand-new tenant, so (email, newTenantId) can never
-    // collide — email is unique per-tenant now (see User schema). The same
-    // email is allowed to own/belong to multiple orgs, so there is no global
-    // "already exists" pre-check here.
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(409).json({
+        error: "This email already has an account. Sign in instead.",
+        code: "EMAIL_ALREADY_EXISTS",
+      });
+    }
 
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
@@ -748,6 +744,12 @@ router.post("/register", registerLimiter, async (req, res) => {
     });
 
   } catch (error) {
+    if (error && error.code === "P2002") {
+      return res.status(409).json({
+        error: "This email already has an account. Sign in instead.",
+        code: "EMAIL_ALREADY_EXISTS",
+      });
+    }
     console.error("[auth] register error:", error);
     res.status(500).json({ error: "Server registration error" });
   }
@@ -756,7 +758,8 @@ router.post("/register", registerLimiter, async (req, res) => {
 // Signup alias (matches signup page) — same behavior as register
 router.post("/signup", registerLimiter, async (req, res) => {
   try {
-    const { email, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const { email: rawEmail, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -798,10 +801,13 @@ router.post("/signup", registerLimiter, async (req, res) => {
       }
     }
 
-    // Org creation makes a brand-new tenant, so (email, newTenantId) can never
-    // collide — email is unique per-tenant now (see User schema). The same
-    // email is allowed to own/belong to multiple orgs, so there is no global
-    // "already exists" pre-check here.
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(409).json({
+        error: "This email already has an account. Sign in instead.",
+        code: "EMAIL_ALREADY_EXISTS",
+      });
+    }
 
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
@@ -853,6 +859,12 @@ router.post("/signup", registerLimiter, async (req, res) => {
     });
 
   } catch (error) {
+    if (error && error.code === "P2002") {
+      return res.status(409).json({
+        error: "This email already has an account. Sign in instead.",
+        code: "EMAIL_ALREADY_EXISTS",
+      });
+    }
     console.error("[auth] signup error:", error);
     res.status(500).json({ error: "Signup failed" });
   }
@@ -1071,6 +1083,12 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     });
 
   } catch (error) {
+    if (error && error.code === "P2002") {
+      return res.status(409).json({
+        error: "This email already exists. Sign in to your account.",
+        code: "EMAIL_ALREADY_EXISTS",
+      });
+    }
     console.error("[auth] customer/register error:", error);
     res.status(500).json({ error: "Customer registration failed" });
   }
@@ -1081,7 +1099,7 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
 // (1000 req/15min on auth/login per server.js).
 router.post("/login", async (req, res) => {
   try {
-    const { email: rawEmail, password, loginTenantId } = req.body || {};
+    const { email: rawEmail, password } = req.body || {};
     const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 
     // Input validation — without this, an empty body crashes findFirst with
@@ -1092,59 +1110,10 @@ router.post("/login", async (req, res) => {
 
     // Admin/admin bypass intentionally removed for security hardening.
 
-    // Email is unique per tenant, not globally. Never use an unscoped
-    // findFirst here: if two tenants have the same email but different
-    // passwords, whichever row MySQL happens to return first makes valid
-    // credentials intermittently fail. A supplied loginTenantId selects the
-    // composite identity directly. Legacy clients without it remain supported
-    // by checking every active candidate and accepting only one password match.
-    const scopedTenantId = Number(loginTenantId);
-    const hasTenantScope = Number.isInteger(scopedTenantId) && scopedTenantId > 0;
-    let user = null;
-    let passwordAlreadyVerified = false;
-    let passwordCheckPerformed = false;
-
-    if (hasTenantScope) {
-      user = await prisma.user.findUnique({
-        where: { email_tenantId: { email, tenantId: scopedTenantId } },
-        include: { tenant: true },
-      });
-    } else {
-      // Pre-authentication identity resolution intentionally spans tenants;
-      // tenant access is granted only after exactly one password match.
-      /* eslint-disable gbscrm/tenant-scope-finder-heuristic -- intentional pre-auth tenant resolution */
-      const candidates = await prisma.user.findMany({
-        where: {
-          email,
-          deactivatedAt: null,
-          tenant: { isActive: true },
-        },
-        include: { tenant: true },
-        orderBy: { id: "asc" },
-      });
-      /* eslint-enable gbscrm/tenant-scope-finder-heuristic */
-
-      const matches = [];
-      for (const candidate of candidates) {
-        passwordCheckPerformed = true;
-        if (await bcrypt.compare(password, candidate.password)) matches.push(candidate);
-      }
-
-      if (matches.length === 1) {
-        [user] = matches;
-        passwordAlreadyVerified = true;
-      } else if (matches.length > 1) {
-        return res.status(409).json({
-          error: "Select the organization you want to access",
-          code: "TENANT_SELECTION_REQUIRED",
-          tenants: matches.map((candidate) => ({
-            id: candidate.tenantId,
-            name: candidate.tenant?.name || `Organization ${candidate.tenantId}`,
-            slug: candidate.tenant?.slug || null,
-          })),
-        });
-      }
-    }
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: { tenant: true },
+    });
     // #192: when the email isn't found, run a dummy bcrypt compare against a
     // fixed-cost hash so the unknown-email path takes the same wall time as
     // the known-email-wrong-password path. Closes the timing-oracle that let
@@ -1152,13 +1121,11 @@ router.post("/login", async (req, res) => {
     // request that would show up in IDS.
     if (!user || user.deactivatedAt || user.tenant?.isActive === false) {
       // 2b$10 hash of "_no_user_dummy_" — never matches a real password.
-      if (!passwordCheckPerformed) {
-        await bcrypt.compare(password, "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC");
-      }
+      await bcrypt.compare(password, "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC");
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    const isMatch = passwordAlreadyVerified || await bcrypt.compare(password, user.password);
+    const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     const tenantId = user.tenantId || 1;
@@ -1340,38 +1307,15 @@ router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res)
 // that asserts the response body never contains a `resetToken`/`token` field.
 router.post("/forgot-password", async (req, res) => {
   try {
-    const { email: rawEmail, resetTenantId } = req.body || {};
+    const { email: rawEmail } = req.body || {};
     const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
     if (!email) return res.status(400).json({ error: "Email is required" });
 
-    // Never reset an arbitrary tenant's account. Use the selected tenant when
-    // supplied; otherwise send only when the normalized email resolves to one
-    // active account. The public response remains identical for all outcomes.
-    const parsedTenantId = Number(resetTenantId);
-    const hasTenantScope = Number.isInteger(parsedTenantId) && parsedTenantId > 0;
-    let user = null;
-    if (hasTenantScope) {
-      user = await prisma.user.findUnique({
-        where: { email_tenantId: { email, tenantId: parsedTenantId } },
-        include: { tenant: true },
-      });
-      if (user?.deactivatedAt || user?.tenant?.isActive === false) user = null;
-    } else {
-      // Pre-authentication recovery lookup intentionally spans tenants and
-      // proceeds only when the email resolves to exactly one active account.
-      /* eslint-disable gbscrm/tenant-scope-finder-heuristic -- intentional unambiguous recovery lookup */
-      const candidates = await prisma.user.findMany({
-        where: {
-          email,
-          deactivatedAt: null,
-          tenant: { isActive: true },
-        },
-        orderBy: { id: "asc" },
-        take: 2,
-      });
-      /* eslint-enable gbscrm/tenant-scope-finder-heuristic */
-      if (candidates.length === 1) [user] = candidates;
-    }
+    let user = await prisma.user.findUnique({
+      where: { email },
+      include: { tenant: true },
+    });
+    if (user?.deactivatedAt || user?.tenant?.isActive === false) user = null;
 
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");
@@ -1603,13 +1547,12 @@ router.put("/me", verifyToken, async (req, res) => {
     }
 
     if (email) {
-      // Email is unique per-tenant — only block if another account IN THE
-      // SAME tenant already uses it.
-      const existing = await prisma.user.findFirst({ where: { email, tenantId: req.user.tenantId } });
+      const normalizedEmail = String(email).trim().toLowerCase();
+      const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
       if (existing && existing.id !== req.user.userId) {
         return res.status(400).json({ error: "Email already in use by another account" });
       }
-      updateData.email = email;
+      updateData.email = normalizedEmail;
     }
 
     // Password change requires current password verification

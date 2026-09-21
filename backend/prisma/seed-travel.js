@@ -125,10 +125,8 @@ async function main() {
   ];
 
   for (const u of users) {
-    // Composite-unique key per schema @@unique([email, tenantId]).
-    // Bare `where: { email }` throws PrismaClientValidationError.
     await prisma.user.upsert({
-      where: { email_tenantId: { email: u.email, tenantId: tenant.id } },
+      where: { email: u.email },
       update: {
         tenantId: tenant.id,
         role: u.role,

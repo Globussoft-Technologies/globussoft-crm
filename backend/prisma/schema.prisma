@@ -569,6 +569,13 @@ model User {
   // mirrors this onto Patient.phone so the clinic — and the Callified
   // calling flow on Appointments — can actually reach them.
   phone           String?
+  jobTitle        String?
+  workNumber      String?
+  reportingToId   Int?
+  defaultPipelineId Int?
+  reportingTo       User?     @relation("UserReportingLine", fields: [reportingToId], references: [id], onDelete: SetNull)
+  directReports     User[]    @relation("UserReportingLine")
+  defaultPipeline   Pipeline? @relation("UserDefaultPipeline", fields: [defaultPipelineId], references: [id], onDelete: SetNull)
   createdAt       DateTime  @default(now())
 
   // 2FA
@@ -753,6 +760,8 @@ model User {
   // email field. Lets the same email register/log in across multiple orgs.
   @@unique([email, tenantId])
   @@index([tenantId, role])
+  @@index([reportingToId])
+  @@index([defaultPipelineId])
 }
 
 // Generic CRM guided-tour preferences and per-tour completion state. The
@@ -3303,6 +3312,7 @@ model Pipeline {
   tenantId         Int                       @default(1)
   tenant           Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stageAssignments PipelineStageAssignment[]
+  defaultForUsers  User[]                    @relation("UserDefaultPipeline")
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
 

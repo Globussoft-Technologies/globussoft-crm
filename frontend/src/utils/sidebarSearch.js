@@ -92,7 +92,6 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
   { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, parent: 'Team & Territories' },
   { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, parent: 'Team & Territories' },
-  { path: '/users', label: 'Users', description: 'Manage CRM users and access', managerOnly: true, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing', description: 'One-shot marketing campaigns', managerOnly: true },
   { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true },
   { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true },

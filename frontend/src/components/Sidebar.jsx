@@ -2744,15 +2744,6 @@ function renderGenericNav({
             gap: "0.25rem",
           }}
         >
-          <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
-          {/* RBAC role + permission admin. Shown to anyone with `roles.read`
-              granted via RBAC (typically ADMIN). The page itself rechecks. */}
-          <Link
-            to="/settings/roles"
-            icon={ShieldCheck}
-            label="Roles"
-            requiredPermission={{ module: "roles", action: "read" }}
-          />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
           <Link
@@ -2888,7 +2879,7 @@ function GenericTeamTerritoriesNav({ Link, isManager }) {
       onActivate={setOpenGroup}
     >
       <Link to="/sales-teams" icon={Users} label="Sales Teams" />
-      <Link to="/users" icon={Users} label="Users" />
+      <Link to="/staff" icon={UsersRound} label="Staff" />
       <Link to="/settings/roles" icon={ShieldCheck} label="Roles" />
       <Link to="/territories" icon={Network} label="Territories" />
     </WellnessNavGroup>

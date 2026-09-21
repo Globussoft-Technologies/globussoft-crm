@@ -2200,6 +2200,7 @@ const Contacts = () => {
           existingContactId={dupModal.existingContactId}
           matchedBy={dupModal.matchedBy}
           contact={dupModal.contact}
+          allowCreateAnyway={!(isGeneric && dupModal.matchedBy === 'email')}
           creating={creatingContact}
           onEditDetails={() => setDupModal(null)}
           onCreateAnyway={() => submitNewContact(true)}

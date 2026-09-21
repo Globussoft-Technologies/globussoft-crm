@@ -668,6 +668,10 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     });
     if (adminCreated) {
       await grantAllPermissions(stats, adminRole.id, vertical);
+    } else if (vertical === 'generic') {
+      // Generic CRM admins have full page access by default, including pages
+      // added after the tenant's original RBAC role was provisioned.
+      await grantAllPermissions(stats, adminRole.id, vertical);
     }
 
     const { role: managerRole, wasCreated: managerCreated } = await ensureRole(stats, {

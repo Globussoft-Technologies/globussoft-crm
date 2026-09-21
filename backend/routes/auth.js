@@ -342,6 +342,9 @@ router.post("/check-email", async (req, res) => {
     const rawTenantId = req.body?.registrationTenantId;
     const tenantId = Number(rawTenantId);
     const scopedTenantId = Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null;
+    const registrationVertical = ["generic", "wellness", "travel"].includes(req.body?.registrationVertical)
+      ? req.body.registrationVertical
+      : null;
 
     // Consistent-timing guard: even invalid emails run a short fixed delay
     // so response timing does not leak whether an email exists. 80 ms is
@@ -352,6 +355,11 @@ router.post("/check-email", async (req, res) => {
     if (email && email.includes("@")) {
       if (scopedTenantId) {
         exists = await customerRegistrationEmailExists(email, scopedTenantId);
+      } else if (registrationVertical) {
+        exists = !!(await prisma.user.findFirst({
+          where: { email, deactivatedAt: null, tenant: { vertical: registrationVertical } },
+          select: { id: true },
+        }));
       } else {
         const count = await prisma.user.count({
           where: {
@@ -373,6 +381,23 @@ router.post("/check-email", async (req, res) => {
   } catch (err) {
     console.error("[auth/check-email] error:", err.message);
     // Never expose internal errors; still return the same shape.
+    res.status(500).json({ exists: false });
+  }
+});
+
+router.post("/check-organization-name", registerLimiter, async (req, res) => {
+  try {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const registrationVertical = ["generic", "wellness", "travel"].includes(req.body?.registrationVertical)
+      ? req.body.registrationVertical
+      : "generic";
+    const exists = name.length > 0 && !!(await prisma.tenant.findFirst({
+      where: { name, vertical: registrationVertical },
+      select: { id: true },
+    }));
+    res.json({ exists });
+  } catch (err) {
+    console.error("[auth/check-organization-name] error:", err.message);
     res.status(500).json({ exists: false });
   }
 });
@@ -699,12 +724,37 @@ router.post("/register", registerLimiter, async (req, res) => {
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
+    const existingSameVerticalUser = await prisma.user.findFirst({
+      where: {
+        email: email.trim().toLowerCase(),
+        deactivatedAt: null,
+        tenant: { vertical: selectedVertical },
+      },
+      select: { id: true },
+    });
+    if (existingSameVerticalUser) {
+      return res.status(409).json({
+        error: `This email is already registered for a ${selectedVertical} CRM. Please sign in instead.`,
+        code: "EMAIL_ALREADY_EXISTS_IN_VERTICAL",
+      });
+    }
+
     const validThemes = ['light', 'dark', 'system'];
     const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const existingSameVerticalOrganization = await prisma.tenant.findFirst({
+      where: { name: orgName.trim(), vertical: selectedVertical },
+      select: { id: true },
+    });
+    if (existingSameVerticalOrganization) {
+      return res.status(409).json({
+        error: "This organization name is already taken. Please use a different name.",
+        code: "ORGANIZATION_NAME_ALREADY_EXISTS",
+      });
+    }
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
@@ -806,12 +856,37 @@ router.post("/signup", registerLimiter, async (req, res) => {
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
+    const existingSameVerticalUser = await prisma.user.findFirst({
+      where: {
+        email: email.trim().toLowerCase(),
+        deactivatedAt: null,
+        tenant: { vertical: selectedVertical },
+      },
+      select: { id: true },
+    });
+    if (existingSameVerticalUser) {
+      return res.status(409).json({
+        error: `This email is already registered for a ${selectedVertical} CRM. Please sign in instead.`,
+        code: "EMAIL_ALREADY_EXISTS_IN_VERTICAL",
+      });
+    }
+
     const validThemes = ['light', 'dark', 'system'];
     const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const existingSameVerticalOrganization = await prisma.tenant.findFirst({
+      where: { name: orgName.trim(), vertical: selectedVertical },
+      select: { id: true },
+    });
+    if (existingSameVerticalOrganization) {
+      return res.status(409).json({
+        error: "This organization name is already taken. Please use a different name.",
+        code: "ORGANIZATION_NAME_ALREADY_EXISTS",
+      });
+    }
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({

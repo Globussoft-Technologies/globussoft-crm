@@ -359,6 +359,10 @@ const PERMISSION_CATALOG = {
   ...GENERIC_MODULES,
   ...WELLNESS_MODULES,
   ...TRAVEL_MODULES,
+  // Generic Calendar supports update/delete. The vertical module maps also
+  // define `calendar`; keep the union validator aware of every valid action
+  // instead of letting the later spread overwrite the Generic actions.
+  calendar: ['read', 'write', 'update', 'delete'],
 };
 
 // ─────────────────────────────────────────────────────────────────────

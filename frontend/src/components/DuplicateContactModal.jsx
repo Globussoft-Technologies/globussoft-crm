@@ -11,6 +11,7 @@ export default function DuplicateContactModal({
   creating,
   onEditDetails,
   onCreateAnyway,
+  allowCreateAnyway = true,
   createAnywayLabel = "Create anyway",
   creatingLabel = "Creating\u2026",
 }) {
@@ -129,18 +130,20 @@ export default function DuplicateContactModal({
           >
             Edit details
           </button>
-          <button
-            type="button"
-            onClick={onCreateAnyway}
-            disabled={creating}
-            style={{
-              ...secondaryButtonStyle,
-              cursor: creating ? "not-allowed" : "pointer",
-              opacity: creating ? 0.5 : 1,
-            }}
-          >
-            {creating ? creatingLabel : createAnywayLabel}
-          </button>
+          {allowCreateAnyway && (
+            <button
+              type="button"
+              onClick={onCreateAnyway}
+              disabled={creating}
+              style={{
+                ...secondaryButtonStyle,
+                cursor: creating ? "not-allowed" : "pointer",
+                opacity: creating ? 0.5 : 1,
+              }}
+            >
+              {creating ? creatingLabel : createAnywayLabel}
+            </button>
+          )}
           <Link
             to={`/contacts/${existingContactId}`}
             style={{

@@ -2398,22 +2398,27 @@ router.post("/", async (req, res) => {
         });
         if (dup) {
           const c = dup.contact;
-          return res.status(409).json({
-            error:
-              "A contact with this email or phone already exists in your CRM",
-            code: "DUPLICATE_CONTACT",
-            matchedBy: dup.matchedBy,
-            existingContactId: c.id,
-            contact: {
-              id: c.id,
-              name: c.name,
-              email: c.email,
-              phone: c.phone ? normalizePhoneValue(c.phone) : c.phone,
-              company: c.company,
-              status: c.status,
-              subBrand: c.subBrand,
-            },
-          });
+          const genericDuplicateEmail =
+            (req.user.vertical || "generic") === "generic" &&
+            dup.matchedBy === "email";
+          if (!force || genericDuplicateEmail) {
+            return res.status(409).json({
+              error:
+                "A contact with this email or phone already exists in your CRM",
+              code: "DUPLICATE_CONTACT",
+              matchedBy: dup.matchedBy,
+              existingContactId: c.id,
+              contact: {
+                id: c.id,
+                name: c.name,
+                email: c.email,
+                phone: c.phone ? normalizePhoneValue(c.phone) : c.phone,
+                company: c.company,
+                status: c.status,
+                subBrand: c.subBrand,
+              },
+            });
+          }
         }
       } catch (e) {
         // Helper failure is non-fatal — log + fall through to the

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 /**
  * EmailOtpField — email input + "Validate" → OTP entry → "Verify" flow used to
@@ -30,16 +30,39 @@ export default function EmailOtpField({
   labelStyle,
   required = true,
   disabled = false,
+  registrationVertical,
 }) {
   const [requested, setRequested] = useState(false);
   const [code, setCode] = useState("");
   const [verified, setVerified] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { type: 'error' | 'info' | 'success', text }
+  const [emailUnavailable, setEmailUnavailable] = useState(false);
   const emailInputId = useId();
   const otpInputId = useId();
 
   const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test((value || "").trim());
+
+  useEffect(() => {
+    if (purpose !== "signup" || !registrationVertical || !emailOk || verified || requested) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/auth/check-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: value.trim(), registrationVertical }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        setEmailUnavailable(Boolean(result.exists));
+        if (result.exists) {
+          setMsg({ type: "error", text: "This email already exists for this CRM. Please use another email or sign in." });
+        }
+      } catch { /* signup remains protected by the backend check */ }
+    }, 450);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [emailOk, purpose, registrationVertical, requested, value, verified]);
 
   const resetVerification = () => {
     if (verified || requested) {
@@ -47,6 +70,7 @@ export default function EmailOtpField({
       setRequested(false);
       setCode("");
       setMsg(null);
+      setEmailUnavailable(false);
       if (onVerifiedChange) onVerifiedChange(null);
     }
   };
@@ -61,6 +85,7 @@ export default function EmailOtpField({
       setMsg({ type: "error", text: "Enter a valid email first" });
       return;
     }
+    if (emailUnavailable) return;
     if (beforeRequest) {
       try {
         const canProceed = await beforeRequest({
@@ -68,8 +93,8 @@ export default function EmailOtpField({
           purpose,
         });
         if (canProceed === false) return;
-      } catch {
-        setMsg({ type: "error", text: "Network error - please try again" });
+      } catch (error) {
+        setMsg({ type: "error", text: error?.message || "Network error - please try again" });
         return;
       }
     }
@@ -192,10 +217,10 @@ export default function EmailOtpField({
             type="button"
             data-testid="otp-validate"
             onClick={request}
-            disabled={busy || disabled || !emailOk}
-            style={{ ...actionBtn, opacity: busy || !emailOk ? 0.6 : 1 }}
+            disabled={busy || disabled || !emailOk || emailUnavailable}
+            style={{ ...actionBtn, opacity: busy || !emailOk || emailUnavailable ? 0.6 : 1 }}
           >
-            {busy && !requested ? "Sending…" : requested ? "Resend" : "Validate"}
+            {busy ? "Sending…" : requested ? "Resend" : "Validate"}
           </button>
         )}
       </div>

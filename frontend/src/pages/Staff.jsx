@@ -184,6 +184,22 @@ const ROLE_CONFIG = {
   USER: { color: "#6b7280", bg: "rgba(107,114,128,0.1)" },
 };
 
+const genericStaffTableStyles = `
+  .staff-generic-resizable-table th,
+  .staff-generic-resizable-table td {
+    box-sizing: border-box;
+    min-width: 0;
+    border-right: 1px solid var(--border-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .staff-generic-resizable-table td:last-child {
+    overflow: visible;
+    white-space: normal;
+  }
+`;
+
 // Access-tier keys mirrored in the RBAC catalog. Picking one of these from
 // the unified Role dropdown maps 1:1 onto User.role; any other RBAC role
 // (DOCTOR / NURSE / RECEPTIONIST / custom) defaults the access tier to USER.
@@ -498,6 +514,10 @@ export default function Staff() {
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightedStaffId = searchParams.get("highlight") || "";
   const [staff, setStaff] = useState([]);
+  const [staffColumnWidths, setStaffColumnWidths] = useState(() => { try { const saved = JSON.parse(localStorage.getItem("generic-crm-staff-column-widths") || "null"); return Array.isArray(saved) && saved.length === 10 ? saved.map((width) => Math.max(60, Number(width) || 60)) : [220, 260, 190, 150, 150, 170, 150, 180, 150, 260]; } catch { return [220, 260, 190, 150, 150, 170, 150, 180, 150, 260]; } });
+  const resizeStaffColumn = (index, event) => { event.preventDefault(); event.stopPropagation(); const startX = event.clientX; const startWidth = staffColumnWidths[index]; const move = (moveEvent) => setStaffColumnWidths((widths) => widths.map((width, i) => i === index ? Math.max(60, startWidth + moveEvent.clientX - startX) : width)); const stop = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", stop); }; window.addEventListener("mousemove", move); window.addEventListener("mouseup", stop); };
+  useEffect(() => { if (!isTravel && !isWellness) localStorage.setItem("generic-crm-staff-column-widths", JSON.stringify(staffColumnWidths)); }, [staffColumnWidths, isTravel, isWellness]);
+  const [salesTeams, setSalesTeams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(null);
   // Free-text search across name + email. Trimmed + lower-cased at match time.
@@ -515,6 +535,8 @@ export default function Staff() {
   // #618 — edit-modal state. null when closed; { id, name, email, role,
   // wellnessRole } when an admin clicked Edit on a row.
   const [editing, setEditing] = useState(null);
+  const [openGenericActions, setOpenGenericActions] = useState(null);
+  const [genericActionsAnchor, setGenericActionsAnchor] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
   // Reset-password modal state. Keeps the existing email flow and adds a
   // direct password-setting path from the same staff-row action.
@@ -561,11 +583,21 @@ export default function Staff() {
     loadStaff();
     loadCommissionProfiles();
     loadAvailableRoles();
+    if (!isWellness && !isTravel) loadSalesTeams();
     if (isWellness) {
       loadWellnessRoleTypes();
       loadClinicLocations();
     }
-  }, [isWellness]);
+  }, [isWellness, isTravel]);
+
+  const loadSalesTeams = async () => {
+    try {
+      const data = await fetchApi("/api/sales-teams");
+      setSalesTeams(Array.isArray(data) ? data : []);
+    } catch {
+      setSalesTeams([]);
+    }
+  };
 
   // Load availability when date changes or showAvailability is toggled
   useEffect(() => {
@@ -701,6 +733,12 @@ export default function Staff() {
       id: member.id,
       name: member.name || "",
       email: member.email || "",
+      jobTitle: member.jobTitle || "",
+      workNumber: member.workNumber || "",
+      mobileNumber: member.phone || "",
+      reportingTo: member.reportingToId ? String(member.reportingToId) : "",
+      teams: member.teamMemberships?.[0]?.team?.id ? String(member.teamMemberships[0].team.id) : "",
+      pipeline: member.defaultPipelineId ? String(member.defaultPipelineId) : "Default Pipeline",
       // PRD Gap §1.5 — current commission-profile assignment (null = unassigned).
       commissionProfileId:
         member.commissionProfileId == null
@@ -789,6 +827,13 @@ export default function Staff() {
         body: JSON.stringify({
           name: editing.name,
           email: editing.email,
+          ...( !isTravel && !isWellness ? {
+            jobTitle: editing.jobTitle,
+            workNumber: editing.workNumber,
+            mobileNumber: editing.mobileNumber,
+            reportingToId: editing.reportingTo || null,
+            defaultPipelineId: editing.pipeline === "Default Pipeline" ? null : editing.pipeline,
+          } : {}),
           role: accessTier,
           wellnessRole,
           // Travel-only: empty array means unrestricted / all sub-brands.
@@ -806,6 +851,10 @@ export default function Staff() {
           ...(manualPassword ? { password: manualPassword } : {}),
         }),
       });
+      if (!isTravel && !isWellness && editing.teams) {
+        const team = salesTeams.find((item) => String(item.id) === String(editing.teams));
+        if (team) await fetchApi(`/api/sales-teams/${team.id}`, { method: "PUT", body: JSON.stringify({ name: team.name, memberIds: [...new Set([...(team.members || []).map((member) => member.userId), editing.id])] }) });
+      }
       notify.success("Staff member updated.");
       setEditing(null);
       loadStaff();
@@ -830,6 +879,12 @@ export default function Staff() {
       name: "",
       email: "",
       password: "",
+      jobTitle: "",
+      workNumber: "",
+      mobileNumber: "",
+      reportingTo: "",
+      teams: "",
+      pipeline: "Default Pipeline",
       rbacRoleId: "",
       wellnessRole: "",
       wellnessRoleTouched: false,
@@ -874,15 +929,33 @@ export default function Staff() {
     const wellnessRole = creating.wellnessRoleTouched
       ? creating.wellnessRole || null
       : derivedWellnessRole || creating.wellnessRole || null;
+    if (!isTravel && !isWellness && accessTier === "ADMIN") {
+      const confirmed = await notify.confirm({
+        title: "Full Admin access",
+        message:
+          "This staff member will have full access to all CRM features and organization data. Only continue if you trust this person with complete administrative access.",
+        confirmText: "Continue and add Admin",
+        cancelText: "Cancel",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
     setSavingCreate(true);
     try {
-      await fetchApi("/api/staff", {
+      const created = await fetchApi("/api/staff", {
         method: "POST",
         body: JSON.stringify({
           name,
           email,
           password,
           role: accessTier,
+          ...( !isTravel && !isWellness ? {
+            jobTitle: creating.jobTitle,
+            workNumber: creating.workNumber,
+            mobileNumber: creating.mobileNumber,
+            reportingToId: creating.reportingTo,
+            defaultPipelineId: creating.pipeline === "Default Pipeline" ? null : creating.pipeline,
+          } : {}),
           wellnessRole,
           // Travel-only: empty array means unrestricted / all sub-brands.
           subBrandAccess: isTravel
@@ -893,6 +966,10 @@ export default function Staff() {
           rbacRoleId: parseInt(creating.rbacRoleId, 10),
         }),
       });
+      if (!isTravel && !isWellness && creating.teams && created?.id) {
+        const team = salesTeams.find((item) => String(item.id) === String(creating.teams));
+        if (team) await fetchApi(`/api/sales-teams/${team.id}`, { method: "PUT", body: JSON.stringify({ name: team.name, memberIds: [...new Set([...(team.members || []).map((member) => member.userId), created.id])] }) });
+      }
       notify.success(`${name} added to the team.`);
       setCreating(null);
       loadStaff();
@@ -1846,18 +1923,22 @@ export default function Staff() {
         ) : (
           <div
             onScroll={handleStaffTableScroll}
-            style={{ maxHeight: "calc(100vh - 28rem)", overflow: "auto" }}
+            style={{ maxHeight: "calc(100vh - 28rem)", overflow: "visible" }}
           >
+            {!isTravel && !isWellness && <style>{genericStaffTableStyles}</style>}
             <table
+              className={!isTravel && !isWellness ? "staff-generic-resizable-table" : undefined}
               style={{
                 width: "100%",
+                minWidth: !isTravel && !isWellness ? 1000 : undefined,
+                tableLayout: !isTravel && !isWellness ? "fixed" : undefined,
                 borderCollapse: "collapse",
                 fontSize: "0.875rem",
               }}
             >
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
-                  {["Name", "Email", "Role", "Joined", "Actions"].map((h) => (
+                  {( !isTravel && !isWellness ? ["User", "Email", "Reporting manager", "Role", "Last login", "Territories", "Teams", "Default pipeline", "Joined", "Actions"] : ["Name", "Email", "Role", "Joined", "Actions"] ).map((h, index) => (
                     <th
                       key={h}
                       style={{
@@ -1872,9 +1953,12 @@ export default function Staff() {
                         top: 0,
                         zIndex: 2,
                         background: "var(--bg-color)",
+                        width: !isTravel && !isWellness ? staffColumnWidths[index] : undefined,
+                        minWidth: !isTravel && !isWellness ? 60 : undefined,
                       }}
                     >
                       {h}
+                      {!isTravel && !isWellness && <span role="separator" aria-orientation="vertical" aria-label={`Resize ${h} column`} title={`Drag to resize ${h}`} onMouseDown={(event) => resizeStaffColumn(index, event)} style={{ position: "absolute", top: 0, right: 0, width: 8, height: "100%", cursor: "col-resize", touchAction: "none", borderRight: "2px solid var(--border-color)" }} />}
                     </th>
                   ))}
                 </tr>
@@ -1927,9 +2011,21 @@ export default function Staff() {
                     >
                       {member.email}
                     </td>
-                    <td style={{ padding: "0.75rem 0.5rem" }}>
-                      <RoleBadge member={member} />
-                    </td>
+                    {!isTravel && !isWellness && (
+                      <>
+                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{staff.find((manager) => String(manager.id) === String(member.reportingToId))?.name || "--"}</td>
+                        <td style={{ padding: "0.75rem 0.5rem" }}>{member.primaryRole?.name || member.role || "--"}</td>
+                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{member.lastLoginAt ? formatDate(member.lastLoginAt) : "--"}</td>
+                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{member.territories?.map((territory) => territory.name).filter(Boolean).join(", ") || "--"}</td>
+                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{member.teamMemberships?.map((membership) => membership.team?.name).filter(Boolean).join(", ") || "--"}</td>
+                        <td style={{ padding: "0.75rem 0.5rem" }}>{member.defaultPipelineId || "Default Pipeline"}</td>
+                      </>
+                    )}
+                    {(isTravel || isWellness) && (
+                      <td style={{ padding: "0.75rem 0.5rem" }}>
+                        <RoleBadge member={member} />
+                      </td>
+                    )}
                     <td
                       style={{
                         padding: "0.75rem 0.5rem",
@@ -1958,15 +2054,56 @@ export default function Staff() {
                       )}
                     </td>
                     <td
-                      style={{ padding: "0.75rem 0.5rem" }}
+                      style={{ padding: "0.75rem 0.5rem", position: "relative" }}
                       data-testid={`staff-actions-${member.id}`}
                     >
                       {canManageStaff || canViewPermissions ? (
+                        <>
+                          {!isTravel && !isWellness && (
+                            <select
+                              value=""
+                              onChange={(event) => {
+                                const action = event.target.value;
+                                if (action === "edit") openEdit(member);
+                                if (action === "toggle") toggleActive(member);
+                                if (action === "reset") resetPassword(member);
+                                if (action === "invite") resendInvite(member);
+                                if (action === "delete") deleteUser(member.id, member.name || member.email);
+                                if (action === "permissions") navigate(`/staff/${member.id}/permissions`);
+                                event.target.value = "";
+                              }}
+                              data-testid={`staff-action-more-${member.id}`}
+                              aria-label="More staff actions"
+                              style={{ ...actionButtonStyle("edit"), cursor: "pointer" }}
+                            >
+                              <option value="">More ▼</option>
+                              <option value="edit">Edit</option>
+                              {member.role !== "ADMIN" && <option value="toggle">{member.deactivatedAt ? "Reactivate" : "Deactivate"}</option>}
+                              <option value="reset">Reset Password</option>
+                              <option value="invite">Resend Invite</option>
+                              {member.role !== "ADMIN" && <option value="delete">Delete</option>}
+                              {canViewPermissions && <option value="permissions">Permissions</option>}
+                            </select>
+                          )}
                         <div
                           style={{
-                            display: "flex",
+                            display: !isTravel && !isWellness && openGenericActions !== member.id ? "none" : "flex",
                             gap: "0.3rem",
                             flexWrap: "wrap",
+                            ...(!isTravel && !isWellness ? {
+                              top: genericActionsAnchor ? genericActionsAnchor.bottom + 4 : 0,
+                              left: genericActionsAnchor ? genericActionsAnchor.left : 0,
+                              position: "fixed",
+                              zIndex: 20,
+                              minWidth: "9.5rem",
+                              padding: "0.45rem",
+                              flexDirection: "column",
+                              alignItems: "stretch",
+                              background: "var(--surface-color, #fff)",
+                              border: "1px solid var(--border-color, #ddd)",
+                              borderRadius: "0.5rem",
+                              boxShadow: "0 8px 20px rgba(0,0,0,0.14)",
+                            } : {}),
                           }}
                         >
                           {canManageStaff && (
@@ -2050,6 +2187,7 @@ export default function Staff() {
                             </button>
                           )}
                         </div>
+                        </>
                       ) : (
                         <span
                           style={{
@@ -2085,14 +2223,23 @@ export default function Staff() {
             background: "rgba(0,0,0,0.5)",
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
+            justifyContent: "flex-end",
+            overflow: "hidden",
             zIndex: 1000,
-            padding: "1rem",
           }}
         >
           <div
             className="card"
-            style={{ width: "100%", maxWidth: 460, padding: "1.5rem" }}
+            style={{
+              width: "min(720px, 100%)",
+              height: !isTravel && !isWellness ? "100vh" : "auto",
+              maxHeight: "100vh",
+              overflowY: "auto",
+              padding: "2rem 2.25rem",
+              borderRadius: "16px 0 0 16px",
+              boxSizing: "border-box",
+              boxShadow: "-12px 0 36px rgba(15, 23, 42, 0.18)",
+            }}
           >
             <div
               style={{
@@ -2226,6 +2373,7 @@ export default function Staff() {
                   style={{ width: "100%", marginTop: "0.25rem" }}
                 />
               </label>
+              {!isTravel && !isWellness && (<> <label>Job title<input className="input-field" value={creating.jobTitle} onChange={(e) => setCreating({ ...creating, jobTitle: e.target.value })} placeholder="e.g. SDR" /></label><label>Work number<input className="input-field" value={creating.workNumber} onChange={(e) => setCreating({ ...creating, workNumber: e.target.value })} placeholder="Staff official contact number" /></label><label>Mobile number<input className="input-field" value={creating.mobileNumber} onChange={(e) => setCreating({ ...creating, mobileNumber: e.target.value })} placeholder="Staff personal mobile number" /></label><label>Reporting to<select className="input-field" value={creating.reportingTo} onChange={(e) => setCreating({ ...creating, reportingTo: e.target.value })}><option value="">Click to select</option>{staff.filter((member) => member.role === "MANAGER" || member.role === "ADMIN").map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label><label>Teams<select className="input-field" value={creating.teams} onChange={(e) => setCreating({ ...creating, teams: e.target.value })}><option value="">Click to select</option>{salesTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label><label>Pipeline<select className="input-field" value={creating.pipeline} onChange={(e) => setCreating({ ...creating, pipeline: e.target.value })}><option value="Default Pipeline">Default Pipeline</option></select></label></>)}
               {/* Single Role dropdown — replaces the prior 3-way split
                   (access tier + job role + wellness role). The picked RBAC
                   role's key drives all three values via saveCreate's
@@ -2581,6 +2729,7 @@ export default function Staff() {
                   style={{ width: "100%", marginTop: "0.25rem" }}
                 />
               </label>
+              {!isTravel && !isWellness && (<><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Job title<input className="input-field" value={editing.jobTitle} onChange={(e) => setEditing({ ...editing, jobTitle: e.target.value })} /></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Work number<input className="input-field" value={editing.workNumber} onChange={(e) => setEditing({ ...editing, workNumber: e.target.value })} /></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile number<input className="input-field" value={editing.mobileNumber} onChange={(e) => setEditing({ ...editing, mobileNumber: e.target.value })} /></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Reporting to<select className="input-field" value={editing.reportingTo} onChange={(e) => setEditing({ ...editing, reportingTo: e.target.value })}><option value="">Click to select</option>{staff.filter((member) => member.id !== editing.id && (member.role === "MANAGER" || member.role === "ADMIN")).map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Teams<select className="input-field" value={editing.teams} onChange={(e) => setEditing({ ...editing, teams: e.target.value })}><option value="">Click to select</option>{salesTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Pipeline<select className="input-field" value={editing.pipeline} onChange={(e) => setEditing({ ...editing, pipeline: e.target.value })}><option value="Default Pipeline">Default Pipeline</option></select></label></>)}
               {/* Single Role dropdown — replaces Access tier + Job role +
                   Wellness role. saveEdit's derivation maps the picked RBAC
                   key onto User.role + wellnessRole so the existing backend
@@ -2750,3 +2899,13 @@ export default function Staff() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+

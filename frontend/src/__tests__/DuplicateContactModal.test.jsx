@@ -86,6 +86,15 @@ describe('DuplicateContactModal', () => {
     expect(props.onEditDetails).not.toHaveBeenCalled();
   });
 
+  it('keeps Edit details available while hiding Create anyway when forced duplicates are disabled', () => {
+    const { props } = renderModal({ allowCreateAnyway: false });
+
+    expect(screen.queryByText('Create anyway')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Edit details'));
+    expect(props.onEditDetails).toHaveBeenCalledTimes(1);
+    expect(props.onCreateAnyway).not.toHaveBeenCalled();
+  });
+
   it('disables "Create anyway" while creating=true and shows the loading label', () => {
     const { props } = renderModal({ creating: true });
     const btn = screen.getByText('Creating…');

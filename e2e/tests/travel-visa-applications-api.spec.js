@@ -1096,12 +1096,6 @@ test.describe("Visa Sure applications — document checklist lifecycle (FR-6)", 
       test.skip(true, "yasin@travelstall.in not seeded — skipping checklist lifecycle");
       return;
     }
-    const contactId = await findVisaSureContactId(request, token);
-    if (!contactId) {
-      test.skip(true, "no visa-sure contact on this stack — checklist lifecycle unreachable");
-      return;
-    }
-
     // 1. Seed a 3-doc template for (tourist × DEST): 2 required + 1 optional.
     const templateIds = [];
     for (const t of [
@@ -1119,8 +1113,12 @@ test.describe("Visa Sure applications — document checklist lifecycle (FR-6)", 
     }
 
     // 2. Create an application for the combo → checklist seeded from template.
+    // Use an application-owned contact instead of borrowing the first shared
+    // seeded contact. Parallel portal/contact specs may remove shared records,
+    // which made the immediately-following detail request intermittently 404.
     const cr = await post(request, token, "/api/travel/visa/applications", {
-      contactId,
+      applicantName: `${RUN_TAG} Checklist Applicant`,
+      applicantEmail: `${RUN_TAG.toLowerCase()}-checklist@e2e.local`,
       applicationType: "tourist",
       destinationCountry: DEST,
     });

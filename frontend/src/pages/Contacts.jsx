@@ -187,6 +187,7 @@ const Contacts = () => {
   const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
+  const isGeneric = !isTravel && !isWellness;
   const isAdmin = user?.role === 'ADMIN';
   // Bulk-select + bulk-assign — mirrors Leads.jsx exactly, same backend
   // endpoint (/api/contacts/bulk-assign), so this works unmodified across

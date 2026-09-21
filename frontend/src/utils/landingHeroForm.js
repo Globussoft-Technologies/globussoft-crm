@@ -11,6 +11,14 @@ export function heroFormEmbedSrc(formId) {
   return `/embed/web-form.html?id=${formId}`;
 }
 
+export function resizeHeroFormFrame(frame, rawHeight) {
+  const height = Number(rawHeight);
+  if (!frame || !Number.isFinite(height) || height <= 0) return false;
+  frame.style.height = `${Math.ceil(height)}px`;
+  frame.style.minHeight = "0";
+  return true;
+}
+
 // Injects the hero web-form iframe into a closed shadow root under
 // #hero-form-mount so the iframe is absent from ordinary Elements queries.
 // Backend authorization remains the actual security boundary.

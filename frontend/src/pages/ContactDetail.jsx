@@ -4,7 +4,7 @@ import {
   Mail, Phone, MessageSquare, StickyNote, CheckSquare,
   Video, TrendingUp, Plus, MoreHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   Calendar, FileText, Handshake, Pencil, Settings, Tag, X, Zap,
-  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle,
+  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -21,7 +21,7 @@ import {
 import {
   AccountsTab, ActivitiesTab, ConversationsTab, DealsTab, FilesTab, InsightsTab,
 } from '../components/contact/ProfileTabs';
-import ContactDetailsDrawer from '../components/contact/ContactDetailsDrawer';
+import ContactDetailsDrawer, { GENERIC_TAG_COLORS, dedupeTags, fallbackTagColor, normalizeTagRecords, tagKey, tagTextColor } from '../components/contact/ContactDetailsDrawer';
 import CallifiedCallDialog from '../components/CallifiedCallDialog';
 import Contacts from './Contacts';
 import '../components/contact/ContactProfile.css';
@@ -248,6 +248,17 @@ export default function ContactDetail() {
   const noteComposerRef = useRef(null);
   const [tagDraft, setTagDraft] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagCatalog, setTagCatalog] = useState([]);
+  const [tagCatalogLoading, setTagCatalogLoading] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
+  const [pendingTags, setPendingTags] = useState([]);
+  const [tagSelectionSaving, setTagSelectionSaving] = useState(false);
+  const [tagMutationError, setTagMutationError] = useState('');
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState(GENERIC_TAG_COLORS[0]);
+  const [tagCreating, setTagCreating] = useState(false);
+  const [tagColorSaving, setTagColorSaving] = useState('');
   const [modal, setModal] = useState(null);
   const [wellnessCallTarget, setWellnessCallTarget] = useState(null);
   const [activityPreset, setActivityPreset] = useState('Note');
@@ -271,6 +282,21 @@ export default function ContactDetail() {
   const notesRef = useRef(null);
   const noteInputRef = useRef(null);
   const moreRef = useRef(null);
+  const contactTagManagerEnabled = isGeneric;
+
+  useEffect(() => {
+    if (!contactTagManagerEnabled) return undefined;
+    let active = true;
+    setTagCatalogLoading(true);
+    fetchApi('/api/contacts/tags', { silent: true }).then((data) => {
+      if (active) setTagCatalog(normalizeTagRecords(data));
+    }).catch(() => {
+      if (active) setTagMutationError('Could not load tags.');
+    }).finally(() => {
+      if (active) setTagCatalogLoading(false);
+    });
+    return () => { active = false; };
+  }, [contactTagManagerEnabled]);
 
   const openWellnessBooking = () => {
     if (!isWellness) return;
@@ -471,6 +497,10 @@ export default function ContactDetail() {
   const deals = contact?.deals || [];
   const appointments = contact?.appointments || [];
   const tags = Array.isArray(contact?.tags) ? contact.tags : [];
+  const wellnessTagRecords = [...tagCatalog, ...tags
+    .filter((tag) => !tagCatalog.some((record) => tagKey(record.name) === tagKey(tag)))
+    .map((name) => ({ name: String(name), color: fallbackTagColor(name) }))];
+  const filteredWellnessTags = wellnessTagRecords.filter((record) => !tagSearch.trim() || record.name.toLowerCase().includes(tagSearch.trim().toLowerCase()));
   const authorOf = (a) => staff.find((u) => String(u.id) === String(a.userId))?.name
     || (a.userId ? `User #${a.userId}` : 'System');
 
@@ -489,16 +519,19 @@ export default function ContactDetail() {
 
   const handleClone = async () => {
     closeMore();
-    const stamp = Date.now().toString(36);
-    const email = contact.email && contact.email.includes('@')
-      ? contact.email.replace('@', `+clone-${stamp}@`)
-      : `clone-${stamp}@placeholder.local`;
     try {
-      const created = await fetchApi('/api/contacts', {
+      // Cloning is an explicit user action, so intentionally bypass the
+      // normal duplicate preflight and preserve the source contact values.
+      const cloneStamp = Date.now().toString(36);
+      const cloneEmail = isGeneric
+        ? contact.email
+        : (contact.email && contact.email.includes('@') ? contact.email.replace('@', `+clone-${cloneStamp}@`) : `clone-${cloneStamp}@placeholder.local`);
+      const created = await fetchApi(`/api/contacts${isGeneric ? '?force=true' : ''}`, {
         method: 'POST',
         body: JSON.stringify({
           name: `${contact.name} (Copy)`,
-          email,
+          email: cloneEmail,
+          phone: isGeneric ? contact.phone || undefined : undefined,
           company: contact.company || undefined,
           title: contact.title || undefined,
           status: contact.status || 'Lead',
@@ -605,8 +638,18 @@ export default function ContactDetail() {
       navigate(`/inbox?travelComposeTo=${encodeURIComponent(contact.email)}`);
       return;
     }
+    if (kind === 'email' && isWellness) {
+      const returnTo = `${location.pathname}${location.search}${location.hash}`;
+      navigate(`/inbox?wellnessComposeTo=${encodeURIComponent(contact.email)}&wellnessComposeReturnTo=${encodeURIComponent(returnTo)}`);
+      return;
+    }
     if (kind === 'meeting' && isTravel) {
       navigate(`/inbox?travelScheduleContactId=${encodeURIComponent(contact.id)}`);
+      return;
+    }
+    if (kind === 'meeting' && isWellness) {
+      const returnTo = `${location.pathname}${location.search}${location.hash}`;
+      navigate(`/inbox?wellnessScheduleContactId=${encodeURIComponent(contact.id)}&wellnessScheduleReturnTo=${encodeURIComponent(returnTo)}`);
       return;
     }
     if (kind === 'task' && isTravel) {
@@ -618,7 +661,7 @@ export default function ContactDetail() {
   };
 
   const openTravelEmail = (event) => {
-    if (!isTravel) return;
+    if (!isTravel && !isWellness) return;
     event.preventDefault();
     openAction('email');
   };
@@ -739,6 +782,84 @@ export default function ContactDetail() {
       setTagDraft('');
     } finally {
       setTagSaving(false);
+    }
+  };
+
+  const openWellnessTagPicker = () => {
+    setPendingTags(dedupeTags(tags));
+    setTagSearch('');
+    setNewTagName('');
+    setNewTagColor(GENERIC_TAG_COLORS[0]);
+    setTagMutationError('');
+    setTagPickerOpen(true);
+  };
+
+  const toggleWellnessTag = (nameValue) => {
+    setPendingTags((current) => current.some((tag) => tagKey(tag) === tagKey(nameValue))
+      ? current.filter((tag) => tagKey(tag) !== tagKey(nameValue))
+      : [...current, nameValue]);
+  };
+
+  const applyWellnessTags = async () => {
+    setTagSelectionSaving(true);
+    try {
+      await patchField({ tags: dedupeTags(pendingTags) });
+      setTagPickerOpen(false);
+    } catch {
+      setTagMutationError('Could not save tags.');
+    } finally {
+      setTagSelectionSaving(false);
+    }
+  };
+
+  const removeWellnessTag = async (nameValue) => {
+    setTagSaving(true);
+    try {
+      await patchField({ tags: tags.filter((tag) => tagKey(tag) !== tagKey(nameValue)) });
+    } finally {
+      setTagSaving(false);
+    }
+  };
+
+  const createWellnessTag = async () => {
+    const nameValue = newTagName.trim();
+    if (!nameValue || tagCatalog.some((record) => tagKey(record.name) === tagKey(nameValue))) {
+      setTagMutationError(nameValue ? 'That tag already exists.' : 'Enter a tag name.');
+      return;
+    }
+    setTagCreating(true);
+    try {
+      const created = await fetchApi('/api/contacts/tags', {
+        method: 'POST',
+        body: JSON.stringify({ name: nameValue, color: newTagColor }),
+      });
+      const record = normalizeTagRecords([created])[0] || { name: nameValue, color: newTagColor };
+      setTagCatalog((current) => [...current, record]);
+      setPendingTags((current) => [...current, record.name]);
+      setNewTagName('');
+      setTagMutationError('');
+    } catch {
+      setTagMutationError('Could not create tag.');
+    } finally {
+      setTagCreating(false);
+    }
+  };
+
+  const changeWellnessTagColor = async (nameValue, color) => {
+    const key = tagKey(nameValue);
+    const previous = tagCatalog;
+    setTagColorSaving(key);
+    setTagCatalog((current) => current.map((record) => tagKey(record.name) === key ? { ...record, color } : record));
+    try {
+      await fetchApi(`/api/contacts/tags/${encodeURIComponent(nameValue)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ color }),
+      });
+    } catch {
+      setTagCatalog(previous);
+      setTagMutationError('Could not update tag color.');
+    } finally {
+      setTagColorSaving('');
     }
   };
 
@@ -1125,7 +1246,7 @@ export default function ContactDetail() {
                 <div className="cp-ov-head-actions">
                   {isCustomizing ? (
                     <>
-                      {!isTravel && !isWellness && <button type="button" className="cp-action-btn cp-action-primary" onClick={() => { persistPrefs(prefs); setIsCustomizing(false); }}>Apply</button>}
+                      {!isTravel && <button type="button" className="cp-action-btn cp-action-primary" onClick={() => { persistPrefs(prefs); setIsCustomizing(false); }}>Apply</button>}
                       <button type="button" className="cp-action-btn" onClick={() => setIsCustomizing(false)}><XCircle size={13} /> Cancel customization</button>
                     </>
                   ) : (
@@ -1312,11 +1433,11 @@ export default function ContactDetail() {
                   {prefs.showSummary && summaryOpen && (
                     <>
                       {prefs.showTags && (
-                      <div className="cp-tags-row">
+                      <div className={`cp-tags-row${tagPickerOpen ? ' cp-tags-row-picker-open' : ''}`} onClick={(event) => { if (contactTagManagerEnabled && !event.target.closest('button, input')) openWellnessTagPicker(); }}>
                         <Tag size={13} />
-                        {tags.length === 0 && <span style={{ color: 'var(--text-secondary)' }}>Click to add tags</span>}
-                        {tags.map((t) => <span key={String(t)} className="cp-chip">{String(t)}</span>)}
-                        <form onSubmit={handleAddTag} className="cp-tag-form">
+                        {tags.length === 0 && <button type="button" className="cp-link-btn" onClick={openWellnessTagPicker}>Click to add tags</button>}
+                        {tags.map((t) => { const record = wellnessTagRecords.find((item) => tagKey(item.name) === tagKey(t)); const color = record?.color || fallbackTagColor(t); return <span key={String(t)} className="cp-chip" style={{ background: color, color: tagTextColor(color), borderColor: color }}>{String(t)}<button type="button" aria-label={`Remove tag ${String(t)}`} onClick={() => removeWellnessTag(t)} disabled={tagSaving}>×</button></span>; })}
+                        {!contactTagManagerEnabled && <form onSubmit={handleAddTag} className="cp-tag-form">
                           <input
                             className="cp-tag-input"
                             value={tagDraft}
@@ -1327,7 +1448,23 @@ export default function ContactDetail() {
                           {tagDraft.trim() && (
                             <button type="submit" className="cp-link-btn" disabled={tagSaving}>{tagSaving ? 'Adding…' : 'Add'}</button>
                           )}
-                        </form>
+                        </form>}
+                        {tags.length > 0 && <button type="button" className="cp-link-btn" onClick={openWellnessTagPicker}>+ Add tag</button>}
+                        {tagPickerOpen && (
+                          <div className="cd-tag-picker cp-contact-tag-picker" role="dialog" aria-label="Tag selector">
+                            <div className="cd-tag-picker-head"><strong>Add tags</strong><button type="button" className="cd-tag-picker-close" onClick={() => setTagPickerOpen(false)} aria-label="Close tag selector"><X size={14} /></button></div>
+                            <label className="cd-tag-picker-search"><Search size={13} /><input value={tagSearch} onChange={(e) => setTagSearch(e.target.value)} placeholder="Search tags" aria-label="Search tags" /></label>
+                            <div className="cd-tag-picker-list" role="listbox" aria-multiselectable="true">
+                              {tagCatalogLoading ? <div className="cd-tag-picker-message">Loading tags...</div> : filteredWellnessTags.length ? filteredWellnessTags.map((record) => { const selected = pendingTags.some((tag) => tagKey(tag) === tagKey(record.name)); return <div className={`cd-tag-option${selected ? ' is-selected' : ''}`} key={record.name}>
+                                <button type="button" role="option" aria-selected={selected} onClick={() => toggleWellnessTag(record.name)}><span className="cd-tag-option-check">{selected ? '✓' : ''}</span><span className="cd-tag-chip" style={{ background: record.color, borderColor: record.color, color: tagTextColor(record.color) }}>{record.name}</span></button>
+                                <label className="cd-tag-color"><input type="color" value={record.color} onChange={(e) => changeWellnessTagColor(record.name, e.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /></label>
+                              </div>; }) : <div className="cd-tag-picker-message">No tags available.</div>}
+                            </div>
+                            <form className="cd-create-tag" onSubmit={(e) => { e.preventDefault(); createWellnessTag(); }}><strong>Create new tag</strong><div className="cd-create-tag-row"><input value={newTagName} onChange={(e) => setNewTagName(e.target.value)} placeholder="Tag name" aria-label="Add tag" /><input type="color" value={newTagColor} onChange={(e) => setNewTagColor(e.target.value)} aria-label="New tag color" /><button type="submit" disabled={tagCreating}>{tagCreating ? 'Creating...' : 'Create'}</button></div></form>
+                            {tagMutationError && <div className="cd-tag-picker-error" role="alert">{tagMutationError}</div>}
+                            <div className="cd-tag-picker-actions"><button type="button" className="cd-tag-picker-cancel" onClick={() => setTagPickerOpen(false)}>Cancel</button><button type="button" className="cd-tag-picker-apply" onClick={applyWellnessTags} disabled={tagSelectionSaving || tagCreating}>{tagSelectionSaving ? 'Applying...' : 'Apply tags'}</button></div>
+                          </div>
+                        )}
                       </div>
                       )}
                       <div className="cp-info-grid">
@@ -1473,8 +1610,8 @@ export default function ContactDetail() {
             </div>
           )}
 
-          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel} genericTagsEnabled={isGeneric} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
-          {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
+          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
+          {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel || isWellness} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}
           {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}

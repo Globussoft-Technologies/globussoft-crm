@@ -174,6 +174,12 @@ test.describe('Contacts API — Generic tag catalog', () => {
       timeout: REQUEST_TIMEOUT,
     });
     expect(cleanup.status()).toBe(200);
+
+    const afterDelete = await get(request, token, '/api/contacts/tags');
+    expect(afterDelete.status()).toBe(200);
+    expect((await afterDelete.json()).tags).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: tag }),
+    ]));
   });
 });
 

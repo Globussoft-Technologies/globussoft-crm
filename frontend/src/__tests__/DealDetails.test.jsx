@@ -54,6 +54,34 @@ describe('<DealDetails />', () => {
     expect(fetchApiMock).toHaveBeenCalledWith('/api/deals/42');
   });
 
+  it('loads every stage from the selected Generic CRM pipeline and highlights only the deal stage', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/deals/42') return Promise.resolve({ ...deal, pipelineId: 7 });
+      if (url === '/api/pipeline_stages?pipelineId=7') {
+        return Promise.resolve([
+          { id: 1, name: 'Lead' },
+          { id: 2, name: 'Contacted' },
+          { id: 3, name: 'Proposal' },
+          { id: 4, name: 'Won' },
+          { id: 5, name: 'Lost' },
+        ]);
+      }
+      if (url.startsWith('/api/pipelines')) return Promise.resolve([{ id: 7, name: 'Enterprise', isDefault: true }]);
+      return Promise.resolve([]);
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Lead')).toBeInTheDocument();
+    expect(screen.getByText('Contacted')).toBeInTheDocument();
+    expect(screen.getByText('Proposal')).toBeInTheDocument();
+    expect(screen.getByText('Won')).toBeInTheDocument();
+    expect(screen.getByText('Lost')).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/pipeline_stages?pipelineId=7', { silent: true });
+    expect(screen.getByText('Proposal')).toHaveClass('current');
+    expect(screen.getByText('Lead')).not.toHaveClass('current');
+  });
+
   it('keeps the Add tag button available when a tag already exists', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/deals/42') return Promise.resolve({ ...deal, contact: { ...deal.contact, tags: ['Existing tag'] } });

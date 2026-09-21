@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useContext } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Mail,
   ArrowRight,
@@ -245,6 +246,7 @@ function formatStaffOptionLabel(staff) {
 }
 
 export default function Inbox() {
+  const navigate = useNavigate();
   const notify = useNotify();
   const { user, tenant } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === "travel";
@@ -253,9 +255,22 @@ export default function Inbox() {
   const travelComposeTo = isTravel && typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("travelComposeTo")
     : "";
+  const wellnessComposeTo = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessComposeTo")
+    : "";
+  const wellnessComposeReturnTo = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessComposeReturnTo")
+    : "";
   const travelScheduleContactId = isTravel && typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("travelScheduleContactId")
     : "";
+  const wellnessScheduleContactId = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessScheduleContactId")
+    : "";
+  const wellnessScheduleReturnTo = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessScheduleReturnTo")
+    : "";
+  const scheduleContactId = travelScheduleContactId || wellnessScheduleContactId;
   const canAssignMeetingStaff = user?.role === "ADMIN";
   const [emails, setEmails] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -264,9 +279,9 @@ export default function Inbox() {
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
 
-  const [showCompose, setShowCompose] = useState(Boolean(isTravel && travelComposeTo));
+  const [showCompose, setShowCompose] = useState(Boolean((isTravel && travelComposeTo) || (isWellness && wellnessComposeTo)));
   const [composeData, setComposeData] = useState(() => ({
-    to: travelComposeTo || "",
+    to: travelComposeTo || wellnessComposeTo || "",
     cc: "",
     bcc: "",
     subject: "",
@@ -310,19 +325,21 @@ export default function Inbox() {
   const [detail, setDetail] = useState(null);
 
   useEffect(() => {
-    if (!isTravel || !travelComposeTo) return;
+    const composeTo = isTravel ? travelComposeTo : wellnessComposeTo;
+    if ((!isTravel && !isWellness) || !composeTo) return;
     setComposeData((current) => ({
       ...current,
-      to: travelComposeTo,
+      to: composeTo,
     }));
     setShowCompose(true);
-  }, [isTravel, travelComposeTo]);
+  }, [isTravel, isWellness, travelComposeTo, wellnessComposeTo]);
 
   useEffect(() => {
-    if (!isTravel || !travelScheduleContactId) return;
-    setMeetData((current) => ({ ...current, contactId: travelScheduleContactId }));
+    const contactId = isTravel ? travelScheduleContactId : wellnessScheduleContactId;
+    if ((!isTravel && !isWellness) || !contactId) return;
+    setMeetData((current) => ({ ...current, contactId }));
     setShowMeet(true);
-  }, [isTravel, travelScheduleContactId]);
+  }, [isTravel, isWellness, travelScheduleContactId, wellnessScheduleContactId]);
 
   // Opening an email marks it read: optimistic local update (clears the
   // blue dot immediately) + persist via POST /api/communications/inbox/:id/read
@@ -460,7 +477,7 @@ export default function Inbox() {
     }
   };
 
-  const closeCompose = () => {
+  const closeCompose = (returnToOrigin = true) => {
     setShowCompose(false);
     setShowCcBcc(false);
     setShowRecipientSuggestions(false);
@@ -472,6 +489,17 @@ export default function Inbox() {
     setComposeData({ to: "", cc: "", bcc: "", subject: "", body: "" });
     setComposeAttachments([]);
     composeFileInputRef.current = null;
+    if (returnToOrigin && isWellness && wellnessComposeReturnTo?.startsWith("/")) {
+      navigate(wellnessComposeReturnTo);
+    }
+  };
+
+  const closeMeet = (returnToOrigin = true) => {
+    setShowMeet(false);
+    setMeetData({ contactId: "", date: "", time: "", description: "", staffIds: [] });
+    if (returnToOrigin && isWellness && wellnessScheduleReturnTo?.startsWith("/")) {
+      navigate(wellnessScheduleReturnTo);
+    }
   };
 
   const meetingStaffOptions = staffMembers
@@ -659,7 +687,7 @@ export default function Inbox() {
       });
 
       notify.success("Email sent successfully.");
-      closeCompose();
+      closeCompose(false);
       await loadEmailsPage({ page: 1, reset: true });
     } catch (err) {
       console.error(err);
@@ -864,8 +892,7 @@ export default function Inbox() {
       }
 
       notify[hasDeliveryIssue ? "info" : "success"](parts.join(" "));
-      setShowMeet(false);
-      setMeetData({ contactId: "", date: "", time: "", description: "", staffIds: [] });
+      closeMeet(false);
     } catch (err) {
       console.error(err);
       notify.error("Failed to schedule meeting.");
@@ -1692,10 +1719,10 @@ export default function Inbox() {
                   onChange={(e) => setMeetData({ ...meetData, contactId: e.target.value })}
                 >
                   <option value="">-- Choose Contact --</option>
-                  {contacts.filter((c) => c.email || String(c.id) === String(travelScheduleContactId)).length > 0 && (
+                  {contacts.filter((c) => c.email || String(c.id) === String(scheduleContactId)).length > 0 && (
                     <optgroup label="Contacts">
                       {contacts
-                        .filter((c) => c.email || String(c.id) === String(travelScheduleContactId))
+                        .filter((c) => c.email || String(c.id) === String(scheduleContactId))
                         .map((c) => (
                           <option key={`c-${c.id}`} value={c.id}>
                             {c.email}
@@ -1856,7 +1883,7 @@ export default function Inbox() {
               >
                 <button
                   type="button"
-                  onClick={() => setShowMeet(false)}
+                  onClick={() => closeMeet()}
                   style={{
                     background: "transparent",
                     color: "var(--text-secondary)",

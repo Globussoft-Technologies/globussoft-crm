@@ -187,6 +187,7 @@ const Contacts = () => {
   const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
+  const isGeneric = !isTravel && !isWellness;
   const isAdmin = user?.role === 'ADMIN';
   // Bulk-select + bulk-assign — mirrors Leads.jsx exactly, same backend
   // endpoint (/api/contacts/bulk-assign), so this works unmodified across
@@ -1731,7 +1732,7 @@ const Contacts = () => {
         {/* Split-table layout: freeze the name column, keep the rest in a
             synced scrollable pane, and preserve the existing filters and
             row actions without changing the fetch or CRUD flows. */}
-        <div className="contacts-split-table">
+        <div className={`contacts-split-table${isGeneric && !loading && sortedContacts.length === 0 ? ' contacts-split-table--generic-empty' : ''}`}>
           <div
             className="contacts-table-frozen-pane"
             style={{ width: contactsFrozenTableWidthPx }}

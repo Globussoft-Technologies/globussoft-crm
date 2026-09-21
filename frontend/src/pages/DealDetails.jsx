@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, BriefcaseBusiness, FileText, Pencil, Settings2, NotebookPen, Search, Users, X } from 'lucide-react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -6,6 +6,7 @@ import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import { formatDate, formatDateMedium, formatDateTime } from '../utils/date';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../appContexts';
 import { EmailModal, MeetingModal } from '../components/contact/ActionModals';
 import { patchContact } from '../components/contact/contactActions';
 import { dedupeTags, fallbackTagColor, GENERIC_TAG_COLORS, normalizeTagRecords, tagKey, tagTextColor } from '../components/contact/ContactDetailsDrawer';
@@ -101,7 +102,7 @@ function fieldValue(deal, key, pipeline, latestNote) {
 }
 function display(value, type, deal) { if (value == null || value === '' || (Array.isArray(value) && value.length === 0)) return EMPTY; if (type === 'currency') return formatMoney(value, { currency: deal.currency }); if (type === 'date') return formatDateMedium(value); if (type === 'dateTime') return formatDateTime(value); if (type === 'relative') return relative(value); if (type === 'percent') return `${value}%`; if (type === 'tags') return Array.isArray(value) ? value.join(', ') : value; return String(value); }
 
-const inlineEditStyles = `.deal-inline-editor{position:fixed;z-index:10000;width:min(270px,calc(100vw - 28px));padding:10px;background:#fff;border:1px solid var(--border-color);border-radius:7px;box-shadow:0 8px 24px rgba(15,23,42,.18)}.deal-inline-editor label{display:grid;gap:5px;font-size:11px;color:var(--text-secondary)}.deal-inline-editor input,.deal-inline-editor select,.deal-inline-editor textarea{width:100%;box-sizing:border-box;border:1px solid var(--border-color);border-radius:5px;padding:7px;background:#fff;color:var(--text-primary);font:inherit}.deal-inline-editor textarea{min-height:58px;resize:vertical}.deal-inline-editor-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:9px}.deal-inline-editor-actions button{font-size:11px;padding:5px 9px}.deal-inline-editor .deal-edit-error{margin:7px 0 0}`;
+const inlineEditStyles = `.deal-inline-editor{position:fixed;z-index:10000;width:min(270px,calc(100vw - 28px));padding:10px;background:var(--modal-bg,#fff);border:1px solid var(--border-color);border-radius:7px;box-shadow:0 8px 24px rgba(15,23,42,.18)}.deal-inline-editor label{display:grid;gap:5px;font-size:11px;color:var(--text-secondary)}.deal-inline-editor input,.deal-inline-editor select,.deal-inline-editor textarea{width:100%;box-sizing:border-box;border:1px solid var(--border-color);border-radius:5px;padding:7px;background:var(--input-bg,var(--surface-color));color:var(--text-primary);font:inherit}.deal-inline-editor textarea{min-height:58px;resize:vertical}.deal-inline-editor-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:9px}.deal-inline-editor-actions button{font-size:11px;padding:5px 9px}.deal-inline-editor .deal-edit-error{margin:7px 0 0}`;
 const stageChevronStyles = `.deal-reference-tracker .deal-stages{gap:0}.deal-reference-tracker .deal-stage{position:relative;z-index:1;justify-content:center;min-height:20px;padding:0 14px 0 10px;border-right:0;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 50%,calc(100% - 10px) 100%,0 100%)}.deal-reference-tracker .deal-stage:not(:first-child){margin-left:-1px;padding-left:14px;clip-path:polygon(10px 0,calc(100% - 10px) 0,100% 50%,calc(100% - 10px) 100%,10px 100%,0 50%)}.deal-reference-tracker .deal-stage:hover{z-index:2}`;
 const dealTagStyles = `.deal-tag-line{position:relative;display:flex;align-items:center;flex-wrap:wrap;gap:6px}.deal-tag-line .cd-tag-chip{font-size:11px}.deal-tag-picker{left:0}`;
 function InfoCard({ title, children, className = '' }) { return <section className={`deal-info-card ${className}`}><style>{referenceStyles + editStyles + inlineEditStyles + '.deal-reference-actions{display:none}.deal-reference-cards{min-height:0;align-items:stretch}.deal-reference-cards>.deal-info-card,.deal-reference-cards>.deal-side-cards{min-height:0}.deal-reference-notes{align-self:stretch;min-height:0;overflow:hidden;contain:size}.deal-reference-notes .deal-card-heading{flex:0 0 auto}.deal-reference-notes .deal-notes-list{flex:1 1 auto;width:100%;min-height:0;height:auto;overflow-y:auto;overflow-x:hidden}' + stageChevronStyles}</style><div className="deal-card-heading"><h2>{title}</h2></div>{children}</section>; }
@@ -314,7 +315,7 @@ function DealContactTable({ contact, returnTo }) {
   return <div className="deal-contacts-table-wrap"><table className="deal-contacts-table"><thead><tr><th>Name</th><th>Email</th><th>Last Contacted Time</th><th>Open Deals Amount</th><th>Won Deals Amount</th></tr></thead><tbody><tr><td><span className="deal-contact-person"><span className="deal-contact-avatar">{initials}</span><strong onClick={openContact} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openContact(); } }} role={contact.id != null ? 'link' : undefined} tabIndex={contact.id != null ? 0 : undefined}>{name}</strong></span></td><td>{contact.email || EMPTY}</td><td>{lastContacted ? formatDateTime(lastContacted) : EMPTY}</td><td>{formatMoney(total(openDeals), { currency: deals[0]?.currency || 'USD' })}</td><td>{formatMoney(total(wonDeals), { currency: deals[0]?.currency || 'USD' })}</td></tr></tbody></table></div>;
 }
 
-function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, products, onStageSelect, activityPageData, activityPage, activityLoading, onActivitiesOpen, onActivitiesPageChange, dealTagCatalog = [] }) {
+function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, products, onStageSelect, stageError, activityPageData, activityPage, activityLoading, onActivitiesOpen, onActivitiesPageChange, dealTagCatalog = [] }) {
   const [tab, setTab] = useState('Deal details');
   const [query, setQuery] = useState('');
   const [showEmpty, setShowEmpty] = useState(false);
@@ -518,41 +519,76 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
       <div className="deal-side-cards"><InfoCard title="Contacts by sales owner"><div className="deal-related"><Users size={16} /><span>{personName(deal.owner) || 'Unassigned'} ({deal.contact ? 1 : 0})</span></div></InfoCard><InfoCard title={`Products (${products.length})`}>{products.length ? products.map((product, index) => <div className="deal-product" key={`${product.name}-${index}`}><span>{product.name}</span><strong>{product.quantity}</strong></div>) : <span className="deal-empty">No products linked</span>}</InfoCard><InfoCard title="Upcoming meeting"><span className="deal-empty">{deal.upcomingMeeting?.title || 'No upcoming meeting'}</span>{deal.upcomingMeeting && <small>{formatDateTime(deal.upcomingMeeting.startAt)}</small>}</InfoCard></div>
       <InfoCard title="Notes" className="deal-reference-notes"><textarea aria-label="Deal note" placeholder="Type your note here..." readOnly onFocus={() => window.dispatchEvent(new Event('deal-note-open'))} /><div className="deal-note"><NotebookPen size={16} /><div><strong>{latestNote?.description || 'No notes available'}</strong>{latestNote && <small>Posted by {personName(latestNote.user) || 'CRM user'}, {relative(latestNote.createdAt)}</small>}</div></div></InfoCard>
     </div>
-    <section className="deal-reference-tracker"><div className="deal-age"><span>Created {relative(deal.createdAt)}</span><span>Expected close date: {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</span></div><div className="deal-stages">{stageRows.map((stage, index) => <div className={`deal-stage ${index <= activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} key={stage.id || stage.name}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</div>)}</div></section>
+    <section className="deal-reference-tracker"><div className="deal-age"><span>Created {relative(deal.createdAt)}</span><span>Expected close date: {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</span></div>{stageError ? <div className="deal-empty">{stageError}</div> : stageRows.length ? <div className="deal-stages">{stageRows.map((stage, index) => <div className={`deal-stage ${index <= activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} key={stage.id || stage.name}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</div>)}</div> : <div className="deal-empty">No stages configured for this pipeline.</div>}</section>
     <div className="deal-reference-workspace"><nav className="deal-reference-nav"><h2>Overview</h2>{navItems.map((item) => <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => selectTab(item)}>{item}</button>)}</nav><main className="deal-reference-main"><div className="deal-details-content"><div className="deal-details-toolbar"><div><h2>{tab === 'Deal details' ? 'Deal details' : tab}</h2><button type="button" className="deal-link"><Settings2 size={14} /> Manage fields</button></div><label><Search size={15} /><input aria-label="Search fields" placeholder="Search fields" value={query} onChange={(event) => setQuery(event.target.value)} /></label><label className="deal-switch"><input type="checkbox" checked={showEmpty} onChange={(event) => setShowEmpty(event.target.checked)} /> Show empty fields</label></div>{tab === 'Activities' && <div className="deal-activity-list">{(deal.activities || []).slice(0, 10).map((item) => <div key={`${item.type}-${item.id}`}><FileText size={15} /><span><strong>{item.type || 'Activity'}</strong>{['Email', 'Note'].includes(item.type) ? <RichTextNotePreview value={item.description} /> : plainText(item.description)}<small>{formatDate(item.createdAt)}</small></span></div>)}</div>}{tab === 'Deal details' && visibleSections.map((section) => <Section key={section.key} section={section} deal={deal} pipeline={pipeline} latestNote={latestNote} showEmpty={showEmpty} />)}{!['Deal details', 'Activities'].includes(tab) && <div className="deal-placeholder"><FileText size={25} /><h2>{tab}</h2><p>This workspace is ready for {tab.toLowerCase()} data when that module is enabled.</p></div>}</div></main></div>
   </div>;
 }
 
 export default function DealDetails() {
-  const { dealId } = useParams(); const navigate = useNavigate(); const [deal, setDeal] = useState(null); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [dealTagCatalog, setDealTagCatalog] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [tab, setTab] = useState('Deal details'); const [query, setQuery] = useState(''); const [showEmpty, setShowEmpty] = useState(false);
+  const { dealId } = useParams(); const navigate = useNavigate(); const [deal, setDeal] = useState(null); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [contacts, setContacts] = useState([]); const [dealTagCatalog, setDealTagCatalog] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [tab, setTab] = useState('Deal details'); const [query, setQuery] = useState(''); const [showEmpty, setShowEmpty] = useState(false);
+  const [stageError, setStageError] = useState('');
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   const notify = useNotify();
   const load = useCallback(async () => {
     if (!/^\d+$/.test(String(dealId)) || Number(dealId) < 1) { setError('This deal could not be found.'); setLoading(false); return; }
     setLoading(true);
     setError('');
     try {
-      const [dealResult, stagesResult, pipelinesResult] = await Promise.allSettled([
+      const [dealResult, pipelinesResult, contactsResult] = await Promise.allSettled([
         fetchApi(`/api/deals/${dealId}`),
-        fetchApi('/api/pipeline_stages', { silent: true }),
         fetchApi('/api/pipelines?fields=summary', { silent: true }),
+        fetchApi('/api/contacts?limit=200', { silent: true }),
       ]);
       if (dealResult.status === 'rejected') throw dealResult.reason;
-      setDeal(dealResult.value);
-      setStages(stagesResult.status === 'fulfilled' && Array.isArray(stagesResult.value) ? stagesResult.value : []);
+      const loadedDeal = dealResult.value;
+      const stagesResult = await Promise.allSettled([
+        fetchApi(isGeneric && loadedDeal?.pipelineId ? `/api/pipeline_stages?pipelineId=${encodeURIComponent(loadedDeal.pipelineId)}` : '/api/pipeline_stages', { silent: true }),
+      ]).then(([result]) => result);
+      setDeal(loadedDeal);
+      if (stagesResult.status === 'fulfilled' && Array.isArray(stagesResult.value)) {
+        setStages(stagesResult.value);
+        setStageError('');
+      } else {
+        setStages([]);
+        setStageError(isGeneric && loadedDeal?.pipelineId ? 'Unable to load stages for this pipeline.' : '');
+      }
       setPipelines(pipelinesResult.status === 'fulfilled' && Array.isArray(pipelinesResult.value) ? pipelinesResult.value : []);
+      const contactRows = contactsResult.status === 'fulfilled' ? contactsResult.value : [];
+      setContacts(Array.isArray(contactRows) ? contactRows : (contactRows?.data || []));
     } catch (err) {
       setError(err?.serverMessage || err?.message || 'Unable to load this deal.');
     } finally {
       setLoading(false);
     }
-  }, [dealId]);
+  }, [dealId, isGeneric]);
   useEffect(() => { load(); }, [load]);
   const pipeline = useMemo(() => pipelines.find((p) => String(p.id) === String(deal?.pipelineId)), [pipelines, deal]);
-  const stageRows = useMemo(() => stages.length ? stages : [{ name: deal?.stage || 'Current stage', color: 'var(--accent-color)' }], [stages, deal]);
+  const stageRows = useMemo(() => {
+    if (stages.length) return stages;
+    // Generic CRM must display the selected pipeline's assignments only. Do
+    // not replace a missing assignment list with the deal's current stage.
+    if (isGeneric && deal?.pipelineId) return [];
+    return [{ name: deal?.stage || 'Current stage', color: 'var(--accent-color)' }];
+  }, [stages, deal, isGeneric]);
   const latestNote = useMemo(() => { const note = (deal?.activities || []).find((a) => String(a.type || '').toLowerCase() === 'note') || (deal?.activities || [])[0]; return note ? { ...note, description: plainText(note.description) } : note; }, [deal]);
   const visibleSections = dealFieldSections.map((section) => ({ ...section, fields: section.fields.filter(([, label]) => !query || label.toLowerCase().includes(query.toLowerCase())) })).filter((section) => section.fields.length);
   const products = (deal?.quotes || []).flatMap((quote) => quote.lineItems || []).map((item) => ({ name: item.productName || item.name || 'Product', quantity: item.quantity || 1, setupFee: item.setupFee, unitPrice: item.unitPrice, discount: item.discount, currency: item.currency || deal?.currency }));
-  const applyUpdatedDeal = (updated) => setDeal((current) => ({ ...current, ...updated, contact: updated?.contact || current.contact, owner: updated?.owner || current.owner, activities: updated?.activities || current.activities, quotes: updated?.quotes || current.quotes }));
+  const applyUpdatedDeal = (updated) => {
+    setDeal((current) => ({ ...current, ...updated, contact: updated?.contact || current.contact, owner: updated?.owner || current.owner, activities: updated?.activities || current.activities, quotes: updated?.quotes || current.quotes }));
+    if (isGeneric && updated?.pipelineId) {
+      fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(updated.pipelineId)}`, { silent: true })
+        .then((nextStages) => {
+          if (!Array.isArray(nextStages)) throw new Error('Invalid pipeline stages response');
+          setStages(nextStages);
+          setStageError('');
+        })
+        .catch(() => {
+          setStages([]);
+          setStageError('Unable to load stages for this pipeline.');
+        });
+    }
+  };
   const updateStage = async (stageName) => {
     const targetStage = slug(stageName);
     if (!targetStage || targetStage === slug(deal.stage)) return;
@@ -569,8 +605,8 @@ export default function DealDetails() {
   };
   if (loading) return <div className="deal-details-page"><div className="deal-loading"><div className="deal-skeleton" /><div className="deal-skeleton short" /><p>Loading deal details...</p></div></div>;
   if (error || !deal) return <div className="deal-details-page"><div className="deal-error"><h1>Deal not found</h1><p>{error || 'This deal is no longer available.'}</p><button type="button" className="deal-primary" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Back to Deals and Pipelines</button><button type="button" className="deal-link" onClick={load}>Try again</button></div></div>;
-  const current = slug(deal.stage); const activeIndex = Math.max(0, stageRows.findIndex((stage) => slug(stage.name) === current)); const notes = deal.activities || [];
-  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} dealTagCatalog={dealTagCatalog} /><InlineDealEditor deal={deal} stages={stages} pipelines={pipelines} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} /><DealTagEditor deal={deal} onCatalogChange={setDealTagCatalog} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} /></>;
+  const current = slug(deal.stage); const activeIndex = stageRows.findIndex((stage) => deal.stageId != null ? String(stage.id) === String(deal.stageId) : slug(stage.name) === current); const notes = deal.activities || [];
+  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} stageError={stageError} dealTagCatalog={dealTagCatalog} /><InlineDealEditor deal={deal} contacts={contacts} stages={stages} pipelines={pipelines} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} /><DealTagEditor deal={deal} onCatalogChange={setDealTagCatalog} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} /></>;
   // return <div className="deal-details-page"><style>{styles}</style><div className="deal-breadcrumb"><button type="button" className="deal-link" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Deals and Pipelines</button><span>/</span><span>{deal.title || 'Untitled deal'}</span></div><header className="deal-header"><div><div className="deal-title-row"><BriefcaseBusiness size={22} color="var(--accent-color)" /><h1>{deal.title || 'Untitled deal'}</h1></div><div className="deal-meta"><strong>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong><span>{deal.forecastCategory || deal.paymentStatus || EMPTY}</span><span>{Array.isArray(deal.tags) && deal.tags.length ? deal.tags.join(', ') : 'Click to add tags'}</span></div></div><button type="button" className="deal-secondary" onClick={() => navigate('/pipeline')}><ArrowLeft size={14} /> Back</button></header><div className="deal-top-grid"><InfoCard title="Overview"><Pair label="Related account" value={deal.contact?.company} deal={deal} /><Pair label="Sales owner" value={personName(deal.owner)} deal={deal} /><Pair label="Expected close date" value={deal.expectedClose} type="date" deal={deal} /><Pair label="Deal value" value={deal.amount} type="currency" deal={deal} /><Pair label="Forecast category" value={deal.forecastCategory} deal={deal} /><Pair label="Pipeline" value={pipeline?.name} deal={deal} /></InfoCard><InfoCard title="Status and assignment"><Pair label="Related contact" value={personName(deal.contact)} deal={deal} /><Pair label="Deal type" value={deal.dealType} deal={deal} /><Pair label="Lost reason" value={deal.lostReason} deal={deal} /><Pair label="Closed date" value={deal.closedAt} type="date" deal={deal} /><Pair label="Payment status" value={deal.paymentStatus} deal={deal} /></InfoCard><div className="deal-side-cards"><InfoCard title="Contacts by sales owner"><div className="deal-related"><Users size={16} /><span>{personName(deal.owner) || 'Unassigned'} ({deal.contact ? 1 : 0})</span></div></InfoCard><InfoCard title={`Products (${products.length})`}>{products.length ? products.map((p, i) => <div className="deal-product" key={`${p.name}-${i}`}><span>{p.name}</span><strong>{p.quantity}</strong></div>) : <span className="deal-empty">No products linked</span>}</InfoCard><InfoCard title="Upcoming meeting"><span className="deal-empty">{deal.upcomingMeeting?.title || 'No upcoming meeting'}</span>{deal.upcomingMeeting && <small>{formatDateTime(deal.upcomingMeeting.startAt)}</small>}</InfoCard></div></div><InfoCard title="Notes"><textarea aria-label="Deal note" placeholder="Type your note here..." readOnly /><div className="deal-note"><NotebookPen size={16} /><div><strong>{latestNote?.description || 'No notes available'}</strong>{latestNote && <small>Posted by {personName(latestNote.user) || 'CRM user'}, {relative(latestNote.createdAt)}</small>}</div></div><button type="button" className="deal-link">View all notes</button></InfoCard><section className="deal-tracker"><div className="deal-section-heading"><strong>Pipeline progress</strong><span>{pipeline?.name || 'Pipeline'}</span></div><div className="deal-stages">{stageRows.map((stage, index) => <div className={`deal-stage ${index <= activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} key={stage.id || stage.name}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</div>)}</div><div className="deal-age">Created {relative(deal.createdAt)} · Expected close {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</div></section><nav className="deal-tabs" aria-label="Deal workspace tabs">{tabs.map((item) => <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>)}</nav>{tab === 'Overview' && <div className="deal-overview-grid"><InfoCard title="Deal summary"><Pair label="Stage" value={deal.stage} deal={deal} /><Pair label="Probability" value={deal.probability} type="percent" deal={deal} /><Pair label="Created" value={deal.createdAt} type="date" deal={deal} /></InfoCard><InfoCard title="Latest activity">{notes.length ? <div className="deal-activity-list">{notes.slice(0, 5).map((item) => <div key={`${item.type}-${item.id}`}><FileText size={15} /><span><strong>{item.type || 'Activity'}</strong>{item.description}<small>{formatDate(item.createdAt)}</small></span></div>)}</div> : <span className="deal-empty">No activities available</span>}</InfoCard></div>}{tab === 'Deal details' && <div className="deal-details-content"><div className="deal-details-toolbar"><div><h2>Deal details</h2><button type="button" className="deal-link"><Settings2 size={14} /> Manage fields</button></div><label><Search size={15} /><input aria-label="Search fields" placeholder="Search fields" value={query} onChange={(e) => setQuery(e.target.value)} /></label><label className="deal-switch"><input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} /> Show empty fields</label></div>{visibleSections.map((section) => <Section key={section.key} section={section} deal={deal} pipeline={pipeline} latestNote={latestNote} showEmpty={showEmpty} />)}</div>}{!['Overview', 'Deal details'].includes(tab) && <div className="deal-placeholder"><FileText size={25} /><h2>{tab}</h2><p>This workspace is ready for {tab.toLowerCase()} data when that module is enabled.</p></div>}</div>;
 }
 

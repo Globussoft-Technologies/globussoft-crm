@@ -14,6 +14,10 @@ const Pipelines = () => {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [stages, setStages] = useState([]);
+  const [availableStages, setAvailableStages] = useState([]);
+  const [loadingStages, setLoadingStages] = useState(false);
+  const [editingStageId, setEditingStageId] = useState(null);
 
   const fetchPipelines = () => {
     setLoading(true);
@@ -32,6 +36,11 @@ const Pipelines = () => {
 
   const openCreate = () => {
     setEditing(null);
+    setStages([]);
+    setAvailableStages([]);
+    setLoadingStages(false);
+    setEditingStageId(null);
+    fetchApi('/api/pipeline_stages?reusable=true').then((data) => setAvailableStages(Array.isArray(data) ? data : [])).catch(() => setAvailableStages([]));
     setForm(emptyForm);
     setError('');
     setShowModal(true);
@@ -39,6 +48,21 @@ const Pipelines = () => {
 
   const openEdit = (p) => {
     setEditing(p);
+    setStages([]);
+    setAvailableStages([]);
+    setLoadingStages(true);
+    setEditingStageId(null);
+    Promise.all([
+      fetchApi(`/api/pipeline_stages?pipelineId=${p.id}`),
+      fetchApi('/api/pipeline_stages?reusable=true'),
+    ]).then(([stageData, reusableData]) => {
+      setStages(Array.isArray(stageData) ? stageData : []);
+      setAvailableStages(Array.isArray(reusableData) ? reusableData : []);
+    }).catch((e) => {
+      setStages([]);
+      setAvailableStages([]);
+      setError(e.message || 'Failed to load pipeline stages');
+    }).finally(() => setLoadingStages(false));
     setForm({ name: p.name || '', description: p.description || '', isDefault: !!p.isDefault });
     setError('');
     setShowModal(true);
@@ -49,10 +73,67 @@ const Pipelines = () => {
     setEditing(null);
     setForm(emptyForm);
     setError('');
+    setStages([]);
+    setAvailableStages([]);
+    setLoadingStages(false);
+    setEditingStageId(null);
+  };
+
+  const addExistingStage = async (event) => {
+    const stageId = Number(event.target.value);
+    event.target.value = '';
+    if (!stageId || stages.some((stage) => stage.id === stageId)) return;
+    const selected = availableStages.find((stage) => stage.id === stageId);
+    if (!selected) return;
+    if (!editing) {
+      setStages((current) => [...current, { ...selected, isExisting: true }]);
+      return;
+    }
+    try {
+      const created = await fetchApi('/api/pipeline_stages', { method: 'POST', body: JSON.stringify({ pipelineId: editing.id, stageId, position: stages.length }) });
+      setStages((current) => [...current, created]);
+    } catch (e) { setError(e.message || 'Failed to add existing stage'); }
+  };
+
+  const addStage = async () => {
+    if (!editing) {
+      setStages((current) => [...current, { name: '', color: '#3b82f6' }]);
+      return;
+    }
+    try {
+      const created = await fetchApi('/api/pipeline_stages', { method: 'POST', body: JSON.stringify({ pipelineId: editing.id, name: `New Stage ${stages.length + 1}`, position: stages.length }) });
+      setStages((current) => [...current, created]);
+    } catch (e) { setError(e.message || 'Failed to add stage'); }
+  };
+
+  const updateStage = async (stage, name) => {
+    const value = name.trim();
+    if (!value || stage.name === value) return;
+    try {
+      const updated = await fetchApi(`/api/pipeline_stages/${stage.id}`, { method: 'PUT', body: JSON.stringify({ name: value, color: stage.color, position: stage.position }) });
+      setStages((current) => current.map((item) => item.id === stage.id ? updated : item));
+      setEditingStageId(null);
+    } catch (e) { setError(e.message || 'Failed to update stage'); }
+  };
+
+  const removeStage = async (stage, stageIndex) => {
+    if (stages.length <= 1) { setError('A pipeline must contain at least one stage.'); return; }
+    try {
+      if (stage.id) await fetchApi(`/api/pipeline_stages/${stage.id}${editing ? `?pipelineId=${editing.id}` : ''}`, { method: 'DELETE' });
+      setStages((current) => current.filter((item, itemIndex) => itemIndex !== stageIndex));
+    } catch (e) { setError(e.message || 'Failed to remove stage'); }
   };
 
   const handleSave = async () => {
     if (!form.name.trim()) { setError('Pipeline name is required'); return; }
+    if (!editing && stages.length === 0) { setError('Add at least one stage before creating a pipeline.'); return; }
+    if (!editing && stages.some((stage) => !stage.name.trim())) { setError('Complete or remove every stage before creating the pipeline.'); return; }
+    const stageNames = stages.map((stage) => stage.name.trim().toLowerCase());
+    if (new Set(stageNames).size !== stageNames.length) { setError('A pipeline cannot contain the same stage more than once.'); return; }
+    if (!editing && stages.some((stage) => !stage.id && availableStages.some((existing) => existing.name.trim().toLowerCase() === stage.name.trim().toLowerCase()))) {
+      setError('This stage already exists. Select the existing stage instead of creating a duplicate.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -68,7 +149,12 @@ const Pipelines = () => {
       } else {
         await fetchApi('/api/pipelines', {
           method: 'POST',
-          body: JSON.stringify(form),
+          body: JSON.stringify({
+            ...form,
+            stages: stages.map((stage) => (stage.id
+              ? { stageId: stage.id }
+              : { name: stage.name.trim(), color: stage.color })),
+          }),
         });
       }
       closeModal();
@@ -85,6 +171,15 @@ const Pipelines = () => {
       fetchPipelines();
     } catch (e) {
       notify.error(e.message || 'Failed to set default');
+    }
+  };
+
+  const handleRemoveDefault = async (id) => {
+    try {
+      await fetchApi(`/api/pipelines/${id}/remove-default`, { method: 'POST' });
+      fetchPipelines();
+    } catch (e) {
+      notify.error(e.message || 'Failed to remove default pipeline');
     }
   };
 
@@ -217,6 +312,15 @@ const Pipelines = () => {
                 >
                   <Edit size={13} /> Edit
                 </button>
+                {p.isDefault && (
+                  <button
+                    onClick={() => handleRemoveDefault(p.id)}
+                    title="Remove default"
+                    style={{ ...iconBtn, color: '#64748b' }}
+                  >
+                    Remove Default
+                  </button>
+                )}
                 {!p.isDefault && (
                   <button
                     onClick={() => handleSetDefault(p.id)}
@@ -302,6 +406,51 @@ const Pipelines = () => {
                 />
                 <span>Set as default pipeline</span>
               </label>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <label style={labelStyle}>Stages *</label>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <select aria-label="Select Existing Stage" defaultValue="" onChange={addExistingStage} style={{ ...iconBtn, maxWidth: '180px' }}>
+                      <option value="">Select Existing Stage</option>
+                      {availableStages.filter((stage) => !stages.some((selected) => selected.id === stage.id)).map((stage) => (
+                        <option key={stage.id} value={stage.id}>{stage.name}</option>
+                      ))}
+                    </select>
+                    <button type="button" onClick={addStage} style={iconBtn}><Plus size={13} /> Add Stage</button>
+                  </div>
+                </div>
+                {editing && loadingStages ? (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Loading pipeline stages...</div>
+                ) : stages.map((stage, index) => {
+                  const isEditingStage = !editing || !stage.id || editingStageId === stage.id;
+                  return (
+                    <div key={stage.id || index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
+                      {isEditingStage ? (
+                        <input
+                          className="input-field"
+                          style={{ ...inputStyle, flex: 1 }}
+                          placeholder="Stage name"
+                          value={stage.name}
+                          autoFocus={editing && editingStageId === stage.id}
+                          onChange={(e) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: e.target.value } : item))}
+                          onBlur={(e) => stage.id && updateStage(stage, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.currentTarget.blur();
+                          }}
+                        />
+                      ) : (
+                        <span style={{ ...inputStyle, flex: 1, display: 'block', background: 'var(--surface-color)' }}>{stage.name}</span>
+                      )}
+                      {editing && stage.id && !isEditingStage && (
+                        <button type="button" onClick={() => setEditingStageId(stage.id)} style={iconBtn}>Edit</button>
+                      )}
+                      <button type="button" onClick={() => removeStage(stage, index)} style={{ ...iconBtn, color: '#ef4444' }} aria-label="Remove stage"><X size={13} /></button>
+                    </div>
+                  );
+                })}
+                {!loadingStages && stages.length === 0 && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add at least one stage.</div>}
+              </div>
 
               {error && (
                 <div style={{

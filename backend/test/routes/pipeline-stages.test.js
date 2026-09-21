@@ -71,6 +71,7 @@ prisma.pipelineStageAssignment = {
   create: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+  deleteMany: vi.fn(),
 };
 
 // verifyToken's revoked-token lookup hits prisma.revokedToken.findUnique;
@@ -89,8 +90,8 @@ const requireCJS = createRequire(import.meta.url);
 // already-cached config/secrets module. This guarantees the test-token
 // signing path matches verifyToken's resolution regardless of env timing.
 const { JWT_SECRET } = requireCJS('../../config/secrets');
-function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
-  return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '1h' });
+function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN', vertical = 'generic' } = {}) {
+  return 'Bearer ' + jwt.sign({ userId, tenantId, role, vertical }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 const pipelineStagesRouter = requireCJS('../../routes/pipeline_stages');
@@ -113,6 +114,7 @@ beforeEach(() => {
   prisma.pipelineStageAssignment.create.mockReset();
   prisma.pipelineStageAssignment.update.mockReset();
   prisma.pipelineStageAssignment.delete.mockReset();
+  prisma.pipelineStageAssignment.deleteMany.mockReset();
 });
 
 // ── Auth gate ───────────────────────────────────────────────────────────
@@ -155,7 +157,7 @@ describe('GET / — list pipeline stages', () => {
       expect.objectContaining({ id: 8, name: 'Contacted', pipelineId: 42, position: 1 }),
     ]);
     expect(prisma.pipelineStageAssignment.findMany).toHaveBeenCalledWith({
-      where: { pipelineId: 42, pipeline: { tenantId: 1 } },
+      where: { tenantId: 1, pipelineId: 42, pipeline: { tenantId: 1 } },
       include: { stage: true },
       orderBy: { position: 'asc' },
     });
@@ -182,6 +184,25 @@ describe('GET / — list pipeline stages', () => {
       where: { tenantId: 1 },
       orderBy: { position: 'asc' },
     });
+  });
+
+  test.each(['wellness', 'travel'])('%s keeps tenant-wide stages and does not use Generic assignments', async (vertical) => {
+    prisma.pipeline.findFirst.mockResolvedValue({ id: 42 });
+    prisma.pipelineStage.findMany.mockResolvedValue([
+      { id: 11, name: 'Lead', position: 0, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/pipeline-stages?pipelineId=42')
+      .set('Authorization', makeBearer({ vertical }));
+
+    expect(res.status).toBe(200);
+    expect(prisma.pipelineStage.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: { position: 'asc' },
+    });
+    expect(prisma.pipeline.findFirst).not.toHaveBeenCalled();
+    expect(prisma.pipelineStageAssignment.findMany).not.toHaveBeenCalled();
   });
 
   test('returns 500 envelope when prisma throws', async () => {
@@ -213,7 +234,7 @@ describe('POST / — create pipeline stage', () => {
     expect(res.body).toEqual(expect.objectContaining({ id: 7, name: 'Contacted', pipelineId: 42, position: 2 }));
     expect(prisma.pipelineStage.create).not.toHaveBeenCalled();
     expect(prisma.pipelineStageAssignment.create).toHaveBeenCalledWith({
-      data: { pipelineId: 42, stageId: 7, position: 2 },
+      data: { pipelineId: 42, stageId: 7, tenantId: 1, position: 2 },
     });
   });
 
@@ -239,6 +260,21 @@ describe('POST / — create pipeline stage', () => {
         tenantId: 1,
       },
     });
+  });
+
+  test.each(['wellness', 'travel'])('%s creates tenant-wide stages without requiring a pipeline', async (vertical) => {
+    prisma.pipelineStage.create.mockResolvedValue({ id: 99, name: 'Qualified', tenantId: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/pipeline-stages')
+      .set('Authorization', makeBearer({ vertical }))
+      .send({ name: 'Qualified', color: '#2563eb', position: 2 });
+
+    expect(res.status).toBe(201);
+    expect(prisma.pipelineStage.create).toHaveBeenCalledWith({
+      data: { name: 'Qualified', color: '#2563eb', position: 2, tenantId: 1 },
+    });
+    expect(prisma.pipelineStageAssignment.create).not.toHaveBeenCalled();
   });
 
   test('applies default color #3b82f6 and default position 0 when omitted', async () => {
@@ -361,15 +397,15 @@ describe('PUT /:id — update pipeline stage', () => {
 describe('DELETE /:id — delete pipeline stage', () => {
   test('Generic CRM removes only the pipeline assignment', async () => {
     prisma.pipeline.findFirst.mockResolvedValue({ id: 42 });
-    prisma.pipelineStageAssignment.delete.mockResolvedValue({ pipelineId: 42, stageId: 7 });
+    prisma.pipelineStageAssignment.deleteMany.mockResolvedValue({ count: 1 });
 
     const res = await request(makeApp())
       .delete('/api/pipeline-stages/7?pipelineId=42')
       .set('Authorization', makeBearer());
 
     expect(res.status).toBe(204);
-    expect(prisma.pipelineStageAssignment.delete).toHaveBeenCalledWith({
-      where: { pipelineId_stageId: { pipelineId: 42, stageId: 7 } },
+    expect(prisma.pipelineStageAssignment.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, pipelineId: 42, stageId: 7 },
     });
     expect(prisma.pipelineStage.delete).not.toHaveBeenCalled();
   });

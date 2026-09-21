@@ -2324,12 +2324,9 @@ model PipelineStage {
 
   tenantId    Int                       @default(1)
   tenant      Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  pipelineId  Int?
-  pipeline    Pipeline?                 @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   assignments PipelineStageAssignment[]
 
   @@index([tenantId, position])
-  @@index([tenantId, pipelineId, position])
 }
 
 model EmailTemplate {
@@ -3305,7 +3302,6 @@ model Pipeline {
   description      String?
   tenantId         Int                       @default(1)
   tenant           Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  stages           PipelineStage[]
   stageAssignments PipelineStageAssignment[]
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
@@ -3314,20 +3310,21 @@ model Pipeline {
 }
 
 // Generic CRM only: a shared stage can be assigned to many pipelines while
-// retaining pipeline-specific ordering. The legacy PipelineStage.pipelineId
-// relation remains for Wellness/Travel compatibility during the migration.
+// retaining pipeline-specific ordering. Wellness and Travel continue using
+// tenant-wide PipelineStage rows and do not consume this join model.
 model PipelineStageAssignment {
   pipelineId Int
   stageId    Int
+  tenantId   Int
   position   Int      @default(0)
   createdAt  DateTime @default(now())
 
   pipeline Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   stage    PipelineStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
-  tenant   Tenant?       @relation(fields: [tenantId], references: [id])
-  tenantId Int?
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@id([pipelineId, stageId])
+  @@index([tenantId, pipelineId, position])
   @@index([stageId, position])
   @@index([pipelineId, position])
 }

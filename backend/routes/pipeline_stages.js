@@ -6,7 +6,8 @@ const prisma = require('../lib/prisma');
 router.use(verifyToken);
 
 // Generic CRM uses shared PipelineStage identities plus per-pipeline
-// assignments. Wellness and Travel retain the legacy direct pipelineId path.
+// assignments. Wellness and Travel retain the tenant-wide behavior that
+// existed before this feature and never read/write the Generic join table.
 function isGenericCrm(req) {
   return req.user?.vertical !== 'wellness' && req.user?.vertical !== 'travel';
 }
@@ -17,7 +18,7 @@ async function ownsPipeline(tenantId, pipelineId) {
 
 async function getGenericPipelineStages(tenantId, pipelineId) {
   const assignments = await prisma.pipelineStageAssignment.findMany({
-    where: { pipelineId, pipeline: { tenantId } },
+    where: { tenantId, pipelineId, pipeline: { tenantId } },
     include: { stage: true },
     orderBy: { position: 'asc' },
   });
@@ -26,12 +27,14 @@ async function getGenericPipelineStages(tenantId, pipelineId) {
 
 router.get('/', async (req, res) => {
   try {
-    const pipelineId = req.query.pipelineId == null ? null : Number(req.query.pipelineId);
-    if (pipelineId != null && !(await ownsPipeline(req.user.tenantId, pipelineId))) {
-      return res.status(404).json({ error: 'Pipeline not found' });
-    }
-
     if (isGenericCrm(req)) {
+      const pipelineId = req.query.pipelineId == null ? null : Number(req.query.pipelineId);
+      if (req.query.pipelineId != null && (!Number.isInteger(pipelineId) || pipelineId < 1)) {
+        return res.status(400).json({ error: 'Valid pipelineId required' });
+      }
+      if (pipelineId != null && !(await ownsPipeline(req.user.tenantId, pipelineId))) {
+        return res.status(404).json({ error: 'Pipeline not found' });
+      }
       if (pipelineId != null) return res.json(await getGenericPipelineStages(req.user.tenantId, pipelineId));
       const stages = await prisma.pipelineStage.findMany({
         where: { tenantId: req.user.tenantId },
@@ -41,7 +44,7 @@ router.get('/', async (req, res) => {
     }
 
     const stages = await prisma.pipelineStage.findMany({
-      where: { tenantId: req.user.tenantId, ...(pipelineId == null ? {} : { pipelineId }) },
+      where: { tenantId: req.user.tenantId },
       orderBy: { position: 'asc' },
     });
     return res.json(stages);
@@ -57,11 +60,8 @@ router.post('/', async (req, res) => {
     const pipelineId = req.body.pipelineId == null ? null : Number(req.body.pipelineId);
 
     if (!isGenericCrm(req)) {
-      if (!Number.isInteger(pipelineId) || pipelineId < 1 || !(await ownsPipeline(req.user.tenantId, pipelineId))) {
-        return res.status(400).json({ error: 'Valid pipelineId required' });
-      }
       const stage = await prisma.pipelineStage.create({
-        data: { name, color: color || '#3b82f6', position: position ?? 0, tenantId: req.user.tenantId, pipelineId },
+        data: { name, color: color || '#3b82f6', position: position ?? 0, tenantId: req.user.tenantId },
       });
       return res.status(201).json(stage);
     }
@@ -87,7 +87,7 @@ router.post('/', async (req, res) => {
       if (!existingStage) return res.status(404).json({ error: 'Pipeline stage not found' });
       if (pipelineId == null) return res.status(400).json({ error: 'pipelineId required when selecting an existing stage' });
       const assignment = await prisma.pipelineStageAssignment.create({
-        data: { pipelineId, stageId: existingStage.id, position: position ?? 0 },
+        data: { pipelineId, stageId: existingStage.id, tenantId: req.user.tenantId, position: position ?? 0 },
       });
       return res.status(201).json({ ...existingStage, pipelineId, position: assignment.position });
     }
@@ -111,7 +111,7 @@ router.post('/', async (req, res) => {
         data: { name: trimmedName, color: color || '#3b82f6', position: position ?? 0, tenantId: req.user.tenantId },
       });
       if (pipelineId == null) return created;
-      await tx.pipelineStageAssignment.create({ data: { pipelineId, stageId: created.id, position: position ?? 0 } });
+      await tx.pipelineStageAssignment.create({ data: { pipelineId, stageId: created.id, tenantId: req.user.tenantId, position: position ?? 0 } });
       return { ...created, pipelineId };
     });
     return res.status(201).json(stage);
@@ -127,7 +127,8 @@ router.put('/reorder', async (req, res) => {
     if (!Array.isArray(stages)) return res.status(400).json({ error: 'stages array required' });
     const pipelineId = Number(req.body.pipelineId);
 
-    if (isGenericCrm(req) && Number.isInteger(pipelineId) && pipelineId > 0) {
+    if (isGenericCrm(req) && req.body.pipelineId != null) {
+      if (!Number.isInteger(pipelineId) || pipelineId < 1) return res.status(400).json({ error: 'Valid pipelineId required' });
       if (!(await ownsPipeline(req.user.tenantId, pipelineId))) return res.status(404).json({ error: 'Pipeline not found' });
       await prisma.$transaction(stages.map((item) => prisma.pipelineStageAssignment.update({
         where: { pipelineId_stageId: { pipelineId, stageId: Number(item.id) } },
@@ -137,7 +138,7 @@ router.put('/reorder', async (req, res) => {
     }
 
     const ownedIds = (await prisma.pipelineStage.findMany({
-      where: { tenantId: req.user.tenantId, ...(Number.isInteger(pipelineId) && pipelineId > 0 ? { pipelineId } : {}), id: { in: stages.map((s) => s.id) } },
+      where: { tenantId: req.user.tenantId, id: { in: stages.map((s) => s.id) } },
       select: { id: true },
     })).map((s) => s.id);
     await Promise.all(stages.filter((s) => ownedIds.includes(s.id)).map((s) => prisma.pipelineStage.update({
@@ -145,7 +146,7 @@ router.put('/reorder', async (req, res) => {
       data: { position: s.position },
     })));
     const updated = await prisma.pipelineStage.findMany({
-      where: { tenantId: req.user.tenantId, ...(Number.isInteger(pipelineId) && pipelineId > 0 ? { pipelineId } : {}) },
+      where: { tenantId: req.user.tenantId },
       orderBy: { position: 'asc' },
     });
     return res.json(updated);
@@ -174,8 +175,10 @@ router.delete('/:id', async (req, res) => {
     const stageId = parseInt(req.params.id);
     if (isGenericCrm(req) && req.query.pipelineId != null) {
       const pipelineId = Number(req.query.pipelineId);
+      if (!Number.isInteger(pipelineId) || pipelineId < 1) return res.status(400).json({ error: 'Valid pipelineId required' });
       if (!(await ownsPipeline(req.user.tenantId, pipelineId))) return res.status(404).json({ error: 'Pipeline not found' });
-      await prisma.pipelineStageAssignment.delete({ where: { pipelineId_stageId: { pipelineId, stageId } } });
+      const removed = await prisma.pipelineStageAssignment.deleteMany({ where: { tenantId: req.user.tenantId, pipelineId, stageId } });
+      if (removed.count === 0) return res.status(404).json({ error: 'Pipeline stage assignment not found' });
       return res.status(204).end();
     }
 

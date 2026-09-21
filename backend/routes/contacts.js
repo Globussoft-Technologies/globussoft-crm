@@ -2113,6 +2113,22 @@ router.delete("/tags", async (req, res) => {
       });
       updatedContacts += 1;
     }
+    // Only Generic CRM owns the shared tag catalog. Wellness and Travel keep
+    // their existing contact-tag behavior and must not read or mutate this
+    // Generic tenant setting.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    if (tenant?.vertical === "generic") {
+      const catalog = await readContactTagCatalog(tenantId);
+      const nextCatalog = catalog.filter(
+        (catalogTag) => catalogTag.name.toLowerCase() !== tagKey,
+      );
+      if (nextCatalog.length !== catalog.length) {
+        await writeContactTagCatalog(tenantId, nextCatalog);
+      }
+    }
     return res.json({ deletedTag: tag, status: statusScope, updatedContacts });
   } catch (_err) {
     return res.status(500).json({ error: "Failed to delete tag" });

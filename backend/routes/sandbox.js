@@ -341,6 +341,7 @@ router.post(
           data: arr("pipelineStageAssignments").map((assignment) => ({
             pipelineId: assignment.pipelineId,
             stageId: assignment.stageId,
+            tenantId,
             position: assignment.position,
             createdAt: assignment.createdAt,
           })),

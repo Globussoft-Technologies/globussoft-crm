@@ -303,28 +303,37 @@ test.describe('#712 — PUT /api/gdpr/retention-policies validates retainDays', 
 test.describe('#714 — PUT /api/staff/:id validates Name and Email', () => {
   let adminToken;
   let targetUserId;
-  let originalName;
-  let originalEmail;
+  const originalName = 'E2E Staff Validation User';
+  const originalEmail = `e2e-staff-validation-${Date.now()}-${process.pid}@e2e.local`;
 
   test.beforeAll(async ({ request }) => {
     const r = await login(request, ADMIN);
     adminToken = r.token;
     if (!adminToken) return;
-    // Find a non-self target user in the same tenant. manager@crm.com
-    // is the standard seed manager on the generic tenant.
-    const list = await request.get(`${API}/staff`, {
+
+    // Own the fixture instead of selecting the first shared seeded user.
+    // Other API specs create and remove staff concurrently; selecting their
+    // temporary row allowed it to disappear between these assertions.
+    const created = await request.post(`${API}/staff`, {
       headers: authHeader(adminToken),
+      data: {
+        name: originalName,
+        email: originalEmail,
+        password: 'password123',
+        role: 'USER',
+      },
       timeout: REQUEST_TIMEOUT,
     });
-    if (!list.ok()) return;
-    const rows = await list.json();
-    const target = (Array.isArray(rows) ? rows : (rows.users || rows.staff || []))
-      .find((u) => u && u.email && u.email !== ADMIN.email);
-    if (target) {
-      targetUserId = target.id;
-      originalName = target.name;
-      originalEmail = target.email;
-    }
+    expect(created.status(), `staff setup body: ${await created.text()}`).toBe(201);
+    targetUserId = (await created.json()).id;
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (!adminToken || !targetUserId) return;
+    await request.delete(`${API}/staff/${targetUserId}`, {
+      headers: authHeader(adminToken),
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => {});
   });
 
   test('empty name returns 400 NAME_REQUIRED (#714)', async ({ request }) => {

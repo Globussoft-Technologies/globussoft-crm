@@ -184,7 +184,12 @@ test.describe('field-permissions API smoke', () => {
   test('POST / + PUT /:id + DELETE /:id round-trip', async ({ request }) => {
     const create = await request.post(`${API}/field-permissions`, {
       headers: adminAuth(),
-      data: { role: 'USER', entity: 'Deal', field: 'amount', canRead: true, canWrite: false },
+      // Keep this CRUD-only fixture distinct from
+      // field-permissions-enforcement-api.spec.js, which intentionally owns
+      // USER/Deal/amount while checking live write filtering. Both files run
+      // in separate Playwright workers, so sharing the same upsert key lets
+      // this test delete the enforcement rule mid-request.
+      data: { role: 'USER', entity: 'Deal', field: 'currency', canRead: true, canWrite: false },
     });
     expect(create.status()).toBe(201);
     const rule = await create.json();

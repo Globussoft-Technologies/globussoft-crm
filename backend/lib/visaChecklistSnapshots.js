@@ -68,13 +68,13 @@ function diffChecklistItems(beforeItems = [], afterItems = []) {
 async function loadChecklistComboState(prisma, { tenantId, applicationType, destinationCountry }) {
   const [templates, sources] = await Promise.all([
     prisma.visaChecklistTemplate.findMany({
-      where: { tenantId, applicationType, destinationCountry, isActive: true },
+      where: { tenantId, applicationType, destinationCountry },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: { docType: true, required: true, sortOrder: true, notes: true },
     }),
     prisma.visaChecklistSource.findMany({
       where: { tenantId, applicationType, destinationCountry, isActive: true },
-      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      orderBy: { id: 'asc' },
       select: {
         id: true,
         sourceName: true,

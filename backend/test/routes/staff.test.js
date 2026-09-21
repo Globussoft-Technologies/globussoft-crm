@@ -58,6 +58,12 @@ prisma.user = {
 prisma.role = {
   findFirst: vi.fn(),
 };
+prisma.pipeline = {
+  findFirst: vi.fn(),
+};
+prisma.territory = {
+  findMany: vi.fn(),
+};
 prisma.userRole = {
   findFirst: vi.fn().mockResolvedValue(null),
   deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -108,6 +114,9 @@ beforeEach(() => {
   prisma.user.delete.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.role.findFirst.mockReset();
+  prisma.pipeline.findFirst.mockReset();
+  prisma.territory.findMany.mockReset();
+  prisma.territory.findMany.mockResolvedValue([]);
   prisma.userRole.create.mockClear();
   prisma.$executeRawUnsafe.mockClear();
   prisma.auditLog.create.mockReset();
@@ -178,6 +187,69 @@ describe('POST / — generic CSV import', () => {
 // ── PUT /:id — edit user fields (#618) ─────────────────────────────
 
 describe('PUT /:id — edit', () => {
+  test('rejects a reporting manager from another tenant', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.user.findFirst
+      .mockResolvedValueOnce({
+        id: 22, tenantId: 1, name: 'Employee', email: 'employee@x.com',
+        role: 'USER', wellnessRole: null,
+      })
+      .mockResolvedValueOnce(null);
+
+    const res = await request(makeApp())
+      .put('/api/staff/22')
+      .send({ reportingToId: 999 });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REPORTING_MANAGER_NOT_FOUND');
+    expect(prisma.user.findFirst.mock.calls[1][0].where).toMatchObject({
+      id: 999,
+      tenantId: 1,
+    });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a default pipeline from another tenant', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 22, tenantId: 1, name: 'Employee', email: 'employee@x.com',
+      role: 'USER', wellnessRole: null,
+    });
+    prisma.pipeline.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .put('/api/staff/22')
+      .send({ defaultPipelineId: 808 });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('DEFAULT_PIPELINE_NOT_FOUND');
+    expect(prisma.pipeline.findFirst).toHaveBeenCalledWith({
+      where: { id: 808, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  test('enforces the three-admin limit for Generic CRM', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 22, tenantId: 1, name: 'Employee', email: 'employee@x.com',
+      role: 'USER', wellnessRole: null,
+    });
+    prisma.user.count.mockResolvedValue(3);
+
+    const res = await request(makeApp())
+      .put('/api/staff/22')
+      .send({ role: 'ADMIN' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ADMIN_LIMIT_REACHED');
+    expect(prisma.user.count).toHaveBeenCalledWith({
+      where: { role: 'ADMIN', tenantId: 1, deactivatedAt: null },
+    });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
   test('updates only changed fields and writes EDIT audit', async () => {
     prisma.user.findFirst.mockResolvedValue({
       id: 22, tenantId: 1, name: 'Old Name', email: 'old@x.com',
@@ -515,6 +587,21 @@ describe('GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15)', 
     expect(summary.status).toBe(200);
     expect(summary.body[0]).not.toHaveProperty('wellnessRole');
     expect(prisma.user.findMany.mock.calls[0][0].select).not.toHaveProperty('wellnessRole');
+  });
+
+  test('wellness tenant does not query or expose Generic staff profile fields', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: 'wellness' });
+    prisma.user.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/staff');
+
+    expect(res.status).toBe(200);
+    const select = prisma.user.findMany.mock.calls[0][0].select;
+    expect(select).not.toHaveProperty('jobTitle');
+    expect(select).not.toHaveProperty('reportingToId');
+    expect(select).not.toHaveProperty('defaultPipelineId');
+    expect(select).not.toHaveProperty('teamMemberships');
+    expect(prisma.territory.findMany).not.toHaveBeenCalled();
   });
 
   test('?fields=summary → prisma.user.findMany called with SLIM select (commissionProfileId DROPPED)', async () => {

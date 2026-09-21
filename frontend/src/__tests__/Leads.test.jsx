@@ -295,7 +295,7 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
-  it('offers a separate product lead when the email already belongs to a lead', async () => {
+  it('blocks a separate Generic lead when the email already belongs to a lead', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (opts?.method === 'POST' && url === '/api/contacts') {
         return Promise.reject({
@@ -312,9 +312,6 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
           },
         });
       }
-      if (opts?.method === 'POST' && url === '/api/contacts?force=true') {
-        return Promise.resolve({ id: 1000, name: 'Alice Smith' });
-      }
       return Promise.resolve([]);
     });
 
@@ -329,25 +326,27 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
         screen.getByText(/registering for another product/i),
       ).toBeInTheDocument();
       expect(
-        screen.getByRole('button', { name: /Create separate product lead/i }),
+        screen.queryByRole('button', { name: /Create separate product lead/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /Edit details/i }),
       ).toBeInTheDocument();
     });
 
     fireEvent.click(
-      screen.getByRole('button', { name: /Create separate product lead/i }),
+      screen.getByRole('button', { name: /Edit details/i }),
     );
 
-    await waitFor(() => {
-      expect(
-        fetchApiMock.mock.calls.some(
-          ([url, opts]) => url === '/api/contacts?force=true' && opts?.method === 'POST',
-        ),
-      ).toBe(true);
-      expect(notifySuccess).toHaveBeenCalledWith(
-        'Separate product lead created successfully',
-      );
-    });
-    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([url, opts]) => url === '/api/contacts?force=true' && opts?.method === 'POST',
+      ),
+    ).toBe(false);
+    expect(notifySuccess).not.toHaveBeenCalledWith(
+      'Separate product lead created successfully',
+    );
+    expect(screen.queryByText('Possible duplicate contact')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Create Lead' })).toBeInTheDocument();
   });
 
   it('input fields carry the correct maxLength attributes', async () => {

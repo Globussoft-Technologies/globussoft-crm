@@ -123,25 +123,27 @@ export default function DuplicateContactModal({
             flexWrap: "wrap",
           }}
         >
-          {allowCreateAnyway && <button
+          <button
             type="button"
             onClick={onEditDetails}
             style={secondaryButtonStyle}
           >
             Edit details
-          </button>}
-          <button
-            type="button"
-            onClick={onCreateAnyway}
-            disabled={creating}
-            style={{
-              ...secondaryButtonStyle,
-              cursor: creating ? "not-allowed" : "pointer",
-              opacity: creating ? 0.5 : 1,
-            }}
-          >
-            {creating ? creatingLabel : createAnywayLabel}
           </button>
+          {allowCreateAnyway && (
+            <button
+              type="button"
+              onClick={onCreateAnyway}
+              disabled={creating}
+              style={{
+                ...secondaryButtonStyle,
+                cursor: creating ? "not-allowed" : "pointer",
+                opacity: creating ? 0.5 : 1,
+              }}
+            >
+              {creating ? creatingLabel : createAnywayLabel}
+            </button>
+          )}
           <Link
             to={`/contacts/${existingContactId}`}
             style={{

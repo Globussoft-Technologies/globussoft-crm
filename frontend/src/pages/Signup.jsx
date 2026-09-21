@@ -26,14 +26,14 @@ const Signup = () => {
         const response = await fetch("/api/auth/check-organization-name", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, registrationVertical: vertical }),
         });
         const result = await response.json().catch(() => ({}));
         if (!cancelled) setOrganizationNameTaken(Boolean(result.exists));
       } catch { /* backend remains authoritative on submit */ }
     }, 400);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [organizationName]);
+  }, [organizationName, vertical]);
 
   const handleSignup = async (e) => {
     e.preventDefault();

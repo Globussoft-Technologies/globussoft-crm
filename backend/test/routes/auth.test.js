@@ -591,6 +591,50 @@ describe('POST /api/auth/signup', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/at least 8 characters/i);
   });
+
+  test('duplicate email is rejected only within the selected CRM vertical', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 77 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'existing@example.com',
+        password: 'password123',
+        name: 'Existing User',
+        organizationName: 'New Travel Org',
+        vertical: 'travel',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('EMAIL_ALREADY_EXISTS_IN_VERTICAL');
+    expect(prisma.user.findFirst.mock.calls[0][0].where).toMatchObject({
+      email: 'existing@example.com',
+      tenant: { vertical: 'travel' },
+    });
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+  });
+
+  test('organization-name uniqueness is scoped to the selected CRM vertical', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.tenant.findFirst.mockResolvedValue({ id: 88 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'new@example.com',
+        password: 'password123',
+        name: 'New User',
+        organizationName: 'Shared Brand',
+        vertical: 'wellness',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORGANIZATION_NAME_ALREADY_EXISTS');
+    expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
+      where: { name: 'Shared Brand', vertical: 'wellness' },
+      select: { id: true },
+    });
+  });
 });
 
 // ── POST /api/auth/register ──────────────────────────────────────────
@@ -750,6 +794,22 @@ describe('POST /api/auth/customer/register', () => {
 // ── POST /api/auth/check-email ───────────────────────────────────────
 
 describe('POST /api/auth/check-email', () => {
+  test('registrationVertical scopes duplicate lookup to that CRM theme', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 501 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'owner@example.com', registrationVertical: 'generic' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.user.findFirst.mock.calls[0][0].where).toEqual({
+      email: 'owner@example.com',
+      deactivatedAt: null,
+      tenant: { vertical: 'generic' },
+    });
+  });
+
   test('known active email → 200 { exists: true }', async () => {
     prisma.user.count.mockResolvedValue(1);
 
@@ -843,6 +903,23 @@ describe('POST /api/auth/check-email', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ exists: false });
     expect(prisma.user.count).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/auth/check-organization-name', () => {
+  test('checks the organization name inside the selected CRM vertical', async () => {
+    prisma.tenant.findFirst.mockResolvedValue({ id: 15 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-organization-name')
+      .send({ name: 'Shared Brand', registrationVertical: 'travel' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
+      where: { name: 'Shared Brand', vertical: 'travel' },
+      select: { id: true },
+    });
   });
 });
 

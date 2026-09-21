@@ -35,15 +35,26 @@ const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
 // Legacy whitelist — used only when the caller's tenant is non-wellness.
 // Wellness tenants consult the WellnessRoleType catalog instead.
 
-// Returns true when the tenant already has an ADMIN user (other than
-// the user identified by `excludeUserId`, so we don't block an admin
-// editing their own record). Used to enforce the one-admin-per-org rule
-// across create, role-update, and general-update endpoints.
-async function tenantHasAdmin(tenantId, excludeUserId = null) {
-  const where = { role: "ADMIN", tenantId };
-  if (excludeUserId) where.id = { not: excludeUserId };
-  const count = await prisma.user.count({ where });
-  return count > 0;
+const GENERIC_ADMIN_LIMIT = 3;
+
+async function tenantAdminLimitReached(tenantId, vertical) {
+  const count = await prisma.user.count({
+    where: { role: "ADMIN", tenantId, deactivatedAt: null },
+  });
+  return count >= (vertical === "generic" ? GENERIC_ADMIN_LIMIT : 1);
+}
+
+function adminLimitError(res, vertical) {
+  if (vertical === "generic") {
+    return res.status(409).json({
+      error: `Generic CRM allows a maximum of ${GENERIC_ADMIN_LIMIT} active Admin users per organization.`,
+      code: "ADMIN_LIMIT_REACHED",
+    });
+  }
+  return res.status(409).json({
+    error: "This organisation already has an Admin. Only one Admin is allowed per organisation.",
+    code: "SINGLE_ADMIN_LIMIT",
+  });
 }
 // PRD_WELLNESS_RBAC DD-5.1: "cashier" added as a valid POS sales role.
 const LEGACY_WELLNESS_ROLES = [
@@ -72,6 +83,59 @@ async function getCallerVertical(req) {
   } catch (_e) {
     return "generic";
   }
+}
+
+function parseOptionalRelationId(value, fieldName) {
+  if (value === undefined) return { supplied: false };
+  if (value === null || value === "") return { supplied: true, value: null };
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return {
+      supplied: true,
+      error: { status: 400, error: `${fieldName} must be a positive integer or null.`, code: `INVALID_${fieldName.toUpperCase()}` },
+    };
+  }
+  return { supplied: true, value: parsed };
+}
+
+async function resolveGenericStaffReferences({ tenantId, targetUserId, reportingToId, defaultPipelineId }) {
+  const reporting = parseOptionalRelationId(reportingToId, "reportingToId");
+  if (reporting.error) return reporting.error;
+  const pipeline = parseOptionalRelationId(defaultPipelineId, "defaultPipelineId");
+  if (pipeline.error) return pipeline.error;
+
+  if (reporting.supplied && reporting.value !== null) {
+    if (reporting.value === targetUserId) {
+      return { status: 400, error: "A staff member cannot report to themselves.", code: "INVALID_REPORTING_MANAGER" };
+    }
+    const manager = await prisma.user.findFirst({
+      where: {
+        id: reporting.value,
+        tenantId,
+        userType: { in: ["STAFF", "OWNER"] },
+        deactivatedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!manager) {
+      return { status: 404, error: "Reporting manager not found in this organization.", code: "REPORTING_MANAGER_NOT_FOUND" };
+    }
+  }
+
+  if (pipeline.supplied && pipeline.value !== null) {
+    const foundPipeline = await prisma.pipeline.findFirst({
+      where: { id: pipeline.value, tenantId },
+      select: { id: true },
+    });
+    if (!foundPipeline) {
+      return { status: 404, error: "Default pipeline not found in this organization.", code: "DEFAULT_PIPELINE_NOT_FOUND" };
+    }
+  }
+
+  return {
+    reportingToId: reporting,
+    defaultPipelineId: pipeline,
+  };
 }
 
 // Travel-only sub-brand access (Q25). The 4 canonical sub-brand ids — kept in
@@ -248,6 +312,7 @@ router.get("/", async (req, res) => {
   try {
     const vertical = await getCallerVertical(req);
     const isTravel = vertical === "travel";
+    const isGeneric = vertical === "generic";
     // #920 slice 15 — PII reduction via opt-in slim shape. When the caller
     // passes ?fields=summary, GET /api/staff returns only the minimal set
     // needed by dropdown / picker UIs (id, name, email, role, wellnessRole,
@@ -290,14 +355,14 @@ router.get("/", async (req, res) => {
       // (UI renders an "Inactive" badge; the row stays in the list so an
       // admin can re-activate it instead of having to soul-search the audit log).
       deactivatedAt: true,
-      ...(isTravel ? {} : {
+      ...(isGeneric ? {
         jobTitle: true,
         workNumber: true,
         phone: true,
         reportingToId: true,
         defaultPipelineId: true,
         teamMemberships: { select: { team: { select: { id: true, name: true } } } },
-      }),
+      } : {}),
       // Per-row primary RBAC role assignment so the Staff page can
       // display + edit the new Custom roles (DOCTOR / NURSE / etc.)
       // without a per-row roundtrip. Includes nested Role for the
@@ -337,7 +402,7 @@ router.get("/", async (req, res) => {
       select: isSummary ? slimSelect : fullSelect,
       orderBy: { createdAt: "desc" },
     });
-    if (!isTravel) {
+    if (isGeneric && !isSummary) {
       const territories = await prisma.territory.findMany({
         where: { tenantId: req.user.tenantId },
         select: { id: true, name: true, assignedUserIds: true },
@@ -434,7 +499,8 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
     ) {
       return res.status(400).json({ error: "A valid work email is required." });
     }
-    const isGenericImport = req.query.import === "1" && (await getCallerVertical(req)) === "generic";
+    const vertical = await getCallerVertical(req);
+    const isGenericImport = req.query.import === "1" && vertical === "generic";
     const resolvedPassword = isGenericImport ? crypto.randomBytes(18).toString("base64url") : password;
     if (!resolvedPassword || typeof resolvedPassword !== "string" || resolvedPassword.length < 6) {
       return res
@@ -513,10 +579,15 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
     // Travel-only: scope the new staff member to one or more sub-brands. Ignored
     // entirely for generic/wellness tenants (they never send it, and we gate on
     // vertical anyway), so this is additive and can't affect those verticals.
-    const vertical = await getCallerVertical(req);
     const sba = vertical === "travel" ? normalizeSubBrandAccess(subBrandAccess) : { set: false };
-    if (vertical !== "generic" && role === "ADMIN" && await tenantHasAdmin(req.user.tenantId)) {
-      return res.status(409).json({ error: "This organisation already has an Admin. Only one Admin is allowed per organisation.", code: "SINGLE_ADMIN_LIMIT" });
+    if (role === "ADMIN" && await tenantAdminLimitReached(req.user.tenantId, vertical)) {
+      return adminLimitError(res, vertical);
+    }
+    const references = vertical === "generic"
+      ? await resolveGenericStaffReferences({ tenantId: req.user.tenantId, reportingToId, defaultPipelineId })
+      : null;
+    if (references?.status) {
+      return res.status(references.status).json({ error: references.error, code: references.code });
     }
 
     // Atomic: create user + the UserRole junction in one transaction. If
@@ -533,8 +604,8 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
             jobTitle: jobTitle ? String(jobTitle).trim() : null,
             workNumber: workNumber ? String(workNumber).trim() : null,
             phone: mobileNumber ? String(mobileNumber).trim() : null,
-            reportingToId: reportingToId ? Number(reportingToId) : null,
-            defaultPipelineId: defaultPipelineId ? Number(defaultPipelineId) : null,
+            ...(references.reportingToId.supplied ? { reportingToId: references.reportingToId.value } : {}),
+            ...(references.defaultPipelineId.supplied ? { defaultPipelineId: references.defaultPipelineId.value } : {}),
           } : {}),
           wellnessRole: wellnessRole || null,
           tenantId: req.user.tenantId,
@@ -689,8 +760,9 @@ router.put("/:id/role", verifyRole(["ADMIN"]), async (req, res) => {
       where: { id: userId, tenantId: req.user.tenantId },
     });
     if (!target) return res.status(404).json({ error: "User not found." });
-    if (role === "ADMIN" && target.role !== "ADMIN" && (await getCallerVertical(req)) !== "generic" && await tenantHasAdmin(req.user.tenantId, target.id)) {
-      return res.status(409).json({ error: "This organisation already has an Admin. Only one Admin is allowed per organisation.", code: "SINGLE_ADMIN_LIMIT" });
+    const vertical = await getCallerVertical(req);
+    if (role === "ADMIN" && target.role !== "ADMIN" && await tenantAdminLimitReached(req.user.tenantId, vertical)) {
+      return adminLimitError(res, vertical);
     }
 
     const user = await prisma.user.update({
@@ -732,12 +804,22 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       req.body || {};
     const data = {};
     const changed = {};
-    if ((await getCallerVertical(req)) === "generic") {
+    const vertical = await getCallerVertical(req);
+    if (vertical === "generic") {
+      const references = await resolveGenericStaffReferences({
+        tenantId: req.user.tenantId,
+        targetUserId: target.id,
+        reportingToId,
+        defaultPipelineId,
+      });
+      if (references.status) {
+        return res.status(references.status).json({ error: references.error, code: references.code });
+      }
       if (jobTitle !== undefined) data.jobTitle = jobTitle ? String(jobTitle).trim() : null;
       if (workNumber !== undefined) data.workNumber = workNumber ? String(workNumber).trim() : null;
       if (mobileNumber !== undefined) data.phone = mobileNumber ? String(mobileNumber).trim() : null;
-      if (reportingToId !== undefined) data.reportingToId = reportingToId ? Number(reportingToId) : null;
-      if (defaultPipelineId !== undefined) data.defaultPipelineId = defaultPipelineId ? Number(defaultPipelineId) : null;
+      if (references.reportingToId.supplied) data.reportingToId = references.reportingToId.value;
+      if (references.defaultPipelineId.supplied) data.defaultPipelineId = references.defaultPipelineId.value;
     }
     // rbacRoleId handled outside the User.update because it lives on the
     // UserRole junction table. Validate up-front so we don't mutate User
@@ -821,8 +903,8 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
             error: `Invalid role. Must be one of: ${VALID_ROLES.join(", ")}`,
           });
       }
-      if (role === "ADMIN" && target.role !== "ADMIN" && (await getCallerVertical(req)) !== "generic" && await tenantHasAdmin(req.user.tenantId, target.id)) {
-        return res.status(409).json({ error: "This organisation already has an Admin. Only one Admin is allowed per organisation.", code: "SINGLE_ADMIN_LIMIT" });
+      if (role === "ADMIN" && target.role !== "ADMIN" && await tenantAdminLimitReached(req.user.tenantId, vertical)) {
+        return adminLimitError(res, vertical);
       }
       // Prevent self-demotion (mirror PUT /:id/role guard)
       if (
@@ -880,7 +962,6 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     // Travel-only (Q25): re-scope this staff member's sub-brand access. Gated on
     // the tenant vertical so a stray field can never alter generic/wellness rows.
     if (subBrandAccess !== undefined) {
-      const vertical = await getCallerVertical(req);
       if (vertical === "travel") {
         const sba = normalizeSubBrandAccess(subBrandAccess);
         if (sba.set && sba.value !== target.subBrandAccess) {

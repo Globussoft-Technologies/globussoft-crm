@@ -45,6 +45,7 @@ prisma.user = {
 };
 prisma.tenant = {
   findUnique: vi.fn().mockResolvedValue(null), // generateUniqueSlug loop terminator
+  findFirst: vi.fn().mockResolvedValue(null),
   create: vi.fn(),
   // T37 / Class B6: ensureRbacOnBoot's discovery path enumerates tenants;
   // provisionTenantRbac itself doesn't normally call findMany on the
@@ -157,6 +158,7 @@ beforeEach(() => {
   prisma.roleWidget.create.mockReset().mockResolvedValue({});
   prisma.user.findMany.mockReset();
   prisma.tenant.findMany.mockReset().mockResolvedValue([]);
+  prisma.tenant.findFirst.mockReset().mockResolvedValue(null);
   // After reset: findFirst delegates to findUnique so per-test
   // findUnique.mockResolvedValue calls cover the login code path too.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));

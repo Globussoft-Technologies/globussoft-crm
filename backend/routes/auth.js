@@ -385,11 +385,14 @@ router.post("/check-email", async (req, res) => {
   }
 });
 
-router.post("/check-organization-name", async (req, res) => {
+router.post("/check-organization-name", registerLimiter, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const registrationVertical = ["generic", "wellness", "travel"].includes(req.body?.registrationVertical)
+      ? req.body.registrationVertical
+      : "generic";
     const exists = name.length > 0 && !!(await prisma.tenant.findFirst({
-      where: { name },
+      where: { name, vertical: registrationVertical },
       select: { id: true },
     }));
     res.json({ exists });
@@ -743,7 +746,7 @@ router.post("/register", registerLimiter, async (req, res) => {
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
     const existingSameVerticalOrganization = await prisma.tenant.findFirst({
-      where: { name: orgName.trim() },
+      where: { name: orgName.trim(), vertical: selectedVertical },
       select: { id: true },
     });
     if (existingSameVerticalOrganization) {
@@ -875,7 +878,7 @@ router.post("/signup", registerLimiter, async (req, res) => {
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
     const existingSameVerticalOrganization = await prisma.tenant.findFirst({
-      where: { name: orgName.trim() },
+      where: { name: orgName.trim(), vertical: selectedVertical },
       select: { id: true },
     });
     if (existingSameVerticalOrganization) {
@@ -1983,9 +1986,7 @@ router.delete("/me/account", verifyToken, async (req, res) => {
     const otherUsers = await prisma.user.count({
       where: { tenantId: req.user.tenantId, id: { not: user.id } },
     });
-    // Remove only the account. Tenant-owned records, especially financial
-    // records, must remain even when this is the last user.
-    const deleteScope = "user";
+    const deleteScope = otherUsers === 0 ? "tenant" : "user";
 
     if (deleteScope === "user" && user.role === "ADMIN") {
       const otherAdmins = await prisma.user.count({
@@ -2017,7 +2018,11 @@ router.delete("/me/account", verifyToken, async (req, res) => {
       ssoProvider: user.ssoProvider || null,
     });
 
-    await prisma.user.delete({ where: { id: user.id } });
+    if (deleteScope === "tenant") {
+      await prisma.tenant.delete({ where: { id: req.user.tenantId } });
+    } else {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
 
     // Kill the session on the same response: drop the HttpOnly cookie and
     // revoke the jti so the bearer dies server-side immediately (the
@@ -2047,16 +2052,6 @@ router.delete("/me/account", verifyToken, async (req, res) => {
 
     res.json({ ok: true, deleted: deleteScope });
   } catch (err) {
-    // A sole user's account deletion also removes the tenant. Financial and
-    // other retained records may intentionally use Restrict tenant FKs, so
-    // surface a safe, actionable response instead of a generic 500.
-    if (err?.code === "P2003") {
-      return res.status(409).json({
-        error:
-          "This account cannot be deleted because the organization still has retained records. Contact an administrator to archive or remove those records first.",
-        code: "TENANT_HAS_RETAINED_RECORDS",
-      });
-    }
     console.error("[auth/me/account] delete error:", err && err.message);
     res.status(500).json({ error: "Failed to delete account" });
   }

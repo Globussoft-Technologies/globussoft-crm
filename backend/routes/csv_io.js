@@ -356,7 +356,10 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         };
         const customFields = {};
         for (const definition of customDefinitions) {
-          if (Object.prototype.hasOwnProperty.call(row, definition.fieldKey)) {
+          const mappedKey = `cf_${definition.fieldKey}`;
+          if (Object.prototype.hasOwnProperty.call(row, mappedKey)) {
+            customFields[definition.fieldKey] = row[mappedKey];
+          } else if (Object.prototype.hasOwnProperty.call(row, definition.fieldKey)) {
             customFields[definition.fieldKey] = row[definition.fieldKey];
           }
         }
@@ -376,6 +379,7 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           await hardDeleteContact(prisma, existing.id);
           existing = null;
         }
+        const wasExisting = Boolean(existing);
         if (existing) {
           await prisma.contact.update({ where: { id: existing.id }, data: updateData });
         } else {
@@ -383,7 +387,7 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         }
         await writeImportedCustomFields(existing.id, req.user.tenantId, customFields, customDefinitions);
         importedContacts.push({ id: existing.id, name: createData.name, email, phone: phone || "", company, title, status, source });
-        if (existing) updated++;
+        if (wasExisting) updated++;
         else imported++;
       } catch (rowErr) {
         errors.push({ rowNumber, reason: rowErr.message });
@@ -840,6 +844,4 @@ router.get("/:entity", (req, res) => {
   });
 });
 module.exports = router;
-
-
 

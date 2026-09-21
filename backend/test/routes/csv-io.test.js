@@ -111,6 +111,12 @@ prisma.membershipPlan = {
 prisma.booking = {
   findMany: vi.fn(),
 };
+prisma.leadCustomFieldDefinition = {
+  findMany: vi.fn(),
+};
+prisma.leadCustomFieldValue = {
+  upsert: vi.fn(),
+};
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   findFirst: vi.fn().mockResolvedValue(null),
@@ -163,6 +169,8 @@ beforeEach(() => {
   prisma.membershipPlan.create.mockReset();
   prisma.membershipPlan.update.mockReset();
   prisma.booking.findMany.mockReset();
+  prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
+  prisma.leadCustomFieldValue.upsert.mockReset();
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   hardDeleteContactMock.mockReset().mockResolvedValue(1);
@@ -256,6 +264,55 @@ describe('GET /api/csv/contacts/template.csv?format=xlsx', () => {
 });
 
 describe('POST /api/csv/contacts/import.csv with XLSX', () => {
+  test('maps and persists Generic lead custom fields using cf_ field keys', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 99 });
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { id: 12, fieldKey: 'industry', fieldType: 'text' },
+    ]);
+
+    const workbook = toXlsxBuffer(
+      ['Customer Email', 'Industry'],
+      [{ 'Customer Email': 'mapped@example.com', Industry: 'Technology' }],
+      'Contacts Import',
+    );
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({
+        'Customer Email': 'email',
+        Industry: 'cf_industry',
+      }))
+      .attach('file', workbook, {
+        filename: 'mapped-contacts.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+    });
+    expect(prisma.leadCustomFieldValue.upsert).toHaveBeenCalledWith({
+      where: { contactId_fieldId: { contactId: 99, fieldId: 12 } },
+      create: {
+        contactId: 99,
+        fieldId: 12,
+        tenantId: 1,
+        valueText: 'Technology',
+        valueNumber: null,
+        valueDate: null,
+        valueBool: null,
+      },
+      update: {
+        valueText: 'Technology',
+        valueNumber: null,
+        valueDate: null,
+        valueBool: null,
+      },
+    });
+  });
+
   test('imports a workbook uploaded as .xlsx and normalizes phone_number values', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 99 });
@@ -715,6 +772,5 @@ describe('RBAC + errorReport query flag', () => {
     expect(body).toMatch(/missing name/i);
   });
 });
-
 
 

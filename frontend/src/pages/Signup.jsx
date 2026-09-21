@@ -1,4 +1,4 @@
-import { useState, useContext } from "react";
+import { useEffect, useState, useContext } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
@@ -7,6 +7,7 @@ import EmailOtpField from "../components/EmailOtpField";
 const Signup = () => {
   const [name, setName] = useState("");
   const [organizationName, setOrganizationName] = useState("");
+  const [organizationNameTaken, setOrganizationNameTaken] = useState(false);
   const [email, setEmail] = useState("");
   const [verificationToken, setVerificationToken] = useState(null);
   const [password, setPassword] = useState("");
@@ -16,8 +17,27 @@ const Signup = () => {
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
 
+  useEffect(() => {
+    const name = organizationName.trim();
+    if (!name) { setOrganizationNameTaken(false); return undefined; }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/auth/check-organization-name", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!cancelled) setOrganizationNameTaken(Boolean(result.exists));
+      } catch { /* backend remains authoritative on submit */ }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [organizationName]);
+
   const handleSignup = async (e) => {
     e.preventDefault();
+    if (organizationNameTaken) return;
     setLoading(true);
     setError("");
 
@@ -137,8 +157,14 @@ const Signup = () => {
               placeholder="Acme Inc."
               value={organizationName}
               onChange={(e) => setOrganizationName(e.target.value)}
+              aria-invalid={organizationNameTaken ? "true" : "false"}
               required
             />
+            {organizationNameTaken && (
+              <p role="alert" style={{ color: "#ef4444", fontSize: "0.78rem", margin: "0.35rem 0 0" }}>
+                This organization name is already taken. Please use a different name.
+              </p>
+            )}
           </div>
           <div style={{ marginBottom: "1rem" }}>
             <label
@@ -234,6 +260,7 @@ const Signup = () => {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               onVerifiedChange={setVerificationToken}
+              registrationVertical={vertical}
               inputClassName="input-field"
             />
           </div>

@@ -53,6 +53,30 @@ const MAX_IMPORT_ROWS = 5000;
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+async function writeImportedCustomFields(contactId, tenantId, customFields, definitions) {
+  for (const [fieldKey, raw] of Object.entries(customFields || {})) {
+    const def = definitions.find((item) => item.fieldKey === fieldKey);
+    if (!def) continue;
+    const value = String(raw ?? "").trim();
+    const data = { valueText: value || null, valueNumber: null, valueDate: null, valueBool: null };
+    if (def.fieldType === "number" && value !== "") {
+      const number = Number(value);
+      if (!Number.isNaN(number)) { data.valueText = null; data.valueNumber = number; }
+    } else if (def.fieldType === "date" && value !== "") {
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) { data.valueText = null; data.valueDate = date; }
+    } else if (def.fieldType === "checkbox") {
+      data.valueText = null;
+      data.valueBool = ["true", "1", "yes", "y"].includes(value.toLowerCase());
+    }
+    await prisma.leadCustomFieldValue.upsert({
+      where: { contactId_fieldId: { contactId, fieldId: def.id } },
+      create: { contactId, fieldId: def.id, tenantId, ...data },
+      update: data,
+    });
+  }
+}
+
 // Body parser for raw text/csv + text/plain bodies — Express's default
 // JSON / urlencoded parsers don't handle these. Without this, posting
 // `text/csv` lands req.body as `{}` and readUploadedCsv() returns null,
@@ -205,6 +229,9 @@ router.get("/contacts", async (req, res) => {
   res.json({
     entity: "contacts",
     headers: CONTACT_IMPORT_COLS.map((c) => c.header),
+    // Generic CRM contact imports require only email; all other columns are
+    // optional and receive the existing importer defaults when omitted.
+    optionalHeaders: CONTACT_IMPORT_COLS.map((c) => c.header).filter((header) => header !== "email"),
     sample: CONTACT_TEMPLATE_SAMPLE,
     thresholds: { rows: MAX_IMPORT_ROWS, bytes: 5 * 1024 * 1024 },
   });
@@ -269,9 +296,18 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
     let updated = 0;
     let skipped = 0;
     const errors = [];
+    const importedContacts = [];
+    let mapping = {};
+    try { mapping = req.body?.mapping ? JSON.parse(req.body.mapping) : {}; } catch { mapping = {}; }
+    const customDefinitions = Object.keys(mapping).length
+      ? await prisma.leadCustomFieldDefinition.findMany({ where: { tenantId: req.user.tenantId } })
+      : [];
 
     for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
+      const sourceRow = rows[i];
+      const row = Object.keys(mapping).length
+        ? Object.fromEntries(Object.entries(mapping).map(([source, target]) => [target, sourceRow[source]]))
+        : sourceRow;
       const rowNumber = i + 2;
       try {
         const name = String(getSpreadsheetValue(row, ["name", "Name"])).trim();
@@ -307,7 +343,10 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         const title = String(getSpreadsheetValue(row, ["title", "Title"])).trim();
         const source = String(getSpreadsheetValue(row, ["source", "Source", "lead_source", "leadSource", "Lead Source"])).trim();
         const createData = {
-          name: sanitizeCellForExport(name),
+          // Contact.name is required in the database, while email is the only
+          // required import column. Use the email local-part as a safe label
+          // when the source file has no name column/value.
+          name: sanitizeCellForExport(name || email.split("@")[0]),
           email,
           phone: phone || null,
           company: sanitizeCellForExport(company),
@@ -315,6 +354,12 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           status,
           source: source || null,
         };
+        const customFields = {};
+        for (const definition of customDefinitions) {
+          if (Object.prototype.hasOwnProperty.call(row, definition.fieldKey)) {
+            customFields[definition.fieldKey] = row[definition.fieldKey];
+          }
+        }
         const updateData = { email };
         if (name) updateData.name = sanitizeCellForExport(name);
         if (phone) updateData.phone = phone;
@@ -334,8 +379,10 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         if (existing) {
           await prisma.contact.update({ where: { id: existing.id }, data: updateData });
         } else {
-          await prisma.contact.create({ data: { ...createData, tenantId: req.user.tenantId } });
+          existing = await prisma.contact.create({ data: { ...createData, tenantId: req.user.tenantId }, select: { id: true } });
         }
+        await writeImportedCustomFields(existing.id, req.user.tenantId, customFields, customDefinitions);
+        importedContacts.push({ id: existing.id, name: createData.name, email, phone: phone || "", company, title, status, source });
         if (existing) updated++;
         else imported++;
       } catch (rowErr) {
@@ -345,7 +392,7 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
     }
 
     await writeImportAudit(req, "Contact", { rowCount: rows.length, imported, updated, errorCount: errors.length });
-    res.json({ imported, updated, skipped, errors });
+    res.json({ imported, updated, skipped, errors, importedContacts });
   } catch (e) {
     console.error("[csv] contacts import error:", e.message);
     res.status(500).json({ error: "Failed to import contacts" });

@@ -73,12 +73,27 @@ export default function CsvImportExportToolbar({
   // (it can overwrite existing rows), so managers must not see a button that
   // can only ever 403.
   allowImport = true,
+  genericLeadWizard = false,
+  mappingFields = [],
 }) {
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [recentImport, setRecentImport] = useState(() => {
+    if (typeof window === "undefined") return null;
+    try { return JSON.parse(window.sessionStorage.getItem("generic-crm-latest-import") || "null"); } catch { return null; }
+  });
+  const [showRecentImport, setShowRecentImport] = useState(false);
+  const [showImportHistory, setShowImportHistory] = useState(false);
+  const [contactsImport, setContactsImport] = useState(null);
+  const [importHistory, setImportHistory] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try { return JSON.parse(window.sessionStorage.getItem("generic-crm-import-history") || "[]"); } catch { return []; }
+  });
   const exportMenuRef = useRef(null);
+  const importMenuRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
   const safeEndpoints = endpoints || {};
   const toolbarButtonStyle = compact ? compactSecondaryBtnStyle : secondaryBtnStyle;
@@ -151,6 +166,15 @@ export default function CsvImportExportToolbar({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [exportMenuOpen]);
 
+  useEffect(() => {
+    if (!importMenuOpen) return undefined;
+    const onDocClick = (event) => {
+      if (importMenuRef.current && !importMenuRef.current.contains(event.target)) setImportMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [importMenuOpen]);
+
   const multiFormat = formats.length > 1;
 
   return (
@@ -208,7 +232,22 @@ export default function CsvImportExportToolbar({
             <Upload size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
         ) : null}
-        {allowImport && (
+        {allowImport && genericLeadWizard ? (
+          <div ref={importMenuRef} style={{ position: "relative", display: "inline-flex" }}>
+            <button type="button" onClick={() => setShowImport(true)} aria-label="Import contacts" style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
+              <Download size={14} /> Import contacts
+            </button>
+            <button type="button" onClick={() => setImportMenuOpen((open) => !open)} aria-label="Import contacts options" aria-haspopup="menu" aria-expanded={importMenuOpen} style={{ ...toolbarButtonStyle, borderLeft: "1px solid var(--border-color)", borderTopLeftRadius: 0, borderBottomLeftRadius: 0, paddingLeft: "0.45rem", paddingRight: "0.45rem" }}>
+              <ChevronDown size={13} />
+            </button>
+            {importMenuOpen && (
+              <div role="menu" aria-label="Import contacts options" style={{ ...dropdownMenuStyle, right: 0, left: "auto", minWidth: 190 }}>
+                <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setShowRecentImport(true); }} style={dropdownItemStyle}>View recent import status</button>
+                <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setShowImportHistory(true); }} style={dropdownItemStyle}>View import history</button>
+              </div>
+            )}
+          </div>
+        ) : allowImport ? (
           <button
             type="button"
             onClick={() => setShowImport(true)}
@@ -217,8 +256,43 @@ export default function CsvImportExportToolbar({
           >
             <Download size={14} /> {multiFormat ? "Import" : "Import CSV"}
           </button>
-        )}
+        ) : null}
       </div>
+
+      {showRecentImport && (
+        <div role="dialog" aria-modal="true" aria-labelledby="recent-import-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setShowRecentImport(false)}>
+          <div className="glass" style={{ width: "min(380px, 100%)", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))" }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><h2 id="recent-import-title" style={{ margin: 0, fontSize: "1rem" }}>Your recent import</h2><button type="button" aria-label="Close recent import" onClick={() => setShowRecentImport(false)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
+            {recentImport ? (
+              <div style={{ border: "1px solid var(--border-color)", borderRadius: 8, padding: 14 }}>
+                <strong style={{ display: "block", marginBottom: 10, overflowWrap: "anywhere" }}>{recentImport.fileName}</strong>
+                <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginBottom: 12 }}>{new Date(recentImport.completedAt).toLocaleString()}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, textAlign: "center" }}>{[["Created", recentImport.inserted], ["Updated", recentImport.updated], ["Skipped", recentImport.skipped], ["Errors", recentImport.errors]].map(([labelText, value]) => <div key={labelText}><div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{labelText}</div><strong>{value}</strong></div>)}</div>
+              </div>
+            ) : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No imports completed yet.</p>}
+          </div>
+        </div>
+      )}
+
+      {showImportHistory && (
+        <div role="dialog" aria-modal="true" aria-labelledby="import-history-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setShowImportHistory(false)}>
+          <div className="glass" style={{ width: "min(980px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))" }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-history-title" style={{ margin: 0, fontSize: "1.05rem" }}>Past imports</h2><button type="button" aria-label="Close import history" onClick={() => setShowImportHistory(false)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
+            {importHistory.length ? (
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 860, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{["Import label", "Created", "Updated", "Skipped", "Errors", "Status", "Imported at", "Contacts"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead><tbody>{importHistory.map((item) => <tr key={item.id}><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", fontWeight: 600, maxWidth: 260, overflowWrap: "anywhere" }}>{item.fileName}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}>{item.inserted}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}>{item.updated}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}>{item.skipped}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", color: item.errors ? "var(--danger-color, #dc2626)" : "inherit" }}>{item.errors}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}><span style={{ color: item.errors ? "#d97706" : "#059669", fontWeight: 600 }}>{item.errors ? "Completed, with errors" : "Completed"}</span></td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{new Date(item.completedAt).toLocaleString()}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}><button type="button" className="btn-secondary" disabled={!item.contacts?.length} onClick={() => setContactsImport(item)}>{item.contacts?.length ? "View contacts" : "No contacts"}</button></td></tr>)}</tbody></table></div>
+            ) : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No imports completed yet.</p>}
+          </div>
+        </div>
+      )}
+
+      {contactsImport && (
+        <div role="dialog" aria-modal="true" aria-labelledby="import-contacts-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setContactsImport(null)}>
+          <div className="glass" style={{ width: "min(1000px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-contacts-title" style={{ margin: 0, fontSize: "1.05rem" }}>Contacts from {contactsImport.fileName}</h2><button type="button" aria-label="Close imported contacts" onClick={() => setContactsImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
+            <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{["Name", "Email", "Phone", "Company", "Title", "Status", "Source"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>{heading}</th>)}</tr></thead><tbody>{contactsImport.contacts.map((contact) => <tr key={contact.id}>{[contact.name, contact.email, contact.phone, contact.company, contact.title, contact.status, contact.source].map((value, index) => <td key={index} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)" }}>{value || "—"}</td>)}</tr>)}</tbody></table></div>
+          </div>
+        </div>
+      )}
 
       {showImport && (
         <ImportModal
@@ -234,7 +308,19 @@ export default function CsvImportExportToolbar({
           skipMeta={skipMeta}
           initialExpectedHeaders={expectedHeaders}
           onClose={() => setShowImport(false)}
+          genericLeadWizard={genericLeadWizard}
+          mappingFields={mappingFields}
           onImported={(result) => {
+            if (genericLeadWizard) {
+              const latest = { fileName: result.fileName || "Uploaded contacts file", completedAt: new Date().toISOString(), inserted: result.inserted || 0, updated: result.updated || 0, skipped: result.skipped || 0, errors: result.errors?.length || 0, contacts: result.importedContacts || [] };
+              setRecentImport(latest);
+              setImportHistory((history) => {
+                const next = [{ ...latest, id: `${latest.completedAt}-${latest.fileName}` }, ...history].slice(0, 20);
+                try { window.sessionStorage.setItem("generic-crm-import-history", JSON.stringify(next)); } catch { /* storage unavailable */ }
+                return next;
+              });
+              try { window.sessionStorage.setItem("generic-crm-latest-import", JSON.stringify(latest)); } catch { /* storage unavailable */ }
+            }
             // Only refresh the parent's list if at least one row landed.
             if (onImported && (result.inserted || result.imported || result.updated)) onImported(result);
           }}
@@ -260,12 +346,15 @@ function ImportModal({
   jobUrl = null,
   skipMeta = false,
   initialExpectedHeaders = [],
+  genericLeadWizard = false,
+  mappingFields = [],
 }) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
   const [file, setFile] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [previewHeaders, setPreviewHeaders] = useState([]);
+  const [mappingSelections, setMappingSelections] = useState({});
   const [previewError, setPreviewError] = useState(null);
   const [thresholds, setThresholds] = useState({ rows: 5000, bytes: 5 * 1024 * 1024 });
   const [expectedHeaders, setExpectedHeaders] = useState(initialExpectedHeaders);
@@ -275,6 +364,58 @@ function ImportModal({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
   const [jobId, setJobId] = useState(null);
+  const [wizardStep, setWizardStep] = useState(genericLeadWizard ? 1 : 2);
+  const [genericImportMode, setGenericImportMode] = useState("leads");
+  const [dynamicLeadFields, setDynamicLeadFields] = useState([]);
+  const [showAddField, setShowAddField] = useState(false);
+  const [newFieldLabel, setNewFieldLabel] = useState("");
+  const [newFieldType, setNewFieldType] = useState("text");
+  const [newFieldOptions, setNewFieldOptions] = useState("");
+  const [newFieldRequired, setNewFieldRequired] = useState(false);
+  const [savingNewField, setSavingNewField] = useState(false);
+
+  const optionFieldTypes = new Set(["dropdown", "radio", "multiselect"]);
+
+  const resetAddField = () => {
+    setShowAddField(false);
+    setNewFieldLabel("");
+    setNewFieldType("text");
+    setNewFieldOptions("");
+    setNewFieldRequired(false);
+  };
+
+  const createField = async () => {
+    const labelText = newFieldLabel.trim();
+    if (!labelText) {
+      notify.error("Label is required");
+      return;
+    }
+    const options = newFieldOptions.split(",").map((option) => option.trim()).filter(Boolean);
+    if (optionFieldTypes.has(newFieldType) && !options.length) {
+      notify.error("Enter at least one option, separated by commas");
+      return;
+    }
+    setSavingNewField(true);
+    try {
+      const created = await fetchApi("/api/lead-custom-fields", {
+        method: "POST",
+        body: JSON.stringify({
+          label: labelText,
+          fieldType: newFieldType,
+          isRequired: newFieldRequired,
+          ...(optionFieldTypes.has(newFieldType) ? { options } : {}),
+        }),
+      });
+      const createdField = created?.field || created;
+      setDynamicLeadFields((fields) => [...fields, createdField]);
+      notify.success("Field created");
+      resetAddField();
+    } catch (e) {
+      notify.error(e?.message || "Failed to create field");
+    } finally {
+      setSavingNewField(false);
+    }
+  };
 
   // Pull entity meta so we can show the column list pre-upload + know the
   // async thresholds.
@@ -288,6 +429,14 @@ function ImportModal({
       })
       .catch(() => { /* gate denied - submit will show the real error */ });
   }, [entity, metaUrl, skipMeta]);
+
+  useEffect(() => {
+    if (!genericLeadWizard) return undefined;
+    fetchApi("/api/lead-custom-fields", { silent: true })
+      .then((data) => setDynamicLeadFields(Array.isArray(data) ? data : (data?.fields || data?.customFields || [])))
+      .catch(() => setDynamicLeadFields([]));
+    return undefined;
+  }, [genericLeadWizard]);
 
   const downloadTemplate = async (format = "csv") => {
     try {
@@ -325,18 +474,38 @@ function ImportModal({
     setPreviewError(null);
     setPreviewRows([]);
     setPreviewHeaders([]);
+    setMappingSelections({});
     if (!f) return;
+    if (genericLeadWizard) setWizardStep(3);
     // XLSX is binary - we don't ship a SheetJS bundle to the client just for
     // preview. The header + per-row validation still runs server-side on
     // submit, and any errors come back in the result.errors[] envelope.
     const looksXlsx = /\.xlsx$/i.test(f.name || "")
       || f.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       || f.type === "application/vnd.ms-excel";
-    if (looksXlsx) return;
+    if (looksXlsx) {
+      // The generic mapping wizard must show the actual workbook columns.
+      // Wellness keeps its existing server-side XLSX preview behavior.
+      if (!genericLeadWizard) return;
+      try {
+        const XLSX = await import("xlsx");
+        const workbook = XLSX.read(await f.arrayBuffer(), { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+        const headers = (rows[0] || []).map((header) => String(header).trim()).filter(Boolean);
+        setPreviewHeaders(headers);
+        setMappingSelections(Object.fromEntries(headers.map((header) => [header, header])));
+        setPreviewRows(rows.slice(1, 11));
+      } catch (e) {
+        setPreviewError(e.message || "Failed to read Excel file");
+      }
+      return;
+    }
     try {
       const text = await f.text();
       const { headers, rows } = parseCsvClient(text);
       setPreviewHeaders(headers);
+      setMappingSelections(Object.fromEntries(headers.map((header) => [header, header])));
       setPreviewRows(rows.slice(0, 10));
       const optional = new Set(optionalHeaders);
       const missing = expectedHeaders.filter((h) => !headers.includes(h) && !optional.has(h));
@@ -351,6 +520,7 @@ function ImportModal({
   const doImport = async () => {
     if (!file) return;
     setSubmitting(true);
+    if (genericLeadWizard) setWizardStep(4);
     setResult(null);
     setJobId(null);
 
@@ -365,6 +535,7 @@ function ImportModal({
     try {
       const fd = new FormData();
       fd.append("file", file);
+      if (genericLeadWizard) fd.append("mapping", JSON.stringify(mappingSelections));
       const token = getAuthToken();
       const res = await fetch(endpoint, {
         method: "POST",
@@ -407,7 +578,11 @@ function ImportModal({
               : ""
             }`,
           );
-          onImported(normalizedResult);
+          onImported({ ...normalizedResult, fileName: file.name });
+          // Generic lead mapping is a review step, not a separate confirmation
+          // step. Close it after the import so the refreshed Leads list is
+          // visible immediately.
+          if (genericLeadWizard) onClose();
         } else if (normalizedResult.errors.length) {
           notify.error(`Import had ${normalizedResult.errors.length} row error(s).`);
         }
@@ -430,7 +605,7 @@ function ImportModal({
       if (j.status === "done" || j.status === "failed") {
         setResult(j.result || { errors: [{ row: 0, column: "(job)", value: "", message: j.error || "Job failed" }], inserted: 0, updated: 0, skipped: 0 });
         setJobId(null);
-        if (j.status === "done" && (j.result.inserted || j.result.updated)) onImported(j.result);
+        if (j.status === "done" && (j.result.inserted || j.result.updated)) onImported({ ...j.result, fileName: file?.name });
       }
     };
     const id = setInterval(tick, 1500);
@@ -483,19 +658,77 @@ function ImportModal({
       <div
         className="glass"
         style={{
-          maxWidth: 720,
-          width: "92%",
+          maxWidth: genericLeadWizard ? (wizardStep === 3 ? 920 : 620) : 720,
+          width: genericLeadWizard ? `min(${wizardStep === 3 ? 920 : 620}px, 92%)` : "92%",
           maxHeight: "90vh",
-          overflow: "auto",
+          height: genericLeadWizard && wizardStep === 1 ? 540 : undefined,
+          overflow: genericLeadWizard && wizardStep === 1 ? "hidden" : "auto",
           padding: "2rem",
           position: "relative",
-          background: "var(--surface-color, rgba(250, 246, 237, 0.95))",
+          background: genericLeadWizard ? "#ffffff" : "var(--surface-color, rgba(250, 246, 237, 0.95))",
           color: "var(--text-primary, inherit)",
           border: "1px solid var(--border-color, rgba(0,0,0,0.1))",
           boxShadow: "var(--shadow-lg, 0 24px 60px rgba(0,0,0,0.25))",
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {genericLeadWizard && (
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginBottom: "1.5rem", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+            {["File info", "Upload file", "Review mapping", "Finalize import"].map((step, index) => (
+              <span key={step} style={{ flex: 1, textAlign: "center", fontWeight: wizardStep === index + 1 ? 700 : 500, color: wizardStep >= index + 1 ? "var(--accent-color)" : "var(--text-secondary)" }}>{step}</span>
+            ))}
+          </div>
+        )}
+        {genericLeadWizard && wizardStep === 1 && (
+          <div style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "5.5rem 2rem 3rem", textAlign: "center", borderRadius: "inherit" }}>
+            <h2 style={{ marginTop: 0 }}>Tell us what your file contains</h2>
+            <div style={{ display: "flex", justifyContent: "center", gap: "1rem", margin: "2rem 0" }}>
+              {["leads", "leadsAccounts"].map((mode) => {
+                const selected = genericImportMode === mode;
+                return <button key={mode} type="button" onClick={() => setGenericImportMode(mode)} aria-pressed={selected} style={{ width: 210, minHeight: 190, padding: "2rem 1rem", border: `${selected ? 2 : 1}px solid ${selected ? "var(--accent-color)" : "var(--border-color)"}`, borderRadius: 12, background: selected ? "var(--accent-bg)" : "transparent", color: "inherit", cursor: "pointer" }}><FileText size={28} /><h3>{mode === "leads" ? "Leads" : "Leads and accounts"}</h3><p>{mode === "leads" ? "My file has information about people" : "My file has people and their companies"}</p></button>;
+              })}
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem" }}>
+              <button type="button" onClick={onClose} style={secondaryBtnStyle}>Back</button>
+              <button type="button" onClick={() => setWizardStep(2)} style={primaryBtnStyle}>Next</button>
+            </div>
+          </div>
+        )}
+        {genericLeadWizard && wizardStep === 3 && (
+          <div style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "1.5rem 2rem 1.5rem", borderRadius: "inherit", boxSizing: "border-box", overflowY: "auto", overflowX: "hidden" }}>
+            <h2 style={{ margin: 0, textAlign: "center" }}>Review the mapping of your fields</h2>
+            <p style={{ textAlign: "center", color: "var(--text-secondary)", marginBottom: "1.5rem" }}>We've mapped the columns in your file to CRM fields — take a look</p>
+            <div style={{ border: "1px solid var(--border-color)", borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "70px minmax(120px, 1fr) 100px minmax(180px, 1.3fr) minmax(100px, 1fr)", gap: 10, padding: "0.8rem", background: "var(--table-header-bg, #eef2f7)", fontWeight: 700, fontSize: "0.8rem", minWidth: 620 }}><span>Import</span><span>CSV column</span><span>Mapped</span><span>CRM field</span><span>Field type</span></div>
+              {(previewHeaders.length ? previewHeaders : expectedHeaders).map((header) => (
+                <div key={header} style={{ display: "grid", gridTemplateColumns: "70px minmax(120px, 1fr) 100px minmax(180px, 1.3fr) minmax(100px, 1fr)", gap: 10, alignItems: "center", padding: "0.8rem", borderTop: "1px solid var(--border-color)", fontSize: "0.85rem", minWidth: 620 }}>
+                  <input type="checkbox" defaultChecked aria-label={`Import ${header}`} />
+                  <strong>{header}</strong>
+                  <span style={{ color: "#059669", fontSize: "1.1rem" }}>✓</span>
+                  <select className="input-field" value={mappingSelections[header] || header} aria-label={`CRM field for ${header}`} onChange={(event) => { if (event.target.value === "__add_new_field__") { setShowAddField(true); return; } setMappingSelections((current) => ({ ...current, [header]: event.target.value })); }}>
+                    <option value={header}>{header === "name" ? "First name" : header === "email" ? "Email (Primary)" : header === "role" ? "Job title" : header}</option>
+                    {[...mappingFields, ...dynamicLeadFields].filter((field, index, fields) => fields.findIndex((item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id)) === index).map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
+                    <option value="__add_new_field__">＋ Add new field</option>
+                  </select>
+                  <span style={{ color: "var(--text-secondary)" }}>Text field</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem", marginTop: "1.25rem", paddingBottom: "0.5rem" }}><button type="button" onClick={() => setWizardStep(2)} style={secondaryBtnStyle}>Back</button><button type="button" onClick={doImport} disabled={submitting || !file} style={primaryBtnStyle}>{submitting ? "Importing…" : "Import contact"}</button></div>
+          </div>
+        )}
+        {genericLeadWizard && showAddField && (
+          <div role="dialog" aria-modal="true" aria-labelledby="add-lead-field-title" style={{ position: "absolute", inset: 0, zIndex: 10, background: "var(--surface-color, #fff)", padding: "5.5rem 2rem 3rem", borderRadius: "inherit" }}>
+            <h2 id="add-lead-field-title" style={{ marginTop: 0 }}>Add new field</h2>
+            <div style={{ display: "grid", gap: "0.85rem" }}>
+              <label>Label *<input className="input-field" value={newFieldLabel} onChange={(event) => setNewFieldLabel(event.target.value)} autoFocus /></label>
+              <label>Field type<select className="input-field" value={newFieldType} onChange={(event) => setNewFieldType(event.target.value)}><option value="text">Text</option><option value="textarea">Textarea</option><option value="number">Number</option><option value="date">Date</option><option value="dropdown">Dropdown</option><option value="radio">Radio</option><option value="multiselect">Multi-select</option></select></label>
+              {optionFieldTypes.has(newFieldType) && <label>Options *<input className="input-field" placeholder="Option 1, Option 2" value={newFieldOptions} onChange={(event) => setNewFieldOptions(event.target.value)} /></label>}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><input type="checkbox" checked={newFieldRequired} onChange={(event) => setNewFieldRequired(event.target.checked)} /> Required field</label>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}><button type="button" onClick={resetAddField} style={secondaryBtnStyle}>Cancel</button><button type="button" onClick={createField} disabled={savingNewField} style={primaryBtnStyle}>{savingNewField ? "Creating…" : "Create field"}</button></div>
+          </div>
+        )}
         <button
           onClick={onClose}
           aria-label="Close"
@@ -656,6 +889,11 @@ function ImportModal({
         )}
 
         <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "1rem" }}>
+          {genericLeadWizard && wizardStep > 1 && !result && (
+            <button type="button" onClick={() => setWizardStep((step) => Math.max(1, step - 1))} style={secondaryBtnStyle}>
+              Back
+            </button>
+          )}
           <button type="button" onClick={onClose} style={secondaryBtnStyle}>
             {result ? "Close" : "Cancel"}
           </button>

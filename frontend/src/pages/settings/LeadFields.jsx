@@ -518,8 +518,17 @@ export default function LeadFields() {
       </p>
 
       <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: "1.5rem" }}>
-        <div style={{ padding: "1.25rem 1.25rem 0" }}>
+        <div style={{ padding: "1.25rem 1.25rem 0", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
           <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 600 }}>Existing Fields</h3>
+          {!creating && (
+            <button
+              onClick={() => setCreating(true)}
+              className="btn-primary"
+              style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}
+            >
+              <Plus size={16} /> Add Field
+            </button>
+          )}
         </div>
         {loading ? (
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--text-secondary)", padding: "1.5rem" }}>
@@ -574,16 +583,8 @@ export default function LeadFields() {
         )}
       </div>
 
-      <div className="card" style={{ padding: "1.25rem" }}>
-        {!creating ? (
-          <button
-            onClick={() => setCreating(true)}
-            className="btn-primary"
-            style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}
-          >
-            <Plus size={16} /> Add Field
-          </button>
-        ) : (
+      {creating && (
+        <div className="card" style={{ padding: "1.25rem" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
             <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 600 }}>New Field</h3>
 
@@ -668,8 +669,8 @@ export default function LeadFields() {
               </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

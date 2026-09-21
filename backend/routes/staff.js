@@ -290,6 +290,14 @@ router.get("/", async (req, res) => {
       // (UI renders an "Inactive" badge; the row stays in the list so an
       // admin can re-activate it instead of having to soul-search the audit log).
       deactivatedAt: true,
+      ...(isTravel ? {} : {
+        jobTitle: true,
+        workNumber: true,
+        phone: true,
+        reportingToId: true,
+        defaultPipelineId: true,
+        teamMemberships: { select: { team: { select: { id: true, name: true } } } },
+      }),
       // Per-row primary RBAC role assignment so the Staff page can
       // display + edit the new Custom roles (DOCTOR / NURSE / etc.)
       // without a per-row roundtrip. Includes nested Role for the
@@ -329,6 +337,19 @@ router.get("/", async (req, res) => {
       select: isSummary ? slimSelect : fullSelect,
       orderBy: { createdAt: "desc" },
     });
+    if (!isTravel) {
+      const territories = await prisma.territory.findMany({
+        where: { tenantId: req.user.tenantId },
+        select: { id: true, name: true, assignedUserIds: true },
+      });
+      for (const user of users) {
+        user.territories = territories
+          .filter((territory) => {
+            try { return (JSON.parse(territory.assignedUserIds || "[]") || []).map(Number).includes(user.id); } catch { return false; }
+          })
+          .map(({ id, name }) => ({ id, name }));
+      }
+    }
 
     // Flatten userRoles[0] → primaryRole on each row so the frontend can
     // render `member.primaryRole?.key` without poking at the join shape.
@@ -398,7 +419,7 @@ router.get("/", async (req, res) => {
 // renders the correct landing view on their first login.
 router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    const { name, email, password, role, wellnessRole, rbacRoleId, subBrandAccess } =
+    const { name, email, password, role, wellnessRole, rbacRoleId, subBrandAccess, jobTitle, workNumber, mobileNumber, reportingToId, defaultPipelineId } =
       req.body || {};
 
     // Basic field presence + shape checks. Mirror auth.js/signup so the
@@ -426,14 +447,6 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
         .json({
           error: `Invalid role. Must be one of: ${VALID_ROLES.join(", ")}`,
         });
-    }
-    // One-admin-per-org rule: block creating a second ADMIN in this tenant.
-    if (role === "ADMIN" && await tenantHasAdmin(req.user.tenantId)) {
-      return res.status(409).json({
-        error:
-          "This organisation already has an Admin. Only one Admin is allowed per organisation. To make someone else the Admin, first change the current Admin's role to Manager or User.",
-        code: "SINGLE_ADMIN_LIMIT",
-      });
     }
     const wrErr = await validateWellnessRole(req, wellnessRole);
     if (wrErr)
@@ -502,6 +515,9 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
     // vertical anyway), so this is additive and can't affect those verticals.
     const vertical = await getCallerVertical(req);
     const sba = vertical === "travel" ? normalizeSubBrandAccess(subBrandAccess) : { set: false };
+    if (vertical !== "generic" && role === "ADMIN" && await tenantHasAdmin(req.user.tenantId)) {
+      return res.status(409).json({ error: "This organisation already has an Admin. Only one Admin is allowed per organisation.", code: "SINGLE_ADMIN_LIMIT" });
+    }
 
     // Atomic: create user + the UserRole junction in one transaction. If
     // either fails, the entire create rolls back. Avoids "user created
@@ -513,6 +529,13 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
           email: email.toLowerCase(),
           password: passwordHash,
           role,
+          ...(vertical === "generic" ? {
+            jobTitle: jobTitle ? String(jobTitle).trim() : null,
+            workNumber: workNumber ? String(workNumber).trim() : null,
+            phone: mobileNumber ? String(mobileNumber).trim() : null,
+            reportingToId: reportingToId ? Number(reportingToId) : null,
+            defaultPipelineId: defaultPipelineId ? Number(defaultPipelineId) : null,
+          } : {}),
           wellnessRole: wellnessRole || null,
           tenantId: req.user.tenantId,
           ...(sba.set ? { subBrandAccess: sba.value } : {}),
@@ -666,15 +689,8 @@ router.put("/:id/role", verifyRole(["ADMIN"]), async (req, res) => {
       where: { id: userId, tenantId: req.user.tenantId },
     });
     if (!target) return res.status(404).json({ error: "User not found." });
-
-    // One-admin-per-org rule: block promoting a second user to ADMIN.
-    // excludeUserId = target.id so an admin can "save" their own ADMIN role without tripping this.
-    if (role === "ADMIN" && target.role !== "ADMIN" && await tenantHasAdmin(req.user.tenantId, target.id)) {
-      return res.status(409).json({
-        error:
-          "This organisation already has an Admin. Only one Admin is allowed per organisation. To make someone else the Admin, first change the current Admin's role to Manager or User.",
-        code: "SINGLE_ADMIN_LIMIT",
-      });
+    if (role === "ADMIN" && target.role !== "ADMIN" && (await getCallerVertical(req)) !== "generic" && await tenantHasAdmin(req.user.tenantId, target.id)) {
+      return res.status(409).json({ error: "This organisation already has an Admin. Only one Admin is allowed per organisation.", code: "SINGLE_ADMIN_LIMIT" });
     }
 
     const user = await prisma.user.update({
@@ -712,10 +728,17 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     });
     if (!target) return res.status(404).json({ error: "User not found." });
 
-    const { name, email, password, role, wellnessRole, commissionProfileId, rbacRoleId, subBrandAccess } =
+    const { name, email, password, role, wellnessRole, commissionProfileId, rbacRoleId, subBrandAccess, jobTitle, workNumber, mobileNumber, reportingToId, defaultPipelineId } =
       req.body || {};
     const data = {};
     const changed = {};
+    if ((await getCallerVertical(req)) === "generic") {
+      if (jobTitle !== undefined) data.jobTitle = jobTitle ? String(jobTitle).trim() : null;
+      if (workNumber !== undefined) data.workNumber = workNumber ? String(workNumber).trim() : null;
+      if (mobileNumber !== undefined) data.phone = mobileNumber ? String(mobileNumber).trim() : null;
+      if (reportingToId !== undefined) data.reportingToId = reportingToId ? Number(reportingToId) : null;
+      if (defaultPipelineId !== undefined) data.defaultPipelineId = defaultPipelineId ? Number(defaultPipelineId) : null;
+    }
     // rbacRoleId handled outside the User.update because it lives on the
     // UserRole junction table. Validate up-front so we don't mutate User
     // and then fail the junction write.
@@ -798,6 +821,9 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
             error: `Invalid role. Must be one of: ${VALID_ROLES.join(", ")}`,
           });
       }
+      if (role === "ADMIN" && target.role !== "ADMIN" && (await getCallerVertical(req)) !== "generic" && await tenantHasAdmin(req.user.tenantId, target.id)) {
+        return res.status(409).json({ error: "This organisation already has an Admin. Only one Admin is allowed per organisation.", code: "SINGLE_ADMIN_LIMIT" });
+      }
       // Prevent self-demotion (mirror PUT /:id/role guard)
       if (
         req.user.userId === userId &&
@@ -805,14 +831,6 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         target.role === "ADMIN"
       ) {
         return res.status(400).json({ error: "Cannot change your own role." });
-      }
-      // One-admin-per-org rule: block promoting a second user to ADMIN.
-      if (role === "ADMIN" && target.role !== "ADMIN" && await tenantHasAdmin(req.user.tenantId, target.id)) {
-        return res.status(409).json({
-          error:
-            "This organisation already has an Admin. Only one Admin is allowed per organisation. To make someone else the Admin, first change the current Admin's role to Manager or User.",
-          code: "SINGLE_ADMIN_LIMIT",
-        });
       }
       if (role !== target.role) {
         data.role = role;

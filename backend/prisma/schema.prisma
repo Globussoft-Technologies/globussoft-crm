@@ -568,6 +568,10 @@ model User {
   // mirrors this onto Patient.phone so the clinic — and the Callified
   // calling flow on Appointments — can actually reach them.
   phone           String?
+  jobTitle        String?
+  workNumber      String?
+  reportingToId   Int?
+  defaultPipelineId Int?
   createdAt       DateTime  @default(now())
 
   // 2FA

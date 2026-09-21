@@ -11,6 +11,7 @@ export default function DuplicateContactModal({
   creating,
   onEditDetails,
   onCreateAnyway,
+  allowCreateAnyway = true,
   createAnywayLabel = "Create anyway",
   creatingLabel = "Creating\u2026",
 }) {
@@ -122,13 +123,13 @@ export default function DuplicateContactModal({
             flexWrap: "wrap",
           }}
         >
-          <button
+          {allowCreateAnyway && <button
             type="button"
             onClick={onEditDetails}
             style={secondaryButtonStyle}
           >
             Edit details
-          </button>
+          </button>}
           <button
             type="button"
             onClick={onCreateAnyway}

@@ -1626,12 +1626,26 @@ const Leads = () => {
   // that were actually called, so a real call that just completed updates both
   // the Lead Score and the Call Status without a browser reload.
   const refreshAll = async () => {
-    const [freshLeads] = await Promise.all([
+    const [freshLeads, , , , freshCustomFields] = await Promise.all([
       fetchLeads(),
       fetchStaff(),
       loadCallifiedCampaigns(),
       loadAutoCampaignRules(),
+      isGeneric
+        ? fetchApi("/api/lead-custom-fields", { silent: true }).catch(() => [])
+        : Promise.resolve([]),
     ]);
+    if (isGeneric && Array.isArray(freshCustomFields)) {
+      setCustomFieldDefs(freshCustomFields);
+      setVisibleColumns((current) => {
+        if (!Array.isArray(current)) return current;
+        const existing = new Set(current);
+        const additions = freshCustomFields
+          .map((field) => `cf_${field.fieldKey}`)
+          .filter((key) => !existing.has(key));
+        return additions.length ? [...current, ...additions] : current;
+      });
+    }
     if (isGeneric && Array.isArray(freshLeads) && freshLeads.length > 0) {
       // Score + classify only leads that were actually called. This avoids
       // burning Gemini credits / HTTP time on hundreds of untouched leads while
@@ -5118,6 +5132,17 @@ const Leads = () => {
             entity="contacts"
             label="Leads"
             formats={["csv", "xlsx"]}
+            genericLeadWizard={isGeneric}
+            onImported={isGeneric ? refreshAll : undefined}
+            mappingFields={isGeneric ? preferredVisibleColumns.map((key) => {
+              const catalogField = leadColumnCatalog.find((field) => field.key === key);
+              const customField = customFieldByKey.get(key);
+              return {
+                key,
+                fieldKey: key,
+                label: catalogField?.label || customField?.label || customField?.name || key.replace(/^cf_/, ""),
+              };
+            }) : []}
             compact
             endpoints={{
               export: "/api/csv/contacts/export.csv",
@@ -9236,6 +9261,7 @@ const Leads = () => {
           existingContactId={leadDuplicate.existingContactId}
           matchedBy={leadDuplicate.matchedBy}
           contact={leadDuplicate.contact}
+          allowCreateAnyway={!(isGeneric && leadDuplicate.matchedBy === 'email')}
           creating={creatingDuplicateLead}
           createAnywayLabel="Create separate product lead"
           creatingLabel="Creating separate lead…"

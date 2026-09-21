@@ -9,3 +9,9 @@ ALTER TABLE `SalesTeam`
   ADD CONSTRAINT `SalesTeam_updatedById_fkey`
     FOREIGN KEY (`updatedById`) REFERENCES `User`(`id`)
     ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE `User`
+  ADD COLUMN `jobTitle` VARCHAR(191) NULL,
+  ADD COLUMN `workNumber` VARCHAR(191) NULL,
+  ADD COLUMN `reportingToId` INTEGER NULL,
+  ADD COLUMN `defaultPipelineId` INTEGER NULL;

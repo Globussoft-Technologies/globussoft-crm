@@ -342,6 +342,9 @@ router.post("/check-email", async (req, res) => {
     const rawTenantId = req.body?.registrationTenantId;
     const tenantId = Number(rawTenantId);
     const scopedTenantId = Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null;
+    const registrationVertical = ["generic", "wellness", "travel"].includes(req.body?.registrationVertical)
+      ? req.body.registrationVertical
+      : null;
 
     // Consistent-timing guard: even invalid emails run a short fixed delay
     // so response timing does not leak whether an email exists. 80 ms is
@@ -352,6 +355,11 @@ router.post("/check-email", async (req, res) => {
     if (email && email.includes("@")) {
       if (scopedTenantId) {
         exists = await customerRegistrationEmailExists(email, scopedTenantId);
+      } else if (registrationVertical) {
+        exists = !!(await prisma.user.findFirst({
+          where: { email, deactivatedAt: null, tenant: { vertical: registrationVertical } },
+          select: { id: true },
+        }));
       } else {
         const count = await prisma.user.count({
           where: {
@@ -373,6 +381,20 @@ router.post("/check-email", async (req, res) => {
   } catch (err) {
     console.error("[auth/check-email] error:", err.message);
     // Never expose internal errors; still return the same shape.
+    res.status(500).json({ exists: false });
+  }
+});
+
+router.post("/check-organization-name", async (req, res) => {
+  try {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const exists = name.length > 0 && !!(await prisma.tenant.findFirst({
+      where: { name },
+      select: { id: true },
+    }));
+    res.json({ exists });
+  } catch (err) {
+    console.error("[auth/check-organization-name] error:", err.message);
     res.status(500).json({ exists: false });
   }
 });
@@ -699,12 +721,37 @@ router.post("/register", registerLimiter, async (req, res) => {
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
+    const existingSameVerticalUser = await prisma.user.findFirst({
+      where: {
+        email: email.trim().toLowerCase(),
+        deactivatedAt: null,
+        tenant: { vertical: selectedVertical },
+      },
+      select: { id: true },
+    });
+    if (existingSameVerticalUser) {
+      return res.status(409).json({
+        error: `This email is already registered for a ${selectedVertical} CRM. Please sign in instead.`,
+        code: "EMAIL_ALREADY_EXISTS_IN_VERTICAL",
+      });
+    }
+
     const validThemes = ['light', 'dark', 'system'];
     const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const existingSameVerticalOrganization = await prisma.tenant.findFirst({
+      where: { name: orgName.trim() },
+      select: { id: true },
+    });
+    if (existingSameVerticalOrganization) {
+      return res.status(409).json({
+        error: "This organization name is already taken. Please use a different name.",
+        code: "ORGANIZATION_NAME_ALREADY_EXISTS",
+      });
+    }
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
@@ -806,12 +853,37 @@ router.post("/signup", registerLimiter, async (req, res) => {
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
+    const existingSameVerticalUser = await prisma.user.findFirst({
+      where: {
+        email: email.trim().toLowerCase(),
+        deactivatedAt: null,
+        tenant: { vertical: selectedVertical },
+      },
+      select: { id: true },
+    });
+    if (existingSameVerticalUser) {
+      return res.status(409).json({
+        error: `This email is already registered for a ${selectedVertical} CRM. Please sign in instead.`,
+        code: "EMAIL_ALREADY_EXISTS_IN_VERTICAL",
+      });
+    }
+
     const validThemes = ['light', 'dark', 'system'];
     const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const existingSameVerticalOrganization = await prisma.tenant.findFirst({
+      where: { name: orgName.trim() },
+      select: { id: true },
+    });
+    if (existingSameVerticalOrganization) {
+      return res.status(409).json({
+        error: "This organization name is already taken. Please use a different name.",
+        code: "ORGANIZATION_NAME_ALREADY_EXISTS",
+      });
+    }
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
@@ -1911,7 +1983,9 @@ router.delete("/me/account", verifyToken, async (req, res) => {
     const otherUsers = await prisma.user.count({
       where: { tenantId: req.user.tenantId, id: { not: user.id } },
     });
-    const deleteScope = otherUsers === 0 ? "tenant" : "user";
+    // Remove only the account. Tenant-owned records, especially financial
+    // records, must remain even when this is the last user.
+    const deleteScope = "user";
 
     if (deleteScope === "user" && user.role === "ADMIN") {
       const otherAdmins = await prisma.user.count({
@@ -1943,11 +2017,7 @@ router.delete("/me/account", verifyToken, async (req, res) => {
       ssoProvider: user.ssoProvider || null,
     });
 
-    if (deleteScope === "tenant") {
-      await prisma.tenant.delete({ where: { id: req.user.tenantId } });
-    } else {
-      await prisma.user.delete({ where: { id: user.id } });
-    }
+    await prisma.user.delete({ where: { id: user.id } });
 
     // Kill the session on the same response: drop the HttpOnly cookie and
     // revoke the jti so the bearer dies server-side immediately (the
@@ -1977,6 +2047,16 @@ router.delete("/me/account", verifyToken, async (req, res) => {
 
     res.json({ ok: true, deleted: deleteScope });
   } catch (err) {
+    // A sole user's account deletion also removes the tenant. Financial and
+    // other retained records may intentionally use Restrict tenant FKs, so
+    // surface a safe, actionable response instead of a generic 500.
+    if (err?.code === "P2003") {
+      return res.status(409).json({
+        error:
+          "This account cannot be deleted because the organization still has retained records. Contact an administrator to archive or remove those records first.",
+        code: "TENANT_HAS_RETAINED_RECORDS",
+      });
+    }
     console.error("[auth/me/account] delete error:", err && err.message);
     res.status(500).json({ error: "Failed to delete account" });
   }

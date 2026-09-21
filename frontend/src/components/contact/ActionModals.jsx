@@ -787,6 +787,8 @@ const asList = (d) => {
 
 export function DealModal({ contact, deal, onClose, onDone }) {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext);
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   const editing = Boolean(deal?.id);
   const initialContact = deal?.contact || contact;
   const [contactId, setContactId] = useState(deal?.contactId ?? initialContact?.id ?? null);
@@ -821,7 +823,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
       try {
         const [c, s, p, u] = await Promise.all([
           fetchApi('/api/contacts?limit=200', { silent: true }).catch(() => []),
-          fetchApi('/api/pipeline_stages', { silent: true }).catch(() => []),
+          isGeneric && pipelineId ? fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}`, { silent: true }).catch(() => []) : fetchApi('/api/pipeline_stages', { silent: true }).catch(() => []),
           fetchApi('/api/pipelines?fields=summary', { silent: true }).catch(() => []),
           fetchApi('/api/staff?fields=summary', { silent: true }).catch(() => []),
         ]);
@@ -836,6 +838,18 @@ export function DealModal({ contact, deal, onClose, onDone }) {
     })();
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    if (!isGeneric || !pipelineId) return undefined;
+    let alive = true;
+    fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}`, { silent: true }).then((data) => {
+      if (!alive) return;
+      const next = asList(data);
+      setStages(next);
+      if (stage && !next.some((item) => slugifyStage(item.name) === stage)) setStage('');
+    }).catch(() => { if (alive) setStages([]); });
+    return () => { alive = false; };
+  }, [isGeneric, pipelineId]);
 
   const stageOptions = useMemo(() => {
     const fromApi = stages
@@ -1104,6 +1118,15 @@ export function DealModal({ contact, deal, onClose, onDone }) {
                   </button>
                 )}
               </div>
+            {(showAll || isGeneric) && (
+              <label className="cp-deal-field">
+                <span>Pipeline</span>
+                <select className="cp-input" value={pipelineId} onChange={(e) => { setPipelineId(e.target.value); if (isGeneric) setStage(''); }}>
+                  <option value="">Click to select</option>
+                  {pipelines.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+            )}
             <label className="cp-deal-field">
               <span>Deal stage</span>
               <select className="cp-input" value={stage} onChange={(e) => setStage(e.target.value)}>
@@ -1115,15 +1138,6 @@ export function DealModal({ contact, deal, onClose, onDone }) {
               <label className="cp-deal-field">
                 <span>Probability %</span>
                 <input className="cp-input" type="number" min="0" max="100" value={probability} onChange={(e) => setProbability(e.target.value)} />
-              </label>
-            )}
-            {showAll && (
-              <label className="cp-deal-field">
-                <span>Pipeline</span>
-                <select className="cp-input" value={pipelineId} onChange={(e) => setPipelineId(e.target.value)}>
-                  <option value="">Click to select</option>
-                  {pipelines.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
               </label>
             )}
             {showAll && (

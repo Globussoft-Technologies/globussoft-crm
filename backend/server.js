@@ -2106,7 +2106,7 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
+const startHttpServer = () => server.listen(PORT, () => {
   console.log(
     `[Backend] Enterprise Express Server running securely on port ${PORT}`,
   );
@@ -2242,6 +2242,26 @@ server.listen(PORT, () => {
       );
   }
 });
+
+// Complete the Generic-only stage-assignment backfill before accepting HTTP
+// traffic. This prevents a newly deployed process from briefly returning an
+// empty board for legacy Generic pipelines. Fail-open keeps older local
+// databases bootable until `prisma generate` and `prisma db push` run.
+const { ensureGenericPipelineStageAssignments } = require("./scripts/ensureGenericPipelineStageAssignments");
+ensureGenericPipelineStageAssignments()
+  .then((stats) => {
+    if (!stats || stats.assignmentsCreated === 0) return;
+    console.log(
+      `[generic-stage-boot] backfilled ${stats.assignmentsCreated} assignment(s) across ${stats.pipelines} Generic pipeline(s)`,
+    );
+  })
+  .catch((err) =>
+    console.error(
+      "[generic-stage-boot] non-fatal error:",
+      err && err.message ? err.message : err,
+    ),
+  )
+  .finally(startHttpServer);
 
 // Graceful shutdown — required for c8 / V8 line coverage to flush its temp
 // files (V8 only dumps coverage on clean process exit; SIGTERM-without-handler

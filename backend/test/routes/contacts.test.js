@@ -1633,6 +1633,12 @@ describe('DELETE /api/contacts/tags', () => {
       { id: 103, tagsJson: JSON.stringify(['VIP']) },
     ]);
     prisma.contact.update.mockResolvedValue({});
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify([
+        { name: 'Strategic', color: '#2563eb' },
+        { name: 'VIP', color: '#059669' },
+      ]),
+    });
 
     const res = await request(makeApp())
       .delete('/api/contacts/tags')
@@ -1662,6 +1668,23 @@ describe('DELETE /api/contacts/tags', () => {
       where: { id: 102 },
       data: { tagsJson: null },
     });
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.contactTagCatalog' } },
+      update: { value: JSON.stringify([{ name: 'VIP', color: '#059669' }]), category: 'general' },
+    }));
+  });
+
+  test.each(['wellness', 'travel'])('%s tag deletion does not mutate the Generic catalog', async (vertical) => {
+    prisma.contact.findMany.mockResolvedValueOnce([]);
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical });
+
+    const res = await request(makeApp({ vertical }))
+      .delete('/api/contacts/tags')
+      .send({ tag: 'Strategic' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.tenantSetting.findUnique).not.toHaveBeenCalled();
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
   });
 });
 

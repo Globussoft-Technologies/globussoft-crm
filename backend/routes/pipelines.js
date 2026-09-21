@@ -8,13 +8,65 @@ const { writeAudit, diffFields } = require("../lib/audit");
 // pipeline list to file deals against it).
 const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 
+function isGenericCrm(req) {
+  return req.user?.vertical !== "wellness" && req.user?.vertical !== "travel";
+}
+
+function pipelineInputError(message, code, status = 400) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
+function normalizePipelineStages(rawStages) {
+  if (rawStages === undefined) return null;
+  if (!Array.isArray(rawStages) || rawStages.length === 0) {
+    throw pipelineInputError("At least one pipeline stage is required", "PIPELINE_STAGES_REQUIRED");
+  }
+  if (rawStages.length > 100) {
+    throw pipelineInputError("A pipeline cannot contain more than 100 stages", "TOO_MANY_PIPELINE_STAGES");
+  }
+
+  const identities = new Set();
+  return rawStages.map((rawStage, position) => {
+    if (!rawStage || typeof rawStage !== "object" || Array.isArray(rawStage)) {
+      throw pipelineInputError("Each pipeline stage must be an object", "INVALID_PIPELINE_STAGE");
+    }
+
+    const stageId = rawStage.stageId == null ? null : Number(rawStage.stageId);
+    const name = String(rawStage.name || "").trim();
+    if (stageId != null && (!Number.isInteger(stageId) || stageId < 1)) {
+      throw pipelineInputError("Each stageId must be a positive integer", "INVALID_PIPELINE_STAGE_ID");
+    }
+    if (stageId == null && !name) {
+      throw pipelineInputError("Each new pipeline stage requires a name", "PIPELINE_STAGE_NAME_REQUIRED");
+    }
+
+    const identity = stageId == null ? `name:${name.toLowerCase()}` : `id:${stageId}`;
+    if (identities.has(identity)) {
+      throw pipelineInputError("A pipeline cannot contain the same stage more than once", "DUPLICATE_PIPELINE_STAGE");
+    }
+    identities.add(identity);
+
+    return {
+      stageId,
+      name,
+      color: typeof rawStage.color === "string" && rawStage.color.trim()
+        ? rawStage.color.trim()
+        : "#3b82f6",
+      position,
+    };
+  });
+}
+
 // ── GET /?fields=summary ─ list all pipelines for tenant (with deal counts) ─
 router.get("/", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     // #920 slice 23: ?fields=summary slim-shape opt-in. Mirrors slices 1-20.
-    // Pipeline is a thin model (no nested includes today — PipelineStage is
-    // a separate tenant-shared model, NOT a relation on Pipeline). When the
+    // Pipeline is a thin model (no nested includes today — Generic CRM stage
+    // membership is represented by PipelineStageAssignment). When the
     // caller passes ?fields=summary we drop the tenantId (leaks tenant
     // identity to clients that don't need it), description (free-form text
     // not needed by dropdown / picker chrome), createdAt + updatedAt
@@ -56,12 +108,20 @@ router.get("/", verifyToken, async (req, res) => {
 router.post("/", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { name, description, isDefault } = req.body || {};
+    const { name, description, isDefault, stages: rawStages } = req.body || {};
     if (!name || !name.trim()) {
       return res.status(400).json({ error: "Pipeline name is required" });
     }
+    if (rawStages !== undefined && !isGenericCrm(req)) {
+      return res.status(400).json({
+        error: "Pipeline-specific stages are available only in Generic CRM",
+        code: "PIPELINE_STAGES_UNSUPPORTED_FOR_VERTICAL",
+      });
+    }
+    const stages = normalizePipelineStages(rawStages);
 
-    // Atomic create: if isDefault, unset others first
+    // Atomic create: default selection, pipeline row, newly-created shared
+    // stages, and per-pipeline assignments either all commit or all roll back.
     const pipeline = await prisma.$transaction(async (tx) => {
       if (isDefault) {
         await tx.pipeline.updateMany({
@@ -73,7 +133,7 @@ router.post("/", ...adminOnly, async (req, res) => {
       const count = await tx.pipeline.count({ where: { tenantId } });
       const shouldBeDefault = isDefault === true || count === 0;
 
-      return tx.pipeline.create({
+      const createdPipeline = await tx.pipeline.create({
         data: {
           name: name.trim(),
           description: description || null,
@@ -81,6 +141,49 @@ router.post("/", ...adminOnly, async (req, res) => {
           tenantId,
         },
       });
+
+      for (const stageInput of stages || []) {
+        let stage;
+        if (stageInput.stageId != null) {
+          stage = await tx.pipelineStage.findFirst({
+            where: { id: stageInput.stageId, tenantId },
+          });
+          if (!stage) {
+            throw pipelineInputError("Pipeline stage not found", "PIPELINE_STAGE_NOT_FOUND", 404);
+          }
+        } else {
+          const duplicate = await tx.pipelineStage.findFirst({
+            where: { tenantId, name: { equals: stageInput.name } },
+            select: { id: true, name: true },
+          });
+          if (duplicate) {
+            throw pipelineInputError(
+              `Stage "${duplicate.name}" already exists. Select the existing stage instead.`,
+              "STAGE_ALREADY_EXISTS",
+              409,
+            );
+          }
+          stage = await tx.pipelineStage.create({
+            data: {
+              name: stageInput.name,
+              color: stageInput.color,
+              position: stageInput.position,
+              tenantId,
+            },
+          });
+        }
+
+        await tx.pipelineStageAssignment.create({
+          data: {
+            pipelineId: createdPipeline.id,
+            stageId: stage.id,
+            tenantId,
+            position: stageInput.position,
+          },
+        });
+      }
+
+      return createdPipeline;
     });
 
     // #568: audit Pipeline CREATE — admin-config write must be discoverable
@@ -97,6 +200,12 @@ router.post("/", ...adminOnly, async (req, res) => {
 
     res.status(201).json(pipeline);
   } catch (err) {
+    if (err?.status && err?.code) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    if (err?.code === "P2002") {
+      return res.status(409).json({ error: "Pipeline contains a duplicate stage", code: "DUPLICATE_PIPELINE_STAGE" });
+    }
     console.error("[pipelines][POST /]", err);
     res.status(500).json({ error: "Failed to create pipeline" });
   }
@@ -109,10 +218,9 @@ router.post("/", ...adminOnly, async (req, res) => {
 // sales dashboard's pipeline strip. Aggregates:
 //
 //   - totalPipelines       count of Pipeline rows for tenant
-//   - totalStages          count of PipelineStage rows for tenant (tenant-wide;
-//                          PipelineStage has NO pipelineId column in the
-//                          current schema — stages are a tenant-shared library
-//                          per prisma/schema.prisma:1333)
+//   - totalStages          count of shared PipelineStage rows for the tenant;
+//                          pipeline membership is represented separately by
+//                          PipelineStageAssignment.
 //   - avgStagesPerPipeline totalStages / totalPipelines, rounded half-up to
 //                          2dp; null when totalPipelines = 0
 //   - defaultPipelineId    id of the Pipeline where isDefault=true (null when
@@ -123,7 +231,7 @@ router.post("/", ...adminOnly, async (req, res) => {
 // Query params:
 //   - ?from / ?to (ISO date bounds on Pipeline.createdAt). Bounds apply to
 //     pipeline aggregates (totalPipelines, defaultPipelineId, lastCreatedAt).
-//     totalStages stays unbounded — PipelineStage has no temporal relation to
+//     totalStages stays unbounded — shared stages have no temporal relation to
 //     a specific Pipeline. Invalid date → 400 INVALID_DATE.
 //
 // Auth: mirrors GET / (verifyToken, all authenticated tenant members).
@@ -302,6 +410,19 @@ router.post("/:id/set-default", ...adminOnly, async (req, res) => {
   } catch (err) {
     console.error("[pipelines][POST /:id/set-default]", err);
     res.status(500).json({ error: "Failed to set default pipeline" });
+  }
+});
+
+router.post("/:id/remove-default", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.pipeline.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Pipeline not found" });
+    await prisma.pipeline.update({ where: { id }, data: { isDefault: false } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[pipelines][POST /:id/remove-default]", err);
+    res.status(500).json({ error: "Failed to remove default pipeline" });
   }
 });
 

@@ -88,6 +88,13 @@ prisma.pipeline = {
   updateMany: vi.fn(),
   delete: vi.fn(),
 };
+prisma.pipelineStage = {
+  findFirst: vi.fn(),
+  create: vi.fn(),
+};
+prisma.pipelineStageAssignment = {
+  create: vi.fn(),
+};
 prisma.deal = prisma.deal || {};
 prisma.deal.findMany = vi.fn();
 prisma.deal.groupBy = vi.fn();
@@ -118,8 +125,8 @@ const requireCJS = createRequire(import.meta.url);
 // already-cached config/secrets module. This guarantees the test-token
 // signing path matches verifyToken's resolution regardless of env timing.
 const { JWT_SECRET } = requireCJS('../../config/secrets');
-function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
-  return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '1h' });
+function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN', vertical = 'generic' } = {}) {
+  return 'Bearer ' + jwt.sign({ userId, tenantId, role, vertical }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 // CJS self-mocking seam: the route does `require('../lib/audit')` at
@@ -155,6 +162,7 @@ function makeApp() {
 }
 
 beforeEach(() => {
+  prisma.$transaction.mockClear();
   prisma.pipeline.findMany.mockReset();
   prisma.pipeline.findFirst.mockReset();
   prisma.pipeline.count.mockReset();
@@ -162,6 +170,9 @@ beforeEach(() => {
   prisma.pipeline.update.mockReset();
   prisma.pipeline.updateMany.mockReset();
   prisma.pipeline.delete.mockReset();
+  prisma.pipelineStage.findFirst.mockReset();
+  prisma.pipelineStage.create.mockReset();
+  prisma.pipelineStageAssignment.create.mockReset();
   prisma.deal.findMany.mockReset();
   prisma.deal.groupBy.mockReset();
   prisma.deal.count.mockReset();
@@ -386,6 +397,80 @@ describe('POST / — create pipeline', () => {
       data: { isDefault: false },
     });
     expect(prisma.pipeline.create).toHaveBeenCalled();
+  });
+
+  test('atomically creates a Generic pipeline with existing and new stage assignments', async () => {
+    prisma.pipeline.count.mockResolvedValue(2);
+    prisma.pipeline.create.mockResolvedValue({
+      id: 101, name: 'Atomic Pipeline', description: null, isDefault: false, tenantId: 1,
+    });
+    prisma.pipelineStage.findFirst
+      .mockResolvedValueOnce({ id: 7, name: 'Qualified', tenantId: 1 })
+      .mockResolvedValueOnce(null);
+    prisma.pipelineStage.create.mockResolvedValue({
+      id: 8, name: 'Negotiation', color: '#f59e0b', position: 1, tenantId: 1,
+    });
+    prisma.pipelineStageAssignment.create.mockResolvedValue({});
+
+    const res = await request(makeApp())
+      .post('/api/pipelines')
+      .set('Authorization', makeBearer())
+      .send({
+        name: 'Atomic Pipeline',
+        stages: [
+          { stageId: 7 },
+          { name: ' Negotiation ', color: '#f59e0b' },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.pipelineStage.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { id: 7, tenantId: 1 },
+    });
+    expect(prisma.pipelineStage.create).toHaveBeenCalledWith({
+      data: { name: 'Negotiation', color: '#f59e0b', position: 1, tenantId: 1 },
+    });
+    expect(prisma.pipelineStageAssignment.create).toHaveBeenNthCalledWith(1, {
+      data: { pipelineId: 101, stageId: 7, tenantId: 1, position: 0 },
+    });
+    expect(prisma.pipelineStageAssignment.create).toHaveBeenNthCalledWith(2, {
+      data: { pipelineId: 101, stageId: 8, tenantId: 1, position: 1 },
+    });
+    expect(writeAuditMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects a foreign stage so the create transaction cannot commit partial data', async () => {
+    prisma.pipeline.count.mockResolvedValue(1);
+    prisma.pipeline.create.mockResolvedValue({
+      id: 102, name: 'Must Roll Back', description: null, isDefault: false, tenantId: 1,
+    });
+    prisma.pipelineStage.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/pipelines')
+      .set('Authorization', makeBearer())
+      .send({ name: 'Must Roll Back', stages: [{ stageId: 9999 }] });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Pipeline stage not found', code: 'PIPELINE_STAGE_NOT_FOUND' });
+    expect(prisma.pipelineStage.findFirst).toHaveBeenCalledWith({
+      where: { id: 9999, tenantId: 1 },
+    });
+    expect(prisma.pipelineStageAssignment.create).not.toHaveBeenCalled();
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  test('does not apply Generic pipeline-stage assignments to Wellness or Travel', async () => {
+    const res = await request(makeApp())
+      .post('/api/pipelines')
+      .set('Authorization', makeBearer({ vertical: 'wellness' }))
+      .send({ name: 'Clinic Pipeline', stages: [{ name: 'Booked' }] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PIPELINE_STAGES_UNSUPPORTED_FOR_VERTICAL');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.pipeline.create).not.toHaveBeenCalled();
   });
 
   test('rejects empty / missing name with 400', async () => {

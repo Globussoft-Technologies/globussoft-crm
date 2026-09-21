@@ -170,7 +170,7 @@ const Clients = () => {
                   aria-label="Rows per page"
                   value={String(pageSize)}
                   onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                  style={{ padding: '0.5rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-hover))', color: 'var(--text-primary)' }}
+                  className="generic-clients-page-size"
                 >
                   {[10, 15, 25, 50].map(size => (
                     <option key={size} value={size}>{size}</option>

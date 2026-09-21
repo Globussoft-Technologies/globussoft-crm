@@ -177,6 +177,7 @@ jobs:
             tests/wellness-geofence-zones-api.spec.js \
             tests/contacts-api.spec.js \
             tests/deals-api.spec.js \
+            tests/pipelines.spec.js \
             tests/surveys-api.spec.js \
             tests/external-api.spec.js \
             tests/wellness-clinical-api.spec.js \

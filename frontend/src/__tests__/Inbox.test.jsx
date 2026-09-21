@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { AuthContext } from "../App";
 
 const fetchApiMock = vi.fn();
@@ -158,9 +159,11 @@ function defaultFetch(url, opts) {
 
 function renderInbox({ user = adminUser } = {}) {
   return render(
-    <AuthContext.Provider value={{ user }}>
-      <Inbox />
-    </AuthContext.Provider>,
+    <MemoryRouter>
+      <AuthContext.Provider value={{ user }}>
+        <Inbox />
+      </AuthContext.Provider>
+    </MemoryRouter>,
   );
 }
 

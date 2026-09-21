@@ -13,8 +13,8 @@ router.get("/", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     // #920 slice 23: ?fields=summary slim-shape opt-in. Mirrors slices 1-20.
-    // Pipeline is a thin model (no nested includes today — PipelineStage is
-    // a separate tenant-shared model, NOT a relation on Pipeline). When the
+    // Pipeline is a thin model (no nested includes today — Generic CRM stage
+    // membership is represented by PipelineStageAssignment). When the
     // caller passes ?fields=summary we drop the tenantId (leaks tenant
     // identity to clients that don't need it), description (free-form text
     // not needed by dropdown / picker chrome), createdAt + updatedAt
@@ -109,10 +109,9 @@ router.post("/", ...adminOnly, async (req, res) => {
 // sales dashboard's pipeline strip. Aggregates:
 //
 //   - totalPipelines       count of Pipeline rows for tenant
-//   - totalStages          count of PipelineStage rows for tenant (tenant-wide;
-//                          PipelineStage has NO pipelineId column in the
-//                          current schema — stages are a tenant-shared library
-//                          per prisma/schema.prisma:1333)
+//   - totalStages          count of shared PipelineStage rows for the tenant;
+//                          pipeline membership is represented separately by
+//                          PipelineStageAssignment.
 //   - avgStagesPerPipeline totalStages / totalPipelines, rounded half-up to
 //                          2dp; null when totalPipelines = 0
 //   - defaultPipelineId    id of the Pipeline where isDefault=true (null when
@@ -123,7 +122,7 @@ router.post("/", ...adminOnly, async (req, res) => {
 // Query params:
 //   - ?from / ?to (ISO date bounds on Pipeline.createdAt). Bounds apply to
 //     pipeline aggregates (totalPipelines, defaultPipelineId, lastCreatedAt).
-//     totalStages stays unbounded — PipelineStage has no temporal relation to
+//     totalStages stays unbounded — shared stages have no temporal relation to
 //     a specific Pipeline. Invalid date → 400 INVALID_DATE.
 //
 // Auth: mirrors GET / (verifyToken, all authenticated tenant members).
@@ -302,6 +301,19 @@ router.post("/:id/set-default", ...adminOnly, async (req, res) => {
   } catch (err) {
     console.error("[pipelines][POST /:id/set-default]", err);
     res.status(500).json({ error: "Failed to set default pipeline" });
+  }
+});
+
+router.post("/:id/remove-default", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const existing = await prisma.pipeline.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: "Pipeline not found" });
+    await prisma.pipeline.update({ where: { id }, data: { isDefault: false } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[pipelines][POST /:id/remove-default]", err);
+    res.status(500).json({ error: "Failed to remove default pipeline" });
   }
 });
 

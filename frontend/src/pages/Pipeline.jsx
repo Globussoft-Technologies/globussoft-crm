@@ -105,7 +105,7 @@ export default function Pipeline() {
       const statsQuery = new URLSearchParams(query); statsQuery.delete('limit'); statsQuery.delete('page');
       const [dealData, stageData, pipelineData, statsData, staffData] = await Promise.all([
         fetchApi(`/api/deals?${query.toString()}`),
-        fetchApi('/api/pipeline_stages'),
+        fetchApi(pipelineId ? `/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}` : '/api/pipeline_stages'),
         fetchApi('/api/pipelines?fields=summary'),
         fetchApi(`/api/deals/stats?${statsQuery.toString()}`),
         fetchApi('/api/staff?fields=summary', { silent: true }).catch(() => []),
@@ -247,11 +247,11 @@ const control = { display: 'inline-flex', alignItems: 'center', gap: 6, color: '
 const pipelineSelect = { width: 170, minWidth: 170, height: 44, padding: '8px 34px 8px 13px', border: '1px solid var(--border-color)', borderRadius: 11, background: 'var(--surface-color)', color: 'var(--text-primary)', fontSize: 13, fontWeight: 600, lineHeight: 1.2, cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none', boxShadow: '0 1px 2px rgba(15,23,42,.04)' };
 const filterSelect = { width: 155, minWidth: 155, height: 44, padding: '8px 34px 8px 13px', border: '1px solid var(--border-color)', borderRadius: 11, background: 'var(--surface-color)', color: 'var(--text-primary)', fontSize: 13, fontWeight: 600, lineHeight: 1.2, cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none', boxShadow: '0 1px 2px rgba(15,23,42,.04)' };
 const hiddenFilterSelect = { position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' };
-const filterMenu = { position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100, width: '100%', minWidth: 155, maxHeight: 240, overflowY: 'auto', padding: 5, border: '1px solid var(--border-color)', borderRadius: 10, background: '#fff', boxShadow: '0 12px 28px rgba(15,23,42,.16)' };
-const filterOption = { display: 'block', width: '100%', padding: '9px 10px', border: 0, borderRadius: 6, background: '#fff', color: 'var(--text-primary)', textAlign: 'left', fontSize: 13, cursor: 'pointer' };
+const filterMenu = { position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100, width: '100%', minWidth: 155, maxHeight: 240, overflowY: 'auto', padding: 5, border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--popover-bg, var(--surface-color))', boxShadow: '0 12px 28px rgba(15,23,42,.16)' };
+const filterOption = { display: 'block', width: '100%', padding: '9px 10px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', textAlign: 'left', fontSize: 13, cursor: 'pointer' };
 const hiddenPipelineSelect = { position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' };
-const pipelineMenu = { position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100, width: '100%', minWidth: 170, maxHeight: 240, overflowY: 'auto', padding: 5, border: '1px solid var(--border-color)', borderRadius: 10, background: '#fff', boxShadow: '0 12px 28px rgba(15,23,42,.16)' };
-const pipelineOption = { display: 'block', width: '100%', padding: '9px 10px', border: 0, borderRadius: 6, background: '#fff', color: 'var(--text-primary)', textAlign: 'left', fontSize: 13, cursor: 'pointer' };
+const pipelineMenu = { position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100, width: '100%', minWidth: 170, maxHeight: 240, overflowY: 'auto', padding: 5, border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--popover-bg, var(--surface-color))', boxShadow: '0 12px 28px rgba(15,23,42,.16)' };
+const pipelineOption = { display: 'block', width: '100%', padding: '9px 10px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', textAlign: 'left', fontSize: 13, cursor: 'pointer' };
 const alert = { padding: 12, marginBottom: 16, borderRadius: 8, background: 'rgba(239,68,68,.1)', color: 'var(--danger-color, #b91c1c)', fontSize: 13 };
 const linkButton = { marginLeft: 10, padding: 0, border: 0, background: 'transparent', color: 'inherit', textDecoration: 'underline', cursor: 'pointer' };
 const empty = { padding: 52, textAlign: 'center', color: 'var(--text-secondary)', border: '1px dashed var(--border-color)', borderRadius: 10 };

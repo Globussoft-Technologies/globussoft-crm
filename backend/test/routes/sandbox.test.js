@@ -34,14 +34,14 @@
  * non-numeric / not-found edge cases on download + delete + restore,
  * RBAC enforcement on restore + reset, legacy blob shape fallback
  * (data || blob), safeStripIds on quote/estimate line items, full-scope
- * restore wiring across all 13 models, sizes-aggregate fallback when
+ * restore wiring across all 14 models, sizes-aggregate fallback when
  * the raw query returns a partial map.)
  * ───────────────────────────────────────────────────────
  *   1. GET /            — tenant-scoped list with sizeBytes attached per row.
  *   2. GET /            — empty-list short-circuits the raw-query and
  *                          returns []. (ids.length === 0 branch)
  *   3. POST /           — captures snapshot, returns 201 + envelope with
- *                          sizeBytes; 13 prisma findMany calls fire
+ *                          sizeBytes; 14 prisma findMany calls fire
  *                          (the modeled scope).
  *   4. POST /           — rejects missing/empty name with 400.
  *   5. POST /           — non-string name (numeric) also 400 — typeof guard.
@@ -90,11 +90,11 @@ prisma.sandboxSnapshot = {
   delete: vi.fn(),
 };
 
-// The 13 tenant-scope models the create endpoint dumps:
+// The 14 tenant-scope models the create endpoint dumps:
 const scopeModels = [
   'contact', 'deal', 'activity', 'task', 'invoice',
   'estimate', 'estimateLineItem', 'contract', 'quote', 'quoteLineItem',
-  'pipeline', 'pipelineStage', 'emailMessage', 'travelQuote',
+  'pipeline', 'pipelineStage', 'pipelineStageAssignment', 'emailMessage', 'travelQuote',
 ];
 for (const m of scopeModels) {
   prisma[m] = prisma[m] || {};
@@ -206,7 +206,7 @@ describe('GET / — list sandbox snapshots', () => {
 
 describe('POST / — capture a new snapshot', () => {
   test('captures tenant data + persists JSON blob, returns 201 with sizeBytes envelope', async () => {
-    // Seed one of the 13 model lists so the resulting JSON blob is non-trivial.
+    // Seed one of the 14 model lists so the resulting JSON blob is non-trivial.
     prisma.contact.findMany.mockResolvedValue([
       { id: 1, name: 'Alice', email: 'a@example.com', tenantId: 1 },
       { id: 2, name: 'Bob',   email: 'b@example.com', tenantId: 1 },
@@ -246,7 +246,7 @@ describe('POST / — capture a new snapshot', () => {
     expect(blob.counts.contacts).toBe(2);
     expect(blob.data.contacts).toHaveLength(2);
 
-    // All 13 scope models were queried with tenant scope (12 direct + 1 nested).
+    // All 14 scope models were queried with tenant scope (13 direct + 1 nested).
     expect(prisma.contact.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 1 },
     }));
@@ -869,7 +869,7 @@ describe('POST /:id/restore — RBAC + edge + deep paths', () => {
     expect(quoteCall.data[0].id).toBeUndefined();
   });
 
-  test('full-scope restore wires all 13 model createMany calls + ordering — emailMessages, activities, tasks, etc.', async () => {
+  test('full-scope restore wires all 14 model createMany calls + ordering — emailMessages, activities, tasks, etc.', async () => {
     const blob = {
       version: 1,
       tenantId: 1,
@@ -925,6 +925,7 @@ describe('POST /:id/restore — RBAC + edge + deep paths', () => {
       quoteLineItems: 0,
       pipelines: 1,
       pipelineStages: 1,
+      pipelineStageAssignments: 0,
       emailMessages: 2,
     });
     // Every model's createMany was invoked exactly once.

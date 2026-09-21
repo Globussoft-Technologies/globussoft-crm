@@ -228,6 +228,10 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe what this pipeline is for/i), {
       target: { value: 'Cold-list AE pursuits' },
     });
+    fireEvent.click(screen.getByRole('button', { name: /Add Stage/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Stage name/i), {
+      target: { value: 'New Lead' },
+    });
 
     // Click the modal-footer submit.
     const submitButtons = screen.getAllByRole('button', { name: /Create Pipeline/i });
@@ -250,6 +254,55 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
         ([u, o]) => u === '/api/pipelines' && (!o || !o.method || o.method === 'GET'),
       );
       expect(getCalls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('removing one unsaved stage removes only that stage', async () => {
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
+
+    const addStageButton = screen.getByRole('button', { name: /Add Stage/i });
+    fireEvent.click(addStageButton);
+    fireEvent.click(addStageButton);
+    fireEvent.click(addStageButton);
+
+    const stageInputs = screen.getAllByPlaceholderText(/Stage name/i);
+    fireEvent.change(stageInputs[0], { target: { value: 'Stage 1' } });
+    fireEvent.change(stageInputs[1], { target: { value: 'Stage 2' } });
+    fireEvent.change(stageInputs[2], { target: { value: 'Stage 3' } });
+
+    const removeButtons = screen.getAllByRole('button', { name: /Remove stage/i });
+    fireEvent.click(removeButtons[1]);
+
+    await waitFor(() => {
+      const remainingInputs = screen.getAllByPlaceholderText(/Stage name/i);
+      expect(remainingInputs).toHaveLength(2);
+      expect(remainingInputs.map((input) => input.value)).toEqual(['Stage 1', 'Stage 3']);
+    });
+  });
+
+  it('creating a pipeline with an existing stage sends its stageId for reuse', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/pipeline_stages?reusable=true') {
+        return Promise.resolve([{ id: 21, name: 'New Lead', color: '#3b82f6' }]);
+      }
+      if (url === '/api/pipelines' && opts?.method === 'POST') return Promise.resolve({ id: 99 });
+      if (url === '/api/pipeline_stages' && opts?.method === 'POST') return Promise.resolve({ id: 21, name: 'New Lead' });
+      return defaultFetchMock(url, opts);
+    });
+
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
+    fireEvent.change(await screen.findByRole('combobox', { name: /Select Existing Stage/i }), { target: { value: '21' } });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Enterprise Sales/i), { target: { value: 'Reusable Pipeline' } });
+    fireEvent.click(screen.getAllByRole('button', { name: /Create Pipeline/i }).at(-1));
+
+    await waitFor(() => {
+      const stagePost = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST');
+      expect(stagePost).toBeTruthy();
+      expect(JSON.parse(stagePost[1].body)).toEqual({ pipelineId: 99, stageId: 21, position: 0 });
     });
   });
 

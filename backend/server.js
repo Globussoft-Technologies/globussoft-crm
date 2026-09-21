@@ -2110,6 +2110,25 @@ server.listen(PORT, () => {
     `[Backend] Enterprise Express Server running securely on port ${PORT}`,
   );
 
+  // Backfill Generic CRM's reusable stage assignments from the legacy
+  // PipelineStage.pipelineId relationship. This is idempotent and non-fatal:
+  // local development can run with an older generated Prisma client until
+  // `prisma generate` and `prisma db push` are completed.
+  const { ensureGenericPipelineStageAssignments } = require("./scripts/ensureGenericPipelineStageAssignments");
+  ensureGenericPipelineStageAssignments()
+    .then((stats) => {
+      if (!stats || (stats.assignmentsCreated === 0 && stats.legacyRowsCleared === 0)) return;
+      console.log(
+        `[generic-stage-boot] backfilled ${stats.assignmentsCreated} assignment(s), cleared ${stats.legacyRowsCleared} legacy row(s) across ${stats.pipelines} pipeline(s)`,
+      );
+    })
+    .catch((err) =>
+      console.error(
+        "[generic-stage-boot] non-fatal error:",
+        err && err.message ? err.message : err,
+      ),
+    );
+
   // Auto-heal RBAC state on boot so requiredPermission-gated UI (e.g. the
   // "Roles" sidebar entry) appears consistently across local / dev / prod
   // without manual seed-rbac-only.js runs. Fire-and-forget: a DB hiccup must

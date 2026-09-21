@@ -2061,55 +2061,9 @@ router.get("/filter-values/:field", async (req, res) => {
 });
 
 // Generic CRM tag catalog. Contact ↔ tag membership continues to use the
+router.delete("/tags", async (req, res) => {
 // existing Contact.tagsJson field; the tenant setting stores shared names and
 // colors so every contact renders the same tag color after a reload.
-router.get('/tags', async (req, res) => {
-  try {
-    if (!await requireGenericContactTags(req, res)) return;
-    const catalog = await readContactTagCatalog(req.user.tenantId);
-    res.json({ tags: catalog.sort((a, b) => a.name.localeCompare(b.name)) });
-  } catch (_err) {
-    res.status(500).json({ error: 'Failed to fetch contact tags' });
-  }
-});
-
-router.post('/tags', async (req, res) => {
-  try {
-    if (!await requireGenericContactTags(req, res)) return;
-    const name = normalizeContactTagValue(req.body?.name);
-    const color = normalizeContactTagColor(req.body?.color) || defaultContactTagColor(name);
-    if (!name) return res.status(400).json({ error: 'Tag name is required', code: 'TAG_NAME_REQUIRED' });
-    if (CONTACT_TAG_CONTROL_RE.test(name)) return res.status(400).json({ error: 'Tag contains invalid control characters', code: 'INVALID_TAG' });
-    if (name.length > CONTACT_TAG_MAX_LENGTH) return res.status(400).json({ error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`, code: 'TAG_TOO_LONG' });
-    const catalog = await readContactTagCatalog(req.user.tenantId);
-    const existing = catalog.find((tag) => tag.name.toLowerCase() === name.toLowerCase());
-    if (existing) return res.json(existing);
-    const created = { name, color };
-    await writeContactTagCatalog(req.user.tenantId, [...catalog, created]);
-    res.status(201).json(created);
-  } catch (_err) {
-    res.status(500).json({ error: 'Failed to create contact tag' });
-  }
-});
-
-router.patch('/tags/:tagName', async (req, res) => {
-  try {
-    if (!await requireGenericContactTags(req, res)) return;
-    const name = normalizeContactTagValue(req.params.tagName);
-    const color = normalizeContactTagColor(req.body?.color);
-    if (!name || !color) return res.status(400).json({ error: 'A valid tag name and color are required', code: 'INVALID_TAG_COLOR' });
-    const catalog = await readContactTagCatalog(req.user.tenantId);
-    const index = catalog.findIndex((tag) => tag.name.toLowerCase() === name.toLowerCase());
-    const updated = index >= 0 ? { ...catalog[index], color } : { name, color };
-    const next = index >= 0 ? catalog.map((tag, itemIndex) => itemIndex === index ? updated : tag) : [...catalog, updated];
-    await writeContactTagCatalog(req.user.tenantId, next);
-    res.json(updated);
-  } catch (_err) {
-    res.status(500).json({ error: 'Failed to update contact tag' });
-  }
-});
-
-router.delete("/tags", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const tag = normalizeContactTagValue(req.body?.tag);
@@ -2159,22 +2113,58 @@ router.delete("/tags", async (req, res) => {
       });
       updatedContacts += 1;
     }
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { vertical: true },
-    });
-    if (tenant?.vertical === "generic") {
-      const catalog = await readContactTagCatalog(tenantId);
-      const nextCatalog = catalog.filter(
-        (catalogTag) => catalogTag.name.toLowerCase() !== tagKey,
-      );
-      if (nextCatalog.length !== catalog.length) {
-        await writeContactTagCatalog(tenantId, nextCatalog);
-      }
-    }
     return res.json({ deletedTag: tag, status: statusScope, updatedContacts });
   } catch (_err) {
     return res.status(500).json({ error: "Failed to delete tag" });
+  }
+});
+
+// Generic CRM tag catalog. Contact/tag membership continues to use the
+// existing Contact.tagsJson field; the tenant setting stores shared names and
+// colors so every contact renders the same tag color after a reload.
+router.get('/tags', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    res.json({ tags: catalog.sort((a, b) => a.name.localeCompare(b.name)) });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch contact tags' });
+  }
+});
+
+router.post('/tags', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const name = normalizeContactTagValue(req.body?.name);
+    const color = normalizeContactTagColor(req.body?.color) || defaultContactTagColor(name);
+    if (!name) return res.status(400).json({ error: 'Tag name is required', code: 'TAG_NAME_REQUIRED' });
+    if (CONTACT_TAG_CONTROL_RE.test(name)) return res.status(400).json({ error: 'Tag contains invalid control characters', code: 'INVALID_TAG' });
+    if (name.length > CONTACT_TAG_MAX_LENGTH) return res.status(400).json({ error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`, code: 'TAG_TOO_LONG' });
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    const existing = catalog.find((tag) => tag.name.toLowerCase() === name.toLowerCase());
+    if (existing) return res.json(existing);
+    const created = { name, color };
+    await writeContactTagCatalog(req.user.tenantId, [...catalog, created]);
+    res.status(201).json(created);
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to create contact tag' });
+  }
+});
+
+router.patch('/tags/:tagName', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const name = normalizeContactTagValue(req.params.tagName);
+    const color = normalizeContactTagColor(req.body?.color);
+    if (!name || !color) return res.status(400).json({ error: 'A valid tag name and color are required', code: 'INVALID_TAG_COLOR' });
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    const index = catalog.findIndex((tag) => tag.name.toLowerCase() === name.toLowerCase());
+    const updated = index >= 0 ? { ...catalog[index], color } : { name, color };
+    const next = index >= 0 ? catalog.map((tag, itemIndex) => itemIndex === index ? updated : tag) : [...catalog, updated];
+    await writeContactTagCatalog(req.user.tenantId, next);
+    res.json(updated);
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to update contact tag' });
   }
 });
 

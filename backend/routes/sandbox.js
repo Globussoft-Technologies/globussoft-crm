@@ -85,6 +85,7 @@ router.post("/", verifyToken, async (req, res) => {
       quoteLineItems,
       pipelines,
       pipelineStages,
+      pipelineStageAssignments,
       emailMessages,
     ] = await Promise.all([
       prisma.contact.findMany({ where, take: 1000, orderBy: { id: "asc" } }),
@@ -105,6 +106,12 @@ router.post("/", verifyToken, async (req, res) => {
       }),
       prisma.pipeline.findMany({ where, orderBy: { id: "asc" } }),
       prisma.pipelineStage.findMany({ where, orderBy: { id: "asc" } }),
+      prisma.pipelineStageAssignment
+        ? prisma.pipelineStageAssignment.findMany({
+          where: { pipeline: { tenantId } },
+          orderBy: [{ pipelineId: "asc" }, { position: "asc" }],
+        })
+        : Promise.resolve([]),
       prisma.emailMessage.findMany({ where, take: 500, orderBy: { id: "desc" } }),
     ]);
 
@@ -125,6 +132,7 @@ router.post("/", verifyToken, async (req, res) => {
         quoteLineItems: quoteLineItems.length,
         pipelines: pipelines.length,
         pipelineStages: pipelineStages.length,
+        pipelineStageAssignments: pipelineStageAssignments.length,
         emailMessages: emailMessages.length,
       },
       data: {
@@ -140,6 +148,7 @@ router.post("/", verifyToken, async (req, res) => {
         quoteLineItems,
         pipelines,
         pipelineStages,
+        pipelineStageAssignments,
         emailMessages,
       },
     };
@@ -308,6 +317,7 @@ router.post(
         quoteLineItems: 0,
         pipelines: 0,
         pipelineStages: 0,
+        pipelineStageAssignments: 0,
         emailMessages: 0,
       };
 
@@ -325,6 +335,18 @@ router.post(
           data: arr("pipelineStages").map((p) => ({ ...p, tenantId })),
         });
         restored.pipelineStages = r.count;
+      }
+      if (arr("pipelineStageAssignments").length) {
+        const r = await prisma.pipelineStageAssignment.createMany({
+          data: arr("pipelineStageAssignments").map((assignment) => ({
+            pipelineId: assignment.pipelineId,
+            stageId: assignment.stageId,
+            position: assignment.position,
+            createdAt: assignment.createdAt,
+          })),
+          skipDuplicates: true,
+        });
+        restored.pipelineStageAssignments = r.count;
       }
 
       // Contacts (parent of many)

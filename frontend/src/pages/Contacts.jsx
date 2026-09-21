@@ -187,6 +187,7 @@ const Contacts = () => {
   const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
+  const isGeneric = !isTravel && !isWellness;
   const isAdmin = user?.role === 'ADMIN';
   // Bulk-select + bulk-assign — mirrors Leads.jsx exactly, same backend
   // endpoint (/api/contacts/bulk-assign), so this works unmodified across
@@ -1728,10 +1729,68 @@ const Contacts = () => {
           </div>
         </div>
 
+        {isGeneric && !loading && sortedContacts.length === 0 && (
+          <div className="contacts-empty-table-wrap">
+            <table
+              className="stable-table contacts-empty-table"
+              style={{
+                width: '100%',
+                minWidth: `${contactsFrozenTableWidth + contactsScrollableTableWidth}px`,
+                borderCollapse: 'separate',
+                borderSpacing: 0,
+                textAlign: 'left',
+                tableLayout: 'fixed',
+              }}
+            >
+              <colgroup>
+                {[...contactsFrozenColumnDefs, ...contactsScrollableColumnDefs].map((column) => (
+                  <col key={column.key} style={{ width: `${getColumnWidth(column.key)}px` }} />
+                ))}
+              </colgroup>
+              <thead>
+                <tr style={{ backgroundColor: 'var(--table-header-bg)' }}>
+                  {contactsFrozenColumnDefs.map((column) =>
+                    column.key === 'select'
+                      ? renderContactsHeaderCell(
+                          column,
+                          CONTACT_SELECTION_CELL_STYLE,
+                          { key: column.key },
+                          <input
+                            type="checkbox"
+                            checked={false}
+                            onChange={toggleSelectAllContacts}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="Select all contacts"
+                            style={CONTACT_CHECKBOX_STYLE}
+                          />,
+                        )
+                      : renderContactsHeaderCell(column, { paddingRight: '2rem' }, { key: column.key }),
+                  )}
+                  {contactsScrollableColumnDefs.map((column) =>
+                    renderContactsHeaderCell(column, { paddingRight: '2rem' }, { key: column.key }),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td
+                    colSpan={contactsFrozenColumnDefs.length + contactsScrollableColumnDefs.length}
+                    style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}
+                  >
+                    {!hasActiveContactFilters
+                      ? 'No contacts yet. Click "Add Contact" or import a CSV.'
+                      : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {/* Split-table layout: freeze the name column, keep the rest in a
             synced scrollable pane, and preserve the existing filters and
             row actions without changing the fetch or CRUD flows. */}
-        <div className="contacts-split-table">
+        <div className={`contacts-split-table${isGeneric && !loading && sortedContacts.length === 0 ? ' contacts-split-table--generic-empty' : ''}`}>
           <div
             className="contacts-table-frozen-pane"
             style={{ width: contactsFrozenTableWidthPx }}

@@ -73,13 +73,4 @@ describe('public web form embed footer', () => {
     expect(html).toContain('.primary{background:var(--gbs-button');
     expect(html).not.toContain('.primary{background:linear-gradient(135deg,#4f46e5,#7c3aed)');
   });
-
-  test('keeps the landing-template iframe free of a fixed height', () => {
-    const html = readFileSync(join(process.cwd(), 'src/pages/landingMarkup.html'), 'utf8');
-
-    expect(html).toContain('height: auto;');
-    expect(html).toContain('min-height: 0;');
-    expect(html).not.toContain('height: 820px;');
-    expect(html).not.toContain('min-height: 820px;');
-  });
 });

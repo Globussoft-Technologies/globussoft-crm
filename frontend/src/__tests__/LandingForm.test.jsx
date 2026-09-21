@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Landing from '../pages/Landing';
-import { heroFormEmbedSrc, injectHeroForm } from '../utils/landingHeroForm';
+import { heroFormEmbedSrc, injectHeroForm, resizeHeroFormFrame } from '../utils/landingHeroForm';
 
 function renderLanding() {
   return render(
@@ -65,6 +65,20 @@ describe('injectHeroForm', () => {
     } finally {
       mount.remove();
     }
+  });
+
+  it('uses the embedded form measurement instead of a fixed frame height', () => {
+    const frame = document.createElement('iframe');
+    frame.style.height = 'auto';
+    frame.style.minHeight = '0px';
+
+    expect(resizeHeroFormFrame(frame, 641.2)).toBe(true);
+    expect(frame.style.height).toBe('642px');
+    expect(frame.style.minHeight).toBe('0px');
+
+    expect(resizeHeroFormFrame(frame, 0)).toBe(false);
+    expect(resizeHeroFormFrame(frame, 'not-a-height')).toBe(false);
+    expect(frame.style.height).toBe('642px');
   });
 });
 

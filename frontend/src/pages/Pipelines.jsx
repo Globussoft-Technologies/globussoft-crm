@@ -147,16 +147,15 @@ const Pipelines = () => {
           await fetchApi(`/api/pipelines/${editing.id}/set-default`, { method: 'POST' });
         }
       } else {
-        const created = await fetchApi('/api/pipelines', {
+        await fetchApi('/api/pipelines', {
           method: 'POST',
-          body: JSON.stringify(form),
+          body: JSON.stringify({
+            ...form,
+            stages: stages.map((stage) => (stage.id
+              ? { stageId: stage.id }
+              : { name: stage.name.trim(), color: stage.color })),
+          }),
         });
-        await Promise.all(stages.map((stage, position) => fetchApi('/api/pipeline_stages', {
-          method: 'POST',
-          body: JSON.stringify(stage.id
-            ? { pipelineId: created.id, stageId: stage.id, position }
-            : { pipelineId: created.id, name: stage.name.trim(), color: stage.color, position }),
-        })));
       }
       closeModal();
       fetchPipelines();

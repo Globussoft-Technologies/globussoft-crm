@@ -20,8 +20,8 @@
  *      Name + Description inputs render; default checkbox renders enabled.
  *   7. Saving a create with empty name surfaces an in-modal error
  *      "Pipeline name is required" and does NOT POST.
- *   8. Saving a create with a valid name fires POST /api/pipelines with the
- *      form body, then refetches the list.
+ *   8. Saving a create with a valid name and stages fires one atomic POST to
+ *      /api/pipelines, then refetches the list.
  *   9. Edit click on a non-default row opens the modal with the header
  *      "Edit Pipeline" + form prefilled with the row's name + description +
  *      isDefault. Saving fires PUT /api/pipelines/<id> with name+description
@@ -246,6 +246,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
       expect(body.name).toBe('Mid-market Outbound');
       expect(body.description).toBe('Cold-list AE pursuits');
       expect(body.isDefault).toBe(false);
+      expect(body.stages).toEqual([{ name: 'New Lead', color: '#3b82f6' }]);
     });
 
     // After save resolves, fetchPipelines() runs → ≥2 GETs total (mount + post-save).
@@ -282,13 +283,12 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     });
   });
 
-  it('creating a pipeline with an existing stage sends its stageId for reuse', async () => {
+  it('creating a pipeline sends an existing stageId in the same atomic request', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/pipeline_stages?reusable=true') {
         return Promise.resolve([{ id: 21, name: 'New Lead', color: '#3b82f6' }]);
       }
       if (url === '/api/pipelines' && opts?.method === 'POST') return Promise.resolve({ id: 99 });
-      if (url === '/api/pipeline_stages' && opts?.method === 'POST') return Promise.resolve({ id: 21, name: 'New Lead' });
       return defaultFetchMock(url, opts);
     });
 
@@ -300,10 +300,11 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /Create Pipeline/i }).at(-1));
 
     await waitFor(() => {
-      const stagePost = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST');
-      expect(stagePost).toBeTruthy();
-      expect(JSON.parse(stagePost[1].body)).toEqual({ pipelineId: 99, stageId: 21, position: 0 });
+      const pipelinePost = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/pipelines' && opts?.method === 'POST');
+      expect(pipelinePost).toBeTruthy();
+      expect(JSON.parse(pipelinePost[1].body).stages).toEqual([{ stageId: 21 }]);
     });
+    expect(fetchApiMock.mock.calls.some(([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST')).toBe(false);
   });
 
   it('Edit opens the modal with "Edit Pipeline" header prefilled with row data', async () => {

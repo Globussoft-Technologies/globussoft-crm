@@ -282,7 +282,7 @@ export default function ContactDetail() {
   const notesRef = useRef(null);
   const noteInputRef = useRef(null);
   const moreRef = useRef(null);
-  const contactTagManagerEnabled = isWellness || isGeneric || isTravel;
+  const contactTagManagerEnabled = isGeneric;
 
   useEffect(() => {
     if (!contactTagManagerEnabled) return undefined;
@@ -1610,7 +1610,7 @@ export default function ContactDetail() {
             </div>
           )}
 
-          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric || isWellness || isTravel} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
+          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
           {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel || isWellness} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}

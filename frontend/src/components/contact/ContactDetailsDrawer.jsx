@@ -95,7 +95,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const { tenant } = useContext(AuthContext);
   const isWellness = tenant?.vertical === 'wellness';
   const isTravel = tenant?.vertical === 'travel';
-  const isGenericTagManager = genericTagsEnabled;
+  const isGenericTagManager = genericTagsEnabled && !isWellness && !isTravel;
   const [openGroups, setOpenGroups] = useState(() => (
     Object.fromEntries(GROUPS.map((group) => [group.key, Boolean(group.openByDefault)]))
   ));

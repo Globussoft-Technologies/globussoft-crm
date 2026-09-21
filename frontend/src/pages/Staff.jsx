@@ -2091,7 +2091,6 @@ export default function Staff() {
                             gap: "0.3rem",
                             flexWrap: "wrap",
                             ...(!isTravel && !isWellness ? {
-                              position: "absolute",
                               top: genericActionsAnchor ? genericActionsAnchor.bottom + 4 : 0,
                               left: genericActionsAnchor ? genericActionsAnchor.left : 0,
                               position: "fixed",

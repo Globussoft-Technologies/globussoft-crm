@@ -233,7 +233,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
         return Promise.resolve({
           websiteUrl: "https://client.example.com",
           configured: true,
-          sftp: { protocol: "sftp", host: "sftp.client.example.com", port: 22, username: "deploy", remotePath: "/" },
+          sftp: { protocol: "sftp", host: "sftp.client.example.com", port: 22, username: "deploy", hostKeyFingerprint: `SHA256:${"A".repeat(43)}`, remotePath: "/" },
         });
       }
       if (url === "/api/travel/promotional-website" && opts?.method === "PUT") {
@@ -255,6 +255,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(screen.getByDisplayValue("https://client.example.com")).toBeInTheDocument();
     expect(screen.getByDisplayValue("/")).toBeInTheDocument();
     expect(screen.getByLabelText("Transfer protocol")).toHaveValue("sftp");
+    expect(screen.getByLabelText("SSH host key fingerprint")).toHaveValue(`SHA256:${"A".repeat(43)}`);
     expect(screen.getByText(/New publishes will sync automatically/i)).toBeInTheDocument();
 
     const host = screen.getByLabelText("Host");
@@ -269,7 +270,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(save).toBeTruthy();
       expect(JSON.parse(save[1].body)).toMatchObject({
         websiteUrl: "https://client.example.com",
-        sftp: { protocol: "sftp", host: "sftp.updated.example.com", remotePath: "/" },
+        sftp: { protocol: "sftp", host: "sftp.updated.example.com", hostKeyFingerprint: `SHA256:${"A".repeat(43)}`, remotePath: "/" },
       });
     });
 

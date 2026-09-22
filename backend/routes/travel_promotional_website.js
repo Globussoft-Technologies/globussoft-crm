@@ -3,7 +3,10 @@
 const express = require('express');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const prisma = require('../lib/prisma');
-const { encrypt, decrypt } = require('../lib/fieldEncryption');
+const {
+  encryptTravelHostingCredential,
+  decryptTravelHostingCredential,
+} = require('../lib/travelHostingCredentialEncryption');
 const { writeAudit } = require('../lib/audit');
 const {
   DEFAULT_REMOTE_PATH,
@@ -40,12 +43,8 @@ function normalizeWebsiteUrl(value) {
 
 function parseStoredSftp(value) {
   if (!value) return null;
-  try {
-    const parsed = JSON.parse(decrypt(value));
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch (_err) {
-    return null;
-  }
+  const parsed = JSON.parse(decryptTravelHostingCredential(value));
+  return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
 function maskConfig(websiteUrl, sftp) {
@@ -62,9 +61,10 @@ function maskConfig(websiteUrl, sftp) {
       hasPassword: Boolean(sftp.password),
       hasPrivateKey: protocol === 'sftp' && Boolean(sftp.privateKey),
       passphraseConfigured: protocol === 'sftp' && Boolean(sftp.passphrase),
+      hostKeyFingerprint: protocol === 'sftp' ? (sftp.hostKeyFingerprint || '') : '',
     } : {
       protocol: 'sftp', host: '', port: 22, username: '', remotePath: DEFAULT_REMOTE_PATH,
-      hasPassword: false, hasPrivateKey: false, passphraseConfigured: false,
+      hasPassword: false, hasPrivateKey: false, passphraseConfigured: false, hostKeyFingerprint: '',
     },
   };
 }
@@ -93,23 +93,32 @@ function validateSftp(input) {
   if (sftp.password && String(sftp.password).length > 4096) throw new Error(`${protocol.toUpperCase()} password is too long`);
   if (sftp.privateKey && String(sftp.privateKey).length > 100000) throw new Error('SFTP private key is too long');
   if (protocol === 'sftp' && !sftp.password && !sftp.privateKey) throw new Error('SFTP password or private key is required');
+  const hostKeyFingerprint = String(sftp.hostKeyFingerprint || '').trim();
+  if (protocol === 'sftp' && !/^SHA256:[A-Za-z0-9+/]{43}$/.test(hostKeyFingerprint)) {
+    throw new Error('SFTP host key fingerprint is required in SHA256 format');
+  }
   if (protocol !== 'sftp' && !sftp.password) throw new Error(`${protocol.toUpperCase()} password is required`);
   return {
     protocol, host, username, port, remotePath,
     ...(sftp.password ? { password: String(sftp.password) } : {}),
     ...(protocol === 'sftp' && sftp.privateKey ? { privateKey: String(sftp.privateKey) } : {}),
     ...(protocol === 'sftp' && sftp.passphrase ? { passphrase: String(sftp.passphrase) } : {}),
+    ...(protocol === 'sftp' ? { hostKeyFingerprint } : {}),
   };
 }
 
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   if (!requireTravel(req, res)) return;
   try {
     const config = await readConfig(req.user.tenantId);
     res.json(maskConfig(config.websiteUrl, config.sftp));
   } catch (err) {
     console.error('[travel-promotional-website] GET failed:', err.message);
-    res.status(500).json({ error: 'Failed to load promotional website settings', code: 'PROMOTIONAL_WEBSITE_READ_FAILED' });
+    const encryptionError = ['TRAVEL_HOSTING_ENCRYPTION_UNAVAILABLE', 'TRAVEL_HOSTING_CREDENTIAL_NOT_ENCRYPTED'].includes(err.code);
+    res.status(encryptionError ? 503 : 500).json({
+      error: encryptionError ? 'Travel hosting credentials cannot be decrypted safely' : 'Failed to load promotional website settings',
+      code: encryptionError ? err.code : 'PROMOTIONAL_WEBSITE_READ_FAILED',
+    });
   }
 });
 
@@ -131,6 +140,9 @@ router.put('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     const sftp = websiteUrl ? validateSftp(mergedSftp) : null;
     const writes = [];
     if (websiteUrl) {
+      // Encrypt before starting either database write so a missing/invalid
+      // server key cannot leave a partially configured website URL behind.
+      const encryptedSftp = encryptTravelHostingCredential(JSON.stringify(sftp));
       writes.push(prisma.tenantSetting.upsert({
         where: { tenantId_key: { tenantId, key: WEBSITE_KEY } },
         create: { tenantId, key: WEBSITE_KEY, value: websiteUrl, category: 'travel-hosting' },
@@ -138,8 +150,8 @@ router.put('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
       }));
       writes.push(prisma.tenantSetting.upsert({
         where: { tenantId_key: { tenantId, key: SFTP_KEY } },
-        create: { tenantId, key: SFTP_KEY, value: encrypt(JSON.stringify(sftp)), category: 'travel-hosting' },
-        update: { value: encrypt(JSON.stringify(sftp)), category: 'travel-hosting' },
+        create: { tenantId, key: SFTP_KEY, value: encryptedSftp, category: 'travel-hosting' },
+        update: { value: encryptedSftp, category: 'travel-hosting' },
       }));
     } else {
       if (current.websiteRow) writes.push(prisma.tenantSetting.delete({ where: { tenantId_key: { tenantId, key: WEBSITE_KEY } } }));
@@ -151,9 +163,13 @@ router.put('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     }
     res.json(maskConfig(websiteUrl, sftp));
   } catch (err) {
-    const status = /required|valid URL|must be|too long|safe directory/i.test(err.message || '') ? 400 : 500;
+    const encryptionUnavailable = err.code === 'TRAVEL_HOSTING_ENCRYPTION_UNAVAILABLE';
+    const status = encryptionUnavailable ? 503 : (/required|valid URL|must be|too long|safe directory|fingerprint/i.test(err.message || '') ? 400 : 500);
     console.error('[travel-promotional-website] PUT failed:', err.message);
-    res.status(status).json({ error: err.message || 'Failed to save promotional website settings', code: status === 400 ? 'INVALID_PROMOTIONAL_WEBSITE_SETTINGS' : 'PROMOTIONAL_WEBSITE_SAVE_FAILED' });
+    res.status(status).json({
+      error: encryptionUnavailable ? 'Travel hosting credential encryption is not configured' : (err.message || 'Failed to save promotional website settings'),
+      code: encryptionUnavailable ? err.code : (status === 400 ? 'INVALID_PROMOTIONAL_WEBSITE_SETTINGS' : 'PROMOTIONAL_WEBSITE_SAVE_FAILED'),
+    });
   }
 });
 
@@ -170,10 +186,12 @@ router.post('/test', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     res.json({ ok: true, protocol: sftp.protocol, remotePath: sftp.remotePath });
   } catch (err) {
     console.error('[travel-promotional-website] test failed:', err.message);
-    const isValidationError = /required|too long|must be between|safe directory|protocol/i.test(err.message || '');
-    res.status(isValidationError ? 400 : 502).json({
-      error: isValidationError ? err.message : 'Could not connect to the transfer server',
-      code: isValidationError ? 'INVALID_TRANSFER_SETTINGS' : 'TRANSFER_CONNECTION_FAILED',
+    const encryptionError = ['TRAVEL_HOSTING_ENCRYPTION_UNAVAILABLE', 'TRAVEL_HOSTING_CREDENTIAL_NOT_ENCRYPTED'].includes(err.code);
+    const isValidationError = /required|too long|must be between|safe directory|protocol|fingerprint|private network/i.test(err.message || '');
+    const status = encryptionError ? 503 : (isValidationError ? 400 : 502);
+    res.status(status).json({
+      error: encryptionError ? 'Travel hosting credentials cannot be decrypted safely' : (isValidationError ? err.message : 'Could not connect to the transfer server'),
+      code: encryptionError ? err.code : (isValidationError ? 'INVALID_TRANSFER_SETTINGS' : 'TRANSFER_CONNECTION_FAILED'),
     });
   }
 });

@@ -152,6 +152,7 @@ export default function Settings() {
     password: "",
     privateKey: "",
     passphrase: "",
+    hostKeyFingerprint: "",
     remotePath: "/",
   });
   const [promotionalWebsiteLoading, setPromotionalWebsiteLoading] = useState(false);
@@ -268,7 +269,7 @@ export default function Settings() {
   }, []);
 
   useEffect(() => {
-    if (ctxTenant?.vertical !== "travel") return undefined;
+    if (ctxTenant?.vertical !== "travel" || ctxUser?.role !== "ADMIN" || !hasPermission("settings", "manage")) return undefined;
     setPromotionalWebsiteLoading(true);
     fetchApi("/api/travel/promotional-website")
       .then((res) => {
@@ -280,13 +281,14 @@ export default function Settings() {
           host: res?.sftp?.host || "",
           port: res?.sftp?.port || DEFAULT_TRANSFER_PORT[protocol] || 22,
           username: res?.sftp?.username || "",
+          hostKeyFingerprint: res?.sftp?.hostKeyFingerprint || "",
           remotePath: res?.sftp?.remotePath || "/",
         }));
         setPromotionalWebsiteStatus(res?.configured ? "configured" : null);
       })
       .catch(() => setPromotionalWebsiteStatus(null))
       .finally(() => setPromotionalWebsiteLoading(false));
-  }, [ctxTenant?.vertical]);
+  }, [ctxTenant?.vertical, ctxUser?.role, hasPermission]);
 
   // Multi-brand (BrandKit) list — travel vertical only (sub-brands are a
   // travel-only concept; generic/wellness tenants only ever have the
@@ -675,6 +677,7 @@ export default function Settings() {
             host: promotionalSftp.host,
             port: Number(promotionalSftp.port) || DEFAULT_TRANSFER_PORT[promotionalSftp.protocol] || 22,
             username: promotionalSftp.username,
+            ...(promotionalSftp.protocol === "sftp" ? { hostKeyFingerprint: promotionalSftp.hostKeyFingerprint } : {}),
             remotePath: promotionalSftp.remotePath,
             ...(promotionalSftp.password ? { password: promotionalSftp.password } : {}),
             ...(promotionalSftp.privateKey ? { privateKey: promotionalSftp.privateKey } : {}),
@@ -693,6 +696,7 @@ export default function Settings() {
         password: "",
         privateKey: "",
         passphrase: "",
+        hostKeyFingerprint: saved?.sftp?.hostKeyFingerprint || current.hostKeyFingerprint,
       }));
       setPromotionalWebsiteStatus(saved?.configured ? "configured" : null);
       notify.success(websiteUrl ? "Promotional website hosting settings saved." : "Promotional website hosting disabled.");
@@ -714,6 +718,7 @@ export default function Settings() {
             host: promotionalSftp.host,
             port: Number(promotionalSftp.port) || DEFAULT_TRANSFER_PORT[promotionalSftp.protocol] || 22,
             username: promotionalSftp.username,
+            ...(promotionalSftp.protocol === "sftp" ? { hostKeyFingerprint: promotionalSftp.hostKeyFingerprint } : {}),
             remotePath: promotionalSftp.remotePath,
             ...(promotionalSftp.password ? { password: promotionalSftp.password } : {}),
             ...(promotionalSftp.privateKey ? { privateKey: promotionalSftp.privateKey } : {}),
@@ -1408,6 +1413,11 @@ export default function Settings() {
                         <div style={{ minWidth: 0 }}>
                           <label className="form-label" htmlFor="promotional-sftp-passphrase">Private key passphrase</label>
                           <input id="promotional-sftp-passphrase" type="password" className="input-field" value={promotionalSftp.passphrase} onChange={(e) => setPromotionalSftp((s) => ({ ...s, passphrase: e.target.value }))} placeholder="Optional" autoComplete="new-password" />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                          <label className="form-label" htmlFor="promotional-sftp-host-fingerprint">SSH host key fingerprint</label>
+                          <input id="promotional-sftp-host-fingerprint" type="text" className="input-field" value={promotionalSftp.hostKeyFingerprint} onChange={(e) => setPromotionalSftp((s) => ({ ...s, hostKeyFingerprint: e.target.value }))} placeholder="SHA256:abcdefghijklmnopqrstuvwxyz1234567890ABCDE" />
+                          <p style={{ margin: "0.4rem 0 0", fontSize: "0.75rem", color: "var(--text-secondary)" }}>Required for SFTP. Copy the SHA256 fingerprint from your hosting provider; it prevents connecting to an impersonated server.</p>
                         </div>
                       </>
                     )}
@@ -4666,4 +4676,3 @@ function NotificationPreferencesCard({ notify }) {
     </div>
   );
 }
-

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
 prisma.tenantSetting = {
@@ -21,6 +21,8 @@ import jwt from 'jsonwebtoken';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const previousTravelHostingKey = process.env.TRAVEL_HOSTING_CREDENTIAL_KEY;
+process.env.TRAVEL_HOSTING_CREDENTIAL_KEY = 'c'.repeat(64);
 const {
   router,
   WEBSITE_KEY,
@@ -29,8 +31,15 @@ const {
   validateSftp,
   maskConfig,
 } = requireCJS('../../routes/travel_promotional_website');
+const { encryptTravelHostingCredential } = requireCJS('../../lib/travelHostingCredentialEncryption');
 const publisher = requireCJS('../../services/travelPromotionalWebsitePublisher');
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
+const HOST_KEY_FINGERPRINT = `SHA256:${'A'.repeat(43)}`;
+
+afterAll(() => {
+  if (previousTravelHostingKey === undefined) delete process.env.TRAVEL_HOSTING_CREDENTIAL_KEY;
+  else process.env.TRAVEL_HOSTING_CREDENTIAL_KEY = previousTravelHostingKey;
+});
 
 function makeApp() {
   const app = express();
@@ -67,6 +76,7 @@ describe('travel promotional website settings', () => {
       protocol: 'ftps', port: 21,
     });
     expect(() => validateSftp({ protocol: 'ftp', host: 'ftp.example.com', username: 'deploy', remotePath: '/' })).toThrow(/password is required/i);
+    expect(() => validateSftp({ protocol: 'sftp', host: 'sftp.example.com', username: 'deploy', password: 'secret', remotePath: '/' })).toThrow(/fingerprint/i);
   });
 
   test('treats a legacy trailing trips path as the existing website root', () => {
@@ -92,16 +102,21 @@ describe('travel promotional website settings', () => {
     expect(generic.status).toBe(403);
 
     const user = await request(makeApp())
+      .get('/api/travel/promotional-website')
+      .set('Authorization', `Bearer ${tokenFor({ role: 'USER' })}`);
+    expect(user.status).toBe(403);
+
+    const userWrite = await request(makeApp())
       .put('/api/travel/promotional-website')
       .set('Authorization', `Bearer ${tokenFor({ role: 'USER' })}`)
       .send({ websiteUrl: 'https://client.example.com' });
-    expect(user.status).toBe(403);
+    expect(userWrite.status).toBe(403);
   });
 
   test('masks stored secrets on GET', async () => {
     prisma.tenantSetting.findMany.mockResolvedValue([
       { id: 1, key: WEBSITE_KEY, value: 'https://client.example.com' },
-      { id: 2, key: SFTP_KEY, value: JSON.stringify({ host: 'sftp.example.com', username: 'deploy', password: 'secret', remotePath: '/' }) },
+      { id: 2, key: SFTP_KEY, value: encryptTravelHostingCredential(JSON.stringify({ host: 'sftp.example.com', username: 'deploy', password: 'secret', hostKeyFingerprint: HOST_KEY_FINGERPRINT, remotePath: '/' })) },
     ]);
     const res = await request(makeApp())
       .get('/api/travel/promotional-website')
@@ -130,15 +145,31 @@ describe('travel promotional website settings', () => {
       .set('Authorization', `Bearer ${tokenFor()}`)
       .send({
         websiteUrl: 'https://client.example.com/',
-        sftp: { host: 'sftp.example.com', port: 22, username: 'deploy', password: 'secret', remotePath: '/' },
+        sftp: { host: 'sftp.example.com', port: 22, username: 'deploy', password: 'secret', hostKeyFingerprint: HOST_KEY_FINGERPRINT, remotePath: '/' },
       });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ websiteUrl: 'https://client.example.com', configured: true });
     const sftpWrite = prisma.tenantSetting.upsert.mock.calls[1][0];
-    if (sftpWrite.create.value.startsWith('ENC:v1:')) {
-      expect(sftpWrite.create.value).not.toContain('secret');
-    } else {
-      expect(JSON.parse(sftpWrite.create.value).password).toBe('secret');
+    expect(sftpWrite.create.value).toMatch(/^TRAVEL_ENC:v1:/);
+    expect(sftpWrite.create.value).not.toContain('secret');
+  });
+
+  test('fails closed instead of storing plaintext when the encryption key is absent', async () => {
+    const previous = process.env.TRAVEL_HOSTING_CREDENTIAL_KEY;
+    delete process.env.TRAVEL_HOSTING_CREDENTIAL_KEY;
+    try {
+      const res = await request(makeApp())
+        .put('/api/travel/promotional-website')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({
+          websiteUrl: 'https://client.example.com',
+          sftp: { protocol: 'ftp', host: 'ftp.example.com', username: 'deploy', password: 'secret', remotePath: '/' },
+        });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('TRAVEL_HOSTING_ENCRYPTION_UNAVAILABLE');
+      expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+    } finally {
+      process.env.TRAVEL_HOSTING_CREDENTIAL_KEY = previous;
     }
   });
 

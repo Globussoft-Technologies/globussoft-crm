@@ -10,10 +10,16 @@ const {
   getRemoteTripFile,
   getPublicTripUrl,
   renderHostedLandingPage,
+  fingerprintHostKey,
+  resolvePublicTransferHost,
   publishLandingPage,
   removeLandingPage,
   removeRemoteDirectory,
 } = publisher;
+
+const TEST_HOST_KEY = Buffer.from('test-host-key');
+const HOST_KEY_FINGERPRINT = fingerprintHostKey(TEST_HOST_KEY);
+const publicLookup = vi.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
 
 describe('travel promotional website publisher', () => {
   test('normalizes safe remote paths and rejects traversal', () => {
@@ -62,14 +68,17 @@ describe('travel promotional website publisher', () => {
     };
     const result = await publishLandingPage({
       page: { id: 27, title: 'Test trip', slug: 'test-trip', content: '[]', isFeatured: true },
-      sftp: { host: 'sftp.example.com', username: 'deploy', password: 'secret' },
+      sftp: { host: 'sftp.example.com', username: 'deploy', password: 'secret', hostKeyFingerprint: HOST_KEY_FINGERPRINT },
       remotePath: '/',
       websiteUrl: 'https://client.example.com',
       crmBaseUrl: 'https://crm.example.com',
       clientFactory: () => client,
+      lookup: publicLookup,
     });
 
-    expect(client.connect).toHaveBeenCalledWith(expect.objectContaining({ host: 'sftp.example.com', username: 'deploy', port: 22 }));
+    expect(client.connect).toHaveBeenCalledWith(expect.objectContaining({ host: '93.184.216.34', username: 'deploy', port: 22 }));
+    expect(client.connect.mock.calls[0][0].hostVerifier(TEST_HOST_KEY)).toBe(true);
+    expect(client.connect.mock.calls[0][0].hostVerifier(Buffer.from('wrong-key'))).toBe(false);
     expect(client.list).toHaveBeenCalledWith('/');
     expect(client.mkdir).toHaveBeenCalledWith('/27', false);
     expect(client.put).toHaveBeenCalledTimes(1);
@@ -85,9 +94,10 @@ describe('travel promotional website publisher', () => {
     };
     await removeLandingPage({
       pageId: 27,
-      sftp: { host: 'sftp.example.com', username: 'deploy', privateKey: 'key' },
+      sftp: { host: 'sftp.example.com', username: 'deploy', privateKey: 'key', hostKeyFingerprint: HOST_KEY_FINGERPRINT },
       remotePath: '/',
       clientFactory: () => client,
+      lookup: publicLookup,
     });
     expect(client.rmdir).toHaveBeenCalledWith('/27', true);
   });
@@ -107,10 +117,11 @@ describe('travel promotional website publisher', () => {
       websiteUrl: 'https://client.example.com',
       crmBaseUrl: 'https://crm.example.com',
       ftpClientFactory: () => client,
+      lookup: publicLookup,
     });
 
     expect(client.access).toHaveBeenCalledWith({
-      host: 'ftp.example.com', port: 21, user: 'deploy', password: 'secret', secure: false,
+      host: '93.184.216.34', port: 21, user: 'deploy', password: 'secret', secure: false,
     });
     expect(client.list).toHaveBeenCalledWith();
     expect(client.ensureDir).toHaveBeenCalledWith('28');
@@ -130,10 +141,20 @@ describe('travel promotional website publisher', () => {
       sftp: { protocol: 'ftp', host: 'ftp.example.com', username: 'deploy', password: 'secret' },
       remotePath: '/home/modernclassroom/public_html/main-forms',
       ftpClientFactory: () => client,
+      lookup: publicLookup,
     });
 
     expect(client.removeDir).toHaveBeenCalledWith('28');
     expect(result.remoteFile).toBe('28/index.html');
+  });
+
+  test.each([
+    ['127.0.0.1', [{ address: '127.0.0.1', family: 4 }]],
+    ['metadata.example', [{ address: '169.254.169.254', family: 4 }]],
+    ['private.example', [{ address: '10.0.0.5', family: 4 }]],
+    ['ipv6-loopback.example', [{ address: '::1', family: 6 }]],
+  ])('rejects private transfer target %s', async (host, addresses) => {
+    await expect(resolvePublicTransferHost(host, vi.fn().mockResolvedValue(addresses))).rejects.toThrow(/private network/i);
   });
 
   test('treats an already-missing remote folder as an idempotent delete', async () => {

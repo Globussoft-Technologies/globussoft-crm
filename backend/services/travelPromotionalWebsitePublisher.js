@@ -11,6 +11,9 @@
  */
 
 const path = require('path');
+const crypto = require('node:crypto');
+const dns = require('node:dns').promises;
+const net = require('node:net');
 const { Readable } = require('node:stream');
 const { renderPage } = require('./landingPageRenderer');
 
@@ -127,12 +130,73 @@ function createFtpClient() {
   return new Client();
 }
 
-function connectionOptions(config) {
+function normalizeHostKeyFingerprint(value) {
+  const fingerprint = String(value || '').trim();
+  if (!/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint)) {
+    throw new Error('SFTP host key fingerprint is required in SHA256 format');
+  }
+  return fingerprint;
+}
+
+function fingerprintHostKey(key) {
+  return `SHA256:${crypto.createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}`;
+}
+
+function isPublicIpAddress(address) {
+  const value = String(address || '').toLowerCase().split('%')[0];
+  const family = net.isIP(value);
+  if (family === 4) {
+    const [a, b] = value.split('.').map(Number);
+    return !(
+      a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && (b === 0 || b === 168)) ||
+      (a === 192 && b === 0 && Number(value.split('.')[2]) === 2) ||
+      (a === 198 && (b === 18 || b === 19 || b === 51)) ||
+      (a === 203 && b === 0 && Number(value.split('.')[2]) === 113)
+    );
+  }
+  if (family === 6) {
+    if (value.startsWith('::ffff:')) return isPublicIpAddress(value.slice(7));
+    return !(
+      value === '::' || value === '::1' ||
+      value.startsWith('fc') || value.startsWith('fd') ||
+      /^fe[89ab]/.test(value) || value.startsWith('ff') ||
+      value.startsWith('2001:db8:')
+    );
+  }
+  return false;
+}
+
+async function resolvePublicTransferHost(host, lookup = dns.lookup) {
+  const normalized = String(host || '').trim().toLowerCase();
+  if (!normalized || normalized === 'localhost' || normalized.endsWith('.localhost') || normalized.endsWith('.local')) {
+    throw new Error('Transfer host cannot target a local or private network');
+  }
+  const literalFamily = net.isIP(normalized);
+  const addresses = literalFamily
+    ? [{ address: normalized, family: literalFamily }]
+    : await lookup(normalized, { all: true, verbatim: true });
+  if (!Array.isArray(addresses) || addresses.length === 0 || addresses.some(({ address }) => !isPublicIpAddress(address))) {
+    throw new Error('Transfer host cannot target a local or private network');
+  }
+  return addresses[0].address;
+}
+
+function connectionOptions(config, resolvedHost = config.host) {
+  const expectedFingerprint = normalizeHostKeyFingerprint(config.hostKeyFingerprint);
   const options = {
-    host: String(config.host || '').trim(),
+    host: String(resolvedHost || '').trim(),
     port: Number(config.port || getDefaultPort('sftp')),
     username: String(config.username || '').trim(),
     readyTimeout: 15000,
+    hostVerifier: (key) => {
+      const actual = Buffer.from(fingerprintHostKey(key));
+      const expected = Buffer.from(expectedFingerprint);
+      return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+    },
   };
   if (config.password) options.password = String(config.password);
   if (config.privateKey) options.privateKey = String(config.privateKey);
@@ -140,16 +204,18 @@ function connectionOptions(config) {
   return options;
 }
 
-function ftpConnectionOptions(config) {
+function ftpConnectionOptions(config, resolvedHost = config.host) {
   const protocol = normalizeProtocol(config.protocol);
   const port = Number(config.port || getDefaultPort(protocol));
-  return {
-    host: String(config.host || '').trim(),
+  const options = {
+    host: String(resolvedHost || '').trim(),
     port,
     user: String(config.username || '').trim(),
     password: String(config.password || ''),
     secure: protocol === 'ftps' ? (port === 990 ? 'implicit' : true) : false,
   };
+  if (protocol === 'ftps') options.secureOptions = { servername: String(config.host || '').trim() };
+  return options;
 }
 
 function validateTransportConfig(config) {
@@ -160,6 +226,7 @@ function validateTransportConfig(config) {
   if (protocol === 'sftp' && !config.password && !config.privateKey) {
     throw new Error('SFTP password or private key is required');
   }
+  if (protocol === 'sftp') normalizeHostKeyFingerprint(config.hostKeyFingerprint);
   if (protocol !== 'sftp' && !config.password) {
     throw new Error(`${protocol.toUpperCase()} password is required`);
   }
@@ -172,13 +239,15 @@ function validateTransportConfig(config) {
 async function withRemoteClient(config, fn, {
   clientFactory = createSftpClient,
   ftpClientFactory = createFtpClient,
+  lookup = dns.lookup,
 } = {}) {
   const protocol = normalizeProtocol(config?.protocol);
   validateTransportConfig(config);
+  const resolvedHost = await resolvePublicTransferHost(config.host, lookup);
   const client = protocol === 'sftp' ? clientFactory() : ftpClientFactory();
   if (protocol === 'sftp') {
     try {
-      await client.connect(connectionOptions(config));
+      await client.connect(connectionOptions(config, resolvedHost));
       return await fn(client, protocol);
     } finally {
       await client.end().catch(() => {});
@@ -186,7 +255,7 @@ async function withRemoteClient(config, fn, {
   }
 
   try {
-    await client.access(ftpConnectionOptions(config));
+    await client.access(ftpConnectionOptions(config, resolvedHost));
     return await fn(client, protocol);
   } finally {
     client.close();
@@ -234,7 +303,7 @@ async function putRemoteBuffer(client, protocol, buffer, remoteFile) {
   return client.uploadFrom(Readable.from([buffer]), path.posix.basename(remoteFile));
 }
 
-async function publishLandingPage({ page, sftp, remotePath, websiteUrl, crmBaseUrl, tmcParentRegistrationUrl, clientFactory, ftpClientFactory } = {}) {
+async function publishLandingPage({ page, sftp, remotePath, websiteUrl, crmBaseUrl, tmcParentRegistrationUrl, clientFactory, ftpClientFactory, lookup } = {}) {
   if (!page || !page.id) throw new Error('Landing page is required');
   const html = renderHostedLandingPage(page, { crmBaseUrl, tmcParentRegistrationUrl });
   await withRemoteClient({ ...sftp, remotePath }, async (client, protocol) => {
@@ -247,7 +316,7 @@ async function publishLandingPage({ page, sftp, remotePath, websiteUrl, crmBaseU
       : getRemoteTripFile(remotePath, page.id);
     await ensureRemoteTripDirectory(client, protocol, remotePath, directory);
     await putRemoteBuffer(client, protocol, Buffer.from(html, 'utf8'), remoteFile);
-  }, { clientFactory, ftpClientFactory });
+  }, { clientFactory, ftpClientFactory, lookup });
   return {
     remoteFile: normalizeProtocol(sftp?.protocol) === 'ftp' || normalizeProtocol(sftp?.protocol) === 'ftps'
       ? path.posix.join(String(page.id), 'index.html')
@@ -269,12 +338,12 @@ async function removeRemoteDirectory(client, directory, protocol = 'sftp') {
   }
 }
 
-async function removeLandingPage({ pageId, sftp, remotePath, clientFactory, ftpClientFactory } = {}) {
+async function removeLandingPage({ pageId, sftp, remotePath, clientFactory, ftpClientFactory, lookup } = {}) {
   await withRemoteClient({ ...sftp, remotePath }, async (client, protocol) => {
     const usesAccountRoot = protocol === 'ftp' || protocol === 'ftps';
     const directory = usesAccountRoot ? String(pageId) : getRemoteTripDirectory(remotePath, pageId);
     await removeRemoteDirectory(client, directory, protocol);
-  }, { clientFactory, ftpClientFactory });
+  }, { clientFactory, ftpClientFactory, lookup });
   const protocol = normalizeProtocol(sftp?.protocol);
   return {
     remoteFile: protocol === 'ftp' || protocol === 'ftps'
@@ -297,6 +366,10 @@ module.exports = {
   absolutizeCrmUrls,
   addAvailabilityGate,
   renderHostedLandingPage,
+  normalizeHostKeyFingerprint,
+  fingerprintHostKey,
+  isPublicIpAddress,
+  resolvePublicTransferHost,
   connectionOptions,
   ftpConnectionOptions,
   validateTransportConfig,

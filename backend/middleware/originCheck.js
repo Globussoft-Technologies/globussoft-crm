@@ -189,6 +189,12 @@ function originCheck(req, res, next) {
   if (PUBLIC_PATH_PREFIXES.some((p) => fullPath.startsWith(p))) {
     return next();
   }
+  // Travel landing pages may be hosted on a customer-controlled domain.
+  // Permit only the anonymous form/payment endpoints exposed by publicRouter;
+  // do not exempt the whole /api/pages namespace because it also contains
+  // authenticated page-management routes.
+  const PUBLIC_LANDING_POST_RE = /^\/api\/pages\/[^/]+\/(submit|registration-draft|registration-documents|payment-order)\/?$/;
+  if (PUBLIC_LANDING_POST_RE.test(fullPath)) return next();
 
   const originHeader = req.headers["origin"];
   const refererHeader = req.headers["referer"] || req.headers["referrer"];

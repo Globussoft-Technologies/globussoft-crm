@@ -105,7 +105,10 @@ function isGenericLandingSite(page) {
 
 async function syncPromotionalLandingPage(page, req) {
   if (!isTravelLandingPage(page)) return null;
-  const config = await readPromotionalWebsiteConfig(page.tenantId || 1);
+  if (!Number.isInteger(Number(page.tenantId)) || Number(page.tenantId) <= 0) {
+    throw new Error("Travel landing page tenant is required for promotional website publishing");
+  }
+  const config = await readPromotionalWebsiteConfig(Number(page.tenantId));
   if (!config.websiteUrl) return null;
   if (!config.sftp) throw new Error("Promotional website transfer credentials are not configured");
   return publishPromotionalLandingPage({
@@ -120,7 +123,10 @@ async function syncPromotionalLandingPage(page, req) {
 
 async function removePromotionalLandingPage(page) {
   if (!isTravelLandingPage(page)) return null;
-  const config = await readPromotionalWebsiteConfig(page.tenantId || 1);
+  if (!Number.isInteger(Number(page.tenantId)) || Number(page.tenantId) <= 0) {
+    throw new Error("Travel landing page tenant is required for promotional website removal");
+  }
+  const config = await readPromotionalWebsiteConfig(Number(page.tenantId));
   if (!config.websiteUrl || !config.sftp) return null;
   return removePromotionalLandingPageFromSftp({
     pageId: page.id,

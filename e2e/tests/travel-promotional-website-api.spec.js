@@ -36,6 +36,21 @@ test.describe('Travel promotional website settings', () => {
     expect(response.status()).toBe(401);
   });
 
+  test('customer-hosted landing forms receive a scoped CORS preflight', async ({ request }) => {
+    const origin = 'https://customer.example.com';
+    const response = await request.fetch(`${BASE_URL}/api/pages/travel-offer/submit`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: origin,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type',
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(response.status()).toBe(204);
+    expect(response.headers()['access-control-allow-origin']).toBe(origin);
+  });
+
   test('travel admin can read masked hosting settings', async ({ request }) => {
     test.skip(!travelToken, 'travel admin is not seeded in this environment');
     const response = await request.get(`${BASE_URL}/api/travel/promotional-website`, {

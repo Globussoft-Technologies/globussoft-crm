@@ -127,6 +127,8 @@ prisma.tenant.findUnique = vi.fn();
 // in the requester's tenant before persisting the link.
 prisma.tmcTrip = prisma.tmcTrip || {};
 prisma.tmcTrip.findFirst = vi.fn();
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findMany = vi.fn().mockResolvedValue([]);
 
 import express from 'express';
 import request from 'supertest';
@@ -1005,6 +1007,22 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
     expect(res.status).toBe(200);
     expect(res.body.isFeatured).toBe(false);
     expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/landing-pages/public/status/:id (no auth)', () => {
+  test('returns published status for a static promotional copy gate', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({ id: 50, status: 'PUBLISHED' });
+    const res = await request(makeApp()).get('/api/landing-pages/public/status/50');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ published: true, pageId: 50 });
+  });
+
+  test('returns 404 when the CRM page is unpublished', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp()).get('/api/landing-pages/public/status/50');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('PAGE_NOT_PUBLISHED');
   });
 });
 

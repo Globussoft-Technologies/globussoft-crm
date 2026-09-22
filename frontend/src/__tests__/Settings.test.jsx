@@ -33,6 +33,8 @@
  *      "Slug is read-only after organization creation." render together.
  *  11. Wellness-only Consent Templates card — does NOT render for generic
  *      vertical; DOES render when tenant.vertical === 'wellness'.
+ *  12. Travel-admin Promotional Website Hosting card loads masked settings,
+ *      saves the website/SFTP mapping, and can test the SFTP connection.
  *
  * Backend contracts pinned:
  *   GET  /api/tenants/current             → tenant row
@@ -102,13 +104,15 @@ vi.mock("../App", () => {
 });
 
 import Settings from "../pages/Settings";
+import { AuthContext } from "../App";
 
-function renderSettings() {
-  return render(
+function renderSettings({ authValue } = {}) {
+  const page = (
     <MemoryRouter>
       <Settings />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  return render(authValue ? <AuthContext.Provider value={authValue}>{page}</AuthContext.Provider> : page);
 }
 
 const baseTenant = {
@@ -218,6 +222,93 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(fetchApiMock.mock.calls.map(([url]) => url)).not.toContain(
       "/api/auth/users",
     );
+  });
+
+  it("renders travel admin promotional hosting settings and saves the selected transfer mapping", async () => {
+    const user = userEvent.setup();
+    const travelTenant = { ...baseTenant, vertical: "travel" };
+    const defaultFetch = buildDefaultFetch({ tenant: travelTenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/travel/promotional-website" && (!opts || !opts.method || opts.method === "GET")) {
+        return Promise.resolve({
+          websiteUrl: "https://client.example.com",
+          configured: true,
+          sftp: { protocol: "sftp", host: "sftp.client.example.com", port: 22, username: "deploy", remotePath: "/" },
+        });
+      }
+      if (url === "/api/travel/promotional-website" && opts?.method === "PUT") {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({
+          websiteUrl: body.websiteUrl,
+          configured: true,
+          sftp: { ...body.sftp, hasPassword: true },
+        });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderSettings({
+      authValue: { tenant: travelTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+    });
+
+    await waitFor(() => expect(screen.getByTestId("travel-promotional-website-card")).toBeInTheDocument());
+    expect(screen.getByDisplayValue("https://client.example.com")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("/")).toBeInTheDocument();
+    expect(screen.getByLabelText("Transfer protocol")).toHaveValue("sftp");
+    expect(screen.getByText(/New publishes will sync automatically/i)).toBeInTheDocument();
+
+    const host = screen.getByLabelText("Host");
+    await user.clear(host);
+    await user.type(host, "sftp.updated.example.com");
+    await user.click(screen.getByRole("button", { name: /Save Hosting Settings/i }));
+
+    await waitFor(() => {
+      const save = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === "/api/travel/promotional-website" && opts?.method === "PUT",
+      );
+      expect(save).toBeTruthy();
+      expect(JSON.parse(save[1].body)).toMatchObject({
+        websiteUrl: "https://client.example.com",
+        sftp: { protocol: "sftp", host: "sftp.updated.example.com", remotePath: "/" },
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: /Test Transfer Connection/i }));
+    await waitFor(() => {
+      const testCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === "/api/travel/promotional-website/test" && opts?.method === "POST",
+      );
+      expect(testCall).toBeTruthy();
+      expect(JSON.parse(testCall[1].body).sftp).toMatchObject({
+        protocol: "sftp",
+        host: "sftp.updated.example.com",
+         remotePath: "/",
+      });
+    });
+  });
+
+  it("switches the transfer form to FTP and uses port 21", async () => {
+    const user = userEvent.setup();
+    const travelTenant = { ...baseTenant, vertical: "travel" };
+    const defaultFetch = buildDefaultFetch({ tenant: travelTenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/travel/promotional-website" && (!opts || !opts.method || opts.method === "GET")) {
+        return Promise.resolve({ websiteUrl: "", configured: false, sftp: { protocol: "sftp", port: 22, remotePath: "/" } });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderSettings({
+      authValue: { tenant: travelTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+    });
+
+    await waitFor(() => expect(screen.getByTestId("travel-promotional-website-card")).toBeInTheDocument());
+    await user.selectOptions(screen.getByLabelText("Transfer protocol"), "ftp");
+    expect(screen.getByLabelText("Port")).toHaveValue(21);
+    expect(screen.queryByLabelText("Private key (optional)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Existing website directory/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/No remote path is used/i)).toBeInTheDocument();
+    expect(screen.getByText(/FTP sends credentials without TLS/i)).toBeInTheDocument();
   });
 
   // 3 — Organization card renders inputs

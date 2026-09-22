@@ -1078,8 +1078,15 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     if (phoneValue) {
       const digits = phoneValue.replace(/\D/g, "");
       const normalizedPhone = phoneValue.replace(/[\s().-]/g, "");
+      const countryCodeDigits = String(req.body.phoneCountry || "").replace(/\D/g, "");
+      const genericPhoneHasValidNationalLength = isGenericForm
+        && /^[1-9]\d{0,2}$/.test(countryCodeDigits)
+        && normalizedPhone.startsWith(`+${countryCodeDigits}`)
+        && /^\+[1-9]\d+$/.test(normalizedPhone)
+        && normalizedPhone.slice(countryCodeDigits.length + 1).length >= 9
+        && normalizedPhone.slice(countryCodeDigits.length + 1).length <= 11;
       const phoneIsValid = isGenericForm
-        ? /^\+[1-9]\d{7,14}$/.test(normalizedPhone)
+        ? genericPhoneHasValidNationalLength
         : /^[+\d][\d\s().-]*$/.test(phoneValue) && digits.length >= 7 && digits.length <= 15;
       if (!phoneIsValid) {
         fieldErrors.phone = isGenericForm
@@ -1090,7 +1097,15 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     }
     if (phoneValue && isGenericForm) {
       const normalizedGenericPhone = phoneValue.replace(/[\s().-]/g, "");
-      if (/^\+[1-9]\d{7,14}$/.test(normalizedGenericPhone)) {
+      const countryCodeDigits = String(req.body.phoneCountry || "").replace(/\D/g, "");
+      const nationalDigits = normalizedGenericPhone.slice(countryCodeDigits.length + 1);
+      if (
+        /^[1-9]\d{0,2}$/.test(countryCodeDigits)
+        && normalizedGenericPhone.startsWith(`+${countryCodeDigits}`)
+        && /^\+[1-9]\d+$/.test(normalizedGenericPhone)
+        && nationalDigits.length >= 9
+        && nationalDigits.length <= 11
+      ) {
         contactData.phone = normalizedGenericPhone;
         delete fieldErrors.phone;
       } else {

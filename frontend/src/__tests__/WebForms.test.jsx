@@ -95,7 +95,7 @@ describe('public web form embed footer', () => {
     expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '11')");
     expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
     expect(html).toContain('slice(0, 11)');
-    expect(html).toContain('phoneInput.length < 9 || phoneInput.length > 11');
+    expect(html).toContain('normalizedPhone.length < 9 || normalizedPhone.length > 11');
     expect(html).toContain('Phone number must contain 9 to 11 digits.');
     expect(html).not.toContain("genericPhoneInput.setAttribute('pattern'");
   });

@@ -680,6 +680,71 @@ describe('GET /api/forms/public/:slug', () => {
 
 describe('POST /api/forms/public/:slug/submit', () => {
 
+  function mockGenericPhoneForm() {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 82,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-phone', sourceKind: 'contact', sourceKey: 'phone', fieldType: 'text', label: 'Phone', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: '{}',
+    });
+  }
+
+  test('accepts a complete E.164 Generic phone without phoneCountry for legacy clients', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Generic Customer')
+      .field('phone', '+919876543210');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ phone: '+919876543210' }),
+    }));
+  });
+
+  test('accepts valid shorter international numbers from the Generic country selector', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Singapore Customer')
+      .field('phoneCountry', '+65')
+      .field('phone', '61234567');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ phone: '+6561234567' }),
+    }));
+  });
+
+  test('rejects a Generic phone whose E.164 prefix does not match phoneCountry', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Wrong Prefix')
+      .field('phoneCountry', '+1')
+      .field('phone', '+6561234567');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { phone: expect.any(String) },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
   test('creates travel submissions with travel scope and inbound web-form source', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 81,

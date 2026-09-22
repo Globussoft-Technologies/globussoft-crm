@@ -7,18 +7,18 @@ export function normalizeThemePreference(theme) {
 // Resolve the theme we should actually apply.
 //
 // Priority:
-//   1. Keep the explicit browser preference selected by the user.
-//   2. Use the server preference only when there is no explicit local choice.
+//   1. Explicit server preference ("light" / "dark") wins.
+//   2. Otherwise, keep any explicit local preference.
 //   3. Fall back to "system".
 export function resolveThemePreference(localTheme, serverTheme) {
-  const explicitLocalTheme = normalizeThemePreference(localTheme);
-  if (explicitLocalTheme === "light" || explicitLocalTheme === "dark") {
-    return explicitLocalTheme;
-  }
-
   const explicitServerTheme = normalizeThemePreference(serverTheme);
   if (explicitServerTheme === "light" || explicitServerTheme === "dark") {
     return explicitServerTheme;
+  }
+
+  const explicitLocalTheme = normalizeThemePreference(localTheme);
+  if (explicitLocalTheme === "light" || explicitLocalTheme === "dark") {
+    return explicitLocalTheme;
   }
 
   return "system";

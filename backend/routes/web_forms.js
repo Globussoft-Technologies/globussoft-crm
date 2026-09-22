@@ -251,6 +251,27 @@ function textOr(raw, fallback = "") {
   return value || fallback;
 }
 
+function normalizeGenericPhone(phone, phoneCountry) {
+  const rawPhone = String(phone || "").trim();
+  const countryDigits = String(phoneCountry || "").replace(/\D/g, "");
+  let normalized = rawPhone.replace(/[\s().-]/g, "");
+
+  if (countryDigits) {
+    if (!/^[1-9]\d{0,2}$/.test(countryDigits)) return null;
+    const countryPrefix = `+${countryDigits}`;
+    if (!normalized.startsWith("+")) {
+      normalized = `${countryPrefix}${normalized.replace(/\D/g, "")}`;
+    }
+    if (!normalized.startsWith(countryPrefix)) return null;
+  }
+
+  // Preserve the public endpoint's existing E.164-compatible contract:
+  // callers may submit a complete international number without the optional
+  // phoneCountry field. The embedded Generic form supplies phoneCountry and
+  // is additionally checked for a matching prefix above.
+  return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : null;
+}
+
 function parseJson(raw, fallback) {
   if (raw == null || raw === "") return fallback;
 
@@ -1075,41 +1096,17 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailValue) || (isGenericForm && emailValue.includes("..")))) {
       fieldErrors.email = "Enter a valid email address";
     }
-    if (phoneValue) {
-      const digits = phoneValue.replace(/\D/g, "");
-      const normalizedPhone = phoneValue.replace(/[\s().-]/g, "");
-      const countryCodeDigits = String(req.body.phoneCountry || "").replace(/\D/g, "");
-      const genericPhoneHasValidNationalLength = isGenericForm
-        && /^[1-9]\d{0,2}$/.test(countryCodeDigits)
-        && normalizedPhone.startsWith(`+${countryCodeDigits}`)
-        && /^\+[1-9]\d+$/.test(normalizedPhone)
-        && normalizedPhone.slice(countryCodeDigits.length + 1).length >= 9
-        && normalizedPhone.slice(countryCodeDigits.length + 1).length <= 11;
-      const phoneIsValid = isGenericForm
-        ? genericPhoneHasValidNationalLength
-        : /^[+\d][\d\s().-]*$/.test(phoneValue) && digits.length >= 7 && digits.length <= 15;
-      if (!phoneIsValid) {
-        fieldErrors.phone = isGenericForm
-          ? "Enter a valid international phone number with country code, for example +919876543210"
-          : "Enter a valid phone number with 7-15 digits";
-        fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
-      }
-    }
     if (phoneValue && isGenericForm) {
-      const normalizedGenericPhone = phoneValue.replace(/[\s().-]/g, "");
-      const countryCodeDigits = String(req.body.phoneCountry || "").replace(/\D/g, "");
-      const nationalDigits = normalizedGenericPhone.slice(countryCodeDigits.length + 1);
-      if (
-        /^[1-9]\d{0,2}$/.test(countryCodeDigits)
-        && normalizedGenericPhone.startsWith(`+${countryCodeDigits}`)
-        && /^\+[1-9]\d+$/.test(normalizedGenericPhone)
-        && nationalDigits.length >= 9
-        && nationalDigits.length <= 11
-      ) {
-        contactData.phone = normalizedGenericPhone;
-        delete fieldErrors.phone;
-      } else {
-        fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
+      const normalizedGenericPhone = normalizeGenericPhone(
+        phoneValue,
+        req.body.phoneCountry,
+      );
+      if (normalizedGenericPhone) contactData.phone = normalizedGenericPhone;
+      else fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
+    } else if (phoneValue) {
+      const digits = phoneValue.replace(/\D/g, "");
+      if (!/^[+\d][\d\s().-]*$/.test(phoneValue) || digits.length < 7 || digits.length > 15) {
+        fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
       }
     }
     if (companyValue && (companyValue.length < 2 || companyValue.length > 150 || !/[\p{L}]/u.test(companyValue))) {

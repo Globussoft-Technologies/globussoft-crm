@@ -51,6 +51,23 @@ const Landing = lazy(() => import("./pages/Landing"));
 const ProductTourProvider = reactLazy(() => import("./tours/TourContext"));
 
 const THEME_STORAGE_KEY = "theme";
+const PUBLIC_LIGHT_THEME_ROUTES = new Set([
+  "/login",
+  "/signup",
+  "/reset-password",
+  "/customer/register",
+  "/tmc/register",
+  "/get-started",
+  "/super-admin/login",
+]);
+
+function shouldDefaultPublicThemeToLight(pathname) {
+  if (!pathname) return false;
+  for (const route of PUBLIC_LIGHT_THEME_ROUTES) {
+    if (pathname === route || pathname.startsWith(`${route}/`)) return true;
+  }
+  return false;
+}
 
 function readPersistedTheme() {
   if (typeof window === "undefined") return null;
@@ -1066,7 +1083,16 @@ export default function App() {
   const [theme, setThemeState] = useState(() => {
     const stored = readPersistedTheme();
     if (stored) return stored;
-    return "light";
+    if (
+      typeof window !== "undefined" &&
+      !token &&
+      shouldDefaultPublicThemeToLight(window.location.pathname)
+    ) {
+      return "light";
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
   });
   const themeRef = useRef(theme);
   const [subscription, setSubscription] = useState(null);

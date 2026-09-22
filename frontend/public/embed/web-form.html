@@ -352,6 +352,22 @@
             countrySelect.style.display = 'none';
             countrySelect.parentNode.insertBefore(picker, countrySelect);
           }
+
+          var genericPhoneInput = root.querySelector('input[type="tel"][name]');
+          if (genericPhoneInput) {
+            genericPhoneInput.setAttribute('maxlength', '14');
+            genericPhoneInput.setAttribute('inputmode', 'numeric');
+            genericPhoneInput.addEventListener('input', function() {
+              var rawPhoneInput = String(genericPhoneInput.value || '');
+              var digits = rawPhoneInput.replace(/\D/g, '');
+              var selectedCountryDigits = String(countrySelect && countrySelect.value || '').replace(/\D/g, '');
+              if (rawPhoneInput.trim().charAt(0) === '+' && selectedCountryDigits && digits.indexOf(selectedCountryDigits) === 0) {
+                digits = digits.slice(selectedCountryDigits.length);
+              }
+              digits = digits.slice(0, 14);
+              if (genericPhoneInput.value !== digits) genericPhoneInput.value = digits;
+            });
+          }
         }
 
         scheduleSize();
@@ -406,10 +422,15 @@
 
           if (scope === 'generic' && fd.get('phone')) {
             var phoneInput = String(fd.get('phone')).trim();
-            var countryCode = String(fd.get('phoneCountry') || '+91');
-            if (phoneInput.charAt(0) !== '+') {
-              fd.set('phone', countryCode + phoneInput.replace(/[^0-9]/g, ''));
+            var nationalDigits = phoneInput.replace(/\D/g, '');
+            var countryCode = String(fd.get('phoneCountry') || '+91').trim();
+            var internationalPhone = countryCode + nationalDigits;
+            if (!/^\+[1-9]\d{7,14}$/.test(internationalPhone)) {
+              showBusy(false);
+              showFieldErrors({ phone: 'Enter a valid international phone number.' });
+              return;
             }
+            fd.set('phone', internationalPhone);
           }
 
         try {
@@ -519,5 +540,3 @@
 </body>
 
 </html>
-
-

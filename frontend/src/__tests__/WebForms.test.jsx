@@ -70,7 +70,7 @@ describe('public web form embed footer', () => {
 
     expect(html).toContain("scope === 'generic' && field.sourceKey === 'phone'");
     expect(html).toContain('name="phoneCountry"');
-    expect(html).toContain("fd.set('phone', countryCode + phoneInput.replace(/[^0-9]/g, ''))");
+    expect(html).toContain("fd.set('phone', internationalPhone)");
   });
 
   test('does not cap long forms in an internal scroll container', () => {
@@ -87,5 +87,18 @@ describe('public web form embed footer', () => {
     expect(html).toContain('.panel{background:var(--gbs-form');
     expect(html).toContain('.primary{background:var(--gbs-button');
     expect(html).not.toContain('.primary{background:linear-gradient(135deg,#4f46e5,#7c3aed)');
+  });
+
+  test('normalizes Generic CRM phone fields without rejecting valid international lengths', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '14')");
+    expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
+    expect(html).toContain('slice(0, 14)');
+    expect(html).toContain("rawPhoneInput.trim().charAt(0) === '+'");
+    expect(html).toContain('/^\\+[1-9]\\d{7,14}$/.test(internationalPhone)');
+    expect(html).toContain('Enter a valid international phone number.');
+    expect(html).not.toContain('normalizedPhone.length < 9 || normalizedPhone.length > 11');
+    expect(html).not.toContain("genericPhoneInput.setAttribute('pattern'");
   });
 });

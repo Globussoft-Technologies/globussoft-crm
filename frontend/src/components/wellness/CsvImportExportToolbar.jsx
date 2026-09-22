@@ -89,14 +89,20 @@ export default function CsvImportExportToolbar({
   const [showImportHistory, setShowImportHistory] = useState(false);
   const [contactsImport, setContactsImport] = useState(null);
   const [importHistory, setImportHistory] = useState(() => {
-    if (typeof window === "undefined") return [];
-    try { return JSON.parse(window.sessionStorage.getItem("generic-crm-import-history") || "[]"); } catch { return []; }
+    return [];
   });
   const exportMenuRef = useRef(null);
   const importMenuRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
   const safeEndpoints = endpoints || {};
   const toolbarButtonStyle = compact ? compactSecondaryBtnStyle : secondaryBtnStyle;
+
+  useEffect(() => {
+    if (!genericLeadWizard) return;
+    fetchApi("/api/csv/contacts/import-history")
+      .then((rows) => setImportHistory(Array.isArray(rows) ? rows : []))
+      .catch(() => setImportHistory([]));
+  }, [genericLeadWizard]);
 
   const exportUrl = safeEndpoints.export || `/api/wellness/csv/${entity}/export`;
   const templateUrl = safeEndpoints.template || `/api/wellness/csv/${entity}/template`;
@@ -316,10 +322,8 @@ export default function CsvImportExportToolbar({
               setRecentImport(latest);
               setImportHistory((history) => {
                 const next = [{ ...latest, id: `${latest.completedAt}-${latest.fileName}` }, ...history].slice(0, 20);
-                try { window.sessionStorage.setItem("generic-crm-import-history", JSON.stringify(next)); } catch { /* storage unavailable */ }
                 return next;
               });
-              try { window.sessionStorage.setItem("generic-crm-latest-import", JSON.stringify(latest)); } catch { /* storage unavailable */ }
             }
             // Only refresh the parent's list if at least one row landed.
             if (onImported && (result.inserted || result.imported || result.updated)) onImported(result);
@@ -368,6 +372,7 @@ function ImportModal({
   const [genericImportMode, setGenericImportMode] = useState("leads");
   const [dynamicLeadFields, setDynamicLeadFields] = useState([]);
   const [showAddField, setShowAddField] = useState(false);
+  const [addingFieldFor, setAddingFieldFor] = useState("");
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldType, setNewFieldType] = useState("text");
   const [newFieldOptions, setNewFieldOptions] = useState("");
@@ -408,6 +413,9 @@ function ImportModal({
       });
       const createdField = created?.field || created;
       setDynamicLeadFields((fields) => [...fields, createdField]);
+      if (addingFieldFor) {
+        setMappingSelections((current) => ({ ...current, [addingFieldFor]: createdField.fieldKey || createdField.key || createdField.id }));
+      }
       notify.success("Field created");
       resetAddField();
     } catch (e) {
@@ -494,7 +502,7 @@ function ImportModal({
         const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
         const headers = (rows[0] || []).map((header) => String(header).trim()).filter(Boolean);
         setPreviewHeaders(headers);
-        setMappingSelections(Object.fromEntries(headers.map((header) => [header, header])));
+        setMappingSelections(Object.fromEntries(headers.filter((header) => ["name", "email", "phone", "company", "title", "status", "source"].includes(String(header).toLowerCase())).map((header) => [header, header])));
         setPreviewRows(rows.slice(1, 11));
       } catch (e) {
         setPreviewError(e.message || "Failed to read Excel file");
@@ -505,7 +513,7 @@ function ImportModal({
       const text = await f.text();
       const { headers, rows } = parseCsvClient(text);
       setPreviewHeaders(headers);
-      setMappingSelections(Object.fromEntries(headers.map((header) => [header, header])));
+      setMappingSelections(Object.fromEntries(headers.filter((header) => ["name", "email", "phone", "company", "title", "status", "source"].includes(String(header).toLowerCase())).map((header) => [header, header])));
       setPreviewRows(rows.slice(0, 10));
       const optional = new Set(optionalHeaders);
       const missing = expectedHeaders.filter((h) => !headers.includes(h) && !optional.has(h));
@@ -656,7 +664,7 @@ function ImportModal({
       onClick={onClose}
     >
       <div
-        className="glass"
+        className={`glass${genericLeadWizard ? " generic-import-wizard" : ""}`}
         style={{
           maxWidth: genericLeadWizard ? (wizardStep === 3 ? 920 : 620) : 720,
           width: genericLeadWizard ? `min(${wizardStep === 3 ? 920 : 620}px, 92%)` : "92%",
@@ -680,7 +688,7 @@ function ImportModal({
           </div>
         )}
         {genericLeadWizard && wizardStep === 1 && (
-          <div style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "5.5rem 2rem 3rem", textAlign: "center", borderRadius: "inherit" }}>
+          <div className="generic-import-step-overlay" style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "5.5rem 2rem 3rem", textAlign: "center", borderRadius: "inherit" }}>
             <h2 style={{ marginTop: 0 }}>Tell us what your file contains</h2>
             <div style={{ display: "flex", justifyContent: "center", gap: "1rem", margin: "2rem 0" }}>
               {["leads", "leadsAccounts"].map((mode) => {
@@ -695,7 +703,7 @@ function ImportModal({
           </div>
         )}
         {genericLeadWizard && wizardStep === 3 && (
-          <div style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "1.5rem 2rem 1.5rem", borderRadius: "inherit", boxSizing: "border-box", overflowY: "auto", overflowX: "hidden" }}>
+          <div className="generic-import-step-overlay" style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "1.5rem 2rem 1.5rem", borderRadius: "inherit", boxSizing: "border-box", overflowY: "auto", overflowX: "hidden" }}>
             <h2 style={{ margin: 0, textAlign: "center" }}>Review the mapping of your fields</h2>
             <p style={{ textAlign: "center", color: "var(--text-secondary)", marginBottom: "1.5rem" }}>We've mapped the columns in your file to CRM fields — take a look</p>
             <div style={{ border: "1px solid var(--border-color)", borderRadius: 10, overflow: "hidden" }}>
@@ -705,8 +713,8 @@ function ImportModal({
                   <input type="checkbox" defaultChecked aria-label={`Import ${header}`} />
                   <strong>{header}</strong>
                   <span style={{ color: "#059669", fontSize: "1.1rem" }}>✓</span>
-                  <select className="input-field" value={mappingSelections[header] || header} aria-label={`CRM field for ${header}`} onChange={(event) => { if (event.target.value === "__add_new_field__") { setShowAddField(true); return; } setMappingSelections((current) => ({ ...current, [header]: event.target.value })); }}>
-                    <option value={header}>{header === "name" ? "First name" : header === "email" ? "Email (Primary)" : header === "role" ? "Job title" : header}</option>
+                  <select className="input-field" value={mappingSelections[header] || ""} aria-label={`CRM field for ${header}`} onChange={(event) => { if (event.target.value === "__add_new_field__") { setAddingFieldFor(header); setNewFieldLabel(header); setShowAddField(true); return; } setMappingSelections((current) => ({ ...current, [header]: event.target.value })); }}>
+                    <option value="">Select CRM field</option>
                     {[...mappingFields, ...dynamicLeadFields].filter((field, index, fields) => fields.findIndex((item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id)) === index).map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
                     <option value="__add_new_field__">＋ Add new field</option>
                   </select>
@@ -718,15 +726,18 @@ function ImportModal({
           </div>
         )}
         {genericLeadWizard && showAddField && (
-          <div role="dialog" aria-modal="true" aria-labelledby="add-lead-field-title" style={{ position: "absolute", inset: 0, zIndex: 10, background: "var(--surface-color, #fff)", padding: "5.5rem 2rem 3rem", borderRadius: "inherit" }}>
-            <h2 id="add-lead-field-title" style={{ marginTop: 0 }}>Add new field</h2>
-            <div style={{ display: "grid", gap: "0.85rem" }}>
-              <label>Label *<input className="input-field" value={newFieldLabel} onChange={(event) => setNewFieldLabel(event.target.value)} autoFocus /></label>
-              <label>Field type<select className="input-field" value={newFieldType} onChange={(event) => setNewFieldType(event.target.value)}><option value="text">Text</option><option value="textarea">Textarea</option><option value="number">Number</option><option value="date">Date</option><option value="dropdown">Dropdown</option><option value="radio">Radio</option><option value="multiselect">Multi-select</option></select></label>
-              {optionFieldTypes.has(newFieldType) && <label>Options *<input className="input-field" placeholder="Option 1, Option 2" value={newFieldOptions} onChange={(event) => setNewFieldOptions(event.target.value)} /></label>}
-              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><input type="checkbox" checked={newFieldRequired} onChange={(event) => setNewFieldRequired(event.target.checked)} /> Required field</label>
+          <div className="generic-import-step-overlay generic-import-add-field" role="dialog" aria-modal="true" aria-labelledby="add-lead-field-title" style={{ position: "absolute", top: "6.5rem", right: "2rem", zIndex: 50, width: "min(360px, calc(100% - 4rem))", background: "var(--surface-color, #fff)", opacity: 1, padding: "1.25rem", borderRadius: 12, border: "1px solid var(--border-color)", boxShadow: "0 18px 42px rgba(0,0,0,.35)" }}>
+            <div className="generic-import-add-field-surface" aria-hidden="true" />
+            <div className="generic-import-add-field-content">
+              <h2 id="add-lead-field-title" style={{ marginTop: 0 }}>Add new field</h2>
+              <div style={{ display: "grid", gap: "0.85rem" }}>
+                <label>Label *<input className="input-field" value={newFieldLabel} onChange={(event) => setNewFieldLabel(event.target.value)} autoFocus /></label>
+                <label>Field type<select className="input-field" value={newFieldType} onChange={(event) => setNewFieldType(event.target.value)}><option value="text">Text</option><option value="textarea">Textarea</option><option value="number">Number</option><option value="date">Date</option><option value="dropdown">Dropdown</option><option value="radio">Radio</option><option value="multiselect">Multi-select</option></select></label>
+                {optionFieldTypes.has(newFieldType) && <label>Options *<input className="input-field" placeholder="Option 1, Option 2" value={newFieldOptions} onChange={(event) => setNewFieldOptions(event.target.value)} /></label>}
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><input type="checkbox" checked={newFieldRequired} onChange={(event) => setNewFieldRequired(event.target.checked)} /> Required field</label>
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}><button type="button" onClick={resetAddField} style={secondaryBtnStyle}>Cancel</button><button type="button" onClick={createField} disabled={savingNewField} style={primaryBtnStyle}>{savingNewField ? "Creating…" : "Create field"}</button></div>
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}><button type="button" onClick={resetAddField} style={secondaryBtnStyle}>Cancel</button><button type="button" onClick={createField} disabled={savingNewField} style={primaryBtnStyle}>{savingNewField ? "Creating…" : "Create field"}</button></div>
           </div>
         )}
         <button

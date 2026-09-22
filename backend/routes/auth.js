@@ -391,10 +391,7 @@ router.post("/check-organization-name", registerLimiter, async (req, res) => {
     const registrationVertical = ["generic", "wellness", "travel"].includes(req.body?.registrationVertical)
       ? req.body.registrationVertical
       : "generic";
-    const exists = name.length > 0 && !!(await prisma.tenant.findFirst({
-      where: { name, vertical: registrationVertical },
-      select: { id: true },
-    }));
+    const exists = name.length > 0 && await organizationNameTaken(name);
     res.json({ exists });
   } catch (err) {
     console.error("[auth/check-organization-name] error:", err.message);
@@ -500,6 +497,13 @@ async function generateUniqueSlug(base) {
   // Fallback: UUID suffix guarantees uniqueness under collision storms.
   const suffix = require("crypto").randomUUID().slice(0, 8);
   return `${root}-${suffix}`;
+}
+
+async function organizationNameTaken(name) {
+  const normalizedName = String(name || '').trim().toLowerCase();
+  if (!normalizedName) return false;
+  const tenants = await prisma.tenant.findMany({ select: { name: true } });
+  return tenants.some((tenant) => String(tenant.name || '').trim().toLowerCase() === normalizedName);
 }
 
 // Password complexity: minimum 8 chars, must contain at least one letter AND one number
@@ -745,10 +749,7 @@ router.post("/register", registerLimiter, async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
-    const existingSameVerticalOrganization = await prisma.tenant.findFirst({
-      where: { name: orgName.trim(), vertical: selectedVertical },
-      select: { id: true },
-    });
+    const existingSameVerticalOrganization = await organizationNameTaken(orgName);
     if (existingSameVerticalOrganization) {
       return res.status(409).json({
         error: "This organization name is already taken. Please use a different name.",
@@ -877,10 +878,7 @@ router.post("/signup", registerLimiter, async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
-    const existingSameVerticalOrganization = await prisma.tenant.findFirst({
-      where: { name: orgName.trim(), vertical: selectedVertical },
-      select: { id: true },
-    });
+    const existingSameVerticalOrganization = await organizationNameTaken(orgName);
     if (existingSameVerticalOrganization) {
       return res.status(409).json({
         error: "This organization name is already taken. Please use a different name.",

@@ -87,6 +87,20 @@ router.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
 // router-level guard so every endpoint inherits auth + RBAC.
 router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
 
+router.get("/contacts/import-history", async (req, res) => {
+  try {
+    const rows = await prisma.genericImportHistory.findMany({
+      where: { tenantId: req.user.tenantId },
+      orderBy: { completedAt: "desc" },
+      take: 20,
+    });
+    res.json(rows.map((row) => ({ ...row, status: row.errors ? "Completed, with errors" : "Completed" })));
+  } catch (error) {
+    console.error("[csv] import history error:", error.message);
+    res.status(503).json({ error: "Import history is temporarily unavailable", code: "IMPORT_HISTORY_UNAVAILABLE" });
+  }
+});
+
 // ── Utility: parse uploaded CSV body ───────────────────────────────
 
 function readUploadedCsv(req) {
@@ -396,6 +410,17 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
     }
 
     await writeImportAudit(req, "Contact", { rowCount: rows.length, imported, updated, errorCount: errors.length });
+    await prisma.genericImportHistory.create({
+      data: {
+        tenantId: req.user.tenantId,
+        fileName: req.file?.originalname || "Uploaded contacts file",
+        inserted: imported,
+        updated,
+        skipped,
+        errors: errors.length,
+        contacts: importedContacts,
+      },
+    });
     res.json({ imported, updated, skipped, errors, importedContacts });
   } catch (e) {
     console.error("[csv] contacts import error:", e.message);

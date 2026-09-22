@@ -11090,3 +11090,17 @@ model SalesTeamMember {
   @@index([tenantId])
   @@index([userId])
 }
+
+model GenericImportHistory {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int
+  fileName    String
+  inserted    Int      @default(0)
+  updated     Int      @default(0)
+  skipped     Int      @default(0)
+  errors      Int      @default(0)
+  contacts    Json?
+  completedAt DateTime @default(now())
+
+  @@index([tenantId, completedAt])
+}

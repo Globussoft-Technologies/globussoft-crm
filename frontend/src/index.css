@@ -6897,8 +6897,8 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   background: #30466b !important;
 }
 
-/* Dialog panels are floating surfaces too. Keep them fully opaque even when
-   a page supplies a translucent --surface-color inline. */
-[role="dialog"] {
-  background: var(--modal-bg, var(--surface-color)) !important;
-}
+/* Dialog backdrops and dialog panels are separate surfaces. Do not apply a
+   modal background to every [role="dialog"] element: many full-screen
+   backdrops use that role, and painting them with --modal-bg hides the CRM
+   page instead of dimming it. Individual modal panels own their surface
+   background (for example .generic-import-wizard and .cp-modal). */

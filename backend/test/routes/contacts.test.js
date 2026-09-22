@@ -500,6 +500,42 @@ describe('GET /api/contacts — list', () => {
     ]);
   });
 
+  test('applies Generic fixed lead filters before pagination and count', async () => {
+    prisma.contact.count.mockResolvedValueOnce(6);
+    const res = await request(makeApp()).get(
+      '/api/contacts?status=Lead&page=2&limit=5&leadSource=Referral&callifiedCampaignId=41&callifiedLeadStatus=qualified&assignedToId=7',
+    );
+
+    expect(res.status).toBe(200);
+    const expectedWhere = expect.objectContaining({
+      tenantId: TENANT_ID,
+      status: 'Lead',
+      source: 'Referral',
+      callifiedCampaignId: 41,
+      callifiedLeadStatus: 'qualified',
+      assignedToId: 7,
+    });
+    expect(prisma.contact.findMany.mock.calls[0][0]).toEqual(expect.objectContaining({
+      where: expectedWhere,
+      take: 5,
+      skip: 5,
+    }));
+    expect(prisma.contact.count).toHaveBeenCalledWith({ where: expectedWhere });
+    expect(res.body).toMatchObject({ total: 6, page: 2, totalPages: 2 });
+  });
+
+  test('does not apply Generic-only fixed filters to another vertical', async () => {
+    const res = await request(makeApp({ vertical: 'travel' })).get(
+      '/api/contacts?page=1&leadSource=Referral&callifiedCampaignId=41&callifiedLeadStatus=qualified',
+    );
+
+    expect(res.status).toBe(200);
+    const where = prisma.contact.findMany.mock.calls[0][0].where;
+    expect(where.source).toBeUndefined();
+    expect(where.callifiedCampaignId).toBeUndefined();
+    expect(where.callifiedLeadStatus).toBeUndefined();
+  });
+
   test('rejects invalid score, saved-view, and sort inputs before querying contacts', async () => {
     expect((await request(makeApp()).get('/api/contacts?scoreMin=90&scoreMax=20')).status).toBe(400);
     expect((await request(makeApp()).get('/api/contacts?viewId=not-a-number')).status).toBe(400);

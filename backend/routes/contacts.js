@@ -2770,26 +2770,33 @@ router.get("/:id/activities", async (req, res) => {
       where: { id: req.user.tenantId },
       select: { vertical: true },
     });
-    const activityRows = await prisma.activity.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      ...(tenant?.vertical === "generic"
-        ? {}
-        : { take: limit, skip: (page - 1) * limit }),
-    });
-    const activityTotal = tenant?.vertical === "generic"
-      ? null
-      : await prisma.activity.count({ where });
-    let merged = activityRows;
-    if (tenant?.vertical === "generic") {
-      const callLogs = await prisma.callLog.findMany({
-        where: {
-          contactId: id,
-          tenantId: req.user.tenantId,
-          provider: "callified",
-        },
+    const isGeneric = tenant?.vertical === "generic";
+    const offset = (page - 1) * limit;
+    const mergeWindow = offset + limit;
+    const callLogWhere = {
+      contactId: id,
+      tenantId: req.user.tenantId,
+      provider: "callified",
+    };
+    const [activityRows, activityTotal, callLogs, callLogTotal] = await Promise.all([
+      prisma.activity.findMany({
+        where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      });
+        take: isGeneric ? mergeWindow : limit,
+        skip: isGeneric ? 0 : offset,
+      }),
+      prisma.activity.count({ where }),
+      isGeneric
+        ? prisma.callLog.findMany({
+            where: callLogWhere,
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: mergeWindow,
+          })
+        : Promise.resolve([]),
+      isGeneric ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
+    ]);
+    let merged = activityRows;
+    if (isGeneric) {
       const seenCallLogIds = new Set();
       const callActivities = callLogs.reduce((rows, callLog) => {
         if (seenCallLogIds.has(callLog.id)) return rows;
@@ -2814,9 +2821,9 @@ router.get("/:id/activities", async (req, res) => {
         return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
       });
     }
-    const total = tenant?.vertical === "generic" ? merged.length : activityTotal;
-    const data = tenant?.vertical === "generic"
-      ? merged.slice((page - 1) * limit, page * limit)
+    const total = isGeneric ? activityTotal + callLogTotal : activityTotal;
+    const data = isGeneric
+      ? merged.slice(offset, offset + limit)
       : merged;
     res.json({
       data,

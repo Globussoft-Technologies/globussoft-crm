@@ -147,6 +147,16 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const GENERIC_LEADS_PAGE_SIZE = 25;
+const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
+  "name",
+  "email",
+  "phone",
+  "company",
+  "aiScore",
+  "assignedTo",
+  "createdAt",
+]);
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
@@ -1117,7 +1127,6 @@ const Leads = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const leadRequestSequenceRef = useRef(0);
-  const previousGenericSearchRef = useRef("");
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
   // Generic CRM uses API pagination with a fixed 25-row page. Other
@@ -1126,10 +1135,10 @@ const Leads = () => {
     total: 0,
     totalPages: 1,
     page: 1,
-    limit: 25,
+    limit: GENERIC_LEADS_PAGE_SIZE,
   });
   const genericPageEffectInitializedRef = useRef(false);
-  const genericSortEffectInitializedRef = useRef(false);
+  const genericQueryEffectInitializedRef = useRef(false);
   const [pageInput, setPageInput] = useState("1");
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [columnLayout, setColumnLayout] = useState(() => {
@@ -1468,23 +1477,14 @@ const Leads = () => {
       const genericFilterQs = isGeneric
         ? `${sourceFilter ? `&leadSource=${encodeURIComponent(sourceFilter)}` : ""}${campaignFilter ? `&callifiedCampaignId=${encodeURIComponent(campaignFilter)}` : ""}${leadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(leadStatusFilter)}` : ""}${assigneeFilter === "unassigned" ? "&unassigned=true" : assigneeFilter ? `&assignedToId=${encodeURIComponent(assigneeFilter)}` : ""}`
         : "";
-      const genericServerSortKeys = new Set([
-        "name",
-        "email",
-        "phone",
-        "company",
-        "aiScore",
-        "assignedTo",
-        "createdAt",
-      ]);
       const genericSortQs =
         isGeneric &&
-        genericServerSortKeys.has(sortConfig.key) &&
+        GENERIC_LEAD_SERVER_SORT_KEYS.has(sortConfig.key) &&
         sortConfig.direction
           ? `&sortBy=${encodeURIComponent(sortConfig.key)}&sortDirection=${sortConfig.direction}`
           : "";
       const paginationQs = isGeneric
-        ? `&page=${pageOverride ?? leadsPage + 1}&limit=25`
+        ? `&page=${pageOverride ?? leadsPage + 1}&limit=${GENERIC_LEADS_PAGE_SIZE}`
         : "&limit=500";
       const data = await fetchApi(
         `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}`,
@@ -1509,7 +1509,7 @@ const Leads = () => {
           page: Number.isFinite(Number(data?.page))
             ? Number(data.page)
             : pageOverride ?? leadsPage + 1,
-          limit: 25,
+          limit: GENERIC_LEADS_PAGE_SIZE,
         });
       }
       let mergedRows = rows;
@@ -1926,12 +1926,7 @@ const Leads = () => {
       isFirstFiltersRender.current = false;
       return;
     }
-    if (isGeneric) {
-      setLeadsPage(0);
-      fetchLeads({ pageOverride: 1 });
-    } else {
-      fetchLeads();
-    }
+    if (!isGeneric) fetchLeads();
   }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Generic CRM page changes fetch only the requested 25-row API page. The
@@ -1946,28 +1941,36 @@ const Leads = () => {
     fetchLeads({ background: true });
   }, [isGeneric, leadsPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (!isGeneric) return;
-    if (!genericSortEffectInitializedRef.current) {
-      genericSortEffectInitializedRef.current = true;
-      return;
-    }
-    fetchLeads({ background: true });
-  }, [isGeneric, sortConfig.key, sortConfig.direction]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Generic CRM lead search is server-backed. Keep the existing local
-  // filtering/rendering behavior intact while exposing the typed value as
-  // `q` in the contacts API request.
+  // Generic CRM search, fixed filters, advanced filters and supported sorts
+  // all operate on the complete server-side dataset. Reset to page one when
+  // any query input changes; if already on page one, issue the request here.
+  // When the page changes, the page effect above owns the request so the same
+  // query is never sent twice.
   useEffect(() => {
     if (!isGeneric) return undefined;
-    const normalizedSearch = searchTerm.trim();
-    if (normalizedSearch === previousGenericSearchRef.current) return undefined;
-    previousGenericSearchRef.current = normalizedSearch;
+    if (!genericQueryEffectInitializedRef.current) {
+      genericQueryEffectInitializedRef.current = true;
+      return undefined;
+    }
     const timer = setTimeout(() => {
-      fetchLeads({ background: true });
+      if (leadsPage !== 0) {
+        setLeadsPage(0);
+      } else {
+        fetchLeads({ background: true, pageOverride: 1 });
+      }
     }, 250);
     return () => clearTimeout(timer);
-  }, [isGeneric, searchTerm]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    isGeneric,
+    searchTerm,
+    sourceFilter,
+    campaignFilter,
+    leadStatusFilter,
+    assigneeFilter,
+    advancedFilters,
+    sortConfig.key,
+    sortConfig.direction,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response
@@ -3922,7 +3925,7 @@ const Leads = () => {
     }
   };
 
-  const filteredLeads = leads.filter((lead) => {
+  const filteredLeads = isGeneric ? leads : leads.filter((lead) => {
     if (
       !matchesSource(
         isGeneric ? leadSourceLabel(lead, true) : lead.source,
@@ -3975,6 +3978,10 @@ const Leads = () => {
     );
   });
   const sortedLeads = useMemo(() => {
+    // Generic CRM sorting is global and therefore performed by the API.
+    // Re-sorting a single 25-row page locally would make cross-page ordering
+    // misleading even when every individual page looked correct.
+    if (isGeneric) return filteredLeads;
     if (!sortConfig.key || !sortConfig.direction) return filteredLeads;
     const direction = sortConfig.direction === "desc" ? -1 : 1;
     const collator = new Intl.Collator(undefined, {
@@ -3994,7 +4001,7 @@ const Leads = () => {
       }
       return collator.compare(String(aValue), String(bValue)) * direction;
     });
-  }, [filteredLeads, getLeadSortValue, sortConfig.direction, sortConfig.key]);
+  }, [filteredLeads, getLeadSortValue, isGeneric, sortConfig.direction, sortConfig.key]);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   // Batch-load Callified call summaries for visible leads (counts + last score).
@@ -4102,7 +4109,7 @@ const Leads = () => {
     sortedLeads.length === 0
       ? 0
       : isGeneric
-        ? currentLeadsPage * 25 + 1
+        ? currentLeadsPage * GENERIC_LEADS_PAGE_SIZE + 1
         : currentLeadsPage * leadsPageSize + 1;
   const pageEnd =
     sortedLeads.length === 0
@@ -8020,6 +8027,7 @@ const Leads = () => {
                     <X size={14} />
                   </button>
                 </div>
+                {(!isGeneric || GENERIC_LEAD_SERVER_SORT_KEYS.has(headerMenuState.key)) && <>
                 <button
                   type="button"
                   onClick={() => {
@@ -8076,6 +8084,7 @@ const Leads = () => {
                   <ChevronDown size={15} />
                   <span>Sort descending Z to A</span>
                 </button>
+                </>}
                 {isGeneric && !headerMenuState.fixedExtra && (
                   <>
                     <button
@@ -8667,7 +8676,7 @@ const Leads = () => {
               </label>
               <select
                 id="leads-page-size"
-                value={isGeneric ? 25 : leadsPageSize}
+                value={isGeneric ? GENERIC_LEADS_PAGE_SIZE : leadsPageSize}
                 onChange={(e) => {
                   if (isGeneric) return;
                   setLeadsPageSize(Number(e.target.value));
@@ -8682,7 +8691,7 @@ const Leads = () => {
                 }}
                 aria-label="Rows per page"
               >
-                {(isGeneric ? [25] : LEADS_PAGE_SIZE_OPTIONS).map((size) => (
+                {(isGeneric ? [GENERIC_LEADS_PAGE_SIZE] : LEADS_PAGE_SIZE_OPTIONS).map((size) => (
                   <option key={size} value={size}>
                     {size}
                   </option>

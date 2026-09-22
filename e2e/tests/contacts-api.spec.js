@@ -680,6 +680,31 @@ test.describe('Contacts API — GET /', () => {
     expect(body.data.some((contact) => contact.id === low.id)).toBe(false);
   });
 
+  test('Generic lead source filtering is applied before pagination and counting', async ({ request }) => {
+    const marker = `${RUN_TAG}-source-${Date.now()}`;
+    const included = await createContact(request, {
+      label: `${marker}-included`,
+      source: marker,
+    });
+    await createContact(request, {
+      label: `${marker}-excluded`,
+      source: `${marker}-other`,
+    });
+    const { token } = await getAdmin(request);
+
+    const params = new URLSearchParams({
+      page: '1',
+      limit: '1',
+      leadSource: marker,
+    });
+    const res = await get(request, token, `/api/contacts?${params}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.total).toBe(1);
+    expect(body.totalPages).toBe(1);
+    expect(body.data.map((contact) => contact.id)).toEqual([included.id]);
+  });
+
   test('saved-view membership is tenant-validated and applied before pagination', async ({ request }) => {
     const included = await createContact(request, { label: `view-in-${Date.now()}` });
     const excluded = await createContact(request, { label: `view-out-${Date.now()}` });

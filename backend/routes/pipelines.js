@@ -76,11 +76,15 @@ router.get("/", verifyToken, async (req, res) => {
     // callers (no ?fields, or any non-exact value) get the full row shape
     // unchanged.
     const isSummary = req.query.fields === "summary";
+    const orderBy = isGenericCrm(req)
+      ? [{ createdAt: "asc" }, { id: "asc" }]
+      : [{ isDefault: "desc" }, { createdAt: "asc" }];
     const findManyArgs = {
       where: { tenantId },
-      // Default status is independent of a pipeline's stable creation order.
-      // Keep cards in their original order when the default changes.
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      // Generic pipeline cards retain their stable creation order when the
+      // default changes. Other verticals keep the established default-first
+      // contract; their pipeline consumers are intentionally unaffected.
+      orderBy,
     };
     if (isSummary) {
       findManyArgs.select = {

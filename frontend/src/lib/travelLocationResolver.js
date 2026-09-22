@@ -207,3 +207,11 @@ export function shouldReplaceSuspiciousCoordinates(savedLat, savedLng, resolvedL
   const distanceKm = haversineDistanceKm(savedLat, savedLng, resolvedLat, resolvedLng);
   return Number.isFinite(distanceKm) && distanceKm > 150;
 }
+
+export function isCoordinateNearAnyAnchor(lat, lng, anchors, maxDistanceKm = 250) {
+  if (!Array.isArray(anchors) || anchors.length === 0) return false;
+  return anchors.some((anchor) => {
+    const distanceKm = haversineDistanceKm(lat, lng, anchor?.lat, anchor?.lng);
+    return Number.isFinite(distanceKm) && distanceKm <= maxDistanceKm;
+  });
+}

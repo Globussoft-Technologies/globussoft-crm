@@ -4,6 +4,7 @@ import {
   deriveItineraryItemLocation,
   destinationGeoQueries,
   haversineDistanceKm,
+  isCoordinateNearAnyAnchor,
   shouldReplaceSuspiciousCoordinates,
 } from "../lib/travelLocationResolver";
 
@@ -104,5 +105,12 @@ describe("travelLocationResolver", () => {
     expect(
       shouldReplaceSuspiciousCoordinates(32.2432, 77.1892, 32.2396, 77.1887),
     ).toBe(false);
+  });
+
+  test("validates map pins against destination anchors", () => {
+    const goa = [{ lat: 15.2993, lng: 74.1240 }];
+    expect(isCoordinateNearAnyAnchor(15.5553, 73.7517, goa)).toBe(true);
+    expect(isCoordinateNearAnyAnchor(6.5244, 3.3792, goa)).toBe(false);
+    expect(isCoordinateNearAnyAnchor(15.5553, 73.7517, [])).toBe(false);
   });
 });

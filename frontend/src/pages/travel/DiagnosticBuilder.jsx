@@ -51,9 +51,7 @@ const QUESTION_TYPES = [
   { value: 'multi-select', label: 'Multiple select' },
 ];
 
-const QUESTIONS_EXAMPLE = JSON.stringify(
-  {
-    questions: [
+const EXAMPLE_QUESTIONS = [
       {
         id: 'q1',
         text: 'How many trips do you organize per year?',
@@ -74,11 +72,33 @@ const QUESTIONS_EXAMPLE = JSON.stringify(
           { value: 'large', label: '50+', weight: 5 },
         ],
       },
+];
+
+const TMC_TRIP_TYPE_QUESTION = {
+  id: 'preferred_trip_types',
+  text: 'Which types of trips do you prefer?',
+  type: 'multi-select',
+  required: true,
+  minSelections: 1,
+  systemManaged: true,
+  options: ['Day Trips', 'Domestic', 'International'].map((category) => ({
+    value: category.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+    label: category,
+    category,
+    weight: 0,
+  })),
+};
+
+function questionsTemplateFor(subBrand) {
+  return JSON.stringify({
+    questions: [
+      ...(String(subBrand).toLowerCase() === 'tmc' ? [TMC_TRIP_TYPE_QUESTION] : []),
+      ...EXAMPLE_QUESTIONS,
     ],
-  },
-  null,
-  2,
-);
+  }, null, 2);
+}
+
+const QUESTIONS_EXAMPLE = questionsTemplateFor('travelstall');
 
 const SCORING_EXAMPLE = JSON.stringify(
   {
@@ -100,7 +120,7 @@ export default function DiagnosticBuilder() {
 
   const [mode, setMode] = useState('visual');
   const [subBrand, setSubBrand] = useState('tmc');
-  const [qJson, setQJson] = useState(QUESTIONS_EXAMPLE);
+  const [qJson, setQJson] = useState(() => questionsTemplateFor('tmc'));
   const [rJson, setRJson] = useState(SCORING_EXAMPLE);
   const [saving, setSaving] = useState(false);
   const [loadingBank, setLoadingBank] = useState(true);
@@ -153,14 +173,14 @@ export default function DiagnosticBuilder() {
 
   const beginTemplateDraft = useCallback((name) => {
     const resolvedName = String(name || '').trim() || defaultTemplateName();
-    setQJson(QUESTIONS_EXAMPLE);
+    setQJson(questionsTemplateFor(subBrand));
     setRJson(SCORING_EXAMPLE);
     setSelectedBankId('');
     setTemplateName(resolvedName);
     setBankInfo({ existing: false, templateName: resolvedName });
     setSavedSnapshot(null);
     setIsCreatingTemplate(true);
-  }, [defaultTemplateName]);
+  }, [defaultTemplateName, subBrand]);
 
   const loadBanks = useCallback(async (preferredId = null) => {
     setLoadingBank(true);
@@ -1244,7 +1264,10 @@ function normalizeQuestions(questions) {
   const usedQuestionIds = new Set();
   return questions.map((question, index) => {
     let id = String(question.id || '').trim();
-    if (!id) id = uniqueKey(buildQuestionId(question.text, index), usedQuestionIds);
+    const ordinaryQuestionIndex = questions
+      .slice(0, index + 1)
+      .filter((item) => item?.systemManaged !== true).length - 1;
+    if (!id) id = uniqueKey(buildQuestionId(question.text, ordinaryQuestionIndex), usedQuestionIds);
     usedQuestionIds.add(id);
 
     const usedOptionValues = new Set();

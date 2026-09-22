@@ -92,13 +92,13 @@ const API_BASE = "https://globuscrm.globussoft.com";
 
 // Page load
 setPhase("loading-form");
-const form = await get(`${API_BASE}/api/travel/diagnostics/public/form/travel-stall/tmc`);
+const form = await get(`${API_BASE}/api/travel/diagnostics/public/form/travel-stall-2/tmc`);
 setPhase("answering");
 
 // Visitor clicks submit
 setPhase("submitting"); // Show the client's loading-card animation here.
 const submission = await post(
-  `${API_BASE}/api/travel/diagnostics/public/form/travel-stall/tmc/submit`,
+  `${API_BASE}/api/travel/diagnostics/public/form/travel-stall-2/tmc/submit`,
   { answers, name, email, phone },
 );
 
@@ -142,14 +142,14 @@ Do not send a CRM staff token, API key, or browser cookies with these public req
 ### Step 1: Fetch the published form
 
 ```http
-GET /api/travel/diagnostics/public/form/travel-stall/tmc
+GET /api/travel/diagnostics/public/form/travel-stall-2/tmc
 ```
 
 Important response fields:
 
 ```json
 {
-  "tenantSlug": "travel-stall",
+  "tenantSlug": "travel-stall-2",
   "tenantName": "Travel Stall",
   "subBrand": "tmc",
   "bankId": 123,
@@ -195,7 +195,7 @@ For the required trip-type question, the customer-facing labels may be edited in
 ### Step 2: Submit the answers
 
 ```http
-POST /api/travel/diagnostics/public/form/travel-stall/tmc/submit
+POST /api/travel/diagnostics/public/form/travel-stall-2/tmc/submit
 Content-Type: application/json
 ```
 
@@ -219,7 +219,7 @@ A successful response has HTTP status `201`:
 {
   "diagnosticId": 1458,
   "reportSlug": "1458-a1b2c3d4e5f60718",
-  "tenantSlug": "travel-stall",
+  "tenantSlug": "travel-stall-2",
   "subBrand": "tmc",
   "score": 46,
   "classification": "power_user",

@@ -30,7 +30,12 @@ import { useNotify } from "../../utils/notify";
 import MapPreview from "../../components/MapPreview";
 import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
 import { geocode } from "../../lib/geocoder";
-import { buildItineraryGeocodeQuery } from "../../lib/travelLocationResolver";
+import {
+  buildItineraryGeocodeQuery,
+  destinationGeoQueries,
+  isCoordinateNearAnyAnchor,
+  shouldReplaceSuspiciousCoordinates,
+} from "../../lib/travelLocationResolver";
 
 // The 12 server-validated itemTypes (backend VALID_ITEM_TYPES). Order here is
 // the order they appear in the type picker — most-used first.
@@ -470,7 +475,7 @@ export default function ItineraryWorkspace() {
   // map's connecting line traces the trip the way it's actually planned —
   // day 1's stops, then day 2's, etc. — instead of whatever order the
   // items happened to be created or fetched in.
-  const mapItems = useMemo(() => {
+  const orderedMapItems = useMemo(() => {
     const flat = [];
     for (let d = 1; d <= dayCount; d += 1) flat.push(...(itemsByDay.get(d) || []));
     flat.push(...(itemsByDay.get(null) || [])); // unscheduled — pinned, but after every real day
@@ -478,6 +483,62 @@ export default function ItineraryWorkspace() {
       .filter((it) => Number.isFinite(Number(it.latitude)) && Number.isFinite(Number(it.longitude)))
       .map((it) => ({ ...it, locationName: readSchedule(it).locationName || it.description }));
   }, [itemsByDay, dayCount]);
+
+  const [mapItems, setMapItems] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!orderedMapItems.length || !itin?.destination) {
+      setMapItems(orderedMapItems);
+      return undefined;
+    }
+
+    // Do not briefly render known-unvalidated coordinates: a single stale
+    // overseas pin makes Leaflet fit the whole world before repair completes.
+    setMapItems([]);
+    (async () => {
+      const anchorQueries = destinationGeoQueries(itin.destination);
+      const anchors = (await Promise.all(
+        anchorQueries.map((query) => geocode(query).catch(() => null)),
+      )).filter(Boolean);
+      if (cancelled) return;
+      if (!anchors.length) {
+        setMapItems(orderedMapItems);
+        return;
+      }
+
+      const validated = [];
+      for (const item of orderedMapItems) {
+        if (cancelled) return;
+        const savedLat = Number(item.latitude);
+        const savedLng = Number(item.longitude);
+        if (isCoordinateNearAnyAnchor(savedLat, savedLng, anchors)) {
+          validated.push(item);
+          continue;
+        }
+
+        const query = buildItineraryGeocodeQuery(item, itin.destination);
+        const resolved = query ? await geocode(query).catch(() => null) : null;
+        if (!resolved || !isCoordinateNearAnyAnchor(resolved.lat, resolved.lng, anchors)) {
+          continue;
+        }
+
+        validated.push({ ...item, latitude: resolved.lat, longitude: resolved.lng });
+        if (
+          item.draftedByAi &&
+          shouldReplaceSuspiciousCoordinates(savedLat, savedLng, resolved.lat, resolved.lng)
+        ) {
+          fetchApi(`/api/travel/itineraries/${id}/items/${item.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ latitude: resolved.lat, longitude: resolved.lng }),
+            silent: true,
+          }).catch(() => {});
+        }
+      }
+      if (!cancelled) setMapItems(validated);
+    })();
+
+    return () => { cancelled = true; };
+  }, [id, itin?.destination, orderedMapItems]);
 
   // ── mutations ───────────────────────────────────────────────────────
   // Every mutation reloads the itinerary rather than patching local state,

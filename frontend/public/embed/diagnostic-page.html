@@ -32,23 +32,18 @@
   <script>
     window.GBS_DIAGNOSTIC_EMBED_CONFIG = window.GBS_DIAGNOSTIC_EMBED_CONFIG || {
       // DevOps installs this file ONCE on the client domain and never has to
-      // touch it again — the page resolves the latest published CRM
-      // diagnostic at runtime, and (via `bases` below) automatically finds
-      // whichever CRM environment the form was actually published on.
-      //
-      // `bases`: CRM environments to try, IN ORDER. The page calls the first
-      // one; if that environment has no form published for this
-      // subBrand/tenantSlug (404), it automatically tries the next one — no
-      // manual apiBase/formBase editing needed when switching between
-      // testing on dev and shipping to prod. Each entry's own origin is used
-      // for BOTH the JSON lookup AND the iframed form page (they're always
-      // the same CRM environment).
-      bases: [
-        'https://globuscrm.globussoft.com', // prod — tried first
-        'https://crm.globusdemos.com',      // dev — fallback if prod has nothing published
-      ],
+      // touch it again. Ordered tenant aliases resolve the current published
+      // form, while an explicit pageId query remains available when needed.
+      // Production client pages should be pinned to one CRM environment.
+      // Falling back to another environment is unsafe because numeric page
+      // IDs and tenant slugs can identify different customers there.
+      apiBase: 'https://globuscrm.globussoft.com',
+      formBase: 'https://globuscrm.globussoft.com',
       subBrand: 'tmc',
-      tenantSlug: 'travel-stall',
+      // Try known tenant slugs in priority order. This keeps an older client
+      // installation working while the newer tenant owns the active form.
+      tenantSlugs: ['travel-stall-2', 'travel-stall'],
+      tenantSlug: '',
       customerId: '',
       pageId: ''
     };
@@ -81,6 +76,11 @@
 
       var subBrand = (params.get('subBrand') || config.subBrand || 'tmc').trim();
       var tenantSlug = (params.get('tenantSlug') || config.tenantSlug || '').trim();
+      var configuredTenantSlugs = Array.isArray(config.tenantSlugs)
+        ? config.tenantSlugs.map(function(value){ return String(value || '').trim(); }).filter(Boolean)
+        : [];
+      var tenantSlugs = tenantSlug ? [tenantSlug] : configuredTenantSlugs;
+      if (!tenantSlugs.length) tenantSlugs = [''];
       var customerId = (params.get('customerId') || config.customerId || '').trim();
       var pageId = (params.get('pageId') || config.pageId || '').trim();
       var statusEl = document.getElementById('status');
@@ -123,13 +123,13 @@
         return 'Diagnostic form lookup failed with status ' + response.status + '.';
       }
 
-      function buildEndpoint(apiBase){
+      function buildEndpoint(apiBase, candidateTenantSlug){
         if (pageId) {
           return apiBase + '/api/diagnostic-pages/public/by-id/' + encodeURIComponent(pageId);
         }
         var qs = new URLSearchParams();
         qs.set('subBrand', subBrand);
-        if (tenantSlug) qs.set('tenantSlug', tenantSlug);
+        if (candidateTenantSlug) qs.set('tenantSlug', candidateTenantSlug);
         if (customerId) qs.set('customerId', customerId);
         return apiBase + '/api/diagnostic-pages/public/featured-full?' + qs.toString();
       }
@@ -141,26 +141,32 @@
       // candidate fails.
       async function resolvePublishedForm(){
         var lastError = null;
+        var tried = [];
         for (var i = 0; i < candidateBases.length; i++) {
           var base = candidateBases[i];
-          try {
-            var response = await fetch(buildEndpoint(base.api), { method:'GET', headers:{ Accept:'application/json' } });
-            if (!response.ok) {
-              lastError = await readError(response);
-              continue; // try the next candidate — most commonly a 404 (nothing published there yet)
+          var slugCandidates = pageId || customerId ? [''] : tenantSlugs;
+          for (var j = 0; j < slugCandidates.length; j++) {
+            var candidateTenantSlug = slugCandidates[j];
+            var endpoint = buildEndpoint(base.api, candidateTenantSlug);
+            tried.push(candidateTenantSlug ? base.api + ' [' + candidateTenantSlug + ']' : endpoint);
+            try {
+              var response = await fetch(endpoint, { method:'GET', headers:{ Accept:'application/json' } });
+              if (!response.ok) {
+                lastError = await readError(response);
+                continue;
+              }
+              var page = await response.json();
+              if (!page || !page.publicUrl) {
+                lastError = 'Diagnostic page payload did not include a public URL.';
+                continue;
+              }
+              return { page: page, formBase: base.form };
+            } catch (fetchErr) {
+              lastError = String(fetchErr && fetchErr.message ? fetchErr.message : fetchErr);
             }
-            var page = await response.json();
-            if (!page || !page.publicUrl) {
-              lastError = 'Diagnostic page payload did not include a public URL.';
-              continue;
-            }
-            return { page: page, formBase: base.form };
-          } catch (fetchErr) {
-            lastError = String(fetchErr && fetchErr.message ? fetchErr.message : fetchErr);
           }
         }
-        var tried = candidateBases.map(function(b){ return b.api; }).join(', ');
-        throw new Error((lastError || 'No published form found') + ' (checked: ' + tried + ')');
+        throw new Error((lastError || 'No published form found') + ' (checked: ' + tried.join(', ') + ')');
       }
 
       async function boot(){

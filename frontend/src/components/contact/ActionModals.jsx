@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, AlignJustify, Indent, Outdent, Image, Smile, Link2, RemoveFormatting, Paperclip, Send, Trash2, ChevronDown, Info, PackagePlus, Plus, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
@@ -33,6 +33,7 @@ function mailSize(n) {
 export function EmailModal({ contact, onClose, onDone }) {
   const notify = useNotify();
   const auth = useContext(AuthContext) || {};
+  const tenantVertical = auth.tenant?.vertical || auth.user?.tenant?.vertical || 'generic';
   const [toList, setToList] = useState(() => (contact?.email ? [contact.email] : []));
   const [toText, setToText] = useState('');
   const [ccList, setCcList] = useState([]);
@@ -117,13 +118,27 @@ export function EmailModal({ contact, onClose, onDone }) {
     setDraftNote('');
     notify.success('Draft discarded.');
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
     try {
       const raw = localStorage.getItem(draftKey);
       if (raw) {
         const d = JSON.parse(raw);
         if (typeof d.subject === 'string' && d.subject) setSubject(d.subject);
-        if (typeof d.bodyHtml === 'string' && d.bodyHtml && editorRef.current && !editorRef.current.innerText.trim()) editorRef.current.innerHTML = d.bodyHtml;
+        if (typeof d.bodyHtml === 'string' && d.bodyHtml && editorRef.current && !editorRef.current.innerText.trim()) {
+          editorRef.current.innerHTML = d.bodyHtml;
+          if (tenantVertical === 'generic') {
+            const resetEditorScroll = () => {
+              if (!editorRef.current) return;
+              editorRef.current.scrollTop = 0;
+              editorRef.current.scrollLeft = 0;
+            };
+            resetEditorScroll();
+            requestAnimationFrame(() => {
+              resetEditorScroll();
+              requestAnimationFrame(resetEditorScroll);
+            });
+          }
+        }
         if (Array.isArray(d.ccList) && d.ccList.length) { setCcList(d.ccList.filter((x) => EMAIL_RE.test(x))); setShowCc(true); }
         if (Array.isArray(d.bccList) && d.bccList.length) { setBccList(d.bccList.filter((x) => EMAIL_RE.test(x))); setShowBcc(true); }
         if (d.savedAt) setDraftNote(`Draft saved ${new Date(d.savedAt).toLocaleTimeString()}`);
@@ -187,7 +202,9 @@ export function EmailModal({ contact, onClose, onDone }) {
       } else {
         await sendEmail({ to: validTo.join(', '), cc: ccList.join(', ') || undefined, bcc: bccList.join(', ') || undefined, subject: subject.trim(), body: html, contactId: contact?.id });
       }
-      await postActivity(contact.id, { type: 'Email', description: `Email sent: ${subject.trim()}${trackEmail ? ' (tracked)' : ''}` }).catch(() => null);
+      if (tenantVertical !== 'generic') {
+        await postActivity(contact.id, { type: 'Email', description: `Email sent: ${subject.trim()}${trackEmail ? ' (tracked)' : ''}` }).catch(() => null);
+      }
       try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
       notify.success('Email sent successfully.');
       onDone();
@@ -214,8 +231,8 @@ export function EmailModal({ contact, onClose, onDone }) {
     <div className="cp-task-overlay cp-email-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="New mail">
       <aside className="cp-meeting-drawer" style={{ width: '72vw', maxWidth: 1100 }} onClick={(e) => e.stopPropagation()}>
         <header className="cp-task-head"><h3>New mail</h3><button type="button" className="cp-icon-btn" onClick={onClose} aria-label="Close"><X size={18} /></button></header>
-        <div className="cp-meeting-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', minHeight: 0, flexShrink: 1, padding: '0.75rem 1.25rem' }}>
-          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start' }}>
+        <div className={`cp-meeting-body${tenantVertical === 'generic' ? ' cp-generic-mail-body' : ''}`} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', minHeight: 0, flexShrink: 1, padding: '0.75rem 1.25rem', overflowY: tenantVertical === 'generic' ? 'hidden' : 'auto' }}>
+          <div className={tenantVertical === 'generic' ? 'cp-generic-mail-recipients' : undefined} style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', flex: tenantVertical === 'generic' ? '0 0 auto' : undefined }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: 24 }}>To</span><div style={{ flex: 1 }}>{mailRow(toList, setToList, toText, setToText, contact?.name || 'Recipients')}</div></div>
               {showCc && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: 24 }}>Cc</span><div style={{ flex: 1 }}>{mailRow(ccList, setCcList, ccText, setCcText, 'Cc')}</div></div>}
@@ -227,12 +244,18 @@ export function EmailModal({ contact, onClose, onDone }) {
               {!showBcc && <button type="button" onClick={() => setShowBcc(true)} style={{ border: 'none', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.78rem' }}>Bcc</button>}
             </div>
           </div>
-          <input className="cp-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Write a subject line" aria-label="Subject" style={{ border: 'none', borderBottom: '1px solid var(--border-color)', borderRadius: 0, paddingLeft: 0 }} />
-          <div ref={editorRef} contentEditable role="textbox" aria-label="Email body" data-placeholder="Start typing your email..." onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } }} style={{ flex: 1, minHeight: '12vh', maxHeight: '30vh', outline: 'none', fontSize: '0.9rem', lineHeight: 1.55, overflowY: 'auto' }} />
+          <input className={`cp-input${tenantVertical === 'generic' ? ' cp-generic-mail-subject' : ''}`} value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Write a subject line" aria-label="Subject" style={{ border: 'none', borderBottom: '1px solid var(--border-color)', borderRadius: 0, paddingLeft: 0, flex: tenantVertical === 'generic' ? '0 0 auto' : undefined }} />
+          {tenantVertical === 'generic' ? (
+            <div className="cp-generic-mail-editor-shell">
+              <div className="cp-generic-mail-editor" ref={editorRef} contentEditable role="textbox" aria-label="Email body" data-placeholder="Start typing your email..." onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } }} style={{ flex: '1 1 auto', minHeight: 0, height: '100%', width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '0.5rem 0', outline: 'none', fontSize: '0.9rem', lineHeight: 1.55, overflowY: 'auto', overflowX: 'hidden', overflowWrap: 'anywhere', wordBreak: 'break-word' }} />
+            </div>
+          ) : (
+            <div ref={editorRef} contentEditable role="textbox" aria-label="Email body" data-placeholder="Start typing your email..." onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } }} style={{ flex: 1, minHeight: '12vh', maxHeight: '30vh', outline: 'none', fontSize: '0.9rem', lineHeight: 1.55, overflowY: 'auto' }} />
+          )}
           {files.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>{files.map((f, i) => <span key={`${f.name}-${i}`} className="cp-task-chip">📎 {f.name} · {mailSize(f.size)} <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((p) => p.filter((_, x) => x !== i))}><X size={12} /></button></span>)}</div>}
         </div>
-        <footer style={{ borderTop: '1px solid var(--border-color)', background: '#fff', flexShrink: 0 }}>
-          <div role="toolbar" aria-label="Formatting" style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', color: 'var(--text-secondary)', padding: '0.25rem 1.25rem', borderBottom: '1px solid var(--border-color)' }}>
+        <footer className={tenantVertical === 'generic' ? 'cp-generic-mail-footer' : undefined} style={{ borderTop: '1px solid var(--border-color)', background: tenantVertical === 'generic' ? 'var(--modal-bg, #fff)' : '#fff', flexShrink: 0 }}>
+          <div className={tenantVertical === 'generic' ? 'cp-generic-mail-toolbar' : undefined} role="toolbar" aria-label="Formatting" style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', color: 'var(--text-secondary)', padding: '0.25rem 1.25rem', borderBottom: '1px solid var(--border-color)' }}>
             <select aria-label="Font" value={fontName} onChange={(e) => { setFontName(e.target.value); exec('fontName', e.target.value); }} style={{ border: 'none', background: 'none', fontSize: '0.75rem', color: 'inherit', cursor: 'pointer', maxWidth: 90 }}>
               {['Arial', 'Georgia', 'Times New Roman', 'Verdana', 'Courier New'].map((f) => <option key={f} value={f}>{f}</option>)}
             </select>
@@ -257,7 +280,7 @@ export function EmailModal({ contact, onClose, onDone }) {
             {tBtn('Outdent', () => exec('outdent'), <Outdent size={14} />)}
             {tBtn('Remove formatting', () => exec('removeFormat'), <RemoveFormatting size={14} />)}
           </div>
-          <div className="cp-meeting-footer" style={{ alignItems: 'center', borderTop: 'none', padding: '0.5rem 1.25rem' }}>
+          <div className={`cp-meeting-footer${tenantVertical === 'generic' ? ' cp-generic-mail-actions' : ''}`} style={{ alignItems: 'center', borderTop: 'none', padding: '0.5rem 1.25rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
               <input ref={fileRef} type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
               <button type="button" className="cp-action-btn" onClick={() => fileRef.current?.click()}><Paperclip size={13} /> Attach{files.length > 0 && ` (${files.length})`}</button>

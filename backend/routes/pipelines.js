@@ -78,7 +78,9 @@ router.get("/", verifyToken, async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where: { tenantId },
-      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+      // Default status is independent of a pipeline's stable creation order.
+      // Keep cards in their original order when the default changes.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     };
     if (isSummary) {
       findManyArgs.select = {

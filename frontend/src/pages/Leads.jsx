@@ -17,6 +17,7 @@ import ReturnToBanner from "../components/ReturnToBanner";
 import {
   UserPlus,
   Search,
+  ArrowLeft,
   ArrowRightCircle,
   Eye,
   Plus,
@@ -1119,6 +1120,16 @@ const Leads = () => {
   const previousGenericSearchRef = useRef("");
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
+  // Generic CRM uses API pagination with a fixed 25-row page. Other
+  // verticals keep their existing client-side pagination behavior.
+  const [leadPagination, setLeadPagination] = useState({
+    total: 0,
+    totalPages: 1,
+    page: 1,
+    limit: 25,
+  });
+  const genericPageEffectInitializedRef = useRef(false);
+  const genericSortEffectInitializedRef = useRef(false);
   const [pageInput, setPageInput] = useState("1");
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [columnLayout, setColumnLayout] = useState(() => {
@@ -1433,7 +1444,7 @@ const Leads = () => {
     customFields: {},
   });
 
-  const fetchLeads = async ({ background = false } = {}) => {
+  const fetchLeads = async ({ background = false, pageOverride } = {}) => {
     const requestSequence = ++leadRequestSequenceRef.current;
     if (!background) setLoading(true);
     try {
@@ -1454,11 +1465,53 @@ const Leads = () => {
       const campaignSearchQs = matchingCampaignIds.length
         ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
         : "";
+      const genericFilterQs = isGeneric
+        ? `${sourceFilter ? `&leadSource=${encodeURIComponent(sourceFilter)}` : ""}${campaignFilter ? `&callifiedCampaignId=${encodeURIComponent(campaignFilter)}` : ""}${leadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(leadStatusFilter)}` : ""}${assigneeFilter === "unassigned" ? "&unassigned=true" : assigneeFilter ? `&assignedToId=${encodeURIComponent(assigneeFilter)}` : ""}`
+        : "";
+      const genericServerSortKeys = new Set([
+        "name",
+        "email",
+        "phone",
+        "company",
+        "aiScore",
+        "assignedTo",
+        "createdAt",
+      ]);
+      const genericSortQs =
+        isGeneric &&
+        genericServerSortKeys.has(sortConfig.key) &&
+        sortConfig.direction
+          ? `&sortBy=${encodeURIComponent(sortConfig.key)}&sortDirection=${sortConfig.direction}`
+          : "";
+      const paginationQs = isGeneric
+        ? `&page=${pageOverride ?? leadsPage + 1}&limit=25`
+        : "&limit=500";
       const data = await fetchApi(
-        `/api/contacts?status=Lead&limit=500${genericSearchQs}${campaignSearchQs}${filtersQs}`,
+        `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}`,
       );
-      const rows = Array.isArray(data) ? data : [];
+      const rows = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
       if (requestSequence !== leadRequestSequenceRef.current) return rows;
+      if (isGeneric) {
+        setLeadPagination({
+          total: Number.isFinite(Number(data?.total))
+            ? Number(data.total)
+            : rows.length,
+          totalPages: Math.max(
+            1,
+            Number.isFinite(Number(data?.totalPages))
+              ? Number(data.totalPages)
+              : 1,
+          ),
+          page: Number.isFinite(Number(data?.page))
+            ? Number(data.page)
+            : pageOverride ?? leadsPage + 1,
+          limit: 25,
+        });
+      }
       let mergedRows = rows;
       setLeads((previousRows) => {
         const previousById = new Map(previousRows.map((row) => [row.id, row]));
@@ -1873,8 +1926,34 @@ const Leads = () => {
       isFirstFiltersRender.current = false;
       return;
     }
-    fetchLeads();
+    if (isGeneric) {
+      setLeadsPage(0);
+      fetchLeads({ pageOverride: 1 });
+    } else {
+      fetchLeads();
+    }
   }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Generic CRM page changes fetch only the requested 25-row API page. The
+  // first page is loaded by the existing mount effect, so skip the initial
+  // state observation to avoid a second page-1 request.
+  useEffect(() => {
+    if (!isGeneric) return;
+    if (!genericPageEffectInitializedRef.current) {
+      genericPageEffectInitializedRef.current = true;
+      return;
+    }
+    fetchLeads({ background: true });
+  }, [isGeneric, leadsPage]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!isGeneric) return;
+    if (!genericSortEffectInitializedRef.current) {
+      genericSortEffectInitializedRef.current = true;
+      return;
+    }
+    fetchLeads({ background: true });
+  }, [isGeneric, sortConfig.key, sortConfig.direction]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Generic CRM lead search is server-backed. Keep the existing local
   // filtering/rendering behavior intact while exposing the typed value as
@@ -4014,22 +4093,30 @@ const Leads = () => {
 
   const leadsPageCount = Math.max(
     1,
-    Math.ceil(sortedLeads.length / leadsPageSize),
+    isGeneric
+      ? leadPagination.totalPages
+      : Math.ceil(sortedLeads.length / leadsPageSize),
   );
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
   const pageStart =
-    sortedLeads.length === 0 ? 0 : currentLeadsPage * leadsPageSize + 1;
+    sortedLeads.length === 0
+      ? 0
+      : isGeneric
+        ? currentLeadsPage * 25 + 1
+        : currentLeadsPage * leadsPageSize + 1;
   const pageEnd =
     sortedLeads.length === 0
       ? 0
       : Math.min(
-          sortedLeads.length,
-          currentLeadsPage * leadsPageSize + leadsPageSize,
+          isGeneric ? leadPagination.total : sortedLeads.length,
+          pageStart + sortedLeads.length - 1,
         );
-  const paginatedLeads = sortedLeads.slice(
-    currentLeadsPage * leadsPageSize,
-    currentLeadsPage * leadsPageSize + leadsPageSize,
-  );
+  const paginatedLeads = isGeneric
+    ? sortedLeads
+    : sortedLeads.slice(
+        currentLeadsPage * leadsPageSize,
+        currentLeadsPage * leadsPageSize + leadsPageSize,
+      );
   const leadsRowSyncSignature = leadsRowSyncEnabled
     ? paginatedLeads
         .map((lead) =>
@@ -4277,9 +4364,10 @@ const Leads = () => {
   };
 
   const activeSearchTerm = searchTerm.trim();
+  const totalLeadCount = isGeneric ? leadPagination.total : leads.length;
   const leadsSummary = activeSearchTerm
-    ? `${filteredLeads.length} of ${leads.length} leads match "${activeSearchTerm}"`
-    : `${leads.length} leads in pipeline`;
+    ? `${filteredLeads.length} of ${totalLeadCount} leads match "${activeSearchTerm}"`
+    : `${totalLeadCount} leads in pipeline`;
   const getHeaderCellStyle = (key, extra = {}) => ({
     padding: "1rem",
     color: "var(--text-secondary)",
@@ -5029,7 +5117,7 @@ const Leads = () => {
         style={{
           marginBottom: "1rem",
           display: "flex",
-          alignItems: "center",
+          alignItems: isGeneric ? "flex-start" : "center",
           justifyContent: "space-between",
           gap: "0.75rem",
           flexWrap: "wrap",
@@ -5038,14 +5126,17 @@ const Leads = () => {
         <div
           style={{
             display: "flex",
-            alignItems: "center",
+            alignItems: isGeneric ? "flex-start" : "center",
+            flexDirection: isGeneric ? "column" : "row",
             gap: "0.75rem",
             minWidth: 0,
             flex: "1 1 240px",
           }}
         >
-          <UserPlus size={24} color="var(--text-primary)" />
-          <div style={{ minWidth: 0 }}>
+          {isGeneric && <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid var(--border-color)", borderRadius: 7, background: "var(--surface-color)", color: "var(--text-primary)", fontWeight: 600, fontSize: 12, cursor: "pointer" }}><ArrowLeft size={16} /> Back</button>}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0 }}>
+            <UserPlus size={24} color="var(--text-primary)" />
+            <div style={{ minWidth: 0 }}>
             <h1
               style={{
                 margin: 0,
@@ -5064,6 +5155,7 @@ const Leads = () => {
             >
               {leadsSummary}
             </p>
+            </div>
           </div>
         </div>
         {/* Generic CRM only: Lead Fields + Create Lead live in the header's
@@ -6368,7 +6460,6 @@ const Leads = () => {
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
-                  setLeadsPage(0);
                 }}
                 style={{
                   paddingLeft: "2.5rem",
@@ -7568,16 +7659,17 @@ const Leads = () => {
                           >
                             <button
                               onClick={() => {
+                                if (!lead.phone) {
+                                  notify.error("Phone number is required to make a call.");
+                                  return;
+                                }
                                 if (!callifiedConfigured) {
                                   notify.info(
                                     "Configure Callified in Settings → Integrations to make AI calls",
                                   );
                                   return;
                                 }
-                                handleSingleDial(
-                                  lead,
-                                  lead.callifiedCampaignId,
-                                );
+                                setCallifiedCallLead(lead);
                               }}
                               title={
                                 callifiedConfigured
@@ -8554,7 +8646,7 @@ const Leads = () => {
                 whiteSpace: "nowrap",
               }}
             >
-              Showing {pageStart}-{pageEnd} of {filteredLeads.length}
+              Showing {pageStart}-{pageEnd} of {isGeneric ? leadPagination.total : filteredLeads.length}
             </span>
             <div
               style={{
@@ -8575,8 +8667,9 @@ const Leads = () => {
               </label>
               <select
                 id="leads-page-size"
-                value={leadsPageSize}
+                value={isGeneric ? 25 : leadsPageSize}
                 onChange={(e) => {
+                  if (isGeneric) return;
                   setLeadsPageSize(Number(e.target.value));
                   setLeadsPage(0);
                 }}
@@ -8589,7 +8682,7 @@ const Leads = () => {
                 }}
                 aria-label="Rows per page"
               >
-                {LEADS_PAGE_SIZE_OPTIONS.map((size) => (
+                {(isGeneric ? [25] : LEADS_PAGE_SIZE_OPTIONS).map((size) => (
                   <option key={size} value={size}>
                     {size}
                   </option>

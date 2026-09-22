@@ -95,7 +95,8 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const { tenant } = useContext(AuthContext);
   const isWellness = tenant?.vertical === 'wellness';
   const isTravel = tenant?.vertical === 'travel';
-  const isGenericTagManager = genericTagsEnabled && !isWellness && !isTravel;
+  const isGeneric = !isWellness && !isTravel;
+  const isGenericTagManager = genericTagsEnabled && isGeneric;
   const [openGroups, setOpenGroups] = useState(() => (
     Object.fromEntries(GROUPS.map((group) => [group.key, Boolean(group.openByDefault)]))
   ));
@@ -164,6 +165,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Monthly Budget', key: customKey(['monthly_budget', 'monthlyBudget']) || 'monthly_budget', value: contact?.monthlyBudget ?? customFields.monthly_budget ?? customFields.monthlyBudget, custom: true, type: 'number' },
     { label: 'Telegram / WhatsApp / Teams', key: customKey(['telegram', 'whatsapp', 'teams', 'messenger']) || 'messenger', value: contact?.telegram || contact?.whatsapp || contact?.teams || contact?.messenger || customFields.telegram || customFields.whatsapp || customFields.teams || customFields.messenger, custom: true },
     { label: 'Advertising Platform', key: customKey(['advertising_platform', 'advertisingPlatform', 'ad_platform']) || 'advertising_platform', value: contact?.advertisingPlatform || contact?.adPlatform || customFields.advertising_platform || customFields.advertisingPlatform || customFields.ad_platform, custom: true },
+    ...(isGeneric ? [{ label: 'Tags', key: 'tags', value: tags }] : []),
   ];
   const dynamicFields = customDefinitions
     .filter((definition) => !basicFields.some((field) => field.key === definition.fieldKey))
@@ -408,7 +410,15 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                 <ContactDetailsGroup label={group.label} open={openGroups[group.key]} onToggle={() => toggleGroup(group.key)} showHeader={false}>
                   <div className="cd-basic-fields" aria-label={`${group.label} fields`}>
                     <div className="cd-basic-grid">
-                      {visibleBasicFields.map((field) => <div className="cd-basic-field" key={field.key}><span>{field.label}</span>{field.owner ? (
+                      {visibleBasicFields.map((field) => <div className="cd-basic-field" key={field.key}><span>{field.label}</span>{field.key === 'tags' ? (
+                        <div className="cd-tag-values">
+                          {tags.map((tag) => {
+                            const nameValue = String(tag);
+                            const color = tagColorMap.get(tagKey(nameValue)) || fallbackTagColor(nameValue);
+                            return <span className="cd-tag-chip" key={nameValue} style={{ background: color, borderColor: color, color: tagTextColor(color) }}>{nameValue}<button type="button" aria-label={`Remove tag ${nameValue}`} onClick={() => removeGenericTag(nameValue)} disabled={tagRemoving === nameValue}>×</button></span>;
+                          })}
+                        </div>
+                      ) : field.owner ? (
                         <InlineField
                           value={contact?.assignedToId ?? ''}
                           display={field.value || <span className="cd-empty-value">Unassigned</span>}

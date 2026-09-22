@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, ExternalLink, Star, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -18,6 +18,7 @@ const Pipelines = () => {
   const [availableStages, setAvailableStages] = useState([]);
   const [loadingStages, setLoadingStages] = useState(false);
   const [editingStageId, setEditingStageId] = useState(null);
+  const [originalStages, setOriginalStages] = useState([]);
 
   const fetchPipelines = () => {
     setLoading(true);
@@ -38,6 +39,7 @@ const Pipelines = () => {
     setEditing(null);
     setStages([]);
     setAvailableStages([]);
+    setOriginalStages([]);
     setLoadingStages(false);
     setEditingStageId(null);
     fetchApi('/api/pipeline_stages?reusable=true').then((data) => setAvailableStages(Array.isArray(data) ? data : [])).catch(() => setAvailableStages([]));
@@ -56,7 +58,9 @@ const Pipelines = () => {
       fetchApi(`/api/pipeline_stages?pipelineId=${p.id}`),
       fetchApi('/api/pipeline_stages?reusable=true'),
     ]).then(([stageData, reusableData]) => {
-      setStages(Array.isArray(stageData) ? stageData : []);
+      const loadedStages = Array.isArray(stageData) ? stageData : [];
+      setStages(loadedStages);
+      setOriginalStages(loadedStages);
       setAvailableStages(Array.isArray(reusableData) ? reusableData : []);
     }).catch((e) => {
       setStages([]);
@@ -75,62 +79,46 @@ const Pipelines = () => {
     setError('');
     setStages([]);
     setAvailableStages([]);
+    setOriginalStages([]);
     setLoadingStages(false);
     setEditingStageId(null);
   };
 
-  const addExistingStage = async (event) => {
+  const addExistingStage = (event) => {
     const stageId = Number(event.target.value);
     event.target.value = '';
     if (!stageId || stages.some((stage) => stage.id === stageId)) return;
     const selected = availableStages.find((stage) => stage.id === stageId);
     if (!selected) return;
-    if (!editing) {
-      setStages((current) => [...current, { ...selected, isExisting: true }]);
-      return;
-    }
-    try {
-      const created = await fetchApi('/api/pipeline_stages', { method: 'POST', body: JSON.stringify({ pipelineId: editing.id, stageId, position: stages.length }) });
-      setStages((current) => [...current, created]);
-    } catch (e) { setError(e.message || 'Failed to add existing stage'); }
+    setStages((current) => [...current, { ...selected, isExisting: true }]);
   };
 
-  const addStage = async () => {
-    if (!editing) {
-      setStages((current) => [...current, { name: '', color: '#3b82f6' }]);
-      return;
-    }
-    try {
-      const created = await fetchApi('/api/pipeline_stages', { method: 'POST', body: JSON.stringify({ pipelineId: editing.id, name: `New Stage ${stages.length + 1}`, position: stages.length }) });
-      setStages((current) => [...current, created]);
-    } catch (e) { setError(e.message || 'Failed to add stage'); }
+  const addStage = () => {
+    setStages((current) => [...current, { name: '', color: '#3b82f6' }]);
   };
 
-  const updateStage = async (stage, name) => {
+  const updateStage = (stage, name) => {
     const value = name.trim();
-    if (!value || stage.name === value) return;
-    try {
-      const updated = await fetchApi(`/api/pipeline_stages/${stage.id}`, { method: 'PUT', body: JSON.stringify({ name: value, color: stage.color, position: stage.position }) });
-      setStages((current) => current.map((item) => item.id === stage.id ? updated : item));
+    if (!stage.id) {
       setEditingStageId(null);
-    } catch (e) { setError(e.message || 'Failed to update stage'); }
+      return;
+    }
+    setStages((current) => current.map((item) => item.id === stage.id ? { ...item, name: value } : item));
+    setEditingStageId(null);
   };
 
-  const removeStage = async (stage, stageIndex) => {
+  const removeStage = (_stage, stageIndex) => {
     if (stages.length <= 1) { setError('A pipeline must contain at least one stage.'); return; }
-    try {
-      if (stage.id) await fetchApi(`/api/pipeline_stages/${stage.id}${editing ? `?pipelineId=${editing.id}` : ''}`, { method: 'DELETE' });
-      setStages((current) => current.filter((item, itemIndex) => itemIndex !== stageIndex));
-    } catch (e) { setError(e.message || 'Failed to remove stage'); }
+    setStages((current) => current.filter((item, itemIndex) => itemIndex !== stageIndex));
   };
 
   const handleSave = async () => {
     if (!form.name.trim()) { setError('Pipeline name is required'); return; }
     if (!editing && stages.length === 0) { setError('Add at least one stage before creating a pipeline.'); return; }
-    if (!editing && stages.some((stage) => !stage.name.trim())) { setError('Complete or remove every stage before creating the pipeline.'); return; }
+    if (stages.some((stage) => !stage.name.trim())) { setError('Stage name is required.'); return; }
     const stageNames = stages.map((stage) => stage.name.trim().toLowerCase());
     if (new Set(stageNames).size !== stageNames.length) { setError('A pipeline cannot contain the same stage more than once.'); return; }
-    if (!editing && stages.some((stage) => !stage.id && availableStages.some((existing) => existing.name.trim().toLowerCase() === stage.name.trim().toLowerCase()))) {
+    if (stages.some((stage) => !stage.id && availableStages.some((existing) => existing.name.trim().toLowerCase() === stage.name.trim().toLowerCase()))) {
       setError('This stage already exists. Select the existing stage instead of creating a duplicate.');
       return;
     }
@@ -145,6 +133,42 @@ const Pipelines = () => {
         // If user toggled default ON during edit, fire set-default separately
         if (form.isDefault && !editing.isDefault) {
           await fetchApi(`/api/pipelines/${editing.id}/set-default`, { method: 'POST' });
+        }
+
+        const originalById = new Map(originalStages.filter((stage) => stage.id).map((stage) => [stage.id, stage]));
+        const persistedStages = [];
+        for (const [position, stage] of stages.entries()) {
+          const name = stage.name.trim();
+          const original = originalById.get(stage.id);
+          let persisted = stage;
+          if (!stage.id) {
+            persisted = await fetchApi('/api/pipeline_stages', {
+              method: 'POST',
+              body: JSON.stringify({ pipelineId: editing.id, name, color: stage.color, position }),
+            });
+          } else if (!original) {
+            persisted = await fetchApi('/api/pipeline_stages', {
+              method: 'POST',
+              body: JSON.stringify({ pipelineId: editing.id, stageId: stage.id, position }),
+            });
+          } else if (original.name !== name || original.color !== stage.color) {
+            persisted = await fetchApi(`/api/pipeline_stages/${stage.id}`, {
+              method: 'PUT',
+              body: JSON.stringify({ name, color: stage.color, position }),
+            });
+          }
+          persistedStages.push({ ...persisted, id: persisted.id, position });
+        }
+
+        const retainedIds = new Set(stages.filter((stage) => stage.id).map((stage) => stage.id));
+        await Promise.all(originalStages
+          .filter((stage) => stage.id && !retainedIds.has(stage.id))
+          .map((stage) => fetchApi(`/api/pipeline_stages/${stage.id}?pipelineId=${editing.id}`, { method: 'DELETE' })));
+        if (persistedStages.length) {
+          await fetchApi('/api/pipeline_stages/reorder', {
+            method: 'PUT',
+            body: JSON.stringify({ pipelineId: editing.id, stages: persistedStages.map((stage, position) => ({ id: stage.id, position })) }),
+          });
         }
       } else {
         await fetchApi('/api/pipelines', {
@@ -358,7 +382,7 @@ const Pipelines = () => {
           <div
             onClick={(e) => e.stopPropagation()}
             className="card"
-            style={{ width: '90%', maxWidth: '480px', padding: '1.75rem' }}
+            style={{ width: '90%', maxWidth: '480px', maxHeight: '90vh', padding: '1.75rem', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
@@ -372,7 +396,7 @@ const Pipelines = () => {
               </button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minHeight: 0, overflowY: 'auto' }}>
               <div>
                 <label style={labelStyle}>Pipeline Name *</label>
                 <input
@@ -420,36 +444,38 @@ const Pipelines = () => {
                     <button type="button" onClick={addStage} style={iconBtn}><Plus size={13} /> Add Stage</button>
                   </div>
                 </div>
-                {editing && loadingStages ? (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Loading pipeline stages...</div>
-                ) : stages.map((stage, index) => {
-                  const isEditingStage = !editing || !stage.id || editingStageId === stage.id;
-                  return (
-                    <div key={stage.id || index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
-                      {isEditingStage ? (
-                        <input
-                          className="input-field"
-                          style={{ ...inputStyle, flex: 1 }}
-                          placeholder="Stage name"
-                          value={stage.name}
-                          autoFocus={editing && editingStageId === stage.id}
-                          onChange={(e) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: e.target.value } : item))}
-                          onBlur={(e) => stage.id && updateStage(stage, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') e.currentTarget.blur();
-                          }}
-                        />
-                      ) : (
-                        <span style={{ ...inputStyle, flex: 1, display: 'block', background: 'var(--surface-color)' }}>{stage.name}</span>
-                      )}
-                      {editing && stage.id && !isEditingStage && (
-                        <button type="button" onClick={() => setEditingStageId(stage.id)} style={iconBtn}>Edit</button>
-                      )}
-                      <button type="button" onClick={() => removeStage(stage, index)} style={{ ...iconBtn, color: '#ef4444' }} aria-label="Remove stage"><X size={13} /></button>
-                    </div>
-                  );
-                })}
-                {!loadingStages && stages.length === 0 && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add at least one stage.</div>}
+                <div style={{ maxHeight: 'min(35vh, 300px)', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                  {editing && loadingStages ? (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Loading pipeline stages...</div>
+                  ) : stages.map((stage, index) => {
+                    const isEditingStage = !editing || !stage.id || editingStageId === stage.id;
+                    return (
+                      <div key={stage.id || index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
+                        {isEditingStage ? (
+                          <input
+                            className="input-field"
+                            style={{ ...inputStyle, flex: 1 }}
+                            placeholder="Stage name"
+                            value={stage.name}
+                            autoFocus={editing && editingStageId === stage.id}
+                            onChange={(e) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: e.target.value } : item))}
+                            onBlur={(e) => stage.id && updateStage(stage, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') e.currentTarget.blur();
+                            }}
+                          />
+                        ) : (
+                          <span style={{ ...inputStyle, flex: 1, display: 'block', background: 'var(--surface-color)' }}>{stage.name}</span>
+                        )}
+                        {editing && stage.id && !isEditingStage && (
+                          <button type="button" onClick={() => setEditingStageId(stage.id)} style={iconBtn}>Edit</button>
+                        )}
+                        <button type="button" onClick={() => removeStage(stage, index)} style={{ ...iconBtn, color: '#ef4444' }} aria-label="Remove stage"><X size={13} /></button>
+                      </div>
+                    );
+                  })}
+                  {!loadingStages && stages.length === 0 && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add at least one stage.</div>}
+                </div>
               </div>
 
               {error && (
@@ -465,7 +491,9 @@ const Pipelines = () => {
                 </div>
               )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.625rem', marginTop: '0.5rem' }}>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.625rem', marginTop: '1rem', flexShrink: 0 }}>
                 <button
                   onClick={closeModal}
                   style={{
@@ -488,7 +516,6 @@ const Pipelines = () => {
                 >
                   {saving ? 'Saving...' : (editing ? 'Save Changes' : 'Create Pipeline')}
                 </button>
-              </div>
             </div>
           </div>
         </div>

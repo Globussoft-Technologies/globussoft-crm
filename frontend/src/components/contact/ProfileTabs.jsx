@@ -204,7 +204,7 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
 
 const DOT = { Email: '#3b82f6', Call: '#f59e0b', Meeting: '#8b5cf6', Note: '#10b981', Deal: '#eab308' };
 
-function ActivityTimeline({ contact, staff, richText = false }) {
+function ActivityTimeline({ contact, staff, richText = false, refreshKey = 0 }) {
   const [filter, setFilter] = useState('All');
   const [activities, setActivities] = useState([]);
   const [page, setPage] = useState(1);
@@ -232,7 +232,7 @@ function ActivityTimeline({ contact, staff, richText = false }) {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [contact.id, contact.activities?.[0]?.id, page]);
+  }, [contact.id, contact.activities?.[0]?.id, page, refreshKey]);
 
   const types = useMemo(() => ['All', ...new Set(activities.map((a) => a.type).filter(Boolean))], [activities]);
   const visible = filter === 'All' ? activities : activities.filter((a) => a.type === filter);
@@ -279,8 +279,8 @@ function ActivityTimeline({ contact, staff, richText = false }) {
   );
 }
 
-export function ActivitiesTab({ contact, onAddActivity, staff, richText = false }) {
-  return <ActivityTimeline contact={contact} staff={staff} onAddActivity={onAddActivity} richText={richText} />;
+export function ActivitiesTab({ contact, onAddActivity, staff, richText = false, refreshKey = 0 }) {
+  return <ActivityTimeline contact={contact} staff={staff} onAddActivity={onAddActivity} richText={richText} refreshKey={refreshKey} />;
 }
 
 export function AccountsTab({ contact, refresh, patchField, isTravel = false }) {

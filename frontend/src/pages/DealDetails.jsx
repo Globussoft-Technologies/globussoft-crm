@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, BriefcaseBusiness, FileText, Pencil, Settings2, NotebookPen, Search, Users, X } from 'lucide-react';
+import { ArrowLeft, BriefcaseBusiness, FileText, Pencil, Settings2, NotebookPen, Search, Users, X, Phone } from 'lucide-react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
@@ -14,6 +14,7 @@ import { RichText, sanitizeRichTextHtml, truncateRichTextHtml } from '../utils/r
 import RichTextNotePreview from '../components/contact/RichTextNotePreview';
 import '../components/contact/ContactProfile.css';
 import '../components/contact/ContactDetailsDrawer.css';
+import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
 
 const EMPTY = '—';
 const tabs = ['Overview', 'Deal details', 'Activities', 'Deal team', 'Contacts', 'Conversations', 'Products', 'Quotes', 'Files'];
@@ -315,7 +316,7 @@ function DealContactTable({ contact, returnTo }) {
   return <div className="deal-contacts-table-wrap"><table className="deal-contacts-table"><thead><tr><th>Name</th><th>Email</th><th>Last Contacted Time</th><th>Open Deals Amount</th><th>Won Deals Amount</th></tr></thead><tbody><tr><td><span className="deal-contact-person"><span className="deal-contact-avatar">{initials}</span><strong onClick={openContact} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openContact(); } }} role={contact.id != null ? 'link' : undefined} tabIndex={contact.id != null ? 0 : undefined}>{name}</strong></span></td><td>{contact.email || EMPTY}</td><td>{lastContacted ? formatDateTime(lastContacted) : EMPTY}</td><td>{formatMoney(total(openDeals), { currency: deals[0]?.currency || 'USD' })}</td><td>{formatMoney(total(wonDeals), { currency: deals[0]?.currency || 'USD' })}</td></tr></tbody></table></div>;
 }
 
-function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, products, onStageSelect, stageError, activityPageData, activityPage, activityLoading, onActivitiesOpen, onActivitiesPageChange, dealTagCatalog = [] }) {
+function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, products, onStageSelect, stageError, activityPageData, activityPage, activityLoading, onActivitiesOpen, onActivitiesPageChange, dealTagCatalog = [], onCall, isGeneric }) {
   const [tab, setTab] = useState('Deal details');
   const [query, setQuery] = useState('');
   const [showEmpty, setShowEmpty] = useState(false);
@@ -510,7 +511,7 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
     <header className="deal-reference-header">
       <div className="deal-avatar">{initials}</div>
       <div><h1>{deal.title || 'Untitled deal'}</h1><div className="deal-meta"><strong>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong><span>{deal.forecastCategory || deal.paymentStatus || EMPTY}</span></div></div>
-      <div className="deal-reference-actions"><button type="button" className="deal-link" onClick={() => navigate('/pipeline')}><ArrowLeft size={14} /> Back</button></div>
+       <div className="deal-reference-actions"><button type="button" className="deal-link" onClick={() => navigate('/pipeline')}><ArrowLeft size={14} /> Back</button><button type="button" className="deal-primary" onClick={onCall} title={`Call ${personName(deal.contact) || 'associated contact'} via AI`}><Phone size={14} /> Call</button></div>
       <div className="deal-tag-line">{tags.length ? tags.map((tag) => { const name = String(tag); const color = tagColorMap.get(tagKey(name)) || fallbackTagColor(name); return <span className="cd-tag-chip" key={name} style={{ background: color, borderColor: color, color: tagTextColor(color) }}><span>{name}</span>{deal.contact?.id && <button type="button" aria-label={`Remove tag ${name}`} onClick={(event) => { event.stopPropagation(); window.dispatchEvent(new CustomEvent('deal-tag-remove', { detail: { name } })); }}>×</button>}</span>; }) : <span>Click to add tags</span>}{deal.contact?.id && <button type="button" className="deal-link deal-add-tag-button" aria-label="Add tag" onClick={(event) => { event.stopPropagation(); window.dispatchEvent(new Event('deal-tag-open')); }}>+ Add tag</button>}</div>
     </header>
     <div className="deal-reference-cards">
@@ -527,6 +528,7 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
 export default function DealDetails() {
   const { dealId } = useParams(); const navigate = useNavigate(); const [deal, setDeal] = useState(null); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [contacts, setContacts] = useState([]); const [dealTagCatalog, setDealTagCatalog] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [tab, setTab] = useState('Deal details'); const [query, setQuery] = useState(''); const [showEmpty, setShowEmpty] = useState(false);
   const [stageError, setStageError] = useState('');
+  const [genericCallLead, setGenericCallLead] = useState(null);
   const { tenant } = useContext(AuthContext) || {};
   const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   const notify = useNotify();
@@ -542,8 +544,18 @@ export default function DealDetails() {
       ]);
       if (dealResult.status === 'rejected') throw dealResult.reason;
       const loadedDeal = dealResult.value;
+      const loadedPipelines = pipelinesResult.status === 'fulfilled' && Array.isArray(pipelinesResult.value)
+        ? pipelinesResult.value
+        : [];
+      const effectivePipelineId = loadedDeal?.pipelineId || (
+        isGeneric ? loadedPipelines.find((item) => item.isDefault)?.id : null
+      );
       const stagesResult = await Promise.allSettled([
-        fetchApi(isGeneric && loadedDeal?.pipelineId ? `/api/pipeline_stages?pipelineId=${encodeURIComponent(loadedDeal.pipelineId)}` : '/api/pipeline_stages', { silent: true }),
+        isGeneric
+          ? effectivePipelineId
+            ? fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(effectivePipelineId)}`, { silent: true })
+            : Promise.resolve([])
+          : fetchApi('/api/pipeline_stages', { silent: true }),
       ]).then(([result]) => result);
       setDeal(loadedDeal);
       if (stagesResult.status === 'fulfilled' && Array.isArray(stagesResult.value)) {
@@ -551,9 +563,9 @@ export default function DealDetails() {
         setStageError('');
       } else {
         setStages([]);
-        setStageError(isGeneric && loadedDeal?.pipelineId ? 'Unable to load stages for this pipeline.' : '');
+        setStageError(isGeneric && effectivePipelineId ? 'Unable to load stages for this pipeline.' : '');
       }
-      setPipelines(pipelinesResult.status === 'fulfilled' && Array.isArray(pipelinesResult.value) ? pipelinesResult.value : []);
+      setPipelines(loadedPipelines);
       const contactRows = contactsResult.status === 'fulfilled' ? contactsResult.value : [];
       setContacts(Array.isArray(contactRows) ? contactRows : (contactRows?.data || []));
     } catch (err) {
@@ -563,12 +575,16 @@ export default function DealDetails() {
     }
   }, [dealId, isGeneric]);
   useEffect(() => { load(); }, [load]);
-  const pipeline = useMemo(() => pipelines.find((p) => String(p.id) === String(deal?.pipelineId)), [pipelines, deal]);
+  const pipeline = useMemo(() => {
+    if (!deal) return null;
+    if (deal.pipelineId) return pipelines.find((p) => String(p.id) === String(deal.pipelineId)) || null;
+    return isGeneric ? pipelines.find((p) => p.isDefault) || null : null;
+  }, [pipelines, deal, isGeneric]);
   const stageRows = useMemo(() => {
     if (stages.length) return stages;
     // Generic CRM must display the selected pipeline's assignments only. Do
     // not replace a missing assignment list with the deal's current stage.
-    if (isGeneric && deal?.pipelineId) return [];
+    if (isGeneric) return [];
     return [{ name: deal?.stage || 'Current stage', color: 'var(--accent-color)' }];
   }, [stages, deal, isGeneric]);
   const latestNote = useMemo(() => { const note = (deal?.activities || []).find((a) => String(a.type || '').toLowerCase() === 'note') || (deal?.activities || [])[0]; return note ? { ...note, description: plainText(note.description) } : note; }, [deal]);
@@ -576,8 +592,11 @@ export default function DealDetails() {
   const products = (deal?.quotes || []).flatMap((quote) => quote.lineItems || []).map((item) => ({ name: item.productName || item.name || 'Product', quantity: item.quantity || 1, setupFee: item.setupFee, unitPrice: item.unitPrice, discount: item.discount, currency: item.currency || deal?.currency }));
   const applyUpdatedDeal = (updated) => {
     setDeal((current) => ({ ...current, ...updated, contact: updated?.contact || current.contact, owner: updated?.owner || current.owner, activities: updated?.activities || current.activities, quotes: updated?.quotes || current.quotes }));
-    if (isGeneric && updated?.pipelineId) {
-      fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(updated.pipelineId)}`, { silent: true })
+    const effectivePipelineId = updated?.pipelineId || (
+      isGeneric ? pipelines.find((item) => item.isDefault)?.id : null
+    );
+    if (isGeneric && effectivePipelineId) {
+      fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(effectivePipelineId)}`, { silent: true })
         .then((nextStages) => {
           if (!Array.isArray(nextStages)) throw new Error('Invalid pipeline stages response');
           setStages(nextStages);
@@ -587,6 +606,9 @@ export default function DealDetails() {
           setStages([]);
           setStageError('Unable to load stages for this pipeline.');
         });
+    } else if (isGeneric) {
+      setStages([]);
+      setStageError('');
     }
   };
   const updateStage = async (stageName) => {
@@ -603,10 +625,22 @@ export default function DealDetails() {
       notify.error(err?.body?.error || 'Unable to update lead stage.');
     }
   };
+  const openDealCall = () => {
+    const lead = deal?.contact;
+    if (!lead?.id) {
+      notify.error('This deal cannot be called because it has no associated CRM lead/contact.');
+      return;
+    }
+    if (!lead.phone) {
+      notify.error('Phone number is required to make a call.');
+      return;
+    }
+    setGenericCallLead(lead);
+  };
   if (loading) return <div className="deal-details-page"><div className="deal-loading"><div className="deal-skeleton" /><div className="deal-skeleton short" /><p>Loading deal details...</p></div></div>;
   if (error || !deal) return <div className="deal-details-page"><div className="deal-error"><h1>Deal not found</h1><p>{error || 'This deal is no longer available.'}</p><button type="button" className="deal-primary" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Back to Deals and Pipelines</button><button type="button" className="deal-link" onClick={load}>Try again</button></div></div>;
   const current = slug(deal.stage); const activeIndex = stageRows.findIndex((stage) => deal.stageId != null ? String(stage.id) === String(deal.stageId) : slug(stage.name) === current); const notes = deal.activities || [];
-  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} stageError={stageError} dealTagCatalog={dealTagCatalog} /><InlineDealEditor deal={deal} contacts={contacts} stages={stages} pipelines={pipelines} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} /><DealTagEditor deal={deal} onCatalogChange={setDealTagCatalog} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} /></>;
+  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} stageError={stageError} dealTagCatalog={dealTagCatalog} onCall={openDealCall} /><InlineDealEditor deal={deal} contacts={contacts} stages={stages} pipelines={pipelines} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} /><DealTagEditor deal={deal} onCatalogChange={setDealTagCatalog} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} />{isGeneric && genericCallLead && <CallifiedLeadCallDialog lead={genericCallLead} onClose={() => setGenericCallLead(null)} onCalled={() => notify.success('Call initiated successfully.')} />}</>;
   // return <div className="deal-details-page"><style>{styles}</style><div className="deal-breadcrumb"><button type="button" className="deal-link" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Deals and Pipelines</button><span>/</span><span>{deal.title || 'Untitled deal'}</span></div><header className="deal-header"><div><div className="deal-title-row"><BriefcaseBusiness size={22} color="var(--accent-color)" /><h1>{deal.title || 'Untitled deal'}</h1></div><div className="deal-meta"><strong>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong><span>{deal.forecastCategory || deal.paymentStatus || EMPTY}</span><span>{Array.isArray(deal.tags) && deal.tags.length ? deal.tags.join(', ') : 'Click to add tags'}</span></div></div><button type="button" className="deal-secondary" onClick={() => navigate('/pipeline')}><ArrowLeft size={14} /> Back</button></header><div className="deal-top-grid"><InfoCard title="Overview"><Pair label="Related account" value={deal.contact?.company} deal={deal} /><Pair label="Sales owner" value={personName(deal.owner)} deal={deal} /><Pair label="Expected close date" value={deal.expectedClose} type="date" deal={deal} /><Pair label="Deal value" value={deal.amount} type="currency" deal={deal} /><Pair label="Forecast category" value={deal.forecastCategory} deal={deal} /><Pair label="Pipeline" value={pipeline?.name} deal={deal} /></InfoCard><InfoCard title="Status and assignment"><Pair label="Related contact" value={personName(deal.contact)} deal={deal} /><Pair label="Deal type" value={deal.dealType} deal={deal} /><Pair label="Lost reason" value={deal.lostReason} deal={deal} /><Pair label="Closed date" value={deal.closedAt} type="date" deal={deal} /><Pair label="Payment status" value={deal.paymentStatus} deal={deal} /></InfoCard><div className="deal-side-cards"><InfoCard title="Contacts by sales owner"><div className="deal-related"><Users size={16} /><span>{personName(deal.owner) || 'Unassigned'} ({deal.contact ? 1 : 0})</span></div></InfoCard><InfoCard title={`Products (${products.length})`}>{products.length ? products.map((p, i) => <div className="deal-product" key={`${p.name}-${i}`}><span>{p.name}</span><strong>{p.quantity}</strong></div>) : <span className="deal-empty">No products linked</span>}</InfoCard><InfoCard title="Upcoming meeting"><span className="deal-empty">{deal.upcomingMeeting?.title || 'No upcoming meeting'}</span>{deal.upcomingMeeting && <small>{formatDateTime(deal.upcomingMeeting.startAt)}</small>}</InfoCard></div></div><InfoCard title="Notes"><textarea aria-label="Deal note" placeholder="Type your note here..." readOnly /><div className="deal-note"><NotebookPen size={16} /><div><strong>{latestNote?.description || 'No notes available'}</strong>{latestNote && <small>Posted by {personName(latestNote.user) || 'CRM user'}, {relative(latestNote.createdAt)}</small>}</div></div><button type="button" className="deal-link">View all notes</button></InfoCard><section className="deal-tracker"><div className="deal-section-heading"><strong>Pipeline progress</strong><span>{pipeline?.name || 'Pipeline'}</span></div><div className="deal-stages">{stageRows.map((stage, index) => <div className={`deal-stage ${index <= activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} key={stage.id || stage.name}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</div>)}</div><div className="deal-age">Created {relative(deal.createdAt)} · Expected close {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</div></section><nav className="deal-tabs" aria-label="Deal workspace tabs">{tabs.map((item) => <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>)}</nav>{tab === 'Overview' && <div className="deal-overview-grid"><InfoCard title="Deal summary"><Pair label="Stage" value={deal.stage} deal={deal} /><Pair label="Probability" value={deal.probability} type="percent" deal={deal} /><Pair label="Created" value={deal.createdAt} type="date" deal={deal} /></InfoCard><InfoCard title="Latest activity">{notes.length ? <div className="deal-activity-list">{notes.slice(0, 5).map((item) => <div key={`${item.type}-${item.id}`}><FileText size={15} /><span><strong>{item.type || 'Activity'}</strong>{item.description}<small>{formatDate(item.createdAt)}</small></span></div>)}</div> : <span className="deal-empty">No activities available</span>}</InfoCard></div>}{tab === 'Deal details' && <div className="deal-details-content"><div className="deal-details-toolbar"><div><h2>Deal details</h2><button type="button" className="deal-link"><Settings2 size={14} /> Manage fields</button></div><label><Search size={15} /><input aria-label="Search fields" placeholder="Search fields" value={query} onChange={(e) => setQuery(e.target.value)} /></label><label className="deal-switch"><input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} /> Show empty fields</label></div>{visibleSections.map((section) => <Section key={section.key} section={section} deal={deal} pipeline={pipeline} latestNote={latestNote} showEmpty={showEmpty} />)}</div>}{!['Overview', 'Deal details'].includes(tab) && <div className="deal-placeholder"><FileText size={25} /><h2>{tab}</h2><p>This workspace is ready for {tab.toLowerCase()} data when that module is enabled.</p></div>}</div>;
 }
 

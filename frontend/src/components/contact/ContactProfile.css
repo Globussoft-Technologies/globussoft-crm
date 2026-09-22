@@ -93,6 +93,14 @@
 .cp-meeting-overlay { position: fixed; inset: 0; z-index: 10000; background: rgba(15, 23, 42, 0.42); display: flex; justify-content: flex-end; }
 .cp-meeting-drawer { width: 60vw; max-width: 960px; min-width: 620px; height: 100vh; background: #fff; display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(15, 23, 42, 0.2); animation: cp-task-slide-in 0.25s ease-out; }
 .cp-meeting-body { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; }
+.cp-generic-mail-body { box-sizing: border-box; overflow: hidden !important; }
+.cp-generic-mail-recipients,
+.cp-generic-mail-subject { flex: 0 0 auto; }
+.cp-generic-mail-editor-shell { display: flex; flex: 1 1 0; min-height: 0; width: 100%; overflow: hidden; }
+.cp-generic-mail-editor { display: block; flex: 1 1 auto; min-height: 0; height: 100%; width: 100%; min-width: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: anywhere; word-break: break-word; }
+.cp-generic-mail-footer,
+.cp-generic-mail-toolbar,
+.cp-generic-mail-actions { background: var(--modal-bg, #fff); color: var(--text-primary); }
 .cp-meeting-columns { display: grid; grid-template-columns: minmax(0, 7fr) minmax(220px, 3fr); gap: 1.5rem; }
 .cp-meeting-columns .cp-task-side { border-left: 1px solid var(--border-color); padding-left: 1.5rem; }
 .cp-meeting-connect { display: flex; gap: 0.5rem; flex-wrap: wrap; }
@@ -102,6 +110,10 @@
 .cp-task-date-stack svg { position: absolute; right: 0.55rem; pointer-events: none; color: var(--text-secondary); }
 .cp-meeting-footer { display: flex; justify-content: space-between; gap: 1rem; padding: 0.85rem 1.5rem; border-top: 1px solid var(--border-color); background: #fff; }
 .cp-meeting-footer > div { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+[data-theme="dark"] .cp-generic-mail-actions {
+  background: var(--modal-bg, var(--surface-color)) !important;
+  color: var(--text-primary);
+}
 @media (max-width: 900px) { .cp-meeting-drawer { width: 82vw; min-width: 0; } .cp-meeting-columns { grid-template-columns: 1fr; } .cp-meeting-columns .cp-task-side { border-left: none; border-top: 1px solid var(--border-color); padding: 1.25rem 0 0; } }
 @media (max-width: 560px) { .cp-meeting-drawer { width: 100vw; } .cp-meeting-footer { flex-direction: column; } }
 .cp-row { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.45rem 0; border-top: 1px solid var(--subtle-bg); font-size: 0.82rem; }
@@ -384,6 +396,12 @@ a.cp-soc:hover { border-color: currentColor; }
 [data-theme="dark"] .cp-note-yellow {
   background: var(--warn-bg, rgba(245, 158, 11, 0.12));
   border-color: var(--warn-border, rgba(245, 158, 11, 0.35));
+}
+
+html[data-theme="dark"] body[data-vertical="generic"] .cp-note-related {
+  background: var(--subtle-bg) !important;
+  border-color: var(--border-color);
+  color: var(--text-secondary);
 }
 
 [data-theme="dark"] .cp-chev {

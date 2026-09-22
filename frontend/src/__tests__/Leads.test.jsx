@@ -1199,7 +1199,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
           !opts &&
           url.includes('filters='),
       );
@@ -1227,7 +1227,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
           !opts &&
           url.includes('filters='),
       );
@@ -2454,7 +2454,7 @@ describe('Leads Web Form column (generic CRM only)', () => {
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
           !opts &&
           url.includes('filters='),
       );

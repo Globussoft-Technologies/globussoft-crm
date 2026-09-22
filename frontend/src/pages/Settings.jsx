@@ -28,6 +28,8 @@ import {
   Stethoscope,
   Sliders,
   Bot,
+  Globe2,
+  Server,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -49,11 +51,12 @@ import ProductTourSettings from "../components/ProductTourSettings";
 // when no brand color is set all match. Mirrors --accent-color in
 // index.css.
 const DEFAULT_BRAND_COLOR = "#3b82f6";
+const DEFAULT_TRANSFER_PORT = { ftp: 21, ftps: 21, sftp: 22 };
 
 export default function Settings() {
   const notify = useNotify();
   const { theme, setTheme, toggleTheme } = useContext(ThemeContext);
-  const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
+  const { tenant: ctxTenant, setTenant, user: ctxUser } = useContext(AuthContext);
   const { isOwner, hasPermission } = usePermissions();
 
   // Branding refactor (2026-07-08): the Branding card follows whichever
@@ -140,6 +143,22 @@ export default function Settings() {
   const [tenant, setTenantState] = useState(ctxTenant || null);
   const [tenantSaving, setTenantSaving] = useState(false);
   const [externalReviewUrl, setExternalReviewUrl] = useState("");
+  const [promotionalWebsite, setPromotionalWebsite] = useState("");
+  const [promotionalSftp, setPromotionalSftp] = useState({
+    protocol: "sftp",
+    host: "",
+    port: 22,
+    username: "",
+    password: "",
+    privateKey: "",
+    passphrase: "",
+    hostKeyFingerprint: "",
+    remotePath: "/",
+  });
+  const [promotionalWebsiteLoading, setPromotionalWebsiteLoading] = useState(false);
+  const [promotionalWebsiteSaving, setPromotionalWebsiteSaving] = useState(false);
+  const [promotionalWebsiteTesting, setPromotionalWebsiteTesting] = useState(false);
+  const [promotionalWebsiteStatus, setPromotionalWebsiteStatus] = useState(null);
   // #611: email-message retention toggle. Industry-default ON for any CRM
   // that claims to track customer comms. Pre-fix the default was OFF, sent
   // emails vanished, Sent folder stayed empty, threading broke.
@@ -248,6 +267,28 @@ export default function Settings() {
       })
       .catch(() => setCallifiedLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (ctxTenant?.vertical !== "travel" || ctxUser?.role !== "ADMIN" || !hasPermission("settings", "manage")) return undefined;
+    setPromotionalWebsiteLoading(true);
+    fetchApi("/api/travel/promotional-website")
+      .then((res) => {
+        setPromotionalWebsite(res?.websiteUrl || "");
+        const protocol = res?.sftp?.protocol || "sftp";
+        setPromotionalSftp((current) => ({
+          ...current,
+          protocol,
+          host: res?.sftp?.host || "",
+          port: res?.sftp?.port || DEFAULT_TRANSFER_PORT[protocol] || 22,
+          username: res?.sftp?.username || "",
+          hostKeyFingerprint: res?.sftp?.hostKeyFingerprint || "",
+          remotePath: res?.sftp?.remotePath || "/",
+        }));
+        setPromotionalWebsiteStatus(res?.configured ? "configured" : null);
+      })
+      .catch(() => setPromotionalWebsiteStatus(null))
+      .finally(() => setPromotionalWebsiteLoading(false));
+  }, [ctxTenant?.vertical, ctxUser?.role, hasPermission]);
 
   // Multi-brand (BrandKit) list — travel vertical only (sub-brands are a
   // travel-only concept; generic/wellness tenants only ever have the
@@ -615,6 +656,82 @@ export default function Settings() {
       notify.error(err?.message || "Failed to update organization");
     }
     setTenantSaving(false);
+  };
+
+  const handleSavePromotionalWebsite = async (e) => {
+    e.preventDefault();
+    setPromotionalWebsiteSaving(true);
+    setPromotionalWebsiteStatus(null);
+    try {
+      const websiteUrl = promotionalWebsite.trim();
+      if (websiteUrl) {
+        const parsed = new URL(websiteUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("Promotional website must use http or https.");
+      }
+      const saved = await fetchApi("/api/travel/promotional-website", {
+        method: "PUT",
+        body: JSON.stringify({
+          websiteUrl,
+          sftp: {
+            protocol: promotionalSftp.protocol,
+            host: promotionalSftp.host,
+            port: Number(promotionalSftp.port) || DEFAULT_TRANSFER_PORT[promotionalSftp.protocol] || 22,
+            username: promotionalSftp.username,
+            ...(promotionalSftp.protocol === "sftp" ? { hostKeyFingerprint: promotionalSftp.hostKeyFingerprint } : {}),
+            remotePath: promotionalSftp.remotePath,
+            ...(promotionalSftp.password ? { password: promotionalSftp.password } : {}),
+            ...(promotionalSftp.privateKey ? { privateKey: promotionalSftp.privateKey } : {}),
+            ...(promotionalSftp.passphrase ? { passphrase: promotionalSftp.passphrase } : {}),
+          },
+        }),
+      });
+      setPromotionalWebsite(saved?.websiteUrl || "");
+      setPromotionalSftp((current) => ({
+        ...current,
+        protocol: saved?.sftp?.protocol || current.protocol,
+        host: saved?.sftp?.host || current.host,
+        port: saved?.sftp?.port || current.port,
+        username: saved?.sftp?.username || current.username,
+        remotePath: saved?.sftp?.remotePath || current.remotePath,
+        password: "",
+        privateKey: "",
+        passphrase: "",
+        hostKeyFingerprint: saved?.sftp?.hostKeyFingerprint || current.hostKeyFingerprint,
+      }));
+      setPromotionalWebsiteStatus(saved?.configured ? "configured" : null);
+      notify.success(websiteUrl ? "Promotional website hosting settings saved." : "Promotional website hosting disabled.");
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to save promotional website settings.");
+    } finally {
+      setPromotionalWebsiteSaving(false);
+    }
+  };
+
+  const handleTestPromotionalWebsite = async () => {
+    setPromotionalWebsiteTesting(true);
+    try {
+      await fetchApi("/api/travel/promotional-website/test", {
+        method: "POST",
+        body: JSON.stringify({
+          sftp: {
+            protocol: promotionalSftp.protocol,
+            host: promotionalSftp.host,
+            port: Number(promotionalSftp.port) || DEFAULT_TRANSFER_PORT[promotionalSftp.protocol] || 22,
+            username: promotionalSftp.username,
+            ...(promotionalSftp.protocol === "sftp" ? { hostKeyFingerprint: promotionalSftp.hostKeyFingerprint } : {}),
+            remotePath: promotionalSftp.remotePath,
+            ...(promotionalSftp.password ? { password: promotionalSftp.password } : {}),
+            ...(promotionalSftp.privateKey ? { privateKey: promotionalSftp.privateKey } : {}),
+            ...(promotionalSftp.passphrase ? { passphrase: promotionalSftp.passphrase } : {}),
+          },
+        }),
+      });
+      notify.success("Transfer connection successful.");
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Transfer connection failed.");
+    } finally {
+      setPromotionalWebsiteTesting(false);
+    }
   };
 
   // #611: toggle EmailMessage retention. Optimistic UI — we flip first, then
@@ -1190,6 +1307,139 @@ export default function Settings() {
               </p>
             )}
           </div>
+
+          {ctxTenant?.vertical === "travel" && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && (
+            <div
+              className="card"
+              data-testid="travel-promotional-website-card"
+              style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
+            >
+              <h3
+                style={{
+                  fontSize: "1.25rem",
+                  fontWeight: "600",
+                  marginBottom: "0.5rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                <Globe2 size={20} color="var(--accent-color)" /> Promotional Website Hosting
+              </h3>
+              <p style={{ color: "var(--text-secondary)", margin: "0 0 1.25rem", lineHeight: 1.5 }}>
+                Optionally host published travel landing pages on your own website. The public URL remains
+                <code style={{ marginLeft: "0.25rem" }}>/trips/&lt;landing-page-number&gt;</code>, while the
+                file is uploaded as <code style={{ marginLeft: "0.25rem" }}>&lt;landing-page-number&gt;/index.html</code>
+                inside the configured transfer directory.
+              </p>
+              {promotionalWebsiteLoading ? (
+                <p style={{ color: "var(--text-secondary)" }}>Loading promotional website settings…</p>
+              ) : (
+                <form onSubmit={handleSavePromotionalWebsite}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
+                      gap: "1rem",
+                    }}
+                  >
+                    <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                      <label className="form-label" htmlFor="promotional-website-url">Website URL</label>
+                      <input
+                        id="promotional-website-url"
+                        type="url"
+                        className="input-field"
+                        placeholder="https://client.example.com"
+                        value={promotionalWebsite}
+                        onChange={(e) => setPromotionalWebsite(e.target.value)}
+                      />
+                    </div>
+                    <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                      <p style={{ display: "flex", alignItems: "center", gap: "0.4rem", margin: 0, color: "var(--text-secondary)", fontSize: "0.875rem" }}>
+                        <Server size={16} /> File transfer connection
+                      </p>
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label" htmlFor="promotional-transfer-protocol">Transfer protocol</label>
+                      <select
+                        id="promotional-transfer-protocol"
+                        className="input-field"
+                        value={promotionalSftp.protocol}
+                        onChange={(e) => {
+                          const protocol = e.target.value;
+                          setPromotionalSftp((current) => ({
+                            ...current,
+                            protocol,
+                            port: DEFAULT_TRANSFER_PORT[protocol] || 22,
+                          }));
+                        }}
+                      >
+                        <option value="ftp">FTP</option>
+                        <option value="ftps">FTPS (secure FTP)</option>
+                        <option value="sftp">SFTP (SSH)</option>
+                      </select>
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label" htmlFor="promotional-sftp-host">Host</label>
+                      <input id="promotional-sftp-host" type="text" className="input-field" value={promotionalSftp.host} onChange={(e) => setPromotionalSftp((s) => ({ ...s, host: e.target.value }))} placeholder="ftp.client.example.com" />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label" htmlFor="promotional-sftp-port">Port</label>
+                      <input id="promotional-sftp-port" type="number" min="1" max="65535" className="input-field" value={promotionalSftp.port} onChange={(e) => setPromotionalSftp((s) => ({ ...s, port: e.target.value }))} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label" htmlFor="promotional-sftp-username">Username</label>
+                      <input id="promotional-sftp-username" type="text" className="input-field" value={promotionalSftp.username} onChange={(e) => setPromotionalSftp((s) => ({ ...s, username: e.target.value }))} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label" htmlFor="promotional-sftp-password">Password</label>
+                      <input id="promotional-sftp-password" type="password" className="input-field" value={promotionalSftp.password} onChange={(e) => setPromotionalSftp((s) => ({ ...s, password: e.target.value }))} placeholder="Leave blank to keep saved password" autoComplete="new-password" />
+                    </div>
+                    {promotionalSftp.protocol === "sftp" ? (
+                      <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                        <label className="form-label" htmlFor="promotional-sftp-remote-path">Existing website directory (already created)</label>
+                        <input id="promotional-sftp-remote-path" type="text" className="input-field" value={promotionalSftp.remotePath} onChange={(e) => setPromotionalSftp((s) => ({ ...s, remotePath: e.target.value }))} placeholder="/home/modernclassroom/public_html/main-forms" />
+                        <p style={{ margin: "0.4rem 0 0", fontSize: "0.75rem", color: "var(--text-secondary)" }}>Enter the existing directory supplied by your hosting provider. The parent is never created; only <code>&lt;trip-id&gt;/index.html</code> is created inside it.</p>
+                      </div>
+                    ) : (
+                      <p style={{ gridColumn: "1 / -1", margin: 0, fontSize: "0.75rem", color: "var(--text-secondary)" }}>This FTP/FTPS account already opens in its assigned website folder. No remote path is used: publishing only creates <code>&lt;trip-id&gt;</code> and uploads <code>index.html</code> inside it.</p>
+                    )}
+                    {promotionalSftp.protocol === "sftp" && (
+                      <>
+                        <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                          <label className="form-label" htmlFor="promotional-sftp-private-key">Private key (optional)</label>
+                          <textarea id="promotional-sftp-private-key" className="input-field" rows="4" value={promotionalSftp.privateKey} onChange={(e) => setPromotionalSftp((s) => ({ ...s, privateKey: e.target.value }))} placeholder="Leave blank to keep saved private key" autoComplete="off" />
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <label className="form-label" htmlFor="promotional-sftp-passphrase">Private key passphrase</label>
+                          <input id="promotional-sftp-passphrase" type="password" className="input-field" value={promotionalSftp.passphrase} onChange={(e) => setPromotionalSftp((s) => ({ ...s, passphrase: e.target.value }))} placeholder="Optional" autoComplete="new-password" />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                          <label className="form-label" htmlFor="promotional-sftp-host-fingerprint">SSH host key fingerprint</label>
+                          <input id="promotional-sftp-host-fingerprint" type="text" className="input-field" value={promotionalSftp.hostKeyFingerprint} onChange={(e) => setPromotionalSftp((s) => ({ ...s, hostKeyFingerprint: e.target.value }))} placeholder="SHA256:abcdefghijklmnopqrstuvwxyz1234567890ABCDE" />
+                          <p style={{ margin: "0.4rem 0 0", fontSize: "0.75rem", color: "var(--text-secondary)" }}>Required for SFTP. Copy the SHA256 fingerprint from your hosting provider; it prevents connecting to an impersonated server.</p>
+                        </div>
+                      </>
+                    )}
+                    {promotionalSftp.protocol === "ftp" && (
+                      <p style={{ gridColumn: "1 / -1", margin: 0, fontSize: "0.8rem", color: "var(--warning-color, #b45309)" }}>
+                        FTP sends credentials without TLS. Use FTPS or SFTP when your hosting provider supports it.
+                      </p>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginTop: "1.25rem" }}>
+                    <button type="submit" className="btn-primary" disabled={promotionalWebsiteSaving || promotionalWebsiteTesting}>
+                      {promotionalWebsiteSaving ? "Saving…" : "Save Hosting Settings"}
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={handleTestPromotionalWebsite} disabled={promotionalWebsiteSaving || promotionalWebsiteTesting}>
+                      {promotionalWebsiteTesting ? "Testing…" : "Test Transfer Connection"}
+                    </button>
+                    {promotionalWebsiteStatus === "configured" && <span style={{ color: "var(--success-color, #16a34a)", fontSize: "0.875rem" }}>Configured. New publishes will sync automatically.</span>}
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
 
           {/* Appearance Card */}
           <div
@@ -4426,4 +4676,3 @@ function NotificationPreferencesCard({ notify }) {
     </div>
   );
 }
-

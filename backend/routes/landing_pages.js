@@ -42,6 +42,11 @@ const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { buildTmcParentRegistrationUrl } = require("../lib/tmcRegistrationContext");
 const visaDocStore = require("../lib/visaDocStore");
 const { normalizeTripType, tripRequiresPassport } = require("../lib/travelDocumentPolicy");
+const { readConfig: readPromotionalWebsiteConfig } = require("./travel_promotional_website");
+const {
+  publishLandingPage: publishPromotionalLandingPage,
+  removeLandingPage: removePromotionalLandingPageFromSftp,
+} = require("../services/travelPromotionalWebsitePublisher");
 
 
 
@@ -96,6 +101,38 @@ function isGenericLandingSite(page) {
 
   );
 
+}
+
+async function syncPromotionalLandingPage(page, req) {
+  if (!isTravelLandingPage(page)) return null;
+  if (!Number.isInteger(Number(page.tenantId)) || Number(page.tenantId) <= 0) {
+    throw new Error("Travel landing page tenant is required for promotional website publishing");
+  }
+  const config = await readPromotionalWebsiteConfig(Number(page.tenantId));
+  if (!config.websiteUrl) return null;
+  if (!config.sftp) throw new Error("Promotional website transfer credentials are not configured");
+  return publishPromotionalLandingPage({
+    page,
+    sftp: config.sftp,
+    remotePath: config.sftp.remotePath,
+    websiteUrl: config.websiteUrl,
+    crmBaseUrl: req ? getFrontendUrlFromRequest(req) : undefined,
+    tmcParentRegistrationUrl: await getTmcParentRegistrationUrl(page, req),
+  });
+}
+
+async function removePromotionalLandingPage(page) {
+  if (!isTravelLandingPage(page)) return null;
+  if (!Number.isInteger(Number(page.tenantId)) || Number(page.tenantId) <= 0) {
+    throw new Error("Travel landing page tenant is required for promotional website removal");
+  }
+  const config = await readPromotionalWebsiteConfig(Number(page.tenantId));
+  if (!config.websiteUrl || !config.sftp) return null;
+  return removePromotionalLandingPageFromSftp({
+    pageId: page.id,
+    sftp: config.sftp,
+    remotePath: config.sftp.remotePath,
+  });
 }
 
 
@@ -1245,6 +1282,27 @@ router.get("/stats", verifyToken, async (req, res) => {
 // MUST be declared BEFORE router.get("/:id", ...) � Express literal vs.
 
 // parametric ordering rule per CLAUDE.md standing rules.
+
+// Lightweight status endpoint used by static promotional copies. The copied
+// page also checks this endpoint before revealing its content; unpublish
+// removes the remote copy as an additional safeguard.
+router.get("/public/status/:id", async (req, res) => {
+  const pageId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(pageId) || pageId <= 0) {
+    return res.status(400).json({ error: "Landing page id must be a positive integer", code: "INVALID_PAGE_ID" });
+  }
+  try {
+    const page = await prisma.landingPage.findFirst({
+      where: { id: pageId, status: "PUBLISHED" },
+      select: { id: true, status: true },
+    });
+    if (!page) return res.status(404).json({ error: "Landing page is not published", code: "PAGE_NOT_PUBLISHED" });
+    return res.json({ published: true, pageId: page.id });
+  } catch (err) {
+    console.error("[LandingPages] public/status error:", err.message);
+    return res.status(500).json({ error: "Failed to check landing page status", code: "STATUS_CHECK_FAILED" });
+  }
+});
 
 router.get("/public/featured", async (req, res) => {
 
@@ -3652,6 +3710,21 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     // touched metaTitle / metaDescription / templateType.
 
+    // A published travel page is also a static file on the configured
+    // promotional website. Sync after the CRM row is saved so edits become
+    // visible without a second publish click. The CRM save remains successful
+    // when a customer's SFTP server is temporarily unavailable; the warning
+    // is returned so the operator can retry by publishing again.
+    let promotionalWebsite = null;
+    if (existing.status === "PUBLISHED" && isTravelLandingPage(updated)) {
+      try {
+        promotionalWebsite = await syncPromotionalLandingPage(updated, req);
+      } catch (syncErr) {
+        console.error("[LandingPages] promotional website update failed:", syncErr.message);
+        promotionalWebsite = { ok: false, error: syncErr.message };
+      }
+    }
+
     const contentChanged = "content" in data && String(data.content) !== String(existing.content);
 
     const titleChanged = data.title !== undefined && data.title !== existing.title;
@@ -3664,7 +3737,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     }
 
-    res.json(updated);
+    res.json(promotionalWebsite ? { ...updated, promotionalWebsite } : updated);
 
   } catch (_err) { res.status(500).json({ error: "Failed to update page" }); }
 
@@ -3679,6 +3752,16 @@ router.delete("/:id", verifyToken, async (req, res) => {
     const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
+
+    try {
+      await removePromotionalLandingPage(existing);
+    } catch (syncErr) {
+      return res.status(502).json({
+        error: "The landing page could not be removed from the promotional website. CRM deletion was not completed.",
+        code: "PROMOTIONAL_WEBSITE_DELETE_FAILED",
+        details: syncErr.message,
+      });
+    }
 
     await prisma.landingPage.delete({ where: { id: existing.id } });
 
@@ -5135,6 +5218,20 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
 
 
     const now = new Date();
+    let promotionalWebsite = null;
+    try {
+      promotionalWebsite = await syncPromotionalLandingPage({
+        ...existing,
+        status: "PUBLISHED",
+        publishedAt: now,
+      }, req);
+    } catch (syncErr) {
+      return res.status(502).json({
+        error: "The landing page passed CRM validation but could not be published to the promotional website.",
+        code: "PROMOTIONAL_WEBSITE_PUBLISH_FAILED",
+        details: syncErr.message,
+      });
+    }
     const published = await prisma.landingPage.update({
       where: { id: existing.id },
       data: {
@@ -5145,7 +5242,7 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
 
     await snapshotSafe(prisma, published, VERSION_SOURCES.PUBLISH, req.user);
 
-    res.json(published);
+    res.json(promotionalWebsite ? { ...published, promotionalWebsite } : published);
 
   } catch (err) {
 
@@ -5166,6 +5263,20 @@ router.post("/:id/unpublish", verifyToken, async (req, res) => {
     const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
+
+    // The CRM draft remains the source of truth, but a draft must not remain
+    // visible on the customer's static website. Remove only this page's
+    // promotional copy before changing the CRM status. If the remote delete
+    // fails, keep the CRM page published so the two systems do not disagree.
+    try {
+      await removePromotionalLandingPage(existing);
+    } catch (syncErr) {
+      return res.status(502).json({
+        error: "The landing page could not be removed from the promotional website. CRM unpublish was not completed.",
+        code: "PROMOTIONAL_WEBSITE_UNPUBLISH_FAILED",
+        details: syncErr.message,
+      });
+    }
 
     // Unpublishing auto-clears the featured flag. Invariant: a featured
 
@@ -5307,8 +5418,14 @@ router.post("/:id/feature", verifyToken, async (req, res) => {
 
 
     const updated = await prisma.landingPage.findUnique({ where: { id: existing.id } });
-
-    res.json(updated);
+    let promotionalWebsite = null;
+    try {
+      promotionalWebsite = await syncPromotionalLandingPage(updated, req);
+    } catch (syncErr) {
+      console.error("[LandingPages] promotional featured page update failed:", syncErr.message);
+      promotionalWebsite = { ok: false, error: syncErr.message };
+    }
+    res.json(promotionalWebsite ? { ...updated, promotionalWebsite } : updated);
 
   } catch (err) {
 
@@ -5344,6 +5461,9 @@ router.post("/:id/unfeature", verifyToken, async (req, res) => {
 
     });
 
+    // Featuring is a CRM-only pointer. Promotional hosting has one file per
+    // landing-page id, so unfeaturing must never delete the hosting account's
+    // root index.html or any other trip file.
     res.json(updated);
 
   } catch (err) {

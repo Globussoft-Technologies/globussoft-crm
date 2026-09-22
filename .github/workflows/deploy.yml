@@ -477,6 +477,7 @@ jobs:
             tests/knowledge-base-api.spec.js \
             tests/landing-pages-api.spec.js \
             tests/landing-pages-travel-api.spec.js \
+            tests/travel-promotional-website-api.spec.js \
             tests/landing-pages-registration-form-api.spec.js \
             tests/landing-page-pending-registration-api.spec.js \
             tests/landing-pages-versions-api.spec.js \

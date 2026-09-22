@@ -189,6 +189,25 @@ const ALLOWED_ORIGINS = [
         .filter(Boolean)
     : []),
 ];
+// Public landing pages can be copied to a customer's domain over SFTP. Their
+// forms and availability gate call the CRM's public GET/POST endpoints from
+// that domain. These endpoints are already anonymous by design, so answer
+// their CORS preflights for the requesting origin without widening any
+// authenticated API surface.
+app.use((req, res, next) => {
+  const publicPageRuntimePath = /^\/api\/pages\/[^/]+\/(json|track|submit|registration-draft|registration-documents|payment-order|payment-status)\/?$/.test(req.path);
+  const publicLandingPath = req.path.startsWith("/p/")
+    || publicPageRuntimePath
+    || req.path.startsWith("/api/landing-pages/public/");
+  const origin = req.headers.origin;
+  if (!publicLandingPath || !origin) return next();
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
+  if (req.method === "OPTIONS") return res.status(204).end();
+  return next();
+});
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -734,6 +753,7 @@ const landingSitesRoutes = require("./routes/landing_sites");
 const { renderPage } = require("./services/landingPageRenderer");
 const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
+const { router: travelPromotionalWebsiteRoutes } = require("./routes/travel_promotional_website");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
 const userPreferencesRoutes = require("./routes/user_preferences");
 const tourProgressRoutes = require("./routes/tour_progress");
@@ -1321,6 +1341,7 @@ app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
 app.use("/api/landing-sites", landingSitesRoutes);
 app.use("/api/tenants", tenantsRoutes);
+app.use("/api/travel/promotional-website", travelPromotionalWebsiteRoutes);
 // /api/tenant-settings — operator-writable cap-override surface backing the
 // per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted
 // next to /api/tenants because the URL space + audience are sibling concerns.

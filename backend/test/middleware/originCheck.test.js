@@ -235,6 +235,31 @@ describe('originCheck — PUBLIC_PATH_PREFIXES unconditionally pass', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
+  test.each(['submit', 'registration-draft', 'registration-documents', 'payment-order'])(
+    'customer-hosted landing page %s passes from its external origin',
+    (action) => {
+      const { req, res, next } = makeReqRes({
+        method: 'POST',
+        path: `/api/pages/travel-offer/${action}`,
+        headers: { origin: 'https://customer.example.com' },
+      });
+      originCheck(req, res, next);
+      expect(next).toHaveBeenCalledOnce();
+      expect(res.status).not.toHaveBeenCalled();
+    },
+  );
+
+  test('authenticated page-management routes are not exempted by the public landing matcher', () => {
+    const { req, res, next } = makeReqRes({
+      method: 'POST',
+      path: '/api/pages/catalog',
+      headers: { origin: 'https://customer.example.com' },
+    });
+    originCheck(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
   test('non-public path is NOT covered by the prefix matcher', () => {
     // Sanity: ensure the prefix check is path-prefix-based, not just
     // "contains the string".

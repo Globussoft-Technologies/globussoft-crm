@@ -1263,7 +1263,12 @@ describe('DiagnosticDetail  human recommendation', () => {
 
     const field = await screen.findByTestId('human-pick-input');
     fireEvent.change(field, { target: { value: 'Kerala Backwaters Ecology Expedition' } });
-    fireEvent.click(screen.getByRole('button', { name: /Save human pick/i }));
+    const saveButton = screen.getByRole('button', { name: /Save human pick/i });
+    await waitFor(() => {
+      expect(field).toHaveValue('Kerala Backwaters Ecology Expedition');
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(patchBody).toEqual({ humanPick: 'Kerala Backwaters Ecology Expedition' });

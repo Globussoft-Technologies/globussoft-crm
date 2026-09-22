@@ -713,19 +713,36 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
   });
 
-  test('accepts valid shorter international numbers from the Generic country selector', async () => {
+  test('accepts a valid 9-digit national number from the Generic country selector', async () => {
     mockGenericPhoneForm();
 
     const response = await request(makeApp())
       .post('/api/forms/public/contact-us/submit?scope=generic')
       .field('name', 'Singapore Customer')
       .field('phoneCountry', '+65')
-      .field('phone', '61234567');
+      .field('phone', '612345678');
 
     expect(response.status).toBe(201);
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ phone: '+6561234567' }),
+      data: expect.objectContaining({ phone: '+65612345678' }),
     }));
+  });
+
+  test('rejects Generic country-selector phone numbers outside 9–11 digits', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid Phone Length')
+      .field('phoneCountry', '+91')
+      .field('phone', '987654321234');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { phone: expect.any(String) },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
   });
 
   test('rejects a Generic phone whose E.164 prefix does not match phoneCountry', async () => {

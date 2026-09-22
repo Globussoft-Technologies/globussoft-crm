@@ -88,4 +88,15 @@ describe('public web form embed footer', () => {
     expect(html).toContain('.primary{background:var(--gbs-button');
     expect(html).not.toContain('.primary{background:linear-gradient(135deg,#4f46e5,#7c3aed)');
   });
+
+  test('enforces 9 to 11 digits for Generic CRM phone fields', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '11')");
+    expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
+    expect(html).toContain('slice(0, 11)');
+    expect(html).toContain('phoneInput.length < 9 || phoneInput.length > 11');
+    expect(html).toContain('Phone number must contain 9 to 11 digits.');
+    expect(html).not.toContain("genericPhoneInput.setAttribute('pattern'");
+  });
 });

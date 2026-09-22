@@ -352,6 +352,16 @@
             countrySelect.style.display = 'none';
             countrySelect.parentNode.insertBefore(picker, countrySelect);
           }
+
+          var genericPhoneInput = root.querySelector('input[type="tel"][name]');
+          if (genericPhoneInput) {
+            genericPhoneInput.setAttribute('maxlength', '11');
+            genericPhoneInput.setAttribute('inputmode', 'numeric');
+            genericPhoneInput.addEventListener('input', function() {
+              var digits = String(genericPhoneInput.value || '').replace(/\D/g, '').slice(0, 11);
+              if (genericPhoneInput.value !== digits) genericPhoneInput.value = digits;
+            });
+          }
         }
 
         scheduleSize();
@@ -405,11 +415,14 @@
         var fd = new FormData(event.target);
 
           if (scope === 'generic' && fd.get('phone')) {
-            var phoneInput = String(fd.get('phone')).trim();
-            var countryCode = String(fd.get('phoneCountry') || '+91');
-            if (phoneInput.charAt(0) !== '+') {
-              fd.set('phone', countryCode + phoneInput.replace(/[^0-9]/g, ''));
+            var phoneInput = String(fd.get('phone')).replace(/\D/g, '');
+            if (phoneInput.length < 9 || phoneInput.length > 11) {
+              showBusy(false);
+              showFieldErrors({ phone: 'Phone number must contain 9 to 11 digits.' });
+              return;
             }
+            var countryCode = String(fd.get('phoneCountry') || '+91');
+            fd.set('phone', countryCode + phoneInput);
           }
 
         try {

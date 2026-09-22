@@ -96,6 +96,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 // Load the OCR client BEFORE the router so the route's CJS require()
 // resolves to our spy-able instance.
 const passportOcrClient = requireCJS('../../services/passportOcrClient');
+const passportFileStore = requireCJS('../../lib/passportFileStore');
 const s3Service = requireCJS('../../services/s3Service');
 const passportRouter = requireCJS('../../routes/travel_passport');
 
@@ -158,7 +159,17 @@ beforeEach(() => {
     provider: 'stub-mode-v1',
     extractedAt: '2026-06-09T10:00:00.000Z',
   });
-  // Stub S3 so "Clear" deletion never touches the live bucket.
+  // Stub passport scan storage so upload tests never touch the configured
+  // S3 bucket. The route uses the shared store abstraction, which may select
+  // S3 from local environment variables even when the test only needs a
+  // deterministic disk-style descriptor.
+  vi.spyOn(passportFileStore, 'storeScan').mockResolvedValue({
+    storage: 'disk',
+    url: '/api/uploads/passport-ocr/test-passport.jpg',
+    key: 'test-passport.jpg',
+    imageFilename: 'test-passport.jpg',
+  });
+  // Stub deletion so "Clear" never touches the live bucket.
   vi.spyOn(s3Service, 'deleteFile').mockResolvedValue(undefined);
 });
 

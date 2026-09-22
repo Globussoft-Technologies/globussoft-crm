@@ -6870,6 +6870,12 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 @media (prefers-reduced-motion: reduce) {
   .brochure-loading-spinner, .brochure-generating::after { animation: none; }
 }
+
+/* Floating menus sit above page content and must not inherit the translucent
+   glass surface used by cards. This keeps menu rows readable in both themes. */
+[role="menu"] {
+  background: var(--popover-bg, var(--surface-color)) !important;
+}
 /* Generic deal details: the page-local reference styles historically used
    light gray surfaces, which remained visible as a washed-out gray field in
    dark mode. Keep the page, tracker, and link treatments in the dark palette. */
@@ -6889,4 +6895,10 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 
 [data-theme="dark"] .deal-reference-tracker .deal-stage.done {
   background: #30466b !important;
+}
+
+/* Dialog panels are floating surfaces too. Keep them fully opaque even when
+   a page supplies a translucent --surface-color inline. */
+[role="dialog"] {
+  background: var(--modal-bg, var(--surface-color)) !important;
 }

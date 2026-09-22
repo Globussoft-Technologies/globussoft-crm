@@ -1427,6 +1427,45 @@ router.get("/", async (req, res) => {
       }
       where.source = { startsWith: prefix };
     }
+    // Generic CRM Leads pagination sends these fixed-filter values so the
+    // total/page metadata is calculated from the filtered dataset rather than
+    // from a larger unfiltered page. Keep this separate from the existing
+    // cross-vertical `source` prefix contract.
+    if ((req.user.vertical || "generic") === "generic") {
+      if (req.query.leadSource !== undefined) {
+        const leadSource = String(req.query.leadSource);
+        if (leadSource.length < 1 || leadSource.length > 128) {
+          return res.status(400).json({
+            error: "leadSource must be a non-empty string ≤128 chars",
+            code: "INVALID_LEAD_SOURCE",
+            field: "leadSource",
+          });
+        }
+        where.source = leadSource;
+      }
+      if (req.query.callifiedCampaignId !== undefined) {
+        const campaignId = Number(req.query.callifiedCampaignId);
+        if (!Number.isInteger(campaignId) || campaignId < 1) {
+          return res.status(400).json({
+            error: "callifiedCampaignId must be a positive integer",
+            code: "INVALID_CALLIFIED_CAMPAIGN_ID",
+            field: "callifiedCampaignId",
+          });
+        }
+        where.callifiedCampaignId = campaignId;
+      }
+      if (req.query.callifiedLeadStatus !== undefined) {
+        const callifiedLeadStatus = String(req.query.callifiedLeadStatus);
+        if (callifiedLeadStatus.length < 1 || callifiedLeadStatus.length > 64) {
+          return res.status(400).json({
+            error: "callifiedLeadStatus must be a non-empty string ≤64 chars",
+            code: "INVALID_CALLIFIED_LEAD_STATUS",
+            field: "callifiedLeadStatus",
+          });
+        }
+        where.callifiedLeadStatus = callifiedLeadStatus;
+      }
+    }
     // Freshsales-style "Filter by" panel — ?filters=<JSON array>, each entry
     // {field, operator, values}. `field` is either a FILTERABLE_FIELDS key
     // (never trust a raw column name from the client into a Prisma
@@ -2727,15 +2766,65 @@ router.get("/:id/activities", async (req, res) => {
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const where = { contactId: id, tenantId: req.user.tenantId };
-    const [data, total] = await Promise.all([
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    const isGeneric = tenant?.vertical === "generic";
+    const offset = (page - 1) * limit;
+    const mergeWindow = offset + limit;
+    const callLogWhere = {
+      contactId: id,
+      tenantId: req.user.tenantId,
+      provider: "callified",
+    };
+    const [activityRows, activityTotal, callLogs, callLogTotal] = await Promise.all([
       prisma.activity.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: limit,
-        skip: (page - 1) * limit,
+        take: isGeneric ? mergeWindow : limit,
+        skip: isGeneric ? 0 : offset,
       }),
       prisma.activity.count({ where }),
+      isGeneric
+        ? prisma.callLog.findMany({
+            where: callLogWhere,
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: mergeWindow,
+          })
+        : Promise.resolve([]),
+      isGeneric ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
     ]);
+    let merged = activityRows;
+    if (isGeneric) {
+      const seenCallLogIds = new Set();
+      const callActivities = callLogs.reduce((rows, callLog) => {
+        if (seenCallLogIds.has(callLog.id)) return rows;
+        seenCallLogIds.add(callLog.id);
+        const status = String(callLog.status || "INITIATED").toUpperCase();
+        rows.push({
+          id: `callified-${callLog.id}`,
+          type: "Call",
+          description: `Callified call ${status.toLowerCase()}`,
+          createdAt: callLog.createdAt,
+          contactId: callLog.contactId,
+          userId: callLog.userId,
+          provider: "callified",
+          status,
+          callLogId: callLog.id,
+        });
+        return rows;
+      }, []);
+      merged = [...activityRows, ...callActivities].sort((a, b) => {
+        const createdDifference = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (createdDifference !== 0) return createdDifference;
+        return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
+      });
+    }
+    const total = isGeneric ? activityTotal + callLogTotal : activityTotal;
+    const data = isGeneric
+      ? merged.slice(offset, offset + limit)
+      : merged;
     res.json({
       data,
       total,

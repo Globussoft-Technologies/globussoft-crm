@@ -23,6 +23,7 @@ import {
 } from '../components/contact/ProfileTabs';
 import ContactDetailsDrawer, { GENERIC_TAG_COLORS, dedupeTags, fallbackTagColor, normalizeTagRecords, tagKey, tagTextColor } from '../components/contact/ContactDetailsDrawer';
 import CallifiedCallDialog from '../components/CallifiedCallDialog';
+import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
 import Contacts from './Contacts';
 import '../components/contact/ContactProfile.css';
 import RichTextNotePreview from '../components/contact/RichTextNotePreview';
@@ -260,6 +261,8 @@ export default function ContactDetail() {
   const [tagCreating, setTagCreating] = useState(false);
   const [tagColorSaving, setTagColorSaving] = useState('');
   const [modal, setModal] = useState(null);
+  const [genericCallLead, setGenericCallLead] = useState(null);
+  const [activitiesRefreshKey, setActivitiesRefreshKey] = useState(0);
   const [wellnessCallTarget, setWellnessCallTarget] = useState(null);
   const [activityPreset, setActivityPreset] = useState('Note');
   const [dealModal, setDealModal] = useState({ open: false, deal: null });
@@ -334,6 +337,7 @@ export default function ContactDetail() {
 
   const overviewContactId = contact?.id;
   const overviewActivityRefreshId = contact?.activities?.[0]?.id;
+  const overviewNoteActivities = overviewActivities.filter((activity) => activity.type === 'Note');
 
   useEffect(() => {
     if (!overviewContactId) return undefined;
@@ -630,6 +634,14 @@ export default function ContactDetail() {
       notify.error('Add an email address before composing.');
       return;
     }
+    if (kind === 'call' && isGeneric && !contact.phone) {
+      notify.error('Phone number is required to make a call.');
+      return;
+    }
+    if (kind === 'call' && isGeneric) {
+      setGenericCallLead(contact);
+      return;
+    }
     if ((kind === 'call' || kind === 'sms' || kind === 'whatsapp') && !contact.phone) {
       notify.error('Add a phone number first.');
       return;
@@ -667,6 +679,14 @@ export default function ContactDetail() {
   };
 
   const openContactCall = () => {
+    if (isGeneric) {
+      if (!contact?.phone) {
+        notify.error('Phone number is required to make a call.');
+        return;
+      }
+      setGenericCallLead(contact);
+      return;
+    }
     if (!isWellness) {
       openAction('call');
       return;
@@ -1184,7 +1204,7 @@ export default function ContactDetail() {
 
       <div className="cp-actions-bar">
         {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
-        {!isTravel && contact.phone && <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>}
+        {!isTravel && (isGeneric || contact.phone) && <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>}
         <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
         <button type="button" className="cp-action-btn" onClick={() => (isWellness ? navigate('/tasks') : openAction('task'))}><CheckSquare size={13} /> Task</button>
         <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
@@ -1580,7 +1600,7 @@ export default function ContactDetail() {
                     <div className="cp-timeline">
                       {overviewActivitiesLoading ? (
                         <div className="cp-empty">Loading activity...</div>
-                      ) : overviewActivities.map((a) => (
+                      ) : overviewNoteActivities.map((a) => (
                         <div key={a.id} className="cp-timeline-entry">
                           <div className="cp-timeline-title" style={!isWellness && !isTravel ? { whiteSpace: 'pre-wrap' } : undefined}>
                             {a.type}{a.description ? ' / ' : ''}
@@ -1589,11 +1609,11 @@ export default function ContactDetail() {
                           <div className="cp-timeline-meta"><Pencil size={11} /> {authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}</div>
                         </div>
                       ))}
-                      {!overviewActivitiesLoading && overviewActivities.length === 0 && (
+                      {!overviewActivitiesLoading && overviewNoteActivities.length === 0 && (
                         <div className="cp-empty">No activity yet.</div>
                       )}
                     </div>
-                    {overviewActivityTotal > 0 && (
+                    {overviewNoteActivities.length > 0 && overviewActivityTotal > 0 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.65rem' }}>
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem' }}>
                           Showing {((overviewActivityPage - 1) * 5) + 1} - {Math.min(overviewActivityPage * 5, overviewActivityTotal)} of {overviewActivityTotal}
@@ -1612,7 +1632,7 @@ export default function ContactDetail() {
 
           {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
           {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel || isWellness} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
-          {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} />}
+          {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} refreshKey={activitiesRefreshKey} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}
           {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}
           {activeTab === 'ai-insights' && <InsightsTab contactId={id} />}
@@ -1621,7 +1641,18 @@ export default function ContactDetail() {
       </div>
 
       {modal === 'email' && <EmailModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
-      {modal === 'call' && <CallModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
+      {modal === 'call' && !isGeneric && <CallModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
+      {isGeneric && genericCallLead && (
+        <CallifiedLeadCallDialog
+          lead={genericCallLead}
+          onClose={() => setGenericCallLead(null)}
+          onCalled={() => {
+            notify.success('Call initiated successfully.');
+            setActivitiesRefreshKey((current) => current + 1);
+            refresh();
+          }}
+        />
+      )}
       {wellnessCallTarget && (
         <CallifiedCallDialog
           customer={{ name: contact.name, phone: contact.phone, subtitle: wellnessCallTarget.serviceName || null }}

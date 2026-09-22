@@ -203,10 +203,10 @@ describe('GET / — list pipelines', () => {
     expect(res.body[0]).toEqual(expect.objectContaining({ id: 11, name: 'Default Sales', dealCount: 5 }));
     expect(res.body[1]).toEqual(expect.objectContaining({ id: 12, name: 'Renewals', dealCount: 2 }));
 
-    // Tenant-scoped + ordered with isDefault=true rows first
+    // Generic CRM keeps a stable creation order even when the default changes.
     expect(prisma.pipeline.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     // Deal-count aggregation is also tenant-scoped + pipeline-id restricted
     expect(prisma.deal.groupBy).toHaveBeenCalledWith({
@@ -248,7 +248,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(res.status).toBe(200);
     expect(prisma.pipeline.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       select: { id: true, name: true, isDefault: true },
     });
   });
@@ -268,7 +268,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(call.select).toBeUndefined();
     expect(call).toEqual({
       where: { tenantId: 1 },
-      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
   });
 
@@ -327,7 +327,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(prisma.pipeline.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { tenantId: 42 },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true, name: true, isDefault: true },
       }),
     );
@@ -335,6 +335,21 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(prisma.deal.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ tenantId: 42 }) }),
     );
+  });
+
+  test('preserves default-first ordering outside Generic CRM', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([]);
+    prisma.deal.groupBy.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/pipelines')
+      .set('Authorization', makeBearer({ vertical: 'wellness' }))
+      .expect(200);
+
+    expect(prisma.pipeline.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
   });
 });
 

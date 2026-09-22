@@ -38,7 +38,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -355,6 +355,61 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
       ([u, o]) => u === '/api/pipelines/12/set-default' && o?.method === 'POST',
     );
     expect(setDefaultCall).toBeUndefined();
+  });
+
+  it('defers stage edits and removals until Save Changes', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/pipeline_stages?pipelineId=12') {
+        return Promise.resolve([
+          { id: 21, name: 'Discovery', color: '#3b82f6', position: 0 },
+          { id: 22, name: 'Qualified', color: '#10b981', position: 1 },
+        ]);
+      }
+      if (url === '/api/pipeline_stages?reusable=true') {
+        return Promise.resolve([
+          { id: 21, name: 'Discovery', color: '#3b82f6' },
+          { id: 22, name: 'Qualified', color: '#10b981' },
+        ]);
+      }
+      if (url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT') {
+        return Promise.resolve([]);
+      }
+      if (/^\/api\/pipeline_stages\/\d+/.test(url) && ['PUT', 'DELETE'].includes(opts?.method)) {
+        return Promise.resolve({ id: 21, name: 'Discovery Updated', color: '#3b82f6' });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
+    const modal = screen.getByRole('heading', { name: /^Edit Pipeline$/i }).closest('.card');
+    expect(modal).toBeTruthy();
+    await within(modal).findByText('Discovery');
+
+    fireEvent.click(within(modal).getAllByRole('button', { name: /^Edit$/i })[0]);
+    const stageInput = within(modal).getByDisplayValue('Discovery');
+    fireEvent.change(stageInput, { target: { value: 'Discovery Updated' } });
+    fireEvent.blur(stageInput);
+    fireEvent.click(within(modal).getAllByRole('button', { name: /Remove stage/i })[1]);
+
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      url === '/api/pipeline_stages/21' && opts?.method === 'PUT',
+    )).toBe(false);
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      url === '/api/pipeline_stages/22?pipelineId=12' && opts?.method === 'DELETE',
+    )).toBe(false);
+
+    fireEvent.click(within(modal).getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      url === '/api/pipeline_stages/21' && opts?.method === 'PUT',
+    )).toBe(true));
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      url === '/api/pipeline_stages/22?pipelineId=12' && opts?.method === 'DELETE',
+    )).toBe(true);
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT',
+    )).toBe(true);
   });
 
   it('Edit + toggling isDefault ON fires PUT then POST /api/pipelines/<id>/set-default', async () => {

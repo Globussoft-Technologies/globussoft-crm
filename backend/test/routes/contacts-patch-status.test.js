@@ -123,6 +123,9 @@ prisma.activity = prisma.activity || {};
 prisma.activity.create = vi.fn();
 prisma.activity.findMany = vi.fn();
 prisma.activity.count = vi.fn();
+prisma.callLog = prisma.callLog || {};
+prisma.callLog.findMany = vi.fn();
+prisma.callLog.count = vi.fn();
 prisma.$transaction = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
@@ -176,6 +179,8 @@ beforeEach(() => {
   prisma.activity.create.mockReset().mockResolvedValue({});
   prisma.activity.findMany.mockReset().mockResolvedValue([]);
   prisma.activity.count.mockReset().mockResolvedValue(0);
+  prisma.callLog.findMany.mockReset().mockResolvedValue([]);
+  prisma.callLog.count.mockReset().mockResolvedValue(0);
   prisma.$transaction.mockReset().mockImplementation(async (callback) => callback(prisma));
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'wellness' });
@@ -326,6 +331,71 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     });
     expect(prisma.activity.count).toHaveBeenCalledWith({
       where: { contactId: CONTACT_ID, tenantId: TENANT_ID },
+    });
+  });
+
+  test('merges Generic CRM Callified CallLogs as Call activities', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'generic' });
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findMany.mockResolvedValueOnce([
+      { id: 12, type: 'Note', createdAt: '2026-09-22T10:00:00.000Z' },
+    ]);
+    prisma.callLog.findMany.mockResolvedValueOnce([
+      {
+        id: 77,
+        contactId: CONTACT_ID,
+        userId: USER_ID,
+        provider: 'callified',
+        status: 'INITIATED',
+        createdAt: '2026-09-22T11:00:00.000Z',
+      },
+    ]);
+    prisma.activity.count.mockResolvedValueOnce(1);
+    prisma.callLog.count.mockResolvedValueOnce(1);
+
+    const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=1&limit=10`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.data[0]).toMatchObject({
+      id: 'callified-77',
+      type: 'Call',
+      description: 'Callified call initiated',
+      contactId: CONTACT_ID,
+      userId: USER_ID,
+      provider: 'callified',
+      status: 'INITIATED',
+      callLogId: 77,
+    });
+    expect(prisma.callLog.findMany).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID, provider: 'callified' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 10,
+    });
+  });
+
+  test('bounds Generic activity sources to the requested merge window', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'generic' });
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findMany.mockResolvedValueOnce([]);
+    prisma.activity.count.mockResolvedValueOnce(250);
+    prisma.callLog.findMany.mockResolvedValueOnce([]);
+    prisma.callLog.count.mockResolvedValueOnce(150);
+
+    const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=3&limit=10`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 400, page: 3, limit: 10, totalPages: 40 });
+    expect(prisma.activity.findMany).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 30,
+      skip: 0,
+    });
+    expect(prisma.callLog.findMany).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID, provider: 'callified' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 30,
     });
   });
 });

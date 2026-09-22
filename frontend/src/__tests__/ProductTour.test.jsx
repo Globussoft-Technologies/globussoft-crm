@@ -18,6 +18,11 @@ const permissionState = {
   hasPermission: () => true,
 };
 
+const activeTourSubscription = {
+  subscriptionStatus: "ACTIVE",
+  daysRemaining: 30,
+};
+
 vi.mock("../hooks/usePermissions", () => ({
   usePermissions: () => permissionState,
 }));
@@ -48,6 +53,7 @@ function renderProvider({ vertical = "generic", role = "USER" } = {}) {
         user: { userId: 9, email: "agent@example.test", role },
         tenant: { id: 14, vertical },
         token: "test-token",
+        subscription: activeTourSubscription,
       }}
     >
       <MemoryRouter initialEntries={["/contacts"]}>
@@ -135,7 +141,7 @@ describe("generic product tours", () => {
 
   it("generates workflow-specific anchors for secondary pages", async () => {
     render(
-      <AuthContext.Provider value={{ user: { userId: 9, role: "USER" }, tenant: { id: 14, vertical: "generic" } }}>
+      <AuthContext.Provider value={{ user: { userId: 9, role: "USER" }, tenant: { id: 14, vertical: "generic" }, subscription: activeTourSubscription }}>
         <MemoryRouter initialEntries={["/gmail"]}>
           <ProductTourProvider><GmailHarness /></ProductTourProvider>
         </MemoryRouter>
@@ -149,7 +155,7 @@ describe("generic product tours", () => {
 
   it("generates stable semantic anchors for legacy pages", async () => {
     render(
-      <AuthContext.Provider value={{ user: { userId: 9, role: "USER" }, tenant: { id: 14, vertical: "generic" } }}>
+      <AuthContext.Provider value={{ user: { userId: 9, role: "USER" }, tenant: { id: 14, vertical: "generic" }, subscription: activeTourSubscription }}>
         <MemoryRouter initialEntries={["/tasks"]}>
           <ProductTourProvider><TaskHarness /></ProductTourProvider>
         </MemoryRouter>

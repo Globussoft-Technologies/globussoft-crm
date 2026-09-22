@@ -610,6 +610,29 @@ describe('GET /api/forms/public/:slug', () => {
 
     expect(res.body.embedCode).toContain('/embed/web-form.html?id=1');
 
+    // Existing forms that predate the setting remain branded by default.
+    expect(res.body.settings.showPoweredBy).toBe(true);
+
+  });
+
+  test('preserves an explicit powered-by opt-out in the public payload', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 2,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Unbranded form',
+      slug: 'unbranded-form',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ showPoweredBy: false }),
+    });
+
+    const res = await request(makeApp()).get('/api/forms/public/unbranded-form');
+
+    expect(res.status).toBe(200);
+    expect(res.body.settings.showPoweredBy).toBe(false);
   });
 
   test('resolves the active form by stable numeric id', async () => {

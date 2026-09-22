@@ -388,9 +388,6 @@ router.post("/check-email", async (req, res) => {
 router.post("/check-organization-name", registerLimiter, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-    const registrationVertical = ["generic", "wellness", "travel"].includes(req.body?.registrationVertical)
-      ? req.body.registrationVertical
-      : "generic";
     const exists = name.length > 0 && await organizationNameTaken(name);
     res.json({ exists });
   } catch (err) {
@@ -499,11 +496,35 @@ async function generateUniqueSlug(base) {
   return `${root}-${suffix}`;
 }
 
+function normalizeOrganizationName(name) {
+  return String(name || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("en-US");
+}
+
 async function organizationNameTaken(name) {
-  const normalizedName = String(name || '').trim().toLowerCase();
+  const normalizedName = normalizeOrganizationName(name);
   if (!normalizedName) return false;
-  const tenants = await prisma.tenant.findMany({ select: { name: true } });
-  return tenants.some((tenant) => String(tenant.name || '').trim().toLowerCase() === normalizedName);
+  const tenant = await prisma.tenant.findFirst({
+    where: {
+      OR: [
+        { organizationNameKey: normalizedName },
+        // MySQL's utf8mb4_unicode_ci comparison is case-insensitive. This
+        // fallback keeps legacy rows (whose key is null) protected without
+        // loading every tenant name into application memory.
+        { name: String(name || "").trim() },
+      ],
+    },
+    select: { id: true },
+  });
+  return Boolean(tenant);
+}
+
+function isOrganizationNameConflict(error) {
+  if (error?.code !== "P2002") return false;
+  return JSON.stringify(error?.meta?.target || "").includes("organizationNameKey");
 }
 
 // Password complexity: minimum 8 chars, must contain at least one letter AND one number
@@ -748,7 +769,7 @@ router.post("/register", registerLimiter, async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const orgName = String(organizationName || (name ? `${name}'s Organization` : "My Organization")).trim().replace(/\s+/g, " ");
     const existingSameVerticalOrganization = await organizationNameTaken(orgName);
     if (existingSameVerticalOrganization) {
       return res.status(409).json({
@@ -758,9 +779,29 @@ router.post("/register", registerLimiter, async (req, res) => {
     }
     const slug = await generateUniqueSlug(orgName);
 
-    const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical, emailVerifiedAt }
-    });
+    let tenant;
+    try {
+      tenant = await prisma.tenant.create({
+        data: {
+          name: orgName,
+          organizationNameKey: normalizeOrganizationName(orgName),
+          slug,
+          ownerEmail: email,
+          plan: "TRIAL",
+          vertical: selectedVertical,
+          emailVerifiedAt,
+        },
+      });
+    } catch (error) {
+      if (isOrganizationNameConflict(error)
+        || (error?.code === "P2002" && await organizationNameTaken(orgName))) {
+        return res.status(409).json({
+          error: "This organization name is already taken. Please use a different name.",
+          code: "ORGANIZATION_NAME_ALREADY_EXISTS",
+        });
+      }
+      throw error;
+    }
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
     const now = new Date();
@@ -877,7 +918,7 @@ router.post("/signup", registerLimiter, async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const orgName = organizationName || (name ? `${name}'s Organization` : "My Organization");
+    const orgName = String(organizationName || (name ? `${name}'s Organization` : "My Organization")).trim().replace(/\s+/g, " ");
     const existingSameVerticalOrganization = await organizationNameTaken(orgName);
     if (existingSameVerticalOrganization) {
       return res.status(409).json({
@@ -887,9 +928,29 @@ router.post("/signup", registerLimiter, async (req, res) => {
     }
     const slug = await generateUniqueSlug(orgName);
 
-    const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical, emailVerifiedAt }
-    });
+    let tenant;
+    try {
+      tenant = await prisma.tenant.create({
+        data: {
+          name: orgName,
+          organizationNameKey: normalizeOrganizationName(orgName),
+          slug,
+          ownerEmail: email,
+          plan: "TRIAL",
+          vertical: selectedVertical,
+          emailVerifiedAt,
+        },
+      });
+    } catch (error) {
+      if (isOrganizationNameConflict(error)
+        || (error?.code === "P2002" && await organizationNameTaken(orgName))) {
+        return res.status(409).json({
+          error: "This organization name is already taken. Please use a different name.",
+          code: "ORGANIZATION_NAME_ALREADY_EXISTS",
+        });
+      }
+      throw error;
+    }
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
     const now = new Date();

@@ -88,10 +88,13 @@ router.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
 router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
 
 router.get("/contacts/import-history", async (req, res) => {
+  if (req.user.vertical !== "generic") {
+    return res.status(404).json({ error: "Import history is not available", code: "IMPORT_HISTORY_NOT_AVAILABLE" });
+  }
   try {
     const rows = await prisma.genericImportHistory.findMany({
       where: { tenantId: req.user.tenantId },
-      orderBy: { completedAt: "desc" },
+      orderBy: [{ completedAt: "desc" }, { id: "desc" }],
       take: 20,
     });
     res.json(rows.map((row) => ({ ...row, status: row.errors ? "Completed, with errors" : "Completed" })));
@@ -410,17 +413,27 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
     }
 
     await writeImportAudit(req, "Contact", { rowCount: rows.length, imported, updated, errorCount: errors.length });
-    await prisma.genericImportHistory.create({
-      data: {
-        tenantId: req.user.tenantId,
-        fileName: req.file?.originalname || "Uploaded contacts file",
-        inserted: imported,
-        updated,
-        skipped,
-        errors: errors.length,
-        contacts: importedContacts,
-      },
-    });
+    // History is supplemental metadata, not part of the contact mutation.
+    // Never turn an already-completed import into a misleading 500 if this
+    // best-effort write fails. Wellness uses this shared contact endpoint but
+    // must not receive Generic-only history records.
+    if (req.user.vertical === "generic") {
+      try {
+        await prisma.genericImportHistory.create({
+          data: {
+            tenantId: req.user.tenantId,
+            fileName: req.file?.originalname || "Uploaded contacts file",
+            inserted: imported,
+            updated,
+            skipped,
+            errors: errors.length,
+            contacts: importedContacts,
+          },
+        });
+      } catch (historyError) {
+        console.error("[csv] failed to persist import history:", historyError.message);
+      }
+    }
     res.json({ imported, updated, skipped, errors, importedContacts });
   } catch (e) {
     console.error("[csv] contacts import error:", e.message);
@@ -869,4 +882,3 @@ router.get("/:entity", (req, res) => {
   });
 });
 module.exports = router;
-

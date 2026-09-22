@@ -117,6 +117,10 @@ prisma.leadCustomFieldDefinition = {
 prisma.leadCustomFieldValue = {
   upsert: vi.fn(),
 };
+prisma.genericImportHistory = {
+  findMany: vi.fn(),
+  create: vi.fn(),
+};
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   findFirst: vi.fn().mockResolvedValue(null),
@@ -127,14 +131,14 @@ import express from 'express';
 import request from 'supertest';
 const csvIoRouter = requireCJS('../../routes/csv_io');
 
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', vertical = 'generic' } = {}) {
   const app = express();
   // JSON body parser is mounted for completeness. The route mounts its
   // own express.text({ type: ['text/csv','text/plain'] }) parser internally
   // so text/csv bodies are read by readUploadedCsv() correctly.
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role };
+    req.user = { userId, tenantId, role, vertical };
     next();
   });
   app.use('/api/csv', csvIoRouter);
@@ -171,12 +175,51 @@ beforeEach(() => {
   prisma.booking.findMany.mockReset();
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldValue.upsert.mockReset();
+  prisma.genericImportHistory.findMany.mockReset().mockResolvedValue([]);
+  prisma.genericImportHistory.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   hardDeleteContactMock.mockReset().mockResolvedValue(1);
 });
 
 // Contacts export
+
+describe('GET /api/csv/contacts/import-history', () => {
+  test('returns only the authenticated Generic tenant history in deterministic order', async () => {
+    prisma.genericImportHistory.findMany.mockResolvedValue([
+      {
+        id: 12,
+        tenantId: 1,
+        fileName: 'contacts.xlsx',
+        inserted: 2,
+        updated: 1,
+        skipped: 0,
+        errors: 0,
+        contacts: [],
+        completedAt: new Date('2026-09-22T08:00:00.000Z'),
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/api/csv/contacts/import-history');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ id: 12, tenantId: 1, status: 'Completed' });
+    expect(prisma.genericImportHistory.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      orderBy: [{ completedAt: 'desc' }, { id: 'desc' }],
+      take: 20,
+    });
+  });
+
+  test('does not expose Generic import history to another CRM vertical', async () => {
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .get('/api/csv/contacts/import-history');
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('IMPORT_HISTORY_NOT_AVAILABLE');
+    expect(prisma.genericImportHistory.findMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('GET /api/csv/contacts/export.csv', () => {
   test('generic ADMIN exports tenant-scoped contacts via the generic CSV route', async () => {
@@ -311,6 +354,16 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
         valueBool: null,
       },
     });
+    expect(prisma.genericImportHistory.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: 1,
+        fileName: 'mapped-contacts.xlsx',
+        inserted: 1,
+        updated: 0,
+        skipped: 0,
+        errors: 0,
+      }),
+    });
   });
 
   test('imports a workbook uploaded as .xlsx and normalizes phone_number values', async () => {
@@ -400,6 +453,34 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
       }),
     );
     expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('returns the completed import when supplemental history persistence fails', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 101 });
+    prisma.genericImportHistory.create.mockRejectedValue(new Error('history unavailable'));
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,email\nHistory Safe,history-safe@example.com\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(prisma.genericImportHistory.create).toHaveBeenCalledOnce();
+  });
+
+  test('does not write Generic import history for a Wellness import', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 102 });
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,email\nWellness Lead,wellness-lead@example.com\n');
+
+    expect(res.status).toBe(200);
+    expect(prisma.genericImportHistory.create).not.toHaveBeenCalled();
   });
 });
 // ─── Services export ───────────────────────────────────────────────
@@ -772,5 +853,4 @@ describe('RBAC + errorReport query flag', () => {
     expect(body).toMatch(/missing name/i);
   });
 });
-
 

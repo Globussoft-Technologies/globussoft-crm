@@ -58,6 +58,11 @@ datasource db {
 model Tenant {
   id                             Int       @id @default(autoincrement())
   name                           String
+  // Normalized key for globally unique organization names created after
+  // this field was introduced. Nullable keeps legacy tenants deploy-safe;
+  // new registrations always populate it and the unique index closes the
+  // concurrent-signup race that an application-only preflight cannot.
+  organizationNameKey            String?   @unique
   slug                           String    @unique
   plan                           String    @default("starter") // starter, professional, enterprise
   vertical                       String    @default("generic") // generic, wellness (more verticals later)
@@ -397,6 +402,7 @@ model Tenant {
   leadCustomFieldValues      LeadCustomFieldValue[]
   webForms                   WebForm[]
   webFormSubmissions         WebFormSubmission[]
+  genericImportHistories     GenericImportHistory[]
   // Generic-vertical-only "Customize table" column-visibility picker.
   tableColumnPreferences     TableColumnPreference[]
   // Generic-vertical-only Contacts "Saved Views" (named fixed contact lists).
@@ -11089,4 +11095,19 @@ model SalesTeamMember {
   @@unique([teamId, userId])
   @@index([tenantId])
   @@index([userId])
+}
+
+model GenericImportHistory {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int
+  fileName    String
+  inserted    Int      @default(0)
+  updated     Int      @default(0)
+  skipped     Int      @default(0)
+  errors      Int      @default(0)
+  contacts    Json?
+  completedAt DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, completedAt])
 }

@@ -58,6 +58,21 @@ describe('public web form embed footer', () => {
     expect(html).toContain('<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>');
   });
 
+  test('honors the per-form powered-by setting while defaulting it on', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('formData.settings.showPoweredBy === false');
+    expect(html).toContain("(footerLink ? '<div class=\"note\">' + footerLink + '</div>' : '')");
+  });
+
+  test('combines a searchable country code with Generic phone submissions only', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain("scope === 'generic' && field.sourceKey === 'phone'");
+    expect(html).toContain('name="phoneCountry"');
+    expect(html).toContain("fd.set('phone', countryCode + phoneInput.replace(/[^0-9]/g, ''))");
+  });
+
   test('does not cap long forms in an internal scroll container', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 

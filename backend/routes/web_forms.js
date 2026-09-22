@@ -388,6 +388,8 @@ function defaultSettings() {
 
     submitButtonLabel: "Submit",
 
+    showPoweredBy: true,
+
     successMessage:
       "Thank you! Your information has been received. We will be in touch with you shortly to assist with your account.",
 
@@ -521,6 +523,8 @@ function normalizeSettings(raw) {
       settings.submitButtonLabel,
       defaultSettings().submitButtonLabel,
     ),
+
+    showPoweredBy: settings.showPoweredBy !== false,
 
     successMessage: textOr(
       settings.successMessage,

@@ -186,6 +186,7 @@ function defaultSettings() {
  return {
   formTitle: "",
   submitButtonLabel: "Submit",
+  showPoweredBy: true,
   successMessage: "Thank you! Your information has been received. We will be in touch with you shortly to assist with your account.",
     afterSubmitAction: "message",
  redirectUrl: "",
@@ -17562,6 +17563,16 @@ export default function WebForms({ scope = "generic" }) {
                   </Section>
                   <Section id="wf-settings" step={3} title="Settings" subtitle="Choose what happens after submit and how the submission should be routed.">
                     <div className="wf-settings-stack">
+                      <div className="wf-settings-block">
+                        <label className="wf-settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedForm.settings.showPoweredBy !== false}
+                            onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, showPoweredBy: e.target.checked } })}
+                          />
+                          <span>Show “Powered By GlobusCRM” on this web form</span>
+                        </label>
+                      </div>
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">
                           <input

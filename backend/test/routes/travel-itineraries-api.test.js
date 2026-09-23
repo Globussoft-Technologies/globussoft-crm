@@ -219,6 +219,35 @@ describe('GET /api/travel/itineraries — search', () => {
   });
 });
 
+describe('GET /api/travel/itineraries - brochure picker summary', () => {
+  test('includes contact display identity without contact email or phone', async () => {
+    prisma.itinerary.findMany.mockResolvedValue([{
+      id: 15,
+      subBrand: 'travelstall',
+      contactId: 501,
+      destination: 'Goa',
+      status: 'sent',
+      contact: { id: 501, name: 'Ansur Kumar', company: 'Greenfield School' },
+    }]);
+    prisma.itinerary.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itineraries?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.itineraries[0].contact).toEqual({
+      id: 501,
+      name: 'Ansur Kumar',
+      company: 'Greenfield School',
+    });
+    const select = prisma.itinerary.findMany.mock.calls[0][0].select;
+    expect(select.contact).toEqual({ select: { id: true, name: true, company: true } });
+    expect(select.contact.select).not.toHaveProperty('email');
+    expect(select.contact.select).not.toHaveProperty('phone');
+  });
+});
+
 describe('GET /api/travel/itineraries - pipeline pagination filters', () => {
   test('supports separate destination/contact filters with limit and offset', async () => {
     prisma.itinerary.findMany.mockResolvedValue([]);

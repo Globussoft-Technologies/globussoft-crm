@@ -1,9 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   buildItineraryGeocodeQuery,
   deriveItineraryItemLocation,
   destinationGeoQueries,
   haversineDistanceKm,
+  isCoordinateNearAnyAnchor,
+  resolveItineraryMapItems,
   shouldReplaceSuspiciousCoordinates,
 } from "../lib/travelLocationResolver";
 
@@ -104,5 +106,115 @@ describe("travelLocationResolver", () => {
     expect(
       shouldReplaceSuspiciousCoordinates(32.2432, 77.1892, 32.2396, 77.1887),
     ).toBe(false);
+  });
+
+  test("validates map pins against destination anchors", () => {
+    const goa = [{ lat: 15.2993, lng: 74.1240 }];
+    expect(isCoordinateNearAnyAnchor(15.5553, 73.7517, goa)).toBe(true);
+    expect(isCoordinateNearAnyAnchor(6.5244, 3.3792, goa)).toBe(false);
+    expect(isCoordinateNearAnyAnchor(15.5553, 73.7517, [])).toBe(false);
+  });
+
+  describe("resolveItineraryMapItems", () => {
+    const goa = { lat: 15.2993, lng: 74.124 };
+
+    test("keeps manual coordinates even when they are far from the destination", async () => {
+      const manualItem = {
+        id: 1,
+        description: "Regional airport transfer",
+        latitude: 6.5244,
+        longitude: 3.3792,
+        draftedByAi: false,
+      };
+      const geocodePlace = vi.fn().mockResolvedValue(goa);
+
+      const result = await resolveItineraryMapItems({
+        items: [manualItem], destination: "Goa", geocodePlace,
+      });
+
+      expect(result).toEqual([manualItem]);
+      expect(geocodePlace).toHaveBeenCalledTimes(1);
+    });
+
+    test("uses a nearby repair for an AI outlier without changing the source item", async () => {
+      const aiItem = {
+        id: 2,
+        description: "Visit Baga Beach",
+        latitude: 6.5244,
+        longitude: 3.3792,
+        draftedByAi: true,
+      };
+      const geocodePlace = vi.fn()
+        .mockResolvedValueOnce(goa)
+        .mockResolvedValueOnce({ lat: 15.5553, lng: 73.7517 });
+
+      const result = await resolveItineraryMapItems({
+        items: [aiItem], destination: "Goa", geocodePlace,
+      });
+
+      expect(result[0]).toMatchObject({ latitude: 15.5553, longitude: 73.7517 });
+      expect(aiItem).toMatchObject({ latitude: 6.5244, longitude: 3.3792 });
+    });
+
+    test("keeps the saved AI pin when repair fails", async () => {
+      const aiItem = {
+        id: 3,
+        description: "Unknown stop",
+        latitude: 6.5244,
+        longitude: 3.3792,
+        draftedByAi: true,
+      };
+      const geocodePlace = vi.fn()
+        .mockResolvedValueOnce(goa)
+        .mockResolvedValueOnce(null);
+
+      await expect(resolveItineraryMapItems({
+        items: [aiItem], destination: "Goa", geocodePlace,
+      })).resolves.toEqual([aiItem]);
+    });
+
+    test("stops after cancellation and does not return stale results", async () => {
+      let cancelled = false;
+      const aiItem = {
+        id: 4,
+        description: "Visit Baga Beach",
+        latitude: 6.5244,
+        longitude: 3.3792,
+        draftedByAi: true,
+      };
+      const geocodePlace = vi.fn()
+        .mockResolvedValueOnce(goa)
+        .mockImplementationOnce(async () => {
+          cancelled = true;
+          return { lat: 15.5553, lng: 73.7517 };
+        });
+
+      const result = await resolveItineraryMapItems({
+        items: [aiItem],
+        destination: "Goa",
+        geocodePlace,
+        isCancelled: () => cancelled,
+      });
+
+      expect(result).toBeNull();
+    });
+
+    test("caps automatic repair requests for large itineraries", async () => {
+      const items = Array.from({ length: 12 }, (_, index) => ({
+        id: index + 1,
+        description: `Stop ${index + 1}`,
+        latitude: 6.5244,
+        longitude: 3.3792,
+        draftedByAi: true,
+      }));
+      const geocodePlace = vi.fn().mockResolvedValue(goa);
+
+      const result = await resolveItineraryMapItems({
+        items, destination: "Goa", geocodePlace, maxRepairs: 3,
+      });
+
+      expect(result).toHaveLength(12);
+      expect(geocodePlace).toHaveBeenCalledTimes(4); // one anchor + three repairs
+    });
   });
 });

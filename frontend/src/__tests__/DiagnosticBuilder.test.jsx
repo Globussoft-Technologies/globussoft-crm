@@ -157,12 +157,12 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(tmc.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('defaults to Visual tab and shows seeded example questions + bands', () => {
+  it('defaults to Visual tab and includes the mandatory TMC trip-type question', async () => {
     renderPage();
     const visualTab = screen.getByRole('tab', { name: /Questions/i });
     expect(visualTab.getAttribute('aria-selected')).toBe('true');
-    // The QUESTIONS_EXAMPLE constant seeds 2 questions.
-    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
+    expect(await screen.findByDisplayValue('Which types of trips do you prefer?')).toBeDisabled();
+    expect(screen.getByRole('heading', { name: /Questions \(3\)/i })).toBeTruthy();
     // SCORING_EXAMPLE seeds 3 result categories.
     expect(screen.getByRole('heading', { name: /Result categories \(3\)/i })).toBeTruthy();
   });
@@ -173,6 +173,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     expect(qTextarea.value).toMatch(/"questions"/);
+    expect(qTextarea.value).toMatch(/Which types of trips do you prefer/i);
     expect(qTextarea.value).toMatch(/How many trips do you organize per year/i);
     expect(rTextarea.value).toMatch(/"method": "weighted-sum"/);
     expect(rTextarea.value).toMatch(/"bands"/);
@@ -180,17 +181,17 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
 
   it('Add question appends a new question card to the Visual list', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
     expect(screen.getByRole('heading', { name: /Questions \(3\)/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
+    expect(screen.getByRole('heading', { name: /Questions \(4\)/i })).toBeTruthy();
   });
 
   it('Remove question deletes a question card from the Visual list', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Questions \(3\)/i })).toBeTruthy();
     const removeBtns = screen.getAllByRole('button', { name: /Remove question/i });
     fireEvent.click(removeBtns[0]);
-    expect(screen.getByRole('heading', { name: /Questions \(1\)/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
   });
 
   it('Add category appends a new band card to the Scoring list', () => {
@@ -387,9 +388,9 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
 
   it('Move-question-down reorders questions in the JSON', () => {
     renderPage();
-    // Find Q1's "Move question down" — the first such button is Q1's.
+    // The first button belongs to the fixed system question; the second is Q1.
     const moveDownBtns = screen.getAllByRole('button', { name: /Move question down/i });
-    fireEvent.click(moveDownBtns[0]);
+    fireEvent.click(moveDownBtns[1]);
     openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     // After moving Q1 down, "Average group size?" (originally Q2) should
@@ -614,8 +615,8 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     renderPage();
     // Move Q2 up → Q2 should now precede Q1 in the JSON.
     const moveUpBtns = screen.getAllByRole('button', { name: /Move question up/i });
-    // moveUpBtns[0] is Q1's (disabled), moveUpBtns[1] is Q2's (enabled).
-    fireEvent.click(moveUpBtns[1]);
+    // The system question remains fixed at index 0; Q2 is the third card.
+    fireEvent.click(moveUpBtns[2]);
     openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     const tripsIdx = qTextarea.value.indexOf('How many trips do you organize per year');

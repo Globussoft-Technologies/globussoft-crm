@@ -30,7 +30,10 @@ import { useNotify } from "../../utils/notify";
 import MapPreview from "../../components/MapPreview";
 import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
 import { geocode } from "../../lib/geocoder";
-import { buildItineraryGeocodeQuery } from "../../lib/travelLocationResolver";
+import {
+  buildItineraryGeocodeQuery,
+  resolveItineraryMapItems,
+} from "../../lib/travelLocationResolver";
 
 // The 12 server-validated itemTypes (backend VALID_ITEM_TYPES). Order here is
 // the order they appear in the type picker — most-used first.
@@ -470,7 +473,7 @@ export default function ItineraryWorkspace() {
   // map's connecting line traces the trip the way it's actually planned —
   // day 1's stops, then day 2's, etc. — instead of whatever order the
   // items happened to be created or fetched in.
-  const mapItems = useMemo(() => {
+  const orderedMapItems = useMemo(() => {
     const flat = [];
     for (let d = 1; d <= dayCount; d += 1) flat.push(...(itemsByDay.get(d) || []));
     flat.push(...(itemsByDay.get(null) || [])); // unscheduled — pinned, but after every real day
@@ -478,6 +481,28 @@ export default function ItineraryWorkspace() {
       .filter((it) => Number.isFinite(Number(it.latitude)) && Number.isFinite(Number(it.longitude)))
       .map((it) => ({ ...it, locationName: readSchedule(it).locationName || it.description }));
   }, [itemsByDay, dayCount]);
+
+  const [mapItems, setMapItems] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    // Always retain and immediately render saved coordinates. Manual pins can
+    // legitimately be far from a broad destination (for example a multi-city
+    // trip), and a failed geocoder lookup must not make an item disappear.
+    setMapItems(orderedMapItems);
+    if (!orderedMapItems.length || !itin?.destination) return undefined;
+
+    (async () => {
+      const resolvedItems = await resolveItineraryMapItems({
+        items: orderedMapItems,
+        destination: itin.destination,
+        geocodePlace: geocode,
+        isCancelled: () => cancelled,
+      });
+      if (!cancelled && resolvedItems) setMapItems(resolvedItems);
+    })();
+
+    return () => { cancelled = true; };
+  }, [id, itin?.destination, orderedMapItems]);
 
   // ── mutations ───────────────────────────────────────────────────────
   // Every mutation reloads the itinerary rather than patching local state,

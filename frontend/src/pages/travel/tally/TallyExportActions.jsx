@@ -11,7 +11,7 @@ import {
   buildVoucherRows,
   validateExport,
 } from "./tallyExportBuilder";
-import { downloadTallyConnectorPackage } from "./tallyConnectorConfig";
+import { downloadTallyConnectorPackage, fetchTallyConnectorBinary } from "./tallyConnectorConfig";
 
 const button = {
   border: 0,
@@ -158,8 +158,12 @@ export default function TallyExportActions({
   const downloadConnector = async () => {
     setGeneratingCredentials(true);
     try {
+      // Verify and download the executable before rotating the one-time
+      // connector token. A missing binary must never disconnect a working
+      // connector and leave the newly-created token unavailable.
+      const executable = await fetchTallyConnectorBinary();
       const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
-      await downloadTallyConnectorPackage(credentials);
+      downloadTallyConnectorPackage(credentials, executable);
       await loadConnectorStatus();
       notify.success("Tally Connector ZIP downloaded. Extract it and run the executable beside config.json.");
     } catch (error) {

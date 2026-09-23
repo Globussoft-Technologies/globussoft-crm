@@ -268,9 +268,14 @@ export default function Expenses() {
 
     try {
       const qs = new URLSearchParams();
-      if (nextOffset > 0) {
+      if (isTravel || nextOffset > 0) {
         qs.set('limit', String(PAGE_SIZE));
+      }
+      if (nextOffset > 0) {
         qs.set('offset', String(nextOffset));
+      }
+      if (isTravel && statusFilter !== 'all') {
+        qs.set('status', statusFilter);
       }
       const queryString = qs.toString();
       const rows = await fetchApi(`/api/expenses${queryString ? `?${queryString}` : ''}`);
@@ -294,7 +299,7 @@ export default function Expenses() {
         setLoadingMore(false);
       }
     }
-  }, []);
+  }, [isTravel, statusFilter]);
 
   const loadStats = useCallback(async () => {
     try {
@@ -342,7 +347,7 @@ export default function Expenses() {
   // that haven't backfilled expenseDate.
   const visibleExpenses = useMemo(() => (
     expenses.filter((exp) => {
-      const matchesStatus = statusFilter === 'all'
+      const matchesStatus = !isTravel || statusFilter === 'all'
         || String(exp.status || 'Pending').toLowerCase() === statusFilter.toLowerCase();
       if (!matchesStatus) return false;
 
@@ -352,7 +357,7 @@ export default function Expenses() {
       const ts = new Date(d).getTime();
       return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
     })
-  ), [expenses, rangeStart, rangeEnd, statusFilter]);
+  ), [expenses, isTravel, rangeStart, rangeEnd, statusFilter]);
 
   const createExpense = async (e, status = 'Pending') => {
     e.preventDefault();
@@ -497,58 +502,68 @@ export default function Expenses() {
       {/* Summary Stats */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            aria-label={`Show all expenses (${expenseStats.total ?? expenses.length})`}
-            aria-pressed={statusFilter === 'all'}
-            onClick={() => setStatusFilter('all')}
-            style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-            background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
-            cursor: 'pointer', outline: statusFilter === 'all' ? '2px solid var(--accent-color)' : 'none', outlineOffset: '2px',
-          }}>
-            {expenseStats.total ?? expenses.length} total expenses
-          </button>
-          <button
-            type="button"
-            aria-label={`Show pending expenses (${formatMoney(totalPending)})`}
-            aria-pressed={statusFilter === 'Pending'}
-            onClick={() => setStatusFilter(statusFilter === 'Pending' ? 'all' : 'Pending')}
-            style={{
+          {isTravel ? <button
+              type="button"
+              aria-label={`Show pending expenses (${formatMoney(totalPending)})`}
+              aria-pressed={statusFilter === 'Pending'}
+              onClick={() => setStatusFilter(statusFilter === 'Pending' ? 'all' : 'Pending')}
+              style={{
+                padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+                background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
+                display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
+                outline: statusFilter === 'Pending' ? '2px solid #f59e0b' : 'none', outlineOffset: '2px',
+              }}
+            ><IndianRupee size={12} /> Pending: {formatMoney(totalPending)}</button> : <span style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
-            cursor: 'pointer', outline: statusFilter === 'Pending' ? '2px solid #f59e0b' : 'none', outlineOffset: '2px',
-          }}>
-            <IndianRupee size={12} /> Pending: {formatMoney(totalPending)}
-          </button>
-          <button
-            type="button"
-            aria-label={`Show approved expenses (${formatMoney(totalApproved)})`}
-            aria-pressed={statusFilter === 'Approved'}
-            onClick={() => setStatusFilter(statusFilter === 'Approved' ? 'all' : 'Approved')}
-            style={{
+          }}><IndianRupee size={12} /> Pending: {formatMoney(totalPending)}</span>}
+          {isTravel ? <button
+              type="button"
+              aria-label={`Show approved expenses (${formatMoney(totalApproved)})`}
+              aria-pressed={statusFilter === 'Approved'}
+              onClick={() => setStatusFilter(statusFilter === 'Approved' ? 'all' : 'Approved')}
+              style={{
+                padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+                background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
+                display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
+                outline: statusFilter === 'Approved' ? '2px solid #10b981' : 'none', outlineOffset: '2px',
+              }}
+            ><CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}</button> : <span style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
-            cursor: 'pointer', outline: statusFilter === 'Approved' ? '2px solid #10b981' : 'none', outlineOffset: '2px',
-          }}>
-            <CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}
-          </button>
-          <button
-            type="button"
-            aria-label={`Show paid-back expenses (${formatMoney(totalReimbursed)})`}
-            aria-pressed={statusFilter === 'Reimbursed'}
-            onClick={() => setStatusFilter(statusFilter === 'Reimbursed' ? 'all' : 'Reimbursed')}
-            style={{
+          }}><CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}</span>}
+          {isTravel ? <button
+              type="button"
+              aria-label={`Show paid-back expenses (${formatMoney(totalReimbursed)})`}
+              aria-pressed={statusFilter === 'Reimbursed'}
+              onClick={() => setStatusFilter(statusFilter === 'Reimbursed' ? 'all' : 'Reimbursed')}
+              style={{
+                padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+                background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
+                display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
+                outline: statusFilter === 'Reimbursed' ? '2px solid #3b82f6' : 'none', outlineOffset: '2px',
+              }}
+            ><IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}</button> : <span style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
-            cursor: 'pointer', outline: statusFilter === 'Reimbursed' ? '2px solid #3b82f6' : 'none', outlineOffset: '2px',
-          }}>
-            <IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}
-          </button>
-          
+          }}><IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}</span>}
+          {isTravel ? <button
+              type="button"
+              aria-label={`Show all expenses (${expenseStats.total ?? expenses.length})`}
+              aria-pressed={statusFilter === 'all'}
+              onClick={() => setStatusFilter('all')}
+              style={{
+                padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+                background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+                cursor: 'pointer', outline: statusFilter === 'all' ? '2px solid var(--accent-color)' : 'none', outlineOffset: '2px',
+              }}
+            >{expenseStats.total ?? expenses.length} total expenses</button> : <span style={{
+              padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+              background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+            }}>{expenseStats.total ?? expenses.length} total expenses</span>}
         </div>
         <button
           type="button"

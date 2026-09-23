@@ -615,15 +615,17 @@ export default function CalendarSync() {
   });
   // Attendee picker — contacts/customers fetched lazily when the modal opens.
   const [contactOptions, setContactOptions] = useState([]);
+  const [attendeeSearchOptions, setAttendeeSearchOptions] = useState(null);
   const [contactSearch, setContactSearch] = useState("");
   const [attendeePickerOpen, setAttendeePickerOpen] = useState("");
   const filteredContactOptions = useMemo(() => {
+    const options = attendeeSearchOptions || contactOptions;
     const query = contactSearch.trim().toLowerCase();
-    if (!query) return contactOptions;
-    return contactOptions.filter((contact) =>
+    if (!query || attendeeSearchOptions) return options;
+    return options.filter((contact) =>
       `${contact.name} ${contact.email}`.toLowerCase().includes(query),
     );
-  }, [contactOptions, contactSearch]);
+  }, [attendeeSearchOptions, contactOptions, contactSearch]);
   const createStartTime = floorToMinute(formData.startTime);
   const createEndTime = floorToMinute(formData.endTime);
   const createNow = floorToMinute(new Date());
@@ -1209,6 +1211,42 @@ export default function CalendarSync() {
       .catch(() => {});
   }, [showCreateModal, showEventDetail, isEditingEvent, contactOptions.length]);
 
+  // Travel tenants can have far more contacts than the initial picker page.
+  // Search on the server so contacts beyond the first 200 remain selectable.
+  useEffect(() => {
+    const query = contactSearch.trim();
+    if (!isTravelTenant || !attendeePickerOpen || !query) {
+      setAttendeeSearchOptions(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      fetchApi(`/api/contacts?q=${encodeURIComponent(query)}&limit=50&fields=summary`, { silent: true })
+        .then((res) => {
+          if (cancelled) return;
+          const list = Array.isArray(res) ? res : res?.data || res?.contacts || [];
+          setAttendeeSearchOptions(
+            list
+              .filter((contact) => contact?.email)
+              .map((contact) => ({
+                id: contact.id,
+                name: contact.name || contact.email,
+                email: contact.email,
+              })),
+          );
+        })
+        .catch(() => {
+          if (!cancelled) setAttendeeSearchOptions(null);
+        });
+    }, 200);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [attendeePickerOpen, contactSearch, isTravelTenant]);
+
   // Append an email to the comma-separated attendees field, de-duplicating.
   const addAttendeeEmail = (email) => {
     const normalizedEmail = String(email || "").trim();
@@ -1303,7 +1341,7 @@ export default function CalendarSync() {
           boxSizing: "border-box",
         }}
         />
-      {(attendeePickerOpen === pickerKey || showCreateModal || (showEventDetail && isEditingEvent)) && (
+      {attendeePickerOpen === pickerKey && (
         <div
           id={`${pickerKey}-attendee-options`}
           role="listbox"
@@ -1337,6 +1375,13 @@ export default function CalendarSync() {
                 setContactSearch("");
                 setAttendeePickerOpen("");
               }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                onSelect(contact.email);
+                setContactSearch("");
+                setAttendeePickerOpen("");
+              }}
               style={{
                 padding: "0.6rem 0.7rem",
                 borderRadius: "6px",
@@ -1359,6 +1404,32 @@ export default function CalendarSync() {
         {newAttendeeOpen === pickerKey ? "×" : "+"}
       </button>
     </div>
+  );
+
+  const renderLegacyAttendeeSelect = (onSelect) => (
+    <select
+      value=""
+      aria-label="Add attendee from contacts"
+      onChange={(event) => {
+        if (event.target.value) onSelect(event.target.value);
+      }}
+      style={{
+        width: "100%",
+        padding: "0.7rem",
+        marginBottom: "0.5rem",
+        border: "1px solid var(--border-color)",
+        borderRadius: "8px",
+        background: "var(--input-bg)",
+        color: "var(--text-primary)",
+      }}
+    >
+      <option value="">+ Add from contacts…</option>
+      {contactOptions.map((contact) => (
+        <option key={contact.id || contact.email} value={contact.email}>
+          {contact.name} ({contact.email})
+        </option>
+      ))}
+    </select>
   );
 
   const handleCreateEvent = async (e) => {
@@ -3920,7 +3991,11 @@ export default function CalendarSync() {
                     >
                       Attendees
                     </label>
-                    {contactOptions.length > 0 && renderAttendeePicker(addEditAttendeeEmail, "edit")}
+                    {contactOptions.length > 0 && (
+                      isTravelTenant
+                        ? renderAttendeePicker(addEditAttendeeEmail, "edit")
+                        : renderLegacyAttendeeSelect(addEditAttendeeEmail)
+                    )}
                     {editFormData.attendees && (
                       <div
                         aria-label="Selected attendees"
@@ -3979,7 +4054,26 @@ export default function CalendarSync() {
                           ))}
                       </div>
                     )}
-                    {newAttendeeOpen === "edit" && <>
+                    {!isTravelTenant && (
+                      <input
+                        type="text"
+                        value={editFormData.attendees || ""}
+                        aria-label="Attendees email addresses"
+                        onChange={(event) => setEditFormData({ ...editFormData, attendees: event.target.value })}
+                        placeholder="email@example.com, another@example.com"
+                        style={{
+                          width: "100%",
+                          padding: "0.85rem",
+                          fontSize: "0.95rem",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          background: "var(--input-bg)",
+                          color: "var(--text-primary)",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                    )}
+                    {isTravelTenant && newAttendeeOpen === "edit" && <>
                     <input
                       type="text"
                       value={newEditAttendeeEmail}
@@ -4499,25 +4593,11 @@ export default function CalendarSync() {
                 >
                   Attendees
                 </label>
-                <input
-                  type="text"
-                  value={formData.attendees}
-                  placeholder="email@example.com, another@example.com"
-                  aria-label="Attendees email addresses"
-                  onChange={(e) => setFormData({ ...formData, attendees: e.target.value })}
-                  style={{
-                    width: "100%",
-                    padding: "0.85rem",
-                    fontSize: "0.95rem",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "8px",
-                    background: "var(--input-bg)",
-                    color: "var(--text-primary)",
-                    boxSizing: "border-box",
-                    marginBottom: "0.5rem",
-                  }}
-                />
-                {contactOptions.length > 0 && renderAttendeePicker(addAttendeeEmail, "create")}
+                {contactOptions.length > 0 && (
+                  isTravelTenant
+                    ? renderAttendeePicker(addAttendeeEmail, "create")
+                    : renderLegacyAttendeeSelect(addAttendeeEmail)
+                )}
                 {formData.attendees && (
                   <div
                     aria-label="Selected attendees"
@@ -4576,7 +4656,24 @@ export default function CalendarSync() {
                       ))}
                   </div>
                 )}
-                {newAttendeeOpen === "create" && <>
+                {!isTravelTenant && <input
+                  type="text"
+                  value={formData.attendees}
+                  placeholder="email@example.com, another@example.com"
+                  aria-label="Attendees email addresses"
+                  onChange={(e) => setFormData({ ...formData, attendees: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: "0.85rem",
+                    fontSize: "0.95rem",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    background: "var(--input-bg)",
+                    color: "var(--text-primary)",
+                    boxSizing: "border-box",
+                  }}
+                />}
+                {isTravelTenant && newAttendeeOpen === "create" && <>
                 <input
                   type="text"
                   placeholder="Add a new attendee email"

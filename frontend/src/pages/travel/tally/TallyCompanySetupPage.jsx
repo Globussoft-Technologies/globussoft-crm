@@ -45,6 +45,13 @@ export default function TallyCompanySetupPage() {
   const save = persistCompanySetup;
 
   const continueToLedgers = async () => {
+    // A configured read-only user may inspect the company setup and continue
+    // to ledger screens, but cannot PUT tally/master-details. Only persist
+    // when the form is actively being edited.
+    if (!editing) {
+      navigate("/travel/tally/ledger");
+      return;
+    }
     if (await persistCompanySetup()) navigate("/travel/tally/ledger");
   };
 

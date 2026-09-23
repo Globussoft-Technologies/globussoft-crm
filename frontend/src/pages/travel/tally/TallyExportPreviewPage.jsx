@@ -8,7 +8,7 @@ import { useNotify } from "../../../utils/notify";
 import { getTripLedgerRows } from "./tallyMath";
 import { buildTallyMastersXml, buildTallyXml, buildVoucherRows } from "./tallyExportBuilder";
 import { useTravelTallyMaster } from "./useTravelTallyMaster";
-import { downloadTallyConnectorPackage } from "./tallyConnectorConfig";
+import { downloadTallyConnectorPackage, fetchTallyConnectorBinary } from "./tallyConnectorConfig";
 import TallySectionNav from "./TallySectionNav";
 import tallyIcon from "../../../assets/tally-icon.png";
 
@@ -227,8 +227,9 @@ export default function TallyExportPreviewPage() {
   const downloadConnector = async () => {
     setGeneratingCredentials(true);
     try {
+      const executable = await fetchTallyConnectorBinary();
       const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
-      await downloadTallyConnectorPackage(credentials);
+      downloadTallyConnectorPackage(credentials, executable);
       await refreshConnectorStatus();
       notify.success("Tally Connector ZIP downloaded. Extract it and run the executable beside config.json.");
     } catch (error) {

@@ -63,8 +63,20 @@ function createStoredZip(files) {
 }
 
 export function getDynamicTallyConnectorUrl(fallbackUrl = "", pageLocation = globalThis.window?.location) {
-  if (!pageLocation?.hostname) return fallbackUrl;
+  try {
+    const configured = new URL(fallbackUrl);
+    const configuredProtocol = configured.protocol === "https:" ? "wss:" : configured.protocol === "http:" ? "ws:" : configured.protocol;
+    const configuredIsLocal = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(configured.hostname);
+    if (["ws:", "wss:"].includes(configuredProtocol) && !configuredIsLocal) {
+      configured.protocol = configuredProtocol;
+      return configured.toString();
+    }
+  } catch (_) {
+    // Fall through to the browser origin when the backend URL is absent or
+    // references an internal/local address that the connector cannot reach.
+  }
 
+  if (!pageLocation?.hostname) return fallbackUrl;
   try {
     const protocol = pageLocation.protocol === "https:" ? "wss" : "ws";
     const hostname = pageLocation.hostname;
@@ -89,7 +101,7 @@ export function buildTallyConnectorConfig(credentials) {
   };
 }
 
-export async function downloadTallyConnectorPackage(credentials) {
+export async function fetchTallyConnectorBinary() {
   const token = getAuthToken();
   const activeTenantId = getActiveTenantId();
   const headers = {};
@@ -105,7 +117,13 @@ export async function downloadTallyConnectorPackage(credentials) {
     throw new Error(details.error || "Could not download the Tally connector executable.");
   }
 
-  const executable = new Uint8Array(await response.arrayBuffer());
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+export function downloadTallyConnectorPackage(credentials, executable) {
+  if (!(executable instanceof Uint8Array) || executable.length === 0) {
+    throw new Error("The Tally connector executable is empty.");
+  }
   const packageBlob = createStoredZip([
     { name: "TallyConnector.exe", data: executable },
     { name: "config.json", data: JSON.stringify(buildTallyConnectorConfig(credentials), null, 2) },

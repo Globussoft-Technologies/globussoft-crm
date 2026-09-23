@@ -1572,16 +1572,26 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
   it('attendee contact picker filters contacts by name or email', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/calendar/google/events') return Promise.resolve(sampleGoogleEvents);
-      if (url === '/api/calendar/outlook/events') return Promise.reject(new Error('not connected'));
+      if (url === '/api/travel/itineraries?limit=150&fields=summary') return Promise.resolve([]);
+      if (url === '/api/travel/trips?limit=150&fields=summary') return Promise.resolve([]);
       if (url === '/api/contacts?limit=200') {
         return Promise.resolve([
           { id: 1, name: 'Alice Example', email: 'alice@example.com' },
           { id: 2, name: 'Bob Example', email: 'bob@example.com' },
         ]);
       }
+      if (url === '/api/contacts?q=alice&limit=50&fields=summary') {
+        return Promise.resolve([
+          { id: 1, name: 'Alice Example', email: 'alice@example.com' },
+        ]);
+      }
       return Promise.resolve(null);
     });
-    render(<CalendarSync />);
+    render(
+      <AuthContext.Provider value={{ user: { tenant: { vertical: 'travel' } } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
 
     await screen.findByText(/^Connected$/i);
     fireEvent.click(screen.getByTitle(/Create new calendar event/i));
@@ -1592,7 +1602,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(screen.getByRole('option', { name: /Bob Example/i })).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'alice' } });
-    expect(screen.getByRole('option', { name: /Alice Example/i })).toBeInTheDocument();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts?q=alice&limit=50&fields=summary',
+      { silent: true },
+    ));
+    expect(await screen.findByRole('option', { name: /Alice Example/i })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Bob Example/i })).not.toBeInTheDocument();
   });
 });

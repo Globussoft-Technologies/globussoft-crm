@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { getDynamicTallyConnectorUrl } from "./tallyConnectorConfig";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchTallyConnectorBinary, getDynamicTallyConnectorUrl } from "./tallyConnectorConfig";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("getDynamicTallyConnectorUrl", () => {
   it("uses the public page origin without leaking the backend fallback port", () => {
@@ -29,5 +33,20 @@ describe("getDynamicTallyConnectorUrl", () => {
     });
 
     expect(result).toBe("ws://localhost:5173/ws/tally-connector");
+  });
+
+  it("keeps a deployment-provided public connector URL", () => {
+    const result = getDynamicTallyConnectorUrl("https://connector.example.test/ws/tally-connector");
+
+    expect(result).toBe("wss://connector.example.test/ws/tally-connector");
+  });
+
+  it("fails before packaging when the executable is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      json: vi.fn().mockResolvedValue({ error: "Connector binary is unavailable" }),
+    }));
+
+    await expect(fetchTallyConnectorBinary()).rejects.toThrow("Connector binary is unavailable");
   });
 });

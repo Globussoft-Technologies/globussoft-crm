@@ -3,6 +3,7 @@ import express from "express";
 import request from "supertest";
 import jwt from "jsonwebtoken";
 import { createRequire } from "node:module";
+import fs from "node:fs";
 import prisma from "../../lib/prisma.js";
 
 const requireCJS = createRequire(import.meta.url);
@@ -93,6 +94,23 @@ describe("travel Tally connector routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.connectorUrl).toBe("wss://connector.example.test/ws/tally-connector");
+  });
+
+  test("protects the binary route and reports a missing executable without rotating credentials", async () => {
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    try {
+      const unauthenticated = await request(makeApp()).get("/api/travel/tally/connector/binary");
+      expect(unauthenticated.status).toBeGreaterThanOrEqual(401);
+
+      const unavailable = await request(makeApp())
+        .get("/api/travel/tally/connector/binary")
+        .set(auth());
+      expect(unavailable.status).toBe(503);
+      expect(unavailable.body.code).toBe("TALLY_CONNECTOR_BINARY_UNAVAILABLE");
+      expect(prisma.integration.upsert).not.toHaveBeenCalled();
+    } finally {
+      existsSpy.mockRestore();
+    }
   });
 
   test("generates a one-time token and stores only its hash", async () => {

@@ -311,6 +311,11 @@
 
         if (scope === 'generic') {
           var countrySelect = root.querySelector('select[name="phoneCountry"]');
+          var genericPhoneInput = root.querySelector('input[type="tel"][name]');
+          function nationalPhoneMaxLength() {
+            var countryDigits = String(countrySelect && countrySelect.value || '').replace(/\D/g, '');
+            return Math.max(1, 15 - countryDigits.length);
+          }
           if (countrySelect) {
             var picker = document.createElement('div');
             picker.className = 'phone-country-picker';
@@ -340,12 +345,19 @@
             trigger.addEventListener('focus', function() { picker.classList.add('open'); });
             trigger.addEventListener('input', function() {
               var query = trigger.value.trim().toLowerCase();
+              var numericQuery = query.replace(/^\+/, '');
               picker.classList.add('open');
               options.querySelectorAll('button').forEach(function(node) {
-                node.style.display = !query || node.dataset.code.indexOf(query) === 0 ? 'block' : 'none';
+                var codeDigits = node.dataset.code.replace(/^\+/, '');
+                node.style.display = !numericQuery || codeDigits.indexOf(numericQuery) === 0 ? 'block' : 'none';
               });
-              var exact = Array.prototype.find.call(countrySelect.options, function(option) { return option.value === query; });
-              if (exact) countrySelect.value = exact.value;
+              var exact = Array.prototype.find.call(countrySelect.options, function(option) {
+                return option.value.replace(/^\+/, '') === numericQuery;
+              });
+              if (exact) {
+                countrySelect.value = exact.value;
+                trigger.value = exact.text;
+              }
             });
             picker.appendChild(trigger);
             picker.appendChild(options);
@@ -353,9 +365,10 @@
             countrySelect.parentNode.insertBefore(picker, countrySelect);
           }
 
-          var genericPhoneInput = root.querySelector('input[type="tel"][name]');
           if (genericPhoneInput) {
-            genericPhoneInput.setAttribute('maxlength', '14');
+            // E.164 permits at most 15 digits; one extra character allows a
+            // pasted leading "+" before it is normalized to national digits.
+            genericPhoneInput.setAttribute('maxlength', '16');
             genericPhoneInput.setAttribute('inputmode', 'numeric');
             genericPhoneInput.addEventListener('input', function() {
               var rawPhoneInput = String(genericPhoneInput.value || '');
@@ -364,7 +377,7 @@
               if (rawPhoneInput.trim().charAt(0) === '+' && selectedCountryDigits && digits.indexOf(selectedCountryDigits) === 0) {
                 digits = digits.slice(selectedCountryDigits.length);
               }
-              digits = digits.slice(0, 14);
+              digits = digits.slice(0, nationalPhoneMaxLength());
               if (genericPhoneInput.value !== digits) genericPhoneInput.value = digits;
             });
           }

@@ -260,9 +260,11 @@ function normalizeGenericPhone(phone, phoneCountry) {
     if (!/^[1-9]\d{0,2}$/.test(countryDigits)) return null;
     const countryPrefix = `+${countryDigits}`;
     if (!normalized.startsWith("+")) {
-      normalized = `${countryPrefix}${normalized.replace(/\D/g, "")}`;
+      const nationalDigits = normalized.replace(/\D/g, "");
+      normalized = `${countryPrefix}${nationalDigits}`;
+    } else {
+      if (!normalized.startsWith(countryPrefix)) return null;
     }
-    if (!normalized.startsWith(countryPrefix)) return null;
   }
 
   // Preserve the public endpoint's existing E.164-compatible contract:

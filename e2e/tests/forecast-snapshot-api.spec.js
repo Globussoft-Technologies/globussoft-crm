@@ -325,12 +325,18 @@ test.describe('Forecast Snapshot Engine — snapshot creation', () => {
 
 test.describe('Forecast Snapshot Engine — pipeline aggregates', () => {
   test('seeded open deal contributes to bestCaseRevenue', async ({ request }) => {
-    // Snapshot pre-seed to capture the baseline rollup amount.
+    // Snapshot pre-seed to size a deal that is larger than the current
+    // tenant aggregate. Other API specs run in parallel and may transition
+    // or edit their own deals between these two requests, so asserting an
+    // exact aggregate delta is inherently racy. A dominant seed gives us a
+    // stable invariant instead: because this deal is open, bestCaseRevenue
+    // must be at least this deal's amount regardless of unrelated changes.
     const before = await runSnapshot(request, tokens.admin);
     const baseline = (await before.json()).total.bestCaseRevenue;
 
-    // Seed a brand-new open deal with a known amount.
-    const SEED_AMOUNT = 137777;
+    // Deal validation caps amount at 1e12. Keep headroom below that limit
+    // while making the new row dominate the normal seeded dataset.
+    const SEED_AMOUNT = Math.min(900_000_000_000, Math.max(137777, baseline * 2 + 1));
     const deal = await createDeal(request, tokens.admin, {
       title: 'aggregate-bestCase',
       amount: SEED_AMOUNT,
@@ -339,15 +345,11 @@ test.describe('Forecast Snapshot Engine — pipeline aggregates', () => {
     });
     expect(deal.amount).toBe(SEED_AMOUNT);
 
-    // Re-snapshot. The same week-window row gets UPDATED — bestCase
-    // grows by AT LEAST the seeded amount (open deals contribute their
-    // full amount to bestCaseRevenue regardless of probability). With
-    // fullyParallel:true / workers=2 in CI, sibling specs may create
-    // additional open deals between baseline and updated, so assert
-    // the seed-amount lower bound rather than strict equality.
+    // Re-snapshot. The same week-window row gets UPDATED and the aggregate
+    // must contain at least the full amount of this still-open deal.
     const after = await runSnapshot(request, tokens.admin);
     const updated = (await after.json()).total;
-    expect(updated.bestCaseRevenue).toBeGreaterThanOrEqual(baseline + SEED_AMOUNT - 0.01);
+    expect(updated.bestCaseRevenue).toBeGreaterThanOrEqual(SEED_AMOUNT - 0.01);
   });
 
   test('open deal contributes amount * probability/100 to expectedRevenue', async ({ request }) => {

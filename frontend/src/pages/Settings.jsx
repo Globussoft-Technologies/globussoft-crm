@@ -98,10 +98,11 @@ export default function Settings() {
   // can restore even if they don't hold roles.manage (the recovery
   // path). roles.manage admins keep the same restore power they had
   // inside the Roles & Permissions page.
+  const canManageSettings = hasPermission("settings", "manage");
   const canRecover =
-    hasPermission("roles", "manage") || hasPermission("settings", "manage");
+    hasPermission("roles", "manage") || canManageSettings;
   const canSeeRecoverySection =
-    hasPermission("roles", "read") || hasPermission("settings", "manage");
+    hasPermission("roles", "read") || canManageSettings;
   const loadRecoveryRoles = async (page = recoveryPage) => {
     const requestId = ++recoveryRequestId.current;
     setRecoveryLoading(true);
@@ -269,7 +270,7 @@ export default function Settings() {
   }, []);
 
   useEffect(() => {
-    if (ctxTenant?.vertical !== "travel" || ctxUser?.role !== "ADMIN" || !hasPermission("settings", "manage")) return undefined;
+    if (ctxTenant?.vertical !== "travel" || ctxUser?.role !== "ADMIN" || !canManageSettings) return undefined;
     setPromotionalWebsiteLoading(true);
     fetchApi("/api/travel/promotional-website")
       .then((res) => {
@@ -288,7 +289,7 @@ export default function Settings() {
       })
       .catch(() => setPromotionalWebsiteStatus(null))
       .finally(() => setPromotionalWebsiteLoading(false));
-  }, [ctxTenant?.vertical, ctxUser?.role, hasPermission]);
+  }, [ctxTenant?.vertical, ctxUser?.role, canManageSettings]);
 
   // Multi-brand (BrandKit) list — travel vertical only (sub-brands are a
   // travel-only concept; generic/wellness tenants only ever have the

@@ -311,6 +311,11 @@
 
         if (scope === 'generic') {
           var countrySelect = root.querySelector('select[name="phoneCountry"]');
+          var genericPhoneInput = root.querySelector('input[type="tel"][name]');
+          function nationalPhoneMaxLength() {
+            var countryDigits = String(countrySelect && countrySelect.value || '').replace(/\D/g, '');
+            return Math.max(1, 15 - countryDigits.length);
+          }
           if (countrySelect) {
             var picker = document.createElement('div');
             picker.className = 'phone-country-picker';
@@ -360,9 +365,10 @@
             countrySelect.parentNode.insertBefore(picker, countrySelect);
           }
 
-          var genericPhoneInput = root.querySelector('input[type="tel"][name]');
           if (genericPhoneInput) {
-            genericPhoneInput.setAttribute('maxlength', '11');
+            // E.164 permits at most 15 digits; one extra character allows a
+            // pasted leading "+" before it is normalized to national digits.
+            genericPhoneInput.setAttribute('maxlength', '16');
             genericPhoneInput.setAttribute('inputmode', 'numeric');
             genericPhoneInput.addEventListener('input', function() {
               var rawPhoneInput = String(genericPhoneInput.value || '');
@@ -371,7 +377,7 @@
               if (rawPhoneInput.trim().charAt(0) === '+' && selectedCountryDigits && digits.indexOf(selectedCountryDigits) === 0) {
                 digits = digits.slice(selectedCountryDigits.length);
               }
-              digits = digits.slice(0, 11);
+              digits = digits.slice(0, nationalPhoneMaxLength());
               if (genericPhoneInput.value !== digits) genericPhoneInput.value = digits;
             });
           }
@@ -432,9 +438,9 @@
             var nationalDigits = phoneInput.replace(/\D/g, '');
             var countryCode = String(fd.get('phoneCountry') || '+91').trim();
             var internationalPhone = countryCode + nationalDigits;
-            if (!/^\d{9,11}$/.test(nationalDigits) || !/^\+[1-9]\d{7,14}$/.test(internationalPhone)) {
+            if (!/^\+[1-9]\d{7,14}$/.test(internationalPhone)) {
               showBusy(false);
-              showFieldErrors({ phone: 'Phone number must contain 9–11 digits.' });
+              showFieldErrors({ phone: 'Enter a valid international phone number.' });
               return;
             }
             fd.set('phone', internationalPhone);

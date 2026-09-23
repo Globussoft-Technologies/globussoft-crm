@@ -92,15 +92,17 @@ describe('public web form embed footer', () => {
   test('normalizes Generic CRM phone fields without rejecting valid international lengths', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '11')");
+    expect(html).toContain('function nationalPhoneMaxLength()');
+    expect(html).toContain('return Math.max(1, 15 - countryDigits.length)');
+    expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '16')");
     expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
-    expect(html).toContain('slice(0, 11)');
+    expect(html).toContain('slice(0, nationalPhoneMaxLength())');
     expect(html).toContain("rawPhoneInput.trim().charAt(0) === '+'");
     expect(html).toContain("var numericQuery = query.replace(/^\\+/, '')");
     expect(html).toContain("option.value.replace(/^\\+/, '') === numericQuery");
-    expect(html).toContain("/^\\d{9,11}$/.test(nationalDigits)");
     expect(html).toContain('/^\\+[1-9]\\d{7,14}$/.test(internationalPhone)');
-    expect(html).toContain('Phone number must contain 9–11 digits.');
+    expect(html).toContain('Enter a valid international phone number.');
+    expect(html).not.toContain("/^\\d{9,11}$/.test(nationalDigits)");
     expect(html).not.toContain("genericPhoneInput.setAttribute('pattern'");
   });
 });

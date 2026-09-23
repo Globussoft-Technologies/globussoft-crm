@@ -713,29 +713,46 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
   });
 
-  test('accepts a valid 9-digit national number from the Generic country selector', async () => {
+  test('accepts a valid 8-digit Singapore number from the Generic country selector', async () => {
     mockGenericPhoneForm();
 
     const response = await request(makeApp())
       .post('/api/forms/public/contact-us/submit?scope=generic')
       .field('name', 'Singapore Customer')
       .field('phoneCountry', '+65')
-      .field('phone', '612345678');
+      .field('phone', '61234567');
 
     expect(response.status).toBe(201);
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ phone: '+65612345678' }),
+      data: expect.objectContaining({ phone: '+6561234567' }),
     }));
   });
 
-  test('rejects Generic country-selector phone numbers outside 9–11 digits', async () => {
+  test('rejects a Generic country-selector phone exceeding the E.164 total-length limit', async () => {
     mockGenericPhoneForm();
 
     const response = await request(makeApp())
       .post('/api/forms/public/contact-us/submit?scope=generic')
       .field('name', 'Invalid Phone Length')
       .field('phoneCountry', '+91')
-      .field('phone', '987654321234');
+      .field('phone', '98765432123456');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { phone: expect.any(String) },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a Generic country-selector phone below the E.164 total-length minimum', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid Short Phone')
+      .field('phoneCountry', '+91')
+      .field('phone', '12345');
 
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({

@@ -259,15 +259,12 @@ function normalizeGenericPhone(phone, phoneCountry) {
   if (countryDigits) {
     if (!/^[1-9]\d{0,2}$/.test(countryDigits)) return null;
     const countryPrefix = `+${countryDigits}`;
-    let nationalDigits;
     if (!normalized.startsWith("+")) {
-      nationalDigits = normalized.replace(/\D/g, "");
+      const nationalDigits = normalized.replace(/\D/g, "");
       normalized = `${countryPrefix}${nationalDigits}`;
     } else {
       if (!normalized.startsWith(countryPrefix)) return null;
-      nationalDigits = normalized.replace(/\D/g, "").slice(countryDigits.length);
     }
-    if (!/^\d{9,11}$/.test(nationalDigits)) return null;
   }
 
   // Preserve the public endpoint's existing E.164-compatible contract:

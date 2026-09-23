@@ -215,3 +215,61 @@ export function isCoordinateNearAnyAnchor(lat, lng, anchors, maxDistanceKm = 250
     return Number.isFinite(distanceKm) && distanceKm <= maxDistanceKm;
   });
 }
+
+// Map repair is intentionally display-only. Opening an itinerary must never
+// mutate stored coordinates, and a failed geocode must never hide a saved pin.
+// Only AI-drafted outliers are candidates because manual coordinates are an
+// operator decision and multi-city itineraries can legitimately span regions.
+export async function resolveItineraryMapItems({
+  items,
+  destination,
+  geocodePlace,
+  isCancelled = () => false,
+  maxRepairs = 8,
+}) {
+  const savedItems = Array.isArray(items) ? items : [];
+  if (!savedItems.length || !destination || typeof geocodePlace !== "function") {
+    return savedItems;
+  }
+
+  const anchorQueries = destinationGeoQueries(destination).slice(0, maxRepairs);
+  const anchors = (await Promise.all(
+    anchorQueries.map((query) => geocodePlace(query).catch(() => null)),
+  )).filter(Boolean);
+  if (isCancelled()) return null;
+  if (!anchors.length) return savedItems;
+
+  const resolvedItems = [];
+  let repairAttempts = 0;
+  for (const item of savedItems) {
+    if (isCancelled()) return null;
+    const savedLat = Number(item.latitude);
+    const savedLng = Number(item.longitude);
+    const isNearDestination = isCoordinateNearAnyAnchor(savedLat, savedLng, anchors);
+
+    if (!item.draftedByAi || isNearDestination || repairAttempts >= maxRepairs) {
+      resolvedItems.push(item);
+      continue;
+    }
+
+    const query = buildItineraryGeocodeQuery(item, destination);
+    if (!query) {
+      resolvedItems.push(item);
+      continue;
+    }
+
+    repairAttempts += 1;
+    const resolved = await geocodePlace(query).catch(() => null);
+    if (isCancelled()) return null;
+    const isUsableRepair =
+      resolved &&
+      isCoordinateNearAnyAnchor(resolved.lat, resolved.lng, anchors) &&
+      shouldReplaceSuspiciousCoordinates(savedLat, savedLng, resolved.lat, resolved.lng);
+
+    resolvedItems.push(isUsableRepair
+      ? { ...item, latitude: resolved.lat, longitude: resolved.lng }
+      : item);
+  }
+
+  return resolvedItems;
+}

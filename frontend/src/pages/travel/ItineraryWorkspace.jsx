@@ -32,9 +32,7 @@ import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
 import { geocode } from "../../lib/geocoder";
 import {
   buildItineraryGeocodeQuery,
-  destinationGeoQueries,
-  isCoordinateNearAnyAnchor,
-  shouldReplaceSuspiciousCoordinates,
+  resolveItineraryMapItems,
 } from "../../lib/travelLocationResolver";
 
 // The 12 server-validated itemTypes (backend VALID_ITEM_TYPES). Order here is
@@ -487,54 +485,20 @@ export default function ItineraryWorkspace() {
   const [mapItems, setMapItems] = useState([]);
   useEffect(() => {
     let cancelled = false;
-    if (!orderedMapItems.length || !itin?.destination) {
-      setMapItems(orderedMapItems);
-      return undefined;
-    }
+    // Always retain and immediately render saved coordinates. Manual pins can
+    // legitimately be far from a broad destination (for example a multi-city
+    // trip), and a failed geocoder lookup must not make an item disappear.
+    setMapItems(orderedMapItems);
+    if (!orderedMapItems.length || !itin?.destination) return undefined;
 
-    // Do not briefly render known-unvalidated coordinates: a single stale
-    // overseas pin makes Leaflet fit the whole world before repair completes.
-    setMapItems([]);
     (async () => {
-      const anchorQueries = destinationGeoQueries(itin.destination);
-      const anchors = (await Promise.all(
-        anchorQueries.map((query) => geocode(query).catch(() => null)),
-      )).filter(Boolean);
-      if (cancelled) return;
-      if (!anchors.length) {
-        setMapItems(orderedMapItems);
-        return;
-      }
-
-      const validated = [];
-      for (const item of orderedMapItems) {
-        if (cancelled) return;
-        const savedLat = Number(item.latitude);
-        const savedLng = Number(item.longitude);
-        if (isCoordinateNearAnyAnchor(savedLat, savedLng, anchors)) {
-          validated.push(item);
-          continue;
-        }
-
-        const query = buildItineraryGeocodeQuery(item, itin.destination);
-        const resolved = query ? await geocode(query).catch(() => null) : null;
-        if (!resolved || !isCoordinateNearAnyAnchor(resolved.lat, resolved.lng, anchors)) {
-          continue;
-        }
-
-        validated.push({ ...item, latitude: resolved.lat, longitude: resolved.lng });
-        if (
-          item.draftedByAi &&
-          shouldReplaceSuspiciousCoordinates(savedLat, savedLng, resolved.lat, resolved.lng)
-        ) {
-          fetchApi(`/api/travel/itineraries/${id}/items/${item.id}`, {
-            method: "PATCH",
-            body: JSON.stringify({ latitude: resolved.lat, longitude: resolved.lng }),
-            silent: true,
-          }).catch(() => {});
-        }
-      }
-      if (!cancelled) setMapItems(validated);
+      const resolvedItems = await resolveItineraryMapItems({
+        items: orderedMapItems,
+        destination: itin.destination,
+        geocodePlace: geocode,
+        isCancelled: () => cancelled,
+      });
+      if (!cancelled && resolvedItems) setMapItems(resolvedItems);
     })();
 
     return () => { cancelled = true; };

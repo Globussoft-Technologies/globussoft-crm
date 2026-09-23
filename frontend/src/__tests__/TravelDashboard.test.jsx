@@ -384,15 +384,14 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     await screen.findByText('Published: 3');
   });
 
-  it('renders the web check-ins footer breakdown and missed accent', async () => {
+  it('renders the web check-ins footer breakdown without a duplicate missed accent', async () => {
     installFetchMock();
     renderPage();
     await screen.findByText('Web check-ins');
     expect(screen.getByText('Delivered: 5')).toBeInTheDocument();
     expect(screen.getByText('Pending: 3')).toBeInTheDocument();
     expect(screen.getByText('Missed: 1')).toBeInTheDocument();
-    // Danger-color accent shows the missed count.
-    expect(screen.getByText('1 missed')).toBeInTheDocument();
+    expect(screen.queryByText('1 missed')).not.toBeInTheDocument();
   });
 
   it('does not render the missed accent when no web check-ins are missed', async () => {
@@ -407,8 +406,7 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     expect(screen.getByText('Delivered: 2')).toBeInTheDocument();
     expect(screen.getByText('Pending: 1')).toBeInTheDocument();
     expect(screen.getByText('Missed: 0')).toBeInTheDocument();
-    // The footer contains "0 missed" as a substring, but the danger-color
-    // accent (an exact text node of "0 missed") must not render.
+    // The footer owns the missed count; no separate accent is rendered.
     expect(screen.queryByText('0 missed')).not.toBeInTheDocument();
   });
 

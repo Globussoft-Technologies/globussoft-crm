@@ -128,7 +128,7 @@ function connect() {
   }
   const url = connectorUrl(config);
   log("INFO", `Connecting to ${new URL(config.serverUrl).host}`);
-  const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${config.token}` }, rejectUnauthorized: config.rejectUnauthorized !== false, handshakeTimeout: 15_000, maxPayload: 8 * 1024 * 1024 });
+  const socket = new WebSocket(url, ["tally-connector", `tally-token.${config.token}`], { headers: { Authorization: `Bearer ${config.token}` }, rejectUnauthorized: config.rejectUnauthorized !== false, handshakeTimeout: 15_000, maxPayload: 8 * 1024 * 1024 });
   socket.on("open", () => {
     reconnectAttempt = 0;
     log("INFO", "Connected to Globussoft CRM");

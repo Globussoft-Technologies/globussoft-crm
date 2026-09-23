@@ -375,7 +375,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .knowledge
 
 [data-vertical="travel"] .travel-content-frame .diagnostics-table-scroll {
   max-width: 100%;
-  max-height: clamp(300px, 52vh, 560px);
+  max-height: clamp(300px, 65vh, 680px);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;

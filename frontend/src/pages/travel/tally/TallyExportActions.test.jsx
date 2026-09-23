@@ -7,7 +7,11 @@ const { success, error, info } = vi.hoisted(() => ({ success: vi.fn(), error: vi
 
 vi.mock("../../../components/PermissionGate", () => ({ default: ({ children }) => children }));
 vi.mock("../../../utils/notify", () => ({ useNotify: () => ({ success, error, info }) }));
-vi.mock("../../../utils/api", () => ({ fetchApi: vi.fn() }));
+vi.mock("../../../utils/api", () => ({
+  fetchApi: vi.fn(),
+  getAuthToken: vi.fn(() => null),
+  getActiveTenantId: vi.fn(() => null),
+}));
 
 const props = {
   accounts: [],
@@ -35,8 +39,26 @@ const props = {
 describe("TallyExportActions direct connector", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
     URL.createObjectURL = vi.fn(() => "blob:tally-export");
     URL.revokeObjectURL = vi.fn();
+  });
+
+  it("does not rotate connector credentials when the executable download fails", async () => {
+    fetchApi.mockResolvedValue({ configured: false, online: false });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      json: vi.fn().mockResolvedValue({ error: "Connector binary is unavailable" }),
+    }));
+    render(<TallyExportActions {...props} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download Tally Connector/i }));
+
+    await waitFor(() => expect(error).toHaveBeenCalledWith("Connector binary is unavailable"));
+    expect(fetchApi).not.toHaveBeenCalledWith(
+      "/api/travel/tally/connector/credentials",
+      expect.anything(),
+    );
   });
 
   it("downloads Masters and Voucher XML when push is attempted while the connector is offline", async () => {

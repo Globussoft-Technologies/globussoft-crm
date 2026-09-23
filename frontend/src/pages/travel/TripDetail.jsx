@@ -1094,14 +1094,20 @@ function ParticipantsTab({ trip, onChange, notify }) {
           participants so they read as one continuous review surface. */}
       {reviewableRegs.length > 0 && (
         <div style={{ background: "var(--surface-color, #fff)", borderRadius: 14, border: "1px solid var(--border-color)", overflow: "hidden", marginBottom: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)" }} data-testid="pending-registrations-list">
-          <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", background: "rgba(241,245,249,0.55)" }}>
+          <div style={{ ...participantTableHeader, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Registered participants</div>
               <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Registration is automatic. Uploaded documents are available below.</div>
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, color: "#2F7A4D", background: "rgba(47,122,77,0.12)", padding: "6px 10px", borderRadius: 999 }}>{reviewableRegs.length} total</span>
           </div>
-          {reviewableRegs.map((r) => {
+          <div
+            data-testid="registered-participants-scroll-area"
+            role="region"
+            aria-label="Registered participant records"
+            style={participantScrollArea}
+          >
+            {reviewableRegs.map((r) => {
             // Parse uploaded document status from extrasJson — booleans only, no raw keys
             let regDocs = {};
             if (r.extrasJson) {
@@ -1210,24 +1216,31 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </div>
               </div>
             );
-          })}
+            })}
+          </div>
         </div>
       )}
 
       <div style={{ ...listShell, borderRadius: 14, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)" }}>
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-color)", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+        <div style={participantTableHeader}>
           Participant list
         </div>
-        {(trip.participants || []).length === 0 ? (
-          <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-            <Users size={28} aria-hidden style={{ opacity: 0.4 }} />
-            <div>No participants yet</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
-              Click <em>Add participant</em> above to enrol the first student.
+        <div
+          data-testid="participant-list-scroll-area"
+          role="region"
+          aria-label="Participant records"
+          style={participantScrollArea}
+        >
+          {(trip.participants || []).length === 0 ? (
+            <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <Users size={28} aria-hidden style={{ opacity: 0.4 }} />
+              <div>No participants yet</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                Click <em>Add participant</em> above to enrol the first student.
+              </div>
             </div>
-          </div>
-        ) : (
-          trip.participants.map((p) => {
+          ) : (
+            trip.participants.map((p) => {
             // Default to "pending" so legacy rows (pre-applicationStatus
             // column) read as pending review rather than as an unknown
             // status. The schema default already covers new rows.
@@ -1301,8 +1314,9 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </div>
               </div>
             );
-          })
-        )}
+            })
+          )}
+        </div>
       </div>
     </div>
   );
@@ -3396,6 +3410,20 @@ const backLink = {
 const listShell = {
   background: "var(--bg-color, #111318)", borderRadius: 8,
   border: "1px solid var(--border-color)", overflow: "hidden",
+};
+const participantScrollArea = {
+  maxHeight: "min(60vh, 520px)",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  scrollbarGutter: "stable",
+};
+const participantTableHeader = {
+  padding: "16px 20px",
+  borderBottom: "1px solid var(--border-color)",
+  background: "var(--surface-hover, var(--subtle-bg))",
+  color: "var(--text-primary)",
+  fontSize: 15,
+  fontWeight: 700,
 };
 const row = {
   padding: "10px 14px", display: "flex", justifyContent: "space-between",

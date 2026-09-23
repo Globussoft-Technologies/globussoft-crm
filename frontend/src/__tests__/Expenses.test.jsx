@@ -70,6 +70,7 @@ vi.mock('../utils/date', () => ({
 }));
 
 import Expenses from '../pages/Expenses';
+import { AuthContext } from '../appContexts';
 
 const sampleExpenses = [
   {
@@ -124,6 +125,17 @@ function defaultFetch(url, opts) {
 
 function renderExpenses() {
   return render(<Expenses />);
+}
+
+function renderTravelExpenses() {
+  return render(
+    <AuthContext.Provider value={{
+      user: { userId: 7, role: 'ADMIN', tenant: { vertical: 'travel' } },
+      tenant: { id: 1, vertical: 'travel' },
+    }}>
+      <Expenses />
+    </AuthContext.Provider>,
+  );
 }
 
 // The component's labels lack htmlFor/id pairing, so getByLabelText doesn't
@@ -184,6 +196,27 @@ describe('<Expenses /> — page surface', () => {
     // future regression that adds a stray GET wouldn't pass silently.
     const contactsCall = fetchApiMock.mock.calls.find(([u]) => u === '/api/contacts');
     expect(contactsCall).toBeFalsy();
+  });
+
+  it('uses backend pagination and status filtering for Travel expenses', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/expenses?limit=25') return Promise.resolve(sampleExpenses);
+      if (url === '/api/expenses?limit=25&status=Pending') {
+        return Promise.resolve(sampleExpenses.filter((expense) => expense.status === 'Pending'));
+      }
+      if (url === '/api/expenses/stats') return Promise.resolve({ total: 4 });
+      if (url.startsWith('/api/travel/quotes')) return Promise.resolve({ quotes: [] });
+      if (url.startsWith('/api/travel/trips')) return Promise.resolve({ trips: [] });
+      return Promise.resolve({});
+    });
+    renderTravelExpenses();
+
+    const pendingFilter = await screen.findByRole('button', { name: /Show pending expenses/i });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/expenses?limit=25'));
+    fireEvent.click(pendingFilter);
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/expenses?limit=25&status=Pending'));
+    expect(await screen.findByText('Figma seat')).toBeInTheDocument();
   });
 
   it('empty list renders the "No expenses recorded yet." placeholder + 0 total chip', async () => {
@@ -657,4 +690,3 @@ describe('<Expenses /> — page surface', () => {
     expect(postCall).toBeFalsy();
   });
 });
-

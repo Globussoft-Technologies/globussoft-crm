@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, History, KeyRound, UploadCloud } from "lucide-react";
+import { Download, History, UploadCloud } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PermissionGate from "../../../components/PermissionGate";
 import { fetchApi } from "../../../utils/api";
@@ -8,6 +8,7 @@ import { useNotify } from "../../../utils/notify";
 import { getTripLedgerRows } from "./tallyMath";
 import { buildTallyMastersXml, buildTallyXml, buildVoucherRows } from "./tallyExportBuilder";
 import { useTravelTallyMaster } from "./useTravelTallyMaster";
+import { downloadTallyConnectorPackage, fetchTallyConnectorBinary } from "./tallyConnectorConfig";
 import TallySectionNav from "./TallySectionNav";
 import tallyIcon from "../../../assets/tally-icon.png";
 
@@ -23,6 +24,7 @@ const SUB_BRAND_OPTIONS = [
 ];
 const validSubBrand = (value) => SUB_BRAND_OPTIONS.some((option) => option.value === value);
 const subBrandLabel = (value) => SUB_BRAND_OPTIONS.find((option) => option.value === value)?.label || value;
+const TALLY_PAGE_SIZE_OPTIONS = [10, 20, 50];
 
 export default function TallyExportPreviewPage() {
   const { tripId } = useParams();
@@ -45,7 +47,6 @@ export default function TallyExportPreviewPage() {
   const [loading, setLoading] = useState(true);
   const [tallyPreviewSelection, setTallyPreviewSelection] = useState("voucher:0");
   const [connectorStatus, setConnectorStatus] = useState(null);
-  const [connectorCredentials, setConnectorCredentials] = useState(null);
   const [generatingCredentials, setGeneratingCredentials] = useState(false);
   const [educationalMode, setEducationalMode] = useState(() => {
     try { return window.localStorage.getItem("travel-tally-educational-mode") === "true"; } catch (_) { return false; }
@@ -147,6 +148,21 @@ export default function TallyExportPreviewPage() {
     ? allRows
     : allRows.filter((row) => getTripCostCentreSyncStatus(row, costCentreStatuses) === tallySyncFilter),
   [allRows, costCentreStatuses, tallySyncFilter]);
+  const currentPage = Math.max(1, Number(searchParams.get("page") || 1));
+  const pageSizeParam = Number(searchParams.get("pageSize"));
+  const pageSize = TALLY_PAGE_SIZE_OPTIONS.includes(pageSizeParam) ? pageSizeParam : 10;
+  const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+  const safePage = Math.min(currentPage, pageCount);
+  const paginatedRows = useMemo(
+    () => visibleRows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [pageSize, safePage, visibleRows],
+  );
+  useEffect(() => {
+    if (currentPage === safePage) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("page", String(safePage));
+    setSearchParams(nextParams, { replace: true });
+  }, [currentPage, safePage, searchParams, setSearchParams]);
   const buildTripExport = () => {
     if (!summary) return;
     const exportDate = master.to || master.from || trip.startDate || trip.fromDate || trip.createdAt || new Date().toISOString();
@@ -208,34 +224,19 @@ export default function TallyExportPreviewPage() {
       setPushing(false);
     }
   };
-  const generateConnectorCredentials = async () => {
+  const downloadConnector = async () => {
     setGeneratingCredentials(true);
     try {
+      const executable = await fetchTallyConnectorBinary();
       const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
-      setConnectorCredentials(credentials);
-      notify.success("Credentials generated. Download config.json now; the token is shown only once.");
+      downloadTallyConnectorPackage(credentials, executable);
+      await refreshConnectorStatus();
+      notify.success("Tally Connector ZIP downloaded. Extract it and run the executable beside config.json.");
+    } catch (error) {
+      notify.error(error.message || "Could not download the Tally Connector ZIP.");
     } finally {
       setGeneratingCredentials(false);
     }
-  };
-  const downloadConnectorConfig = () => {
-    if (!connectorCredentials) return;
-    const config = {
-      serverUrl: connectorCredentials.connectorUrl,
-      customerId: connectorCredentials.customerId,
-      connectorId: connectorCredentials.connectorId,
-      token: connectorCredentials.token,
-      machineId: "office-pc-1",
-      localTallyUrl: "http://127.0.0.1:9000",
-      requestTimeoutMs: 45000,
-      rejectUnauthorized: true,
-    };
-    const url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "config.json";
-    anchor.click();
-    URL.revokeObjectURL(url);
   };
   const previewData = buildTripExport();
   const previewRows = previewData?.voucherRows.slice(1) || [];
@@ -245,6 +246,24 @@ export default function TallyExportPreviewPage() {
     setSubBrandFilter(value);
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("subBrand", value);
+    nextParams.set("page", "1");
+    setSearchParams(nextParams, { replace: true });
+  };
+  const updateTallySyncFilter = (value) => {
+    setTallySyncFilter(value);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("page", "1");
+    setSearchParams(nextParams, { replace: true });
+  };
+  const updatePage = (nextPage) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("page", String(Math.min(pageCount, Math.max(1, nextPage))));
+    setSearchParams(nextParams, { replace: true });
+  };
+  const updatePageSize = (nextPageSize) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("pageSize", String(nextPageSize));
+    nextParams.set("page", "1");
     setSearchParams(nextParams, { replace: true });
   };
 
@@ -271,15 +290,10 @@ export default function TallyExportPreviewPage() {
           <div style={connectorButtons}>
             <button type="button" onClick={refreshConnectorStatus} style={smallButton}>Refresh status</button>
             <PermissionGate module="tally" action="update">
-              <button type="button" onClick={generateConnectorCredentials} disabled={generatingCredentials} style={smallButton}><KeyRound size={14} /> {generatingCredentials ? "Generating…" : connectorStatus?.configured ? "Rotate credentials" : "Generate credentials"}</button>
+              <button type="button" onClick={downloadConnector} disabled={generatingCredentials} style={{ ...smallButton, background: "#f4512c", borderColor: "#f4512c", color: "#fff" }}><Download size={14} /> {generatingCredentials ? "Preparing ZIP…" : "Download Tally Connector"}</button>
             </PermissionGate>
           </div>
         </div>
-        {connectorCredentials && <div style={credentialNotice}>
-          <strong>Save this configuration now</strong>
-          <small>The token is shown only once. Download it before leaving this page.</small>
-          <button type="button" onClick={downloadConnectorConfig} style={smallButton}><Download size={14} /> Download config.json</button>
-        </div>}
         <small style={muted}>Run the connector on the Windows computer where Tally is open on localhost port 9000.</small>
       </div>
       <TallySyncGuidelines />
@@ -289,7 +303,7 @@ export default function TallyExportPreviewPage() {
           {SUB_BRAND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
         <label htmlFor="tally-sync-status-filter" style={filterLabel}>Tally Sync Status</label>
-        <select id="tally-sync-status-filter" value={tallySyncFilter} onChange={(event) => setTallySyncFilter(event.target.value)} style={filterSelect}>
+        <select id="tally-sync-status-filter" value={tallySyncFilter} onChange={(event) => updateTallySyncFilter(event.target.value)} style={filterSelect}>
           <option value="all">All statuses</option>
           <option value="SYNCED">Synced</option>
           <option value="NOT_CONNECTED">Not connected</option>
@@ -299,7 +313,7 @@ export default function TallyExportPreviewPage() {
       <div style={{ overflowX: "auto" }}>
         <table style={table}>
           <thead><tr>{["Trip", "Status", "Tally Sync Status", "Sales", "Purchase", "GST / TCS", "Cash Profit / Loss", "Actions"].map((label) => <th key={label} style={th}>{label}</th>)}</tr></thead>
-          <tbody>{visibleRows.length ? visibleRows.map((row) => <tr key={row.id}>
+          <tbody>{visibleRows.length ? paginatedRows.map((row) => <tr key={row.id}>
             <td style={td}><strong>{row.label}</strong><small style={{ display: "block", color: "var(--text-secondary)" }}>Trip #{row.id}</small></td>
             <td style={td}>{row.status}</td>
             <td style={td}><SyncStatusBadge status={getTripCostCentreSyncStatus(row, costCentreStatuses)} /></td>
@@ -311,6 +325,16 @@ export default function TallyExportPreviewPage() {
           </tr>) : <tr><td colSpan="8" style={emptyState}>No trips found for the selected sub-brand.</td></tr>}</tbody>
         </table>
       </div>
+      {visibleRows.length > 0 && (
+        <TallyPagination
+          page={safePage}
+          pageCount={pageCount}
+          pageSize={pageSize}
+          total={visibleRows.length}
+          onPageChange={updatePage}
+          onPageSizeChange={updatePageSize}
+        />
+      )}
     </section>
   </main>;
   if (!trip || !summary) return <main style={page}><TallySectionNav showBack /><section style={card}><h1>Trip not found</h1><p style={muted}>This trip is no longer available for export.</p></section></main>;
@@ -328,6 +352,35 @@ export default function TallyExportPreviewPage() {
     <section style={card}><h2 style={sectionTitle}>All trip records</h2><RecordTable title="Customer invoices & receipts" rows={customers} columns={["name", "reference", "invoiceTotal", "amount"]} labels={["Party", "Reference", "Invoice", "Received"]} /><RecordTable title="Expenses" rows={payables} columns={["name", "reference", "amount", "status"]} labels={["Supplier", "Reference", "Amount", "Status"]} /></section>
     <div style={bottomPush}><div style={connectorButtons}><PermissionGate module="tally" action="export"><button type="button" onClick={pushTripDirectly} disabled={pushing || summary.unpaidSales > 0} title={summary.unpaidSales > 0 ? "Direct push is blocked while the trip has an outstanding amount" : connectorStatus?.online ? "Send masters and vouchers directly to local Tally" : "Connector offline: download XML files for manual import into Tally"} style={{ ...downloadButton, background: !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", borderColor: !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", cursor: !pushing && summary.unpaidSales <= 0 ? "pointer" : "not-allowed" }}><UploadCloud size={16} /> {pushing ? "Pushing…" : "Push directly to Tally"}</button></PermissionGate></div><label style={educationalToggle}><input type="checkbox" checked={educationalMode} onChange={(event) => { const enabled = event.target.checked; setEducationalMode(enabled); try { window.localStorage.setItem("travel-tally-educational-mode", String(enabled)); } catch (_) { /* optional preference */ } }} /> Tally is running in Educational Mode <small>(uses the first day of each month)</small></label></div>
   </main>;
+}
+
+function TallyPagination({ page, pageCount, pageSize, total, onPageChange, onPageSizeChange }) {
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  const controlStyle = {
+    minHeight: 34,
+    padding: "6px 10px",
+    border: "1px solid var(--border-color, rgba(148,163,184,.25))",
+    borderRadius: 8,
+    background: "transparent",
+    color: "var(--text-primary)",
+    fontWeight: 600,
+    cursor: "pointer",
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 16, color: "var(--text-secondary)", fontSize: 12 }}>
+      <span>Showing {start}-{end} of {total}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <label htmlFor="tally-page-size">Per page:</label>
+        <select id="tally-page-size" value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))} style={{ ...controlStyle, cursor: "pointer" }}>
+          {TALLY_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+        </select>
+        <button type="button" onClick={() => onPageChange(page - 1)} disabled={page <= 1} style={{ ...controlStyle, opacity: page <= 1 ? 0.5 : 1, cursor: page <= 1 ? "not-allowed" : "pointer" }} aria-label="Previous page">Previous</button>
+        <span>Page {page} of {pageCount}</span>
+        <button type="button" onClick={() => onPageChange(page + 1)} disabled={page >= pageCount} style={{ ...controlStyle, opacity: page >= pageCount ? 0.5 : 1, cursor: page >= pageCount ? "not-allowed" : "pointer" }} aria-label="Next page">Next</button>
+      </div>
+    </div>
+  );
 }
 
 function Detail({ label, value }) { return <div style={detail}><span style={muted}>{label}</span><strong>{field(value)}</strong></div>; }
@@ -371,7 +424,8 @@ function getTallyPreviewOptions(rows) {
 }
 
 function TallyPreviewSelector({ options, value, onChange }) {
-  return <div style={previewControls}><div><strong style={{ display: "block", fontSize: 14 }}>Tally preview</strong><span style={muted}>Select a voucher or ledger to see how it will appear in Tally.</span></div><select aria-label="Select voucher or ledger preview" value={value} onChange={(event) => onChange(event.target.value)} style={previewSelect}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>;
+  const hasOptions = options.length > 0;
+  return <div style={previewControls}><div><strong style={{ display: "block", fontSize: 14 }}>Tally preview</strong><span style={muted}>Select a voucher or ledger to see how it will appear in Tally.</span></div><select aria-label="Select voucher or ledger preview" value={value} onChange={(event) => onChange(event.target.value)} disabled={!hasOptions} style={{ ...previewSelect, opacity: hasOptions ? 1 : 0.6, cursor: hasOptions ? "pointer" : "not-allowed" }}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>;
 }
 
 function TallyVoucherPreview({ row, rows, companyName }) {
@@ -410,7 +464,6 @@ const connectorPanel = { marginTop: 18, padding: 14, border: "1px solid var(--bo
 const connectorHeader = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" };
 const connectorButtons = { display: "flex", gap: 8, flexWrap: "wrap" };
 const smallButton = { ...button, minHeight: 34, padding: "6px 10px", fontSize: 12 };
-const credentialNotice = { display: "grid", gap: 7, marginTop: 12, padding: 12, borderRadius: 8, background: "rgba(245,158,11,.12)" };
 const guidelinesPanel = { margin: "12px 0", padding: 14, border: "1px solid rgba(245,158,11,.45)", borderRadius: 10, background: "rgba(245,158,11,.08)", fontSize: 13 };
 const guidelinesList = { margin: "8px 0 0", paddingLeft: 20, color: "var(--text-secondary)", lineHeight: 1.6 };
 const filterBar = { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, margin: "12px 0" };

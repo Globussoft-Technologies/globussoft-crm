@@ -1,4 +1,6 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
@@ -17,6 +19,10 @@ const {
 
 const guards = [verifyToken, requireTravelTenant];
 const activePushes = new Set();
+const connectorBinaryPath = path.resolve(
+  process.env.TALLY_CONNECTOR_EXE_PATH
+    || path.join(__dirname, "..", "..", "tally-connector", "dist", "TallyConnector.exe"),
+);
 
 function safeCredentials(raw) {
   if (!raw) return null;
@@ -29,9 +35,24 @@ function safeCredentials(raw) {
 }
 
 function connectorUrlFor(req) {
+  const configuredUrl = String(process.env.TALLY_CONNECTOR_PUBLIC_URL || "").trim();
+  if (configuredUrl) {
+    try {
+      const url = new URL(configuredUrl);
+      if (url.protocol === "https:") url.protocol = "wss:";
+      if (url.protocol === "http:") url.protocol = "ws:";
+      if (!url.pathname || url.pathname === "/") url.pathname = CONNECTOR_PATH;
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch (_) {
+      console.warn("[tally-connector] ignoring invalid TALLY_CONNECTOR_PUBLIC_URL");
+    }
+  }
   const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
   const wsProtocol = (forwarded || req.protocol) === "https" ? "wss" : "ws";
-  return `${wsProtocol}://${req.get("host")}${CONNECTOR_PATH}`;
+  return `${wsProtocol}://${forwardedHost || req.get("host")}${CONNECTOR_PATH}`;
 }
 
 function validXml(value) {
@@ -135,6 +156,26 @@ router.post("/credentials", ...guards, requirePermission("tally", "update"), asy
     console.error("[tally-connector] credential generation failed:", error.message);
     res.status(500).json({ error: "Failed to generate connector credentials", code: "TALLY_CONNECTOR_CREDENTIAL_ERROR" });
   }
+});
+
+router.get("/binary", ...guards, requirePermission("tally", "read"), (req, res) => {
+  if (!fs.existsSync(connectorBinaryPath)) {
+    return res.status(503).json({
+      error: "The Tally connector package is not available on this server.",
+      code: "TALLY_CONNECTOR_BINARY_UNAVAILABLE",
+    });
+  }
+
+  res.setHeader("Cache-Control", "private, no-store");
+  return res.download(connectorBinaryPath, "TallyConnector.exe", (error) => {
+    if (error && !res.headersSent) {
+      console.error("[tally-connector] binary download failed:", error.message);
+      res.status(500).json({
+        error: "Failed to download the Tally connector.",
+        code: "TALLY_CONNECTOR_BINARY_DOWNLOAD_ERROR",
+      });
+    }
+  });
 });
 
 router.post("/push", ...guards, requirePermission("tally", "export"), async (req, res) => {

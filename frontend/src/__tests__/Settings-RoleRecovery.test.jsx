@@ -50,16 +50,22 @@ vi.mock('../utils/notify', () => ({
 // usePermissions — vary the perm set per test.
 let permsForTest = new Set(['roles.read', 'roles.manage', 'settings.read', 'settings.manage']);
 let isOwnerForTest = false;
+const permissionMockFns = vi.hoisted(() => ({
+  hasPermission: vi.fn(),
+  hasAllPermissions: vi.fn(),
+  hasAnyPermission: vi.fn(),
+  refresh: vi.fn(() => Promise.resolve()),
+}));
 vi.mock('../hooks/usePermissions', () => ({
   usePermissions: () => ({
-    hasPermission: (m, a) => permsForTest.has(`${m}.${a}`),
-    hasAllPermissions: (list) => list.every((p) => permsForTest.has(`${p.module}.${p.action}`)),
-    hasAnyPermission: (list) => list.some((p) => permsForTest.has(`${p.module}.${p.action}`)),
+    hasPermission: permissionMockFns.hasPermission,
+    hasAllPermissions: permissionMockFns.hasAllPermissions,
+    hasAnyPermission: permissionMockFns.hasAnyPermission,
     isLoading: false,
     isReady: true,
     permissions: Array.from(permsForTest),
     isOwner: isOwnerForTest,
-    refresh: vi.fn(() => Promise.resolve()),
+    refresh: permissionMockFns.refresh,
   }),
   invalidatePermissionCache: vi.fn(),
 }));
@@ -181,6 +187,14 @@ beforeEach(() => {
   notifyObj.info.mockReset();
   permsForTest = new Set(['roles.read', 'roles.manage', 'settings.read', 'settings.manage']);
   isOwnerForTest = false;
+  permissionMockFns.hasPermission.mockImplementation((m, a) => permsForTest.has(`${m}.${a}`));
+  permissionMockFns.hasAllPermissions.mockImplementation(
+    (list) => list.every((p) => permsForTest.has(`${p.module}.${p.action}`)),
+  );
+  permissionMockFns.hasAnyPermission.mockImplementation(
+    (list) => list.some((p) => permsForTest.has(`${p.module}.${p.action}`)),
+  );
+  permissionMockFns.refresh.mockClear();
   // Default URL-routing mock; per-test handlers override.
   fetchApiMock.mockImplementation((url, opts) => {
     if (url === '/api/roles?page=1&limit=10' && (!opts || !opts.method || opts.method === 'GET')) {

@@ -497,6 +497,14 @@ const CALENDAR_SYNC_ITEM_STYLE = {
   background: "var(--surface-hover)",
   border: "1px solid var(--border-color)",
 };
+
+const CALENDAR_SYNC_SCROLL_AREA_STYLE = {
+  maxHeight: "min(60vh, 520px)",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  scrollbarGutter: "stable",
+  paddingRight: "0.25rem",
+};
 const CALENDAR_SYNC_MAX_RENDERED_MEETINGS = 50;
 
 function getMeetingReminderAlertKey(event, reminderKey) {
@@ -569,6 +577,9 @@ export default function CalendarSync() {
     createMeet: false,
     createZoom: false,
   });
+  const [newAttendeeEmail, setNewAttendeeEmail] = useState("");
+  const [newEditAttendeeEmail, setNewEditAttendeeEmail] = useState("");
+  const [newAttendeeOpen, setNewAttendeeOpen] = useState("");
   const [showEventDetail, setShowEventDetail] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [isEditingEvent, setIsEditingEvent] = useState(false);
@@ -604,6 +615,15 @@ export default function CalendarSync() {
   });
   // Attendee picker — contacts/customers fetched lazily when the modal opens.
   const [contactOptions, setContactOptions] = useState([]);
+  const [contactSearch, setContactSearch] = useState("");
+  const [attendeePickerOpen, setAttendeePickerOpen] = useState("");
+  const filteredContactOptions = useMemo(() => {
+    const query = contactSearch.trim().toLowerCase();
+    if (!query) return contactOptions;
+    return contactOptions.filter((contact) =>
+      `${contact.name} ${contact.email}`.toLowerCase().includes(query),
+    );
+  }, [contactOptions, contactSearch]);
   const createStartTime = floorToMinute(formData.startTime);
   const createEndTime = floorToMinute(formData.endTime);
   const createNow = floorToMinute(new Date());
@@ -1201,6 +1221,12 @@ export default function CalendarSync() {
     setFormData({ ...formData, attendees: [...current, normalizedEmail].join(", ") });
   };
 
+  const commitNewAttendeeEmail = () => {
+    if (!newAttendeeEmail.trim()) return;
+    addAttendeeEmail(newAttendeeEmail);
+    setNewAttendeeEmail("");
+  };
+
   const removeAttendeeEmail = (email) => {
     const remaining = formData.attendees
       .split(",")
@@ -1220,6 +1246,12 @@ export default function CalendarSync() {
     setEditFormData({ ...editFormData, attendees: [...current, normalizedEmail].join(", ") });
   };
 
+  const commitNewEditAttendeeEmail = () => {
+    if (!newEditAttendeeEmail.trim()) return;
+    addEditAttendeeEmail(newEditAttendeeEmail);
+    setNewEditAttendeeEmail("");
+  };
+
   const removeEditAttendeeEmail = (email) => {
     const remaining = String(editFormData.attendees || "")
       .split(",")
@@ -1227,6 +1259,98 @@ export default function CalendarSync() {
       .filter((item) => item && item.toLowerCase() !== String(email).toLowerCase());
     setEditFormData({ ...editFormData, attendees: remaining.join(", ") });
   };
+
+  const renderAttendeePicker = (onSelect, pickerKey) => (
+    <div style={{ position: "relative", display: "flex", gap: "0.4rem", marginBottom: "0.5rem" }}>
+      <div style={{ position: "relative", flex: 1 }}>
+        <input
+        type="search"
+        value={contactSearch}
+        role="combobox"
+        aria-label="Add attendee from contacts"
+        aria-expanded={attendeePickerOpen === pickerKey}
+        aria-controls={`${pickerKey}-attendee-options`}
+        placeholder="+ Add from contacts…"
+        onFocus={() => setAttendeePickerOpen(pickerKey)}
+        onBlur={() => setAttendeePickerOpen("")}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setAttendeePickerOpen("");
+          }
+        }}
+        onChange={(e) => {
+          setContactSearch(e.target.value);
+          setAttendeePickerOpen(pickerKey);
+        }}
+        style={{
+          width: "100%",
+          padding: "0.7rem",
+          fontSize: "0.9rem",
+          border: "1px solid var(--border-color)",
+          borderRadius: "8px",
+          background: "var(--bg-color)",
+          color: "var(--text-primary)",
+          boxSizing: "border-box",
+        }}
+        />
+      {attendeePickerOpen === pickerKey && (
+        <div
+          id={`${pickerKey}-attendee-options`}
+          role="listbox"
+          style={{
+            position: "absolute",
+            zIndex: 20,
+            left: 0,
+            right: 0,
+            top: "calc(100% + 0.25rem)",
+            maxHeight: 220,
+            overflowY: "auto",
+            padding: "0.25rem",
+            border: "1px solid var(--border-color)",
+            borderRadius: "8px",
+            background: "var(--bg-color, #0b0c10)",
+            color: "var(--text-primary)",
+            boxShadow: "0 8px 20px rgba(0,0,0,0.15)",
+          }}
+        >
+          {filteredContactOptions.length === 0 ? (
+            <div style={{ padding: "0.65rem", color: "var(--text-secondary)" }}>No matching contacts</div>
+          ) : filteredContactOptions.map((contact) => (
+            <div
+              key={contact.email}
+              role="option"
+              aria-label={`${contact.name} (${contact.email})`}
+              tabIndex={0}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onSelect(contact.email);
+                setContactSearch("");
+                setAttendeePickerOpen("");
+              }}
+              style={{
+                padding: "0.6rem 0.7rem",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+            >
+              {contact.name} ({contact.email})
+            </div>
+          ))}
+        </div>
+      )}
+      </div>
+      <button
+        type="button"
+        aria-label={newAttendeeOpen === pickerKey ? "Close new attendee input" : "Add a new attendee"}
+        title={newAttendeeOpen === pickerKey ? "Close new attendee input" : "Add a new attendee"}
+        onClick={() => setNewAttendeeOpen((current) => current === pickerKey ? "" : pickerKey)}
+        style={{ width: 40, height: 40, borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--surface-hover)", color: "var(--text-primary)", fontSize: "1.2rem", cursor: "pointer" }}
+      >
+        {newAttendeeOpen === pickerKey ? "×" : "+"}
+      </button>
+    </div>
+  );
 
   const handleCreateEvent = async (e) => {
     e?.preventDefault?.();
@@ -2682,7 +2806,17 @@ export default function CalendarSync() {
             <div style={{ fontWeight: 700 }}>Pending alerts</div>
             <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>24h trip/birthday reminders plus 24h, 30m, and 10m meeting reminders</div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          <div
+            data-testid="pending-alerts-scroll-area"
+            role="region"
+            aria-label="Pending alert records"
+            style={{
+              ...CALENDAR_SYNC_SCROLL_AREA_STYLE,
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.5rem",
+            }}
+          >
             {sortedPendingAlerts.map((alert) => (
               <div
                 key={alert.key}
@@ -2927,7 +3061,14 @@ export default function CalendarSync() {
                 No travel trips found yet.
               </div>
             ) : (
-              renderTripRows()
+              <div
+                data-testid="travel-trips-scroll-area"
+                role="region"
+                aria-label="Travel trip records"
+                style={CALENDAR_SYNC_SCROLL_AREA_STYLE}
+              >
+                {renderTripRows()}
+              </div>
             )
           ) : activeTab === "birthdays" ? (
             filteredBirthdayRows.length === 0 ? (
@@ -2937,7 +3078,14 @@ export default function CalendarSync() {
                   : `No birthdays found for ${selectedBirthdayMonthLabel.toLowerCase()}.`}
               </div>
             ) : (
-              renderBirthdayRows()
+              <div
+                data-testid="birthdays-scroll-area"
+                role="region"
+                aria-label="Birthday records"
+                style={CALENDAR_SYNC_SCROLL_AREA_STYLE}
+              >
+                {renderBirthdayRows()}
+              </div>
             )
           ) : meetingRows.length === 0 ? (
             <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>
@@ -2948,7 +3096,14 @@ export default function CalendarSync() {
               No meetings found for the selected filters.
             </div>
           ) : (
-            renderMeetingRows(filteredMeetingRows)
+            <div
+              data-testid="meetings-scroll-area"
+              role="region"
+              aria-label="Meeting records"
+              style={CALENDAR_SYNC_SCROLL_AREA_STYLE}
+            >
+              {renderMeetingRows(filteredMeetingRows)}
+            </div>
           )}
         </div>
       )}
@@ -3756,35 +3911,7 @@ export default function CalendarSync() {
                     >
                       Attendees
                     </label>
-                    {contactOptions.length > 0 && (
-                      <select
-                        value=""
-                        aria-label="Add attendee from contacts"
-                        onChange={(e) => {
-                          addEditAttendeeEmail(e.target.value);
-                          e.target.value = "";
-                        }}
-                        style={{
-                          width: "100%",
-                          padding: "0.7rem",
-                          fontSize: "0.9rem",
-                          marginBottom: "0.5rem",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "8px",
-                          background: "var(--bg-color)",
-                          color: "var(--text-primary)",
-                          boxSizing: "border-box",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <option value="">+ Add from contacts…</option>
-                        {contactOptions.map((contact) => (
-                          <option key={contact.email} value={contact.email}>
-                            {contact.name} ({contact.email})
-                          </option>
-                        ))}
-                      </select>
-                    )}
+                    {contactOptions.length > 0 && renderAttendeePicker(addEditAttendeeEmail, "edit")}
                     {editFormData.attendees && (
                       <div
                         aria-label="Selected attendees"
@@ -3843,16 +3970,19 @@ export default function CalendarSync() {
                           ))}
                       </div>
                     )}
+                    {newAttendeeOpen === "edit" && <>
                     <input
                       type="text"
-                      value={editFormData.attendees}
-                      onChange={(e) =>
-                        setEditFormData({
-                          ...editFormData,
-                          attendees: e.target.value,
-                        })
-                      }
-                      placeholder="email@example.com, another@example.com"
+                      value={newEditAttendeeEmail}
+                      aria-label="New attendee email"
+                      onChange={(e) => setNewEditAttendeeEmail(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === ",") {
+                          e.preventDefault();
+                          commitNewEditAttendeeEmail();
+                        }
+                      }}
+                      placeholder="Add a new attendee email"
                       style={{
                         width: "100%",
                         padding: "0.85rem",
@@ -3877,6 +4007,15 @@ export default function CalendarSync() {
                         e.target.style.boxShadow = "none";
                       }}
                     />
+                    <button
+                      type="button"
+                      onClick={commitNewEditAttendeeEmail}
+                      disabled={!newEditAttendeeEmail.trim()}
+                      style={{ marginTop: "0.45rem", padding: "0.45rem 0.75rem", borderRadius: 7, border: "1px solid var(--border-color)", background: "var(--surface-hover)", color: "var(--text-primary)", cursor: newEditAttendeeEmail.trim() ? "pointer" : "not-allowed" }}
+                    >
+                      Add attendee
+                    </button>
+                    </>}
                   </div>
 
                   {/* Description */}
@@ -4351,34 +4490,7 @@ export default function CalendarSync() {
                 >
                   Attendees
                 </label>
-                {contactOptions.length > 0 && (
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      addAttendeeEmail(e.target.value);
-                      e.target.value = "";
-                    }}
-                    style={{
-                      width: "100%",
-                      padding: "0.7rem",
-                      fontSize: "0.9rem",
-                      marginBottom: "0.5rem",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "8px",
-                      background: "var(--bg-color)",
-                      color: "var(--text-primary)",
-                      boxSizing: "border-box",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <option value="">+ Add from contacts…</option>
-                    {contactOptions.map((c) => (
-                      <option key={c.id} value={c.email}>
-                        {c.name} ({c.email})
-                      </option>
-                    ))}
-                  </select>
-                )}
+                {contactOptions.length > 0 && renderAttendeePicker(addAttendeeEmail, "create")}
                 {formData.attendees && (
                   <div
                     aria-label="Selected attendees"
@@ -4437,13 +4549,19 @@ export default function CalendarSync() {
                       ))}
                   </div>
                 )}
+                {newAttendeeOpen === "create" && <>
                 <input
                   type="text"
-                  placeholder="email@example.com, another@example.com"
-                  value={formData.attendees}
-                  onChange={(e) =>
-                    setFormData({ ...formData, attendees: e.target.value })
-                  }
+                  placeholder="Add a new attendee email"
+                  value={newAttendeeEmail}
+                  aria-label="New attendee email"
+                  onChange={(e) => setNewAttendeeEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === ",") {
+                      e.preventDefault();
+                      commitNewAttendeeEmail();
+                    }
+                  }}
                   style={{
                     width: "100%",
                     padding: "0.85rem",
@@ -4466,6 +4584,15 @@ export default function CalendarSync() {
                     e.target.style.boxShadow = "none";
                   }}
                 />
+                <button
+                  type="button"
+                  onClick={commitNewAttendeeEmail}
+                  disabled={!newAttendeeEmail.trim()}
+                  style={{ marginTop: "0.45rem", padding: "0.45rem 0.75rem", borderRadius: 7, border: "1px solid var(--border-color)", background: "var(--surface-hover)", color: "var(--text-primary)", cursor: newAttendeeEmail.trim() ? "pointer" : "not-allowed" }}
+                >
+                  Add attendee
+                </button>
+                </>}
               </div>
 
               {/* Description */}

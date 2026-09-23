@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 import jwt from "jsonwebtoken";
@@ -7,6 +7,7 @@ import prisma from "../../lib/prisma.js";
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+const originalConnectorPublicUrl = process.env.TALLY_CONNECTOR_PUBLIC_URL;
 const SAFE_VOUCHER_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 const SAFE_COST_CENTRE_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><COSTCENTRE NAME="TRIP-1" ACTION="Create"><NAME>TRIP-1</NAME></COSTCENTRE></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 
@@ -35,6 +36,7 @@ function auth() {
 }
 
 beforeEach(() => {
+  delete process.env.TALLY_CONNECTOR_PUBLIC_URL;
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 1, vertical: "travel", name: "Travel Test", slug: "travel-test" });
   prisma.user.findUnique.mockReset().mockResolvedValue({ id: 7, role: "ADMIN", deactivatedAt: null, sessionVersion: 0 });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
@@ -44,6 +46,11 @@ beforeEach(() => {
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.travelTallySyncLog.findMany.mockReset().mockResolvedValue([]);
   prisma.travelTallySyncLog.create.mockReset().mockResolvedValue({ id: 1 });
+});
+
+afterEach(() => {
+  if (originalConnectorPublicUrl === undefined) delete process.env.TALLY_CONNECTOR_PUBLIC_URL;
+  else process.env.TALLY_CONNECTOR_PUBLIC_URL = originalConnectorPublicUrl;
 });
 
 describe("travel Tally connector routes", () => {
@@ -65,6 +72,27 @@ describe("travel Tally connector routes", () => {
     expect(response.body).toMatchObject({ configured: true, online: false, credentials: { connectorId: "tally_public_id" } });
     expect(JSON.stringify(response.body)).not.toContain("tokenHash");
     expect(response.body).not.toHaveProperty("token");
+  });
+
+  test("derives the connector URL from forwarded deployment headers", async () => {
+    const response = await request(makeApp())
+      .get("/api/travel/tally/connector/status")
+      .set(auth())
+      .set("X-Forwarded-Proto", "https")
+      .set("X-Forwarded-Host", "tenant.example.test");
+
+    expect(response.status).toBe(200);
+    expect(response.body.connectorUrl).toBe("wss://tenant.example.test/ws/tally-connector");
+  });
+
+  test("supports a deployment-provided connector URL without a source-code hostname", async () => {
+    process.env.TALLY_CONNECTOR_PUBLIC_URL = "https://connector.example.test";
+    const response = await request(makeApp())
+      .get("/api/travel/tally/connector/status")
+      .set(auth());
+
+    expect(response.status).toBe(200);
+    expect(response.body.connectorUrl).toBe("wss://connector.example.test/ws/tally-connector");
   });
 
   test("generates a one-time token and stores only its hash", async () => {

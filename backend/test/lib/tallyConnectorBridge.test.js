@@ -90,7 +90,7 @@ describe("Tally connector bridge", () => {
     const address = server.address();
     const client = new WebSocket(
       `ws://127.0.0.1:${address.port}${CONNECTOR_PATH}?customerId=${tenantId}&connectorId=${credentials.stored.connectorId}`,
-      { headers: { Authorization: `Bearer ${credentials.token}` } },
+      ["tally-connector", `tally-token.${credentials.token}`],
     );
     await new Promise((resolve, reject) => {
       client.once("open", resolve);

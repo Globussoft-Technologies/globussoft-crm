@@ -292,7 +292,7 @@ export const fetchApi = async (url, options = {}) => {
       } else if (response.status === 502 || response.status === 503 || response.status === 504) {
         userMsg = 'The server was temporarily unreachable (probably mid-deploy or restarting). Please wait a few seconds and try again.';
       } else {
-        userMsg = 'Something went wrong on our end. Please try again — if it keeps happening, contact support.';
+        userMsg = "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.";
       }
       console.error(`[api] ${response.status} ${errorCode} on ${url}:`, serverMsg || '(no server message)');
     } else {

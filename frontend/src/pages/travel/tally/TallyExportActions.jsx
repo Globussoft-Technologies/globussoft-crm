@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Download, KeyRound, UploadCloud } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, UploadCloud } from "lucide-react";
 import PermissionGate from "../../../components/PermissionGate";
 import { fetchApi } from "../../../utils/api";
 import { useNotify } from "../../../utils/notify";
@@ -11,6 +11,7 @@ import {
   buildVoucherRows,
   validateExport,
 } from "./tallyExportBuilder";
+import { downloadTallyConnectorPackage } from "./tallyConnectorConfig";
 
 const button = {
   border: 0,
@@ -129,7 +130,6 @@ export default function TallyExportActions({
   const [selectedVoucherType, setSelectedVoucherType] = useState("all");
   const [connectorStatus, setConnectorStatus] = useState(null);
   const [hasCheckedConnectorStatus, setHasCheckedConnectorStatus] = useState(false);
-  const [connectorCredentials, setConnectorCredentials] = useState(null);
   const [generatingCredentials, setGeneratingCredentials] = useState(false);
   const [pushing, setPushing] = useState(false);
   const filteredRows = voucherRows
@@ -155,30 +155,18 @@ export default function TallyExportActions({
     return () => clearInterval(timer);
   }, []);
 
-  const generateConnectorCredentials = async () => {
+  const downloadConnector = async () => {
     setGeneratingCredentials(true);
     try {
       const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
-      setConnectorCredentials(credentials);
+      await downloadTallyConnectorPackage(credentials);
       await loadConnectorStatus();
-      notify.success("Connector credentials generated. Download the config now; the token is shown only once.");
+      notify.success("Tally Connector ZIP downloaded. Extract it and run the executable beside config.json.");
+    } catch (error) {
+      notify.error(error.message || "Could not download the Tally Connector ZIP.");
     } finally {
       setGeneratingCredentials(false);
     }
-  };
-
-  const downloadConnectorConfig = () => {
-    if (!connectorCredentials) return;
-    downloadFile("config.json", JSON.stringify({
-      serverUrl: connectorCredentials.connectorUrl,
-      customerId: connectorCredentials.customerId,
-      connectorId: connectorCredentials.connectorId,
-      token: connectorCredentials.token,
-      machineId: "office-pc-1",
-      localTallyUrl: "http://127.0.0.1:9000",
-      requestTimeoutMs: 45000,
-      rejectUnauthorized: true,
-    }, null, 2), "application/json;charset=utf-8");
   };
 
   const pushDirectlyToTally = async () => {
@@ -284,17 +272,12 @@ export default function TallyExportActions({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button type="button" className="btn-secondary" onClick={() => loadConnectorStatus(false)}>Refresh status</button>
             <PermissionGate module="tally" action="update">
-              <button type="button" className="btn-secondary" onClick={generateConnectorCredentials} disabled={generatingCredentials}>
-                <KeyRound size={15} /> {generatingCredentials ? "Generating…" : connectorStatus?.configured ? "Rotate credentials" : "Generate credentials"}
+              <button type="button" className="btn-secondary" onClick={downloadConnector} disabled={generatingCredentials} style={{ background: "#f4512c", borderColor: "#f4512c", color: "#fff" }}>
+                <Download size={15} /> {generatingCredentials ? "Preparing ZIP…" : "Download Tally Connector"}
               </button>
             </PermissionGate>
           </div>
         </div>
-        {connectorCredentials && <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: "rgba(245,158,11,.12)" }}>
-          <strong style={{ display: "block", color: "#f59e0b" }}>Save this configuration now</strong>
-          <small style={{ display: "block", margin: "5px 0 9px", color: "var(--text-secondary)" }}>The connector token cannot be displayed again. Rotating credentials disconnects the previous configuration.</small>
-          <button type="button" className="btn-secondary" onClick={downloadConnectorConfig}><Download size={15} /> Download config.json</button>
-        </div>}
         <small style={{ display: "block", marginTop: 10, color: "var(--text-secondary)" }}>Run the Globussoft connector on the Windows computer where Tally is open on localhost port 9000.</small>
       </div>
       <div style={{ ...validationPanel, marginTop: 12 }}>

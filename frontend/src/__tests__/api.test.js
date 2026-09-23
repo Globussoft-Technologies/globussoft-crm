@@ -173,7 +173,7 @@ describe('utils/api — fetchApi', () => {
   it('throws safe message on 5xx but preserves server message on err.serverMessage', async () => {
     mockFetch({ status: 500, body: { message: 'boom' } });
     await expect(fetchApi('/api/crash')).rejects.toMatchObject({
-      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      message: "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.",
       serverMessage: 'boom',
       status: 500,
     });
@@ -189,7 +189,7 @@ describe('utils/api — fetchApi', () => {
       json: () => Promise.reject(new Error('parse fail')),
     });
     await expect(fetchApi('/api/crash')).rejects.toMatchObject({
-      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      message: "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.",
       code: null,
       status: 500,
     });
@@ -233,7 +233,7 @@ describe('utils/api — fetchApi', () => {
       json: () => Promise.resolve({}),
     });
     await expect(fetchApi('/api/crash')).rejects.toMatchObject({
-      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      message: "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.",
       status: 500,
     });
   });

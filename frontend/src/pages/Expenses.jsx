@@ -204,6 +204,7 @@ export default function Expenses() {
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState(null);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [statusFilter, setStatusFilter] = useState('all');
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
   const tableScrollRef = useRef(null);
   const requestSeqRef = useRef(0);
@@ -320,7 +321,7 @@ export default function Expenses() {
     if (el.scrollHeight <= el.clientHeight + 24) {
       loadExpenses({ reset: false });
     }
-  }, [expenses, loading, loadingMore, hasMore, loadExpenses]);
+  }, [expenses, loading, loadingMore, hasMore, statusFilter, loadExpenses]);
 
   const handleTableScroll = useCallback((e) => {
     const el = e.currentTarget;
@@ -340,15 +341,18 @@ export default function Expenses() {
   // Filter by expenseDate when set, fall back to createdAt for legacy rows
   // that haven't backfilled expenseDate.
   const visibleExpenses = useMemo(() => (
-    (rangeStart && rangeEnd)
-      ? expenses.filter((exp) => {
-          const d = exp.expenseDate || exp.createdAt;
-          if (!d) return false;
-          const ts = new Date(d).getTime();
-          return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
-        })
-      : expenses
-  ), [expenses, rangeStart, rangeEnd]);
+    expenses.filter((exp) => {
+      const matchesStatus = statusFilter === 'all'
+        || String(exp.status || 'Pending').toLowerCase() === statusFilter.toLowerCase();
+      if (!matchesStatus) return false;
+
+      if (!rangeStart || !rangeEnd) return true;
+      const d = exp.expenseDate || exp.createdAt;
+      if (!d) return false;
+      const ts = new Date(d).getTime();
+      return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+    })
+  ), [expenses, rangeStart, rangeEnd, statusFilter]);
 
   const createExpense = async (e, status = 'Pending') => {
     e.preventDefault();
@@ -493,33 +497,58 @@ export default function Expenses() {
       {/* Summary Stats */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <span style={{
+          <button
+            type="button"
+            aria-label={`Show all expenses (${expenseStats.total ?? expenses.length})`}
+            aria-pressed={statusFilter === 'all'}
+            onClick={() => setStatusFilter('all')}
+            style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+            cursor: 'pointer', outline: statusFilter === 'all' ? '2px solid var(--accent-color)' : 'none', outlineOffset: '2px',
+          }}>
+            {expenseStats.total ?? expenses.length} total expenses
+          </button>
+          <button
+            type="button"
+            aria-label={`Show pending expenses (${formatMoney(totalPending)})`}
+            aria-pressed={statusFilter === 'Pending'}
+            onClick={() => setStatusFilter(statusFilter === 'Pending' ? 'all' : 'Pending')}
+            style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
+            cursor: 'pointer', outline: statusFilter === 'Pending' ? '2px solid #f59e0b' : 'none', outlineOffset: '2px',
           }}>
             <IndianRupee size={12} /> Pending: {formatMoney(totalPending)}
-          </span>
-          <span style={{
+          </button>
+          <button
+            type="button"
+            aria-label={`Show approved expenses (${formatMoney(totalApproved)})`}
+            aria-pressed={statusFilter === 'Approved'}
+            onClick={() => setStatusFilter(statusFilter === 'Approved' ? 'all' : 'Approved')}
+            style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
+            cursor: 'pointer', outline: statusFilter === 'Approved' ? '2px solid #10b981' : 'none', outlineOffset: '2px',
           }}>
             <CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}
-          </span>
-          <span style={{
+          </button>
+          <button
+            type="button"
+            aria-label={`Show reimbursed expenses (${formatMoney(totalReimbursed)})`}
+            aria-pressed={statusFilter === 'Reimbursed'}
+            onClick={() => setStatusFilter(statusFilter === 'Reimbursed' ? 'all' : 'Reimbursed')}
+            style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
+            cursor: 'pointer', outline: statusFilter === 'Reimbursed' ? '2px solid #3b82f6' : 'none', outlineOffset: '2px',
           }}>
             <IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}
-          </span>
-          <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-            background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
-          }}>
-            {expenseStats.total ?? expenses.length} total expenses
-          </span>
+          </button>
+          
         </div>
         <button
           type="button"
@@ -813,7 +842,8 @@ export default function Expenses() {
         <div className="card finance-page__table-card" style={{ padding: '2rem' }}>
           <div className="finance-page__section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Receipt size={20} color="var(--accent-color)" /> All Expenses
+              <Receipt size={20} color="var(--accent-color)" />
+              {statusFilter === 'all' ? 'All Expenses' : `${statusFilter} Expenses`}
             </h3>
           {expenses.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -852,7 +882,8 @@ export default function Expenses() {
             </p>
           ) : visibleExpenses.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
-              No expenses in the selected range.
+              No {statusFilter === 'all' ? 'expenses' : `${statusFilter.toLowerCase()} expenses`}
+              {rangeStart && rangeEnd ? ' in the selected range.' : '.'}
             </p>
           ) : (
             <div

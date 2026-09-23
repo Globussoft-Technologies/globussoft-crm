@@ -488,6 +488,15 @@ describe('<TripDetail /> — Participants tab', () => {
     expect(await screen.findByText('1 participant')).toBeInTheDocument();
     // Existing participant row.
     expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Participant list')).toHaveStyle({
+      background: 'var(--surface-hover, var(--subtle-bg))',
+      color: 'var(--text-primary)',
+    });
+    expect(screen.getByRole('region', { name: /Participant records/i })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
     // Add CTA renders unconditionally (no RBAC gate).
     expect(screen.getByRole('button', { name: /Add participant/i })).toBeInTheDocument();
   });
@@ -1732,6 +1741,15 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(await screen.findByTestId('pending-registrations-list')).toBeInTheDocument();
     expect(screen.getByText('Aarav Iyer')).toBeInTheDocument();
     expect(screen.getByText('Registered')).toBeInTheDocument();
+    expect(screen.getByText('Registered participants').parentElement.parentElement).toHaveStyle({
+      background: 'var(--surface-hover, var(--subtle-bg))',
+      color: 'var(--text-primary)',
+    });
+    expect(screen.getByRole('region', { name: /Registered participant records/i })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
   });
 
   it('shows "X pending registrations" count next to participants total', async () => {

@@ -84,6 +84,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import CalendarSync from '../pages/CalendarSync';
+import { AuthContext } from '../appContexts';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -271,6 +272,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(
       screen.getByRole('button', { name: /Disconnect/i }),
     ).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: /Meeting records/i })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
   });
 
   it('no events synced: events panel renders the "No events synced yet" copy', async () => {
@@ -778,6 +784,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(alertsCard).toHaveTextContent('3');
     fireEvent.click(alertsCard);
 
+    expect(await screen.findByRole('region', { name: /Pending alert records/i })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
     expect(await screen.findByText(/^Meeting: Tomorrow planning call \(24 hours\)/i)).toBeInTheDocument();
     expect(screen.getByText(/^Meeting: Near-term client call \(30 minutes\)/i)).toBeInTheDocument();
     expect(await screen.findByText(/^Meeting: Imminent client call \(10 minutes\)/i)).toBeInTheDocument();
@@ -1507,5 +1518,81 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(screen.queryByText(/Bulk meeting 051/i)).not.toBeInTheDocument();
     // The "51 events" header counter still reflects the TRUE collected count
     // — the slice(0, 50) only clamps RENDER, not the events array length.
+  });
+
+  it('travel trips records render inside an independent scroll area', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/calendar/google/events') return Promise.resolve([]);
+      if (url === '/api/travel/itineraries?limit=150&fields=summary') return Promise.resolve([]);
+      if (url === '/api/travel/trips?limit=150&fields=summary') {
+        return Promise.resolve([
+          { id: 1, tripCode: 'TMC-1', status: 'confirmed', destination: 'Mumbai', departDate: isoDateTime({ daysFromNow: 1 }) },
+          { id: 2, tripCode: 'TMC-2', status: 'confirmed', destination: 'Delhi', departDate: isoDateTime({ daysFromNow: 2 }) },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { tenant: { vertical: 'travel' } } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
+
+    const records = await screen.findByRole('region', { name: /Travel trip records/i });
+    expect(records).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
+  });
+
+  it('birthday records render inside an independent scroll area', async () => {
+    const birthday = new Date(2000, new Date().getMonth(), 1, 12).toISOString();
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/calendar/google/events' || url === '/api/calendar/outlook/events') {
+        return Promise.reject(new Error('not connected'));
+      }
+      if (url === '/api/contacts?limit=200') {
+        return Promise.resolve([{ id: 1, name: 'Birthday Contact', birthDate: birthday }]);
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Birthdays this month/i }));
+
+    expect(await screen.findByRole('region', { name: /Birthday records/i })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
+  });
+
+  it('attendee contact picker filters contacts by name or email', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/calendar/google/events') return Promise.resolve(sampleGoogleEvents);
+      if (url === '/api/calendar/outlook/events') return Promise.reject(new Error('not connected'));
+      if (url === '/api/contacts?limit=200') {
+        return Promise.resolve([
+          { id: 1, name: 'Alice Example', email: 'alice@example.com' },
+          { id: 2, name: 'Bob Example', email: 'bob@example.com' },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+
+    const search = await screen.findByRole('combobox', { name: /Add attendee from contacts/i });
+    fireEvent.focus(search);
+    expect(screen.getByRole('option', { name: /Alice Example/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Bob Example/i })).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: 'alice' } });
+    expect(screen.getByRole('option', { name: /Alice Example/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Bob Example/i })).not.toBeInTheDocument();
   });
 });

@@ -842,6 +842,12 @@ jobs:
             echo "after  SHA: $(git rev-parse --short HEAD)"
             git log --oneline -3
 
+            cd ~/globussoft-crm/tally-connector
+            echo "=== build Windows Tally connector ==="
+            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
+            npm run build:windows 2>&1 | tail -5
+            test -s dist/TallyConnector.exe
+
             # The brochure engine is vendored under agentic-orchcrm/ and the
             # backend spawns tsx from its node_modules at runtime. Install its
             # deps before starting the backend.
@@ -1274,7 +1280,13 @@ jobs:
             echo "after  SHA: $(git rev-parse --short HEAD)"
             git log --oneline -3
 
-            cd backend
+            cd "$HOME/globussoft-crm/tally-connector"
+            echo "=== build Windows Tally connector ==="
+            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
+            npm run build:windows 2>&1 | tail -5
+            test -s dist/TallyConnector.exe
+
+            cd "$HOME/globussoft-crm/backend"
             echo "=== npm install ==="
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
 

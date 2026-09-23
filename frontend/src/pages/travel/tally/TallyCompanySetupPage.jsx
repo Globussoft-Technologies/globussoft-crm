@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import TallyMasterSection from "./TallyMasterSection";
@@ -14,27 +14,38 @@ export default function TallyCompanySetupPage() {
   // Start locked while the saved database record is being hydrated. This
   // prevents a saved setup from briefly rendering as editable on reload.
   const [editing, setEditing] = useState(false);
+  const initializedEditing = useRef(false);
 
   useEffect(() => {
-    if (masterHydrated) setEditing(!isConfigured);
+    if (!masterHydrated || initializedEditing.current) return;
+    initializedEditing.current = true;
+    setEditing(!isConfigured);
   }, [masterHydrated, isConfigured]);
 
-  const save = async () => {
+  const persistCompanySetup = async () => {
     const validationError = validateMasterStep();
     if (validationError) {
       setMessage("");
       setError(validationError);
-      return;
+      return false;
     }
     try {
       await saveMaster();
       setError("");
       setMessage("Company setup saved.");
       setEditing(false);
+      return true;
     } catch {
       setMessage("");
       setError("Company setup could not be saved. Please try again.");
+      return false;
     }
+  };
+
+  const save = persistCompanySetup;
+
+  const continueToLedgers = async () => {
+    if (await persistCompanySetup()) navigate("/travel/tally/ledger");
   };
 
   return (
@@ -57,13 +68,26 @@ export default function TallyCompanySetupPage() {
         <fieldset disabled={!editing} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <TallyMasterSection master={master} updateMaster={updateMaster} />
         </fieldset>
-        {error && <p style={{ color: "#ef4444", fontWeight: 700 }}>{error}</p>}
+        {error && (
+          <p
+            role="alert"
+            style={{
+              margin: "16px 0 0",
+              color: "#b91c1c",
+              fontSize: 13,
+              fontWeight: 600,
+              lineHeight: 1.45,
+            }}
+          >
+            {error}
+          </p>
+        )}
         {message && <p style={{ color: "#10b981", fontWeight: 700 }}>{message}</p>}
         <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
           {editing && <><TallyWriteGate><button type="button" onClick={save} style={buttonStyle}>Save Company Setup</button></TallyWriteGate>{isConfigured && <button type="button" onClick={() => { cancelEdit(); setEditing(false); setError(""); setMessage(""); }} style={secondaryButtonStyle}>Cancel Edit</button>}</>}
           <button
             type="button"
-            onClick={() => navigate("/travel/tally/ledger")}
+            onClick={continueToLedgers}
             style={secondaryButtonStyle}
           >
             Continue to Ledgers

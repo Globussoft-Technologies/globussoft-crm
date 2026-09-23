@@ -35,6 +35,16 @@ function createConnectorCredentials() {
   };
 }
 
+function connectorTokenFromRequest(req) {
+  const authorization = String(req.headers.authorization || "");
+  if (authorization.startsWith("Bearer ")) return authorization.slice(7).trim();
+  const protocols = String(req.headers["sec-websocket-protocol"] || "")
+    .split(",")
+    .map((value) => value.trim());
+  const tokenProtocol = protocols.find((value) => value.startsWith("tally-token."));
+  return tokenProtocol ? tokenProtocol.slice("tally-token.".length) : "";
+}
+
 function parseTallyResponse(xml) {
   const source = String(xml || "");
   const number = (tag) => {
@@ -146,8 +156,7 @@ function attachTallyConnectorBridge(server) {
     req._webSocketUpgradeClaimed = true;
     const customerId = url.searchParams.get("customerId");
     const connectorId = url.searchParams.get("connectorId");
-    const authorization = String(req.headers.authorization || "");
-    const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+    const token = connectorTokenFromRequest(req);
     const machineId = url.searchParams.get("machineId");
     authenticateConnector(customerId, connectorId, token).then((tenantId) => {
       if (!tenantId) {

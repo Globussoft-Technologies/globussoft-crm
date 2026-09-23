@@ -1222,7 +1222,9 @@ export default function Staff() {
       style={{
         padding: "2rem",
         height: "100%",
+        minWidth: 0,
         overflowY: "auto",
+        overflowX: "hidden",
         animation: "fadeIn 0.5s ease-out",
       }}
     >
@@ -1630,7 +1632,10 @@ export default function Staff() {
       )}
 
       {/* Staff Table */}
-      <div className="card" style={{ padding: "2rem" }}>
+      <div
+        className="card"
+        style={{ padding: "2rem", minWidth: 0, overflow: "hidden" }}
+      >
         <div
           style={{
             display: "flex",
@@ -1923,7 +1928,13 @@ export default function Staff() {
         ) : (
           <div
             onScroll={handleStaffTableScroll}
-            style={{ maxHeight: "calc(100vh - 28rem)", overflow: "visible" }}
+            style={{
+              width: "100%",
+              minWidth: 0,
+              maxHeight: "calc(100vh - 28rem)",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
           >
             {!isTravel && !isWellness && <style>{genericStaffTableStyles}</style>}
             <table

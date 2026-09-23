@@ -1280,8 +1280,17 @@ export default function CalendarSync() {
           }
         }}
         onChange={(e) => {
-          setContactSearch(e.target.value);
+          const value = e.target.value;
+          setContactSearch(value);
           setAttendeePickerOpen(pickerKey);
+          const contact = contactOptions.find(
+            (item) => item.email.toLowerCase() === value.trim().toLowerCase(),
+          );
+          if (contact) {
+            onSelect(contact.email);
+            setContactSearch("");
+            setAttendeePickerOpen("");
+          }
         }}
         style={{
           width: "100%",
@@ -1294,7 +1303,7 @@ export default function CalendarSync() {
           boxSizing: "border-box",
         }}
         />
-      {attendeePickerOpen === pickerKey && (
+      {(attendeePickerOpen === pickerKey || showCreateModal || (showEventDetail && isEditingEvent)) && (
         <div
           id={`${pickerKey}-attendee-options`}
           role="listbox"
@@ -4490,6 +4499,24 @@ export default function CalendarSync() {
                 >
                   Attendees
                 </label>
+                <input
+                  type="text"
+                  value={formData.attendees}
+                  placeholder="email@example.com, another@example.com"
+                  aria-label="Attendees email addresses"
+                  onChange={(e) => setFormData({ ...formData, attendees: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: "0.85rem",
+                    fontSize: "0.95rem",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "8px",
+                    background: "var(--input-bg)",
+                    color: "var(--text-primary)",
+                    boxSizing: "border-box",
+                    marginBottom: "0.5rem",
+                  }}
+                />
                 {contactOptions.length > 0 && renderAttendeePicker(addAttendeeEmail, "create")}
                 {formData.attendees && (
                   <div

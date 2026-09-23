@@ -537,7 +537,7 @@ export default function Expenses() {
           </button>
           <button
             type="button"
-            aria-label={`Show reimbursed expenses (${formatMoney(totalReimbursed)})`}
+            aria-label={`Show paid-back expenses (${formatMoney(totalReimbursed)})`}
             aria-pressed={statusFilter === 'Reimbursed'}
             onClick={() => setStatusFilter(statusFilter === 'Reimbursed' ? 'all' : 'Reimbursed')}
             style={{

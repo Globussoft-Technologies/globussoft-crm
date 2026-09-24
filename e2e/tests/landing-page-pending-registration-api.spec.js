@@ -206,6 +206,7 @@ test.describe('Hybrid registration flow — happy path', () => {
       passport: {
         number: 'M1234567',
         expiry: '2031-09-01',
+        status: 'Valid for 6+ months',
       },
     });
     expect(submitRes.status(), `submit body: ${await submitRes.text().catch(() => '')}`).toBe(201);

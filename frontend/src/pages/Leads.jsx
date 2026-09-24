@@ -147,7 +147,7 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const GENERIC_LEADS_PAGE_SIZE = 10;
+const GENERIC_LEADS_PAGE_SIZE = 25;
 const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
   "name",
   "email",

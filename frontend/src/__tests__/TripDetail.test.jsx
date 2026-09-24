@@ -2030,6 +2030,40 @@ describe('<TripDetail /> — pending registration document view buttons', () => 
     expect(screen.getByTestId('view-parent-consent-101')).toBeInTheDocument();
   });
 
+  it('shows one parent-portal consent form and opens it for the matching participant', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:participant-consent');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    rawFetchMock.mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(['signed consent'], { type: 'image/png' })),
+    });
+    const trip = makeTrip({
+      participants: [{ id: 901, fullName: 'Anaya Sharma', parentName: 'Riya Sharma', parentEmail: 'parent@example.com' }],
+      parentConsentDocuments: [{
+        parentEmail: 'parent@example.com',
+        document: { id: 501, filename: 'signed-consent.png', mimeType: 'image/png', status: 'in_review' },
+      }],
+    });
+    installFetchMock({ trip });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+
+    expect(await screen.findByTestId('view-participant-consent-901')).toHaveTextContent('Consent form - View');
+    expect(screen.queryByText('Medical consent - View')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('view-participant-consent-901'));
+    await waitFor(() => expect(rawFetchMock).toHaveBeenCalledWith(
+      '/api/travel/trips/101/participants/901/consent-form/file',
+      expect.objectContaining({ headers: { Authorization: 'Bearer test-token' } }),
+    ));
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(
+      'blob:participant-consent',
+      '_blank',
+      'noopener,noreferrer',
+    ));
+  });
+
   it('clicking passport View calls the view-url API and opens the signed URL', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     installFetchMock({ pendingRegs: [regWithPassport] });

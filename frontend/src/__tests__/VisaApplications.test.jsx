@@ -28,10 +28,8 @@
  *      complexCase render the corresponding pill labels ("ready",
  *      "risk", "complex"). Row with none renders the em-dash fallback.
  *   8. Create-drawer open: clicking "Create Application" opens the drawer
- *      with the 3 required fields (Contact / Application type / Destination
- *      country) and fetches /api/contacts?limit=200 to populate the picker.
- *      The Trip linkage control is optional and still preloads TMC trips
- *      for school-trip applicants.
+ *      with the required fields (Contact / International trip / Application
+ *      type / Destination country) and fetches contacts and TMC trips.
  *   9. Form validation — empty destination: client-side gate surfaces
  *      "Destination country is required" inline + does NOT fire POST.
  *  10. Form validation — empty contactId: client-side gate surfaces
@@ -191,12 +189,19 @@ const VISA_CONTACTS_DEFAULT = [
   { id: 5002, name: 'Arjun Patel', email: 'arjun@test.example', subBrand: 'other-brand' },
 ];
 const TRIPS_DEFAULT = [
-  { id: 9001, tripCode: 'tmc-vietnam-2026', destination: 'Vietnam', departDate: '2026-11-01' },
+  {
+    id: 9001,
+    tripCode: 'tmc-vietnam-2026',
+    destination: 'Vietnam',
+    tripType: 'international',
+    departDate: '2026-11-01',
+  },
 ];
 const TRIP_DETAIL_DEFAULT = {
   id: 9001,
   tripCode: 'tmc-vietnam-2026',
   destination: 'Vietnam',
+  tripType: 'international',
   departDate: '2026-11-01',
   participants: [
     {
@@ -373,6 +378,28 @@ describe('<VisaApplications /> — page chrome + RBAC', () => {
     expect(
       screen.queryByRole('button', { name: /Create a new visa application/i }),
     ).toBeNull();
+  });
+});
+
+describe('<VisaApplications /> — trip eligibility', () => {
+  it('shows only international trips in the trip linkage picker', async () => {
+    installFetchMock({
+      trips: [
+        ...TRIPS_DEFAULT,
+        { id: 9002, tripCode: 'tmc-goa-2026', destination: 'Goa', tripType: 'domestic' },
+        { id: 9003, tripCode: 'tmc-local-2026', destination: 'Local', tripType: 'day_trip' },
+        { id: 9004, tripCode: 'tmc-unknown-2026', destination: 'Unknown', tripType: 'other' },
+      ],
+    });
+    renderPage();
+    await screen.findByText('Riya Sharma');
+    fireEvent.click(screen.getByRole('button', { name: /Create a new visa application/i }));
+    const tripSelect = await screen.findByTestId('create-trip-select');
+
+    expect(within(tripSelect).getByRole('option', { name: /tmc-vietnam-2026/i })).toBeInTheDocument();
+    expect(within(tripSelect).queryByRole('option', { name: /tmc-goa-2026/i })).toBeNull();
+    expect(within(tripSelect).queryByRole('option', { name: /tmc-local-2026/i })).toBeNull();
+    expect(within(tripSelect).queryByRole('option', { name: /tmc-unknown-2026/i })).toBeNull();
   });
 });
 
@@ -661,7 +688,7 @@ describe('<VisaApplications /> — create drawer', () => {
     );
   });
 
-  it('submit happy path without trip linkage POSTs only the visa fields and leaves tripId/participantId out', async () => {
+  it('validation: missing trip shows Trip is required and does NOT fire POST', async () => {
     renderPage();
     await screen.findByText('Riya Sharma');
     fireEvent.click(screen.getByRole('button', { name: /Create a new visa application/i }));
@@ -674,36 +701,17 @@ describe('<VisaApplications /> — create drawer', () => {
       { target: { value: '5001' } },
     );
     fireEvent.change(
-      screen.getByLabelText(/Application type/i),
-      { target: { value: 'tourist' } },
-    );
-    fireEvent.change(
       screen.getByLabelText(/Destination country/i),
       { target: { value: '  Italy  ' } },
     );
     fetchApiMock.mockClear();
     installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Create Application/i }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/visa/applications' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.contactId).toBe(5001);
-      expect(typeof body.contactId).toBe('number');
-      expect(body.applicantName).toBeUndefined();
-      expect(body.applicantEmail).toBeUndefined();
-      expect(body.applicantPhone).toBeUndefined();
-      expect(body.tripId).toBeUndefined();
-      expect(body.participantId).toBeUndefined();
-      expect(body.applicationType).toBe('tourist');
-      expect(body.destinationCountry).toBe('Italy');
-      expect(post[1].silent).toBe(true);
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Visa application created/i),
+    fireEvent.submit(screen.getByLabelText(/Destination country/i).closest('form'));
+    await waitFor(() => expect(screen.getByText(/Trip is required/i)).toBeInTheDocument());
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/visa/applications' && o?.method === 'POST',
     );
+    expect(posts.length).toBe(0);
   });
 
   it('auto-selects the matching participant when the contact and trip identify the same traveler', async () => {

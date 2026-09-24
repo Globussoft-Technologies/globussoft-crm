@@ -16,4 +16,10 @@ function tripRequiresPassport(value) {
   return normalizeTripType(value) === "international";
 }
 
-module.exports = { normalizeTripType, tripRequiresPassport };
+function requiredParentDocumentTypes(value) {
+  return tripRequiresPassport(value)
+    ? ["passport", "aadhaar", "consent-form", "visa"]
+    : ["aadhaar", "consent-form"];
+}
+
+module.exports = { normalizeTripType, tripRequiresPassport, requiredParentDocumentTypes };

@@ -2127,35 +2127,23 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
+
+// RBAC is part of the request-serving contract: the first authenticated
+// request can ask for /auth/me/permissions immediately after the server
+// becomes reachable. Keep this reconciliation ahead of listen() so a fresh
+// login cannot cache a partially-provisioned permission set and render a
+// permanently incomplete sidebar until the next login.
+const { runRbacBootSync } = require("./lib/rbacBootSync");
+
+const runRbacBootBeforeTraffic = () => {
+  if (process.env.DISABLE_RBAC_BOOT_SYNC === "1") return Promise.resolve(null);
+  return runRbacBootSync();
+};
+
 const startHttpServer = () => server.listen(PORT, () => {
   console.log(
     `[Backend] Enterprise Express Server running securely on port ${PORT}`,
   );
-
-  // Auto-heal RBAC state on boot so requiredPermission-gated UI (e.g. the
-  // "Roles" sidebar entry) appears consistently across local / dev / prod
-  // without manual seed-rbac-only.js runs. Fire-and-forget: a DB hiccup must
-  // never crash the server. Set DISABLE_RBAC_BOOT_SYNC=1 to opt out.
-  const { ensureRbacOnBoot } = require("./scripts/ensureRbacOnBoot");
-  ensureRbacOnBoot()
-    .then((stats) => {
-      if (!stats) return;
-      const wrote =
-        stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
-      if (wrote > 0) {
-        console.log(
-          `[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`,
-        );
-      } else {
-        console.log("[rbac-boot] RBAC state already compatible — no changes.");
-      }
-    })
-    .catch((err) =>
-      console.error(
-        "[rbac-boot] non-fatal error:",
-        err && err.message ? err.message : err,
-      ),
-    );
 
   // Reconcile User.wellnessRole against the canonical RBAC role on every
   // wellness-tenant user. Heals any drift where a user holds a DOCTOR /
@@ -2269,7 +2257,8 @@ const startHttpServer = () => server.listen(PORT, () => {
 // empty board for legacy Generic pipelines. Fail-open keeps older local
 // databases bootable until `prisma generate` and `prisma db push` run.
 const { ensureGenericPipelineStageAssignments } = require("./scripts/ensureGenericPipelineStageAssignments");
-ensureGenericPipelineStageAssignments()
+runRbacBootBeforeTraffic()
+  .then(() => ensureGenericPipelineStageAssignments())
   .then((stats) => {
     if (!stats || stats.assignmentsCreated === 0) return;
     console.log(

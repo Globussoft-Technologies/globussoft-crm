@@ -179,6 +179,10 @@ function formatTripLabel(trip) {
   return `${code}${destination}${depart}`;
 }
 
+function isInternationalTrip(trip) {
+  return String(trip?.tripType || '').trim().toLowerCase() === 'international';
+}
+
 function normalizeMatchKey(value) {
   return String(value || '')
     .trim()
@@ -678,9 +682,8 @@ export default function VisaApplications() {
     setFormError(null);
     setCreating(true);
     // Backend /api/contacts doesn't support ?subBrand= today; fetch a
-    // batch and filter client-side. Trip linkage is optional, but we
-    // still preload the TMC trip list so school-trip applicants can be
-    // linked to a participant when needed.
+    // Fetch the TMC trip list and keep only international trips. Visa
+    // applications must always be linked to one of these trips.
     setContactsLoading(true);
     fetchApi('/api/contacts?limit=200')
       .then((res) => {
@@ -692,7 +695,8 @@ export default function VisaApplications() {
     setTripsLoading(true);
     fetchApi('/api/travel/trips?fields=summary&limit=200', { silent: true })
       .then((res) => {
-        setTrips(Array.isArray(res?.trips) ? res.trips : []);
+        const list = Array.isArray(res?.trips) ? res.trips : [];
+        setTrips(list.filter(isInternationalTrip));
       })
       .catch(() => setTrips([]))
       .finally(() => setTripsLoading(false));
@@ -791,8 +795,19 @@ export default function VisaApplications() {
       setFormError({ field: 'applicationType', message: 'Application type is required' });
       return;
     }
-    if (form.tripId && !form.participantId) {
+    if (!form.tripId) {
+      setFormError({ field: 'tripId', message: 'Trip is required' });
+      return;
+    }
+    if (!form.participantId) {
       setFormError({ field: 'participantId', message: 'Participant is required when linking a trip' });
+      return;
+    }
+    if (!isInternationalTrip(selectedTrip)) {
+      setFormError({
+        field: 'tripId',
+        message: 'Visa applications can only be linked to international trips',
+      });
       return;
     }
     const dest = (form.destinationCountry || '').trim();
@@ -810,6 +825,8 @@ export default function VisaApplications() {
       const body = {
         applicationType: form.applicationType,
         destinationCountry: dest,
+        tripId: parseInt(form.tripId, 10),
+        participantId: parseInt(form.participantId, 10),
       };
       if (form.contactId) {
         body.contactId = parseInt(form.contactId, 10);
@@ -818,10 +835,6 @@ export default function VisaApplications() {
         if ((form.applicantEmail || '').trim()) body.applicantEmail = form.applicantEmail.trim();
         if ((form.applicantPhone || '').trim()) body.applicantPhone = form.applicantPhone.trim();
         if (form.applicantBirthDate) body.applicantBirthDate = form.applicantBirthDate;
-      }
-      if (form.tripId) {
-        body.tripId = parseInt(form.tripId, 10);
-        body.participantId = parseInt(form.participantId, 10);
       }
       await fetchApi('/api/travel/visa/applications', {
         method: 'POST',
@@ -859,6 +872,7 @@ export default function VisaApplications() {
           break;
         case 'INVALID_TRIP_ID':
         case 'TRIP_NOT_FOUND':
+        case 'VISA_NOT_REQUIRED':
           field = 'tripId';
           break;
         case 'INVALID_PARTICIPANT_ID':
@@ -1467,18 +1481,17 @@ export default function VisaApplications() {
               )}
 
               <label style={fieldLabel}>
-                Trip linkage (optional)
+                Trip *
                 <select
                   data-testid="create-trip-select"
                   value={form.tripId}
                   onChange={(e) => onTripChange(e.target.value)}
                   style={inputStyle}
                   aria-invalid={formError?.field === 'tripId' ? 'true' : undefined}
+                  required
                 >
                   <option value="">
-                    {tripsLoading
-                      ? 'Loading trips...'
-                      : 'No trip linked'}
+                    {tripsLoading ? 'Loading international trips...' : 'Select an international trip'}
                   </option>
                   {trips.map((trip) => (
                     <option key={trip.id} value={trip.id}>
@@ -1487,7 +1500,7 @@ export default function VisaApplications() {
                   ))}
                 </select>
                 <span style={fieldHintText}>
-                  Leave blank for non-TMC travel, or link a TMC trip now if the applicant is already part of one.
+                  Only international trips are available because visa applications require an international trip.
                 </span>
                 {formError?.field === 'tripId' && (
                   <span style={fieldErrorText} role="alert">

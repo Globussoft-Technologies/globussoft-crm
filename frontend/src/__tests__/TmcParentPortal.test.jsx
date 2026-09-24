@@ -6,6 +6,7 @@ describe("TmcParentPortal", () => {
   let fetchSpy;
 
   beforeEach(() => {
+    window.history.replaceState({}, "", "/tmc/parent-portal");
     localStorage.clear();
     localStorage.setItem("tmcParentPortalToken", "parent-token");
     fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((url, options = {}) => {
@@ -72,9 +73,9 @@ describe("TmcParentPortal", () => {
             document: {
               id: 22,
               documentType: "consent-form",
-              filename: "consent-form.pdf",
+              filename: "consent-form.png",
               fileSize: 2048,
-              mimeType: "application/pdf",
+              mimeType: "image/png",
               status: "in_review",
               tripId: 7,
             },
@@ -85,6 +86,12 @@ describe("TmcParentPortal", () => {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({ url: "https://files.example.test/parent-document.pdf" }),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/documents/11/file") {
+        return Promise.resolve({
+          ok: true,
+          blob: () => Promise.resolve(new Blob(["passport"], { type: "application/pdf" })),
         });
       }
       if (url === "/api/portal/tmc/parent/documents") {
@@ -103,6 +110,61 @@ describe("TmcParentPortal", () => {
               trip: { id: 7, destination: "Darjeeling" },
             }],
           }),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/visa-letters") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            applications: [{
+              id: 91,
+              applicationType: "student",
+              destinationCountry: "Vietnam",
+              status: "intake",
+              trip: { id: 7, destination: "Vietnam", tripCode: "VIET-2026" },
+              participant: { id: 55, fullName: "Rishav Kapoor" },
+              visaLetters: [{
+                id: 301,
+                documentType: "Cover Letter",
+                status: "SENT",
+                generatedFileName: "cover-letter.pdf",
+              }],
+            }],
+          }),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/consent-forms/7") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            trip: { id: 7, destination: "Darjeeling", tripType: "domestic" },
+            tripType: "domestic",
+            template: {
+              id: 31,
+              filename: "domestic-terms.pdf",
+              mimeType: "application/pdf",
+              fileSize: 4096,
+            },
+            signedDocument: null,
+          }),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/consent-forms/7/file?download=1" || url === "/api/portal/tmc/parent/consent-forms/7/file") {
+        return Promise.resolve({
+          ok: true,
+          blob: () => Promise.resolve(new Blob(["%PDF-1.7 terms"], { type: "application/pdf" })),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/visa-letters/301/generated?download=1") {
+        return Promise.resolve({
+          ok: true,
+          blob: () => Promise.resolve(new Blob(["pdf"], { type: "application/pdf" })),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/visa-letters/301/signed-upload" && options.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ letter: { id: 301, status: "SIGNED_UPLOADED" } }),
         });
       }
       if (url === "/api/portal/tmc/parent/trips/7/review" && options.method === "POST") {
@@ -201,8 +263,18 @@ describe("TmcParentPortal", () => {
     expect(labels).toEqual(["Dashboard", "Trips", "My Bookings", "Travel Documents", "Reviews"]);
   });
 
+  it("restores the selected section from the URL after a refresh", async () => {
+    window.history.replaceState({}, "", "/tmc/parent-portal?view=documents");
+    render(<TmcParentPortal />);
+
+    expect(await screen.findByRole("heading", { name: "Travel Documents", level: 2 })).toBeInTheDocument();
+  });
+
   it("lists travel documents, uploads a selected file, and opens a private view link", async () => {
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    globalThis.URL.createObjectURL = vi.fn(() => "blob:parent-document");
+    globalThis.URL.revokeObjectURL = vi.fn();
     render(<TmcParentPortal />);
 
     await screen.findByRole("heading", { name: "Dashboard" });
@@ -210,26 +282,102 @@ describe("TmcParentPortal", () => {
     expect(await screen.findByRole("heading", { name: "Travel Documents", level: 2 })).toBeInTheDocument();
     expect(screen.getByText("passport-arijit.pdf")).toBeInTheDocument();
     expect(screen.getByText(/Passport · Darjeeling/)).toBeInTheDocument();
-    expect(screen.getByText("(optional)").parentElement).toHaveTextContent("Related trip (optional)");
+    expect(screen.getByText(/Select a trip to see the documents required/)).toBeInTheDocument();
+    const tripSelect = screen.getByRole("combobox", { name: "Related trip" });
+    expect(tripSelect).toHaveValue("");
+    const documentTypeSelect = screen.getByRole("combobox", { name: "Document type" });
+    expect(documentTypeSelect).toBeDisabled();
+    expect(documentTypeSelect).toHaveAttribute("title", "Select a trip first to choose a document type.");
+    const documentTypeHint = screen.getByRole("button", { name: "Why is document type disabled?" });
+    expect(documentTypeHint).toHaveAttribute("title", "Select a trip first to choose a document type.");
+    fireEvent.click(documentTypeHint);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Select a trip first to choose a document type.");
+    expect(tripSelect).toHaveFocus();
+    fireEvent.change(tripSelect, { target: { value: "7" } });
+    expect([...documentTypeSelect.options].map((option) => option.textContent)).toEqual([
+      "Select a document",
+      "Passport",
+      "Aadhaar card",
+      "Consent form",
+      "Visa documents",
+    ]);
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Document type" }), { target: { value: "consent-form" } });
-    fireEvent.change(screen.getByLabelText("Choose travel document"), {
-      target: { files: [new File(["pdf"], "consent-form.pdf", { type: "application/pdf" })] },
+    fireEvent.change(documentTypeSelect, { target: { value: "consent-form" } });
+    expect(await screen.findByRole("heading", { name: "Consent form", level: 3 })).toBeInTheDocument();
+    expect(screen.getByText("domestic-terms.pdf")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View terms" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/parent/consent-forms/7/file",
+      expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "Download terms" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/parent/consent-forms/7/file?download=1",
+      expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
+    ));
+    fireEvent.change(screen.getByLabelText("Choose signed consent image"), {
+      target: { files: [new File(["png"], "consent-form.png", { type: "image/png" })] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Upload document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Upload signed consent" }));
 
     await waitFor(() => {
       const uploadCall = fetchSpy.mock.calls.find(([url, options]) => url === "/api/portal/tmc/parent/documents" && options.method === "POST");
       expect(uploadCall).toBeTruthy();
       expect(uploadCall[1].body).toBeInstanceOf(FormData);
       expect(uploadCall[1].body.get("documentType")).toBe("consent-form");
-      expect(uploadCall[1].body.get("file").name).toBe("consent-form.pdf");
+      expect(uploadCall[1].body.get("tripId")).toBe("7");
+      expect(uploadCall[1].body.get("file").name).toBe("consent-form.png");
     });
     expect(await screen.findByText(/travel team will review/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "View passport-arijit.pdf" }));
-    await waitFor(() => expect(openSpy).toHaveBeenCalledWith("https://files.example.test/parent-document.pdf", "_blank", "noopener,noreferrer"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/parent/documents/11/file",
+      expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
+    ));
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith("blob:parent-document", "_blank", "noopener,noreferrer"));
     openSpy.mockRestore();
+    anchorClick.mockRestore();
+  });
+
+  it("shows sent visa letters and lets a parent download and upload a signed PDF", async () => {
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(<TmcParentPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: /Travel Documents/ }));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Related trip" }), { target: { value: "7" } });
+    expect(screen.queryByRole("heading", { name: "Visa documents", level: 3 })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Document type" }), { target: { value: "visa" } });
+    expect(await screen.findByRole("heading", { name: "Visa documents", level: 3 })).toBeInTheDocument();
+    expect(screen.getByLabelText("Choose travel document")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upload visa document" })).toBeInTheDocument();
+    expect(screen.getByText("Cover Letter")).toBeInTheDocument();
+    expect(screen.getByText(/Signature pending/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Download Cover Letter" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/parent/visa-letters/301/generated?download=1",
+      expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
+    ));
+    await waitFor(() => expect(anchorClick).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText("Upload signed Cover Letter"), {
+      target: { files: [new File(["pdf"], "signed-cover-letter.pdf", { type: "application/pdf" })] },
+    });
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/parent/visa-letters/301/signed-upload",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
+    ));
+    expect(await screen.findByText(/Signed letter uploaded/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Document type" }), { target: { value: "passport" } });
+    expect(screen.queryByRole("heading", { name: "Visa documents", level: 3 })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Choose travel document")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upload document" })).toBeInTheDocument();
+
+    anchorClick.mockRestore();
   });
 
   it("supports theme switching and opens the parent profile from the header", async () => {

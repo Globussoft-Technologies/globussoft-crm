@@ -73,6 +73,26 @@ describe('public web form embed footer', () => {
     expect(html).toContain("fd.set('phone', internationalPhone)");
   });
 
+  test('detects a Generic phone country locally without disclosing visitor IPs', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('function detectGenericCountryFromLocale');
+    expect(html).toContain('new Intl.Locale(locale).region');
+    expect(html).not.toContain('ipapi.co');
+    expect(html).not.toContain('ipwho.is');
+    expect(html).not.toContain('api.country.is');
+  });
+
+  test('contains the Generic multi-step navigation and validation runtime', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('function multiStepConfig()');
+    expect(html).toContain('function validateStep(stepIndex)');
+    expect(html).toContain("document.getElementById('step-next').addEventListener");
+    expect(html).toContain('showStep(currentStepIndex + 1)');
+    expect(html).toContain('showStep(currentStepIndex - 1)');
+  });
+
   test('does not cap long forms in an internal scroll container', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 

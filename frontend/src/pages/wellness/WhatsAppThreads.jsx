@@ -46,6 +46,14 @@ import MessageContextMenu from './whatsapp/MessageContextMenu';
 import UnblockModal from './whatsapp/UnblockModal';
 import NewMessageModal from './whatsapp/NewMessageModal';
 
+function explainWhatsAppSendError(error, isMeta) {
+  const message = String(error?.message || '');
+  if (isMeta && message.includes('No active WhatsApp provider configured')) {
+    return 'WhatsApp is not connected for this organization. An administrator must open Settings → WhatsApp, add the Meta WhatsApp credentials, and activate the connection before messages can be sent.';
+  }
+  return message || 'Failed to send WhatsApp message.';
+}
+
 // `showThreadList` — render the left conversation rail (list + search + status
 // filter + unread toggle + the "+ New" and Templates buttons). OFF by default:
 // the rail was dropped from this page in 3f3ff602 and wellness has run without
@@ -379,10 +387,12 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
         }
       } catch { /* non-fatal */ }
       try {
-        const patients = await fetchApi('/api/wellness/patients?limit=200');
+        if (!isMeta) {
+          const patients = await fetchApi('/api/wellness/patients?limit=200');
         const list = Array.isArray(patients) ? patients : Array.isArray(patients?.patients) ? patients.patients : [];
-        for (const p of list) {
-          if (p.phone && p.name) opts.push({ id: `p-${p.id}`, name: p.name, phone: p.phone, source: 'patient' });
+          for (const p of list) {
+            if (p.phone && p.name) opts.push({ id: `p-${p.id}`, name: p.name, phone: p.phone, source: 'patient' });
+          }
         }
       } catch { /* non-fatal — generic CRM tenants don't have patients */ }
       // Dedupe by phone — if same number exists in both contacts + patients,
@@ -687,6 +697,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       await fetchApi(`${sendBase}/send`, {
         method: 'POST',
         body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
+        silent: isMeta,
       });
       setReply('');
       setReplyToMsg(null);
@@ -695,11 +706,11 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       loadList();
     } catch (err) {
-      const msg = err?.message || '';
+      const msg = explainWhatsAppSendError(err, isMeta);
       if (msg.includes('CONTACT_OPTED_OUT')) {
         notify.error('Contact has opted out — replies are blocked.');
       } else {
-        notify.error(msg || 'Failed to send.');
+        notify.error(msg);
       }
     }
     setSending(false);
@@ -749,6 +760,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       const resp = await fetchApi(`${sendBase}/send`, {
         method: 'POST',
         body: JSON.stringify(payload),
+        silent: isMeta,
       });
       notify.info(useTemplate ? 'Template message sent.' : 'Message sent.');
       setShowNewModal(false);
@@ -760,7 +772,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       await loadList();
       if (resp?.thread?.id) setSelectedId(resp.thread.id);
     } catch (err) {
-      const msg = err?.message || 'Failed to send.';
+      const msg = explainWhatsAppSendError(err, isMeta);
       if (msg.includes('CONTACT_OPTED_OUT')) {
         setNewError('This contact has opted out of WhatsApp messages.');
       } else {

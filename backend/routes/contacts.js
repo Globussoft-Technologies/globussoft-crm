@@ -1664,7 +1664,7 @@ router.get("/", async (req, res) => {
         tasks: true,
         assignedTo: { select: { id: true, name: true, email: true } },
         webFormSubmissions: {
-          select: { id: true, webForm: { select: { id: true, name: true } } },
+          select: { id: true, payloadJson: true, sourceUrl: true, submittedAt: true, webForm: { select: { id: true, name: true } } },
           orderBy: { submittedAt: "desc" },
           take: 1,
         },

@@ -95,6 +95,26 @@ const BUILTIN_COLUMNS = {
     // list (labels match the web-form field labels).
     { key: "firstTouchSource", label: "First Touch Source" }, // Contact.firstTouchSource
     { key: "lastTouchSource", label: "Last Touch Source" }, // Contact.lastTouchSource
+    { key: "pageUrl", label: "Page URL" },
+    { key: "pageTitle", label: "Page Title" },
+    { key: "pageSource", label: "Page Source" },
+    { key: "referrerUrl", label: "Referrer URL" },
+    { key: "landingPageUrl", label: "Landing Page URL" },
+    { key: "currentDomain", label: "Current Domain" },
+    { key: "formName", label: "Form Name / ID" },
+    { key: "utm_source", label: "UTM Source" },
+    { key: "utm_medium", label: "UTM Medium" },
+    { key: "utm_campaign", label: "UTM Campaign" },
+    { key: "utm_term", label: "UTM Term" },
+    { key: "utm_content", label: "UTM Content" },
+    { key: "gclid", label: "Google Click ID" },
+    { key: "fbclid", label: "Meta Click ID" },
+    { key: "fbc", label: "Meta Click Cookie" },
+    { key: "fbp", label: "Meta Browser ID" },
+    { key: "submittedAt", label: "Submission Timestamp" },
+    { key: "browser", label: "Browser" },
+    { key: "operatingSystem", label: "Operating System" },
+    { key: "deviceType", label: "Device Type" },
     { key: "treatmentOfInterest", label: "Treatment Of Interest" }, // Contact.treatmentOfInterest
     { key: "birthDate", label: "Birth Date" }, // Contact.birthDate (DateTime)
     { key: "anniversary", label: "Anniversary" }, // Contact.anniversary (DateTime)

@@ -284,6 +284,61 @@ beforeEach(() => {
 
 describe('WebForms builder page', () => {
 
+  test('persists Generic multi-page definitions and field assignment', async () => {
+    renderPage({ ...FORM_FIXTURE, scope: 'generic' });
+    await openBuilder();
+
+    for (const title of ['Contact details', 'Requirements']) {
+      fireEvent.click(screen.getByRole('button', { name: /Add page/i }));
+      const dialog = screen.getByRole('dialog', { name: /Add form page/i });
+      fireEvent.change(dialog.querySelector('input[placeholder="Enter page title"]'), { target: { value: title } });
+      fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((button) => button.textContent === 'Add page'));
+    }
+
+    const stepSelect = screen.getByText('Form step').closest('label').querySelector('select');
+    fireEvent.change(stepSelect, { target: { value: stepSelect.options[1].value } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const update = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT');
+      expect(update).toBeTruthy();
+      const body = JSON.parse(update[1].body);
+      expect(body.settings.steps.map((step) => step.title)).toEqual(['Contact details', 'Requirements']);
+      expect(body.settings.multiStepEnabled).toBe(true);
+      expect(body.fields[0].stepId).toBe(body.settings.steps[1].id);
+    });
+  });
+
+  test('renders conditional children in an indented branch card beneath their parent', async () => {
+    const conditionalForm = {
+      ...FORM_FIXTURE,
+      scope: 'generic',
+      fields: [
+        {
+          id: 'root-question', sourceKind: 'custom', sourceKey: 'root-question', fieldType: 'dropdown',
+          label: 'Interested in', optionsText: 'Shopify\nWordPress', options: ['Shopify', 'WordPress'],
+          required: false, hidden: false, showWhen: null,
+        },
+        {
+          id: 'child-question', sourceKind: 'custom', sourceKey: 'child-question', fieldType: 'text',
+          label: 'Shopify Store URL', options: [], required: false, hidden: false,
+          showWhen: { fieldId: 'root-question', fieldKey: 'root-question', value: 'Shopify' },
+        },
+      ],
+    };
+
+    const { container } = renderPage(conditionalForm);
+    await openBuilder();
+
+    expect(screen.getByText('Conditional flow')).toBeInTheDocument();
+    expect(screen.getByText('Show question')).toBeInTheDocument();
+    const childCard = container.querySelector('.wf-conditional-child-card');
+    expect(childCard).toBeInTheDocument();
+    expect(childCard).toHaveTextContent('Shopify');
+    expect(childCard).toHaveTextContent('Shopify Store URL');
+    expect(childCard.querySelector('[data-testid="wf-field-editor-grid"]')).toBeInTheDocument();
+  });
+
   test('travel logo selection immediately sends a multipart upload request', async () => {
     const { container } = renderTravelPage();
     await openBuilder();

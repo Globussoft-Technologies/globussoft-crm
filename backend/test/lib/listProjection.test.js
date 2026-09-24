@@ -297,12 +297,13 @@ describe('listProjection(modelName, fullShape)', () => {
   });
 
   describe('per-model summary shape pinning', () => {
-    test('TmcTrip slim shape = {id, tripCode, destination, status, departDate, returnDate, createdAt}', () => {
+    test('TmcTrip slim shape includes tripType for eligibility-aware pickers', () => {
       const p = listProjection('TmcTrip', false);
       expect(p).toEqual({
         id: true,
         tripCode: true,
         destination: true,
+        tripType: true,
         status: true,
         departDate: true,
         returnDate: true,

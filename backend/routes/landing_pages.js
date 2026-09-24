@@ -5972,10 +5972,9 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" } });
     const fields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : {};
     if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
-    const tripType = await resolveLandingPageTripType(page);
-    if (tripRequiresPassport(tripType) && String(fields.passport_status || "").toLowerCase() !== "valid passport") {
-      return res.status(400).json({ error: "A valid passport is required for document upload", code: "PASSPORT_REQUIRED" });
-    }
+    // Passport status controls whether the public wizard offers payment. It
+    // no longer gates a document-upload step because documents are collected
+    // through the parent portal/admin workflow.
     const draftToken = crypto.randomBytes(24).toString("hex");
     const draft = await prisma.pendingTripRegistration.create({
       data: {
@@ -6086,6 +6085,15 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
     }
     if (!page.tripId) {
       return res.status(409).json({ error: "Payment can only be used on trip-linked landing pages", code: "NO_TRIP_LINK" });
+    }
+
+    const tripType = await resolveLandingPageTripType(page);
+    const paymentFields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : req.body || {};
+    const passportStatus = String(paymentFields.passport_status || paymentFields.passportStatus || "").trim().toLowerCase();
+    const passportValid = !tripRequiresPassport(tripType)
+      || ["valid passport", "valid for 6+ months", "yes, passport is valid for 6+ months"].includes(passportStatus);
+    if (!passportValid) {
+      return res.status(400).json({ error: "Payment requires a passport valid for at least 6 months", code: "PASSPORT_REQUIRED" });
     }
 
     const selection = resolveLandingPagePaymentSelection(page, req.body || {});
@@ -7203,7 +7211,6 @@ function resolveRegistrationMode(page, formProps) {
 async function handleRegistrationDraft(req, res, page, formProps) {
 
   const tenantId = page.tenantId || 1;
-  const paymentConfig = getLandingPagePaymentConfig(page);
   const requiresPassport = tripRequiresPassport(await resolveLandingPageTripType(page));
 
   // The wizard's per-step values arrive flattened under `fields`
@@ -7223,6 +7230,10 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   const parent = (req.body && typeof req.body.parent === "object" && req.body.parent) ? req.body.parent : {};
 
   const passport = (req.body && typeof req.body.passport === "object" && req.body.passport) ? req.body.passport : {};
+
+  const passportStatus = String(passport.status || flat.passport_status || flat.passportStatus || "").trim().toLowerCase();
+  const passportValid = !requiresPassport
+    || ["valid passport", "valid for 6+ months", "yes, passport is valid for 6+ months"].includes(passportStatus);
 
   const extras = (req.body && typeof req.body.extras === "object" && req.body.extras) ? req.body.extras : null;
 
@@ -7459,6 +7470,17 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   });
 
 
+
+  // A passport that is not valid for at least six months completes the
+  // registration without opening payment or the parent portal.
+  if (requiresPassport && !passportValid) {
+    return res.status(201).json({
+      ok: true,
+      draftId: draft.id,
+      redirect: { type: "thanks" },
+      message: "Thank you — your registration has been received. We'll be in touch shortly.",
+    });
+  }
 
   // Resolve microsite redirect. If the trip has a published microsite,
 

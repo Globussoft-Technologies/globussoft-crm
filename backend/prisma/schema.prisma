@@ -223,6 +223,7 @@ model Tenant {
   tmcTrips                            TmcTrip[]
   tmcParentTrips                      TmcParentTrip[]
   tmcParentDocuments                  TmcParentDocument[]
+  tmcConsentTemplates                 TmcConsentTemplate[]
   tmcTripTeacherReviews               TmcTripTeacherReview[]
   webCheckins                         WebCheckin[]
   webCheckinAutomationRuns            WebCheckinAutomationRun[]
@@ -7605,12 +7606,13 @@ model TmcParentDocument {
   tenantId        Int      @default(1)
   parentContactId Int
   tripId          Int?
-  documentType    String // passport | birth-certificate | consent-form | medical-form | school-id | visa | other
+  documentType    String // passport | aadhaar | consent-form | visa
   filename        String
-  fileUrl         String   @db.Text
+  fileUrl         String?  @db.Text
+  fileBlob        Bytes?   @db.MediumBlob
   fileSize        Int?
   mimeType        String?
-  storage         String? // s3 | ocs | disk
+  storage         String? // s3 | ocs | disk | db
   storageKey      String?
   status          String   @default("in_review") // in_review | approved | rejected
   notes           String?  @db.Text
@@ -7622,6 +7624,26 @@ model TmcParentDocument {
 
   @@index([tenantId, parentContactId, createdAt])
   @@index([tenantId, tripId])
+}
+
+// Trip-type-specific consent terms uploaded from the operator's source
+// documents. The original PDF bytes stay in the tenant database so the
+// parent portal can stream the exact terms selected for each trip.
+model TmcConsentTemplate {
+  id         Int      @id @default(autoincrement())
+  tenantId   Int      @default(1)
+  tripType   String   // day_trip | domestic | international
+  filename   String
+  mimeType   String
+  fileSize   Int
+  fileBlob   Bytes    @db.MediumBlob
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, tripType])
+  @@index([tenantId, tripType])
 }
 
 /// Teacher tour report submitted after a TMC trip is completed. This is kept

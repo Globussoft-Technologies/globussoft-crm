@@ -179,6 +179,10 @@ function formatTripLabel(trip) {
   return `${code}${destination}${depart}`;
 }
 
+function isInternationalTrip(trip) {
+  return String(trip?.tripType || '').trim().toLowerCase() === 'international';
+}
+
 function normalizeMatchKey(value) {
   return String(value || '')
     .trim()
@@ -678,9 +682,7 @@ export default function VisaApplications() {
     setFormError(null);
     setCreating(true);
     // Backend /api/contacts doesn't support ?subBrand= today; fetch a
-    // batch and filter client-side. Trip linkage is optional, but we
-    // still preload the TMC trip list so school-trip applicants can be
-    // linked to a participant when needed.
+    // batch and preload eligible TMC trips for optional participant linkage.
     setContactsLoading(true);
     fetchApi('/api/contacts?limit=200')
       .then((res) => {
@@ -692,7 +694,8 @@ export default function VisaApplications() {
     setTripsLoading(true);
     fetchApi('/api/travel/trips?fields=summary&limit=200', { silent: true })
       .then((res) => {
-        setTrips(Array.isArray(res?.trips) ? res.trips : []);
+        const list = Array.isArray(res?.trips) ? res.trips : [];
+        setTrips(list.filter(isInternationalTrip));
       })
       .catch(() => setTrips([]))
       .finally(() => setTripsLoading(false));
@@ -859,6 +862,7 @@ export default function VisaApplications() {
           break;
         case 'INVALID_TRIP_ID':
         case 'TRIP_NOT_FOUND':
+        case 'VISA_NOT_REQUIRED':
           field = 'tripId';
           break;
         case 'INVALID_PARTICIPANT_ID':
@@ -1476,9 +1480,7 @@ export default function VisaApplications() {
                   aria-invalid={formError?.field === 'tripId' ? 'true' : undefined}
                 >
                   <option value="">
-                    {tripsLoading
-                      ? 'Loading trips...'
-                      : 'No trip linked'}
+                    {tripsLoading ? 'Loading international trips...' : 'No trip linked'}
                   </option>
                   {trips.map((trip) => (
                     <option key={trip.id} value={trip.id}>
@@ -1487,7 +1489,7 @@ export default function VisaApplications() {
                   ))}
                 </select>
                 <span style={fieldHintText}>
-                  Leave blank for non-TMC travel, or link a TMC trip now if the applicant is already part of one.
+                  Leave blank for standalone Visa Sure work, or link an international TMC trip and participant.
                 </span>
                 {formError?.field === 'tripId' && (
                   <span style={fieldErrorText} role="alert">
@@ -1926,6 +1928,5 @@ const navButtonStyle = {
   alignItems: 'center',
   justifyContent: 'center',
 };
-
 
 

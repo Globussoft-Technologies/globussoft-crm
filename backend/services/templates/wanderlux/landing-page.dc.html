@@ -498,21 +498,6 @@
                 </div>
               </sc-for>
 
-              <sc-if value="{{ regIsDocuments }}">
-              <div style="display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid var(--c-border);border-radius:10px;background:var(--c-light)">
-                <p style="margin:0;color:var(--c-text2);font-size:13px">Upload {{ regRequiredDocumentCount }} required documents to continue to payment.</p>
-                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
-                  <sc-for list="{{ regDocumentFields }}" as="doc">
-                    <div style="border:1px solid var(--c-border);border-radius:9px;padding:13px;background:var(--c-panel);min-width:0">
-                      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px"><label style="font-size:13px;font-weight:700;color:var(--c-text)">{{ doc.label }} *</label><sc-if value="{{ doc.hasFile }}"><span style="color:#16803c;font-size:18px" aria-label="Uploaded">&#10003;</span></sc-if></div>
-                      <label style="display:flex;flex-direction:column;gap:7px;align-items:center;justify-content:center;min-height:70px;border:1px dashed {{ doc.hasFile ? '#72bd83' : 'var(--c-border)' }};border-radius:7px;padding:10px;text-align:center;cursor:pointer;color:var(--c-text2);font-size:12px"><sc-if value="{{ doc.hasFile }}"><strong style="display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)">{{ doc.fileName }}</strong><span>{{ doc.fileMeta }}</span></sc-if><sc-if value="{{ doc.hasFile }}"><span style="color:var(--c-brand);font-weight:600">Replace document</span></sc-if><sc-if value="{{ doc.showChoose }}"><span style="color:var(--c-brand);font-weight:600">Choose document</span></sc-if><input type="file" accept="image/jpeg,image/png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange="{{ doc.onInput }}" aria-label="{{ doc.label }}" style="display:none"></label><sc-if value="{{ doc.hasFile }}"><div style="display:flex;gap:8px;margin-top:8px"><button type="button" onClick="{{ doc.onPreview }}" style="flex:1;border:1px solid var(--c-border);background:transparent;color:var(--c-brand);border-radius:6px;padding:7px;font-size:12px;cursor:pointer">Preview</button><button type="button" onClick="{{ doc.onRemove }}" aria-label="Remove {{ doc.label }}" style="border:1px solid var(--c-border);background:transparent;color:var(--c-text2);border-radius:6px;padding:7px 10px;font-size:12px;cursor:pointer">Remove</button></div></sc-if>
-                    </div>
-                  </sc-for>
-                </div>
-                <div style="padding:12px 14px;border-radius:8px;background:color-mix(in srgb,var(--c-accent) 8%,var(--c-light));color:var(--c-text2);font-size:12px">Your documents are encrypted and stored securely for TMC admin review.</div>
-              </div>
-              </sc-if>
-
               <!-- Honeypot: hidden from humans, catches bots -->
               <input type="text" tabindex="-1" autocomplete="off" onChange="{{ hpSetter }}" class="lpg-hide" aria-hidden="true">
 
@@ -975,7 +960,7 @@ var DEFAULT_CONFIG = {
       ]},
       { title:'Step 3: Confirm', fields:[
         {name:'participants', label:'Number of Participants', type:'number', required:false, placeholder:'1'},
-        {name:'passport_status', label:'Passport Status', type:'select', required:true, placeholder:'Select status', options:['Valid passport','Applied / in process','Not yet applied']}
+        {name:'passport_status', label:'Passport Status', type:'select', required:true, placeholder:'Select status', options:['Valid for 6+ months','Applied / in process','Not yet applied']}
       ]}
     ],
     covers:[
@@ -1044,7 +1029,7 @@ var DEFAULT_CONFIG = {
 class Component extends DCLogic {
   state = {
     now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
-    regStep:0, regValues:{}, regFiles:{}, regDraftToken:'', regDocumentsUploaded:false, regError:'', regSubmitted:false, regSending:false,
+    regStep:0, regValues:{}, regDraftToken:'', regError:'', regSubmitted:false, regSending:false,
     regPaymentMode:'installment', regPaymentInstallmentIndex:0, regPaymentLoading:false, regPaymentError:'', regPaymentCompleted:false, regPaymentLinkId:'',
     brValues:{}, brError:'', brSubmitted:false, brSending:false,
     toast: null,
@@ -1079,7 +1064,6 @@ class Component extends DCLogic {
             if (!status) return;
             const next = {};
             if (status.fields && typeof status.fields === 'object') next.regValues = Object.assign({}, this.state.regValues, status.fields);
-            if (status.documentsUploaded) { next.regDocumentsUploaded = true; next.regStep = Math.max(this.state.regStep, 3); }
             if (status.paid) { next.regPaymentCompleted = true; next.regPaymentError = ''; }
             if (Object.keys(next).length) this.setState(next);
           })
@@ -1096,11 +1080,11 @@ class Component extends DCLogic {
           regPaymentCompleted: true,
           regPaymentLoading: false,
           regPaymentError: '',
-          // A hosted payment link is created only after documents are
-          // uploaded, so the callback can deterministically resume at the
-          // payment step even before the server draft lookup completes.
-          regStep: Math.max(Number(params.get('regStep')) || 0, 3),
-          regDocumentsUploaded: true,
+          // Resume the payment tab supplied by the callback. The tab is now
+          // reached directly after the registration fields.
+          regStep: Number.isFinite(Number(params.get('regStep')))
+            ? Number(params.get('regStep'))
+            : this.state.regStep,
           regDraftToken: params.get('draftToken') || this.state.regDraftToken || '',
           regPaymentLinkId: params.get('razorpay_payment_link_id') || params.get('paymentLinkId') || '',
         });
@@ -1147,7 +1131,7 @@ class Component extends DCLogic {
   saveRegistrationDraft(patch){
     try{
       const current = Object.assign({
-        regStep:0, regValues:{}, regDraftToken:'', regDocumentsUploaded:false,
+        regStep:0, regValues:{}, regDraftToken:'',
         regPaymentMode:'installment', regPaymentInstallmentIndex:0
       }, patch || {});
         window.localStorage.setItem(this.registrationDraftKey(), JSON.stringify(current));
@@ -1164,7 +1148,6 @@ class Component extends DCLogic {
         regStep: Number.isFinite(Number(saved.regStep)) ? Number(saved.regStep) : 0,
         regValues: saved.regValues && typeof saved.regValues === 'object' ? saved.regValues : {},
         regDraftToken: saved.regDraftToken || '',
-        regDocumentsUploaded: saved.regDocumentsUploaded === true,
         regPaymentMode: saved.regPaymentMode === 'complete' ? 'complete' : 'installment',
         regPaymentInstallmentIndex: Number(saved.regPaymentInstallmentIndex) || 0
         ,regPaymentCompleted: saved.regPaymentCompleted === true
@@ -1229,7 +1212,7 @@ class Component extends DCLogic {
 
   /* generic input/select setter for a given state bag + field name */
   setField(bag, name){
-    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = { regError: bag === 'regValues' ? '' : st.regError }; patch[bag] = next; if(bag === 'regValues') this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regDocumentsUploaded: st.regDocumentsUploaded, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return patch; }); };
+    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = { regError: bag === 'regValues' ? '' : st.regError }; patch[bag] = next; if(bag === 'regValues') this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return patch; }); };
   }
 
   showToast(message, tone){
@@ -1544,18 +1527,17 @@ class Component extends DCLogic {
 
     // Older saved pages may contain the former combined documents/payment
     // step. Keep the saved registration fields intact, but normalize that
-    // legacy step away so documents stay on the passport tab and payment gets
-    // its own final tab.
+    // legacy step away so payment gets its own final tab.
     const baseSteps = (reg.steps || []).filter((step) => {
       const title = String(step && step.title || '').toLowerCase();
-      return !title.includes('documents and payment') && !title.includes('documents & payment');
+      return !title.includes('document') && !title.includes('payment');
     });
     const normalizedTripType = String(reg.tripType || (cfg.meta && cfg.meta.tripType) || '').toLowerCase().replace(/[- ]/g, '_');
     const isDomesticTrip = normalizedTripType === 'domestic' || normalizedTripType === 'day_trip';
-    const passportValue = String(this.state.regValues.passport_status || '').toLowerCase();
-    const passportValid = isDomesticTrip || passportValue === 'valid passport' || passportValue === 'yes, passport is valid for 6+ months';
+    const passportValue = String(this.state.regValues.passport_status || '').trim().toLowerCase();
+    const passportValid = isDomesticTrip || ['valid passport', 'valid for 6+ months', 'yes, passport is valid for 6+ months'].includes(passportValue);
     const rsteps = passportValid && baseSteps.length
-      ? baseSteps.concat([{ title:'Step 3: Documents', fields:[] }, { title:'Step 4: Payment', fields:[] }])
+      ? baseSteps.concat([{ title:'Step ' + (baseSteps.length + 1) + ': Payment', fields:[] }])
       : baseSteps;
     out.regMultiStep = rsteps.length > 1;
     const stepIdx = Math.min(this.state.regStep, Math.max(0, rsteps.length - 1));
@@ -1567,16 +1549,9 @@ class Component extends DCLogic {
       reqMark: f.required ? ' *' : '', isSelect: f.type === 'select', isInput: f.type !== 'select',
       options: f.options || [], value: this.state.regValues[f.name] || '', onInput: this.setField('regValues', f.name)
     }));
-    out.regIsDocuments = passportValid && stepIdx === baseSteps.length;
-    out.regDocumentFields = [
-      ...(isDomesticTrip ? [] : [{ name:'passport', label:'Passport' }]),
-      { name:'aadhaar', label:'Aadhaar card' }, { name:'parentConsent', label:'Parent consent form' }, { name:'medicalConsent', label:'Medical consent form' }
-    ];
-    out.regRequiredDocumentCount = out.regDocumentFields.length;
-    out.regDocumentFields = out.regDocumentFields.map((doc) => ({ ...doc, hasFile:!!(this.state.regFiles && this.state.regFiles[doc.name]), showChoose:!(this.state.regFiles && this.state.regFiles[doc.name]), fileName:this.state.regFiles && this.state.regFiles[doc.name] ? this.state.regFiles[doc.name].name : '', fileMeta:this.state.regFiles && this.state.regFiles[doc.name] ? ((this.state.regFiles[doc.name].size / 1024 / 1024).toFixed(1) + ' MB · ' + (this.state.regFiles[doc.name].type || 'Document')) : '', onInput:(e) => this.setState(st => ({ regFiles:{ ...(st.regFiles || {}), [doc.name]:e.target.files && e.target.files[0] } })), onRemove:() => this.setState(st => { const next={...(st.regFiles || {})}; delete next[doc.name]; return { regFiles:next, regDocumentsUploaded:false }; }), onPreview:() => { const file=this.state.regFiles && this.state.regFiles[doc.name]; if(file) window.open(URL.createObjectURL(file), '_blank', 'noopener'); } }));
     out.regShowBack = stepIdx > 0;
     out.regIsLast = stepIdx >= rsteps.length - 1;
-    out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast && passportValid && this.state.regDocumentsUploaded);
+    out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast && passportValid);
     out.regPaymentAllowComplete = paymentCfg.allowCompletePayment !== false;
     out.regPaymentMode = paymentMode;
     out.regPaymentIsInstallment = paymentMode === 'installment';
@@ -1611,12 +1586,12 @@ class Component extends DCLogic {
     out.regPrimaryLabel = out.regIsLast ? (out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'))) : 'Next';
     out.regPrimaryButtonLabel = this.state.regPaymentLoading ? 'Opening Razorpay...' : out.regPrimaryLabel;
     out.regPrimaryButtonOpacity = this.state.regPaymentLoading ? 0.78 : 1;
-    out.regError = out.regIsDocuments ? this.state.regError : '';
+    out.regError = this.state.regError;
     out.hpSetter = this.setField('regValues', '_hp');
-    out.regPrev = () => this.setState(st => { const regStep = Math.max(0, st.regStep - 1); this.saveRegistrationDraft({ regStep, regValues: st.regValues, regDraftToken: st.regDraftToken, regDocumentsUploaded: st.regDocumentsUploaded, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return { regStep, regError:'' }; });
-    out.regChoosePaymentInstallment = () => { this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode:'installment', regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regPaymentMode: 'installment', regPaymentError: '' }); };
-    out.regChoosePaymentComplete = () => { this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode:'complete', regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regPaymentMode: 'complete', regPaymentError: '' }); };
-    out.regChoosePaymentInstallmentIndex = (e) => { const regPaymentInstallmentIndex = Number(e.target.value) || 0; this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode: this.state.regPaymentMode, regPaymentInstallmentIndex }); this.setState({ regPaymentInstallmentIndex, regPaymentError: '' }); };
+    out.regPrev = () => this.setState(st => { const regStep = Math.max(0, st.regStep - 1); this.saveRegistrationDraft({ regStep, regValues: st.regValues, regDraftToken: st.regDraftToken, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return { regStep, regError:'' }; });
+    out.regChoosePaymentInstallment = () => { this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regPaymentMode:'installment', regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regPaymentMode: 'installment', regPaymentError: '' }); };
+    out.regChoosePaymentComplete = () => { this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regPaymentMode:'complete', regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regPaymentMode: 'complete', regPaymentError: '' }); };
+    out.regChoosePaymentInstallmentIndex = (e) => { const regPaymentInstallmentIndex = Number(e.target.value) || 0; this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regPaymentMode: this.state.regPaymentMode, regPaymentInstallmentIndex }); this.setState({ regPaymentInstallmentIndex, regPaymentError: '' }); };
     out.regPrimary = (() => {
       const steps = rsteps, idx = stepIdx, endpoint = reg.endpoint, c = cfg;
       return () => {
@@ -1624,20 +1599,6 @@ class Component extends DCLogic {
         const fields = (steps[idx] && steps[idx].fields) || [];
         for(const f of fields){ const err = validateField(f, this.state.regValues[f.name]); if(err){ this.setState({ regError: err }); return; } }
         this.setState({ regError:'' });
-        if(out.regIsDocuments && !this.state.regDocumentsUploaded){
-          const files = this.state.regFiles || {};
-          const requiredDocuments = isDomesticTrip ? ['aadhaar','parentConsent','medicalConsent'] : ['passport','aadhaar','parentConsent','medicalConsent'];
-          if(requiredDocuments.some((name) => !files[name])){ this.setState({ regError: isDomesticTrip ? 'Please upload all three required documents.' : 'Please upload all four required documents.' }); return; }
-          this.setState({ regError:'', regPaymentLoading:true });
-          const fd = new FormData();
-          fd.append('fields', JSON.stringify(this.state.regValues || {}));
-          Object.keys(files).forEach((name) => { if(files[name]) fd.append(name, files[name]); });
-          fetch((paymentOrderEndpoint || endpoint || '').replace(/\/payment-order$/, '/registration-documents'), { method:'POST', body:fd })
-            .then((r) => r.json().then((body) => ({ ok:r.ok, body })))
-            .then((result) => { if(!result.ok) throw new Error(result.body.error || 'Document upload failed.'); const regDraftToken = result.body.draftToken || ''; this.saveRegistrationDraft({ regStep: idx + 1, regValues: this.state.regValues, regDraftToken, regDocumentsUploaded:true, regPaymentMode: this.state.regPaymentMode, regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regStep:idx + 1, regDraftToken, regDocumentsUploaded:true, regPaymentLoading:false }); })
-            .catch((err) => this.setState({ regPaymentLoading:false, regError:err.message || 'Document upload failed.' }));
-          return;
-        }
         if(idx < steps.length - 1){ this.setState(st => ({ regStep: st.regStep + 1, regError:'' })); return; }
         if(out.regPaymentCompleted){
           this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId }, doneKey:'regSubmitted', sendingKey:'regSending' });
@@ -1669,7 +1630,7 @@ class Component extends DCLogic {
           draftToken: this.state.regDraftToken || '',
           regStep: idx,
         };
-        this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
+        this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
         fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(paymentPayload) })
           .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
           .then(async (order) => {

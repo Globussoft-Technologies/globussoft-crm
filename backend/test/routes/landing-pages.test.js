@@ -1618,6 +1618,26 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
 });
 
 describe('POST /p/:slug/payment-order + payment submit', () => {
+  test('payment-order rejects an international registration without six-month passport validity', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/payment-order')
+      .send({
+        mode: 'installment',
+        fields: {
+          name: 'Ravi Iyer',
+          email: 'parent@example.com',
+          phone: '+919876543210',
+          passport_status: 'Applied / in process',
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'PASSPORT_REQUIRED' });
+    expect(getTenantRazorpayClientMock).not.toHaveBeenCalled();
+  });
+
   test('payment-order creates a Razorpay order for the selected complete payment flow', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
     prisma.payment.create.mockResolvedValue({ id: 901 });
@@ -1632,6 +1652,7 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
           name: 'Ravi Iyer',
           email: 'parent@example.com',
           phone: '+919876543210',
+          passport_status: 'Valid for 6+ months',
         },
       });
 
@@ -1848,7 +1869,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       .send({
         student: { name: 'Aarav Iyer', dob: '2010-04-12', school: 'DPS North' },
         parent: { name: 'Rohan Iyer', email: 'rohan@example.com', phone: '+919876543210' },
-        passport: { number: 'M1234567', expiry: '2031-09-01' },
+        passport: { number: 'M1234567', expiry: '2031-09-01', status: 'Valid for 6+ months' },
       });
 
     expect(res.status).toBe(201);
@@ -1908,6 +1929,35 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     );
   });
 
+  test('non-valid passport status completes with thank-you response and no portal redirect', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      content: wanderluxContent, templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100,
+    });
+    prisma.pendingTripRegistration.create.mockResolvedValue({
+      id: 7010, status: 'DRAFT', draftToken: 'invalid-passport-token',
+    });
+    prisma.contact.create.mockResolvedValue({ id: 8010, tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/trip-bali2026/submit')
+      .send({
+        fields: { passport_status: 'Applied / in process' },
+        student: { name: 'Aarav Iyer' },
+        parent: { name: 'Rohan Iyer', email: 'rohan@example.com', phone: '+919876543210' },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      ok: true,
+      redirect: { type: 'thanks' },
+    });
+    expect(res.body.redirect).not.toHaveProperty('url');
+    expect(res.body.message).toMatch(/thank you/i);
+  });
+
   test('redirects to customer portal (regardless of microsite) when trip has no published microsite', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
@@ -1925,6 +1975,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       .send({
         student: { name: 'Priya Singh' },
         parent: { name: 'Anil Singh', email: 'anil@example.com', phone: '+919811112222' },
+        passport: { status: 'Valid for 6+ months' },
       });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
@@ -1952,6 +2003,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       .send({
         student: { name: 'X' },
         parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
+        passport: { status: 'Valid for 6+ months' },
       });
     expect(res.status).toBe(201);
     expect(res.body.redirect).toMatchObject({
@@ -1976,6 +2028,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       .send({
         student: { name: 'X' },
         parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
+        passport: { status: 'Valid for 6+ months' },
       });
     expect(res.status).toBe(201);
     expect(res.body.redirect).toMatchObject({
@@ -2018,6 +2071,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
           parent_email: 'kavita@example.com',
           parent_phone: '+919900112233',
           passport_number: 'N7654321',
+          passport_status: 'Valid for 6+ months',
         },
       });
     expect(res.status).toBe(201);

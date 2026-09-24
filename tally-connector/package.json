@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node index.js",
     "check": "node --check index.js",
-    "build:windows": "pkg index.js --targets node22-win-x64 --output dist/TallyConnector.exe"
+    "build:windows": "pkg index.js --targets node22-win-x64 --no-bytecode --public --public-packages \"*\" --output dist/TallyConnector.exe"
   },
   "dependencies": {
     "ws": "^8.18.0"

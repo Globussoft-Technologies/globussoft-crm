@@ -83,6 +83,11 @@ const normalizeBankDetails = (value) => ({
   ),
 });
 
+const hasValidAccountNumber = (bankDetails) => {
+  const accountNumber = String(bankDetails?.accountNumber || "").trim();
+  return !accountNumber || /^\d{9,18}$/.test(accountNumber);
+};
+
 const normalizeMasterDetails = (value) => ({
   companyName: String(value?.companyName || ""),
   mailingName: String(value?.mailingName || ""),
@@ -251,6 +256,12 @@ router.put(
       const bankDetails = normalizeBankDetails(
         req.body?.bankDetails || req.body || {},
       );
+      if (!hasValidAccountNumber(bankDetails)) {
+        return res.status(400).json({
+          error: "Bank account number must contain 9 to 18 digits.",
+          code: "INVALID_BANK_ACCOUNT_NUMBER",
+        });
+      }
       await setSetting(
         req.travelTenant.id,
         TALLY_BANK_DETAILS_KEY,
@@ -302,6 +313,12 @@ router.put(
   async (req, res) => {
     try {
       const masterDetails = normalizeMasterDetails(req.body?.masterDetails || req.body || {});
+      if (!hasValidAccountNumber(masterDetails.bankDetails)) {
+        return res.status(400).json({
+          error: "Bank account number must contain 9 to 18 digits.",
+          code: "INVALID_BANK_ACCOUNT_NUMBER",
+        });
+      }
       await setSetting(
         req.travelTenant.id,
         TALLY_MASTER_DETAILS_KEY,

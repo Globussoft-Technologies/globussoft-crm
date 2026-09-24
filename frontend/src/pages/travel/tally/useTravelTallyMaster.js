@@ -134,6 +134,8 @@ export function useTravelTallyMaster() {
       return "Enter a valid 6-digit PIN code.";
     if (master.contactNumber.trim() && !/^\+?[0-9 ()-]{7,20}$/.test(master.contactNumber.trim()))
       return "Enter a valid contact number.";
+    if (master.bankDetails?.accountNumber?.trim() && !/^\d{9,18}$/.test(master.bankDetails.accountNumber.trim()))
+      return "Enter a valid 9–18 digit bank account number.";
     if (master.bankDetails?.ifscCode?.trim() && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(master.bankDetails.ifscCode.trim().toUpperCase()))
       return "Enter a valid IFSC code.";
     if (master.bankDetails?.upiId?.trim() && !/^[\w.-]+@[\w.-]+$/.test(master.bankDetails.upiId.trim()))

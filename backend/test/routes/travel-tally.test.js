@@ -194,6 +194,19 @@ describe("travel Tally cost centre sources", () => {
 });
 
 describe("travel Tally route guards and envelopes", () => {
+  test.each([
+    "/api/travel/tally/master-bank-details",
+    "/api/travel/tally/master-details",
+  ])("rejects an invalid bank account number on %s", async (path) => {
+    const response = await request(makeApp())
+      .put(path)
+      .set(auth())
+      .send({ bankDetails: { accountNumber: "not-a-bank-account" } });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("INVALID_BANK_ACCOUNT_NUMBER");
+  });
+
   test("requires authentication", async () => {
     const response = await request(makeApp()).get("/api/travel/tally/masters");
     expect([401, 403]).toContain(response.status);

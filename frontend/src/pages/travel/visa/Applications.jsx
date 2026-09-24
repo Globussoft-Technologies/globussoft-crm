@@ -682,8 +682,7 @@ export default function VisaApplications() {
     setFormError(null);
     setCreating(true);
     // Backend /api/contacts doesn't support ?subBrand= today; fetch a
-    // Fetch the TMC trip list and keep only international trips. Visa
-    // applications must always be linked to one of these trips.
+    // batch and preload eligible TMC trips for optional participant linkage.
     setContactsLoading(true);
     fetchApi('/api/contacts?limit=200')
       .then((res) => {
@@ -795,19 +794,8 @@ export default function VisaApplications() {
       setFormError({ field: 'applicationType', message: 'Application type is required' });
       return;
     }
-    if (!form.tripId) {
-      setFormError({ field: 'tripId', message: 'Trip is required' });
-      return;
-    }
-    if (!form.participantId) {
+    if (form.tripId && !form.participantId) {
       setFormError({ field: 'participantId', message: 'Participant is required when linking a trip' });
-      return;
-    }
-    if (!isInternationalTrip(selectedTrip)) {
-      setFormError({
-        field: 'tripId',
-        message: 'Visa applications can only be linked to international trips',
-      });
       return;
     }
     const dest = (form.destinationCountry || '').trim();
@@ -825,8 +813,6 @@ export default function VisaApplications() {
       const body = {
         applicationType: form.applicationType,
         destinationCountry: dest,
-        tripId: parseInt(form.tripId, 10),
-        participantId: parseInt(form.participantId, 10),
       };
       if (form.contactId) {
         body.contactId = parseInt(form.contactId, 10);
@@ -835,6 +821,10 @@ export default function VisaApplications() {
         if ((form.applicantEmail || '').trim()) body.applicantEmail = form.applicantEmail.trim();
         if ((form.applicantPhone || '').trim()) body.applicantPhone = form.applicantPhone.trim();
         if (form.applicantBirthDate) body.applicantBirthDate = form.applicantBirthDate;
+      }
+      if (form.tripId) {
+        body.tripId = parseInt(form.tripId, 10);
+        body.participantId = parseInt(form.participantId, 10);
       }
       await fetchApi('/api/travel/visa/applications', {
         method: 'POST',
@@ -1481,17 +1471,16 @@ export default function VisaApplications() {
               )}
 
               <label style={fieldLabel}>
-                Trip *
+                Trip linkage (optional)
                 <select
                   data-testid="create-trip-select"
                   value={form.tripId}
                   onChange={(e) => onTripChange(e.target.value)}
                   style={inputStyle}
                   aria-invalid={formError?.field === 'tripId' ? 'true' : undefined}
-                  required
                 >
                   <option value="">
-                    {tripsLoading ? 'Loading international trips...' : 'Select an international trip'}
+                    {tripsLoading ? 'Loading international trips...' : 'No trip linked'}
                   </option>
                   {trips.map((trip) => (
                     <option key={trip.id} value={trip.id}>
@@ -1500,7 +1489,7 @@ export default function VisaApplications() {
                   ))}
                 </select>
                 <span style={fieldHintText}>
-                  Only international trips are available because visa applications require an international trip.
+                  Leave blank for standalone Visa Sure work, or link an international TMC trip and participant.
                 </span>
                 {formError?.field === 'tripId' && (
                   <span style={fieldErrorText} role="alert">
@@ -1939,6 +1928,5 @@ const navButtonStyle = {
   alignItems: 'center',
   justifyContent: 'center',
 };
-
 
 

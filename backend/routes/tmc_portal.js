@@ -207,36 +207,19 @@ async function getParentAccessibleTripIds(req) {
   const [parentLinks, participantRows] = await Promise.all([
     prisma.tmcParentTrip.findMany({
       where: { tenantId, parentContactId },
-      select: { tripId: true, teacherContactId: true },
+      select: { tripId: true },
     }),
     email
       ? prisma.tripParticipant.findMany({
           where: { parentEmail: email, trip: { tenantId } },
-          select: { tripId: true, trip: { select: { teacherContactId: true } } },
+          select: { tripId: true },
         })
       : [],
   ]);
-  const teacherContactIds = [
-    ...new Set([
-      ...parentLinks.map((row) => Number(row.teacherContactId)),
-      ...participantRows.map((row) => Number(row.trip?.teacherContactId)),
-    ].filter((id) => Number.isInteger(id) && id > 0)),
-  ];
-  const teacherTrips = teacherContactIds.length
-    ? await prisma.tmcTrip.findMany({
-        where: {
-          tenantId,
-          teacherContactId: { in: teacherContactIds },
-          status: { not: "cancelled" },
-        },
-        select: { id: true },
-      })
-    : [];
   return [
     ...new Set([
       ...parentLinks.map((row) => Number(row.tripId)),
       ...participantRows.map((row) => Number(row.tripId)),
-      ...teacherTrips.map((row) => Number(row.id)),
     ].filter((id) => Number.isInteger(id) && id > 0)),
   ];
 }
@@ -438,12 +421,17 @@ async function loadParentConsentContext(req, tripId) {
 
 async function loadParentVisaLetter(req, letterId) {
   const accessibleTripIds = await getParentAccessibleTripIds(req);
-  if (!accessibleTripIds.length) return null;
+  const parentEmail = String(req.tmcContact.email || "").trim().toLowerCase();
+  if (!accessibleTripIds.length || !parentEmail) return null;
   return prisma.visaLetterDocument.findFirst({
     where: {
       id: letterId,
       tenantId: Number(req.portal.tenantId),
       tripId: { in: accessibleTripIds },
+      participant: {
+        parentEmail,
+        tripId: { in: accessibleTripIds },
+      },
       status: { in: TMC_PARENT_VISA_LETTER_STATUSES },
     },
   });
@@ -2500,30 +2488,15 @@ router.get(
       const linkedTripIds = [
         ...new Set(parentLinks.map((row) => row.tripId).filter(Boolean)),
       ];
-      // Existing parent accounts are associated with the teacher who issued
-      // their earlier registration link. Include newly assigned trips for
-      // those teachers so parents do not need to create a second account or
-      // re-register just because a teacher was assigned to another trip.
-      const teacherContactIds = [
-        ...new Set(
-          parentLinks
-            .map((row) => Number(row.teacher?.id))
-            .filter((id) => Number.isInteger(id) && id > 0),
-        ),
-      ];
-      const tripAccessFilters = [];
-      if (linkedTripIds.length) {
-        tripAccessFilters.push({ id: { in: linkedTripIds } });
-      }
-      if (teacherContactIds.length) {
-        tripAccessFilters.push({ teacherContactId: { in: teacherContactIds } });
-      }
-      const assignedTrips = tripAccessFilters.length
+      // A parent link grants access to exactly one trip. Teachers routinely
+      // lead multiple school groups, so teacher ownership must never be used
+      // as a transitive parent authorization grant.
+      const assignedTrips = linkedTripIds.length
         ? await prisma.tmcTrip.findMany({
             where: {
               tenantId: Number(req.portal.tenantId),
+              id: { in: linkedTripIds },
               status: { not: "cancelled" },
-              OR: tripAccessFilters,
             },
             orderBy: [{ departDate: "asc" }, { id: "asc" }],
             select: {
@@ -2572,12 +2545,17 @@ router.get(
     try {
       const tenantId = Number(req.portal.tenantId);
       const tripIds = await getParentAccessibleTripIds(req);
-      if (!tripIds.length) return res.json({ applications: [] });
+      const parentEmail = String(req.tmcContact.email || "").trim().toLowerCase();
+      if (!tripIds.length || !parentEmail) return res.json({ applications: [] });
 
       const applications = await prisma.visaApplication.findMany({
         where: {
           tenantId,
           tripId: { in: tripIds },
+          participant: {
+            parentEmail,
+            tripId: { in: tripIds },
+          },
           visaLetterDocuments: {
             some: {
               tenantId,

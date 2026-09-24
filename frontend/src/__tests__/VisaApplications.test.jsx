@@ -688,7 +688,7 @@ describe('<VisaApplications /> — create drawer', () => {
     );
   });
 
-  it('validation: missing trip shows Trip is required and does NOT fire POST', async () => {
+  it('submits a standalone Visa Sure application without trip linkage', async () => {
     renderPage();
     await screen.findByText('Riya Sharma');
     fireEvent.click(screen.getByRole('button', { name: /Create a new visa application/i }));
@@ -707,11 +707,17 @@ describe('<VisaApplications /> — create drawer', () => {
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.submit(screen.getByLabelText(/Destination country/i).closest('form'));
-    await waitFor(() => expect(screen.getByText(/Trip is required/i)).toBeInTheDocument());
-    const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/visa/applications' && o?.method === 'POST',
-    );
-    expect(posts.length).toBe(0);
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/visa/applications' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.contactId).toBe(5001);
+      expect(body.destinationCountry).toBe('Italy');
+      expect(body.tripId).toBeUndefined();
+      expect(body.participantId).toBeUndefined();
+    });
   });
 
   it('auto-selects the matching participant when the contact and trip identify the same traveler', async () => {
@@ -1329,7 +1335,6 @@ describe('<VisaApplications /> — ?status= deep-link (dashboard KPI drill-down)
     });
   });
 });
-
 
 
 

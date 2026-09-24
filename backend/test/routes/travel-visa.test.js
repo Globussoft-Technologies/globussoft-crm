@@ -24,7 +24,7 @@
  *     or its Contact row is missing) vs 400 INVALID_ID. Detail-shape includes contact +
  *     diagnostic + documentChecklist.
  *   - POST /applications validation: MISSING_FIELDS (no contactId / no
- *     applicationType / no destinationCountry / no tripId), INVALID_APPLICATION_TYPE
+ *     applicationType / no destinationCountry), INVALID_APPLICATION_TYPE
  *     (enum), INVALID_DESTINATION (>200 chars), NOT_FOUND (contact not on
  *     tenant), happy 201 returns the created row with status='intake'.
  *   - PATCH /applications/:id: field-by-field opt-in, EMPTY_BODY when no
@@ -892,9 +892,19 @@ describe('POST /applications ? validation + happy path', () => {
     expect(prisma.visaApplication.create).not.toHaveBeenCalled();
   });
 
-  test('missing trip binding → 400 MISSING_FIELDS', async () => {
+  test('standalone Visa Sure application remains valid without a TMC trip binding', async () => {
     prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'rfu' });
     prisma.passportIdentity.findFirst.mockResolvedValue(null);
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 104,
+      tenantId: 1,
+      contactId: 11,
+      applicationType: 'tourist',
+      destinationCountry: 'Japan',
+      status: 'intake',
+      tripId: null,
+      participantId: null,
+    });
     const res = await request(makeApp())
       .post('/api/travel/visa/applications')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
@@ -904,9 +914,12 @@ describe('POST /applications ? validation + happy path', () => {
         destinationCountry: 'Japan',
       });
 
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'MISSING_FIELDS' });
-    expect(prisma.visaApplication.create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.findFirst).not.toHaveBeenCalled();
+    expect(prisma.visaApplication.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ tripId: null, participantId: null }),
+    }));
   });
 
   test('snapshot-backed create returns checklist snapshot fields', async () => {
@@ -1488,7 +1501,6 @@ describe('travel-visa checklist snapshots + source library', () => {
     });
   });
 });
-
 
 
 

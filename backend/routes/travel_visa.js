@@ -1962,8 +1962,9 @@ router.get(
 //     destinationCountry: <String> (REQUIRED) — 1..200 chars. 400
 //                                  MISSING_FIELDS / INVALID_DESTINATION
 //                                  outside that range.
-//     tripId: <Int> (REQUIRED) — must reference an international TMC trip.
-//     participantId: <Int> (REQUIRED) — must belong to tripId.
+//     tripId: <Int> (OPTIONAL) — when supplied, must reference an
+//                                  international TMC trip.
+//     participantId: <Int> (REQUIRED WITH tripId) — must belong to tripId.
 //   }
 //
 // SCHEMA NOTES (drift from dispatch brief):
@@ -1990,7 +1991,7 @@ router.get(
 //
 // Errors:
 //   400 MISSING_FIELDS              — contactId / applicationType /
-//                                     destinationCountry / tripId missing
+//                                     destinationCountry missing
 //   400 INVALID_APPLICATION_TYPE    — applicationType not in enum
 //   400 INVALID_DESTINATION         — destinationCountry empty or > 200 chars
 //   404 NOT_FOUND                   — contactId not on this tenant
@@ -2049,42 +2050,36 @@ router.post(
       const contactId = resolvedContact.contactId;
 
       const tripId = body.tripId == null || body.tripId === "" ? null : Number(body.tripId);
-      if (tripId == null) {
-        return res.status(400).json({
-          error: "tripId is required",
-          code: "MISSING_FIELDS",
-        });
-      }
-      if (!Number.isInteger(tripId) || tripId <= 0) {
-        return res.status(400).json({ error: "tripId must be a number", code: "INVALID_TRIP_ID" });
-      }
-
       const participantId = body.participantId == null || body.participantId === "" ? null : Number(body.participantId);
-      if (!Number.isInteger(participantId) || participantId <= 0) {
-        return res.status(400).json({ error: "participantId must be a number", code: "INVALID_PARTICIPANT_ID" });
-      }
-
       let linkedTrip = null;
       let linkedParticipant = null;
-      linkedTrip = await prisma.tmcTrip.findFirst({
-        where: { id: tripId, tenantId },
-        select: { id: true, tripType: true },
-      });
-      if (!linkedTrip) {
-        return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
-      }
-      if (String(linkedTrip.tripType || "").trim().toLowerCase() !== "international") {
-        return res.status(400).json({
-          error: "Visa applications can only be linked to international trips",
-          code: "VISA_NOT_REQUIRED",
+      if (tripId != null || participantId != null) {
+        if (!Number.isInteger(tripId) || tripId <= 0) {
+          return res.status(400).json({ error: "tripId must be a number", code: "INVALID_TRIP_ID" });
+        }
+        if (!Number.isInteger(participantId) || participantId <= 0) {
+          return res.status(400).json({ error: "participantId must be a number", code: "INVALID_PARTICIPANT_ID" });
+        }
+        linkedTrip = await prisma.tmcTrip.findFirst({
+          where: { id: tripId, tenantId },
+          select: { id: true, tripType: true },
         });
-      }
-      linkedParticipant = await prisma.tripParticipant.findFirst({
-        where: { id: participantId, tripId },
-        select: { id: true },
-      });
-      if (!linkedParticipant) {
-        return res.status(404).json({ error: "Participant not found on this trip", code: "PARTICIPANT_NOT_FOUND" });
+        if (!linkedTrip) {
+          return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
+        }
+        if (String(linkedTrip.tripType || "").trim().toLowerCase() !== "international") {
+          return res.status(400).json({
+            error: "Visa applications can only be linked to international trips",
+            code: "VISA_NOT_REQUIRED",
+          });
+        }
+        linkedParticipant = await prisma.tripParticipant.findFirst({
+          where: { id: participantId, tripId },
+          select: { id: true },
+        });
+        if (!linkedParticipant) {
+          return res.status(404).json({ error: "Participant not found on this trip", code: "PARTICIPANT_NOT_FOUND" });
+        }
       }
 
       const passportIdentity = prisma.passportIdentity
@@ -2102,8 +2097,8 @@ router.post(
           applicationType,
           destinationCountry,
           passportIdentityId: passportIdentity?.id || null,
-          tripId: linkedTrip.id,
-          participantId: linkedParticipant.id,
+          tripId: linkedTrip?.id || null,
+          participantId: linkedParticipant?.id || null,
           status: "intake",
         },
       });
@@ -2163,8 +2158,8 @@ router.post(
           applicationType,
           destinationCountry,
           contactResolution: resolvedContact.contactMode,
-          tripId: linkedTrip.id,
-          participantId: linkedParticipant.id,
+          tripId: linkedTrip?.id || null,
+          participantId: linkedParticipant?.id || null,
         },
       ).catch(() => {});
 
@@ -4589,8 +4584,6 @@ router.get(
 );
 
 module.exports = router;
-
-
 
 
 

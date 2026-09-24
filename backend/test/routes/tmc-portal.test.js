@@ -157,14 +157,13 @@ describe('TMC portal authentication and tenant isolation', () => {
 });
 
 describe('TMC parent trip isolation', () => {
-  test('an existing parent sees new trips assigned to a linked teacher, but not other teachers\' trips', async () => {
+  test('a parent link grants only its explicit trip, not every trip assigned to the teacher', async () => {
     prisma.contact.findFirst.mockResolvedValue(contact('PARENT'));
     prisma.tmcParentTrip.findMany.mockResolvedValue([
       { id: 1, tripId: 501, createdAt: new Date(), teacher: { id: 70 }, trip: { id: 501, landingPage: null } },
     ]);
     prisma.tmcTrip.findMany.mockResolvedValue([
       { id: 501, tripCode: 'TMC-501', landingPage: null },
-      { id: 502, tripCode: 'TMC-502', landingPage: null },
     ]);
 
     const res = await request(makeApp())
@@ -172,15 +171,12 @@ describe('TMC parent trip isolation', () => {
       .set(bearer());
 
     expect(res.status).toBe(200);
-    expect(res.body.trips.map((trip) => trip.id)).toEqual([501, 502]);
+    expect(res.body.trips.map((trip) => trip.id)).toEqual([501]);
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         tenantId: 7,
+        id: { in: [501] },
         status: { not: 'cancelled' },
-        OR: [
-          { id: { in: [501] } },
-          { teacherContactId: { in: [70] } },
-        ],
       },
     }));
   });
@@ -220,6 +216,10 @@ describe('TMC parent trip isolation', () => {
       where: {
         tenantId: 7,
         tripId: { in: [501] },
+        participant: {
+          parentEmail: 'parent@example.test',
+          tripId: { in: [501] },
+        },
         visaLetterDocuments: {
           some: { tenantId: 7, status: { in: ['SENT', 'SIGNED_UPLOADED'] } },
         },
@@ -278,7 +278,14 @@ describe('TMC parent trip isolation', () => {
       kind: 'signed',
     }));
     expect(prisma.visaLetterDocument.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: 7, tripId: { in: [501] } }),
+      where: expect.objectContaining({
+        tenantId: 7,
+        tripId: { in: [501] },
+        participant: {
+          parentEmail: 'parent@example.test',
+          tripId: { in: [501] },
+        },
+      }),
     }));
   });
 });

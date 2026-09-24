@@ -35,7 +35,12 @@ const readGate = verifyWellnessRole(
 );
 const writeGate = verifyWellnessRole(
   ["admin", "manager"],
-  { anyOfPermissions: [{ module: "prescriptions", action: "write" }] },
+  {
+    anyOfPermissions: [{ module: "prescriptions", action: "write" }],
+    // Doctors use /quick-add while prescribing, but must not gain full
+    // catalogue CRUD through their prescriptions.write grant.
+    deny: ["doctor", "professional"],
+  },
 );
 // Quick-add is a PRESCRIBER action, not catalogue admin — a doctor who finds
 // no "Paracetamol" mid-consultation has to be able to add it, or they will type

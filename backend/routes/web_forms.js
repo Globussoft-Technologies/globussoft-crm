@@ -791,16 +791,25 @@ function readBodyValue(body, key) {
   return body[key];
 }
 
-function isConditionalFieldVisible(field, fields, body) {
+function isConditionalFieldVisible(field, fields, body, evaluating = new Set()) {
   const condition = field?.showWhen;
   if (!condition || (!condition.fieldId && !condition.fieldKey)) return true;
   if (!textOr(condition.value)) return false;
+
+  const fieldId = String(field?.id || field?.sourceKey || "");
+  if (evaluating.has(fieldId)) return false;
+  const nextEvaluating = new Set(evaluating);
+  nextEvaluating.add(fieldId);
 
   const controller = fields.find((candidate) => (
     (condition.fieldId && String(candidate.id) === String(condition.fieldId)) ||
     (!condition.fieldId && condition.fieldKey && String(candidate.sourceKey) === String(condition.fieldKey))
   ));
   if (!controller) return true;
+
+  // A nested child can only be visible when every ancestor in its branch is
+  // visible. Do not trust an API caller to omit values for a hidden parent.
+  if (!isConditionalFieldVisible(controller, fields, body, nextEvaluating)) return false;
 
   const raw = readBodyValue(body, controller.sourceKey);
   const values = Array.isArray(raw) ? raw : [raw];

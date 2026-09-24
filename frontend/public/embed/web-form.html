@@ -153,7 +153,7 @@
 
       var resizeTimer = null;
       var hostContext = {};
-      var ipCountryDetectionStarted = false;
+      var localeCountryDetectionStarted = false;
 
 
 
@@ -207,62 +207,30 @@
         phoneCountryFlagPreloadCache[flagUrl] = image;
         image.src = flagUrl;
       }
-      function detectGenericCountryFromIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState){
-        if (scope !== 'generic' || ipCountryDetectionStarted) return;
-        ipCountryDetectionStarted = true;
-        var endpoints = [
-          { url: 'https://ipapi.co/json/', parse: function(data){ return data && (data.country_code || data.countryCode); } },
-          { url: 'https://ipwho.is/', parse: function(data){ return data && (data.country_code || data.countryCode); } },
-          { url: 'https://api.country.is/', parse: function(data){ return data && data.country; } },
-        ];
-        function lookup(endpoint){
-          var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-          var timeoutId = setTimeout(function(){ if (controller) controller.abort(); }, 1800);
-          var cacheBuster = (endpoint.url.indexOf('?') === -1 ? '?' : '&') + 'gbs_country=' + Date.now();
-          var requestOptions = { headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'omit' };
-          if (controller) requestOptions.signal = controller.signal;
-          return fetch(endpoint.url + cacheBuster, requestOptions)
-            .then(function(response){
-              clearTimeout(timeoutId);
-              if (!response.ok) throw new Error('IP country lookup failed');
-              return response.json();
-            })
-            .then(endpoint.parse)
-            .then(function(iso){
-              if (!iso) throw new Error('IP country was not returned');
-              return String(iso).trim().toUpperCase();
-            })
-            .catch(function(error){
-              clearTimeout(timeoutId);
-              throw error;
-            });
-        }
-        var lookupResults = endpoints.map(lookup);
-        new Promise(function(resolve, reject){
-          var pending = lookupResults.length;
-          var settled = false;
-          lookupResults.forEach(function(result){
-            result.then(function(iso){
-              if (!settled) { settled = true; resolve(iso); }
-            }).catch(function(){
-              pending -= 1;
-              if (!pending && !settled) reject(new Error('IP country lookup failed'));
-            });
-          });
-        })
-          .then(function(iso){
-            var detectedCode = phoneCountryCodeByIso[iso];
-            if (!detectedCode || !Array.from(country.options).some(function(option){ return option.value === detectedCode; })) return;
-            if (restrictedCountries && allowedCountries.indexOf(detectedCode) === -1) return;
-            if (String(input.value || '').trim() || phoneState.userEnteredPhone || phoneState.userSelectedCountry) return;
-            phoneState.applyingDetectedCountry = true;
-            country.value = detectedCode;
-            country.dispatchEvent(new Event('change'));
-            phoneState.applyingDetectedCountry = false;
-            applyRule();
-          })
-          .catch(function(){ /* IP detection is optional; keep the existing default silently. */ })
-          ;
+      function detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState){
+        if (scope !== 'generic' || localeCountryDetectionStarted) return;
+        localeCountryDetectionStarted = true;
+        var locales = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || '']).filter(Boolean);
+        var iso = '';
+        locales.some(function(locale){
+          try {
+            iso = typeof Intl.Locale === 'function' ? String(new Intl.Locale(locale).region || '') : '';
+          } catch (_error) { iso = ''; }
+          if (!iso) {
+            var match = String(locale).match(/[-_]([A-Za-z]{2})(?:$|[-_])/);
+            iso = match ? match[1] : '';
+          }
+          return Boolean(iso);
+        });
+        var detectedCode = phoneCountryCodeByIso[String(iso || '').toUpperCase()];
+        if (!detectedCode || !Array.from(country.options).some(function(option){ return option.value === detectedCode; })) return;
+        if (restrictedCountries && allowedCountries.indexOf(detectedCode) === -1) return;
+        if (String(input.value || '').trim() || phoneState.userEnteredPhone || phoneState.userSelectedCountry) return;
+        phoneState.applyingDetectedCountry = true;
+        country.value = detectedCode;
+        country.dispatchEvent(new Event('change'));
+        phoneState.applyingDetectedCountry = false;
+        applyRule();
       }
       function setupGenericPhone(){
         if (scope !== 'generic') return;
@@ -304,7 +272,7 @@
           applyRule();
         });
         applyRule();
-        detectGenericCountryFromIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
+        detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
       }
       window.addEventListener('message', function(event){ if(event.data && event.data.source === 'gbs-web-form-host' && event.data.type === 'context'){ hostContext = { pageUrl: String(event.data.pageUrl || ''), pageTitle: String(event.data.pageTitle || '') }; } });
 

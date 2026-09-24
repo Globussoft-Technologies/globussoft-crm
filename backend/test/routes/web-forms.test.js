@@ -229,6 +229,17 @@ describe('Generic conditional fields', () => {
     expect(isConditionalFieldVisible(fields[2], fields, { interest: 'Shopify', shopifyUrl: 'https://other.example' })).toBe(false);
   });
 
+  test('requires every ancestor in a nested conditional branch to be visible', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'interest', sourceKind: 'custom', sourceKey: 'interest', fieldType: 'dropdown', options: ['Shopify', 'SEO'] },
+      { id: 'store', sourceKind: 'custom', sourceKey: 'store', fieldType: 'text', showWhen: { fieldId: 'interest', value: 'Shopify' } },
+      { id: 'plan', sourceKind: 'custom', sourceKey: 'plan', fieldType: 'text', showWhen: { fieldId: 'store', value: 'shop.example' } },
+    ]), 'generic');
+
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'Shopify', store: 'shop.example' })).toBe(true);
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'SEO', store: 'shop.example' })).toBe(false);
+  });
+
   test('clears an unlinked typed parent question', () => {
     const fields = normalizeFields(JSON.stringify([
       { id: 'interest', sourceKind: 'custom', sourceKey: 'interest', fieldType: 'dropdown', label: 'What service do you need?', options: ['SEO', 'Shopify'] },
@@ -512,6 +523,11 @@ describe('PUT /api/forms/:id', () => {
       submitButtonLabel: 'Send request',
       successMessage: 'Received',
       optInEnabled: true,
+      multiStepEnabled: true,
+      steps: [
+        { id: 'contact-details', title: 'Contact details', description: 'Tell us about yourself' },
+        { id: 'requirements', title: 'Requirements', description: '' },
+      ],
     };
 
     prisma.webForm.findFirst.mockResolvedValueOnce({
@@ -556,7 +572,11 @@ describe('PUT /api/forms/:id', () => {
       isActive: false,
       fields: expect.arrayContaining([expect.objectContaining({ label: 'Full name' })]),
       style: expect.objectContaining({ buttonColor: '#99B177' }),
-      settings: expect.objectContaining({ submitButtonLabel: 'Send request' }),
+      settings: expect.objectContaining({
+        submitButtonLabel: 'Send request',
+        multiStepEnabled: true,
+        steps: expect.arrayContaining([expect.objectContaining({ id: 'requirements', title: 'Requirements' })]),
+      }),
     }));
     expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
@@ -565,7 +585,7 @@ describe('PUT /api/forms/:id', () => {
         isActive: false,
         fieldsJson: expect.stringContaining('Full name'),
         styleJson: expect.stringContaining('#99B177'),
-        settingsJson: expect.stringContaining('Send request'),
+        settingsJson: expect.stringContaining('Requirements'),
       }),
     }));
   });
@@ -955,6 +975,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
       .post('/api/forms/public/contact-us/submit')
 
+      .set('X-GBS-Tracking', JSON.stringify({ pageUrl: 'https://example.com/pricing', utm_source: 'newsletter' }))
+
       .field('name', 'Jane Doe')
 
       .field('interest', 'A')
@@ -985,6 +1007,12 @@ describe('POST /api/forms/public/:slug/submit', () => {
     const submissionArg = prisma.webFormSubmission.create.mock.calls[0][0].data;
 
     expect(submissionArg.payloadJson).toContain('"interest":["A","B"]');
+    expect(JSON.parse(submissionArg.payloadJson)._meta.tracking).toEqual(expect.objectContaining({
+      pageUrl: 'https://example.com/pricing',
+      utm_source: 'newsletter',
+      formName: 'Contact Us',
+      formId: '1',
+    }));
 
     expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
 

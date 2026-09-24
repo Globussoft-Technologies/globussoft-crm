@@ -26,19 +26,21 @@ async function sendGenericWebFormWhatsApp({ form, contact, submissionId }) {
     return { sent: false, code: contact?.phone ? "NOT_GENERIC" : "LEAD_PHONE_MISSING" };
   }
 
-  const [tenant, admin, config, setting] = await Promise.all([
+  const [tenant, config, setting] = await Promise.all([
     prisma.tenant.findUnique({ where: { id: form.tenantId }, select: { name: true, vertical: true } }),
-    prisma.user.findFirst({ where: { tenantId: form.tenantId, role: "ADMIN", deactivatedAt: null }, select: { phone: true } }),
     prisma.whatsAppConfig.findFirst({ where: { tenantId: form.tenantId, isActive: true }, select: { phoneNumberId: true } }),
     prisma.tenantSetting.findUnique({ where: { tenantId_key: { tenantId: form.tenantId, key: SETTING_KEY } }, select: { value: true } }),
   ]);
   if (tenant?.vertical !== "generic") return { sent: false, code: "NOT_GENERIC" };
-  if (!admin?.phone) return { sent: false, code: "ADMIN_PHONE_MISSING" };
   if (!config?.phoneNumberId) return { sent: false, code: "WHATSAPP_NOT_CONFIGURED" };
 
   const body = render(setting?.value || DEFAULT_TEMPLATE, { contact, tenant, form });
+  const messageMetadata = JSON.stringify({ submissionId, source: "web_form" });
   const duplicate = await prisma.whatsAppMessage.findFirst({
-    where: { tenantId: form.tenantId, contactId: contact.id, templateName: MESSAGE_TAG, body },
+    // Acknowledgements are idempotent per submission, not forever per
+    // contact/body. A returning lead who submits again must receive the new
+    // acknowledgement while retries of the same submission stay safe.
+    where: { tenantId: form.tenantId, contactId: contact.id, templateName: MESSAGE_TAG, interactiveJson: messageMetadata },
     select: { id: true },
   });
   if (duplicate) return { sent: false, code: "DUPLICATE" };
@@ -49,7 +51,7 @@ async function sendGenericWebFormWhatsApp({ form, contact, submissionId }) {
     update: { contactName: contact.name, contactId: contact.id, lastMessageAt: new Date() },
   });
   const message = await prisma.whatsAppMessage.create({
-    data: { to: contact.phone, from: config.phoneNumberId, body, direction: "OUTBOUND", status: "QUEUED", templateName: MESSAGE_TAG, contactId: contact.id, tenantId: form.tenantId, threadId: thread.id, interactiveJson: JSON.stringify({ submissionId, source: "web_form" }) },
+    data: { to: contact.phone, from: config.phoneNumberId, body, direction: "OUTBOUND", status: "QUEUED", templateName: MESSAGE_TAG, contactId: contact.id, tenantId: form.tenantId, threadId: thread.id, interactiveJson: messageMetadata },
   });
   await require("./whatsappQueue").getQueue().enqueueSend({ messageId: message.id, tenantId: form.tenantId });
   return { sent: true, messageId: message.id };

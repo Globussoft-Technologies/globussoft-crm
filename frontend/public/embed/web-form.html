@@ -8,6 +8,8 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
+  <link rel="preconnect" href="https://flagcdn.com" crossorigin />
+
   <title>Web Form</title>
 
   <style>
@@ -33,6 +35,8 @@
 
     .field{margin-bottom:16px}
 
+    .conditional-field{border-left:3px solid rgba(99,102,241,.34);padding-left:12px}
+
     .phone-input{display:grid;grid-template-columns:96px minmax(0, 1fr);gap:8px}
 
     .phone-input select{scrollbar-color:#8b8b8b #f1f1f1;scrollbar-width:thin}
@@ -40,11 +44,12 @@
     .phone-input select::-webkit-scrollbar-track{background:#f1f1f1;border-radius:4px}
     .phone-input select::-webkit-scrollbar-thumb{background:#8b8b8b;border-radius:4px;min-height:50%}
     .phone-country-picker{position:relative}
-    .phone-country-picker>input{width:100%;padding:.82rem .9rem;background:#fff;color:#111827;border:1px solid #d8ddec;border-radius:12px;font:inherit;text-align:left;line-height:1.2}
+    .phone-country-picker>input{width:100%;padding:.82rem .65rem .82rem 2.45rem;background:#fff;background-repeat:no-repeat;background-position:.7rem center;background-size:20px 14px;color:#111827;border:1px solid #d8ddec;border-radius:12px;font:inherit;font-weight:650;text-align:left;line-height:1.2}
     .phone-country-picker>input:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 4px rgba(99,102,241,.13)}
     .phone-country-options{position:absolute;z-index:20;display:none;top:calc(100% + 4px);left:0;width:180px;max-height:145px;overflow-y:auto;background:#fff;border:1px solid #9ca3af;border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.18)}
     .phone-country-picker.open .phone-country-options{display:block}
-    .phone-country-options button{display:block;width:100%;padding:7px 10px;border:0;border-radius:0;background:#fff;color:#111827;text-align:left;font:inherit;cursor:pointer}
+    .phone-country-options button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:0;background:#fff;color:#111827;text-align:left;font:inherit;cursor:pointer}
+    .phone-country-flag{display:block;width:20px;height:14px;flex:0 0 20px;object-fit:cover;border-radius:2px;box-shadow:0 0 0 1px rgba(15,23,42,.12)}
     .phone-country-options button:hover,.phone-country-options button.selected{background:#4059d2;color:#fff}
 
     .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
@@ -72,6 +77,13 @@
     .optin a{color:var(--gbs-accent,#12344D);text-decoration:underline}
 
     .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}
+
+    .step-progress{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 22px;padding-bottom:14px;border-bottom:1px solid #edf0f7}
+    .step-progress-item{display:flex;align-items:center;gap:6px;color:#8791a8;font-size:.78rem;font-weight:750}
+    .step-progress-item::after{content:'→';margin-left:4px;color:#c3c9d6}.step-progress-item:last-child::after{content:''}
+    .step-progress-item.current{color:var(--gbs-button,#12344D)}.step-progress-item.completed{color:#16805c}
+    .step-number{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#edf0f7;color:inherit}.current .step-number{background:var(--gbs-button,#12344D);color:#fff}.completed .step-number{background:#d9f5e9}
+    .step-description{margin:-12px 0 18px;color:var(--gbs-text,#52607a);font-size:.88rem}
 
     button{border:0;border-radius:12px;padding:.86rem 1.1rem;font:inherit;font-weight:750;cursor:pointer;transition:transform .2s,box-shadow .2s,opacity .2s}
 
@@ -137,11 +149,164 @@
 
       var busy = false;
 
+      var currentStepIndex = 0;
+
       var resizeTimer = null;
+      var hostContext = {};
+      var ipCountryDetectionStarted = false;
 
 
 
       function esc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+      function readCookie(name){
+        var prefix = name + '=';
+        var found = document.cookie.split(';').map(function(v){ return v.trim(); }).filter(function(v){ return v.indexOf(prefix) === 0; })[0];
+        return found ? decodeURIComponent(found.substring(prefix.length)) : '';
+      }
+      function rememberCookie(name, value){
+        if (!value || readCookie(name)) return;
+        document.cookie = name + '=' + encodeURIComponent(String(value).slice(0, 2000)) + '; Max-Age=7776000; Path=/; SameSite=Lax';
+      }
+      function normalizeBrowser(ua){ if (/Edg\//i.test(ua)) return 'Edge'; if (/OPR\//i.test(ua)) return 'Opera'; if (/Chrome|CriOS/i.test(ua)) return 'Chrome'; if (/Firefox|FxiOS/i.test(ua)) return 'Firefox'; if (/Safari/i.test(ua)) return 'Safari'; return 'Other'; }
+      function normalizeOs(ua){
+        var match;
+        if ((match = ua.match(/Windows NT ([\d.]+)/i))) { var win = {'10.0':'10/11','6.3':'8.1','6.2':'8','6.1':'7'}[match[1]] || match[1]; return 'Windows ' + win; }
+        if ((match = ua.match(/Android ([\d.]+)/i))) return 'Android ' + match[1];
+        if ((match = ua.match(/(?:CPU iPhone OS|CPU OS) ([\d_]+)/i))) return 'iOS ' + match[1].replace(/_/g, '.');
+        if ((match = ua.match(/Mac OS X ([\d_\.]+)/i))) return 'macOS ' + match[1].replace(/_/g, '.');
+        if (/Linux/i.test(ua)) return 'Linux';
+        return 'Other';
+      }
+      var phoneRules = { '+1':[10,10], '+7':[10,10], '+20':[8,10], '+27':[9,9], '+33':[9,9], '+44':[9,10], '+49':[10,11], '+61':[9,9], '+65':[8,8], '+81':[9,10], '+86':[11,11], '+91':[10,10], '+971':[9,9] };
+      var phoneCountryIsoByCode = {
+        '+1':'US', '+7':'RU', '+20':'EG', '+27':'ZA', '+30':'GR', '+31':'NL', '+32':'BE', '+33':'FR', '+34':'ES', '+36':'HU', '+39':'IT', '+40':'RO', '+41':'CH', '+43':'AT', '+44':'GB', '+45':'DK', '+46':'SE', '+47':'NO', '+48':'PL', '+49':'DE', '+51':'PE', '+52':'MX', '+53':'CU', '+54':'AR', '+55':'BR', '+56':'CL', '+57':'CO', '+58':'VE', '+60':'MY', '+61':'AU', '+62':'ID', '+63':'PH', '+64':'NZ', '+65':'SG', '+66':'TH', '+81':'JP', '+82':'KR', '+84':'VN', '+86':'CN', '+90':'TR', '+91':'IN', '+92':'PK', '+93':'AF', '+94':'LK', '+95':'MM', '+98':'IR',
+        '+211':'SS', '+212':'MA', '+213':'DZ', '+216':'TN', '+218':'LY', '+220':'GM', '+221':'SN', '+222':'MR', '+223':'ML', '+224':'GN', '+225':'CI', '+226':'BF', '+227':'NE', '+228':'TG', '+229':'BJ', '+230':'MU', '+231':'LR', '+232':'SL', '+233':'GH', '+234':'NG', '+235':'TD', '+236':'CF', '+237':'CM', '+238':'CV', '+239':'ST', '+240':'GQ', '+241':'GA', '+242':'CG', '+243':'CD', '+244':'AO', '+245':'GW', '+246':'IO', '+248':'SC', '+249':'SD', '+250':'RW', '+251':'ET', '+252':'SO', '+253':'DJ', '+254':'KE', '+255':'TZ', '+256':'UG', '+257':'BI', '+258':'MZ', '+260':'ZM', '+261':'MG', '+262':'RE', '+263':'ZW', '+264':'NA', '+265':'MW', '+266':'LS', '+267':'BW', '+268':'SZ', '+269':'KM',
+        '+290':'SH', '+291':'ER', '+297':'AW', '+298':'FO', '+299':'GL', '+350':'GI', '+351':'PT', '+352':'LU', '+353':'IE', '+354':'IS', '+355':'AL', '+356':'MT', '+357':'CY', '+358':'FI', '+359':'BG', '+370':'LT', '+371':'LV', '+372':'EE', '+373':'MD', '+374':'AM', '+375':'BY', '+376':'AD', '+377':'MC', '+378':'SM', '+379':'VA', '+380':'UA', '+381':'RS', '+382':'ME', '+383':'XK', '+385':'HR', '+386':'SI', '+387':'BA', '+389':'MK', '+420':'CZ', '+421':'SK', '+423':'LI',
+        '+500':'FK', '+501':'BZ', '+502':'GT', '+503':'SV', '+504':'HN', '+505':'NI', '+506':'CR', '+507':'PA', '+508':'PM', '+509':'HT', '+590':'GP', '+591':'BO', '+592':'GY', '+593':'EC', '+594':'GF', '+595':'PY', '+596':'MQ', '+597':'SR', '+598':'UY', '+599':'CW', '+670':'TL', '+672':'NF', '+673':'BN', '+674':'NR', '+675':'PG', '+676':'TO', '+677':'SB', '+678':'VU', '+679':'FJ', '+680':'PW', '+681':'WF', '+682':'CK', '+683':'NU', '+685':'WS', '+686':'KI', '+687':'NC', '+688':'TV', '+689':'PF', '+690':'TK', '+691':'FM', '+692':'MH',
+        '+850':'KP', '+852':'HK', '+853':'MO', '+855':'KH', '+856':'LA', '+880':'BD', '+886':'TW', '+960':'MV', '+961':'LB', '+962':'JO', '+963':'SY', '+964':'IQ', '+965':'KW', '+966':'SA', '+967':'YE', '+968':'OM', '+970':'PS', '+971':'AE', '+972':'IL', '+973':'BH', '+974':'QA', '+975':'BT', '+976':'MN', '+977':'NP', '+992':'TJ', '+993':'TM', '+994':'AZ', '+995':'GE', '+996':'KG', '+998':'UZ'
+      };
+      var phoneCountryCodeByIso = {};
+      Object.keys(phoneCountryIsoByCode).forEach(function(code){ phoneCountryCodeByIso[phoneCountryIsoByCode[code]] = code; });
+      phoneCountryCodeByIso.CA = '+1';
+      phoneCountryCodeByIso.KZ = '+7';
+      function phoneCountryFlag(code){
+        var iso = phoneCountryIsoByCode[code];
+        if (!iso) return '🌐';
+        return iso.split('').map(function(letter){ return String.fromCodePoint(127397 + letter.charCodeAt(0)); }).join('');
+      }
+      function phoneCountryFlagUrl(code){
+        var iso = phoneCountryIsoByCode[code];
+        return iso ? 'https://flagcdn.com/w20/' + iso.toLowerCase() + '.png' : '';
+      }
+      var phoneCountryFlagPreloadCache = {};
+      function preloadPhoneCountryFlag(code){
+        var flagUrl = phoneCountryFlagUrl(code);
+        if (!flagUrl || phoneCountryFlagPreloadCache[flagUrl] || typeof Image === 'undefined') return;
+        var image = new Image();
+        image.decoding = 'async';
+        phoneCountryFlagPreloadCache[flagUrl] = image;
+        image.src = flagUrl;
+      }
+      function detectGenericCountryFromIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState){
+        if (scope !== 'generic' || ipCountryDetectionStarted) return;
+        ipCountryDetectionStarted = true;
+        var endpoints = [
+          { url: 'https://ipapi.co/json/', parse: function(data){ return data && (data.country_code || data.countryCode); } },
+          { url: 'https://ipwho.is/', parse: function(data){ return data && (data.country_code || data.countryCode); } },
+          { url: 'https://api.country.is/', parse: function(data){ return data && data.country; } },
+        ];
+        function lookup(endpoint){
+          var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          var timeoutId = setTimeout(function(){ if (controller) controller.abort(); }, 1800);
+          var cacheBuster = (endpoint.url.indexOf('?') === -1 ? '?' : '&') + 'gbs_country=' + Date.now();
+          var requestOptions = { headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'omit' };
+          if (controller) requestOptions.signal = controller.signal;
+          return fetch(endpoint.url + cacheBuster, requestOptions)
+            .then(function(response){
+              clearTimeout(timeoutId);
+              if (!response.ok) throw new Error('IP country lookup failed');
+              return response.json();
+            })
+            .then(endpoint.parse)
+            .then(function(iso){
+              if (!iso) throw new Error('IP country was not returned');
+              return String(iso).trim().toUpperCase();
+            })
+            .catch(function(error){
+              clearTimeout(timeoutId);
+              throw error;
+            });
+        }
+        var lookupResults = endpoints.map(lookup);
+        new Promise(function(resolve, reject){
+          var pending = lookupResults.length;
+          var settled = false;
+          lookupResults.forEach(function(result){
+            result.then(function(iso){
+              if (!settled) { settled = true; resolve(iso); }
+            }).catch(function(){
+              pending -= 1;
+              if (!pending && !settled) reject(new Error('IP country lookup failed'));
+            });
+          });
+        })
+          .then(function(iso){
+            var detectedCode = phoneCountryCodeByIso[iso];
+            if (!detectedCode || !Array.from(country.options).some(function(option){ return option.value === detectedCode; })) return;
+            if (restrictedCountries && allowedCountries.indexOf(detectedCode) === -1) return;
+            if (String(input.value || '').trim() || phoneState.userEnteredPhone || phoneState.userSelectedCountry) return;
+            phoneState.applyingDetectedCountry = true;
+            country.value = detectedCode;
+            country.dispatchEvent(new Event('change'));
+            phoneState.applyingDetectedCountry = false;
+            applyRule();
+          })
+          .catch(function(){ /* IP detection is optional; keep the existing default silently. */ })
+          ;
+      }
+      function setupGenericPhone(){
+        if (scope !== 'generic') return;
+        var country = document.querySelector('select[name="phoneCountry"]');
+        var input = document.querySelector('input[name="phone"]');
+        if (!country || !input) return;
+        var phoneSettings = formData.settings || {};
+        var phoneState = { userEnteredPhone: false, userSelectedCountry: false, applyingDetectedCountry: false };
+        var restrictedCountries = phoneSettings.phoneAllowAllCountries === false || String(phoneSettings.phoneAllowAllCountries).toLowerCase() === 'false';
+        var allowedCountries = (phoneSettings.phoneAllowedCountries || []).map(function(value){ return String(value).replace(/\D/g, ''); }).filter(Boolean).map(function(value){ return '+' + value; });
+        if (restrictedCountries) {
+          Array.prototype.forEach.call(country.options, function(option){ option.hidden = allowedCountries.indexOf(option.value) === -1; });
+          if (allowedCountries.length) country.value = allowedCountries.indexOf('+91') !== -1 ? '+91' : allowedCountries[0];
+        } else if (Array.from(country.options).some(function(option){ return option.value === '+91'; })) {
+          country.value = '+91';
+        }
+        var phoneExamples = { '+1':'2025550123', '+44':'7911123456', '+61':'412345678', '+91':'9876543210', '+971':'501234567', '+81':'9012345678', '+49':'15123456789', '+33':'612345678', '+65':'81234567' };
+        function applyRule(){ var rule = phoneRules[country.value] || [7,15]; input.minLength = rule[0]; input.maxLength = rule[1]; input.placeholder = phoneExamples[country.value] || (rule[0] === rule[1] ? rule[0] + ' digits' : rule[0] + '-' + rule[1] + ' digits'); }
+        input.setAttribute('inputmode', 'numeric'); input.setAttribute('pattern', '[0-9]*');
+        input.addEventListener('input', function(){
+          phoneState.userEnteredPhone = true;
+          var raw = String(input.value || '').trim();
+          if (raw.charAt(0) === '+') {
+            var codes = Object.keys(phoneRules).sort(function(a,b){ return b.length - a.length; });
+            var matched = codes.find(function(code){ return raw.indexOf(code) === 0; });
+            if (matched) { country.value = matched; raw = raw.substring(matched.length); applyRule(); }
+          }
+          raw = raw.replace(/\D/g, '');
+          var selectedRule = phoneRules[country.value] || [7,15];
+          var numericCodes = Object.keys(phoneRules).sort(function(a,b){ return b.length - a.length; });
+          if (raw.length > selectedRule[1]) {
+            var bareCode = numericCodes.find(function(code){ return raw.indexOf(code.substring(1)) === 0 && raw.length - code.substring(1).length >= (phoneRules[code] || [7,15])[0]; });
+            if (bareCode) { country.value = bareCode; raw = raw.substring(bareCode.length - 1); applyRule(); }
+          }
+          input.value = raw;
+        });
+        country.addEventListener('change', function(){
+          if (!phoneState.applyingDetectedCountry) phoneState.userSelectedCountry = true;
+          applyRule();
+        });
+        applyRule();
+        detectGenericCountryFromIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
+      }
+      window.addEventListener('message', function(event){ if(event.data && event.data.source === 'gbs-web-form-host' && event.data.type === 'context'){ hostContext = { pageUrl: String(event.data.pageUrl || ''), pageTitle: String(event.data.pageTitle || '') }; } });
 
       function getFieldOptions(field){
         var raw = Array.isArray(field && field.options) ? field.options.slice() : [];
@@ -150,6 +315,7 @@
       }
 
       function postSize(){ try{ parent.postMessage({ source:'gbs-web-form', type:'size', height: document.body.scrollHeight }, '*'); }catch(e){} }
+      try { parent.postMessage({ source:'gbs-web-form', type:'ready' }, '*'); } catch(e) {}
 
       function scheduleSize(){ clearTimeout(resizeTimer); resizeTimer = setTimeout(postSize, 20); }
 
@@ -211,6 +377,8 @@
           return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><div class="phone-input"><select name="phoneCountry" aria-label="Phone country code"><option value="+1">+1</option><option value="+7">+7</option><option value="+20">+20</option><option value="+27">+27</option><option value="+30">+30</option><option value="+31">+31</option><option value="+32">+32</option><option value="+33">+33</option><option value="+34">+34</option><option value="+36">+36</option><option value="+39">+39</option><option value="+40">+40</option><option value="+41">+41</option><option value="+43">+43</option><option value="+44">+44</option><option value="+45">+45</option><option value="+46">+46</option><option value="+47">+47</option><option value="+48">+48</option><option value="+49">+49</option><option value="+51">+51</option><option value="+52">+52</option><option value="+53">+53</option><option value="+54">+54</option><option value="+55">+55</option><option value="+56">+56</option><option value="+57">+57</option><option value="+58">+58</option><option value="+60">+60</option><option value="+61">+61</option><option value="+62">+62</option><option value="+63">+63</option><option value="+64">+64</option><option value="+65">+65</option><option value="+66">+66</option><option value="+81">+81</option><option value="+82">+82</option><option value="+84">+84</option><option value="+86">+86</option><option value="+90">+90</option><option value="+91" selected>+91</option><option value="+92">+92</option><option value="+93">+93</option><option value="+94">+94</option><option value="+95">+95</option><option value="+98">+98</option><option value="+211">+211</option><option value="+212">+212</option><option value="+213">+213</option><option value="+216">+216</option><option value="+218">+218</option><option value="+220">+220</option><option value="+221">+221</option><option value="+222">+222</option><option value="+223">+223</option><option value="+224">+224</option><option value="+225">+225</option><option value="+226">+226</option><option value="+227">+227</option><option value="+228">+228</option><option value="+229">+229</option><option value="+230">+230</option><option value="+231">+231</option><option value="+232">+232</option><option value="+233">+233</option><option value="+234">+234</option><option value="+235">+235</option><option value="+236">+236</option><option value="+237">+237</option><option value="+238">+238</option><option value="+239">+239</option><option value="+240">+240</option><option value="+241">+241</option><option value="+242">+242</option><option value="+243">+243</option><option value="+244">+244</option><option value="+245">+245</option><option value="+246">+246</option><option value="+248">+248</option><option value="+249">+249</option><option value="+250">+250</option><option value="+251">+251</option><option value="+252">+252</option><option value="+253">+253</option><option value="+254">+254</option><option value="+255">+255</option><option value="+256">+256</option><option value="+257">+257</option><option value="+258">+258</option><option value="+260">+260</option><option value="+261">+261</option><option value="+262">+262</option><option value="+263">+263</option><option value="+264">+264</option><option value="+265">+265</option><option value="+266">+266</option><option value="+267">+267</option><option value="+268">+268</option><option value="+269">+269</option><option value="+290">+290</option><option value="+291">+291</option><option value="+297">+297</option><option value="+298">+298</option><option value="+299">+299</option><option value="+350">+350</option><option value="+351">+351</option><option value="+352">+352</option><option value="+353">+353</option><option value="+354">+354</option><option value="+355">+355</option><option value="+356">+356</option><option value="+357">+357</option><option value="+358">+358</option><option value="+359">+359</option><option value="+370">+370</option><option value="+371">+371</option><option value="+372">+372</option><option value="+373">+373</option><option value="+374">+374</option><option value="+375">+375</option><option value="+376">+376</option><option value="+377">+377</option><option value="+378">+378</option><option value="+379">+379</option><option value="+380">+380</option><option value="+381">+381</option><option value="+382">+382</option><option value="+383">+383</option><option value="+385">+385</option><option value="+386">+386</option><option value="+387">+387</option><option value="+389">+389</option><option value="+420">+420</option><option value="+421">+421</option><option value="+423">+423</option><option value="+500">+500</option><option value="+501">+501</option><option value="+502">+502</option><option value="+503">+503</option><option value="+504">+504</option><option value="+505">+505</option><option value="+506">+506</option><option value="+507">+507</option><option value="+508">+508</option><option value="+509">+509</option><option value="+590">+590</option><option value="+591">+591</option><option value="+592">+592</option><option value="+593">+593</option><option value="+594">+594</option><option value="+595">+595</option><option value="+596">+596</option><option value="+597">+597</option><option value="+598">+598</option><option value="+599">+599</option><option value="+670">+670</option><option value="+672">+672</option><option value="+673">+673</option><option value="+674">+674</option><option value="+675">+675</option><option value="+676">+676</option><option value="+677">+677</option><option value="+678">+678</option><option value="+679">+679</option><option value="+680">+680</option><option value="+681">+681</option><option value="+682">+682</option><option value="+683">+683</option><option value="+685">+685</option><option value="+686">+686</option><option value="+687">+687</option><option value="+688">+688</option><option value="+689">+689</option><option value="+690">+690</option><option value="+691">+691</option><option value="+692">+692</option><option value="+850">+850</option><option value="+852">+852</option><option value="+853">+853</option><option value="+855">+855</option><option value="+856">+856</option><option value="+880">+880</option><option value="+886">+886</option><option value="+960">+960</option><option value="+961">+961</option><option value="+962">+962</option><option value="+963">+963</option><option value="+964">+964</option><option value="+965">+965</option><option value="+966">+966</option><option value="+967">+967</option><option value="+968">+968</option><option value="+970">+970</option><option value="+971">+971</option><option value="+972">+972</option><option value="+973">+973</option><option value="+974">+974</option><option value="+975">+975</option><option value="+976">+976</option><option value="+977">+977</option><option value="+992">+992</option><option value="+993">+993</option><option value="+994">+994</option><option value="+995">+995</option><option value="+996">+996</option><option value="+998">+998</option></select><input id="f-' + name + '" type="tel" name="' + name + '" ' + required + ' placeholder="' + placeholder.replace(/^\+\d+\s*/, '') + '" autocomplete="tel-national" /></div>' + help + '</div>';
         }
 
+        if (field.fieldType === 'email' || (scope === 'generic' && field.sourceKey === 'email')) return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="email" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" autocomplete="email" />' + help + '</div>';
+
         if (field.fieldType === 'textarea') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><textarea id="f-' + name + '" name="' + name + '" ' + required + ' placeholder="' + placeholder + '"></textarea>' + help + '</div>';
 
         if (field.fieldType === 'number') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="number" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
@@ -251,6 +419,87 @@
 
       }
 
+      function conditionalDepth(field, fields){
+        var depth = 1;
+        var visited = {};
+        var condition = field && field.showWhen;
+        var parent = condition ? fields.find(function(candidate){ return (condition.fieldId && String(candidate.id) === String(condition.fieldId)) || (!condition.fieldId && condition.fieldKey && String(candidate.sourceKey) === String(condition.fieldKey)); }) : null;
+        while (parent && !visited[String(parent.id)]) {
+          visited[String(parent.id)] = true;
+          depth += 1;
+          var parentCondition = parent.showWhen;
+          parent = parentCondition ? fields.find(function(candidate){ return (parentCondition.fieldId && String(candidate.id) === String(parentCondition.fieldId)) || (!parentCondition.fieldId && parentCondition.fieldKey && String(candidate.sourceKey) === String(parentCondition.fieldKey)); }) : null;
+        }
+        return depth;
+      }
+
+      function conditionalFieldHtml(field, index, fields){
+        var html = fieldHtml(field);
+        var condition = field && field.showWhen;
+        if (scope !== 'generic' || field.hidden || !condition || (!condition.fieldId && !condition.fieldKey)) return html;
+        var level = conditionalDepth(field, fields);
+        var indent = Math.min(Math.max(level - 1, 0), 4) * 12;
+        return html.replace('<div class="field ', '<div class="field conditional-field" style="margin-left:' + indent + 'px" data-conditional-level="' + level + '" data-show-when-field-id="' + esc(condition.fieldId || '') + '" data-show-when-field-key="' + esc(condition.fieldKey || '') + '" data-show-when-value="' + esc(condition.value || '') + '" ');
+      }
+
+      function setupGenericConditionalFields(fields){
+        if (scope !== 'generic') return;
+        var form = root.querySelector('#gbs-form');
+        if (!form) return;
+        var conditionalWrappers = root.querySelectorAll('[data-show-when-field-id], [data-show-when-field-key]');
+        function readFieldValues(sourceKey){
+          var values = [];
+          Array.prototype.forEach.call(form.elements, function(control){
+            if (!control || control.name !== sourceKey) return;
+            if (control.disabled) return;
+            if ((control.type === 'checkbox' || control.type === 'radio') && !control.checked) return;
+            if (control.tagName === 'SELECT' && control.multiple) {
+              Array.prototype.forEach.call(control.selectedOptions, function(option){ values.push(String(option.value)); });
+            } else if (control.value != null) {
+              values.push(String(control.value));
+            }
+          });
+          return values;
+        }
+        function clearFieldValues(wrapper){
+          Array.prototype.forEach.call(wrapper.querySelectorAll('input,select,textarea'), function(control){
+            if (control.type === 'checkbox' || control.type === 'radio') {
+              control.checked = false;
+            } else if (control.tagName === 'SELECT') {
+              control.selectedIndex = -1;
+            } else {
+              control.value = '';
+            }
+          });
+        }
+        function updateVisibility(){
+          var changed = true;
+          var pass = 0;
+          while (changed && pass <= fields.length) {
+            changed = false;
+            pass += 1;
+            Array.prototype.forEach.call(conditionalWrappers, function(wrapper){
+              var fieldId = wrapper.getAttribute('data-show-when-field-id') || '';
+              var fieldKey = wrapper.getAttribute('data-show-when-field-key') || '';
+              var conditionField = fields.find(function(field){ return (fieldId && String(field.id) === fieldId) || (!fieldId && fieldKey && String(field.sourceKey) === fieldKey); });
+              var values = conditionField ? readFieldValues(conditionField.sourceKey) : [];
+              var expected = wrapper.getAttribute('data-show-when-value') || '';
+              var visible = Boolean(conditionField && expected && values.indexOf(expected) !== -1);
+              var wasVisible = !wrapper.hidden;
+              if (!visible && wasVisible) clearFieldValues(wrapper);
+              if (wasVisible !== visible) changed = true;
+              wrapper.hidden = !visible;
+              wrapper.setAttribute('aria-hidden', visible ? 'false' : 'true');
+              Array.prototype.forEach.call(wrapper.querySelectorAll('input,select,textarea'), function(control){ control.disabled = !visible; });
+            });
+          }
+          scheduleSize();
+        }
+        form.addEventListener('change', updateVisibility);
+        form.addEventListener('input', updateVisibility);
+        updateVisibility();
+      }
+
       function setMessage(kind, text){
 
         var message = String(text == null ? '' : text).trim() || 'Thank you! Your information has been received. We will be in touch shortly.';
@@ -266,6 +515,63 @@
       }
 
 
+
+      function multiStepConfig(){
+        var settings = formData.settings || {};
+        var steps = Array.isArray(settings.steps) && settings.steps.length ? settings.steps : [{ id:'step-1', title:'Step 1', description:'' }];
+        return { enabled: scope === 'generic' && settings.multiStepEnabled === true && steps.length > 1, steps: steps };
+      }
+
+      function isConditionalFieldVisible(field, fields){
+        var condition = field && field.showWhen;
+        if (scope !== 'generic' || !condition || (!condition.fieldId && !condition.fieldKey)) return true;
+        var parent = fields.find(function(candidate){ return (condition.fieldId && String(candidate.id) === String(condition.fieldId)) || (!condition.fieldId && condition.fieldKey && String(candidate.sourceKey) === String(condition.fieldKey)); });
+        if (!parent) return true;
+        var node = document.querySelector('[name="' + String(parent.sourceKey || parent.id).replace(/"/g, '\\"') + '"]');
+        if (!node) return false;
+        var values = [];
+        if (node.type === 'checkbox' || node.type === 'radio') document.querySelectorAll('[name="' + String(parent.sourceKey || parent.id).replace(/"/g, '\\"') + '"]:checked').forEach(function(control){ values.push(String(control.value)); });
+        else values.push(String(node.value || ''));
+        return values.indexOf(String(condition.value || '')) !== -1;
+      }
+
+      function validateStep(stepIndex){
+        var config = multiStepConfig();
+        if (!config.enabled) return true;
+        var stepId = String(config.steps[stepIndex].id);
+        var fields = Array.isArray(formData.fields) ? formData.fields : [];
+        var errors = {};
+        fields.forEach(function(field){
+          if (String(field.stepId || config.steps[0].id) !== stepId || !field.required || field.hidden || !isConditionalFieldVisible(field, fields)) return;
+          var node = document.querySelector('[name="' + String(field.sourceKey || field.id).replace(/"/g, '\\"') + '"]');
+          if (!node) return;
+          var value = node.type === 'checkbox' ? (node.checked ? 'true' : '') : node.value;
+          if (!String(value || '').trim()) errors[field.sourceKey || field.id] = 'This field is required.';
+        });
+        showFieldErrors(errors);
+        return Object.keys(errors).length === 0;
+      }
+
+      function showStep(stepIndex){
+        var config = multiStepConfig();
+        if (!config.enabled) return;
+        currentStepIndex = Math.max(0, Math.min(stepIndex, config.steps.length - 1));
+        var stepId = String(config.steps[currentStepIndex].id);
+        (formData.fields || []).forEach(function(field){
+          var node = document.querySelector('[name="' + String(field.sourceKey || field.id).replace(/"/g, '\\"') + '"]');
+          var shell = node && node.closest('.field');
+          if (shell) shell.style.display = String(field.stepId || config.steps[0].id) === stepId ? '' : 'none';
+        });
+        document.querySelectorAll('.step-progress-item').forEach(function(node, index){ node.classList.toggle('current', index === currentStepIndex); node.classList.toggle('completed', index < currentStepIndex); });
+        var description = document.getElementById('step-description');
+        if (description) description.textContent = config.steps[currentStepIndex].description || '';
+        var previous = document.getElementById('step-previous');
+        var next = document.getElementById('step-next');
+        var submit = document.getElementById('submit-btn');
+        if (previous) previous.style.display = currentStepIndex > 0 ? '' : 'none';
+        if (next) next.style.display = currentStepIndex < config.steps.length - 1 ? '' : 'none';
+        if (submit) submit.style.display = currentStepIndex === config.steps.length - 1 ? '' : 'none';
+      }
 
       function renderForm(data){
 
@@ -307,9 +613,17 @@
           ? ''
           : '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
 
-        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div><div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form>' + (footerLink ? '<div class="note">' + footerLink + '</div>' : '') + '</div>';
+        var stepConfig = multiStepConfig();
+        var progress = stepConfig.enabled ? '<div class="step-progress" aria-label="Form progress">' + stepConfig.steps.map(function(step, index){ return '<div class="step-progress-item" data-step="' + index + '"><span class="step-number">' + (index + 1) + '</span>' + esc(step.title || ('Step ' + (index + 1))) + '</div>'; }).join('') + '</div><div id="step-description" class="step-description"></div>' : '';
+        var stepActions = stepConfig.enabled ? '<button type="button" class="primary" id="step-previous">Previous</button><button type="button" class="primary" id="step-next">Next</button>' : '';
+        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div>' + progress + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(function(field, index){ return conditionalFieldHtml(field, index, fields); }).join('') + '</div>' + optIn + '<div class="actions">' + stepActions + '<button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form>' + (footerLink ? '<div class="note">' + footerLink + '</div>' : '') + '</div>';
+        setupGenericConditionalFields(fields);
+        setupGenericPhone();
 
         if (scope === 'generic') {
+          var pickerPhoneSettings = formData.settings || {};
+          var pickerRestrictedCountries = pickerPhoneSettings.phoneAllowAllCountries === false || String(pickerPhoneSettings.phoneAllowAllCountries).toLowerCase() === 'false';
+          var pickerAllowedCountries = (pickerPhoneSettings.phoneAllowedCountries || []).map(function(value){ return '+' + String(value).replace(/\D/g, ''); }).filter(function(value){ return value !== '+'; });
           var countrySelect = root.querySelector('select[name="phoneCountry"]');
           var genericPhoneInput = root.querySelector('input[type="tel"][name]');
           function nationalPhoneMaxLength() {
@@ -317,11 +631,21 @@
             return Math.max(1, 15 - countryDigits.length);
           }
           if (countrySelect) {
+            if (pickerRestrictedCountries && pickerAllowedCountries.length && pickerAllowedCountries.indexOf(countrySelect.value) === -1) countrySelect.value = pickerAllowedCountries[0];
             var picker = document.createElement('div');
             picker.className = 'phone-country-picker';
             var trigger = document.createElement('input');
             trigger.type = 'text';
-            trigger.value = countrySelect.options[countrySelect.selectedIndex].text;
+            function updatePickerTrigger(){
+              var selectedOption = countrySelect.options[countrySelect.selectedIndex];
+              if (selectedOption) {
+                trigger.value = String(selectedOption.value);
+                preloadPhoneCountryFlag(selectedOption.value);
+                var flagUrl = phoneCountryFlagUrl(selectedOption.value);
+                trigger.style.backgroundImage = flagUrl ? 'url("' + flagUrl + '")' : 'none';
+              }
+            }
+            updatePickerTrigger();
             trigger.placeholder = '+91';
             trigger.setAttribute('aria-label', 'Phone country code');
             var options = document.createElement('div');
@@ -329,36 +653,46 @@
             Array.prototype.forEach.call(countrySelect.options, function(option) {
               var item = document.createElement('button');
               item.type = 'button';
-              item.textContent = option.text;
+              var flag = document.createElement('img');
+              flag.className = 'phone-country-flag';
+              flag.alt = '';
+              flag.setAttribute('aria-hidden', 'true');
+              flag.loading = 'lazy';
+              flag.src = phoneCountryFlagUrl(option.value);
+              var code = document.createElement('span');
+              code.textContent = String(option.value);
+              item.appendChild(flag);
+              item.appendChild(code);
               item.className = option.value === countrySelect.value ? 'selected' : '';
               item.addEventListener('click', function() {
                 countrySelect.value = option.value;
-                trigger.textContent = option.text;
-                trigger.value = option.text;
+                countrySelect.dispatchEvent(new Event('change'));
+                updatePickerTrigger();
                 picker.classList.remove('open');
                 options.querySelectorAll('button').forEach(function(node) { node.classList.remove('selected'); });
                 item.classList.add('selected');
               });
+              item.addEventListener('pointerenter', function(){ preloadPhoneCountryFlag(option.value); });
               item.dataset.code = option.value;
+              item.style.display = !pickerRestrictedCountries || pickerAllowedCountries.indexOf(option.value) !== -1 ? 'block' : 'none';
               options.appendChild(item);
             });
-            trigger.addEventListener('focus', function() { picker.classList.add('open'); });
+            trigger.addEventListener('focus', function() { picker.classList.add('open'); trigger.select(); });
             trigger.addEventListener('input', function() {
-              var query = trigger.value.trim().toLowerCase();
+              var query = trigger.value.trim().toLowerCase().replace(/^[^+0-9a-z]+/i, '');
               var numericQuery = query.replace(/^\+/, '');
+              var normalizedQuery = numericQuery;
               picker.classList.add('open');
               options.querySelectorAll('button').forEach(function(node) {
-                var codeDigits = node.dataset.code.replace(/^\+/, '');
-                node.style.display = !numericQuery || codeDigits.indexOf(numericQuery) === 0 ? 'block' : 'none';
+                var searchable = String(node.textContent || '').toLowerCase() + ' ' + String(node.dataset.code || '').toLowerCase();
+                var normalizedSearchable = searchable.replace(/\+/g, '');
+                var allowed = !pickerRestrictedCountries || pickerAllowedCountries.indexOf(node.dataset.code) !== -1;
+                node.style.display = allowed && (!normalizedQuery || normalizedSearchable.indexOf(normalizedQuery) !== -1) ? 'block' : 'none';
               });
-              var exact = Array.prototype.find.call(countrySelect.options, function(option) {
-                return option.value.replace(/^\+/, '') === numericQuery;
-              });
-              if (exact) {
-                countrySelect.value = exact.value;
-                trigger.value = exact.text;
-              }
+              var exact = Array.prototype.find.call(countrySelect.options, function(option) { return option.value.toLowerCase() === query || option.value.replace(/^\+/, '') === numericQuery; });
+              if (exact) { countrySelect.value = exact.value; countrySelect.dispatchEvent(new Event('change')); }
             });
+            countrySelect.addEventListener('change', updatePickerTrigger);
             picker.appendChild(trigger);
             picker.appendChild(options);
             countrySelect.style.display = 'none';
@@ -386,6 +720,12 @@
         scheduleSize();
 
         var formEl = document.getElementById('gbs-form');
+
+        if (multiStepConfig().enabled) {
+          document.getElementById('step-next').addEventListener('click', function(){ if (validateStep(currentStepIndex)) showStep(currentStepIndex + 1); });
+          document.getElementById('step-previous').addEventListener('click', function(){ showStep(currentStepIndex - 1); });
+          showStep(0);
+        }
 
         formEl.addEventListener('submit', submitForm);
 
@@ -429,14 +769,67 @@
 
         if (busy) return;
 
+        var stepConfig = multiStepConfig();
+        if (stepConfig.enabled) {
+          for (var stepIndex = 0; stepIndex < stepConfig.steps.length; stepIndex += 1) {
+            if (!validateStep(stepIndex)) { showStep(stepIndex); return; }
+          }
+        }
+
         showBusy(true);
 
         var fd = new FormData(event.target);
 
-          if (scope === 'generic' && fd.get('phone')) {
+        // Generic CRM attribution metadata. These values are informational
+        // only; the server remains the source of truth for tenant/form IDs.
+        if (scope === 'generic') {
+          var pageUrl = hostContext.pageUrl || document.referrer || window.location.href;
+          var pageTitle = hostContext.pageTitle || document.title || formData.name || '';
+          var pageUrlObject = null;
+          try { pageUrlObject = new URL(pageUrl); } catch(e) {}
+          var query = pageUrlObject ? pageUrlObject.searchParams : new URLSearchParams(window.location.search);
+          var pageSource = query.get('utm_source') || (document.referrer ? (function(){ try { return new URL(document.referrer).hostname; } catch(e) { return ''; } })() : 'direct');
+          ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','fbc','fbp'].forEach(function(key){ rememberCookie('gbs_' + key, query.get(key) || ''); });
+          rememberCookie('gbs_landing_url', pageUrl);
+          rememberCookie('gbs_landing_title', pageTitle);
+          var tracking = {
+            pageUrl: pageUrl,
+            pageTitle: pageTitle,
+            pageSource: pageSource,
+            referrerUrl: document.referrer || '',
+            landingPageUrl: readCookie('gbs_landing_url') || pageUrl,
+            currentDomain: pageUrlObject ? pageUrlObject.hostname : window.location.hostname,
+            formName: formData.name || '',
+            formId: formData.id || slug,
+            utm_source: readCookie('gbs_utm_source'),
+            utm_medium: readCookie('gbs_utm_medium'),
+            utm_campaign: readCookie('gbs_utm_campaign'),
+            utm_term: readCookie('gbs_utm_term'),
+            utm_content: readCookie('gbs_utm_content'),
+            gclid: readCookie('gbs_gclid'),
+            fbclid: readCookie('gbs_fbclid'),
+            fbc: readCookie('gbs_fbc'),
+            fbp: readCookie('gbs_fbp'),
+            submittedAt: new Date().toISOString(),
+            browser: normalizeBrowser(navigator.userAgent),
+            operatingSystem: normalizeOs(navigator.userAgent),
+            deviceType: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'mobile' : 'desktop'
+          };
+          // Internal transport header: this is not a form field and is never
+          // exposed in the form builder or rendered in the visitor form.
+          event._gbsTrackingMetadata = tracking;
+        }
+
+        if (scope === 'generic' && fd.get('phone')) {
             var phoneInput = String(fd.get('phone')).trim();
             var nationalDigits = phoneInput.replace(/\D/g, '');
             var countryCode = String(fd.get('phoneCountry') || '+91').trim();
+            var phoneRule = phoneRules[countryCode] || [7, 15];
+            if (nationalDigits.length < phoneRule[0] || nationalDigits.length > phoneRule[phoneRule.length - 1]) {
+              showBusy(false);
+              showFieldErrors({ phone: 'Enter a valid phone number with ' + (phoneRule[0] === phoneRule[phoneRule.length - 1] ? phoneRule[0] : phoneRule[0] + '-' + phoneRule[phoneRule.length - 1]) + ' digits.' });
+              return;
+            }
             var internationalPhone = countryCode + nationalDigits;
             if (!/^\+[1-9]\d{7,14}$/.test(internationalPhone)) {
               showBusy(false);
@@ -448,7 +841,11 @@
 
         try {
 
-          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '/submit?scope=' + encodeURIComponent(scope), { method: 'POST', body: fd });
+          var requestHeaders = {};
+          if (event._gbsTrackingMetadata) {
+            requestHeaders['X-GBS-Tracking'] = JSON.stringify(event._gbsTrackingMetadata);
+          }
+          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '/submit?scope=' + encodeURIComponent(scope), { method: 'POST', body: fd, headers: requestHeaders });
 
           var json = await res.json().catch(function(){ return {}; });
 

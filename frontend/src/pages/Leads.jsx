@@ -147,7 +147,7 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const GENERIC_LEADS_PAGE_SIZE = 25;
+const GENERIC_LEADS_PAGE_SIZE = 10;
 const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
   "name",
   "email",
@@ -195,6 +195,48 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "callifiedAi",
   "callifiedScore",
 ];
+// These columns are system-populated and must not be offered as CSV import
+// destinations. The remaining Customize Table catalog entries are valid CRM
+// field choices for generic lead imports.
+const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
+  "pageUrl",
+  "pageTitle",
+  "pageSource",
+  "referrerUrl",
+  "landingPageUrl",
+  "currentDomain",
+  "formName",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "gclid",
+  "fbclid",
+  "fbc",
+  "fbp",
+  "submittedAt",
+  "browser",
+  "operatingSystem",
+  "deviceType",
+  "createdAt",
+  "lastUpdated",
+  "webForm",
+  "actions",
+  "campaign",
+  "callStatus",
+  "callifiedAi",
+  "callifiedScore",
+]);
+const CSV_IMPORT_FIELD_TYPES = {
+  aiScore: "number",
+  status: "dropdown",
+  birthDate: "date",
+  anniversary: "date",
+  website: "url",
+  linkedin: "url",
+  description: "textarea",
+};
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
   name: 240,
@@ -788,6 +830,15 @@ const leadWebFormName = (lead) =>
   (["website-form", "Landing Page"].includes(lead?.source)
     ? "Landing Page"
     : "");
+const leadTrackingMetadata = (lead) => {
+  const raw = lead?.webFormSubmissions?.[0]?.payloadJson;
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return parsed?._meta?.tracking || {};
+  } catch (_err) {
+    return {};
+  }
+};
 // First/Last name columns (generic Leads table only): pure derivation of
 // Contact.name — first whitespace-separated token vs the remainder. Single
 // token → last name empty (cell renders "—"). No schema backing needed.
@@ -1129,13 +1180,14 @@ const Leads = () => {
   const leadRequestSequenceRef = useRef(0);
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
-  // Generic CRM uses API pagination with a fixed 25-row page. Other
-  // verticals keep their existing client-side pagination behavior.
+  // Generic CRM uses API pagination; other verticals keep their existing
+  // client-side pagination behavior.
+  const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(GENERIC_LEADS_PAGE_SIZE);
   const [leadPagination, setLeadPagination] = useState({
     total: 0,
     totalPages: 1,
     page: 1,
-    limit: GENERIC_LEADS_PAGE_SIZE,
+    limit: genericLeadsPageSize,
   });
   const genericPageEffectInitializedRef = useRef(false);
   const genericQueryEffectInitializedRef = useRef(false);
@@ -1484,7 +1536,7 @@ const Leads = () => {
           ? `&sortBy=${encodeURIComponent(sortConfig.key)}&sortDirection=${sortConfig.direction}`
           : "";
       const paginationQs = isGeneric
-        ? `&page=${pageOverride ?? leadsPage + 1}&limit=${GENERIC_LEADS_PAGE_SIZE}`
+        ? `&page=${pageOverride ?? leadsPage + 1}&limit=${genericLeadsPageSize}`
         : "&limit=500";
       const data = await fetchApi(
         `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}`,
@@ -1509,7 +1561,7 @@ const Leads = () => {
           page: Number.isFinite(Number(data?.page))
             ? Number(data.page)
             : pageOverride ?? leadsPage + 1,
-          limit: GENERIC_LEADS_PAGE_SIZE,
+          limit: genericLeadsPageSize,
         });
       }
       let mergedRows = rows;
@@ -1929,7 +1981,7 @@ const Leads = () => {
     if (!isGeneric) fetchLeads();
   }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Generic CRM page changes fetch only the requested 25-row API page. The
+  // Generic CRM page changes fetch only the requested API page. The
   // first page is loaded by the existing mount effect, so skip the initial
   // state observation to avoid a second page-1 request.
   useEffect(() => {
@@ -1939,7 +1991,7 @@ const Leads = () => {
       return;
     }
     fetchLeads({ background: true });
-  }, [isGeneric, leadsPage]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isGeneric, leadsPage, genericLeadsPageSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Generic CRM search, fixed filters, advanced filters and supported sorts
   // all operate on the complete server-side dataset. Reset to page one when
@@ -3211,6 +3263,7 @@ const Leads = () => {
         // Web-form parity set (same Contact data as the web-form Add-field list).
         key === "firstTouchSource" ||
         key === "lastTouchSource" ||
+        (isGeneric && ["pageUrl", "pageTitle", "pageSource", "referrerUrl", "landingPageUrl", "currentDomain", "formName", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "fbc", "fbp", "submittedAt", "browser", "operatingSystem", "deviceType"].includes(key)) ||
         key === "treatmentOfInterest" ||
         key === "birthDate" ||
         key === "anniversary" ||
@@ -3245,6 +3298,8 @@ const Leads = () => {
       if (key === "firstTouchSource")
         return { key, label: "First Touch Source" };
       if (key === "lastTouchSource") return { key, label: "Last Touch Source" };
+      const trackingLabels = { pageUrl: "Page URL", pageTitle: "Page Title", pageSource: "Page Source", referrerUrl: "Referrer URL", landingPageUrl: "Landing Page URL", currentDomain: "Current Domain", formName: "Form Name / ID", utm_source: "UTM Source", utm_medium: "UTM Medium", utm_campaign: "UTM Campaign", utm_term: "UTM Term", utm_content: "UTM Content", gclid: "Google Click ID", fbclid: "Meta Click ID", fbc: "Meta Click Cookie", fbp: "Meta Browser ID", submittedAt: "Submission Timestamp", browser: "Browser", operatingSystem: "Operating System", deviceType: "Device Type" };
+      if (isGeneric && trackingLabels[key]) return { key, label: trackingLabels[key] };
       if (key === "treatmentOfInterest")
         return { key, label: "Treatment Of Interest" };
       if (key === "birthDate") return { key, label: "Birth Date" };
@@ -4109,7 +4164,7 @@ const Leads = () => {
     sortedLeads.length === 0
       ? 0
       : isGeneric
-        ? currentLeadsPage * GENERIC_LEADS_PAGE_SIZE + 1
+        ? currentLeadsPage * genericLeadsPageSize + 1
         : currentLeadsPage * leadsPageSize + 1;
   const pageEnd =
     sortedLeads.length === 0
@@ -4544,6 +4599,16 @@ const Leads = () => {
               );
             }}
           />
+        </td>
+      );
+    }
+    const trackingKeys = ["pageUrl", "pageTitle", "pageSource", "referrerUrl", "landingPageUrl", "currentDomain", "formName", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "fbc", "fbp", "submittedAt", "browser", "operatingSystem", "deviceType"];
+    if (isGeneric && trackingKeys.includes(column.key)) {
+      const metadata = leadTrackingMetadata(lead);
+      const value = metadata[column.key] || (column.key === "submittedAt" ? lead?.webFormSubmissions?.[0]?.submittedAt : "");
+      return (
+        <td style={getBodyCellStyle(column.key, { color: "var(--text-secondary)", fontSize: "0.875rem" })} title={value || undefined}>
+          {value ? String(value) : "—"}
         </td>
       );
     }
@@ -5233,15 +5298,18 @@ const Leads = () => {
             formats={["csv", "xlsx"]}
             genericLeadWizard={isGeneric}
             onImported={isGeneric ? refreshAll : undefined}
-            mappingFields={isGeneric ? preferredVisibleColumns.map((key) => {
-              const catalogField = leadColumnCatalog.find((field) => field.key === key);
-              const customField = customFieldByKey.get(key);
-              return {
-                key,
-                fieldKey: key,
-                label: catalogField?.label || customField?.label || customField?.name || key.replace(/^cf_/, ""),
-              };
-            }) : []}
+            mappingFields={isGeneric ? leadColumnCatalog
+              .filter((field) => !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key))
+              .map((catalogField) => {
+                const key = catalogField.key;
+                const customField = customFieldByKey.get(key);
+                return {
+                  key,
+                  fieldKey: key,
+                  label: catalogField.label || customField?.label || customField?.name || key.replace(/^cf_/, ""),
+                  fieldType: customField?.fieldType || CSV_IMPORT_FIELD_TYPES[key] || "text",
+                };
+              }) : []}
             compact
             endpoints={{
               export: "/api/csv/contacts/export.csv",
@@ -8676,10 +8744,13 @@ const Leads = () => {
               </label>
               <select
                 id="leads-page-size"
-                value={isGeneric ? GENERIC_LEADS_PAGE_SIZE : leadsPageSize}
+                value={isGeneric ? genericLeadsPageSize : leadsPageSize}
                 onChange={(e) => {
-                  if (isGeneric) return;
-                  setLeadsPageSize(Number(e.target.value));
+                  if (isGeneric) {
+                    setGenericLeadsPageSize(Number(e.target.value));
+                  } else {
+                    setLeadsPageSize(Number(e.target.value));
+                  }
                   setLeadsPage(0);
                 }}
                 className="input-field"
@@ -8691,7 +8762,7 @@ const Leads = () => {
                 }}
                 aria-label="Rows per page"
               >
-                {(isGeneric ? [GENERIC_LEADS_PAGE_SIZE] : LEADS_PAGE_SIZE_OPTIONS).map((size) => (
+                {(isGeneric ? [10, 15, 25, 50, 100] : LEADS_PAGE_SIZE_OPTIONS).map((size) => (
                   <option key={size} value={size}>
                     {size}
                   </option>

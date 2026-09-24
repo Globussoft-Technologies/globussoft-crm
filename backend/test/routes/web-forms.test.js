@@ -89,6 +89,7 @@ prisma.user.findFirst = vi.fn();
 
 const webFormsRouter = requireCJS('../../routes/web_forms');
 const { buildEmbedCode } = webFormsRouter;
+const { normalizeFields, isConditionalFieldVisible } = webFormsRouter;
 prisma.webFormSubmission.count = vi.fn();
 
 
@@ -175,6 +176,102 @@ describe('web-form embed sizing', () => {
     expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
+  });
+});
+
+describe('Generic conditional fields', () => {
+  const configuredFields = [
+    {
+      id: 'interest',
+      sourceKind: 'custom',
+      sourceKey: 'interest',
+      fieldType: 'dropdown',
+      options: ['WordPress', 'Shopify', 'SEO'],
+      label: 'Are you interested in?',
+    },
+    {
+      id: 'shopify-url',
+      sourceKind: 'custom',
+      sourceKey: 'shopifyUrl',
+      fieldType: 'url',
+      label: 'Shopify Store URL',
+      showWhen: { fieldId: 'interest', fieldKey: 'interest', value: 'Shopify' },
+    },
+  ];
+
+  test('preserves a valid parent and trigger value for Generic forms', () => {
+    const fields = normalizeFields(JSON.stringify(configuredFields), 'generic');
+
+    expect(fields[1].showWhen).toEqual({
+      fieldId: 'interest',
+      fieldKey: 'interest',
+      parentQuestion: 'Are you interested in?',
+      value: 'Shopify',
+    });
+    expect(isConditionalFieldVisible(fields[1], fields, { interest: 'Shopify' })).toBe(true);
+    expect(isConditionalFieldVisible(fields[1], fields, { interest: 'WordPress' })).toBe(false);
+  });
+
+  test('supports multiple children and chained child conditions', () => {
+    const fields = normalizeFields(JSON.stringify([
+      ...configuredFields,
+      {
+        id: 'shopify-plan',
+        sourceKind: 'custom',
+        sourceKey: 'shopifyPlan',
+        fieldType: 'dropdown',
+        options: ['Basic', 'Advanced'],
+        showWhen: { fieldId: 'shopify-url', fieldKey: 'shopifyUrl', value: 'https://shop.example' },
+      },
+    ]), 'generic');
+
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'Shopify', shopifyUrl: 'https://shop.example' })).toBe(true);
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'Shopify', shopifyUrl: 'https://other.example' })).toBe(false);
+  });
+
+  test('clears an unlinked typed parent question', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'interest', sourceKind: 'custom', sourceKey: 'interest', fieldType: 'dropdown', label: 'What service do you need?', options: ['SEO', 'Shopify'] },
+      { id: 'details', sourceKind: 'custom', sourceKey: 'details', fieldType: 'text', label: 'Shopify details', showWhen: { parentQuestion: 'What service do you need?', value: 'Shopify' } },
+    ]), 'generic');
+
+    expect(fields[1].showWhen).toBeNull();
+  });
+
+  test('keeps conditional flows separate from contact and lead fields', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name' },
+      { id: 'details', sourceKind: 'custom', sourceKey: 'details', fieldType: 'text', showWhen: { fieldId: 'name', value: 'WordPress' } },
+    ]), 'generic');
+
+    expect(fields[1].showWhen).toBeNull();
+  });
+
+  test('clears self, deleted, invalid-choice, and non-Generic rules safely', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'parent', sourceKind: 'custom', sourceKey: 'parent', fieldType: 'dropdown', options: ['Yes', 'No'] },
+      { id: 'self', sourceKind: 'custom', sourceKey: 'self', fieldType: 'text', showWhen: { fieldId: 'self', value: 'x' } },
+      { id: 'deleted', sourceKind: 'custom', sourceKey: 'deleted', fieldType: 'text', showWhen: { fieldId: 'missing', value: 'x' } },
+      { id: 'invalid', sourceKind: 'custom', sourceKey: 'invalid', fieldType: 'text', showWhen: { fieldId: 'parent', value: 'Maybe' } },
+    ]), 'generic');
+    const travelFields = normalizeFields(JSON.stringify(configuredFields), 'travel');
+
+    expect(fields.slice(1).every((field) => field.showWhen === null)).toBe(true);
+    expect(travelFields[1].showWhen).toBeNull();
+  });
+
+  test('clears cyclic nested rules while preserving valid chains', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'root', sourceKind: 'custom', sourceKey: 'root', fieldType: 'dropdown', options: ['Yes', 'No'] },
+      { id: 'child', sourceKind: 'custom', sourceKey: 'child', fieldType: 'dropdown', options: ['Next'], showWhen: { fieldId: 'root', value: 'Yes' } },
+      { id: 'grandchild', sourceKind: 'custom', sourceKey: 'grandchild', fieldType: 'text', showWhen: { fieldId: 'child', value: 'Next' } },
+      { id: 'cycle-a', sourceKind: 'custom', sourceKey: 'cycleA', fieldType: 'text', showWhen: { fieldId: 'cycle-b', value: 'x' } },
+      { id: 'cycle-b', sourceKind: 'custom', sourceKey: 'cycleB', fieldType: 'text', showWhen: { fieldId: 'cycle-a', value: 'y' } },
+    ]), 'generic');
+
+    expect(fields[1].showWhen.fieldId).toBe('root');
+    expect(fields[2].showWhen.fieldId).toBe('child');
+    expect([fields[3].showWhen, fields[4].showWhen].filter(Boolean)).toHaveLength(0);
   });
 });
 

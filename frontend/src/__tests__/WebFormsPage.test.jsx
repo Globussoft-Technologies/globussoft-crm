@@ -284,6 +284,36 @@ beforeEach(() => {
 
 describe('WebForms builder page', () => {
 
+  test('renders conditional children in an indented branch card beneath their parent', async () => {
+    const conditionalForm = {
+      ...FORM_FIXTURE,
+      scope: 'generic',
+      fields: [
+        {
+          id: 'root-question', sourceKind: 'custom', sourceKey: 'root-question', fieldType: 'dropdown',
+          label: 'Interested in', optionsText: 'Shopify\nWordPress', options: ['Shopify', 'WordPress'],
+          required: false, hidden: false, showWhen: null,
+        },
+        {
+          id: 'child-question', sourceKind: 'custom', sourceKey: 'child-question', fieldType: 'text',
+          label: 'Shopify Store URL', options: [], required: false, hidden: false,
+          showWhen: { fieldId: 'root-question', fieldKey: 'root-question', value: 'Shopify' },
+        },
+      ],
+    };
+
+    const { container } = renderPage(conditionalForm);
+    await openBuilder();
+
+    expect(screen.getByText('Conditional flow')).toBeInTheDocument();
+    expect(screen.getByText('Show question')).toBeInTheDocument();
+    const childCard = container.querySelector('.wf-conditional-child-card');
+    expect(childCard).toBeInTheDocument();
+    expect(childCard).toHaveTextContent('Shopify');
+    expect(childCard).toHaveTextContent('Shopify Store URL');
+    expect(childCard.querySelector('[data-testid="wf-field-editor-grid"]')).toBeInTheDocument();
+  });
+
   test('travel logo selection immediately sends a multipart upload request', async () => {
     const { container } = renderTravelPage();
     await openBuilder();

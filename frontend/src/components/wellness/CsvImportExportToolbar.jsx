@@ -46,6 +46,53 @@ const FORMAT_META = {
   xlsx: { label: "Excel (XLSX)", ext: "xlsx" },
 };
 
+const IMPORT_FIELD_TYPE_OPTIONS = [
+  { value: "text", label: "Text field" },
+  { value: "textarea", label: "Textarea" },
+  { value: "number", label: "Number" },
+  { value: "date", label: "Date" },
+  { value: "dropdown", label: "Dropdown" },
+  { value: "radio", label: "Radio" },
+  { value: "multiselect", label: "Multi-select" },
+  { value: "checkbox", label: "Checkbox" },
+  { value: "url", label: "URL" },
+];
+
+const AUTOMATIC_CRM_FIELD_KEYS = new Set([
+  "pageUrl",
+  "pageTitle",
+  "pageSource",
+  "referrerUrl",
+  "landingPageUrl",
+  "currentDomain",
+  "formName",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "gclid",
+  "fbclid",
+  "fbc",
+  "fbp",
+  "submittedAt",
+  "browser",
+  "operatingSystem",
+  "deviceType",
+  "createdAt",
+  "lastUpdated",
+  "webForm",
+  "actions",
+  "campaign",
+  "callStatus",
+  "callifiedAi",
+  "callifiedScore",
+]);
+
+const normalizeFieldType = (fieldType) => (
+  IMPORT_FIELD_TYPE_OPTIONS.some((option) => option.value === fieldType) ? fieldType : "text"
+);
+
 export default function CsvImportExportToolbar({
   entity,
   filters = {},
@@ -359,6 +406,7 @@ function ImportModal({
   const [previewRows, setPreviewRows] = useState([]);
   const [previewHeaders, setPreviewHeaders] = useState([]);
   const [mappingSelections, setMappingSelections] = useState({});
+  const [mappingFieldTypes, setMappingFieldTypes] = useState({});
   const [previewError, setPreviewError] = useState(null);
   const [thresholds, setThresholds] = useState({ rows: 5000, bytes: 5 * 1024 * 1024 });
   const [expectedHeaders, setExpectedHeaders] = useState(initialExpectedHeaders);
@@ -380,6 +428,34 @@ function ImportModal({
   const [savingNewField, setSavingNewField] = useState(false);
 
   const optionFieldTypes = new Set(["dropdown", "radio", "multiselect"]);
+
+  const availableMappingFields = [...mappingFields, ...dynamicLeadFields]
+    .filter((field) => !AUTOMATIC_CRM_FIELD_KEYS.has(field.fieldKey || field.key || field.id))
+    .filter((field, index, fields) => fields.findIndex((item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id)) === index);
+
+  const findMappingField = (value) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) return null;
+    return availableMappingFields.find((field) => {
+      const key = String(field.fieldKey || field.key || field.id || "").toLowerCase();
+      const labelText = String(field.label || field.name || field.fieldKey || field.key || "").toLowerCase();
+      return key === normalized || labelText === normalized;
+    }) || null;
+  };
+
+  const initializeMapping = (headers) => {
+    const selections = {};
+    const types = {};
+    headers.forEach((header) => {
+      const field = findMappingField(header);
+      if (!field) return;
+      const key = field.fieldKey || field.key || field.id;
+      selections[header] = key;
+      types[header] = normalizeFieldType(field.fieldType);
+    });
+    setMappingSelections(selections);
+    setMappingFieldTypes(types);
+  };
 
   const resetAddField = () => {
     setShowAddField(false);
@@ -415,6 +491,7 @@ function ImportModal({
       setDynamicLeadFields((fields) => [...fields, createdField]);
       if (addingFieldFor) {
         setMappingSelections((current) => ({ ...current, [addingFieldFor]: createdField.fieldKey || createdField.key || createdField.id }));
+        setMappingFieldTypes((current) => ({ ...current, [addingFieldFor]: normalizeFieldType(createdField.fieldType || newFieldType) }));
       }
       notify.success("Field created");
       resetAddField();
@@ -483,6 +560,7 @@ function ImportModal({
     setPreviewRows([]);
     setPreviewHeaders([]);
     setMappingSelections({});
+    setMappingFieldTypes({});
     if (!f) return;
     if (genericLeadWizard) setWizardStep(3);
     // XLSX is binary - we don't ship a SheetJS bundle to the client just for
@@ -502,7 +580,7 @@ function ImportModal({
         const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
         const headers = (rows[0] || []).map((header) => String(header).trim()).filter(Boolean);
         setPreviewHeaders(headers);
-        setMappingSelections(Object.fromEntries(headers.filter((header) => ["name", "email", "phone", "company", "title", "status", "source"].includes(String(header).toLowerCase())).map((header) => [header, header])));
+        initializeMapping(headers);
         setPreviewRows(rows.slice(1, 11));
       } catch (e) {
         setPreviewError(e.message || "Failed to read Excel file");
@@ -513,7 +591,7 @@ function ImportModal({
       const text = await f.text();
       const { headers, rows } = parseCsvClient(text);
       setPreviewHeaders(headers);
-      setMappingSelections(Object.fromEntries(headers.filter((header) => ["name", "email", "phone", "company", "title", "status", "source"].includes(String(header).toLowerCase())).map((header) => [header, header])));
+      initializeMapping(headers);
       setPreviewRows(rows.slice(0, 10));
       const optional = new Set(optionalHeaders);
       const missing = expectedHeaders.filter((h) => !headers.includes(h) && !optional.has(h));
@@ -543,7 +621,10 @@ function ImportModal({
     try {
       const fd = new FormData();
       fd.append("file", file);
-      if (genericLeadWizard) fd.append("mapping", JSON.stringify(mappingSelections));
+      if (genericLeadWizard) {
+        fd.append("mapping", JSON.stringify(mappingSelections));
+        fd.append("mappingFieldTypes", JSON.stringify(mappingFieldTypes));
+      }
       const token = getAuthToken();
       const res = await fetch(endpoint, {
         method: "POST",
@@ -713,12 +794,14 @@ function ImportModal({
                   <input type="checkbox" defaultChecked aria-label={`Import ${header}`} />
                   <strong>{header}</strong>
                   <span style={{ color: "#059669", fontSize: "1.1rem" }}>✓</span>
-                  <select className="input-field" value={mappingSelections[header] || ""} aria-label={`CRM field for ${header}`} onChange={(event) => { if (event.target.value === "__add_new_field__") { setAddingFieldFor(header); setNewFieldLabel(header); setShowAddField(true); return; } setMappingSelections((current) => ({ ...current, [header]: event.target.value })); }}>
+                  <select className="input-field" value={mappingSelections[header] || ""} aria-label={`CRM field for ${header}`} onChange={(event) => { if (event.target.value === "__add_new_field__") { setAddingFieldFor(header); setNewFieldLabel(header); setShowAddField(true); return; } const selectedField = availableMappingFields.find((field) => (field.fieldKey || field.key || field.id) === event.target.value); setMappingSelections((current) => ({ ...current, [header]: event.target.value })); setMappingFieldTypes((current) => ({ ...current, [header]: normalizeFieldType(selectedField?.fieldType || current[header]) })); }}>
                     <option value="">Select CRM field</option>
-                    {[...mappingFields, ...dynamicLeadFields].filter((field, index, fields) => fields.findIndex((item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id)) === index).map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
+                    {availableMappingFields.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
                     <option value="__add_new_field__">＋ Add new field</option>
                   </select>
-                  <span style={{ color: "var(--text-secondary)" }}>Text field</span>
+                  <select className="input-field" value={normalizeFieldType(mappingFieldTypes[header])} aria-label={`Field type for ${header}`} onChange={(event) => setMappingFieldTypes((current) => ({ ...current, [header]: event.target.value }))}>
+                    {IMPORT_FIELD_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
                 </div>
               ))}
             </div>

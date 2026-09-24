@@ -14,6 +14,7 @@ const { sendEmail } = require("../lib/emailSender");
 const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const s3Service = require("../services/s3Service");
+const { sendGenericWebFormWhatsApp } = require("../lib/genericWebFormWhatsApp");
 
 const router = express.Router();
 
@@ -115,6 +116,7 @@ function uploadLogoOrReject(req, res, next) {
 
 const FIELD_TYPES = new Set([
   "text",
+  "email",
   "textarea",
   "number",
   "dropdown",
@@ -340,7 +342,7 @@ function defaultFields() {
 
       sourceKey: "email",
 
-      fieldType: "text",
+      fieldType: "email",
 
       label: "Email",
 
@@ -432,6 +434,10 @@ function defaultSettings() {
     optInLinkUrl: "",
 
     notificationEmail: "",
+    phoneAllowAllCountries: true,
+    phoneAllowedCountries: [],
+    multiStepEnabled: false,
+    steps: [],
   };
 }
 
@@ -442,16 +448,27 @@ function normalizeField(field, index) {
     ? field.sourceKind
     : "custom";
 
-  const fieldType = FIELD_TYPES.has(field?.fieldType)
-    ? field.fieldType
-    : "text";
+  const sourceKey = textOr(field?.sourceKey, field?.key || `custom_${index}`);
+  const fieldType = sourceKind === "contact" && sourceKey === "email"
+    ? "email"
+    : FIELD_TYPES.has(field?.fieldType)
+      ? field.fieldType
+      : "text";
+  const showWhen = field?.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey)
+    ? {
+      fieldId: textOr(field.showWhen.fieldId),
+      fieldKey: textOr(field.showWhen.fieldKey),
+      parentQuestion: textOr(field.showWhen.parentQuestion),
+      value: textOr(field.showWhen.value),
+    }
+    : null;
 
   return {
     id: textOr(field?.id, `${sourceKind}-${field?.sourceKey || index}`),
 
     sourceKind,
 
-    sourceKey: textOr(field?.sourceKey, field?.key || `custom_${index}`),
+    sourceKey,
 
     fieldType,
 
@@ -477,16 +494,93 @@ function normalizeField(field, index) {
 
     fileTags: fieldType === "file" ? parseOptions(field?.fileTags) : [],
 
+    showWhen,
+
     width: field?.width === "half" ? "half" : "full",
+    stepId: textOr(field?.stepId),
   };
 }
 
-function normalizeFields(raw) {
+function normalizeFields(raw, scope = "generic") {
   const parsed = parseJson(raw, null);
 
   if (!Array.isArray(parsed) || parsed.length === 0) return defaultFields();
 
-  return parsed.map((field, index) => normalizeField(field, index));
+  const fields = parsed.map((field, index) => normalizeField(field, index));
+
+  if (scope !== "generic") return fields.map((field) => ({ ...field, showWhen: null }));
+
+  const byId = new Map(fields.map((field) => [String(field.id), field]));
+  const bySourceKey = new Map();
+  fields.forEach((field) => {
+    if (field.sourceKey && !bySourceKey.has(String(field.sourceKey))) {
+      bySourceKey.set(String(field.sourceKey), field);
+    }
+  });
+
+  const normalizedFields = fields.map((field) => {
+    const condition = field.showWhen;
+    if (!condition) return field;
+
+    const requestedId = textOr(condition.fieldId);
+    const requestedKey = textOr(condition.fieldKey);
+    const controller = (requestedId && byId.get(requestedId)) ||
+      (requestedKey && bySourceKey.get(requestedKey));
+
+    // Conditional flows are standalone custom-field trees. Invalid,
+    // non-custom, self-referencing, hidden, or file parents are made safe by
+    // clearing the rule. The child then behaves like a normal visible field.
+    if (!controller || controller.sourceKind !== "custom" || String(controller.id) === String(field.id) || controller.hidden || controller.fieldType === "file") {
+      return { ...field, showWhen: null };
+    }
+
+    const value = textOr(condition.value);
+    const controllerOptions = controller.fieldType === "checkbox"
+      ? ["true"]
+      : CHOICE_TYPES.has(controller.fieldType) ? controller.options : [];
+
+    // Choice-based triggers must be one of the configured answers. Scalar
+    // parents use the explicitly entered trigger text.
+    if (controllerOptions.length && value && !controllerOptions.includes(value)) {
+      return { ...field, showWhen: null };
+    }
+
+    return {
+      ...field,
+      showWhen: {
+        fieldId: String(controller.id),
+        fieldKey: String(controller.sourceKey || ""),
+        parentQuestion: String(controller.label || ""),
+        value,
+      },
+    };
+  });
+
+  // A conditional child may itself be a parent, but a cycle would make the
+  // visibility graph impossible to evaluate. Clear cyclic rules so affected
+  // fields remain normal visible fields and valid chains survive.
+  return normalizedFields.map((field) => {
+    if (!field.showWhen) return field;
+
+    const visited = new Set([String(field.id)]);
+    let parent = normalizedFields.find((candidate) => (
+      (field.showWhen.fieldId && String(candidate.id) === String(field.showWhen.fieldId)) ||
+      (!field.showWhen.fieldId && field.showWhen.fieldKey && String(candidate.sourceKey) === String(field.showWhen.fieldKey))
+    ));
+
+    while (parent) {
+      const parentId = String(parent.id);
+      if (visited.has(parentId)) return { ...field, showWhen: null };
+      visited.add(parentId);
+      if (!parent.showWhen) break;
+      parent = normalizedFields.find((candidate) => (
+        (parent.showWhen.fieldId && String(candidate.id) === String(parent.showWhen.fieldId)) ||
+        (!parent.showWhen.fieldId && parent.showWhen.fieldKey && String(candidate.sourceKey) === String(parent.showWhen.fieldKey))
+      ));
+    }
+
+    return field;
+  });
 }
 
 function normalizeStyle(raw) {
@@ -534,6 +628,13 @@ function normalizeUrl(value) {
 
 function normalizeSettings(raw) {
   const settings = { ...defaultSettings(), ...(parseJson(raw, {}) || {}) };
+  const steps = Array.isArray(settings.steps)
+    ? settings.steps.map((step, index) => ({
+      id: textOr(step?.id, `step-${index + 1}`),
+      title: textOr(step?.title, `Step ${index + 1}`),
+      description: textOr(step?.description),
+    }))
+    : [];
 
   return {
     formTitle: textOr(settings.formTitle),
@@ -566,6 +667,13 @@ function normalizeSettings(raw) {
 
     notificationEmail: textOr(settings.notificationEmail),
 
+    phoneAllowAllCountries: settings.phoneAllowAllCountries !== false,
+    phoneAllowedCountries: Array.isArray(settings.phoneAllowedCountries)
+      ? [...new Set(settings.phoneAllowedCountries.map((value) => `+${String(value).replace(/\D/g, "")}`).filter((value) => value !== "+"))]
+      : [],
+
+    multiStepEnabled: Boolean(settings.multiStepEnabled),
+
     optInEnabled: Boolean(settings.optInEnabled),
 
     optInText: textOr(settings.optInText, defaultSettings().optInText),
@@ -573,6 +681,8 @@ function normalizeSettings(raw) {
     optInLinkText: textOr(settings.optInLinkText),
 
     optInLinkUrl: normalizeUrl(settings.optInLinkUrl),
+    // Do not expose the legacy placeholder page as a real user-created page.
+    steps: steps.length === 1 && steps[0].id === "step-1" && steps[0].title === "Step 1" && !steps[0].description ? [] : steps,
   };
 }
 
@@ -606,7 +716,7 @@ function buildEmbedCode(form, origin) {
     "<!-- Globussoft CRM web form -->",
 
     `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
-    '<script>(function(frame){window.addEventListener("message",function(event){if(!frame||event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form"||event.data.type!=="size")return;var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}});})(document.currentScript.previousElementSibling);</script>',
+    '<script>(function(frame){if(!frame)return;function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}}window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>',
   ].join("\n");
 }
 
@@ -637,7 +747,7 @@ async function ensureUniqueSlug(baseSlug, scope = "generic", excludeId = null) {
 function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
   if (!row) return null;
 
-  const fields = normalizeFields(row.fieldsJson);
+  const fields = normalizeFields(row.fieldsJson, row.scope || "generic");
   const style = normalizeStyle(row.styleJson);
   const settings = normalizeSettings(row.settingsJson);
 
@@ -679,6 +789,22 @@ function readBodyValue(body, key) {
   if (!body || !key) return undefined;
 
   return body[key];
+}
+
+function isConditionalFieldVisible(field, fields, body) {
+  const condition = field?.showWhen;
+  if (!condition || (!condition.fieldId && !condition.fieldKey)) return true;
+  if (!textOr(condition.value)) return false;
+
+  const controller = fields.find((candidate) => (
+    (condition.fieldId && String(candidate.id) === String(condition.fieldId)) ||
+    (!condition.fieldId && condition.fieldKey && String(candidate.sourceKey) === String(condition.fieldKey))
+  ));
+  if (!controller) return true;
+
+  const raw = readBodyValue(body, controller.sourceKey);
+  const values = Array.isArray(raw) ? raw : [raw];
+  return values.some((value) => String(value == null ? "" : value) === String(condition.value));
 }
 
 function isTruthyValue(fieldType, raw) {
@@ -896,13 +1022,36 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     submitStage = "normalize_form";
 
-    const fields = normalizeFields(form.fieldsJson);
+    const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
 
     const formScope = form.scope || "generic";
 
     const settings = normalizeSettings(form.settingsJson);
 
     const body = req.body || {};
+
+    let trackingMetadata = null;
+    const trackingHeader = req.get("x-gbs-tracking");
+    if (formScope === "generic" && trackingHeader) {
+      try {
+        const parsed = JSON.parse(String(trackingHeader));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          trackingMetadata = Object.fromEntries(Object.entries(parsed).slice(0, 30).map(([key, value]) => [key, textOr(value).slice(0, 2000)]));
+        }
+      } catch (_err) {
+        trackingMetadata = null;
+      }
+    }
+    if (formScope === "generic") {
+      trackingMetadata = {
+        ...(trackingMetadata || {}),
+        referrerUrl: trackingMetadata?.referrerUrl || textOr(req.get("referer"), ""),
+        browser: trackingMetadata?.browser || textOr(req.get("user-agent"), ""),
+        submittedAt: trackingMetadata?.submittedAt || new Date().toISOString(),
+        formName: trackingMetadata?.formName || form.name,
+        formId: trackingMetadata?.formId || String(form.id),
+      };
+    }
 
     const files = Array.isArray(req.files) ? req.files : [];
 
@@ -924,6 +1073,11 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     }
 
     for (const field of fields) {
+      if (formScope === "generic" && !isConditionalFieldVisible(field, fields, body)) {
+        payload[field.sourceKey] = null;
+        continue;
+      }
+
       if (field.fieldType === "file") {
         if (field.hidden) continue;
 
@@ -1099,6 +1253,10 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       fieldErrors.email = "Enter a valid email address";
     }
     if (phoneValue && isGenericForm) {
+      const submittedPhoneCountry = `+${String(req.body.phoneCountry || "").replace(/\D/g, "")}`;
+      if (!settings.phoneAllowAllCountries && settings.phoneAllowedCountries.length && !settings.phoneAllowedCountries.includes(submittedPhoneCountry)) {
+        fieldErrors.phone = "Please select an allowed country code";
+      }
       const normalizedGenericPhone = normalizeGenericPhone(
         phoneValue,
         req.body.phoneCountry,
@@ -1321,6 +1479,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
             ),
 
             userAgent: textOr(req.get("user-agent"), null),
+            ...(trackingMetadata ? { tracking: trackingMetadata } : {}),
           },
         }),
 
@@ -1371,6 +1530,17 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
       message: settings.successMessage,
     };
+
+    // Generic-only, best-effort automation. Never make lead creation depend
+    // on WhatsApp configuration, provider availability, or queue health.
+    if (formScope === "generic") {
+      try {
+        response.whatsapp = await sendGenericWebFormWhatsApp({ form, contact, submissionId: submission.id });
+      } catch (whatsappError) {
+        console.error("[web_forms] generic WhatsApp automation failed:", whatsappError.message);
+        response.whatsapp = { sent: false, code: "WHATSAPP_SEND_FAILED" };
+      }
+    }
 
     if (settings.afterSubmitAction === "redirect" && settings.redirectUrl) {
       response.redirectUrl = settings.redirectUrl;
@@ -1491,7 +1661,7 @@ router.post("/", verifyToken, async (req, res) => {
 
         isActive: body.isActive !== false,
 
-        fieldsJson: JSON.stringify(normalizeFields(body.fields)),
+        fieldsJson: JSON.stringify(normalizeFields(body.fields, scope)),
 
         styleJson: JSON.stringify(normalizeStyle(body.style)),
 
@@ -1578,7 +1748,7 @@ router.get("/:id/leads", verifyToken, async (req, res) => {
           contact: { select: { id: true, createdAt: true, updatedAt: true } } },
       }),
     ]);
-    const fields = normalizeFields(form.fieldsJson);
+    const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
     res.json({ fields, total, page, limit, leads: submissions.map((row) => {
       const payload = parseJson(row.payloadJson, {}) || {};
       const files = parseJson(row.filesJson, []) || [];
@@ -1670,7 +1840,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (body.isActive !== undefined) data.isActive = Boolean(body.isActive);
 
     if (body.fields !== undefined)
-      data.fieldsJson = JSON.stringify(normalizeFields(body.fields));
+      data.fieldsJson = JSON.stringify(normalizeFields(body.fields, scope));
 
     if (body.style !== undefined)
       data.styleJson = JSON.stringify(normalizeStyle(body.style));
@@ -1742,3 +1912,7 @@ module.exports.defaultFields = defaultFields;
 module.exports.defaultStyle = defaultStyle;
 
 module.exports.defaultSettings = defaultSettings;
+
+module.exports.normalizeFields = normalizeFields;
+
+module.exports.isConditionalFieldVisible = isConditionalFieldVisible;

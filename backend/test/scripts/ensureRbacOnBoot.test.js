@@ -270,23 +270,13 @@ describe('regression: per-key landingPath shape', () => {
   });
 });
 
-describe('ADMIN permission backfill - seed-on-creation only', () => {
-  // PRINCIPLE: grantAllPermissions is now called ONLY when ADMIN is first
-  // created. ensureRolePermission is still additive/idempotent, but it is only
-  // invoked on first provision. This means:
-  //   - an existing ADMIN role's grants are left untouched on every boot
-  //   - permissions an operator explicitly REVOKED stay revoked after restart
-  //   - newly-catalogued permissions must be granted manually via the Roles &
-  //     Permissions UI for existing tenants; fresh tenants get them at first boot
-  //
-  // Trade-off accepted: new catalog entries (e.g. cost_master.delete) do NOT
-  // auto-propagate to existing ADMIN roles. The tenant admin grants them once
-  // via the UI; after that grant persists across restarts.
+describe('ADMIN permission backfill', () => {
+  // Generic and travel ADMIN are full-access system roles. Existing roles are
+  // additively synchronized so newly-catalogued modules appear after deploy;
+  // wellness keeps the seed-on-creation contract so clinic-specific role
+  // customization remains untouched.
 
-  test('existing ADMIN role does NOT receive grants on subsequent boot', async () => {
-    // Simulate ADMIN already existing. Because grantAllPermissions is now gated
-    // on role creation, no rolePermission.create calls should be made for the
-    // pre-existing ADMIN.
+  test('existing travel ADMIN receives the current travel catalog', async () => {
     const PRE_EXISTING_ADMIN_ID = 999;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {
       if (where.key === 'ADMIN') {
@@ -310,14 +300,17 @@ describe('ADMIN permission backfill - seed-on-creation only', () => {
       'ADMIN must NOT be re-created when it already exists',
     ).not.toContain('ADMIN');
 
-    // No permissions should be granted for an existing ADMIN on boot.
     const adminPermCreates = mockPrisma.rolePermission.create.mock.calls.filter(
       (call) => call[0].data.roleId === PRE_EXISTING_ADMIN_ID,
     );
-    expect(
-      adminPermCreates,
-      'Existing ADMIN should NOT receive permission grants on subsequent boot',
-    ).toHaveLength(0);
+    const grants = adminPermCreates.map(
+      (call) => `${call[0].data.module}.${call[0].data.action}`,
+    );
+    expect(grants).toContain('diagnostics.read');
+    expect(grants).toContain('itineraries.read');
+    expect(grants).toContain('itinerary_templates.read');
+    expect(grants).toContain('passport.manage');
+    expect(grants).not.toContain('patients.read');
   });
 
   test('existing ADMIN with all perms already present produces zero new creates (idempotent)', async () => {
@@ -345,11 +338,9 @@ describe('ADMIN permission backfill - seed-on-creation only', () => {
     ).toHaveLength(0);
   });
 
-  test('revoked permission on existing ADMIN stays revoked after subsequent boot', async () => {
-    // Concrete scenario: a tenant admin revokes `cost_master.delete` from
-    // ADMIN via the Roles & Permissions UI. That deletes the RolePermission row.
-    // On the next server boot, the existing ADMIN must NOT receive a backfill,
-    // so the revocation persists.
+  test('existing wellness ADMIN remains seed-on-creation only', async () => {
+    // Wellness roles remain customizable across restarts. This also proves the
+    // travel repair does not broaden the boot sync to every vertical.
     const PRE_EXISTING_ADMIN_ID = 777;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {
       if (where.key === 'ADMIN') {
@@ -358,7 +349,7 @@ describe('ADMIN permission backfill - seed-on-creation only', () => {
       return Promise.resolve(null);
     });
 
-    await provisionTenantRbac(101, { vertical: 'travel' });
+    await provisionTenantRbac(101, { vertical: 'wellness' });
 
     // No permission grants should be issued for the existing ADMIN.
     const adminPermCalls = mockPrisma.rolePermission.create.mock.calls.filter(
@@ -366,7 +357,7 @@ describe('ADMIN permission backfill - seed-on-creation only', () => {
     );
     expect(
       adminPermCalls,
-      'Revoked permissions must NOT be re-granted to existing ADMIN on boot',
+      'Existing wellness ADMIN should not receive permission grants on boot',
     ).toHaveLength(0);
   });
 

@@ -6,6 +6,12 @@ export function registerGlobalNotify(notify) {
   _globalNotify = notify;
 }
 
+// Product-approved fallback for unexpected server errors. Keep this copy free
+// of support/contact instructions: this deployment has no support channel.
+// The exact wording is pinned in api.test.js to prevent unrelated refactors
+// from silently restoring an older message.
+const GENERIC_SERVER_ERROR_MESSAGE = "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.";
+
 // ---------------------------------------------------------------------------
 // #343 [SECURITY] In-memory JWT holder.
 //
@@ -292,7 +298,7 @@ export const fetchApi = async (url, options = {}) => {
       } else if (response.status === 502 || response.status === 503 || response.status === 504) {
         userMsg = 'The server was temporarily unreachable (probably mid-deploy or restarting). Please wait a few seconds and try again.';
       } else {
-        userMsg = 'Something went wrong on our end. Please try again — if it keeps happening, contact support.';
+        userMsg = GENERIC_SERVER_ERROR_MESSAGE;
       }
       console.error(`[api] ${response.status} ${errorCode} on ${url}:`, serverMsg || '(no server message)');
     } else {

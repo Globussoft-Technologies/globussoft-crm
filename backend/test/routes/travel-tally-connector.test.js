@@ -55,6 +55,78 @@ afterEach(() => {
 });
 
 describe("travel Tally connector routes", () => {
+  test("builds a read-only filtered voucher-presence request", () => {
+    const xml = connectorRouter.__testHooks.buildVoucherPresenceRequest(
+      "Travel & Tours",
+      new Set(["Sales\u0000INV-1", "Receipt\u0000REC-INV-1"]),
+    );
+
+    expect(xml).toContain("<TALLYREQUEST>Export</TALLYREQUEST>");
+    expect(xml).toContain("<TYPE>Collection</TYPE>");
+    expect(xml).toContain("<SVCURRENTCOMPANY>Travel &amp; Tours</SVCURRENTCOMPANY>");
+    expect(xml).toContain("$Reference = &quot;INV-1&quot;");
+    expect(xml).not.toContain("ACTION=");
+  });
+
+  test("recreates only history entries that are missing from live Tally", () => {
+    const exportedKeys = new Set(["Sales\u0000INV-1", "Receipt\u0000REC-INV-1"]);
+    const legacyCoverage = new Map([["OLD-INV", 100]]);
+    const legacyFingerprints = new Map([["purchase-fingerprint", 1]]);
+    const legacyFingerprintKeys = new Map([["purchase-fingerprint", ["Purchase\u0000TRV-0001"]]]);
+    const liveVoucherKeys = new Set(["Sales\u0000INV-1"]);
+
+    connectorRouter.__testHooks.retainOnlyLiveVoucherHistory(
+      exportedKeys,
+      legacyCoverage,
+      legacyFingerprints,
+      legacyFingerprintKeys,
+      liveVoucherKeys,
+    );
+
+    expect([...exportedKeys]).toEqual(["Sales\u0000INV-1"]);
+    expect(legacyCoverage.size).toBe(0);
+    expect(legacyFingerprints.size).toBe(0);
+  });
+
+  test("updates live vouchers by exact Tally Master ID and leaves deleted vouchers as Create", () => {
+    const tallyExport = '<ENVELOPE><VOUCHER><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><REFERENCE>INV-1</REFERENCE><MASTERID>501</MASTERID></VOUCHER></ENVELOPE>';
+    const presence = connectorRouter.__testHooks.liveVoucherPresence(tallyExport);
+    const incoming = '<ENVELOPE><TALLYMESSAGE><VOUCHER VCHTYPE="Sales" ACTION="Create"><DATE>20260924</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><REFERENCE>INV-1</REFERENCE></VOUCHER></TALLYMESSAGE><TALLYMESSAGE><VOUCHER VCHTYPE="Receipt" ACTION="Create"><DATE>20260924</DATE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME><REFERENCE>REC-INV-1</REFERENCE></VOUCHER></TALLYMESSAGE></ENVELOPE>';
+
+    const result = connectorRouter.__testHooks.markLiveVouchersForAlter(incoming, presence);
+
+    expect(result.altered).toBe(1);
+    expect(result.xml).toContain('VCHTYPE="Sales" TAGNAME="Master ID" TAGVALUE="501" ACTION="Alter"');
+    expect(result.xml).toContain('<VOUCHER VCHTYPE="Receipt" ACTION="Create">');
+  });
+
+  test("pushes newly added trip vouchers without prompting about older vouchers", () => {
+    const existing = new Set(["Sales\u0000INV-1", "Receipt\u0000REC-INV-1"]);
+
+    expect(connectorRouter.__testHooks.shouldOfferExistingVoucherUpdate(existing, { included: 1, skipped: 2 })).toBe(false);
+    expect(connectorRouter.__testHooks.shouldOfferExistingVoucherUpdate(existing, { included: 0, skipped: 2 })).toBe(true);
+  });
+
+  test("keeps full trip context in voucher sync history after filtering", () => {
+    const filteredReceipt = "<ENVELOPE><VOUCHER><REFERENCE>REC-2</REFERENCE></VOUCHER></ENVELOPE>";
+    const fullTripXml = "<ENVELOPE><VOUCHER><NAME>QUOTE-3</NAME><REFERENCE>INV-1</REFERENCE></VOUCHER><VOUCHER><REFERENCE>REC-2</REFERENCE></VOUCHER></ENVELOPE>";
+
+    expect(connectorRouter.__testHooks.syncLogRequestPayload("vouchers", filteredReceipt, fullTripXml)).toBe(fullTripXml);
+    expect(connectorRouter.__testHooks.syncLogRequestPayload("masters", "<MASTERS />", fullTripXml)).toBe("<MASTERS />");
+  });
+
+  test("recognizes a legacy GST journal after its generated reference changes", () => {
+    const legacy = '<ENVELOPE><TALLYMESSAGE><VOUCHER VCHTYPE="Journal" ACTION="Create"><DATE>20260901</DATE><VOUCHERNUMBER>JRN-0007</VOUCHERNUMBER><REFERENCE>JRN-0007</REFERENCE><LEDGERENTRIES.LIST><LEDGERNAME>Sales Ledger</LEDGERNAME><AMOUNT>-19999.44</AMOUNT><COSTCENTREALLOCATIONS.LIST><NAME>QUOTE-3</NAME></COSTCENTREALLOCATIONS.LIST></LEDGERENTRIES.LIST><LEDGERENTRIES.LIST><LEDGERNAME>GST Payable</LEDGERNAME><AMOUNT>19999.44</AMOUNT></LEDGERENTRIES.LIST></VOUCHER></TALLYMESSAGE></ENVELOPE>';
+    const current = legacy.replaceAll("JRN-0007", "SALES-LEDGER-quote-3");
+    const [entry] = connectorRouter.__testHooks.legacyPurchasePaymentEntries(legacy);
+    const fingerprints = new Map([[entry.fingerprint, 1]]);
+
+    const filtered = connectorRouter.__testHooks.omitPreviouslyExportedVouchers(current, new Set(), new Map(), fingerprints);
+
+    expect(filtered.included).toBe(0);
+    expect(filtered.skipped).toBe(1);
+  });
+
   test("requires authentication and the travel vertical", async () => {
     expect((await request(makeApp()).get("/api/travel/tally/connector/status")).status).toBeGreaterThanOrEqual(401);
     prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: "generic", name: "Generic", slug: "generic" });

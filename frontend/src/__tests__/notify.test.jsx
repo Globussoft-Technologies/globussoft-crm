@@ -128,6 +128,35 @@ describe('useNotify — inside <NotifyProvider>', () => {
     await waitFor(() => expect(resolved).toBe(false));
   });
 
+  it('dismisses a three-action confirm from its Close button', async () => {
+    const user = userEvent.setup();
+    const apiRef = { current: null };
+    render(
+      <NotifyProvider>
+        <Consumer apiRef={apiRef} />
+      </NotifyProvider>,
+    );
+
+    let resolved;
+    act(() => {
+      apiRef.current.confirm({
+        title: 'Existing vouchers found',
+        message: 'Choose an action',
+        confirmText: 'Update existing',
+        cancelText: 'More options',
+        confirmValue: 'update',
+        cancelValue: 'more',
+        dismissible: true,
+      }).then((value) => { resolved = value; });
+    });
+
+    await screen.findByText('Existing vouchers found');
+    await user.click(screen.getByRole('button', { name: 'Close dialog' }));
+
+    await waitFor(() => expect(resolved).toBe(false));
+    expect(screen.queryByText('Existing vouchers found')).not.toBeInTheDocument();
+  });
+
   it('notify.prompt resolves with the typed value on confirm', async () => {
     const user = userEvent.setup();
     const apiRef = { current: null };

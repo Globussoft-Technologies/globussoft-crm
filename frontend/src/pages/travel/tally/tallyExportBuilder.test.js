@@ -55,15 +55,16 @@ describe("Tally GST journal export", () => {
     expect(journal).toContain("<AMOUNT>-22431.90</AMOUNT>");
     expect(journal).toContain("<LEDGERNAME>GST Payable</LEDGERNAME>");
     expect(journal).toContain("<AMOUNT>22431.90</AMOUNT>");
+    expect(journal).toContain("<REFERENCE>SALES-LEDGER-1</REFERENCE>");
     expect(journal).not.toContain("BILLALLOCATIONS.LIST");
     expect(journal).not.toContain("<LEDGERNAME>Travel</LEDGERNAME>");
   });
 
-  it("keeps exact generated settlement references and dates", () => {
+  it("keeps exact stable settlement references and dates", () => {
     const rows = makeRows();
     const xml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
     expect((xml.match(/<BILLTYPE>Agst Ref<\/BILLTYPE>/g) || [])).toHaveLength(4);
-    for (const reference of ["INTERNAL-INVOICE-1", "PUR-0003", "PUR-0005", "PUR-0007"]) {
+    for (const reference of ["INTERNAL-INVOICE-1", "INTERNAL-PAYABLE-1", "INTERNAL-PAYABLE-2", "INTERNAL-PAYABLE-3"]) {
       expect(xml).toContain(`<NAME>${reference}</NAME><BILLTYPE>Agst Ref</BILLTYPE>`);
     }
     expect(xml).toContain("<DATE>20260907</DATE>");
@@ -98,9 +99,10 @@ describe("Tally GST journal export", () => {
     expect(payment).not.toContain("COSTCENTREALLOCATIONS.LIST");
   });
 
-  it("preserves the educational date behavior and GST accounting", () => {
+  it("uses first-of-month dates in Educational Mode and preserves GST accounting", () => {
     const xml = buildTallyXml({ companyName: master.companyName, voucherRows: makeRows(), educationalMode: true });
     expect(xml).toContain("<DATE>20260901</DATE>");
+    expect(xml).toContain("Original transaction date: 2026-09-07");
     expect(xml).toContain("<LEDGERNAME>Sales Ledger</LEDGERNAME>");
     expect(xml).toContain("<LEDGERNAME>GST Payable</LEDGERNAME>");
   });
@@ -120,7 +122,7 @@ describe("Tally GST journal export", () => {
     expect(sales).toContain('ACTION="Alter"');
   });
 
-  it("exports paid-only Sales and Receipt amounts", () => {
+  it("exports the full Sales invoice and only the received amount as Receipt", () => {
     const rows = buildVoucherRows({
       accounts: [],
       commonRows: [],
@@ -143,9 +145,46 @@ describe("Tally GST journal export", () => {
     const sales = xml.match(/<VOUCHER VCHTYPE="Sales"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
     const receipt = xml.match(/<VOUCHER VCHTYPE="Receipt"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
 
-    expect(sales).toContain("<AMOUNT>40000.00</AMOUNT>");
+    expect(sales).toContain("<AMOUNT>120000.00</AMOUNT>");
     expect(receipt).toContain("<AMOUNT>-40000.00</AMOUNT>");
     expect(receipt).toContain("<AMOUNT>40000.00</AMOUNT>");
+  });
+
+  it("allocates trip operating expenses to the same cost centre", () => {
+    const rows = buildVoucherRows({
+      accounts: [],
+      commonRows: [{ reference: "EXP-1", amount: 2500, transactionDate: "2026-09-15", itineraryId: 1, name: "Hotel expense" }],
+      customers: [],
+      payables: [],
+      trips: [],
+      tripTaxes: {},
+      master,
+      selectedSubBrandLabel: "Travel",
+    });
+    const xml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
+    const expense = xml.match(/<VOUCHER VCHTYPE="Payment"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
+
+    expect(expense).toContain("<DATE>20260915</DATE>");
+    expect(expense).toContain("<CATEGORYALLOCATIONS.LIST>");
+    expect(expense).toContain("<NAME>TRIP-1</NAME>");
+  });
+
+  it("uses a payable transaction date instead of its due date", () => {
+    const rows = buildVoucherRows({
+      accounts: [],
+      commonRows: [],
+      customers: [],
+      payables: [{ reference: "PUR-1", name: "Supplier", amount: 5000, transactionDate: "2026-09-15", dueDate: "2026-10-01", itineraryId: 1 }],
+      trips: [],
+      tripTaxes: {},
+      master,
+      selectedSubBrandLabel: "Travel",
+    });
+    const xml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
+    const purchase = xml.match(/<VOUCHER VCHTYPE="Purchase"[\s\S]*?<\/VOUCHER>/)?.[0] || "";
+
+    expect(purchase).toContain("<DATE>20260915</DATE>");
+    expect(purchase).not.toContain("<DATE>20261001</DATE>");
   });
 
   it("rejects an Agst Ref with no exact New Ref", () => {

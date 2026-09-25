@@ -507,7 +507,7 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
     const sourceLimit = boundedPositiveInt(req.query.sourceLimit, COST_CENTRE_SOURCE_LIMIT);
     const rowSkip = (page - 1) * limit;
     const sourceSkip = (sourcePage - 1) * sourceLimit;
-    const [rows, itineraries, tmcTrips, quotes] = await Promise.all([
+    const [rows, itineraries, tmcTrips, quotes, voucherSyncLogs] = await Promise.all([
       prisma.travelTallyCostCentre.findMany({
         where: { tenantId },
         include: {
@@ -522,6 +522,12 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
       prisma.itinerary.findMany({ where: { tenantId }, select: { id: true, destination: true, subBrand: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
       prisma.tmcTrip.findMany({ where: { tenantId }, select: { id: true, tripCode: true, destination: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
       prisma.travelQuote.findMany({ where: { tenantId, itineraryId: null }, select: { id: true, subBrand: true, contact: { select: { name: true } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
+      prisma.travelTallySyncLog.findMany({
+        where: { tenantId, sourceType: "DIRECT_EXPORT", voucherType: "VOUCHERS", status: { in: ["SYNCED", "FAILED"] } },
+        select: { requestPayload: true, createdAt: true, status: true },
+        orderBy: { createdAt: "desc" },
+        take: 1000,
+      }),
     ]);
     const hasMoreRows = rows.length > limit;
     const hasMoreSources = [itineraries, tmcTrips, quotes].some((items) => items.length > sourceLimit);
@@ -530,8 +536,18 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
       ...tmcTrips.slice(0, sourceLimit).map((row) => ({ sourceType: "TMC_TRIP", sourceId: row.id, code: `TMC-TRIP-${row.id}`, label: row.tripCode ? `${row.tripCode} - ${row.destination}` : row.destination || "TMC trip", subBrand: "tmc" })),
       ...quotes.slice(0, sourceLimit).map((row) => ({ sourceType: "QUOTE", sourceId: row.id, code: `QUOTE-${row.id}`, label: row.contact?.name ? `Quote for ${row.contact.name}` : `Quote #${row.id}`, subBrand: row.subBrand })),
     ];
+    const costCentres = rows.slice(0, limit).map((row) => {
+      const matchingLogs = voucherSyncLogs.filter((log) => String(log.requestPayload || "").includes(`<NAME>${row.code}</NAME>`));
+      const latestAttempt = matchingLogs[0];
+      const latestSuccess = matchingLogs.find((log) => log.status === "SYNCED");
+      return {
+        ...row,
+        voucherSyncStatus: latestAttempt?.status || null,
+        lastVoucherSyncAt: latestSuccess?.createdAt || null,
+      };
+    });
     res.json({
-      costCentres: rows.slice(0, limit),
+      costCentres,
       sources,
       pagination: { page, limit, hasMore: hasMoreRows },
       sourcePagination: { page: sourcePage, limit: sourceLimit, hasMore: hasMoreSources },
@@ -1500,16 +1516,18 @@ router.get(
       const paymentTotalsByInvoice = {};
       const installmentTotalsByInvoice = {};
       const successfulPayments = [];
+      const successfulInstallments = [];
       if (invoices.length > 0) {
         const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
         const installmentRows = await prisma.tripInstalmentPayment.findMany({
           where: { invoiceId: { in: [...invoiceIds] } },
-          select: { invoiceId: true, paidAmount: true },
+          select: { id: true, invoiceId: true, paidAmount: true, paidAt: true, createdAt: true },
         });
         for (const row of installmentRows) {
           if (!row.invoiceId) continue;
           installmentTotalsByInvoice[row.invoiceId] =
             (installmentTotalsByInvoice[row.invoiceId] || 0) + Number(row.paidAmount || 0);
+          if (Number(row.paidAmount || 0) > 0) successfulInstallments.push(row);
         }
         const paymentCandidates = await prisma.payment.findMany({
           where: {
@@ -1701,7 +1719,24 @@ router.get(
       // Return each successful customer payment separately for the Bank and
       // Cash Ledger views. Statement imports remain available through their
       // own workflow, but are not customer receipt rows.
-      const paymentDetails = successfulPayments.sort(
+      const paymentDetails = [
+        ...successfulPayments,
+        ...successfulInstallments
+          .filter((payment) => !paymentTotalsByInvoice[payment.invoiceId])
+          .map((payment) => ({
+            id: `installment-${payment.id}`,
+            invoiceId: payment.invoiceId,
+            travelInvoiceId: payment.invoiceId,
+            amount: Number(payment.paidAmount || 0),
+            currency: "INR",
+            gateway: "installment",
+            gatewayId: `INST-${payment.id}`,
+            status: "SUCCESS",
+            paidAt: payment.paidAt || payment.createdAt,
+            createdAt: payment.createdAt,
+            metadata: null,
+          })),
+      ].sort(
         (a, b) =>
           new Date(b.paidAt || b.createdAt).getTime() -
             new Date(a.paidAt || a.createdAt).getTime() ||
@@ -1735,6 +1770,7 @@ router.get(
           currency: payment.currency || invoice?.currency || "INR",
           paymentMethod: method,
           paidAt: payment.paidAt || payment.createdAt,
+          createdAt: payment.createdAt,
           reference: payment.gatewayId || null,
           subBrand: invoice?.subBrand || null,
           quoteId: invoice?.quoteId || null,
@@ -1883,6 +1919,7 @@ router.get(
           paymentTotalsByInvoice[invoice.id] || installmentTotalsByInvoice[invoice.id] || 0,
         );
         return {
+          id: invoice.id,
           reference: invoice.invoiceNum,
           paymentReference: paymentDetails.find((payment) => payment.travelInvoiceId === invoice.id)?.gatewayId || null,
           name: contactMap[invoice.contactId]?.name || "Customer",
@@ -1893,6 +1930,7 @@ router.get(
           paymentRecordMissing:
             invoice.status === "Paid" && receivedType === "legacy-paid",
           transactionDate: invoice.createdAt,
+          createdAt: invoice.createdAt,
           invoiceTotal,
           taxableAmount: Math.max(0, invoiceTotal - gstAmount - Number(invoice.tcsAmount || 0)),
           outstandingAmount: Math.max(0, invoiceTotal - received),
@@ -1927,6 +1965,7 @@ router.get(
           category: expense.category,
           amount: Number(expense.amount || 0),
           transactionDate: expense.expenseDate || expense.createdAt,
+          createdAt: expense.createdAt,
           itineraryId:
             Number.isInteger(expenseTripId) && expenseTripId > 0
               ? expenseTripId
@@ -2001,10 +2040,9 @@ router.get(
         }));
       });
 
-      // Return only settled supplier payments because Pending and Scheduled
-      // records remain on the dedicated Payables page and are not purchases.
+      // Export the supplier bill when the payable exists. Settlement remains a
+      // separate Payment voucher and is emitted only after the payable is paid.
       const supplierPayableDetails = matchingPayables
-          .filter((payable) => payable.status === "paid")
           .map((payable) => {
             const payableTripId =
               payable.itineraryId ||
@@ -2018,6 +2056,7 @@ router.get(
             category: payable.supplier?.supplierCategory || "other",
             description: payable.description,
             amount: Number(payable.amount || 0),
+            paidAmount: payable.status === "paid" ? Number(payable.amount || 0) : 0,
             currency: payable.currency || "INR",
             dueDate: payable.dueDate,
             status: payable.status,
@@ -2025,6 +2064,8 @@ router.get(
             paymentMode: payable.paymentMode,
             paymentReference: payable.paymentReference,
             transactionDate: payable.createdAt,
+            createdAt: payable.createdAt,
+            updatedAt: payable.updatedAt,
             subBrand: payable.supplier?.subBrand || null,
             quoteId: quoteIdFromPayableNotes(payable.notes),
             itineraryId: payableTripId,
@@ -2062,7 +2103,7 @@ router.get(
         };
       });
 
-      const supplierPaymentRows = supplierPayableDetails.map((payable) => ({
+      const supplierPaymentRows = supplierPayableDetails.filter((payable) => payable.status === "paid").map((payable) => ({
         paymentId: `supplier-payable-${payable.id}`,
         transactionType: "purchase",
         customer: payable.name,

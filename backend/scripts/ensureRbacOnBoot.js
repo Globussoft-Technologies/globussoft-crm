@@ -668,9 +668,12 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     });
     if (adminCreated) {
       await grantAllPermissions(stats, adminRole.id, vertical);
-    } else if (vertical === 'generic') {
-      // Generic CRM admins have full page access by default, including pages
-      // added after the tenant's original RBAC role was provisioned.
+    } else if (vertical === 'generic' || vertical === 'travel') {
+      // Generic and travel ADMIN are full-access system roles. Keep existing
+      // roles aligned with their vertical catalog so deployments that add
+      // modules do not leave only the new permission-gated sidebar groups
+      // empty after the next login. ensureRolePermission is additive and
+      // idempotent, so already-current tenants incur no writes.
       await grantAllPermissions(stats, adminRole.id, vertical);
     }
 

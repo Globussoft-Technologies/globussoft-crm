@@ -4,7 +4,7 @@ const path = require("path");
 const os = require("os");
 const { WebSocket } = require("ws");
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const baseDir = process.pkg ? path.dirname(process.execPath) : __dirname;
 const configPath = process.env.TALLY_CONNECTOR_CONFIG || path.join(baseDir, "config.json");
 let reconnectAttempt = 0;
@@ -61,7 +61,7 @@ function parseTallyResponse(xml) {
   return result;
 }
 
-async function postToTally(config, xml) {
+async function postToTally(config, xml, jobType = "IMPORT_XML") {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Number(config.requestTimeoutMs) || 45_000);
   try {
@@ -72,6 +72,24 @@ async function postToTally(config, xml) {
       signal: controller.signal,
     });
     const responseXml = await response.text();
+    if (String(jobType).startsWith("EXPORT_")) {
+      if (!response.ok) {
+        const error = new Error(`Tally returned HTTP ${response.status}`);
+        error.code = "TALLY_HTTP_ERROR";
+        error.responseXml = responseXml;
+        throw error;
+      }
+      if (!/<ENVELOPE(?:\s|>)/i.test(responseXml)) {
+        const error = new Error("Tally returned an invalid export response");
+        error.code = "TALLY_EXPORT_FAILED";
+        error.responseXml = responseXml;
+        throw error;
+      }
+      return {
+        responseXml,
+        tally: { success: true, created: 0, altered: 0, deleted: 0, errors: 0, exceptions: 0, ignored: 0, lineError: null },
+      };
+    }
     const tally = parseTallyResponse(responseXml);
     if (!response.ok || !tally.success) {
       const error = new Error(tally.lineError || `Tally returned HTTP ${response.status}`);
@@ -101,7 +119,7 @@ async function handleJob(socket, config, message) {
   }
   log("INFO", `Processing ${message.jobType || "IMPORT_XML"} job ${jobId}`);
   try {
-    const result = await postToTally(config, xml);
+    const result = await postToTally(config, xml, message.jobType);
     safeSend(socket, { type: "job_result", jobId, status: "success", responseXml: result.responseXml, tally: result.tally });
     log("INFO", `Completed job ${jobId}: created=${result.tally.created}, altered=${result.tally.altered}`);
   } catch (error) {

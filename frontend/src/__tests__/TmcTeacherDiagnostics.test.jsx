@@ -4,27 +4,32 @@ import TmcTeacherDiagnostics from "../pages/travel/TmcTeacherDiagnostics";
 
 describe("TmcTeacherDiagnostics", () => {
   let fetchSpy;
+  let resolveTeacherSubmit;
 
   beforeEach(() => {
     fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((url, options = {}) => {
       if (url === "/api/portal/tmc/teacher/diagnostics") {
         if (options.method === "POST") {
-          return Promise.resolve({
-            ok: true,
-            status: 201,
-            json: () => Promise.resolve({
-              diagnosticId: 42,
-              engineState: "strong_match",
-              classificationLabel: "Routed by TMC Engine",
-              recommendedTier: "engine",
-              reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
-              recommendations: [{
-                name: "Campus Overnight Adventure",
-                category: "domestic",
-                summary: "An overnight programme for teamwork and reflection.",
-                learnings: ["Build collaboration through shared activities."],
-              }],
-            }),
+          return new Promise((resolve) => {
+            resolveTeacherSubmit = () => resolve({
+              ok: true,
+              status: 201,
+              json: () => Promise.resolve({
+                diagnosticId: 42,
+                engineState: "strong_match",
+                classificationLabel: "Routed by TMC Engine",
+                recommendedTier: "engine",
+                reportPdfUrl: null,
+                reportReady: false,
+                recommendations: [{
+                  name: "Campus Overnight Adventure",
+                  category: "domestic",
+                  summary: "An overnight programme for teamwork and reflection.",
+                  learnings: ["Build collaboration through shared activities."],
+                  driveLink: "https://example.com/campus-brochure.pdf",
+                }],
+              }),
+            });
           });
         }
         return Promise.resolve({ ok: true, json: () => Promise.resolve({ diagnostics: [] }) });
@@ -43,23 +48,12 @@ describe("TmcTeacherDiagnostics", () => {
                 options: [{ value: "one", label: "First answer" }],
               },
               {
-                id: "q12",
-                field: "contact",
-                text: "Where should we send your readiness profile?",
-                type: "group",
-                hardWall: true,
-                fields: [
-                  { id: "contact_name", label: "Your name", type: "text" },
-                  { id: "email", label: "Email", type: "email" },
-                ],
-              },
-              {
                 id: "q2",
                 field: "secondary_skills",
                 text: "Which skills should the trip strengthen?",
                 type: "multi",
                 required: true,
-                min: 1,
+                min: 2,
                 max: 2,
                 options: [
                   { value: "empathy", label: "Empathy" },
@@ -73,6 +67,18 @@ describe("TmcTeacherDiagnostics", () => {
                 type: "textarea",
                 required: false,
               },
+              {
+                id: "q12",
+                field: "contact",
+                text: "Where should we send your readiness profile?",
+                type: "group",
+                hardWall: true,
+                fields: [
+                  { id: "contact_name", label: "Your name", type: "text" },
+                  { id: "email", label: "Email", type: "email" },
+                  { id: "phone", label: "Phone", type: "tel", required: false },
+                ],
+              },
             ],
           }),
         });
@@ -82,8 +88,10 @@ describe("TmcTeacherDiagnostics", () => {
           ok: true,
           json: () => Promise.resolve({
             ok: true,
-            interests: [{ name: "Campus Overnight Adventure", driveLink: "" }],
+            interests: [{ name: "Campus Overnight Adventure", driveLink: "https://example.com/campus-brochure.pdf" }],
             submittedAt: "2026-09-11T00:00:00.000Z",
+            reportReady: true,
+            reportPdfUrl: "/api/uploads/diagnostics/diag-42-teacher.pdf",
           }),
         });
       }
@@ -108,36 +116,79 @@ describe("TmcTeacherDiagnostics", () => {
     fireEvent.click(screen.getByRole("button", { name: /Take the diagnostic/i }));
     expect(await screen.findByText("Which CRM question should the teacher answer?")).toBeTruthy();
     expect(screen.getByText("Where should we send your readiness profile?")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Phone" }).required).toBe(false);
     expect(screen.getByTestId("teacher-diagnostic-question-scroll").style.overflowY).toBe("auto");
-    const optionalQuestion = screen.getByRole("heading", { name: "Anything else the trip should consider?" }).closest("section");
-    expect(within(optionalQuestion).getByRole("textbox")).toBeTruthy();
-    expect(within(optionalQuestion).queryByText(/Choose at least/)).toBeNull();
-    fireEvent.click(screen.getByLabelText("First answer"));
-    fireEvent.click(screen.getByLabelText("Empathy", { selector: "input" }));
-    fireEvent.click(screen.getByRole("button", { name: /Complete diagnostic/i }));
+    expect(screen.queryByText(/Selected:\s*\d+\s*\//)).toBeNull();
 
-    await waitFor(() => expect(screen.getByText(/Your diagnostic result is ready/i)).toBeTruthy());
+    const skillsQuestion = screen
+      .getByRole("heading", { name: "Which skills should the trip strengthen?" })
+      .closest("section");
+    expect(within(skillsQuestion).getByText("Choose at least 2 options.")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Empathy", { selector: "input" }));
+    expect(within(skillsQuestion).getByRole("alert")).toHaveTextContent(
+      "* You need to choose at least 2 options.",
+    );
+    fireEvent.click(screen.getByLabelText("Collaboration", { selector: "input" }));
+    expect(within(skillsQuestion).queryByRole("alert")).toBeNull();
+    const optionalQuestion = screen
+      .getByRole("heading", { name: "Anything else the trip should consider?" })
+      .closest("section");
+    expect(within(optionalQuestion).getByRole("textbox")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("First answer"));
+    fireEvent.click(screen.getByRole("button", { name: /Complete diagnostic/i }));
+    expect(await screen.findByText(/Submitting your response/)).toBeTruthy();
+    resolveTeacherSubmit();
+
+    await waitFor(() => expect(screen.getByText(/Your trip recommendations are ready/i)).toBeTruthy());
     expect(screen.getByText("Recommended trips for your school")).toBeTruthy();
     expect(screen.getByText("Campus Overnight Adventure")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View brochure" }).getAttribute("href")).toBe("https://example.com/campus-brochure.pdf");
     expect(screen.queryByRole("link", { name: /Download report PDF/i })).toBeNull();
     expect(screen.queryByRole("link", { name: /View report/i })).toBeNull();
     expect(screen.queryByText(/diagnostic-form/i)).toBeNull();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "I'm interested in Campus Overnight Adventure" }));
-    fireEvent.click(screen.getByRole("button", { name: /Complete diagnostic \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit chosen interests \(1\)/i }));
 
     await waitFor(() => expect(screen.getByText(/Trip choices saved/i)).toBeTruthy());
-    expect(screen.getByRole("link", { name: /Download report PDF/i }).getAttribute("href")).toBe("/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf");
+    expect(screen.getByRole("link", { name: /Download report PDF/i }).getAttribute("href")).toBe("/api/uploads/diagnostics/diag-42-teacher.pdf");
 
     const submitCall = fetchSpy.mock.calls.find(([url, options]) => url === "/api/portal/tmc/teacher/diagnostics" && options.method === "POST");
     expect(JSON.parse(submitCall[1].body)).toMatchObject({
       answers: {
         primary_outcome: "one",
-        secondary_skills: ["empathy"],
+        secondary_skills: ["empathy", "collaboration"],
         contact: { email: "aisha@example.com" },
       },
     });
     const interestCall = fetchSpy.mock.calls.find(([url]) => url === "/api/portal/tmc/teacher/diagnostics/42/interests");
-    expect(JSON.parse(interestCall[1].body)).toEqual({ interests: [{ name: "Campus Overnight Adventure", driveLink: "" }] });
+    expect(JSON.parse(interestCall[1].body)).toEqual({ interests: [{ name: "Campus Overnight Adventure", driveLink: "https://example.com/campus-brochure.pdf" }] });
+  });
+
+  it("shows dynamic validation inline before submit", async () => {
+    render(
+      <TmcTeacherDiagnostics
+        token="teacher-token"
+        contact={{ name: "Aisha Teacher", email: "aisha@example.com" }}
+        onSessionExpired={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /Take the diagnostic/i }));
+    fireEvent.click(screen.getByLabelText("First answer"));
+    fireEvent.click(screen.getByLabelText("Empathy", { selector: "input" }));
+    const skillsQuestion = screen
+      .getByRole("heading", { name: "Which skills should the trip strengthen?" })
+      .closest("section");
+    expect(within(skillsQuestion).getByRole("alert")).toHaveTextContent(
+      "* You need to choose at least 2 options.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Complete diagnostic/i }));
+
+    expect(within(skillsQuestion).getByRole("alert")).toHaveTextContent(
+      "* You need to choose at least 2 options.",
+    );
+    expect(screen.getByTestId("teacher-diagnostic-question-scroll")).toBeTruthy();
+    expect(fetchSpy.mock.calls.filter(([, options]) => options.method === "POST")).toHaveLength(0);
   });
 });

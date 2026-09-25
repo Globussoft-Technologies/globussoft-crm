@@ -287,6 +287,7 @@ export default function Inbox() {
     subject: "",
     body: "",
   }));
+  const [composeContactId, setComposeContactId] = useState("");
   const [composeTone, setComposeTone] = useState("professional");
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false);
@@ -487,6 +488,7 @@ export default function Inbox() {
     setDraftingEmail(false);
     setLoadingSubjects(false);
     setComposeData({ to: "", cc: "", bcc: "", subject: "", body: "" });
+    setComposeContactId("");
     setComposeAttachments([]);
     composeFileInputRef.current = null;
     if (returnToOrigin && isWellness && wellnessComposeReturnTo?.startsWith("/")) {
@@ -514,11 +516,13 @@ export default function Inbox() {
       key: `contact-${contact.id}`,
       email: contact.email || "",
       name: contact.name || "",
+      contactId: /^\d+$/.test(String(contact.id)) ? String(contact.id) : "",
     })),
     ...patients.map((patient) => ({
       key: `patient-${patient.id}`,
       email: patient.email || "",
       name: patient.name || "",
+      contactId: "",
     })),
   ].filter((entry) => entry.email || entry.name);
 
@@ -531,11 +535,12 @@ export default function Inbox() {
     : composeRecipientOptions;
   const visibleRecipientSuggestions = filteredRecipientSuggestions.slice(0, 6);
 
-  const handleRecipientSelect = (email) => {
+  const handleRecipientSelect = (recipient) => {
     setComposeData((prev) => ({
       ...prev,
-      to: replaceRecipientQuery(prev.to, email),
+      to: replaceRecipientQuery(prev.to, recipient.email),
     }));
+    setComposeContactId(recipient.contactId || "");
     setShowRecipientSuggestions(false);
   };
 
@@ -547,7 +552,7 @@ export default function Inbox() {
   };
 
   const handleLoadSubjects = useCallback(async () => {
-    const context = composeData.body.trim() || composeData.to.trim() || "follow up";
+    const context = composeData.subject.trim() || composeData.body.trim() || composeData.to.trim() || "follow up";
     setLoadingSubjects(true);
     try {
       const data = await fetchApi("/api/ai/subject-lines", {
@@ -569,22 +574,26 @@ export default function Inbox() {
     } finally {
       setLoadingSubjects(false);
     }
-  }, [composeData.body, composeData.to, notify]);
+  }, [composeData.body, composeData.subject, composeData.to, notify]);
 
   const handleComposeDraft = useCallback(async () => {
-    const context = composeData.body.trim() || composeData.to.trim() || "follow up";
+    const subject = composeData.subject.trim();
+    const context = composeData.body.trim() || subject || composeData.to.trim() || "follow up";
+    const subjectContext = subject || context;
     setDraftingEmail(true);
     try {
       const [subjectData, draftData] = await Promise.all([
         fetchApi("/api/ai/subject-lines", {
           method: "POST",
-          body: JSON.stringify({ context, count: 5 }),
+          body: JSON.stringify({ context: subjectContext, count: 5 }),
         }),
         fetchApi("/api/ai/draft", {
           method: "POST",
           body: JSON.stringify({
             context,
+            subject,
             tone: composeTone,
+            contactId: composeContactId || undefined,
             recipientEmail: composeData.to.split(",")[0]?.trim() || "",
           }),
         }),
@@ -606,7 +615,7 @@ export default function Inbox() {
     } finally {
       setDraftingEmail(false);
     }
-  }, [composeData.body, composeData.to, composeTone, notify]);
+  }, [composeContactId, composeData.body, composeData.subject, composeData.to, composeTone, notify]);
 
   const formatAttachmentSize = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -1261,6 +1270,7 @@ export default function Inbox() {
                     }}
                     onChange={(e) => {
                       setComposeData({ ...composeData, to: e.target.value });
+                      setComposeContactId("");
                       setShowRecipientSuggestions(true);
                     }}
                     placeholder="client@company.com (comma-separated for multiple)"
@@ -1292,7 +1302,7 @@ export default function Inbox() {
                           aria-label={entry.email}
                           onMouseDown={(event) => {
                             event.preventDefault();
-                            handleRecipientSelect(entry.email);
+                            handleRecipientSelect(entry);
                           }}
                           style={{
                             width: "100%",

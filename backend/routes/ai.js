@@ -73,11 +73,14 @@ Output rules:
 // ── AI Email Draft ────────────────────────────────────────────────
 router.post("/draft", verifyToken, llmLimiter, async (req, res) => {
   try {
-    const { context, recipientEmail, tone, contactId, mode, maxWords } = req.body;
-    if (!context) return res.status(400).json({ error: "Please provide a subject or context." });
+    const { context, subject, recipientEmail, tone, contactId, mode, maxWords } = req.body;
+    const subjectText = typeof subject === "string" ? subject.trim() : "";
+    const contextText = typeof context === "string" ? context.trim() : "";
+    const draftContext = subjectText || contextText;
+    if (!draftContext) return res.status(400).json({ error: "Please provide a subject or context." });
 
     if (mode === "short_answer") {
-      return await handleShortAnswerDraft(req, res, { context, maxWords });
+      return await handleShortAnswerDraft(req, res, { context: draftContext, maxWords });
     }
 
     // Gather CRM context about the recipient if available
@@ -104,13 +107,17 @@ router.post("/draft", verifyToken, llmLimiter, async (req, res) => {
     }
 
     const toneInstruction = tone ? `Write in a ${tone} tone.` : "Write in a professional yet warm tone.";
+    const additionalContext = subjectText && contextText && contextText !== subjectText
+      ? `\nAdditional user context: "${contextText}"`
+      : "";
 
     // Represent the TENANT's own organisation (e.g. "Travel Stall"), never the
     // platform vendor that built the CRM.
     const { orgName, bizDescriptor } = await resolveSenderOrg(req.user.tenantId);
     const prompt = `You are an email assistant writing on behalf of ${orgName}${bizDescriptor ? `, ${bizDescriptor}` : ""}. Represent ONLY ${orgName} — never mention, describe, or sign off as any other company (in particular do NOT reference the software vendor that built this CRM). Write a professional business email body (no subject line, no "Subject:" prefix) based on the following context.
 
-Subject/Context: "${context}"
+Subject: "${draftContext}"
+The subject is the primary intent of this email. Every paragraph must directly address it; do not turn the message into a generic follow-up.${additionalContext}
 ${toneInstruction}
 ${contactContext}
 
@@ -138,7 +145,7 @@ Requirements:
       if (genErr.friendly) {
         // No BYOK, no funded CRM subscription — degrade to the template
         // fallback rather than surfacing a billing error on a compose box.
-        const draft = generateFallbackDraft(context, tone);
+        const draft = generateFallbackDraft(draftContext, tone);
         return res.json({ draft, model: "template-fallback" });
       }
       throw genErr;
@@ -151,7 +158,10 @@ Requirements:
       return res.status(500).json({ error: "Failed to generate a draft. Please write this field manually.", code: "AI_DRAFT_FAILED" });
     }
     // Fallback on any error
-    const draft = generateFallbackDraft(req.body.context, req.body.tone);
+    const fallbackContext = typeof req.body.subject === "string" && req.body.subject.trim()
+      ? req.body.subject.trim()
+      : req.body.context;
+    const draft = generateFallbackDraft(fallbackContext, req.body.tone);
     res.json({ draft, model: "fallback-on-error" });
   }
 });

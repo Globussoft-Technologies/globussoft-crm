@@ -17,6 +17,7 @@ const { writeAudit } = require("../lib/audit");
 const tmcEngine = require("../lib/tmcDiagnosticEngine");
 const tmcLeadQuality = require("../lib/tmcLeadQuality");
 const travelRag = require("../lib/travelRag");
+const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
 const diagnosticNotifications = require("../lib/diagnosticNotifications");
 const visaDocStore = require("../lib/visaDocStore");
@@ -37,6 +38,7 @@ const {
   setTmcRegistrationContext,
 } = require("../lib/tmcRegistrationContext");
 const { requiredParentDocumentTypes } = require("../lib/travelDocumentPolicy");
+const { ensureTmcTripTypeBank } = require("../lib/tmcTripTypePreference");
 
 const TMC_CONSENT_TEMPLATE_ASSETS = Object.freeze({
   day_trip: { filename: "day-tour-terms.pdf", sourceFile: "day-tour-terms.pdf" },
@@ -471,15 +473,6 @@ function parentReviewShape(review) {
   };
 }
 
-function buildTeacherReportPdfUrl(diagnostic) {
-  const id = Number(diagnostic?.id);
-  const token = String(diagnostic?.reportSlugToken || "").trim();
-  if (!Number.isInteger(id) || id <= 0 || !/^[0-9a-f]{16}$/i.test(token)) {
-    return null;
-  }
-  return `/api/travel/diagnostics/public/readiness-report/${id}-${token.toLowerCase()}.pdf`;
-}
-
 async function loadParentReviewTrip(req, res) {
   const tripId = Number(req.params.tripId);
   if (!Number.isInteger(tripId) || tripId <= 0) {
@@ -631,32 +624,73 @@ function projectTeacherIdentityField(field) {
   };
 }
 
-function buildTeacherQuestions(parsed) {
-  const questions = Array.isArray(parsed?.questions)
-    ? parsed.questions.slice()
+const DEFAULT_TEACHER_IDENTITY_FIELDS = [
+  { id: "name", label: "Name", type: "text", enabled: true, required: true },
+  { id: "email", label: "Email", type: "email", enabled: true, required: true },
+  { id: "phone", label: "Phone", type: "tel", enabled: true, required: false },
+];
+
+const TEACHER_CONTACT_FIELD_IDS = {
+  name: "contact_name",
+  email: "email",
+  phone: "phone",
+};
+
+function configuredTeacherIdentityFields(parsed) {
+  const saved = Array.isArray(parsed?.identityFields)
+    ? parsed.identityFields
     : [];
-  if (
-    questions.some((question) => (question.field || question.id) === "contact")
-  )
-    return questions;
-  const identityFields = Array.isArray(parsed?.identityFields)
-    ? parsed.identityFields.filter((field) => field?.enabled !== false)
-    : [];
-  if (!identityFields.length) return questions;
-  const fieldIdMap = { name: "contact_name", email: "email", phone: "phone" };
-  questions.push({
-    id: "teacher_contact",
-    field: "contact",
-    text: "Your contact details",
-    type: "group",
-    required: false,
-    fields: identityFields.map((field) => ({
-      ...field,
-      id: fieldIdMap[field.id] || field.id,
-      type: normalizeIdentityFieldType(field.type),
-    })),
+  return DEFAULT_TEACHER_IDENTITY_FIELDS.map((fallback) => {
+    const configured = saved.find((field) => field?.id === fallback.id);
+    return projectTeacherIdentityField({ ...fallback, ...(configured || {}) });
   });
-  return questions;
+}
+
+function applyTeacherIdentityFields(parsed) {
+  if (!Array.isArray(parsed?.questions)) return parsed;
+  const contactIndex = parsed.questions.findIndex(
+    (question) => (question?.field || question?.id) === "contact",
+  );
+  if (contactIndex < 0) return parsed;
+
+  const contactQuestion = parsed.questions[contactIndex];
+  const existingFields = Array.isArray(contactQuestion.fields)
+    ? contactQuestion.fields
+    : [];
+  const existingById = new Map(
+    existingFields.filter((field) => field?.id).map((field) => [field.id, field]),
+  );
+  const fields = configuredTeacherIdentityFields(parsed)
+    .filter((field) => field.enabled)
+    .map((field) => {
+      const id = TEACHER_CONTACT_FIELD_IDS[field.id] || field.id;
+      const existing = existingById.get(id) || {};
+      return {
+        ...existing,
+        id,
+        label: field.label || existing.label || field.id,
+        helper: field.helper || existing.helper || null,
+        type: field.type || existing.type || "text",
+        required: field.required,
+        placeholder: field.placeholder || existing.placeholder || null,
+      };
+    });
+
+  return {
+    ...parsed,
+    questions: parsed.questions.map((question, index) =>
+      index === contactIndex ? { ...question, fields } : question,
+    ),
+  };
+}
+
+function buildTeacherQuestions(parsed) {
+  // The teacher portal must render the same question list the administrator
+  // saved. In particular, do not synthesize a contact question from the
+  // legacy `identityFields` companion config: that would add fields that are
+  // not present in the active question bank. Identity fields remain exposed
+  // separately in the response for consumers that explicitly use them.
+  return Array.isArray(parsed?.questions) ? parsed.questions.slice() : [];
 }
 
 function teacherQuestionType(question) {
@@ -676,7 +710,7 @@ function projectTeacherQuestion(question) {
     text: question.text || "",
     helper: question.helper || null,
     type: teacherQuestionType(question),
-    hardWall: question.hardWall === true || question.field === "contact",
+    hardWall: question.hardWall === true,
     required: isDiagnosticRequired(question.required),
     min: Number.isInteger(minSelections) ? minSelections : undefined,
     max: Number.isInteger(maxSelections) ? maxSelections : undefined,
@@ -822,7 +856,10 @@ function validateDiagnosticValueType(question, value, label) {
 }
 
 function validateSelectionBounds(question, value, label) {
-  if (!Array.isArray(value)) return null;
+  // A non-required multi-select with no answer is still optional. Selection
+  // bounds apply once the teacher has started answering the question; the
+  // required flag is the source of truth for whether an empty answer fails.
+  if (!Array.isArray(value) || value.length === 0) return null;
   const minSelections = Number.isInteger(question.minSelections)
     ? question.minSelections
     : question.min;
@@ -986,7 +1023,8 @@ function recommendationsFromEngine(engineOutput) {
         category: trip?.category || "Other",
         summary: trip?.summary || "",
         learnings: Array.isArray(trip?.learnings) ? trip.learnings : [],
-        driveLink: trip?.driveLink || "",
+        driveLink:
+          trip?.driveLink || trip?.brochurePdfUrl || trip?.driveViewLink || "",
       })
     )
       break;
@@ -1573,14 +1611,21 @@ router.get(
           isActive: true,
         },
         orderBy: { version: "desc" },
-        select: { id: true, version: true, questionsJson: true },
+        select: {
+          id: true,
+          version: true,
+          tenantId: true,
+          subBrand: true,
+          questionsJson: true,
+        },
       });
       if (!bank)
         return res.status(404).json({
           error: "No TMC diagnostic is available right now",
           code: "BANK_NOT_FOUND",
         });
-      const parsed = parseJson(bank.questionsJson, null);
+      const normalizedBank = await ensureTmcTripTypeBank({ prisma, bank });
+      const parsed = parseJson(normalizedBank.questionsJson, null);
       if (!parsed || !Array.isArray(parsed.questions)) {
         return res.status(500).json({
           error: "TMC diagnostic is temporarily unavailable",
@@ -1589,14 +1634,14 @@ router.get(
       }
       res.json({
         available: true,
-        bankId: bank.id,
-        version: bank.version,
-        questions: buildTeacherQuestions(parsed).map(projectTeacherQuestion),
-        identityFields: Array.isArray(parsed.identityFields)
-          ? parsed.identityFields
-              .map(projectTeacherIdentityField)
-              .filter((field) => field.enabled)
-          : [],
+        bankId: normalizedBank.id,
+        version: normalizedBank.version,
+        questions: buildTeacherQuestions(
+          applyTeacherIdentityFields(parsed),
+        ).map(projectTeacherQuestion),
+        identityFields: configuredTeacherIdentityFields(parsed).filter(
+          (field) => field.enabled,
+        ),
       });
     } catch (err) {
       console.error("[tmc-portal][teacher/diagnostic]", err);
@@ -1643,8 +1688,11 @@ router.post(
           code: "BANK_NOT_FOUND",
         });
 
-      const parsedBank = parseJson(bank.questionsJson, {});
-      const bankQuestions = buildTeacherQuestions(parsedBank);
+      const normalizedBank = await ensureTmcTripTypeBank({ prisma, bank });
+      const parsedBank = parseJson(normalizedBank.questionsJson, {});
+      const bankQuestions = buildTeacherQuestions(
+        applyTeacherIdentityFields(parsedBank),
+      );
       if (!Array.isArray(bankQuestions)) {
         return res.status(500).json({
           error: "TMC diagnostic is temporarily unavailable",
@@ -1776,12 +1824,13 @@ router.post(
             bankId: bank.id,
             bankVersion: bank.version,
             specVersion: "TMC_DIAGNOSTIC_ENGINE_V1_2026-06-08",
+            questionsJson: normalizedBank.questionsJson,
           }),
           answersJson: JSON.stringify(answers),
-          score: null,
-          classification: null,
-          classificationLabel: null,
-          recommendedTier: null,
+          score: 0,
+          classification: engineOutput.state,
+          classificationLabel: "Routed by TMC Engine",
+          recommendedTier: "engine",
           engineState: engineOutput.state,
           engineScoresJson: JSON.stringify({
             ...engineOutput.scores,
@@ -1840,6 +1889,20 @@ router.post(
         );
       }
 
+      const recommendations = recommendationsFromEngine({
+        ...engineOutput,
+        ragResult,
+      });
+      // Keep the no-recommendation edge case usable by generating the same
+      // customer-facing PDF immediately. When trips are available, the PDF is
+      // deliberately generated only after the teacher submits trip choices.
+      const reportPdfUrl = recommendations.length === 0
+        ? await generateDiagnosticPdfBestEffort(diag, normalizedBank, {
+            ragResult,
+            recommendations,
+          })
+        : null;
+      const reportReady = recommendations.length === 0;
       res.status(201).json({
         id: diag.id,
         diagnosticId: diag.id,
@@ -1847,14 +1910,9 @@ router.post(
         classificationLabel: "Routed by TMC Engine",
         recommendedTier: "engine",
         curriculumFit: engineOutput.curriculumFit || [],
-        recommendations: recommendationsFromEngine({
-          ...engineOutput,
-          ragResult,
-        }),
-        reportPdfUrl: buildTeacherReportPdfUrl({
-          id: diag.id,
-          reportSlugToken,
-        }),
+        recommendations,
+        reportPdfUrl,
+        reportReady,
         createdAt: diag.createdAt,
         chosenInterests: null,
       });
@@ -1896,18 +1954,27 @@ router.get(
           engineState: true,
           createdAt: true,
           curriculumFitJson: true,
+          reportPdfUrl: true,
           reportSlugToken: true,
         },
       });
-      res.json({
-        diagnostics: diagnostics.map((diagnostic) => ({
-          id: diagnostic.id,
-          engineState: diagnostic.engineState,
-          createdAt: diagnostic.createdAt,
-          reportPdfUrl: buildTeacherReportPdfUrl(diagnostic),
-          hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
-        })),
-      });
+      const history = await Promise.all(
+        diagnostics.map(async (diagnostic) => {
+          const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
+            tenantId: Number(req.portal.tenantId),
+            diagnosticId: diagnostic.id,
+          });
+          return {
+            id: diagnostic.id,
+            engineState: diagnostic.engineState,
+            createdAt: diagnostic.createdAt,
+            reportPdfUrl: chosenInterests ? diagnostic.reportPdfUrl || null : null,
+            reportReady: Boolean(chosenInterests),
+            hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
+          };
+        }),
+      );
+      res.json({ diagnostics: history });
     } catch (err) {
       console.error("[tmc-portal][teacher/diagnostics]", err);
       res.status(500).json({ error: "Failed to load diagnostic reports" });
@@ -1945,6 +2012,16 @@ router.get(
           createdAt: true,
           engineScoresJson: true,
           curriculumFitJson: true,
+          tenantId: true,
+          contactId: true,
+          questionBankId: true,
+          subBrand: true,
+          score: true,
+          classification: true,
+          classificationLabel: true,
+          recommendedTier: true,
+          questionsJson: true,
+          answersJson: true,
           reportPdfUrl: true,
           reportSlugToken: true,
         },
@@ -1977,7 +2054,8 @@ router.get(
           classificationLabel: "Routed by TMC Engine",
           recommendedTier: "engine",
           createdAt: diagnostic.createdAt,
-          reportPdfUrl: buildTeacherReportPdfUrl(diagnostic),
+          reportPdfUrl: chosenInterests ? diagnostic.reportPdfUrl || null : null,
+          reportReady: Boolean(chosenInterests),
           recommendations: recommendationPayloadFromDiagnostic(
             diagnostic,
             ragResult,
@@ -2017,7 +2095,23 @@ router.post(
           contactId: Number(req.tmcContact.id),
           subBrand: "tmc",
         },
-        select: { id: true, tenantId: true },
+        select: {
+          id: true,
+          tenantId: true,
+          contactId: true,
+          questionBankId: true,
+          subBrand: true,
+          createdAt: true,
+          score: true,
+          classification: true,
+          classificationLabel: true,
+          recommendedTier: true,
+          questionsJson: true,
+          answersJson: true,
+          engineScoresJson: true,
+          curriculumFitJson: true,
+          reportPdfUrl: true,
+        },
       });
       if (!diagnostic)
         return res.status(404).json({
@@ -2032,7 +2126,62 @@ router.post(
         diagnosticId: diagnostic.id,
         interests,
       });
-      res.json({ ok: true, ...saved });
+      let ragResult = null;
+      try {
+        ragResult = await travelRag.getRagResultForDiagnostic(diagnostic.id);
+      } catch (ragErr) {
+        console.warn(
+          "[tmc-portal][teacher/diagnostics/:id/interests] RAG load failed (non-fatal):",
+          ragErr.message,
+        );
+      }
+
+      let bank = null;
+      try {
+        const snapshot = parseJson(diagnostic.questionsJson, {});
+        if (snapshot.questionsJson) {
+          bank = {
+            id: diagnostic.questionBankId,
+            tenantId: diagnostic.tenantId,
+            subBrand: diagnostic.subBrand,
+            version: snapshot.bankVersion,
+            questionsJson: snapshot.questionsJson,
+          };
+        } else if (diagnostic.questionBankId) {
+          const activeBank = await prisma.travelDiagnosticQuestionBank.findFirst({
+            where: {
+              id: diagnostic.questionBankId,
+              tenantId: diagnostic.tenantId,
+              subBrand: "tmc",
+              isActive: true,
+            },
+          });
+          bank = activeBank
+            ? await ensureTmcTripTypeBank({ prisma, bank: activeBank })
+            : null;
+        }
+      } catch (bankErr) {
+        console.warn(
+          "[tmc-portal][teacher/diagnostics/:id/interests] question snapshot load failed (non-fatal):",
+          bankErr.message,
+        );
+      }
+
+      const recommendations = recommendationPayloadFromDiagnostic(
+        diagnostic,
+        ragResult,
+      );
+      const reportPdfUrl = await generateDiagnosticPdfBestEffort(
+        diagnostic,
+        bank,
+        { ragResult, recommendations },
+      );
+      res.json({
+        ok: true,
+        ...saved,
+        reportReady: true,
+        reportPdfUrl: reportPdfUrl || diagnostic.reportPdfUrl || null,
+      });
     } catch (err) {
       if (err?.status)
         return res

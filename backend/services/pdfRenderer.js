@@ -4334,11 +4334,42 @@ async function renderTmcReadinessReport({
     }
   }
 
-  doc.roundedRect(pageMargin, 156, contentW, 88, 18).fillAndStroke("#FFFFFF", BRAND.border);
+  const profileTop = 156;
+  const profileH = 112;
+  const profileInnerX = pageMargin + 18;
+  const profileInnerW = contentW - 36;
+  const stateLabel = eState === "strong_match"
+    ? "Strong readiness fit identified"
+    : eState === "partial_match"
+      ? "Partial readiness fit — see report"
+      : "Custom concept recommended";
+  const stateBadgeW = 166;
+  const stateBadgeX = pageMargin + contentW - 18 - stateBadgeW;
+  const schoolNameW = eState
+    ? Math.max(140, stateBadgeX - profileInnerX - 12)
+    : profileInnerW;
+
+  doc.roundedRect(pageMargin, profileTop, contentW, profileH, 18).fillAndStroke("#FFFFFF", BRAND.border);
   doc.fillColor(BRAND.textDark).font("Helvetica-Bold").fontSize(18)
-    .text(schoolName, pageMargin + 18, 176, { width: contentW - 36 });
+    .text(schoolName, profileInnerX, 176, {
+      width: schoolNameW,
+      lineBreak: false,
+      ellipsis: true,
+    });
+  if (eState) {
+    doc.roundedRect(stateBadgeX, 170, stateBadgeW, 22, 8)
+      .fillAndStroke(accentSoft, BRAND.borderSoft);
+    doc.fillColor(accent).font("Helvetica-Bold").fontSize(8.5)
+      .text(stateLabel, stateBadgeX + 8, 176, {
+        width: stateBadgeW - 16,
+        height: 11,
+        align: "center",
+        lineBreak: false,
+        ellipsis: true,
+      });
+  }
   doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
-    .text(`Prepared for ${contactName || "the leadership team"}${contactRole ? `, ${contactRole}` : ""}`, pageMargin + 18, 202, { width: contentW - 36 });
+    .text(`Prepared for ${contactName || "the leadership team"}${contactRole ? `, ${contactRole}` : ""}`, profileInnerX, 202, { width: profileInnerW, lineBreak: false, ellipsis: true });
   doc.roundedRect(pageMargin + 18, 222, 150, 42, 10).fillAndStroke("#FFFFFF", BRAND.borderSoft);
   doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.textMuted)
     .text("REPORT DATE", pageMargin + 30, 232, { width: 126, lineBreak: false });
@@ -4354,16 +4385,8 @@ async function renderTmcReadinessReport({
     .text("AUDIENCE", pageMargin + 360, 232, { width: 124, lineBreak: false });
   doc.font("Helvetica-Bold").fontSize(10.5).fillColor(BRAND.textDark)
     .text("School leadership", pageMargin + 360, 243, { width: 124 });
-  if (eState) {
-    const stateLabel = eState === "strong_match"
-      ? "Strong readiness fit identified"
-      : eState === "partial_match"
-        ? "Partial readiness fit — see report"
-        : "Custom concept recommended";
-    doc.fillColor(accent).font("Helvetica-Bold").fontSize(10).text(stateLabel, pageMargin + 18, 174);
-  }
   doc.moveDown(2);
-  doc.y = Math.max(doc.y, 270);
+  doc.y = Math.max(doc.y, profileTop + profileH + 14);
 
   doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
     .text("AT A GLANCE", pageMargin, doc.y, { characterSpacing: 1.2 });

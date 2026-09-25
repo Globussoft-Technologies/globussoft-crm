@@ -3,10 +3,6 @@
 const express = require('express');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const prisma = require('../lib/prisma');
-const {
-  encryptTravelHostingCredential,
-  decryptTravelHostingCredential,
-} = require('../lib/travelHostingCredentialEncryption');
 const { writeAudit } = require('../lib/audit');
 const {
   DEFAULT_REMOTE_PATH,
@@ -43,7 +39,7 @@ function normalizeWebsiteUrl(value) {
 
 function parseStoredSftp(value) {
   if (!value) return null;
-  const parsed = JSON.parse(decryptTravelHostingCredential(value));
+  const parsed = JSON.parse(value);
   return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
@@ -114,11 +110,7 @@ router.get('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     res.json(maskConfig(config.websiteUrl, config.sftp));
   } catch (err) {
     console.error('[travel-promotional-website] GET failed:', err.message);
-    const encryptionError = ['TRAVEL_HOSTING_ENCRYPTION_UNAVAILABLE', 'TRAVEL_HOSTING_CREDENTIAL_NOT_ENCRYPTED'].includes(err.code);
-    res.status(encryptionError ? 503 : 500).json({
-      error: encryptionError ? 'Travel hosting credentials cannot be decrypted safely' : 'Failed to load promotional website settings',
-      code: encryptionError ? err.code : 'PROMOTIONAL_WEBSITE_READ_FAILED',
-    });
+    res.status(500).json({ error: 'Failed to load promotional website settings', code: 'PROMOTIONAL_WEBSITE_READ_FAILED' });
   }
 });
 
@@ -140,9 +132,6 @@ router.put('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     const sftp = websiteUrl ? validateSftp(mergedSftp) : null;
     const writes = [];
     if (websiteUrl) {
-      // Encrypt before starting either database write so a missing/invalid
-      // server key cannot leave a partially configured website URL behind.
-      const encryptedSftp = encryptTravelHostingCredential(JSON.stringify(sftp));
       writes.push(prisma.tenantSetting.upsert({
         where: { tenantId_key: { tenantId, key: WEBSITE_KEY } },
         create: { tenantId, key: WEBSITE_KEY, value: websiteUrl, category: 'travel-hosting' },
@@ -150,8 +139,8 @@ router.put('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
       }));
       writes.push(prisma.tenantSetting.upsert({
         where: { tenantId_key: { tenantId, key: SFTP_KEY } },
-        create: { tenantId, key: SFTP_KEY, value: encryptedSftp, category: 'travel-hosting' },
-        update: { value: encryptedSftp, category: 'travel-hosting' },
+        create: { tenantId, key: SFTP_KEY, value: JSON.stringify(sftp), category: 'travel-hosting' },
+        update: { value: JSON.stringify(sftp), category: 'travel-hosting' },
       }));
     } else {
       if (current.websiteRow) writes.push(prisma.tenantSetting.delete({ where: { tenantId_key: { tenantId, key: WEBSITE_KEY } } }));
@@ -163,12 +152,11 @@ router.put('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     }
     res.json(maskConfig(websiteUrl, sftp));
   } catch (err) {
-    const encryptionUnavailable = err.code === 'TRAVEL_HOSTING_ENCRYPTION_UNAVAILABLE';
-    const status = encryptionUnavailable ? 503 : (/required|valid URL|must be|too long|safe directory|fingerprint/i.test(err.message || '') ? 400 : 500);
+    const status = /required|valid URL|must be|too long|safe directory|fingerprint/i.test(err.message || '') ? 400 : 500;
     console.error('[travel-promotional-website] PUT failed:', err.message);
     res.status(status).json({
-      error: encryptionUnavailable ? 'Travel hosting credential encryption is not configured' : (err.message || 'Failed to save promotional website settings'),
-      code: encryptionUnavailable ? err.code : (status === 400 ? 'INVALID_PROMOTIONAL_WEBSITE_SETTINGS' : 'PROMOTIONAL_WEBSITE_SAVE_FAILED'),
+      error: err.message || 'Failed to save promotional website settings',
+      code: status === 400 ? 'INVALID_PROMOTIONAL_WEBSITE_SETTINGS' : 'PROMOTIONAL_WEBSITE_SAVE_FAILED',
     });
   }
 });
@@ -186,12 +174,11 @@ router.post('/test', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     res.json({ ok: true, protocol: sftp.protocol, remotePath: sftp.remotePath });
   } catch (err) {
     console.error('[travel-promotional-website] test failed:', err.message);
-    const encryptionError = ['TRAVEL_HOSTING_ENCRYPTION_UNAVAILABLE', 'TRAVEL_HOSTING_CREDENTIAL_NOT_ENCRYPTED'].includes(err.code);
     const isValidationError = /required|too long|must be between|safe directory|protocol|fingerprint|private network/i.test(err.message || '');
-    const status = encryptionError ? 503 : (isValidationError ? 400 : 502);
+    const status = isValidationError ? 400 : 502;
     res.status(status).json({
-      error: encryptionError ? 'Travel hosting credentials cannot be decrypted safely' : (isValidationError ? err.message : 'Could not connect to the transfer server'),
-      code: encryptionError ? err.code : (isValidationError ? 'INVALID_TRANSFER_SETTINGS' : 'TRANSFER_CONNECTION_FAILED'),
+      error: isValidationError ? err.message : 'Could not connect to the transfer server',
+      code: isValidationError ? 'INVALID_TRANSFER_SETTINGS' : 'TRANSFER_CONNECTION_FAILED',
     });
   }
 });

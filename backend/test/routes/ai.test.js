@@ -184,6 +184,36 @@ describe('POST /draft — AI email draft', () => {
     expect(prisma.contact.findFirst).not.toHaveBeenCalled();
   });
 
+  test('explicit subject is the primary prompt intent while recipient context is retained', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 42,
+      name: 'Acme Industries',
+      company: 'Acme Co',
+      title: 'CFO',
+      status: 'Prospect',
+      aiScore: 81,
+      deals: [],
+      activities: [],
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai/draft')
+      .set('Authorization', makeBearer({ tenantId: 9 }))
+      .send({
+        subject: 'Revised itinerary confirmation',
+        context: 'Please confirm the revised dates and airport transfer.',
+        contactId: 42,
+        recipientEmail: 'ignored@example.com',
+      });
+
+    expect(res.status).toBe(200);
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('Subject: "Revised itinerary confirmation"');
+    expect(prompt).toContain('Additional user context: "Please confirm the revised dates and airport transfer."');
+    expect(prompt).toContain('Acme Industries');
+    expect(prompt).toContain('directly address it');
+  });
+
   test('contactId enrichment: tenant-scoped lookup with deals + activities folded into prompt', async () => {
     prisma.contact.findFirst.mockResolvedValue({
       id: 42,

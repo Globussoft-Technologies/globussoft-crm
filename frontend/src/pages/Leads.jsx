@@ -35,6 +35,8 @@ import {
   ChevronRight,
   ChevronDown,
   ChevronUp,
+  Copy,
+  Check,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import ColumnPicker from "../components/ColumnPicker";
@@ -48,6 +50,7 @@ import {
   subBrandShortLabel,
 } from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
+import { copyToClipboard } from "../utils/clipboard";
 import CallifiedLeadCallDialog from "../components/CallifiedLeadCallDialog";
 import { useLeadCalling } from "../hooks/useLeadCalling";
 import {
@@ -160,8 +163,6 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
-const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
-const LEADS_NAME_COLUMN_MAX_WIDTH = 380;
 const LEADS_ACTIONS_COLUMN_WIDTH = 176;
 const LEADS_SOURCE_COLUMN_MIN_WIDTH = 190;
 const LEADS_ASSIGNED_COLUMN_MIN_WIDTH = 190;
@@ -1002,6 +1003,7 @@ function BuiltInInlineCellEditor({
   const [draft, setDraft] = useState(value ?? "");
   const [saving, setSaving] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -1011,6 +1013,18 @@ function BuiltInInlineCellEditor({
   useEffect(() => {
     if (editing && inputRef.current) inputRef.current.focus();
   }, [editing]);
+
+  const copyable = (field === "email" || field === "phone") && value;
+  const handleCopy = async (event) => {
+    event.stopPropagation();
+    try {
+      await copyToClipboard(String(value));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Keep the inline editor usable if the browser blocks clipboard access.
+    }
+  };
 
   const save = async (nextValue = draft) => {
     const normalized =
@@ -1085,6 +1099,25 @@ function BuiltInInlineCellEditor({
             }}
           >
             <Pencil size={12} />
+          </button>
+        )}
+        {copyable && (
+          <button
+            type="button"
+            onClick={handleCopy}
+            aria-label={copied ? `${label} copied` : `Copy ${label}`}
+            title={copied ? "Copied" : "Click to Copy"}
+            style={{
+              ...actionIconBtn,
+              flexShrink: 0,
+              padding: 2,
+              opacity: hovered ? 0.85 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+              transition: "opacity 0.15s ease",
+              color: copied ? "var(--success-color)" : "var(--text-secondary)",
+            }}
+          >
+            {copied ? <Check size={12} /> : <Copy size={12} />}
           </button>
         )}
       </span>
@@ -1413,18 +1446,69 @@ const Leads = () => {
   );
   const getColumnDefaultWidth = (key) =>
     LEADS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith("cf_") ? 150 : 140);
+  const autoFitLeadColumnWidths = useMemo(() => {
+    const canvas = typeof document !== "undefined"
+      ? document.createElement("canvas")
+      : null;
+    const context = canvas?.getContext("2d");
+    const sampleText = typeof document !== "undefined"
+      ? document.querySelector(".leads-table--scrollable .inline-cell-editor-display > span")
+      : null;
+    const sampleStyle = sampleText ? window.getComputedStyle(sampleText) : null;
+    const fontSize = sampleStyle?.fontSize || "13px";
+    const fontFamily = sampleStyle?.fontFamily || "sans-serif";
+    const letterSpacing = Number.parseFloat(sampleStyle?.letterSpacing) || 0;
+    const textWidth = (value, weight = 400) => {
+      const text = String(value);
+      if (!context) return text.length * (Number.parseFloat(fontSize) || 13) * 0.5;
+      context.font = `${weight} ${fontSize} ${fontFamily}`;
+      return context.measureText(text).width + Math.max(0, text.length - 1) * letterSpacing;
+    };
+    const longest = { name: "Name", phone: "Phone" };
+    for (const lead of leads) {
+      const name = String(lead?.name || "Unnamed lead");
+      const phone = String(lead?.phone || "+ Add Phone");
+      if (textWidth(name, 700) > textWidth(longest.name, 700)) longest.name = name;
+      if (textWidth(phone) > textWidth(longest.phone)) longest.phone = phone;
+    }
+    const nameValueWidth = textWidth(longest.name, 700) + 16 + 10 + 6 + 18 + 16 + 10;
+    const nameHeaderWidth = textWidth("Name", 500) + 16 + 16 + 13 + 8 + 28;
+    const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
+    const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
+    return {
+      name: Math.ceil(Math.max(LEADS_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth)),
+      phone: Math.ceil(Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth)),
+    };
+  }, [leads]);
+  useEffect(() => {
+    setColumnLayout((current) => {
+      const widths = current.widths || {};
+      if (
+        widths.name === autoFitLeadColumnWidths.name &&
+        widths.phone === autoFitLeadColumnWidths.phone
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        widths: {
+          ...widths,
+          name: autoFitLeadColumnWidths.name,
+          phone: autoFitLeadColumnWidths.phone,
+        },
+      };
+    });
+  }, [autoFitLeadColumnWidths]);
   const getColumnWidth = (key) => {
     if (columnLayout.collapsed?.[key]) return LEADS_COLUMN_COLLAPSED_WIDTH;
     const configuredWidth =
       Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
+    if (key === "name" || key === "phone") {
+      const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
+      return Math.max(autoFitLeadColumnWidths[key], manuallySizedWidth);
+    }
     if (key === "actions") {
       return Math.max(configuredWidth, LEADS_ACTIONS_COLUMN_WIDTH);
-    }
-    if (key === "name") {
-      return Math.max(
-        LEADS_NAME_COLUMN_MIN_WIDTH,
-        Math.min(configuredWidth, LEADS_NAME_COLUMN_MAX_WIDTH),
-      );
     }
     if (key === "source") {
       return Math.max(configuredWidth, LEADS_SOURCE_COLUMN_MIN_WIDTH);
@@ -1438,15 +1522,14 @@ const Leads = () => {
     const minWidth =
       key === "actions"
         ? LEADS_ACTIONS_COLUMN_WIDTH
-        : key === "name"
-          ? LEADS_NAME_COLUMN_MIN_WIDTH
+        : key === "name" || key === "phone"
+          ? autoFitLeadColumnWidths[key]
           : key === "source"
             ? LEADS_SOURCE_COLUMN_MIN_WIDTH
             : key === "assignedTo"
               ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
               : LEADS_COLUMN_MIN_WIDTH;
-    const maxWidth =
-      key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
+    const maxWidth = Number.POSITIVE_INFINITY;
     const nextWidth = Math.max(minWidth, Math.min(Math.round(width), maxWidth));
     setColumnLayout((prev) => ({
       widths: { ...(prev.widths || {}), [key]: nextWidth },
@@ -3765,6 +3848,50 @@ const Leads = () => {
     : isGeneric
       ? "leads-table leads-table--compact"
       : "leads-table";
+  const phoneColumnIndex = leadUserColumnDefs.findIndex(
+    (column) => column.key === "phone",
+  );
+  useLayoutEffect(() => {
+    const table = leadsScrollableTableRef.current;
+    if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
+    let overflowWidth = 0;
+    const rowsById = new Map(
+      Array.from(table.querySelectorAll("tbody tr[data-lead-row-id]"))
+        .map((row) => [row.dataset.leadRowId, row]),
+    );
+    for (const lead of leads) {
+      const row = rowsById.get(String(lead.id));
+      const cell = row?.cells[phoneColumnIndex];
+      const value = cell?.querySelector(
+        ".inline-cell-editor-display > span",
+      );
+      if (value) {
+        overflowWidth = Math.max(
+          overflowWidth,
+          value.scrollWidth - value.clientWidth,
+        );
+      }
+    }
+    if (overflowWidth <= 0) return;
+    setColumnLayout((current) => {
+      const currentWidth = Math.max(
+        autoFitLeadColumnWidths.phone,
+        Number(current.widths?.phone) || 0,
+      );
+      const requiredWidth = Math.ceil(currentWidth + overflowWidth);
+      if (requiredWidth <= currentWidth) return current;
+      return {
+        ...current,
+        widths: { ...current.widths, phone: requiredWidth },
+      };
+    });
+  }, [
+    leads,
+    phoneColumnIndex,
+    autoFitLeadColumnWidths.phone,
+    columnLayout.widths?.phone,
+    columnLayout.collapsed?.phone,
+  ]);
   // Every vertical uses the split-table layout. Row-height sync is required
   // so the frozen Name pane stays aligned with the scrollable columns.
   const leadsRowSyncEnabled = true;

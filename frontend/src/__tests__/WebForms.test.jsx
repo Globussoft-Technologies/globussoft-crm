@@ -20,7 +20,8 @@ describe('buildWebFormPreviewUrl', () => {
   test('embeds the draft payload for previewing unsaved changes', () => {
     const url = buildWebFormPreviewUrl({ name: 'Draft Form', slug: 'draft-form' }, 'https://crm.example.com');
 
-    expect(url).toContain('https://crm.example.com/embed/web-form.html#preview=');
+    expect(url).toContain('https://crm.example.com/embed/web-form.html?previewVersion=');
+    expect(url).toContain('#preview=');
     expect(url).toContain(encodeURIComponent('Draft Form'));
   });
 });
@@ -73,15 +74,15 @@ describe('public web form embed footer', () => {
     expect(html).toContain("fd.set('phone', internationalPhone)");
   });
 
-  test('detects a Generic phone country locally without disclosing visitor IPs', () => {
+  test('prefers browser location and falls back to IP for Generic phone country detection', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain("country.value = '+91'");
     expect(html).toContain('function detectGenericCountryFromLocale');
+    expect(html).toContain('function detectGenericCountryFromLocationOrIp');
+    expect(html).toContain('navigator.geolocation.getCurrentPosition');
+    expect(html).toContain('https://ipapi.co/json/');
     expect(html).toContain('new Intl.Locale(locale).region');
-    expect(html).not.toContain('ipapi.co');
-    expect(html).not.toContain('ipwho.is');
-    expect(html).not.toContain('api.country.is');
   });
 
   test('preserves Generic phone country choices made by the visitor', () => {

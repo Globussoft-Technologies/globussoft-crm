@@ -149,7 +149,7 @@ describe("CsvImportExportToolbar", () => {
     expect(screen.getByRole("button", { name: /Download CSV template/i })).toBeInTheDocument();
   });
 
-  it("shows the schema-backed field type as read-only in the Generic lead mapping wizard", async () => {
+  it("allows selecting the field type in the Generic lead mapping wizard", async () => {
     render(
       <CsvImportExportToolbar
         entity="contacts"
@@ -168,7 +168,10 @@ describe("CsvImportExportToolbar", () => {
     fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
 
     expect(await screen.findByText("Review the mapping of your fields")).toBeInTheDocument();
-    expect(screen.getByLabelText("Field type for email")).toHaveTextContent("Text field");
-    expect(screen.queryByRole("combobox", { name: "Field type for email" })).toBeNull();
+    const fieldType = screen.getByRole("combobox", { name: "Field type for email" });
+    expect(fieldType).toHaveValue("text");
+    expect(fieldType).toHaveTextContent("Dropdown");
+    fireEvent.change(fieldType, { target: { value: "dropdown" } });
+    expect(fieldType).toHaveValue("dropdown");
   });
 });

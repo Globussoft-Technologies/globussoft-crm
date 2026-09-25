@@ -65,7 +65,7 @@ const sampleContact = {
 };
 
 const sampleContactTwo = {
-  id: "c2",
+  id: "42",
   name: "Muralidhar",
   email: "muralidhar@travelstall.in",
 };
@@ -320,11 +320,14 @@ describe("<Inbox />", () => {
 
     await user.click(screen.getByRole("button", { name: /ai draft/i }));
     await waitFor(() => {
-      expect(
-        fetchApiMock.mock.calls.some(
-          ([url, opts]) => url === "/api/ai/draft" && opts?.method === "POST",
-        ),
-      ).toBe(true);
+      const draftCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === "/api/ai/draft" && opts?.method === "POST",
+      );
+      expect(draftCall).toBeTruthy();
+      const draftRequest = JSON.parse(draftCall[1].body);
+      expect(draftRequest.subject).toBe("Travel itinerary ready");
+      expect(draftRequest.context).toBe("Draft me");
+      expect(draftRequest.recipientEmail).toBe("primary@x.com");
     });
 
     await waitFor(() =>
@@ -366,6 +369,29 @@ describe("<Inbox />", () => {
     expect(screen.getByLabelText(/^Cc:$/)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Bcc:$/)).toBeInTheDocument();
   });
+
+  it("passes the selected CRM contact to the AI draft request", async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByText("Compose Email")).toBeInTheDocument());
+    await user.click(screen.getByText("Compose Email"));
+    await user.type(screen.getByPlaceholderText(/client@company.com/i), "muralidhar");
+    await user.click(await screen.findByRole("option", { name: "muralidhar@travelstall.in" }));
+    await user.type(screen.getByLabelText(/^Subject:$/), "Travel booking confirmation");
+    await user.click(screen.getByRole("button", { name: /ai draft/i }));
+
+    await waitFor(() => {
+      const draftCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === "/api/ai/draft" && opts?.method === "POST",
+      );
+      expect(draftCall).toBeTruthy();
+      const draftRequest = JSON.parse(draftCall[1].body);
+      expect(draftRequest.contactId).toBe("42");
+      expect(draftRequest.recipientEmail).toBe("muralidhar@travelstall.in");
+      expect(draftRequest.subject).toBe("Travel booking confirmation");
+    });
+  }, 15_000);
 
   it('renders "All / Inbox / Sent" and switches backend folder filters', async () => {
     const user = userEvent.setup();

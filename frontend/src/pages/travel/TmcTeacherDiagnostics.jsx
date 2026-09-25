@@ -9,6 +9,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
+import DiagnosticSubmitOverlay from "../../components/travel/DiagnosticSubmitOverlay";
 
 async function portalApi(path, token, options = {}) {
   const response = await fetch(`/api/portal/tmc${path}`, {
@@ -170,6 +171,48 @@ function validateDynamicQuestion(question, value, label, isTopLevel) {
   return optionError(question, value, label);
 }
 
+function friendlyValidationMessage(question, value) {
+  const type = normalizedType(question);
+  if (type === "group") {
+    if (question.required && emptyValue(value)) return "Please answer this question.";
+    const group =
+      value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    for (const child of question.fields || []) {
+      const childMessage = friendlyValidationMessage(child, group[child.id]);
+      if (childMessage) return childMessage;
+    }
+    return "";
+  }
+  if (type === "multi") {
+    const selected = Array.isArray(value) ? value : [];
+    const min = selectionLimit(question, "min");
+    const max = selectionLimit(question, "max");
+    if (min != null && selected.length < min)
+      return `You need to choose at least ${min} option${min === 1 ? "" : "s"}.`;
+    if (max != null && selected.length > max)
+      return `You can choose at most ${max} option${max === 1 ? "" : "s"}.`;
+  }
+  if (question.required && emptyValue(value)) return "Please answer this question.";
+  if (
+    type === "email" &&
+    !emptyValue(value) &&
+    !/^\S+@\S+\.\S+$/.test(String(value).trim())
+  ) {
+    return "Please enter a valid email address.";
+  }
+  if (optionError(question, value, "This answer"))
+    return "Please choose one of the available options.";
+  return "";
+}
+
+function selectionGuidanceMessage(question, value) {
+  if (normalizedType(question) !== "multi") return "";
+  const min = selectionLimit(question, "min");
+  const selected = Array.isArray(value) ? value : [];
+  if (min == null || selected.length >= min) return "";
+  return `Choose at least ${min} option${min === 1 ? "" : "s"}.`;
+}
+
 function validateDynamicAnswers(questions, answers) {
   for (const question of questions) {
     const field = questionField(question);
@@ -207,10 +250,19 @@ function reportFromResult(result) {
     recommendedTier: result.recommendedTier || "engine",
     createdAt: result.createdAt || new Date().toISOString(),
     recommendations: Array.isArray(result.recommendations)
-      ? result.recommendations
+      ? result.recommendations.map((recommendation) => ({
+          ...recommendation,
+          driveLink:
+            recommendation.driveLink ||
+            recommendation.brochurePdfUrl ||
+            recommendation.driveViewLink ||
+            "",
+        }))
       : [],
     chosenInterests: result.chosenInterests || null,
     reportPdfUrl: result.reportPdfUrl || null,
+    reportReady:
+      result.reportReady === true || Boolean(result.reportPdfUrl),
   };
 }
 
@@ -235,6 +287,8 @@ export default function TmcTeacherDiagnostics({
   const [reportsLoading, setReportsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [validationAttempted, setValidationAttempted] = useState(false);
+  const [touchedFields, setTouchedFields] = useState(() => new Set());
   const [latest, setLatest] = useState(null);
   const [taking, setTaking] = useState(false);
   const [selectedNames, setSelectedNames] = useState(() => new Set());
@@ -308,9 +362,17 @@ export default function TmcTeacherDiagnostics({
     [recommendations],
   );
   const interestsComplete =
-    recommendations.length === 0 || Boolean(interestsSubmittedAt);
+    Boolean(latest?.reportReady) || Boolean(interestsSubmittedAt);
+
+  const markFieldTouched = (field) => {
+    setTouchedFields((current) => {
+      if (current.has(field)) return current;
+      return new Set([...current, field]);
+    });
+  };
 
   const setGroupField = (field, subField, value) => {
+    markFieldTouched(field);
     setAnswers((current) => ({
       ...current,
       [field]: { ...(current[field] || {}), [subField]: value },
@@ -318,10 +380,12 @@ export default function TmcTeacherDiagnostics({
   };
 
   const setAnswer = (field, value) => {
+    markFieldTouched(field);
     setAnswers((current) => ({ ...current, [field]: value }));
   };
 
   const toggleMulti = (field, value, max) => {
+    markFieldTouched(field);
     setAnswers((current) => {
       const selected = Array.isArray(current[field]) ? current[field] : [];
       if (selected.includes(value))
@@ -336,6 +400,7 @@ export default function TmcTeacherDiagnostics({
 
   const selectOption = (question, option) => {
     const field = questionField(question);
+    markFieldTouched(field);
     setAnswers((current) => {
       const next = { ...current, [field]: option.value };
       if (option.mappedSkill) next[`${field}_skill`] = option.mappedSkill;
@@ -396,17 +461,17 @@ export default function TmcTeacherDiagnostics({
     setInterestsSubmittedAt(null);
     setInterestsError("");
     setSubmitError("");
+    setValidationAttempted(false);
+    setTouchedFields(new Set());
     setTaking(true);
   };
 
   const submit = async () => {
     setSubmitError("");
+    setValidationAttempted(true);
     const payload = buildAnswersPayload();
     const validationError = validateDynamicAnswers(questions, payload);
-    if (validationError) {
-      setSubmitError(validationError);
-      return;
-    }
+    if (validationError) return;
     setSubmitting(true);
     try {
       const result = await portalApi("/teacher/diagnostics", token, {
@@ -427,6 +492,8 @@ export default function TmcTeacherDiagnostics({
       setSelectedNames(new Set());
       setInterestsSubmittedAt(null);
       setInterestsError("");
+      setValidationAttempted(false);
+      setTouchedFields(new Set());
       await loadReports();
     } catch (err) {
       if ([401, 403, 404].includes(err.status)) onSessionExpired(err.message);
@@ -484,7 +551,12 @@ export default function TmcTeacherDiagnostics({
         { method: "POST", body: { interests: chosen } },
       );
       setInterestsSubmittedAt(result.submittedAt || new Date().toISOString());
-      setLatest((current) => ({ ...current, chosenInterests: result }));
+      setLatest((current) => ({
+        ...current,
+        chosenInterests: result,
+        reportReady: result.reportReady === true || Boolean(result.reportPdfUrl),
+        reportPdfUrl: result.reportPdfUrl || current?.reportPdfUrl || null,
+      }));
     } catch (err) {
       if ([401, 403, 404].includes(err.status)) onSessionExpired(err.message);
       else
@@ -496,6 +568,10 @@ export default function TmcTeacherDiagnostics({
 
   return (
     <div style={{ ...styles.page, ...(taking ? styles.pageTaking : {}) }}>
+      <DiagnosticSubmitOverlay
+        active={submitting}
+        primaryColor="var(--tmc-primary, #365d7a)"
+      />
       <div style={styles.titleRow}>
         <div>
           <h1 style={styles.title}>Teacher diagnostic</h1>
@@ -525,12 +601,11 @@ export default function TmcTeacherDiagnostics({
           </button>
         </div>
       )}
-      {submitError && (
+      {submitError && !taking && (
         <div role="alert" style={styles.error}>
           {submitError}
         </div>
       )}
-
       {formLoading ? (
         <section style={styles.card} aria-label="Loading diagnostic">
           <div style={styles.empty}>
@@ -558,6 +633,15 @@ export default function TmcTeacherDiagnostics({
                 </p>
               </div>
             </div>
+            {taking && submitError && (
+              <div
+                id="teacher-diagnostic-error"
+                role="alert"
+                style={styles.formError}
+              >
+                {submitError}
+              </div>
+            )}
             {!taking && !latest && (
               <div style={styles.diagnosticIntro}>
                 <div>
@@ -585,10 +669,14 @@ export default function TmcTeacherDiagnostics({
                 onToggleMulti={toggleMulti}
                 onAnswerChange={setAnswer}
                 onGroupField={setGroupField}
+                validationAttempted={validationAttempted}
+                touchedFields={touchedFields}
                 onSubmit={submit}
                 onCancel={() => {
                   setTaking(false);
                   setSubmitError("");
+                  setValidationAttempted(false);
+                  setTouchedFields(new Set());
                 }}
               />
             )}
@@ -679,6 +767,8 @@ function NativeQuestionForm({
   onToggleMulti,
   onAnswerChange,
   onGroupField,
+  validationAttempted,
+  touchedFields,
   onSubmit,
   onCancel,
 }) {
@@ -702,6 +792,9 @@ function NativeQuestionForm({
               onToggleMulti={onToggleMulti}
               onAnswerChange={onAnswerChange}
               onGroupField={onGroupField}
+              showValidation={
+                validationAttempted || touchedFields.has(questionField(question))
+              }
             />
           ))}
         </div>
@@ -747,11 +840,16 @@ function NativeQuestionBlock({
   onToggleMulti,
   onAnswerChange,
   onGroupField,
+  showValidation,
 }) {
   const field = questionField(question);
   const value = answers[field];
   const type = normalizedType(question);
   const options = Array.isArray(question.options) ? question.options : [];
+  const validationMessage = showValidation
+    ? friendlyValidationMessage(question, value)
+    : selectionGuidanceMessage(question, value);
+  const validationIsActive = showValidation && Boolean(validationMessage);
   return (
     <section
       style={styles.questionCard}
@@ -797,17 +895,6 @@ function NativeQuestionBlock({
               </label>
             );
           })}
-          {selectionLimit(question, "max") != null && (
-            <div style={styles.counter}>
-              Selected: {Array.isArray(value) ? value.length : 0} /{" "}
-              {selectionLimit(question, "max")}
-            </div>
-          )}
-          {selectionLimit(question, "min") != null && (
-            <div style={styles.counter}>
-              Choose at least {selectionLimit(question, "min")}.
-            </div>
-          )}
         </div>
       ) : isTextType(type) ? (
         <DynamicInput
@@ -839,6 +926,19 @@ function NativeQuestionBlock({
           })}
         </div>
       ) : null}
+      {validationMessage && (
+        <p
+          role={validationIsActive ? "alert" : undefined}
+          style={
+            validationIsActive
+              ? styles.questionError
+              : styles.questionGuidance
+          }
+        >
+          {validationIsActive ? "* " : ""}
+          {validationIsActive ? validationMessage : selectionGuidanceMessage(question, value)}
+        </p>
+      )}
     </section>
   );
 }
@@ -927,16 +1027,6 @@ function GroupFields({ question, value, onChange }) {
                   );
                 })}
               </div>
-              {max != null && (
-                <div style={styles.counter}>
-                  Selected: {selected.length} / {max}
-                </div>
-              )}
-              {selectionLimit(field, "min") != null && (
-                <div style={styles.counter}>
-                  Choose at least {selectionLimit(field, "min")}.
-                </div>
-              )}
             </fieldset>
           );
         }
@@ -1002,16 +1092,19 @@ function NativeDiagnosticResult({
           <Award size={20} color="var(--tmc-primary)" />
           <div>
             <strong id="teacher-diagnostic-result">
-              Your diagnostic result is ready
+              {interestsComplete
+                ? "Your readiness report is ready"
+                : "Your trip recommendations are ready"}
             </strong>
-            <div style={styles.muted}>
+            {interestsComplete && <div style={styles.muted}>
               {latest.classificationLabel} · {formatLabel(latest.engineState)}
-            </div>
+            </div>}
           </div>
         </div>
         <p style={styles.muted}>
-          Choose the trip options you want to discuss with the travel team. Your
-          choices stay in this teacher portal.
+          {interestsComplete
+            ? "Your selected trips have been saved in this teacher portal."
+            : "Choose the trip options you want to discuss with the travel team, then submit your choices to receive the readiness report."}
         </p>
       </section>
       {recommendations.length > 0 ? (
@@ -1069,6 +1162,17 @@ function NativeDiagnosticResult({
                                 )}
                               </ul>
                             )}
+                          {recommendation.driveLink && (
+                            <a
+                              href={recommendation.driveLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(event) => event.stopPropagation()}
+                              style={styles.brochureLink}
+                            >
+                              View brochure
+                            </a>
+                          )}
                         </div>
                       </label>
                     ))}
@@ -1087,7 +1191,7 @@ function NativeDiagnosticResult({
               >
                 {interestsSubmitting
                   ? "Saving..."
-                  : `Complete diagnostic (${selectedNames.size})`}
+                  : `Submit chosen interests (${selectedNames.size})`}
               </button>
             )}
             {interestsSubmittedAt && (
@@ -1106,20 +1210,22 @@ function NativeDiagnosticResult({
       ) : (
         <section style={styles.card}>
           <div style={styles.empty}>
-            No matching trips were found. Your readiness report is still
-            available to download.
+            No matching trips were found. Your diagnostic has been recorded and
+            the travel team can follow up with you.
           </div>
         </section>
       )}
       <section style={styles.downloadCard}>
         <div>
           <strong>
-            {interestsComplete ? "Diagnostic complete" : "Your report is ready"}
+            {interestsComplete
+              ? "Diagnostic complete"
+              : "Choose trips to receive your report"}
           </strong>
           <p style={styles.muted}>
             {interestsComplete
               ? "Download the PDF report for your school records."
-              : "Save your trip choices above to complete the diagnostic flow."}
+              : "Your readiness report will be available after you submit your trip choices."}
           </p>
         </div>
         <div style={styles.inlineActions}>
@@ -1280,30 +1386,6 @@ const styles = {
     fontSize: 14,
   },
   questionList: { display: "grid", gap: 14, paddingBottom: 4 },
-  progressTrack: {
-    position: "relative",
-    height: 24,
-    borderRadius: 999,
-    background: "var(--tmc-surface-soft)",
-    border: "1px solid var(--tmc-border)",
-    overflow: "hidden",
-    marginBottom: 18,
-  },
-  progressFill: {
-    height: "100%",
-    background: "var(--tmc-primary)",
-    opacity: 0.18,
-    transition: "width 160ms ease",
-  },
-  progressLabel: {
-    position: "absolute",
-    inset: 0,
-    display: "grid",
-    placeItems: "center",
-    color: "var(--tmc-heading)",
-    fontSize: 12,
-    fontWeight: 700,
-  },
   questionCard: {
     background: "var(--tmc-surface)",
     border: "1px solid var(--tmc-border)",
@@ -1318,6 +1400,18 @@ const styles = {
     lineHeight: 1.4,
   },
   helper: { color: "var(--tmc-muted)", fontSize: 13, lineHeight: 1.5 },
+  questionError: {
+    margin: "10px 0 0",
+    color: "var(--tmc-error-text)",
+    fontSize: 13,
+    lineHeight: 1.4,
+  },
+  questionGuidance: {
+    margin: "10px 0 0",
+    color: "var(--tmc-muted)",
+    fontSize: 13,
+    lineHeight: 1.4,
+  },
   optionGrid: { display: "grid", gap: 8, marginTop: 16 },
   optionRow: {
     display: "flex",
@@ -1335,7 +1429,6 @@ const styles = {
     borderColor: "var(--tmc-primary)",
     background: "var(--tmc-selected-bg)",
   },
-  counter: { color: "var(--tmc-muted)", fontSize: 12 },
   wizardNav: {
     display: "flex",
     alignItems: "center",
@@ -1414,6 +1507,14 @@ const styles = {
     fontSize: 13,
     lineHeight: 1.5,
   },
+  brochureLink: {
+    display: "inline-flex",
+    marginTop: 10,
+    color: "var(--tmc-link)",
+    fontSize: 13,
+    fontWeight: 700,
+    textDecoration: "none",
+  },
   choiceFooter: {
     display: "flex",
     alignItems: "center",
@@ -1486,6 +1587,20 @@ const styles = {
     background: "var(--tmc-error-bg)",
     color: "var(--tmc-error-text)",
     fontSize: 13,
+  },
+  formError: {
+    padding: "10px 12px",
+    borderRadius: 8,
+    background: "var(--tmc-error-bg)",
+    color: "var(--tmc-error-text)",
+    fontSize: 13,
+    display: "block",
+    height: "auto",
+    minHeight: 0,
+    marginTop: 18,
+    marginBottom: 0,
+    boxSizing: "border-box",
+    alignSelf: "stretch",
   },
   spin: { animation: "spin 1s linear infinite" },
 };

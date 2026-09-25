@@ -557,13 +557,11 @@ model Tenant {
 
 model User {
   id              Int       @id @default(autoincrement())
-  // Email is unique PER TENANT, not globally — the same person can hold a
-  // separate account in multiple organisations (e.g. a customer of both a
-  // travel agency and a wellness clinic). Composite uniqueness lives in
-  // @@unique([email, tenantId]) at the bottom of the model. Because email is
-  // no longer a standalone unique key, all lookups use findFirst (often
-  // scoped by tenantId) rather than findUnique({ where: { email } }).
-  email           String
+  // Login email is a global identity. A credential must resolve to exactly
+  // one User/tenant, so the login UI never asks the user to choose an
+  // organisation after password verification. Routes normalize email to
+  // lowercase + trim before reads and writes.
+  email           String    @unique
   password        String
   emailVerifiedAt DateTime? // set when a self-registered user verified their email via OTP (null for staff/invited/pre-feature users)
   role            String    @default("USER") // ADMIN, USER, MANAGER
@@ -763,9 +761,6 @@ model User {
   createdContactViews    SavedContactView[]
   createdWebForms        WebForm[]
 
-  // Email is unique within a tenant, not globally — see the comment on the
-  // email field. Lets the same email register/log in across multiple orgs.
-  @@unique([email, tenantId])
   @@index([tenantId, role])
   @@index([reportingToId])
   @@index([defaultPipelineId])

@@ -138,7 +138,7 @@ describe('POST / — generic CSV import', () => {
       isActive: true,
       landingPath: '/home',
     });
-    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.findUnique.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({
       id: 44,
       name: 'Imported User',
@@ -168,6 +168,9 @@ describe('POST / — generic CSV import', () => {
       expect.any(Date),
     );
     const createData = prisma.user.create.mock.calls[0][0].data;
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { email: 'imported@example.com' },
+    });
     expect(createData.password).not.toBeUndefined();
     expect(createData.password).not.toBe('password123');
   });

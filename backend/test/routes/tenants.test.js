@@ -77,10 +77,6 @@ prisma.tenant = {
 prisma.user = {
   findMany: vi.fn(),
   findUnique: vi.fn(),
-  // Schema-drift compat: User.email is composite-unique with tenantId
-  // (@@unique([email, tenantId])), so the tenants route uses findFirst
-  // for the email duplicate check. The existing tests mock findUnique;
-  // findFirst delegates so per-test mockResolvedValue calls keep working.
   findFirst: vi.fn(),
   create: vi.fn(),
 };
@@ -113,8 +109,7 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.findFirst.mockReset();
   prisma.user.create.mockReset();
-  // After reset, wire findFirst → findUnique so existing per-test
-  // findUnique.mockResolvedValue calls cover both code paths.
+  // Other tenant-scoped paths still use findFirst.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
 });
 
@@ -396,6 +391,9 @@ describe('POST /api/tenants/users', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/already exists/i);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { email: 'taken@x.test' },
+    });
     expect(prisma.user.create).not.toHaveBeenCalled();
   });
 

@@ -130,10 +130,7 @@ beforeEach(() => {
   prisma.user.update.mockReset();
   prisma.user.delete.mockReset();
   prisma.user.count.mockReset();
-  // Schema-drift compat: SCIM route uses findFirst for email dup-checks
-  // because User.email is composite-unique with tenantId. Existing tests
-  // mock findUnique; delegate so per-test mockResolvedValue calls cover
-  // both code paths.
+  // Tenant-scoped SCIM read/update/delete paths still use findFirst.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
 });
 
@@ -420,6 +417,7 @@ describe('POST /v2/Users — create', () => {
     expect(res.status).toBe(409);
     expect(res.body.schemas).toEqual(['urn:ietf:params:scim:api:messages:2.0:Error']);
     expect(res.body.status).toBe('409');
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'dup@x.io' } });
     expect(prisma.user.create).not.toHaveBeenCalled();
   });
 });

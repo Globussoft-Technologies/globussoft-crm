@@ -34,8 +34,6 @@ const Login = () => {
   const [forgotToken, setForgotToken] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
   const [loginPending, setLoginPending] = useState(false);
-  const [tenantChoices, setTenantChoices] = useState([]);
-  const [loginTenantId, setLoginTenantId] = useState("");
   const loginPendingRef = useRef(false);
   const loginRequestRef = useRef(0);
 
@@ -166,7 +164,6 @@ const Login = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: forgotEmail.trim().toLowerCase(),
-          ...(loginTenantId ? { resetTenantId: Number(loginTenantId) } : {}),
         }),
       });
       const data = await response.json();
@@ -346,7 +343,7 @@ const Login = () => {
     }
   };
 
-  const performLogin = async (loginEmail, loginPassword, requestedTenantId = loginTenantId) => {
+  const performLogin = async (loginEmail, loginPassword) => {
     if (loginPendingRef.current) return;
     loginPendingRef.current = true;
     setLoginPending(true);
@@ -366,7 +363,6 @@ const Login = () => {
         body: JSON.stringify({
           email: normalizedEmail,
           password: loginPassword,
-          ...(requestedTenantId ? { loginTenantId: Number(requestedTenantId) } : {}),
         }),
       });
 
@@ -374,18 +370,12 @@ const Login = () => {
       if (requestId !== loginRequestRef.current) return;
 
       if (response.ok) {
-        setTenantChoices([]);
         if (data.requires2FA && data.tempToken) {
           setRequire2FA(true);
           setTempToken(data.tempToken);
           return;
         }
         finalizeLogin(data);
-      } else if (response.status === 409 && data.code === "TENANT_SELECTION_REQUIRED") {
-        const choices = Array.isArray(data.tenants) ? data.tenants : [];
-        setTenantChoices(choices);
-        setLoginTenantId(choices.length === 1 ? String(choices[0].id) : "");
-        setError(data.error || "Select the organization you want to access");
       } else if (response.status === 401) {
         const wentToPortal = await tryPortalLogin(normalizedEmail, loginPassword);
         if (requestId === loginRequestRef.current && !wentToPortal) {
@@ -414,9 +404,7 @@ const Login = () => {
   const quickLogin = (qEmail, qPassword) => {
     setEmail(qEmail);
     setPassword(qPassword);
-    setTenantChoices([]);
-    setLoginTenantId("");
-    performLogin(qEmail, qPassword, "");
+    performLogin(qEmail, qPassword);
   };
 
   const handleVerify2FA = async (e) => {
@@ -588,13 +576,7 @@ const Login = () => {
                   className="input-field"
                   placeholder="admin@globussoft.com"
                   value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (tenantChoices.length > 0) {
-                      setTenantChoices([]);
-                      setLoginTenantId("");
-                    }
-                  }}
+                  onChange={(e) => setEmail(e.target.value)}
                 />
               </div>
               <div style={{ marginBottom: "1rem" }}>
@@ -615,35 +597,6 @@ const Login = () => {
                   autoComplete="current-password"
                 />
               </div>
-              {tenantChoices.length > 0 && (
-                <div style={{ marginBottom: "1rem" }}>
-                  <label
-                    htmlFor="login-tenant"
-                    style={{
-                      display: "block",
-                      marginBottom: "0.5rem",
-                      fontSize: "0.875rem",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    Organization
-                  </label>
-                  <select
-                    id="login-tenant"
-                    className="input-field"
-                    value={loginTenantId}
-                    onChange={(event) => setLoginTenantId(event.target.value)}
-                    required
-                  >
-                    <option value="">Select organization</option>
-                    {tenantChoices.map((choice) => (
-                      <option key={choice.id} value={choice.id}>
-                        {choice.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
               <label
                 style={{
                   display: "flex",

@@ -14,7 +14,7 @@ import { fetchApi, setAuthToken, clearAuthToken } from '../utils/api';
  *   - 401 with {silent:true} clears the token but does NOT redirect (#841 — keeps
  *     background polls from booting the user mid-flow on transient 401s)
  *   - 5xx with a parseable error body surfaces server-supplied message
- *   - 5xx with an unparseable body falls back to the generic "Server error" copy
+ *   - 5xx with an unparseable body falls back to the approved generic retry copy
  *
  * Why
  *   Every page in the SPA goes through fetchApi — a regression here breaks
@@ -24,7 +24,7 @@ import { fetchApi, setAuthToken, clearAuthToken } from '../utils/api';
  * Contract pinned
  *   - getAuthToken() reads sessionStorage["token"] but NEVER localStorage["token"]
  *   - 401 path: clearAuthToken() + window.location.href = '/login'
- *   - 5xx with no parseable body → "Server error — please try again."
+ *   - Generic 5xx copy must not direct users to a nonexistent support channel
  */
 
 // jsdom doesn't allow writing to window.location.href cleanly — stub navigation
@@ -173,7 +173,7 @@ describe('utils/api — fetchApi', () => {
   it('throws safe message on 5xx but preserves server message on err.serverMessage', async () => {
     mockFetch({ status: 500, body: { message: 'boom' } });
     await expect(fetchApi('/api/crash')).rejects.toMatchObject({
-      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      message: "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.",
       serverMessage: 'boom',
       status: 500,
     });
@@ -189,7 +189,7 @@ describe('utils/api — fetchApi', () => {
       json: () => Promise.reject(new Error('parse fail')),
     });
     await expect(fetchApi('/api/crash')).rejects.toMatchObject({
-      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      message: "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.",
       code: null,
       status: 500,
     });
@@ -233,7 +233,7 @@ describe('utils/api — fetchApi', () => {
       json: () => Promise.resolve({}),
     });
     await expect(fetchApi('/api/crash')).rejects.toMatchObject({
-      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      message: "Something went wrong on our end. Please try again. If it still doesn't work, wait a few minutes and retry.",
       status: 500,
     });
   });

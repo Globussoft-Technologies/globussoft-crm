@@ -7332,11 +7332,15 @@ const Leads = () => {
                       key={lead.id}
                       data-lead-row-id={String(lead.id)}
                       style={{
-                        cursor: "pointer",
+                        cursor: isTravel ? "default" : "pointer",
                       }}
                       className="table-row-hover"
-                      onClick={() => navigate(leadDetailPath(lead))}
-                      title="Open lead detail"
+                      onClick={() => {
+                        // Travel Leads: keep this row on the list for now.
+                        // navigate(leadDetailPath(lead));
+                        if (!isTravel) navigate(leadDetailPath(lead));
+                      }}
+                      title={isTravel ? undefined : "Open lead detail"}
                     >
                       <td
                         style={getBodyCellStyle("name", { fontWeight: "500" })}
@@ -7371,13 +7375,16 @@ const Leads = () => {
                               editOnDisplayClick={false}
                               renderValue={(name) => (
                                 <a
-                                  href={leadDetailPath(lead)}
+                                  href={isTravel ? "#lead-preview" : leadDetailPath(lead)}
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    navigate(leadDetailPath(lead));
+                                    // Travel Leads: keep the profile link inactive for now.
+                                    // navigate(leadDetailPath(lead));
+                                    if (isTravel) setPreviewLead(lead);
+                                    else navigate(leadDetailPath(lead));
                                   }}
-                                  title={`Open profile for ${lead.name || "lead"}`}
+                                  title={isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`}
                                   style={{
                                     minWidth: 0,
                                     overflow: "hidden",
@@ -7555,11 +7562,15 @@ const Leads = () => {
                         key={lead.id}
                         data-lead-row-id={String(lead.id)}
                         style={{
-                          cursor: "pointer",
+                          cursor: isTravel ? "default" : "pointer",
                         }}
                         className="table-row-hover"
-                        onClick={() => navigate(leadDetailPath(lead))}
-                        title="Open lead detail"
+                        onClick={() => {
+                          // Travel Leads: keep this row on the list for now.
+                          // navigate(leadDetailPath(lead));
+                          if (!isTravel) navigate(leadDetailPath(lead));
+                        }}
+                        title={isTravel ? undefined : "Open lead detail"}
                       >
                         {leadUserColumnDefs.map((column) => (
                           <Fragment key={column.key}>
@@ -9024,13 +9035,21 @@ const Leads = () => {
                 marginTop: "1rem",
               }}
             >
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => navigate(leadDetailPath(previewLeadCurrent))}
-              >
-                Open full detail
-              </button>
+              {!isTravel && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => navigate(leadDetailPath(previewLeadCurrent))}
+                >
+                  Open full detail
+                </button>
+              )}
+              {/* Travel Leads: the full-detail action is intentionally disabled for now.
+                  <button type="button" className="btn-secondary"
+                    onClick={() => navigate(leadDetailPath(previewLeadCurrent))}>
+                    Open full detail
+                  </button>
+              */}
               <button
                 type="button"
                 className="btn-secondary"

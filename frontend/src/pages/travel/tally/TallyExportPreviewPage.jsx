@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, History, UploadCloud } from "lucide-react";
+import { Download, History, Search, UploadCloud } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PermissionGate from "../../../components/PermissionGate";
 import { fetchApi } from "../../../utils/api";
 import { formatMoney } from "../../../utils/money";
 import { useNotify } from "../../../utils/notify";
-import { getTripLedgerRows } from "./tallyMath";
+import { getTripLedgerRows, rowMatchesTrip } from "./tallyMath";
 import { buildTallyMastersXml, buildTallyXml, buildVoucherRows } from "./tallyExportBuilder";
 import { useTravelTallyMaster } from "./useTravelTallyMaster";
 import { downloadTallyConnectorPackage, fetchTallyConnectorBinary } from "./tallyConnectorConfig";
@@ -37,13 +37,18 @@ export default function TallyExportPreviewPage() {
     validSubBrand(requestedSubBrand) ? requestedSubBrand : (master.subBrand || "all"),
   );
   const [tallySyncFilter, setTallySyncFilter] = useState("all");
+  const [tripSearch, setTripSearch] = useState("");
   const [trip, setTrip] = useState(null);
   const [allTrips, setAllTrips] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [allCustomers, setAllCustomers] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [allPayments, setAllPayments] = useState([]);
   const [payables, setPayables] = useState([]);
   const [allPayables, setAllPayables] = useState([]);
   const [costCentreStatuses, setCostCentreStatuses] = useState({});
+  const [lastVoucherSyncTimes, setLastVoucherSyncTimes] = useState({});
+  const [tripVoucherResults, setTripVoucherResults] = useState({});
   const [loading, setLoading] = useState(true);
   const [tallyPreviewSelection, setTallyPreviewSelection] = useState("voucher:0");
   const [connectorStatus, setConnectorStatus] = useState(null);
@@ -94,10 +99,14 @@ export default function TallyExportPreviewPage() {
     ]).then(([tripData, tmcTripData, ledgerData, costCentreData]) => {
       if (cancelled) return;
       const nextCostCentreStatuses = {};
+      const nextLastVoucherSyncTimes = {};
       (costCentreData?.costCentres || []).forEach((costCentre) => {
-        nextCostCentreStatuses[`${costCentre.sourceType}:${costCentre.sourceId}`] = costCentre.syncStatus || "NOT_CONNECTED";
+        const key = `${costCentre.sourceType}:${costCentre.sourceId}`;
+        nextCostCentreStatuses[key] = costCentre.voucherSyncStatus || costCentre.syncStatus || "NOT_CONNECTED";
+        if (costCentre.lastVoucherSyncAt) nextLastVoucherSyncTimes[key] = costCentre.lastVoucherSyncAt;
       });
       setCostCentreStatuses(nextCostCentreStatuses);
+      setLastVoucherSyncTimes(nextLastVoucherSyncTimes);
       const itineraryTrips = (tripData?.itineraries || []).map((row) => ({ ...row, ledgerType: "itinerary" }));
       const tmcTrips = (tmcTripData?.trips || []).map((row) => ({
         ...row,
@@ -128,10 +137,14 @@ export default function TallyExportPreviewPage() {
       const isTmcTrip = String(tripId || "").startsWith("tmc-");
       const isQuoteTrip = String(tripId || "").startsWith("quote-");
       const sourceTripId = isTmcTrip ? String(tripId).replace(/^tmc-/, "") : String(tripId);
-      setCustomers((ledgerData?.customerDetails || []).filter((row) =>
+      const tripCustomers = (ledgerData?.customerDetails || []).filter((row) =>
         isQuoteTrip ? String(row.quoteId) === String(tripId).replace(/^quote-/, "")
           : isTmcTrip ? String(row.tripId) === sourceTripId : String(row.itineraryId) === sourceTripId,
-      ));
+      );
+      setCustomers(tripCustomers);
+      const tripInvoiceIds = new Set(tripCustomers.map((row) => Number(row.id)));
+      setPayments((ledgerData?.paymentDetails || []).filter((payment) => tripInvoiceIds.has(Number(payment.invoiceId))));
+      setAllPayments(ledgerData?.paymentDetails || []);
       setAllCustomers(ledgerData?.customerDetails || []);
       setPayables((ledgerData?.payableDetails || []).filter((row) =>
         isQuoteTrip ? String(row.quoteId) === String(tripId).replace(/^quote-/, "")
@@ -144,10 +157,24 @@ export default function TallyExportPreviewPage() {
 
   const summary = useMemo(() => trip ? getTripLedgerRows({ trips: [trip], customers, suppliers: [], payables, tripTaxes: {} })[0] : null, [trip, customers, payables]);
   const allRows = useMemo(() => getTripLedgerRows({ trips: allTrips, customers: allCustomers, suppliers: [], payables: allPayables, tripTaxes: {} }), [allTrips, allCustomers, allPayables]);
-  const visibleRows = useMemo(() => tallySyncFilter === "all"
-    ? allRows
-    : allRows.filter((row) => getTripCostCentreSyncStatus(row, costCentreStatuses) === tallySyncFilter),
-  [allRows, costCentreStatuses, tallySyncFilter]);
+  const pendingVoucherCounts = useMemo(() => Object.fromEntries(allRows.map((row) => [row.id, countPendingTripVouchers({
+    tripId: row.id,
+    customers: allCustomers,
+    payments: allPayments,
+    payables: allPayables,
+    lastSyncedAt: lastVoucherSyncTimes[costCentreKeyForTrip(row.id)],
+  })])), [allCustomers, allPayments, allPayables, allRows, lastVoucherSyncTimes]);
+  const visibleRows = useMemo(() => {
+    const query = tripSearch.trim().toLocaleLowerCase();
+    return allRows.filter((row) => {
+      const matchesStatus = tallySyncFilter === "all"
+        || getTripDisplaySyncStatus(row, costCentreStatuses, pendingVoucherCounts) === tallySyncFilter;
+      const tripIdForSearch = String(row.id || "").replace(/^tmc-/, "");
+      const matchesSearch = !query || [row.label, row.id, tripIdForSearch]
+        .some((value) => String(value || "").toLocaleLowerCase().includes(query));
+      return matchesStatus && matchesSearch;
+    });
+  }, [allRows, costCentreStatuses, pendingVoucherCounts, tallySyncFilter, tripSearch]);
   const currentPage = Math.max(1, Number(searchParams.get("page") || 1));
   const pageSizeParam = Number(searchParams.get("pageSize"));
   const pageSize = TALLY_PAGE_SIZE_OPTIONS.includes(pageSizeParam) ? pageSizeParam : 10;
@@ -169,7 +196,7 @@ export default function TallyExportPreviewPage() {
     const journalDate = customers.find((row) => row.transactionDate || row.createdAt || row.date)?.transactionDate || customers.find((row) => row.transactionDate || row.createdAt || row.date)?.createdAt || master.from || exportDate;
     const effectiveSubBrand = trip.subBrand || subBrandFilter;
     const exportMaster = { ...master, subBrand: effectiveSubBrand, from: master.from || exportDate, to: journalDate };
-    const voucherRows = buildVoucherRows({ accounts: [], commonRows: [], customers, payables, trips: [trip], tripTaxes: {}, master: exportMaster, selectedSubBrandLabel: effectiveSubBrand === "all" ? "Travel" : subBrandLabel(effectiveSubBrand), ledgerRows: [], ledgerMappings: [] });
+    const voucherRows = buildVoucherRows({ accounts: [], commonRows: [], customers, payments, payables, trips: [trip], tripTaxes: {}, master: exportMaster, selectedSubBrandLabel: effectiveSubBrand === "all" ? "Travel" : subBrandLabel(effectiveSubBrand), ledgerRows: [], ledgerMappings: [] });
     return { voucherRows, fileName: summary.label.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "trip" };
   };
   const downloadXmlFile = (fileName, xml) => {
@@ -182,10 +209,10 @@ export default function TallyExportPreviewPage() {
   };
   const pushTripDirectly = async () => {
     const exportData = buildTripExport();
-    if (!exportData || summary?.unpaidSales > 0) return;
+    if (!exportData) return;
     const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: exportData.voucherRows });
     const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows: exportData.voucherRows, educationalMode });
-    const pushToTally = (allowDuplicate = false) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, allowDuplicate }) });
+    const pushToTally = (options = {}) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, ...options }), silent: true });
     const downloadFallback = (notice = { title: "Push failed", message: "The push failed, so Masters and Voucher XML files were downloaded automatically." }) => {
       downloadXmlFile(`${exportData.fileName}-masters.xml`, mastersXml);
       downloadXmlFile(`${exportData.fileName}${educationalMode ? "-educational" : ""}-vouchers.xml`, vouchersXml);
@@ -200,23 +227,91 @@ export default function TallyExportPreviewPage() {
     }
     const showSuccess = (result) => {
       const tally = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
-      notify.success(`Trip pushed to Tally. Created ${tally?.created || 0}, altered ${tally?.altered || 0}.`);
+      if (!tally && result.skippedVouchers > 0) {
+        notify.info(`No new vouchers to push. Skipped ${result.skippedVouchers} voucher(s) already sent to Tally.`);
+        return;
+      }
+      const skipped = result.skippedVouchers ? `, skipped ${result.skippedVouchers} already pushed` : "";
+      const created = Number(tally?.created || 0);
+      const altered = Number(tally?.altered || 0);
+      if (trip?.id != null) {
+        setTripVoucherResults((current) => ({ ...current, [String(trip.id)]: { created, altered } }));
+      }
+      const costCentreSynced = result.results?.some((entry) => entry.stage === "masters" && entry.status === "success");
+      if (costCentreSynced && trip?.id != null) {
+        const rawId = String(trip.id);
+        const sourceType = rawId.startsWith("tmc-") ? "TMC_TRIP" : rawId.startsWith("quote-") ? "QUOTE" : "ITINERARY";
+        const sourceId = rawId.replace(/^(tmc-|quote-)/, "");
+        setCostCentreStatuses((current) => ({ ...current, [`${sourceType}:${sourceId}`]: "SYNCED" }));
+        if (result.results?.some((entry) => entry.stage === "vouchers" && entry.status === "success")) {
+          setLastVoucherSyncTimes((current) => ({ ...current, [`${sourceType}:${sourceId}`]: new Date().toISOString() }));
+        }
+      }
+      notify.success(`Trip pushed to Tally. ${summary?.label || "Trip"}: ${created} new voucher(s) created, ${altered} updated${skipped}.`);
     };
     setPushing(true);
     try {
       showSuccess(await pushToTally());
     } catch (error) {
-      if (error.code === "TALLY_DUPLICATE_PUSH") {
-        const confirmed = await notify.confirm({ title: "Possible duplicate", message: "This trip was already pushed to Tally. Continuing may create duplicate records. Do you want to continue?", confirmText: "Continue push", cancelText: "Cancel", destructive: true });
-        if (!confirmed) {
-          notify.info("Push cancelled. No duplicate was created.");
+      if (error.code === "TALLY_IMPORT_FAILED" && trip?.id != null) {
+        setCostCentreStatuses((current) => ({ ...current, [costCentreKeyForTrip(trip.id)]: "FAILED" }));
+      }
+      if (error.code === "TALLY_EXISTING_VOUCHERS_FOUND") {
+        const existingAction = await notify.confirm({
+          title: "Existing vouchers found",
+          message: `${error.message}\n\nUpdate existing vouchers and recreate any that were deleted from Tally?`,
+          confirmText: "Update existing",
+          cancelText: "More options",
+          confirmValue: "update",
+          cancelValue: "more",
+          dismissible: true,
+        });
+        if (existingAction === "update" || existingAction === true) {
+          try {
+            showSuccess(await pushToTally({ updateExisting: true }));
+          } catch (updateError) {
+            notify.error(updateError.message || "The Tally update failed.");
+          }
+          return;
+        }
+        if (existingAction !== "more") return;
+        const repushConfirmed = await notify.confirm({
+          title: "Re-upload as new vouchers?",
+          message: "This sends every voucher with Create and can produce duplicates for vouchers that still exist in Tally.",
+          confirmText: "Re-upload all",
+          cancelText: "Cancel",
+          destructive: true,
+        });
+        if (!repushConfirmed) {
+          notify.info("Push cancelled. Nothing was sent to Tally.");
           return;
         }
         try {
-          showSuccess(await pushToTally(true));
-        } catch (_) {
-          downloadFallback();
+          showSuccess(await pushToTally({ forceRepush: true }));
+        } catch (retryError) {
+          notify.error(retryError.message || "The repeated Tally push failed.");
         }
+        return;
+      }
+      if (error.code === "TALLY_NO_NEW_VOUCHERS") {
+        const confirmed = await notify.confirm({
+          title: "No new vouchers",
+          message: `${error.message}\n\nPush all vouchers again?`,
+          confirmText: "Push again",
+          cancelText: "Cancel",
+          destructive: true,
+        });
+        if (!confirmed) {
+          notify.info("Push cancelled. Nothing was sent to Tally.");
+          return;
+        }
+        try {
+          showSuccess(await pushToTally({ forceRepush: true }));
+        } catch (retryError) {
+          notify.error(retryError.message || "The repeated Tally push failed.");
+        }
+      } else if (error.code === "TALLY_LEGACY_RECEIPT_PARTIAL_MATCH") {
+        notify.error(error.message);
       } else {
         downloadFallback();
       }
@@ -251,6 +346,12 @@ export default function TallyExportPreviewPage() {
   };
   const updateTallySyncFilter = (value) => {
     setTallySyncFilter(value);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("page", "1");
+    setSearchParams(nextParams, { replace: true });
+  };
+  const updateTripSearch = (value) => {
+    setTripSearch(value);
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("page", "1");
     setSearchParams(nextParams, { replace: true });
@@ -298,6 +399,18 @@ export default function TallyExportPreviewPage() {
       </div>
       <TallySyncGuidelines />
       <div style={filterBar}>
+        <label htmlFor="tally-trip-search" style={searchControl}>
+          <Search size={15} aria-hidden="true" />
+          <input
+            id="tally-trip-search"
+            type="search"
+            value={tripSearch}
+            onChange={(event) => updateTripSearch(event.target.value)}
+            placeholder="Search trips by name or ID"
+            aria-label="Search trips by name or ID"
+            style={tripSearchInput}
+          />
+        </label>
         <label htmlFor="tally-sub-brand-filter" style={filterLabel}>Sub-brand</label>
         <select id="tally-sub-brand-filter" value={subBrandFilter} onChange={(event) => updateSubBrandFilter(event.target.value)} style={filterSelect}>
           {SUB_BRAND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -306,6 +419,7 @@ export default function TallyExportPreviewPage() {
         <select id="tally-sync-status-filter" value={tallySyncFilter} onChange={(event) => updateTallySyncFilter(event.target.value)} style={filterSelect}>
           <option value="all">All statuses</option>
           <option value="SYNCED">Synced</option>
+          <option value="NEW_VOUCHERS">New vouchers pending</option>
           <option value="NOT_CONNECTED">Not connected</option>
           <option value="FAILED">Failed</option>
         </select>
@@ -316,13 +430,13 @@ export default function TallyExportPreviewPage() {
           <tbody>{visibleRows.length ? paginatedRows.map((row) => <tr key={row.id}>
             <td style={td}><strong>{row.label}</strong><small style={{ display: "block", color: "var(--text-secondary)" }}>Trip #{row.id}</small></td>
             <td style={td}>{row.status}</td>
-            <td style={td}><SyncStatusBadge status={getTripCostCentreSyncStatus(row, costCentreStatuses)} /></td>
+            <td style={td}><SyncStatusBadge status={getTripDisplaySyncStatus(row, costCentreStatuses, pendingVoucherCounts)} />{pendingVoucherCounts[row.id] > 0 && <small style={{ display: "block", marginTop: 5, color: "#c2410c" }}>{pendingVoucherCounts[row.id]} new voucher(s) to push</small>}{tripVoucherResults[row.id] && <small style={{ display: "block", marginTop: 5, color: "var(--text-secondary)" }}>Last push: {tripVoucherResults[row.id].created} new, {tripVoucherResults[row.id].altered} updated</small>}</td>
             <td style={td}>{formatMoney(row.sales)}{row.unpaidSales > 0 && <small style={{ display: "block", color: "#f59e0b" }}>Unpaid: {formatMoney(row.unpaidSales)}</small>}</td>
             <td style={td}>{formatMoney(row.purchase)}</td>
             <td style={td}>{formatMoney(row.gst + row.tcs)}</td>
             <td style={td}>{formatMoney(row.profit)}</td>
             <td style={td}><button type="button" aria-label={`Preview ${row.label}`} title={`Preview ${row.label}`} onClick={() => navigate(`/travel/tally/export/${row.id}?subBrand=${encodeURIComponent(subBrandFilter)}`)} style={iconButton}><img src={tallyIcon} alt="" style={tallyIconStyle} /></button></td>
-          </tr>) : <tr><td colSpan="8" style={emptyState}>No trips found for the selected sub-brand.</td></tr>}</tbody>
+          </tr>) : <tr><td colSpan="8" style={emptyState}>No trips match your search and filters.</td></tr>}</tbody>
         </table>
       </div>
       {visibleRows.length > 0 && (
@@ -350,7 +464,7 @@ export default function TallyExportPreviewPage() {
       {selectedPreview?.kind === "voucher" ? <TallyVoucherPreview row={selectedPreview.row} companyName={master.companyName} /> : selectedPreview ? <TallyLedgerPreview ledger={selectedPreview.ledger} rows={previewRows} /> : <p style={muted}>No voucher or ledger data available for preview.</p>}
     </section>
     <section style={card}><h2 style={sectionTitle}>All trip records</h2><RecordTable title="Customer invoices & receipts" rows={customers} columns={["name", "reference", "invoiceTotal", "amount"]} labels={["Party", "Reference", "Invoice", "Received"]} /><RecordTable title="Expenses" rows={payables} columns={["name", "reference", "amount", "status"]} labels={["Supplier", "Reference", "Amount", "Status"]} /></section>
-    <div style={bottomPush}><div style={connectorButtons}><PermissionGate module="tally" action="export"><button type="button" onClick={pushTripDirectly} disabled={pushing || summary.unpaidSales > 0} title={summary.unpaidSales > 0 ? "Direct push is blocked while the trip has an outstanding amount" : connectorStatus?.online ? "Send masters and vouchers directly to local Tally" : "Connector offline: download XML files for manual import into Tally"} style={{ ...downloadButton, background: !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", borderColor: !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", cursor: !pushing && summary.unpaidSales <= 0 ? "pointer" : "not-allowed" }}><UploadCloud size={16} /> {pushing ? "Pushing…" : "Push directly to Tally"}</button></PermissionGate></div><label style={educationalToggle}><input type="checkbox" checked={educationalMode} onChange={(event) => { const enabled = event.target.checked; setEducationalMode(enabled); try { window.localStorage.setItem("travel-tally-educational-mode", String(enabled)); } catch (_) { /* optional preference */ } }} /> Tally is running in Educational Mode <small>(uses the first day of each month)</small></label></div>
+    <div style={bottomPush}><div style={connectorButtons}><PermissionGate module="tally" action="export"><button type="button" onClick={pushTripDirectly} disabled={pushing} title={connectorStatus?.online ? "Send masters and vouchers directly to local Tally" : "Connector offline: download XML files for manual import into Tally"} style={{ ...downloadButton, background: !pushing ? "#ea580c" : "#64748b", borderColor: !pushing ? "#ea580c" : "#64748b", cursor: !pushing ? "pointer" : "not-allowed" }}><UploadCloud size={16} /> {pushing ? "Pushing…" : "Push directly to Tally"}</button></PermissionGate></div><label style={educationalToggle}><input type="checkbox" checked={educationalMode} onChange={(event) => { const enabled = event.target.checked; setEducationalMode(enabled); try { window.localStorage.setItem("travel-tally-educational-mode", String(enabled)); } catch (_) { /* optional preference */ } }} /> Tally is running in Educational Mode <small>(uses the first day of each month)</small></label></div>
   </main>;
 }
 
@@ -384,33 +498,65 @@ function TallyPagination({ page, pageCount, pageSize, total, onPageChange, onPag
 }
 
 function Detail({ label, value }) { return <div style={detail}><span style={muted}>{label}</span><strong>{field(value)}</strong></div>; }
-function getTripCostCentreSyncStatus(row, statuses) {
-  const rawId = String(row.id || "");
+function costCentreKeyForTrip(tripId) {
+  const rawId = String(tripId || "");
   const sourceType = rawId.startsWith("tmc-") ? "TMC_TRIP" : rawId.startsWith("quote-") ? "QUOTE" : "ITINERARY";
   const sourceId = rawId.replace(/^(tmc-|quote-)/, "");
-  return statuses[`${sourceType}:${sourceId}`] || "NOT_CONNECTED";
+  return `${sourceType}:${sourceId}`;
+}
+function getTripCostCentreSyncStatus(row, statuses) {
+  return statuses[costCentreKeyForTrip(row.id)] || "NOT_CONNECTED";
+}
+function getTripDisplaySyncStatus(row, statuses, pendingVoucherCounts) {
+  const status = getTripCostCentreSyncStatus(row, statuses);
+  return status === "SYNCED" && Number(pendingVoucherCounts[row.id] || 0) > 0 ? "NEW_VOUCHERS" : status;
+}
+function countPendingTripVouchers({ tripId, customers, payments, payables, lastSyncedAt }) {
+  const lastSync = new Date(lastSyncedAt || "").getTime();
+  if (!Number.isFinite(lastSync)) return 0;
+  const addedAfterSync = (value) => {
+    const timestamp = new Date(value || "").getTime();
+    return Number.isFinite(timestamp) && timestamp > lastSync;
+  };
+  let count = 0;
+  customers.filter((row) => rowMatchesTrip(row, tripId)).forEach((row) => {
+    const invoiceAdded = addedAfterSync(row.createdAt || row.transactionDate);
+    if (invoiceAdded) count += 1;
+    const hasPaymentRows = payments.some((payment) => Number(payment.invoiceId) === Number(row.id));
+    if (invoiceAdded && !hasPaymentRows && Number(row.amount || 0) > 0) count += 1;
+  });
+  payments.filter((row) => rowMatchesTrip(row, tripId)).forEach((row) => {
+    if (addedAfterSync(row.createdAt || row.paidAt)) count += 1;
+  });
+  payables.filter((row) => rowMatchesTrip(row, tripId)).forEach((row) => {
+    if (addedAfterSync(row.createdAt || row.transactionDate)) count += 1;
+    if (Number(row.paidAmount || 0) > 0 && addedAfterSync(row.updatedAt || row.paidAt || row.paidDate)) count += 1;
+  });
+  return count;
 }
 function SyncStatusBadge({ status }) {
   const normalized = String(status || "NOT_CONNECTED").toUpperCase();
   const palette = normalized === "SYNCED"
     ? { color: "#047857", background: "#ecfdf5", borderColor: "#a7f3d0", dot: "#10b981" }
+    : normalized === "NEW_VOUCHERS"
+      ? { color: "#c2410c", background: "#fff7ed", borderColor: "#fdba74", dot: "#f97316" }
     : normalized === "FAILED"
       ? { color: "#b91c1c", background: "#fef2f2", borderColor: "#fecaca", dot: "#ef4444" }
       : { color: "#92400e", background: "#fffbeb", borderColor: "#fde68a", dot: "#f59e0b" };
-  const label = normalized === "NOT_CONNECTED" ? "Not connected" : normalized.charAt(0) + normalized.slice(1).toLowerCase();
+  const label = normalized === "NOT_CONNECTED" ? "Not connected" : normalized === "NEW_VOUCHERS" ? "New vouchers pending" : normalized.charAt(0) + normalized.slice(1).toLowerCase();
   return <span style={{ ...syncStatusBadge, ...palette }}><span aria-hidden="true" style={{ ...syncStatusDot, background: palette.dot }} />{label}</span>;
 }
 function TallySyncGuidelines() {
   return <aside style={guidelinesPanel} aria-labelledby="tally-sync-guidelines-title">
     <strong id="tally-sync-guidelines-title" style={{ color: "#f59e0b" }}>Tally Sync Guidelines</strong>
     <ul style={guidelinesList}>
-      <li>Push a trip to Tally <strong>only after the trip is completed</strong>. The invoice can be fully paid or may still have an outstanding balance.</li>
-      <li>Push each invoice to Tally <strong>only once whenever possible</strong>.</li>
-      <li>Before pushing an invoice again, <strong>verify whether the corresponding voucher already exists in Tally</strong>.</li>
-      <li>Ensure the trip&apos;s <strong>Cost Centre shows “Synced”</strong> before exporting vouchers related to that trip.</li>
-      <li>Check <strong>Sync History</strong> to verify the result of the previous sync before retrying a failed or uncertain export.</li>
-      <li>Re-pushing a voucher may <strong>alter an existing matching voucher or create a duplicate</strong>, depending on how Tally identifies the voucher.</li>
-      <li>Proceed with a duplicate/retry push <strong>only after confirming that it will not create incorrect or duplicate accounting entries</strong>.</li>
+      <li>Push a trip to Tally <strong>only after it is completed</strong>.</li>
+      <li>Sales vouchers carry the <strong>full invoice amount</strong>, even when the customer has paid only part or none of it. Recorded payments are exported as separate receipt vouchers.</li>
+      <li>Supplier bills are exported at their full amount; recorded supplier payments are exported separately to the selected cash or bank ledger.</li>
+      <li>Before exporting vouchers, confirm the trip&apos;s <strong>Cost Centre status is Synced</strong>.</li>
+      <li>A normal push skips vouchers already sent. Check <strong>Sync History</strong> after exporting to confirm what was created, updated, or skipped.</li>
+      <li>If Tally reports existing vouchers, choose <strong>Update existing</strong> to update matches and recreate vouchers deleted from Tally.</li>
+      <li>Use <strong>Re-upload all</strong> only when intended: it sends every voucher as new and may create duplicates for vouchers already in Tally.</li>
     </ul>
   </aside>;
 }
@@ -466,7 +612,9 @@ const connectorButtons = { display: "flex", gap: 8, flexWrap: "wrap" };
 const smallButton = { ...button, minHeight: 34, padding: "6px 10px", fontSize: 12 };
 const guidelinesPanel = { margin: "12px 0", padding: 14, border: "1px solid rgba(245,158,11,.45)", borderRadius: 10, background: "rgba(245,158,11,.08)", fontSize: 13 };
 const guidelinesList = { margin: "8px 0 0", paddingLeft: 20, color: "var(--text-secondary)", lineHeight: 1.6 };
-const filterBar = { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, margin: "12px 0" };
+const filterBar = { display: "flex", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: 10, margin: "12px 0" };
+const searchControl = { display: "flex", alignItems: "center", gap: 8, flex: "1 1 240px", minWidth: 180, padding: "8px 10px", border: "1px solid var(--border-color, rgba(148,163,184,.25))", borderRadius: 8, color: "var(--text-secondary)", background: "var(--input-bg, #0f172a)" };
+const tripSearchInput = { width: "100%", minWidth: 0, border: 0, outline: 0, background: "transparent", color: "var(--text-primary, #f8fafc)", font: "inherit" };
 const filterLabel = { color: "var(--text-secondary)", fontSize: 12, fontWeight: 700 };
 const filterSelect = { minWidth: 180, padding: "8px 10px", border: "1px solid var(--border-color, rgba(148,163,184,.25))", borderRadius: 8, background: "var(--input-bg, #0f172a)", color: "var(--text-primary, #f8fafc)", colorScheme: "dark light" };
 const educationalToggle = { display: "flex", alignItems: "center", gap: 7, marginTop: 16, color: "var(--text-primary)", fontSize: 13 };

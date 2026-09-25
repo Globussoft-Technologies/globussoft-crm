@@ -15,10 +15,15 @@ const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const s3Service = require("../services/s3Service");
 const { sendGenericWebFormWhatsApp } = require("../lib/genericWebFormWhatsApp");
+const axios = require("axios");
+const { DEFAULT_PERSONAL_DOMAINS, cleanDomains, validateEmail } = require("../lib/webFormEmailValidation");
 
 const router = express.Router();
 
 const uploadDir = path.join(__dirname, "..", "uploads", "web-forms");
+const MAX_UPLOAD_FILES = 5;
+const MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_TOTAL_BYTES = 20 * 1024 * 1024;
 
 try {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -69,20 +74,16 @@ const MIME_TO_EXT = {
 };
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
-
-    filename: (_req, file, cb) => {
-      const ext =
-        MIME_TO_EXT[String(file.mimetype || "").toLowerCase()] || ".bin";
-
-      const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-      cb(null, `${stamp}${ext}`);
-    },
-  }),
-
-  limits: { fileSize: 10 * 1024 * 1024 },
+  // Keep files in bounded memory until CAPTCHA and field validation pass.
+  // Disk storage here would let rejected public submissions leave files
+  // behind before the route can verify the CAPTCHA token.
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_UPLOAD_FILE_BYTES,
+    files: MAX_UPLOAD_FILES,
+    fields: 100,
+    parts: 105,
+  },
 
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_FILE_MIMES.has(String(file.mimetype || "").toLowerCase()))
@@ -91,6 +92,27 @@ const upload = multer({
     return cb(new Error("Unsupported attachment type"));
   },
 });
+
+function storedUploadFilename(file) {
+  const ext = MIME_TO_EXT[String(file?.mimetype || "").toLowerCase()] || ".bin";
+  const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${stamp}${ext}`;
+}
+
+function uploadAnyOrReject(req, res, next) {
+  upload.any()(req, res, (error) => {
+    if (!error) return next();
+    const tooLarge = error.code === "LIMIT_FILE_SIZE"
+      || error.code === "LIMIT_FILE_COUNT"
+      || error.code === "LIMIT_PART_COUNT";
+    return res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge
+        ? "Upload limit exceeded (maximum 5 files, 10 MB each)."
+        : (error.message || "Invalid attachment"),
+      code: tooLarge ? "UPLOAD_LIMIT_EXCEEDED" : "INVALID_ATTACHMENT",
+    });
+  });
+}
 
 const logoUpload = multer({
   storage: multer.memoryStorage(),
@@ -198,6 +220,13 @@ const LEAD_CUSTOM_TO_CONTACT = {
   medium: "medium",
 };
 const FORM_SCOPES = new Set(["generic", "travel"]);
+
+function notificationValue(value) {
+  if (Array.isArray(value)) return value.map((item) => textOr(item)).filter(Boolean).join(", ");
+  if (value == null) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
 
 function normalizeScope(raw) {
   const scope = textOr(raw, "generic").toLowerCase();
@@ -400,6 +429,50 @@ function defaultStyle() {
     accentColor: "#12344D",
 
     logoUrl: "",
+    fontSize: 16,
+    fontWeight: 400,
+    labelFontSize: 13,
+    placeholderFontSize: 14,
+    errorFontSize: 13,
+    successFontSize: 16,
+    fieldWidth: 100,
+    fieldHeight: 44,
+    fieldBorderWidth: 1,
+    fieldBorderRadius: 12,
+    fieldBorderColor: "#D8DDEC",
+    fieldFocusBorderColor: "#6366F1",
+    fieldBackgroundColor: "#FFFFFF",
+    placeholderColor: "#6B7280",
+    fieldTextColor: "#111827",
+    layoutColumns: "one",
+    customColumnWidth: 50,
+    rowGap: 9,
+    columnGap: 9,
+    mobileColumns: "one",
+    tabletColumns: "one",
+    containerBackgroundMode: "solid",
+    gradientStart: "#FFFFFF",
+    gradientEnd: "#EEF1FF",
+    gradientAngle: 145,
+    containerBorderColor: "#D8DDEC",
+    containerBorderWidth: 1,
+    containerBorderRadius: 24,
+    containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerPadding: 30,
+    containerMargin: 0,
+    buttonHoverColor: "#0D2639",
+    buttonTextColor: "#FFFFFF",
+    buttonFontSize: 16,
+    buttonBorderColor: "transparent",
+    buttonBorderWidth: 0,
+    buttonBorderRadius: 12,
+    buttonWidth: "auto",
+    buttonHeight: 46,
+    buttonAlignment: "left",
+    buttonLoadingColor: "#12344D",
+    buttonLoadingText: "Submitting...",
+    successMessageColor: "#065F46",
+    errorMessageColor: "#B91C1C",
   };
 }
 
@@ -438,6 +511,13 @@ function defaultSettings() {
     phoneAllowedCountries: [],
     multiStepEnabled: false,
     steps: [],
+    emailValidationType: "all",
+    blockedEmailDomains: DEFAULT_PERSONAL_DOMAINS,
+    allowedEmailDomains: [],
+    emailMxValidation: false,
+    recaptchaEnabled: false,
+    disabledBlockedEmailDomains: [],
+    disabledAllowedEmailDomains: [],
   };
 }
 
@@ -586,13 +666,24 @@ function normalizeFields(raw, scope = "generic") {
 function normalizeStyle(raw) {
   const style = { ...defaultStyle(), ...(parseJson(raw, {}) || {}) };
 
-  return {
-    fontFamily: textOr(style.fontFamily, defaultStyle().fontFamily),
+  const safeColor = (value, fallback) => {
+    const text = String(value == null ? "" : value).trim();
+    return /^(#[0-9a-f]{6}|transparent)$/i.test(text) ? text.toUpperCase() : fallback;
+  };
+  const safeNumber = (value, fallback, min, max) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+  };
+  const safeEnum = (value, allowed, fallback) => allowed.includes(value) ? value : fallback;
+  const fontFamilies = [
+    "Inter, system-ui, sans-serif", "system-ui, sans-serif", "Arial, sans-serif",
+    "Helvetica, Arial, sans-serif", "Georgia, serif", "Tahoma, sans-serif", "Verdana, sans-serif",
+  ];
 
-    backgroundColor: textOr(
-      style.backgroundColor,
-      defaultStyle().backgroundColor,
-    ),
+  return {
+    fontFamily: safeEnum(style.fontFamily, fontFamilies, defaultStyle().fontFamily),
+
+    backgroundColor: textOr(style.backgroundColor, defaultStyle().backgroundColor),
 
     formColor: textOr(style.formColor, defaultStyle().formColor),
 
@@ -600,16 +691,57 @@ function normalizeStyle(raw) {
 
     textColor: textOr(style.textColor, defaultStyle().textColor),
 
-    fieldLabelColor: textOr(
-      style.fieldLabelColor,
-      defaultStyle().fieldLabelColor,
-    ),
+    fieldLabelColor: textOr(style.fieldLabelColor, defaultStyle().fieldLabelColor),
 
     buttonColor: textOr(style.buttonColor, defaultStyle().buttonColor),
 
     accentColor: textOr(style.accentColor, defaultStyle().accentColor),
 
     logoUrl: textOr(style.logoUrl),
+    fontSize: safeNumber(style.fontSize, 16, 10, 32),
+    fontWeight: safeEnum(Number(style.fontWeight), [400, 500, 600, 700], 400),
+    labelFontSize: safeNumber(style.labelFontSize, 13, 9, 24),
+    placeholderFontSize: safeNumber(style.placeholderFontSize, 14, 9, 24),
+    errorFontSize: safeNumber(style.errorFontSize, 13, 9, 24),
+    successFontSize: safeNumber(style.successFontSize, 16, 9, 32),
+    fieldWidth: safeNumber(style.fieldWidth, 100, 50, 100),
+    fieldHeight: safeNumber(style.fieldHeight, 44, 28, 96),
+    fieldBorderWidth: safeNumber(style.fieldBorderWidth, 1, 0, 8),
+    fieldBorderRadius: safeNumber(style.fieldBorderRadius, 12, 0, 40),
+    fieldBorderColor: safeColor(style.fieldBorderColor, "#D8DDEC"),
+    fieldFocusBorderColor: safeColor(style.fieldFocusBorderColor, "#6366F1"),
+    fieldBackgroundColor: safeColor(style.fieldBackgroundColor, "#FFFFFF"),
+    placeholderColor: safeColor(style.placeholderColor, "#6B7280"),
+    fieldTextColor: safeColor(style.fieldTextColor, "#111827"),
+    layoutColumns: safeEnum(style.layoutColumns, ["one", "two"], "one"),
+    customColumnWidth: safeNumber(style.customColumnWidth, 50, 25, 75),
+    rowGap: safeNumber(style.rowGap, 9, 0, 64),
+    columnGap: safeNumber(style.columnGap, 9, 0, 64),
+    mobileColumns: safeEnum(style.mobileColumns, ["one", "two"], "one"),
+    tabletColumns: safeEnum(style.tabletColumns, ["one", "two"], "one"),
+    containerBackgroundMode: safeEnum(style.containerBackgroundMode, ["solid", "gradient"], "solid"),
+    gradientStart: safeColor(style.gradientStart, "#FFFFFF"),
+    gradientEnd: safeColor(style.gradientEnd, "#EEF1FF"),
+    gradientAngle: safeNumber(style.gradientAngle, 145, 0, 360),
+    containerBorderColor: safeColor(style.containerBorderColor, "#D8DDEC"),
+    containerBorderWidth: safeNumber(style.containerBorderWidth, 1, 0, 8),
+    containerBorderRadius: safeNumber(style.containerBorderRadius, 24, 0, 48),
+    containerShadow: safeEnum(style.containerShadow, ["none", "0 24px 70px rgba(30,41,96,.14)", "0 8px 24px rgba(15,23,42,.18)"], defaultStyle().containerShadow),
+    containerPadding: safeNumber(style.containerPadding, 30, 0, 80),
+    containerMargin: safeNumber(style.containerMargin, 0, 0, 80),
+    buttonHoverColor: safeColor(style.buttonHoverColor, "#0D2639"),
+    buttonTextColor: safeColor(style.buttonTextColor, "#FFFFFF"),
+    buttonFontSize: safeNumber(style.buttonFontSize, 16, 10, 32),
+    buttonBorderColor: safeColor(style.buttonBorderColor, "transparent"),
+    buttonBorderWidth: safeNumber(style.buttonBorderWidth, 0, 0, 8),
+    buttonBorderRadius: safeNumber(style.buttonBorderRadius, 12, 0, 40),
+    buttonWidth: safeEnum(style.buttonWidth, ["auto", "full"], "auto"),
+    buttonHeight: safeNumber(style.buttonHeight, 46, 30, 96),
+    buttonAlignment: safeEnum(style.buttonAlignment, ["left", "center", "right", "full"], "left"),
+    buttonLoadingColor: safeColor(style.buttonLoadingColor, "#12344D"),
+    buttonLoadingText: textOr(style.buttonLoadingText, "Submitting...").slice(0, 80),
+    successMessageColor: safeColor(style.successMessageColor, "#065F46"),
+    errorMessageColor: safeColor(style.errorMessageColor, "#B91C1C"),
   };
 }
 
@@ -673,6 +805,13 @@ function normalizeSettings(raw) {
       : [],
 
     multiStepEnabled: Boolean(settings.multiStepEnabled),
+    emailValidationType: settings.emailValidationType === "company" ? "company" : "all",
+    blockedEmailDomains: cleanDomains(settings.blockedEmailDomains || DEFAULT_PERSONAL_DOMAINS),
+    allowedEmailDomains: cleanDomains(settings.allowedEmailDomains),
+    emailMxValidation: Boolean(settings.emailMxValidation),
+    recaptchaEnabled: Boolean(settings.recaptchaEnabled),
+    disabledBlockedEmailDomains: cleanDomains(settings.disabledBlockedEmailDomains),
+    disabledAllowedEmailDomains: cleanDomains(settings.disabledAllowedEmailDomains),
 
     optInEnabled: Boolean(settings.optInEnabled),
 
@@ -764,6 +903,9 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
       settings,
       submissionCount,
     };
+    if (row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+      payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
+    }
     if (origin) payload.embedCode = buildEmbedCode(row, origin);
     return payload;
   }
@@ -779,6 +921,10 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
 
     submissionCount,
   };
+
+  if (isPublic && row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+    payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
+  }
 
   if (origin) payload.embedCode = buildEmbedCode(row, origin);
 
@@ -1001,7 +1147,11 @@ router.get("/public/:slug", async (req, res) => {
     // Form configuration is editable by CRM users. Do not let an embedded
     // browser reuse an older public configuration after a successful save.
     res.set("Cache-Control", "no-store");
-    res.json(shapeForm(form, 0, origin, true));
+    const publicPayload = shapeForm(form, 0, origin, true);
+    if (form.scope === "generic" && publicPayload.settings?.recaptchaEnabled) {
+      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SITE_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SITE_KEY || "" }));
+    }
+    res.json(publicPayload);
   } catch (err) {
     console.error("[web-forms/public] load error:", err && err.message);
 
@@ -1009,16 +1159,15 @@ router.get("/public/:slug", async (req, res) => {
   }
 });
 
-router.post("/public/:slug/submit", upload.any(), async (req, res) => {
+router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
   let submitStage = "start";
+  const persistedFilePaths = [];
 
   try {
     const scope = normalizeScope(req.query?.scope);
 
     if (!scope)
       return res.status(400).json({ error: "Invalid form scope", code: "INVALID_FORM_SCOPE" });
-
-    submitStage = "load_form";
 
     submitStage = "load_form";
 
@@ -1061,8 +1210,44 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         formId: trackingMetadata?.formId || String(form.id),
       };
     }
-
     const files = Array.isArray(req.files) ? req.files : [];
+    const totalUploadBytes = files.reduce(
+      (total, file) => total + Number(file?.size || 0),
+      0,
+    );
+    if (totalUploadBytes > MAX_UPLOAD_TOTAL_BYTES) {
+      return res.status(413).json({
+        error: "Combined attachments must not exceed 20 MB.",
+        code: "UPLOAD_TOTAL_TOO_LARGE",
+      });
+    }
+
+    if (formScope === "generic" && settings.recaptchaEnabled) {
+      const token = textOr(body.recaptchaToken);
+      const secret = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SECRET_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SECRET_KEY || "" }));
+      let verified = false;
+      if (token && secret) {
+        try {
+          const verificationBody = new URLSearchParams({
+            secret,
+            response: token,
+            remoteip: req.ip || "",
+          });
+          const result = await axios.post(
+            "https://www.google.com/recaptcha/api/siteverify",
+            verificationBody.toString(),
+            {
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              timeout: 8000,
+            },
+          );
+          verified = result.data?.success === true;
+        } catch (_error) {
+          verified = false;
+        }
+      }
+      if (!verified) return res.status(400).json({ error: "CAPTCHA verification failed. Please try again.", code: "CAPTCHA_FAILED" });
+    }
 
     const payload = {};
 
@@ -1098,18 +1283,21 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
           missing.push(field.label);
 
         for (const file of fieldFiles) {
+          const filename = storedUploadFilename(file);
           fileRecords.push({
             fieldKey: field.sourceKey,
 
             originalName: file.originalname,
 
-            filename: file.filename,
+            filename,
 
             mimeType: file.mimetype,
 
             size: file.size,
 
-            url: `/uploads/web-forms/${file.filename}`,
+            url: `/uploads/web-forms/${filename}`,
+
+            buffer: file.buffer,
           });
         }
 
@@ -1258,7 +1446,10 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
       fieldErrors.name = "Enter a valid name using letters, spaces, hyphens, or apostrophes";
     }
-    if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailValue) || (isGenericForm && emailValue.includes("..")))) {
+    if (emailValue && isGenericForm) {
+      const emailResult = await validateEmail(emailValue, settings);
+      if (!emailResult.valid) fieldErrors.email = emailResult.message;
+    } else if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^\s]+$/.test(emailValue))) {
       fieldErrors.email = "Enter a valid email address";
     }
     if (phoneValue && isGenericForm) {
@@ -1450,6 +1641,9 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     if (fileRecords.length) {
       for (const file of fileRecords) {
+        const filePath = path.join(uploadDir, path.basename(file.filename));
+        await fs.promises.writeFile(filePath, file.buffer, { flag: "wx" });
+        persistedFilePaths.push(filePath);
         await prisma.contactAttachment.create({
           data: {
             filename: file.originalName || file.filename,
@@ -1492,7 +1686,9 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
           },
         }),
 
-        filesJson: fileRecords.length ? JSON.stringify(fileRecords) : null,
+        filesJson: fileRecords.length
+          ? JSON.stringify(fileRecords.map(({ buffer: _buffer, ...file }) => file))
+          : null,
 
         sourceUrl: textOr(req.get("referer"), textOr(req.get("origin"), null)),
 
@@ -1502,17 +1698,42 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     submitStage = "send_notification";
 
-    if (settings.notificationEnabled && settings.notificationEmail) {
+    if (formScope === "generic" && settings.notificationEnabled && settings.notificationEmail) {
+      const fieldLines = fields
+        .filter((field) => !field.hidden)
+        .map((field) => {
+          if (field.fieldType === "file") {
+            const names = fileRecords
+              .filter((file) => file.fieldKey === field.sourceKey)
+              .map((file) => file.originalName || file.filename);
+            return `${field.label || field.sourceKey}: ${names.join(", ")}`;
+          }
+          return `${field.label || field.sourceKey}: ${notificationValue(payload[field.sourceKey])}`;
+        });
+
+      const attachments = fileRecords
+        .map((file) => {
+          try {
+            if (!file.filename || !Buffer.isBuffer(file.buffer)) return null;
+            return {
+              filename: file.originalName || file.filename,
+              type: file.mimeType || "application/octet-stream",
+              content: file.buffer.toString("base64"),
+            };
+          } catch (_error) {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
       const lines = [
         `New web form submission: ${form.name}`,
 
         `Form slug: ${form.slug}`,
 
-        `Contact: ${contact.name || ""}`,
+        "",
 
-        contact.email ? `Email: ${contact.email}` : null,
-
-        contact.phone ? `Phone: ${contact.phone}` : null,
+        ...fieldLines,
 
         `Submission ID: ${submission.id}`,
 
@@ -1525,6 +1746,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         subject: `New web form submission: ${form.name}`,
 
         text: lines.join("\n"),
+
+        attachments,
       }).catch(() => {});
     }
 
@@ -1557,6 +1780,9 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     return res.status(201).json(response);
   } catch (err) {
+    await Promise.allSettled(
+      persistedFilePaths.map((filePath) => fs.promises.unlink(filePath)),
+    );
     console.error("[web-forms/public] submit error:", {
       stage: submitStage,
       message: err && err.message,

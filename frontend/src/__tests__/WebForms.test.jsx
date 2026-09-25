@@ -76,11 +76,42 @@ describe('public web form embed footer', () => {
   test('detects a Generic phone country locally without disclosing visitor IPs', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
+    expect(html).toContain("country.value = '+91'");
     expect(html).toContain('function detectGenericCountryFromLocale');
     expect(html).toContain('new Intl.Locale(locale).region');
     expect(html).not.toContain('ipapi.co');
     expect(html).not.toContain('ipwho.is');
     expect(html).not.toContain('api.country.is');
+  });
+
+  test('preserves Generic phone country choices made by the visitor', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('phoneState.userEnteredPhone || phoneState.userSelectedCountry');
+    expect(html).toContain("if (!phoneState.applyingDetectedCountry) phoneState.userSelectedCountry = true;");
+    expect(html).toContain("detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
+  });
+
+  test('keeps the Generic CRM email-domain picker opaque across themes', () => {
+    const html = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+
+    expect(html).toContain('web-form-builder-generic');
+    expect(html).toContain('scope === "generic" ? "web-form-builder web-form-builder-generic" : "web-form-builder"');
+    expect(html).toContain('wf-email-domain-popover');
+    expect(html).toContain('background: "var(--wf-popover-bg, #fff)"');
+    expect(html).toContain('zIndex: 1000');
+    expect(html).toContain('opacity: 1 }}');
+    expect(html).toContain('isolation: isolate');
+    expect(html).toContain('opacity: 1 !important');
+    expect(html).toContain('--wf-popover-bg: #ffffff');
+    expect(html).toContain('--wf-popover-bg: #1a1d24');
+  });
+
+  test('limits locale country detection to the Generic CRM runtime', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain("if (scope !== 'generic' || localeCountryDetectionStarted) return;");
+    expect(html).toContain("if (scope !== 'generic') return;");
   });
 
   test('contains the Generic multi-step navigation and validation runtime', () => {

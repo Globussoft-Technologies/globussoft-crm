@@ -87,6 +87,11 @@ describe('GET /api/tenant-settings/', () => {
         value: '7500',
         category: 'budget',
       },
+      {
+        key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY,
+        value: 'stored-secret',
+        category: 'general',
+      },
     ]);
     const res = await request(makeApp())
       .get('/api/tenant-settings/')
@@ -94,10 +99,18 @@ describe('GET /api/tenant-settings/', () => {
     expect(res.status).toBe(200);
     expect(res.body.settings).toEqual([
       { key: KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS, value: '7500', category: 'budget' },
+      { key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY, value: '', category: 'general', hasValue: true },
     ]);
     // defaults map MUST include every canonical key so the UI can render
     // the "currently overridden" badge without a second round trip.
-    expect(res.body.defaults).toEqual(DEFAULTS);
+    expect(res.body.defaults).toEqual({
+      ...DEFAULTS,
+      [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: null,
+    });
+    expect(res.body.sensitiveDefaults).toEqual({
+      [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: Boolean(DEFAULTS[KEYS.GENERIC_RECAPTCHA_SECRET_KEY]),
+    });
+    expect(JSON.stringify(res.body)).not.toContain('stored-secret');
     expect(res.body.allowedKeys).toEqual(expect.arrayContaining(Object.values(KEYS)));
     // tenant scope MUST come from req.user.tenantId, not body.
     expect(prisma.tenantSetting.findMany).toHaveBeenCalledWith(
@@ -109,6 +122,26 @@ describe('GET /api/tenant-settings/', () => {
 });
 
 describe('GET /api/tenant-settings/:key', () => {
+  test('never exposes a stored reCAPTCHA secret', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY,
+      value: 'server-only-secret',
+      category: 'general',
+    });
+    const res = await request(makeApp())
+      .get(`/api/tenant-settings/${KEYS.GENERIC_RECAPTCHA_SECRET_KEY}`)
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY,
+      value: '',
+      defaultValue: null,
+      hasValue: true,
+      isOverride: true,
+    });
+    expect(JSON.stringify(res.body)).not.toContain('server-only-secret');
+  });
+
   test('returns active value + defaultValue + isOverride=true when row exists', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({
       key: KEYS.LLM_MONTHLY_CAP_USD_CENTS,
@@ -147,6 +180,32 @@ describe('GET /api/tenant-settings/:key', () => {
 });
 
 describe('PUT /api/tenant-settings/:key', () => {
+  test('masks a reCAPTCHA secret in the response and audit details', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'old-secret' });
+    prisma.tenantSetting.upsert.mockResolvedValue({
+      id: 101,
+      key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY,
+      value: 'new-secret',
+      category: 'general',
+    });
+    const res = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.GENERIC_RECAPTCHA_SECRET_KEY}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: 'new-secret' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ value: '', defaultValue: null, hasValue: true });
+    expect(JSON.stringify(res.body)).not.toContain('new-secret');
+
+    const details = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
+    expect(details).toMatchObject({
+      key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY,
+      oldValue: '[REDACTED]',
+      newValue: '[REDACTED]',
+    });
+    expect(JSON.stringify(details)).not.toContain('old-secret');
+    expect(JSON.stringify(details)).not.toContain('new-secret');
+  });
+
   test('happy path upserts + writes audit + returns 200 envelope', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue(null); // no prior row
     prisma.tenantSetting.upsert.mockResolvedValue({

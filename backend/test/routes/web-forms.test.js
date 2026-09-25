@@ -12,6 +12,9 @@ import prisma from '../../lib/prisma.js';
 
 
 const requireCJS = createRequire(import.meta.url);
+const fs = requireCJS('node:fs');
+const axios = requireCJS('axios');
+axios.post = vi.fn();
 
 const authMw = requireCJS('../../middleware/auth');
 
@@ -160,6 +163,7 @@ beforeEach(() => {
   prisma.user.findFirst.mockResolvedValue(null);
 
   emailSender.sendEmail.mockClear();
+  axios.post.mockReset();
   s3Service.uploadImage.mockReset();
   s3Service.uploadImage.mockResolvedValue('https://objectstorage.example.com/n/ns/b/forms/o/travel/web-forms/11/logos/logo.png');
   s3Service.isOciUrl.mockReset();
@@ -796,6 +800,94 @@ describe('GET /api/forms/public/:slug', () => {
 
 
 describe('POST /api/forms/public/:slug/submit', () => {
+
+  function mockCaptchaForm({ withFile = false } = {}) {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 83,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Protected form',
+      slug: 'protected-form',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        ...(withFile
+          ? [{ id: 'resume', sourceKind: 'custom', sourceKey: 'resume', fieldType: 'file', label: 'Resume', required: false, hidden: false, width: 'full', options: [] }]
+          : []),
+      ]),
+      styleJson: '{}',
+      settingsJson: JSON.stringify({ recaptchaEnabled: true }),
+    });
+    prisma.tenantSetting.findUnique.mockImplementation((params) => (
+      params.where?.tenantId_key?.key === 'generic.webForm.recaptcha.secretKey'
+        ? { value: 'server-only-secret' }
+        : null
+    ));
+  }
+
+  test('verifies CAPTCHA in the request body and never puts the secret in the URL', async () => {
+    mockCaptchaForm();
+    axios.post.mockResolvedValue({ data: { success: true } });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/protected-form/submit?scope=generic')
+      .field('name', 'Protected Customer')
+      .field('recaptchaToken', 'browser-token');
+
+    expect(response.status).toBe(201);
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://www.google.com/recaptcha/api/siteverify',
+      expect.stringContaining('secret=server-only-secret'),
+      expect.objectContaining({
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 8000,
+      }),
+    );
+    expect(axios.post.mock.calls[0][0]).not.toContain('server-only-secret');
+  });
+
+  test('rejects invalid CAPTCHA before persisting uploaded files or CRM records', async () => {
+    mockCaptchaForm({ withFile: true });
+    axios.post.mockResolvedValue({ data: { success: false } });
+    const writeFile = vi.spyOn(fs.promises, 'writeFile');
+
+    try {
+      const response = await request(makeApp())
+        .post('/api/forms/public/protected-form/submit?scope=generic')
+        .field('name', 'Rejected Customer')
+        .field('recaptchaToken', 'invalid-token')
+        .attach('resume', Buffer.from('not persisted'), {
+          filename: 'resume.txt',
+          contentType: 'text/plain',
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({ code: 'CAPTCHA_FAILED' });
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(prisma.contact.create).not.toHaveBeenCalled();
+      expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
+    } finally {
+      writeFile.mockRestore();
+    }
+  });
+
+  test('rejects more than five attachments before loading the public form', async () => {
+    let pending = request(makeApp())
+      .post('/api/forms/public/any-form/submit?scope=generic');
+    for (let index = 0; index < 6; index += 1) {
+      pending = pending.attach(`file${index}`, Buffer.from(String(index)), {
+        filename: `file-${index}.txt`,
+        contentType: 'text/plain',
+      });
+    }
+    const response = await pending;
+
+    expect(response.status).toBe(413);
+    expect(response.body).toMatchObject({ code: 'UPLOAD_LIMIT_EXCEEDED' });
+    expect(prisma.webForm.findFirst).not.toHaveBeenCalled();
+  });
 
   function mockGenericPhoneForm() {
     prisma.webForm.findFirst.mockResolvedValue({

@@ -142,6 +142,8 @@ const KEYS = {
   REPORT_SMTP_USER:                      "report.smtpUser",
   REPORT_SMTP_PASS:                      "report.smtpPass",
   TRAVEL_EXTERNAL_REVIEW_URL:            "travel.externalReviewUrl",
+  GENERIC_RECAPTCHA_SITE_KEY:            "generic.webForm.recaptcha.siteKey",
+  GENERIC_RECAPTCHA_SECRET_KEY:          "generic.webForm.recaptcha.secretKey",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -150,6 +152,8 @@ const KEYS = {
 // $50, LLM $100, Booking/Expedia $100). Reading via `process.env.<KEY>
 // ?? <fallback>` lets ops override the floor without code changes.
 const DEFAULTS = {
+  [KEYS.GENERIC_RECAPTCHA_SITE_KEY]: process.env.RECAPTCHA_SITE_KEY || "",
+  [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: process.env.RECAPTCHA_SECRET_KEY || "",
   [KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.ADSGPT_MONTHLY_CAP_USD_CENTS ?? 5000),
   [KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS]:

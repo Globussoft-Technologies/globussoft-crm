@@ -16,13 +16,13 @@
 
     *,*::before,*::after{box-sizing:border-box}
 
-    html,body{margin:0;padding:0;background:radial-gradient(circle at 10% 0%,rgba(99,102,241,.14),transparent 42%),linear-gradient(145deg,#f8f9ff 0%,#eef1ff 100%);color:#10132d;font-family:var(--gbs-font,Inter,system-ui,sans-serif)}
+    html,body{margin:0;padding:0;background:radial-gradient(circle at 10% 0%,rgba(99,102,241,.14),transparent 42%),linear-gradient(145deg,#f8f9ff 0%,#eef1ff 100%);color:#10132d;font-family:var(--gbs-font,Inter,system-ui,sans-serif);font-size:var(--gbs-font-size,16px);font-weight:var(--gbs-font-weight,400)}
 
     body{padding:20px}
 
     .wrap{max-width:620px;margin:0 auto}
 
-    .panel{background:var(--gbs-form,rgba(255,255,255,.94));border:1px solid rgba(148,163,184,.28);border-radius:24px;padding:30px;box-shadow:0 24px 70px rgba(30,41,96,.14);backdrop-filter:blur(12px)}
+    .panel{background:var(--gbs-form,rgba(255,255,255,.94));background:var(--gbs-container-bg,var(--gbs-form,rgba(255,255,255,.94)));border:var(--gbs-container-border-width,1px) solid var(--gbs-container-border,#d8ddec);border-radius:var(--gbs-container-radius,24px);padding:var(--gbs-container-padding,30px);margin:var(--gbs-container-margin,0);box-shadow:var(--gbs-container-shadow,0 24px 70px rgba(30,41,96,.14));backdrop-filter:blur(12px)}
 
     .logo{max-height:48px;max-width:210px;object-fit:contain;display:block;margin-bottom:16px}
 
@@ -33,7 +33,7 @@
 
     p.desc{margin:0;color:var(--gbs-text,#52607a);font-size:.92rem;line-height:1.6}
 
-    .field{margin-bottom:16px}
+    .field{margin-bottom:var(--gbs-row-gap,16px);min-width:0}
 
     .conditional-field{border-left:3px solid rgba(99,102,241,.34);padding-left:12px}
 
@@ -44,27 +44,28 @@
     .phone-input select::-webkit-scrollbar-track{background:#f1f1f1;border-radius:4px}
     .phone-input select::-webkit-scrollbar-thumb{background:#8b8b8b;border-radius:4px;min-height:50%}
     .phone-country-picker{position:relative}
-    .phone-country-picker>input{width:100%;padding:.82rem .65rem .82rem 2.45rem;background:#fff;background-repeat:no-repeat;background-position:.7rem center;background-size:20px 14px;color:#111827;border:1px solid #d8ddec;border-radius:12px;font:inherit;font-weight:650;text-align:left;line-height:1.2}
-    .phone-country-picker>input:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 4px rgba(99,102,241,.13)}
+    .phone-country-picker>input{width:100%;padding:.82rem .65rem .82rem 2.45rem;background:var(--gbs-field-bg,#fff);background-repeat:no-repeat;background-position:.7rem center;background-size:20px 14px;color:var(--gbs-field-text,#111827);border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px);font:inherit;font-weight:650;text-align:left;line-height:1.2}
+    .phone-country-picker>input:focus{outline:none;border-color:var(--gbs-focus-border,#6366f1);box-shadow:0 0 0 4px color-mix(in srgb,var(--gbs-focus-border,#6366f1) 13%,transparent)}
     .phone-country-options{position:absolute;z-index:20;display:none;top:calc(100% + 4px);left:0;width:180px;max-height:145px;overflow-y:auto;background:#fff;border:1px solid #9ca3af;border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.18)}
     .phone-country-picker.open .phone-country-options{display:block}
     .phone-country-options button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:0;background:#fff;color:#111827;text-align:left;font:inherit;cursor:pointer}
     .phone-country-flag{display:block;width:20px;height:14px;flex:0 0 20px;object-fit:cover;border-radius:2px;box-shadow:0 0 0 1px rgba(15,23,42,.12)}
     .phone-country-options button:hover,.phone-country-options button.selected{background:#4059d2;color:#fff}
 
-    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+    .grid{display:grid;grid-template-columns:var(--gbs-columns,repeat(2,minmax(0,1fr)));column-gap:var(--gbs-column-gap,9px);row-gap:var(--gbs-row-gap,9px)}
 
     .half{grid-column:span 1}
 
-    .full{grid-column:1/-1}
+    .full{grid-column:var(--gbs-full-span,1/-1)}
 
-    label{display:block;font-size:.78rem;color:var(--gbs-label,#34405e);font-weight:700;margin-bottom:4px}
+    label{display:block;font-size:var(--gbs-label-size,.78rem);color:var(--gbs-label,#34405e);font-weight:var(--gbs-font-weight,700);margin-bottom:4px}
 
-    input,select,textarea{width:100%;border:1px solid #d8ddec;border-radius:12px;padding:.82rem .9rem;font:inherit;background:#fff;color:#111827;transition:border-color .2s,box-shadow .2s,transform .2s}
+    input,select,textarea{width:var(--gbs-field-width,100%);max-width:100%;min-height:var(--gbs-field-height,0);border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px);padding:.82rem .9rem;font:inherit;font-size:var(--gbs-field-font-size,inherit);background:var(--gbs-field-bg,#fff);color:var(--gbs-field-text,#111827);transition:border-color .2s,box-shadow .2s,transform .2s}
 
-    textarea{min-height:104px;resize:vertical}
+    textarea{min-height:var(--gbs-textarea-height,104px);resize:vertical}
 
-    input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 4px rgba(99,102,241,.13);transform:translateY(-1px)}
+    input::placeholder,textarea::placeholder{color:var(--gbs-placeholder-color,#6b7280);font-size:var(--gbs-placeholder-size,14px)}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gbs-focus-border,#6366f1);box-shadow:0 0 0 4px color-mix(in srgb,var(--gbs-focus-border,#6366f1) 13%,transparent);transform:translateY(-1px)}
 
     .check{display:inline-flex;align-items:flex-start;gap:8px;color:var(--gbs-text,#111827);font-size:.95rem;cursor:pointer;text-align:left;margin-bottom:0;width:fit-content;max-width:100%}
 
@@ -76,7 +77,7 @@
 
     .optin a{color:var(--gbs-accent,#12344D);text-decoration:underline}
 
-    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}
+    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:var(--gbs-button-align,flex-start);margin-top:22px}
 
     .step-progress{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 22px;padding-bottom:14px;border-bottom:1px solid #edf0f7}
     .step-progress-item{display:flex;align-items:center;gap:6px;color:#8791a8;font-size:.78rem;font-weight:750}
@@ -87,9 +88,9 @@
 
     button{border:0;border-radius:12px;padding:.86rem 1.1rem;font:inherit;font-weight:750;cursor:pointer;transition:transform .2s,box-shadow .2s,opacity .2s}
 
-    .primary{background:var(--gbs-button,#12344D);color:#fff;min-width:150px;box-shadow:0 10px 22px color-mix(in srgb,var(--gbs-button,#12344D) 25%,transparent)}
+    .primary{background:var(--gbs-button,#12344D);color:var(--gbs-button-text,#fff);font-size:var(--gbs-button-size,16px);height:var(--gbs-button-height,46px);width:var(--gbs-button-width,auto);border:var(--gbs-button-border-width,0px) solid var(--gbs-button-border,transparent);border-radius:var(--gbs-button-radius,12px);min-width:150px;box-shadow:0 10px 22px color-mix(in srgb,var(--gbs-button,#12344D) 25%,transparent)}
 
-    .primary:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 14px 26px color-mix(in srgb,var(--gbs-button,#12344D) 32%,transparent)}
+    .primary:hover:not(:disabled){background:var(--gbs-button-hover,var(--gbs-button,#12344D));transform:translateY(-1px);box-shadow:0 14px 26px color-mix(in srgb,var(--gbs-button-hover,var(--gbs-button,#12344D)) 32%,transparent)}
 
     button:disabled{cursor:wait;opacity:.72}
 
@@ -101,10 +102,10 @@
 
     .error,.success{border-radius:16px;padding:18px 18px;margin-bottom:18px;line-height:1.55}
 
-    .error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;white-space:pre-line}
-    .field-error{display:block;color:#b91c1c;font-size:0.82rem;margin-top:3px;line-height:1.35}
+    .error{background:#fef2f2;color:var(--gbs-error-color,#b91c1c);border:1px solid #fecaca;white-space:pre-line;font-size:var(--gbs-error-size,inherit)}
+    .field-error{display:block;color:var(--gbs-error-color,#b91c1c);font-size:var(--gbs-error-size,13px);margin-top:3px;line-height:1.35}
 
-    .success{background:linear-gradient(135deg,#ecfdf5,#f0fdf4);color:#065f46;border:1px solid #a7f3d0;text-align:center;font-weight:700}
+    .success{background:linear-gradient(135deg,#ecfdf5,#f0fdf4);color:var(--gbs-success-color,#065f46);border:1px solid #a7f3d0;text-align:center;font-weight:700;font-size:var(--gbs-success-size,inherit)}
 
     /* Keep the generic CRM confirmation centered in the available page. */
     .generic-success{min-height:calc(100vh - 40px);display:flex;align-items:center;justify-content:center}
@@ -117,7 +118,8 @@
 
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    @media (max-width:640px){body{padding:12px}.panel{padding:22px 18px;border-radius:20px}.grid{grid-template-columns:1fr}.half,.full{grid-column:1/-1}}
+    @media (min-width:641px) and (max-width:900px){.grid{grid-template-columns:var(--gbs-tablet-columns,1fr)}}
+    @media (max-width:640px){body{padding:12px}.panel{padding:22px 18px;border-radius:20px}.grid{grid-template-columns:var(--gbs-mobile-columns,1fr)}.half,.full{grid-column:auto}}
 
   </style>
 
@@ -295,21 +297,117 @@
 
         style = style || {};
 
+        var generic = scope === 'generic';
+        var safeColor = function(value, fallback) { return /^(#[0-9a-f]{6}|transparent)$/i.test(String(value || '')) ? String(value).toUpperCase() : fallback; };
+        var number = function(value, fallback, min, max) { var n = Number(value); return isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
+        var customWidth = number(style.customColumnWidth, 50, 25, 75);
+        var configuredColumnGap = number(style.columnGap, 9, 0, 64);
+        var columns = generic && style.layoutColumns === 'two' ? 'minmax(0,' + customWidth + '%) minmax(0,calc(100% - ' + customWidth + '% - ' + configuredColumnGap + 'px))' : generic ? '1fr' : 'repeat(2,minmax(0,1fr))';
+        var tablet = generic && style.tabletColumns === 'two' ? 'repeat(2,minmax(0,1fr))' : generic ? '1fr' : 'repeat(2,minmax(0,1fr))';
+        var mobile = generic && style.mobileColumns === 'two' ? 'repeat(2,minmax(0,1fr))' : '1fr';
+        var align = generic && style.buttonAlignment === 'center' ? 'center' : generic && style.buttonAlignment === 'right' ? 'flex-end' : 'flex-start';
+        if (generic && style.buttonAlignment === 'full') align = 'stretch';
+        var containerBackground = generic && style.containerBackgroundMode === 'gradient'
+          ? 'linear-gradient(' + number(style.gradientAngle, 145, 0, 360) + 'deg,' + safeColor(style.gradientStart, '#FFFFFF') + ',' + safeColor(style.gradientEnd, '#EEF1FF') + ')'
+          : safeColor(style.formColor, '#FFFFFF');
+
         return [
 
           '--gbs-font:' + (style.fontFamily || 'Inter, system-ui, sans-serif'),
 
+          '--gbs-font-size:' + (generic ? number(style.fontSize, 16, 10, 32) : 16) + 'px',
+
+          '--gbs-font-weight:' + (generic ? [400,500,600,700].indexOf(Number(style.fontWeight)) >= 0 ? Number(style.fontWeight) : 400 : 400),
+
           '--gbs-bg:' + (style.backgroundColor || '#EBEFF3'),
 
-          '--gbs-form:' + (style.formColor || '#FFFFFF'),
+          '--gbs-form:' + safeColor(style.formColor, '#FFFFFF'),
 
-          '--gbs-title:' + (style.titleColor || '#000000'),
+          '--gbs-container-bg:' + containerBackground,
 
-          '--gbs-text:' + (style.textColor || '#111827'),
+          '--gbs-container-border:' + (generic ? safeColor(style.containerBorderColor, '#D8DDEC') : 'rgba(148,163,184,.28)'),
 
-          '--gbs-label:' + (style.fieldLabelColor || '#666666'),
+          '--gbs-container-border-width:' + (generic ? number(style.containerBorderWidth, 1, 0, 8) : 1) + 'px',
 
-          '--gbs-button:' + (style.buttonColor || '#12344D'),
+          '--gbs-container-radius:' + (generic ? number(style.containerBorderRadius, 24, 0, 48) : 24) + 'px',
+
+          '--gbs-container-padding:' + (generic ? number(style.containerPadding, 30, 0, 80) : 30) + 'px',
+
+          '--gbs-container-margin:' + (generic ? number(style.containerMargin, 0, 0, 80) : 0) + 'px',
+
+          '--gbs-container-shadow:' + (generic && ['none','0 24px 70px rgba(30,41,96,.14)','0 8px 24px rgba(15,23,42,.18)'].indexOf(style.containerShadow) >= 0 ? style.containerShadow : '0 24px 70px rgba(30,41,96,.14)'),
+
+          '--gbs-title:' + safeColor(style.titleColor, '#000000'),
+
+          '--gbs-text:' + safeColor(style.textColor, '#111827'),
+
+          '--gbs-label:' + safeColor(style.fieldLabelColor, '#666666'),
+
+          '--gbs-label-size:' + (generic ? number(style.labelFontSize, 13, 9, 24) : 13) + 'px',
+
+           '--gbs-field-width:' + (generic ? number(style.fieldWidth, 100, 50, 100) : 100) + '%',
+
+          '--gbs-field-height:' + (generic ? number(style.fieldHeight, 44, 28, 96) : 44) + 'px',
+
+          '--gbs-field-border-width:' + (generic ? number(style.fieldBorderWidth, 1, 0, 8) : 1) + 'px',
+
+          '--gbs-field-radius:' + (generic ? number(style.fieldBorderRadius, 12, 0, 40) : 12) + 'px',
+
+          '--gbs-field-border:' + (generic ? safeColor(style.fieldBorderColor, '#D8DDEC') : '#D8DDEC'),
+
+          '--gbs-focus-border:' + (generic ? safeColor(style.fieldFocusBorderColor, '#6366F1') : '#6366F1'),
+
+          '--gbs-field-bg:' + (generic ? safeColor(style.fieldBackgroundColor, '#FFFFFF') : '#FFFFFF'),
+
+          '--gbs-placeholder-color:' + (generic ? safeColor(style.placeholderColor, '#6B7280') : '#6B7280'),
+
+          '--gbs-field-text:' + (generic ? safeColor(style.fieldTextColor, '#111827') : '#111827'),
+
+          '--gbs-field-font-size:' + (generic ? number(style.fontSize, 16, 10, 32) : 16) + 'px',
+
+          '--gbs-placeholder-size:' + (generic ? number(style.placeholderFontSize, 14, 9, 24) : 14) + 'px',
+
+          '--gbs-textarea-height:' + (generic ? number(style.fieldHeight, 44, 28, 96) : 104) + 'px',
+
+          '--gbs-columns:' + columns,
+
+          '--gbs-tablet-columns:' + tablet,
+
+          '--gbs-mobile-columns:' + mobile,
+
+          '--gbs-row-gap:' + (generic ? number(style.rowGap, 9, 0, 64) : 9) + 'px',
+
+          '--gbs-column-gap:' + (generic ? number(style.columnGap, 9, 0, 64) : 9) + 'px',
+
+          '--gbs-full-span:' + (generic && style.layoutColumns === 'two' ? 'span 1' : '1/-1'),
+
+          '--gbs-button:' + safeColor(style.buttonColor, '#12344D'),
+
+          '--gbs-button-hover:' + (generic ? safeColor(style.buttonHoverColor, '#0D2639') : safeColor(style.buttonColor, '#12344D')),
+
+          '--gbs-button-text:' + (generic ? safeColor(style.buttonTextColor, '#FFFFFF') : '#FFFFFF'),
+
+          '--gbs-button-size:' + (generic ? number(style.buttonFontSize, 16, 10, 32) : 16) + 'px',
+
+          '--gbs-button-height:' + (generic ? number(style.buttonHeight, 46, 30, 96) : 46) + 'px',
+
+          '--gbs-button-radius:' + (generic ? number(style.buttonBorderRadius, 12, 0, 40) : 12) + 'px',
+
+          '--gbs-button-width:' + (generic && style.buttonWidth === 'full' || generic && style.buttonAlignment === 'full' ? '100%' : 'auto'),
+
+          '--gbs-button-align:' + align,
+
+          '--gbs-button-border:' + (generic ? safeColor(style.buttonBorderColor, 'transparent') : 'transparent'),
+
+          '--gbs-button-border-width:' + (generic ? number(style.buttonBorderWidth, 0, 0, 8) : 0) + 'px',
+
+          '--gbs-error-color:' + (generic ? safeColor(style.errorMessageColor, '#B91C1C') : '#B91C1C'),
+
+          '--gbs-success-color:' + (generic ? safeColor(style.successMessageColor, '#065F46') : '#065F46'),
+
+          '--gbs-error-size:' + (generic ? number(style.errorFontSize, 13, 9, 24) : 13) + 'px',
+
+          '--gbs-success-size:' + (generic ? number(style.successFontSize, 16, 9, 32) : 16) + 'px',
 
           '--gbs-accent:' + (style.accentColor || '#12344D'),
 
@@ -340,6 +438,8 @@
         var help = field.helpText ? '<div class="note" style="margin-top:6px">' + esc(field.helpText) + '</div>' : '';
 
         var placeholder = esc(field.placeholder || '');
+
+        if (field.sourceKey === 'email') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="email" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" autocomplete="email" />' + help + '</div>';
 
         if (scope === 'generic' && field.sourceKey === 'phone') {
           return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><div class="phone-input"><select name="phoneCountry" aria-label="Phone country code"><option value="+1">+1</option><option value="+7">+7</option><option value="+20">+20</option><option value="+27">+27</option><option value="+30">+30</option><option value="+31">+31</option><option value="+32">+32</option><option value="+33">+33</option><option value="+34">+34</option><option value="+36">+36</option><option value="+39">+39</option><option value="+40">+40</option><option value="+41">+41</option><option value="+43">+43</option><option value="+44">+44</option><option value="+45">+45</option><option value="+46">+46</option><option value="+47">+47</option><option value="+48">+48</option><option value="+49">+49</option><option value="+51">+51</option><option value="+52">+52</option><option value="+53">+53</option><option value="+54">+54</option><option value="+55">+55</option><option value="+56">+56</option><option value="+57">+57</option><option value="+58">+58</option><option value="+60">+60</option><option value="+61">+61</option><option value="+62">+62</option><option value="+63">+63</option><option value="+64">+64</option><option value="+65">+65</option><option value="+66">+66</option><option value="+81">+81</option><option value="+82">+82</option><option value="+84">+84</option><option value="+86">+86</option><option value="+90">+90</option><option value="+91" selected>+91</option><option value="+92">+92</option><option value="+93">+93</option><option value="+94">+94</option><option value="+95">+95</option><option value="+98">+98</option><option value="+211">+211</option><option value="+212">+212</option><option value="+213">+213</option><option value="+216">+216</option><option value="+218">+218</option><option value="+220">+220</option><option value="+221">+221</option><option value="+222">+222</option><option value="+223">+223</option><option value="+224">+224</option><option value="+225">+225</option><option value="+226">+226</option><option value="+227">+227</option><option value="+228">+228</option><option value="+229">+229</option><option value="+230">+230</option><option value="+231">+231</option><option value="+232">+232</option><option value="+233">+233</option><option value="+234">+234</option><option value="+235">+235</option><option value="+236">+236</option><option value="+237">+237</option><option value="+238">+238</option><option value="+239">+239</option><option value="+240">+240</option><option value="+241">+241</option><option value="+242">+242</option><option value="+243">+243</option><option value="+244">+244</option><option value="+245">+245</option><option value="+246">+246</option><option value="+248">+248</option><option value="+249">+249</option><option value="+250">+250</option><option value="+251">+251</option><option value="+252">+252</option><option value="+253">+253</option><option value="+254">+254</option><option value="+255">+255</option><option value="+256">+256</option><option value="+257">+257</option><option value="+258">+258</option><option value="+260">+260</option><option value="+261">+261</option><option value="+262">+262</option><option value="+263">+263</option><option value="+264">+264</option><option value="+265">+265</option><option value="+266">+266</option><option value="+267">+267</option><option value="+268">+268</option><option value="+269">+269</option><option value="+290">+290</option><option value="+291">+291</option><option value="+297">+297</option><option value="+298">+298</option><option value="+299">+299</option><option value="+350">+350</option><option value="+351">+351</option><option value="+352">+352</option><option value="+353">+353</option><option value="+354">+354</option><option value="+355">+355</option><option value="+356">+356</option><option value="+357">+357</option><option value="+358">+358</option><option value="+359">+359</option><option value="+370">+370</option><option value="+371">+371</option><option value="+372">+372</option><option value="+373">+373</option><option value="+374">+374</option><option value="+375">+375</option><option value="+376">+376</option><option value="+377">+377</option><option value="+378">+378</option><option value="+379">+379</option><option value="+380">+380</option><option value="+381">+381</option><option value="+382">+382</option><option value="+383">+383</option><option value="+385">+385</option><option value="+386">+386</option><option value="+387">+387</option><option value="+389">+389</option><option value="+420">+420</option><option value="+421">+421</option><option value="+423">+423</option><option value="+500">+500</option><option value="+501">+501</option><option value="+502">+502</option><option value="+503">+503</option><option value="+504">+504</option><option value="+505">+505</option><option value="+506">+506</option><option value="+507">+507</option><option value="+508">+508</option><option value="+509">+509</option><option value="+590">+590</option><option value="+591">+591</option><option value="+592">+592</option><option value="+593">+593</option><option value="+594">+594</option><option value="+595">+595</option><option value="+596">+596</option><option value="+597">+597</option><option value="+598">+598</option><option value="+599">+599</option><option value="+670">+670</option><option value="+672">+672</option><option value="+673">+673</option><option value="+674">+674</option><option value="+675">+675</option><option value="+676">+676</option><option value="+677">+677</option><option value="+678">+678</option><option value="+679">+679</option><option value="+680">+680</option><option value="+681">+681</option><option value="+682">+682</option><option value="+683">+683</option><option value="+685">+685</option><option value="+686">+686</option><option value="+687">+687</option><option value="+688">+688</option><option value="+689">+689</option><option value="+690">+690</option><option value="+691">+691</option><option value="+692">+692</option><option value="+850">+850</option><option value="+852">+852</option><option value="+853">+853</option><option value="+855">+855</option><option value="+856">+856</option><option value="+880">+880</option><option value="+886">+886</option><option value="+960">+960</option><option value="+961">+961</option><option value="+962">+962</option><option value="+963">+963</option><option value="+964">+964</option><option value="+965">+965</option><option value="+966">+966</option><option value="+967">+967</option><option value="+968">+968</option><option value="+970">+970</option><option value="+971">+971</option><option value="+972">+972</option><option value="+973">+973</option><option value="+974">+974</option><option value="+975">+975</option><option value="+976">+976</option><option value="+977">+977</option><option value="+992">+992</option><option value="+993">+993</option><option value="+994">+994</option><option value="+995">+995</option><option value="+996">+996</option><option value="+998">+998</option></select><input id="f-' + name + '" type="tel" name="' + name + '" ' + required + ' placeholder="' + placeholder.replace(/^\+\d+\s*/, '') + '" autocomplete="tel-national" /></div>' + help + '</div>';
@@ -407,7 +507,52 @@
         if (scope !== 'generic' || field.hidden || !condition || (!condition.fieldId && !condition.fieldKey)) return html;
         var level = conditionalDepth(field, fields);
         var indent = Math.min(Math.max(level - 1, 0), 4) * 12;
-        return html.replace('<div class="field ', '<div class="field conditional-field" style="margin-left:' + indent + 'px" data-conditional-level="' + level + '" data-show-when-field-id="' + esc(condition.fieldId || '') + '" data-show-when-field-key="' + esc(condition.fieldKey || '') + '" data-show-when-value="' + esc(condition.value || '') + '" ');
+        return html.replace('<div class="field ', '<div class="field full conditional-field" style="margin-left:' + indent + 'px" data-conditional-level="' + level + '" data-show-when-field-id="' + esc(condition.fieldId || '') + '" data-show-when-field-key="' + esc(condition.fieldKey || '') + '" data-show-when-value="' + esc(condition.value || '') + '" ');
+      }
+
+      function orderGenericConditionalFields(fields){
+        if (scope !== 'generic') return fields;
+        var ordered = [];
+        var visited = {};
+        function parentFor(field){
+          var condition = field && field.showWhen;
+          if (!condition) return null;
+          return fields.find(function(candidate){ return (
+            (condition.fieldId && String(candidate.id) === String(condition.fieldId)) ||
+            (condition.fieldKey && String(candidate.sourceKey) === String(condition.fieldKey)) ||
+            (condition.parentQuestion && String(candidate.label || '') === String(condition.parentQuestion))
+          ); }) || null;
+        }
+        var conditionalRoots = fields.filter(function(field){
+          return field && (
+            field.conditionalFlow === true ||
+            String(field.sourceKey || '').indexOf('conditional-root_') === 0
+          );
+        });
+        if (!conditionalRoots.length && fields.some(function(field){ return field && field.showWhen; })) {
+          conditionalRoots = fields.filter(function(field){
+            return field && field.sourceKind === 'custom' && !field.showWhen &&
+              (field.fieldType === 'dropdown' || field.fieldType === 'radio' || field.fieldType === 'multiselect');
+          }).slice(0, 1);
+        }
+        var fallbackRootId = conditionalRoots.length === 1 ? String(conditionalRoots[0].id) : '';
+        function append(field){
+          var fieldId = String(field && field.id || '');
+          if (!field || visited[fieldId]) return;
+          visited[fieldId] = true;
+          ordered.push(field);
+          var children = fields.filter(function(child){
+            var parent = parentFor(child);
+            return parent && String(parent.id) === fieldId;
+          });
+          if (!children.length && fallbackRootId === fieldId) {
+            children = fields.filter(function(child){ return child && child.showWhen; });
+          }
+          children.forEach(append);
+        }
+        fields.forEach(function(field){ if (!parentFor(field)) append(field); });
+        fields.forEach(append);
+        return ordered;
       }
 
       function setupGenericConditionalFields(fields){
@@ -508,6 +653,7 @@
         if (!config.enabled) return true;
         var stepId = String(config.steps[stepIndex].id);
         var fields = Array.isArray(formData.fields) ? formData.fields : [];
+        fields = orderGenericConditionalFields(fields);
         var errors = {};
         fields.forEach(function(field){
           if (String(field.stepId || config.steps[0].id) !== stepId || !field.required || field.hidden || !isConditionalFieldVisible(field, fields)) return;
@@ -536,9 +682,11 @@
         var previous = document.getElementById('step-previous');
         var next = document.getElementById('step-next');
         var submit = document.getElementById('submit-btn');
+        var recaptcha = document.getElementById('recaptcha-container');
         if (previous) previous.style.display = currentStepIndex > 0 ? '' : 'none';
         if (next) next.style.display = currentStepIndex < config.steps.length - 1 ? '' : 'none';
         if (submit) submit.style.display = currentStepIndex === config.steps.length - 1 ? '' : 'none';
+        if (recaptcha) recaptcha.style.display = currentStepIndex === config.steps.length - 1 ? '' : 'none';
       }
 
       function renderForm(data){
@@ -547,11 +695,12 @@
 
         var style = formData.style || {};
 
-        document.body.style.background = style.backgroundColor || '#EBEFF3';
+        document.body.style.background = /^(#[0-9a-f]{6})$/i.test(String(style.backgroundColor || '')) ? style.backgroundColor : '#EBEFF3';
 
         document.documentElement.style.cssText = styleVars(style);
 
         var fields = Array.isArray(formData.fields) ? formData.fields : [];
+        fields = orderGenericConditionalFields(fields);
 
         var titleOverride = new URLSearchParams(window.location.search).get('title');
         var rawTitle = String(titleOverride || (formData.settings && formData.settings.formTitle) || '').trim();
@@ -577,6 +726,7 @@
           optIn = '<div class="field full optin"><label class="check"><input type="checkbox" name="optInConsent" value="true" /><span>' + consentText + linkHtml + '</span></label></div>';
         }
 
+        var recaptcha = scope === 'generic' && formData.settings && formData.settings.recaptchaEnabled && formData.settings.recaptchaSiteKey ? '<div id="recaptcha-container" class="field"><div class="g-recaptcha" data-sitekey="' + esc(formData.settings.recaptchaSiteKey) + '"></div></div>' : '';
         var footerLink = formData.settings && formData.settings.showPoweredBy === false
           ? ''
           : '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
@@ -584,9 +734,10 @@
         var stepConfig = multiStepConfig();
         var progress = stepConfig.enabled ? '<div class="step-progress" aria-label="Form progress">' + stepConfig.steps.map(function(step, index){ return '<div class="step-progress-item" data-step="' + index + '"><span class="step-number">' + (index + 1) + '</span>' + esc(step.title || ('Step ' + (index + 1))) + '</div>'; }).join('') + '</div><div id="step-description" class="step-description"></div>' : '';
         var stepActions = stepConfig.enabled ? '<button type="button" class="primary" id="step-previous">Previous</button><button type="button" class="primary" id="step-next">Next</button>' : '';
-        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div>' + progress + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(function(field, index){ return conditionalFieldHtml(field, index, fields); }).join('') + '</div>' + optIn + '<div class="actions">' + stepActions + '<button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form>' + (footerLink ? '<div class="note">' + footerLink + '</div>' : '') + '</div>';
+        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div>' + progress + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(function(field, index){ return conditionalFieldHtml(field, index, fields); }).join('') + '</div>' + optIn + recaptcha + '<div class="actions">' + stepActions + '<button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form>' + (footerLink ? '<div class="note">' + footerLink + '</div>' : '') + '</div>';
         setupGenericConditionalFields(fields);
         setupGenericPhone();
+        if (recaptcha) { var script = document.createElement('script'); script.src = 'https://www.google.com/recaptcha/api.js'; script.async = true; script.defer = true; document.head.appendChild(script); }
 
         if (scope === 'generic') {
           var pickerPhoneSettings = formData.settings || {};
@@ -711,7 +862,9 @@
 
         btn.disabled = flag;
 
-        btn.innerHTML = flag ? '<span class="spinner"></span>Sending' : esc((formData.settings && formData.settings.submitButtonLabel) || 'Submit');
+        btn.innerHTML = flag ? '<span class="spinner"></span>' + esc((formData.style && formData.style.buttonLoadingText) || 'Submitting...') : esc((formData.settings && formData.settings.submitButtonLabel) || 'Submit');
+        if (scope === 'generic' && formData.style && flag && /^(#[0-9a-f]{6})$/i.test(String(formData.style.buttonLoadingColor || ''))) btn.style.background = formData.style.buttonLoadingColor;
+        else btn.style.background = '';
 
       }
 
@@ -743,10 +896,15 @@
             if (!validateStep(stepIndex)) { showStep(stepIndex); return; }
           }
         }
+        if (scope === 'generic' && formData.settings && formData.settings.recaptchaEnabled) {
+          var captchaToken = window.grecaptcha && window.grecaptcha.getResponse ? window.grecaptcha.getResponse() : '';
+          if (!captchaToken) { setMessage('error', 'Please complete the "I\'m not a robot" verification.'); return; }
+        }
 
         showBusy(true);
 
-        var fd = new FormData(event.target);
+          var fd = new FormData(event.target);
+          if (scope === 'generic' && formData.settings && formData.settings.recaptchaEnabled && window.grecaptcha) fd.set('recaptchaToken', window.grecaptcha.getResponse());
 
         // Generic CRM attribution metadata. These values are informational
         // only; the server remains the source of truth for tenant/form IDs.
@@ -837,6 +995,8 @@
 
         } catch (err) {
 
+          if (scope === 'generic' && formData.settings && formData.settings.recaptchaEnabled && window.grecaptcha && window.grecaptcha.reset) window.grecaptcha.reset();
+
           showFieldErrors(err.fieldErrors || {});
           var msg = document.getElementById('msg');
           if (msg) msg.innerHTML = Object.keys(err.fieldErrors || {}).length ? '' : '<div class="error">' + esc(err.message || 'Something went wrong') + '</div>';
@@ -866,8 +1026,16 @@
         if (previewData) {
 
           try {
-
-            renderForm(JSON.parse(previewData));
+            var previewForm = JSON.parse(previewData);
+            if (scope === 'generic' && previewForm.settings && previewForm.settings.recaptchaEnabled && !previewForm.settings.recaptchaSiteKey) {
+              var previewRef = previewForm.id || previewForm.slug || slug;
+              var previewRes = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(previewRef) + '?scope=generic');
+              if (previewRes.ok) {
+                var publicPreview = await previewRes.json();
+                previewForm.settings = Object.assign({}, previewForm.settings, { recaptchaSiteKey: publicPreview.settings && publicPreview.settings.recaptchaSiteKey });
+              }
+            }
+            renderForm(previewForm);
 
             return;
 

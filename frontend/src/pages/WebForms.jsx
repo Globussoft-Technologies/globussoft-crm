@@ -1,7 +1,6 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import WebFormLeadsModal from "../components/WebFormLeadsModal";
 import { createPortal } from "react-dom";
-import { Navigate } from "react-router-dom";
 
 
 
@@ -259,7 +258,7 @@ function getConditionalRoot(field, fields) {
   return current || field;
 }
 
-function buildConditionalFieldGroups(fields) {
+function buildConditionalFieldGroups(fields, preserveFieldOrder = false) {
   const groups = new Map();
 
   fields.forEach((field, index) => {
@@ -271,7 +270,7 @@ function buildConditionalFieldGroups(fields) {
     groups.get(rootId).fields.push({ field, index });
   });
 
-  return Array.from(groups.values())
+  const groupedFields = Array.from(groups.values())
     .map((group) => ({
       ...group,
       fields: [...group.fields].sort((a, b) => {
@@ -280,8 +279,13 @@ function buildConditionalFieldGroups(fields) {
         if (aIsRoot !== bIsRoot) return aIsRoot ? -1 : 1;
         return a.index - b.index;
       }),
-    }))
-    .sort((a, b) => {
+    }));
+
+  if (preserveFieldOrder) {
+    return groupedFields.sort((a, b) => a.firstIndex - b.firstIndex);
+  }
+
+  return groupedFields.sort((a, b) => {
       const isConditionalRoot = (group) => (
         group.root?.conditionalFlow === true ||
         String(group.root?.sourceKey || "").startsWith("conditional-root_") ||
@@ -351,6 +355,50 @@ function defaultStyle() {
  buttonColor: "#12344D",
  accentColor: "#12344D",
     logoUrl: "",
+    fontSize: 16,
+    fontWeight: 400,
+    labelFontSize: 13,
+    placeholderFontSize: 14,
+    errorFontSize: 13,
+    successFontSize: 16,
+    fieldWidth: 100,
+    fieldHeight: 44,
+    fieldBorderWidth: 1,
+    fieldBorderRadius: 12,
+    fieldBorderColor: "#D8DDEC",
+    fieldFocusBorderColor: "#6366F1",
+    fieldBackgroundColor: "#FFFFFF",
+    placeholderColor: "#6B7280",
+    fieldTextColor: "#111827",
+    layoutColumns: "one",
+    customColumnWidth: 50,
+    rowGap: 9,
+    columnGap: 9,
+    mobileColumns: "one",
+    tabletColumns: "one",
+    containerBackgroundMode: "solid",
+    gradientStart: "#FFFFFF",
+    gradientEnd: "#EEF1FF",
+    gradientAngle: 145,
+    containerBorderColor: "#D8DDEC",
+    containerBorderWidth: 1,
+    containerBorderRadius: 24,
+    containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerPadding: 30,
+    containerMargin: 0,
+    buttonHoverColor: "#0D2639",
+    buttonTextColor: "#FFFFFF",
+    buttonFontSize: 16,
+    buttonBorderColor: "transparent",
+    buttonBorderWidth: 0,
+    buttonBorderRadius: 12,
+    buttonWidth: "auto",
+    buttonHeight: 46,
+    buttonAlignment: "left",
+    buttonLoadingColor: "#12344D",
+    buttonLoadingText: "Submitting...",
+    successMessageColor: "#065F46",
+    errorMessageColor: "#B91C1C",
   };
 }
 
@@ -2207,6 +2255,15 @@ function ColorField({ label, value, onChange, fallback }) {
 
 }
 
+function StyleNumberField({ label, value, min, max, step = 1, onChange }) {
+  return (
+    <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+      <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>{label}</span>
+      <input className="input-field" type="number" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </label>
+  );
+}
+
 
 
 
@@ -3165,7 +3222,7 @@ function toggleFormat(formats, value) {
 
 
 
-function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFields, scope, onChange, onMove, onRemove, phoneSettings, onPhoneSettingsChange, onAddConditionalChild, steps = [], multiStepEnabled = false }) {
+function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFields, scope, onChange, onMove, onRemove, phoneSettings, onPhoneSettingsChange, onAddConditionalChild, steps = [], multiStepEnabled = false, formScope = scope || "generic", formSettings, onFormSettingsChange }) {
 
 
 
@@ -3309,6 +3366,34 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
   const [formatPickerOpen, setFormatPickerOpen] = useState(false);
+  const [domainDraft, setDomainDraft] = useState({ blockedEmailDomains: "", allowedEmailDomains: "" });
+
+  useEffect(() => {
+    const closeDomainPickers = (event) => {
+      document.querySelectorAll("details[data-email-domain-picker][open]").forEach((picker) => {
+        if (!picker.contains(event.target)) picker.removeAttribute("open");
+      });
+    };
+    document.addEventListener("click", closeDomainPickers);
+    return () => document.removeEventListener("click", closeDomainPickers);
+  }, []);
+
+  const updateDomainList = (key, domain, checked) => {
+    if (!formSettings || !onFormSettingsChange) return;
+    const current = Array.isArray(formSettings[key]) ? formSettings[key] : [];
+    const disabledKey = key === "blockedEmailDomains" ? "disabledBlockedEmailDomains" : "disabledAllowedEmailDomains";
+    const disabled = Array.isArray(formSettings[disabledKey]) ? formSettings[disabledKey] : [];
+    const nextDisabled = checked ? disabled.filter((item) => item !== domain) : [...new Set([...disabled, domain])];
+    onFormSettingsChange({ ...formSettings, [key]: [...new Set([...current, domain])], [disabledKey]: nextDisabled });
+  };
+
+  const addDomain = (key) => {
+    const domain = String(domainDraft[key] || "").trim().toLowerCase().replace(/^@+/, "").replace(/\.+$/, "");
+    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/i.test(domain)) return;
+    const current = Array.isArray(formSettings?.[key]) ? formSettings[key] : [];
+    if (!current.includes(domain)) onFormSettingsChange({ ...formSettings, [key]: [...current, domain] });
+    setDomainDraft((value) => ({ ...value, [key]: "" }));
+  };
 
 
 
@@ -4572,7 +4657,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-    <div ref={setNodeRef} className="wf-field-card" style={fieldCardStyle}>
+    <div ref={setNodeRef} className="wf-field-card" style={{ ...fieldCardStyle, overflow: formScope === "generic" && field.sourceKind === "contact" && field.sourceKey === "email" ? "visible" : undefined }}>
 
 
 
@@ -5117,7 +5202,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-          <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: phoneSettings ? "flex-end" : "flex-end", flexWrap: "wrap", flexDirection: "row", minWidth: 0, width: phoneSettings ? "100%" : "max-content", gridColumn: phoneSettings ? "1 / -1" : undefined, justifySelf: "end", alignSelf: "start" }}>
+          <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "flex-end", flexWrap: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "wrap" : "nowrap", flexDirection: "row", minWidth: 0, width: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "100%" : "max-content", gridColumn: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "1 / -1" : "auto", justifySelf: "end", alignSelf: "start" }}>
 
 
 
@@ -5267,6 +5352,24 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
+
+            {formScope === "generic" && field.sourceKind === "contact" && field.sourceKey === "email" && formSettings && onFormSettingsChange ? (
+              <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", flexBasis: "100%", order: 2, color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>Email validation
+                  <select className="input-field" style={{ width: 150, padding: "0.35rem 0.45rem" }} value={formSettings.emailValidationType || "all"} onChange={(e) => onFormSettingsChange({ ...formSettings, emailValidationType: e.target.value })}>
+                    <option value="all">Allow all email addresses</option><option value="company">Company email only</option>
+                  </select>
+                </label>
+                {formSettings.emailValidationType === "company" ? ["blockedEmailDomains", "allowedEmailDomains"].map((key) => {
+                  const label = key === "blockedEmailDomains" ? "Blocked" : "Allowed";
+                  const domains = Array.isArray(formSettings[key]) ? formSettings[key] : [];
+                  const disabledKey = key === "blockedEmailDomains" ? "disabledBlockedEmailDomains" : "disabledAllowedEmailDomains";
+                  const disabled = Array.isArray(formSettings[disabledKey]) ? formSettings[disabledKey] : [];
+                  return <details key={key} data-email-domain-picker="true" style={{ position: "relative" }}><summary style={{ cursor: "pointer" }}>{label} ({domains.filter((domain) => !disabled.includes(domain)).length})</summary><div className="wf-email-domain-popover" style={{ position: "absolute", right: 0, top: "100%", zIndex: 1000, minWidth: 230, maxHeight: 230, overflowY: "auto", marginTop: 6, padding: 10, border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--wf-popover-bg, #fff)", boxShadow: "0 8px 20px rgba(0,0,0,.14)", opacity: 1 }}><div style={{ display: "grid", gap: 6 }}>{domains.map((domain) => <label key={domain} style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={!disabled.includes(domain)} onChange={(e) => updateDomainList(key, domain, e.target.checked)} />{domain}</label>)}</div><div style={{ position: "sticky", bottom: 0, display: "flex", gap: 5, marginTop: 8, paddingTop: 8, background: "var(--wf-popover-bg, #fff)" }}><input className="input-field" style={{ minWidth: 0, padding: "0.35rem" }} value={domainDraft[key]} onChange={(e) => setDomainDraft((value) => ({ ...value, [key]: e.target.value }))} placeholder="customdomain.com" /><button type="button" className="btn-secondary" onClick={() => addDomain(key)}>Add</button></div></div></details>;
+                }) : null}
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><input type="checkbox" checked={Boolean(formSettings.emailMxValidation)} onChange={(e) => onFormSettingsChange({ ...formSettings, emailMxValidation: e.target.checked })} />Valid MX</label>
+              </div>
+            ) : null}
 
             <button type="button" className="btn-secondary" onClick={() => onRemove(index)} title="Delete field" style={{ padding: "0.55rem 0.65rem", color: "var(--text-secondary)", borderColor: "var(--border-color)", background: "var(--surface-hover)" }}>
 
@@ -8273,6 +8376,35 @@ export default function WebForms({ scope = "generic" }) {
 
       fields[index] = { ...(fields[index] || {}), ...patch };
 
+      if (current?.scope === "generic" && Object.prototype.hasOwnProperty.call(patch, "stepId")) {
+        const changedField = fields[index];
+        const isConditionalRoot = !changedField.showWhen && (
+          changedField?.conditionalFlow === true ||
+          String(changedField?.sourceKey || "").startsWith("conditional-root_")
+        );
+        if (isConditionalRoot) {
+          const descendantIds = new Set([String(changedField.id)]);
+          let foundDescendant = true;
+          while (foundDescendant) {
+            foundDescendant = false;
+            fields.forEach((field) => {
+              const condition = field?.showWhen;
+              const parentMatches = condition && (
+                (condition.fieldId && descendantIds.has(String(condition.fieldId))) ||
+                (condition.fieldKey && fields.some((candidate) => descendantIds.has(String(candidate.id)) && String(candidate.sourceKey) === String(condition.fieldKey)))
+              );
+              if (parentMatches && !descendantIds.has(String(field.id))) {
+                descendantIds.add(String(field.id));
+                foundDescendant = true;
+              }
+            });
+          }
+          fields.forEach((field) => {
+            if (descendantIds.has(String(field.id))) field.stepId = patch.stepId;
+          });
+        }
+      }
+
 
 
 
@@ -8494,6 +8626,32 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
+
+      if (current?.scope === "generic") {
+        const groups = buildConditionalFieldGroups(fields, true);
+        const selectedGroup = groups.find((group) =>
+          group.fields.some(({ field }) => String(field.id) === String(fields[index]?.id))
+        );
+        const isConditionalGroup = selectedGroup && (
+          selectedGroup.fields.length > 1 ||
+          selectedGroup.root?.conditionalFlow === true ||
+          String(selectedGroup.root?.sourceKey || "").startsWith("conditional-root_") ||
+          selectedGroup.fields.some(({ field }) => Boolean(field.showWhen))
+        );
+
+        if (isConditionalGroup) {
+          const blockIndex = groups.findIndex((group) => group === selectedGroup);
+          const nextBlockIndex = blockIndex + delta;
+          if (nextBlockIndex < 0 || nextBlockIndex >= groups.length) return current;
+
+          const blocks = groups.map((group) => [...group.fields]
+            .sort((a, b) => a.index - b.index)
+            .map(({ field }) => field));
+          const [block] = blocks.splice(blockIndex, 1);
+          blocks.splice(nextBlockIndex, 0, block);
+          return { ...(current || {}), fields: blocks.flat() };
+        }
+      }
 
       const nextIndex = index + delta;
 
@@ -10148,7 +10306,7 @@ export default function WebForms({ scope = "generic" }) {
 
   const builderFields = selectedForm?.fields || [];
   const builderFieldGroups = selectedForm?.scope === "generic"
-    ? buildConditionalFieldGroups(builderFields)
+    ? buildConditionalFieldGroups(builderFields, true)
     : builderFields.map((field, index) => ({ root: field, firstIndex: index, fields: [{ field, index }] }));
 
 
@@ -10197,7 +10355,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-    <div className="web-form-builder" style={{ padding: "1.5rem", display: "grid", gap: 16, alignContent: "start", color: "var(--text-primary)", animation: "fadeIn 0.2s ease" }}>
+    <div className={scope === "generic" ? "web-form-builder web-form-builder-generic" : "web-form-builder"} style={{ padding: "1.5rem", display: "grid", gap: 16, alignContent: "start", color: "var(--text-primary)", animation: "fadeIn 0.2s ease" }}>
 
 
 
@@ -10470,6 +10628,27 @@ export default function WebForms({ scope = "generic" }) {
 
 
           --wf-field-shadow: 0 6px 18px rgba(0, 0, 0, 0.10);
+
+        }
+
+        .web-form-builder-generic {
+          --wf-popover-bg: #ffffff;
+        }
+
+        html[data-theme="dark"] .web-form-builder-generic,
+        [data-theme="dark"] .web-form-builder-generic {
+          --wf-popover-bg: #1a1d24;
+        }
+
+        .web-form-builder-generic .wf-email-domain-popover {
+          isolation: isolate;
+          color: var(--text-primary);
+          opacity: 1 !important;
+        }
+
+        .web-form-builder-generic .wf-email-domain-popover .input-field {
+          opacity: 1 !important;
+        }
 
 
 
@@ -11249,7 +11428,7 @@ export default function WebForms({ scope = "generic" }) {
         .wf-builder-context strong {
           min-width: 0;
           color: var(--text-primary);
-          overflow: hidden;
+          overflow: visible;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
@@ -13665,7 +13844,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
           gap: 12px;
-          overflow: hidden;
+          overflow: visible;
           position: relative;
 
 
@@ -17880,7 +18059,7 @@ export default function WebForms({ scope = "generic" }) {
                           {builderFieldGroups.map((group) => {
                             const groupFields = group.fields.map(({ field }) => field);
                             const renderField = ({ field, index }) => (
-                              <FieldCard key={field.id} field={field} index={index} allFields={builderFields} conditionalFlowFields={groupFields} leadFields={leadFields} scope={selectedForm.scope} onChange={updateField} onMove={moveField} onRemove={removeField} phoneSettings={selectedForm.scope === "generic" && field.sourceKey === "phone" ? selectedForm.settings : null} onPhoneSettingsChange={(settings) => applyDraft({ settings })} onAddConditionalChild={addConditionalChild} steps={selectedForm.settings.steps} multiStepEnabled={selectedForm.settings.multiStepEnabled} />
+                              <FieldCard key={field.id} field={field} index={index} allFields={builderFields} conditionalFlowFields={groupFields} leadFields={leadFields} scope={selectedForm.scope} onChange={updateField} onMove={moveField} onRemove={removeField} phoneSettings={selectedForm.scope === "generic" && field.sourceKey === "phone" ? selectedForm.settings : null} onPhoneSettingsChange={(settings) => applyDraft({ settings })} onAddConditionalChild={addConditionalChild} steps={selectedForm.settings.steps} multiStepEnabled={selectedForm.settings.multiStepEnabled} formScope={selectedForm.scope} formSettings={selectedForm.settings} onFormSettingsChange={(settings) => applyDraft({ settings })} />
                             );
 
                             if (group.fields.length === 1) return renderField(group.fields[0]);
@@ -17976,10 +18155,84 @@ export default function WebForms({ scope = "generic" }) {
                           <ColorField label="Color of field labels *" value={selectedForm.style.fieldLabelColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldLabelColor: value } })} fallback="#666666" />
                         </div>
                       </div>
+                      {selectedForm.scope === "generic" ? (
+                        <div className="wf-style-divider" style={{ display: "grid", gap: 18 }}>
+                          <div className="wf-style-kicker">Typography</div>
+                          <div className="wf-style-grid-colors">
+                            <StyleNumberField label="Font size (px)" value={selectedForm.style.fontSize} min={10} max={32} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fontSize: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Font weight</span><select className="input-field" value={selectedForm.style.fontWeight} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontWeight: Number(e.target.value) } })}>{[400, 500, 600, 700].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                            <StyleNumberField label="Label size (px)" value={selectedForm.style.labelFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, labelFontSize: value } })} />
+                            <StyleNumberField label="Placeholder size (px)" value={selectedForm.style.placeholderFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, placeholderFontSize: value } })} />
+                            <StyleNumberField label="Error message size (px)" value={selectedForm.style.errorFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, errorFontSize: value } })} />
+                            <StyleNumberField label="Success message size (px)" value={selectedForm.style.successFontSize} min={9} max={32} onChange={(value) => applyDraft({ style: { ...selectedForm.style, successFontSize: value } })} />
+                          </div>
+                          <div className="wf-style-kicker">Fields</div>
+                          <div className="wf-style-grid-colors">
+                            <StyleNumberField label="Field width (%)" value={selectedForm.style.fieldWidth} min={50} max={100} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldWidth: value } })} />
+                            <StyleNumberField label="Field height (px)" value={selectedForm.style.fieldHeight} min={28} max={96} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldHeight: value } })} />
+                            <StyleNumberField label="Border width (px)" value={selectedForm.style.fieldBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderWidth: value } })} />
+                            <StyleNumberField label="Border radius (px)" value={selectedForm.style.fieldBorderRadius} min={0} max={40} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderRadius: value } })} />
+                            <ColorField label="Border color" value={selectedForm.style.fieldBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderColor: value } })} fallback="#D8DDEC" />
+                            <ColorField label="Focus border color" value={selectedForm.style.fieldFocusBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldFocusBorderColor: value } })} fallback="#6366F1" />
+                            <ColorField label="Field background" value={selectedForm.style.fieldBackgroundColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBackgroundColor: value } })} fallback="#FFFFFF" />
+                            <ColorField label="Placeholder color" value={selectedForm.style.placeholderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, placeholderColor: value } })} fallback="#6B7280" />
+                            <ColorField label="Text color" value={selectedForm.style.fieldTextColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldTextColor: value } })} fallback="#111827" />
+                          </div>
+                          <div className="wf-style-kicker">Layout</div>
+                          <div className="wf-style-grid-colors">
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Desktop columns</span><select className="input-field" value={selectedForm.style.layoutColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, layoutColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                            <StyleNumberField label="Custom column width (%)" value={selectedForm.style.customColumnWidth} min={25} max={75} onChange={(value) => applyDraft({ style: { ...selectedForm.style, customColumnWidth: value } })} />
+                            <StyleNumberField label="Row gap (px)" value={selectedForm.style.rowGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, rowGap: value } })} />
+                            <StyleNumberField label="Column gap (px)" value={selectedForm.style.columnGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, columnGap: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Tablet layout</span><select className="input-field" value={selectedForm.style.tabletColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, tabletColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile layout</span><select className="input-field" value={selectedForm.style.mobileColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, mobileColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                          </div>
+                          <div className="wf-style-kicker">Form Container</div>
+                          <div className="wf-style-grid-colors">
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Background</span><select className="input-field" value={selectedForm.style.containerBackgroundMode} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerBackgroundMode: e.target.value } })}><option value="solid">Solid background</option><option value="gradient">Gradient background</option></select></label>
+                            {selectedForm.style.containerBackgroundMode === "gradient" ? <>
+                              <ColorField label="Gradient start" value={selectedForm.style.gradientStart} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientStart: value } })} fallback="#FFFFFF" />
+                              <ColorField label="Gradient end" value={selectedForm.style.gradientEnd} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientEnd: value } })} fallback="#EEF1FF" />
+                              <StyleNumberField label="Gradient angle (degrees)" value={selectedForm.style.gradientAngle} min={0} max={360} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientAngle: value } })} />
+                            </> : null}
+                            <ColorField label="Container border" value={selectedForm.style.containerBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerBorderColor: value } })} fallback="#D8DDEC" />
+                            <StyleNumberField label="Container border width (px)" value={selectedForm.style.containerBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerBorderWidth: value } })} />
+                            <StyleNumberField label="Container radius (px)" value={selectedForm.style.containerBorderRadius} min={0} max={48} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerBorderRadius: value } })} />
+                            <StyleNumberField label="Container padding (px)" value={selectedForm.style.containerPadding} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerPadding: value } })} />
+                            <StyleNumberField label="Container margin (px)" value={selectedForm.style.containerMargin} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerMargin: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Shadow</span><select className="input-field" value={selectedForm.style.containerShadow} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerShadow: e.target.value } })}><option value="none">None</option><option value="0 24px 70px rgba(30,41,96,.14)">Soft</option><option value="0 8px 24px rgba(15,23,42,.18)">Compact</option></select></label>
+                          </div>
+                          <div className="wf-style-kicker">Button</div>
+                          <div className="wf-style-grid-colors">
+                            <ColorField label="Hover color" value={selectedForm.style.buttonHoverColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonHoverColor: value } })} fallback="#0D2639" />
+                            <ColorField label="Button text color" value={selectedForm.style.buttonTextColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonTextColor: value } })} fallback="#FFFFFF" />
+                            <StyleNumberField label="Button font size (px)" value={selectedForm.style.buttonFontSize} min={10} max={32} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonFontSize: value } })} />
+                            <StyleNumberField label="Button height (px)" value={selectedForm.style.buttonHeight} min={30} max={96} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonHeight: value } })} />
+                            <StyleNumberField label="Button radius (px)" value={selectedForm.style.buttonBorderRadius} min={0} max={40} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderRadius: value } })} />
+                            <ColorField label="Button border" value={selectedForm.style.buttonBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderColor: value } })} fallback="#12344D" />
+                            <StyleNumberField label="Button border width (px)" value={selectedForm.style.buttonBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderWidth: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Width</span><select className="input-field" value={selectedForm.style.buttonWidth} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonWidth: e.target.value } })}><option value="auto">Auto</option><option value="full">Full width</option></select></label>
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Alignment</span><select className="input-field" value={selectedForm.style.buttonAlignment} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonAlignment: e.target.value } })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="full">Full width</option></select></label>
+                            <ColorField label="Loading color" value={selectedForm.style.buttonLoadingColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonLoadingColor: value } })} fallback="#12344D" />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Loading text</span><input className="input-field" value={selectedForm.style.buttonLoadingText} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonLoadingText: e.target.value } })} /></label>
+                          </div>
+                          <div className="wf-style-kicker">Messages</div>
+                          <div className="wf-style-grid-colors">
+                            <ColorField label="Success message color" value={selectedForm.style.successMessageColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, successMessageColor: value } })} fallback="#065F46" />
+                            <ColorField label="Error message color" value={selectedForm.style.errorMessageColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, errorMessageColor: value } })} fallback="#B91C1C" />
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </Section>
                  <Section id="wf-settings" step={3} title="Settings" subtitle="Choose what happens after submit and how the submission should be routed.">
                     <div className="wf-settings-stack">
+                      {selectedForm.scope === "generic" ? (<div className="wf-settings-block">
+                        <label className="wf-settings-toggle">
+                          <input type="checkbox" checked={Boolean(selectedForm.settings.recaptchaEnabled)} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, recaptchaEnabled: e.target.checked } })} />
+                          <span>Enable reCAPTCHA</span>
+                        </label>
+                      </div>) : null}
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">
                           <input

@@ -26,6 +26,31 @@ const { KEYS, DEFAULTS, setSetting } = require("../lib/tenantSettings");
 const { writeAudit } = require("../lib/audit");
 
 const ALLOWED_KEYS = Object.values(KEYS);
+const SENSITIVE_KEYS = new Set([KEYS.GENERIC_RECAPTCHA_SECRET_KEY]);
+
+function isSensitiveKey(key) {
+  return SENSITIVE_KEYS.has(key);
+}
+
+function publicDefaults() {
+  return Object.fromEntries(
+    Object.entries(DEFAULTS).map(([key, value]) => [
+      key,
+      isSensitiveKey(key) ? null : value,
+    ]),
+  );
+}
+
+function sensitiveDefaultState() {
+  return Object.fromEntries(
+    [...SENSITIVE_KEYS].map((key) => [key, Boolean(DEFAULTS[key])]),
+  );
+}
+
+function auditValue(key, value) {
+  if (value == null) return null;
+  return isSensitiveKey(key) ? "[REDACTED]" : String(value);
+}
 
 function isKnownKey(key) {
   return ALLOWED_KEYS.includes(key);
@@ -71,8 +96,11 @@ router.get("/", verifyToken, async (req, res) => {
       orderBy: [{ category: "asc" }, { key: "asc" }],
     });
     res.json({
-      settings: rows,
-      defaults: { ...DEFAULTS },
+      settings: rows.map((row) => isSensitiveKey(row.key)
+        ? { ...row, value: "", hasValue: Boolean(row.value) }
+        : row),
+      defaults: publicDefaults(),
+      sensitiveDefaults: sensitiveDefaultState(),
       allowedKeys: ALLOWED_KEYS,
     });
   } catch (e) {
@@ -89,7 +117,8 @@ router.get("/:key", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const key = String(req.params.key);
-    const defaultValue = DEFAULTS[key] !== undefined ? DEFAULTS[key] : null;
+    const rawDefaultValue = DEFAULTS[key] !== undefined ? DEFAULTS[key] : null;
+    const defaultValue = isSensitiveKey(key) ? null : rawDefaultValue;
 
     const row = await prisma.tenantSetting.findUnique({
       where: { tenantId_key: { tenantId, key } },
@@ -99,7 +128,10 @@ router.get("/:key", verifyToken, async (req, res) => {
     if (!row) {
       return res.json({
         key,
-        value: defaultValue == null ? null : String(defaultValue),
+        value: isSensitiveKey(key)
+          ? ""
+          : (defaultValue == null ? null : String(defaultValue)),
+        ...(isSensitiveKey(key) ? { hasValue: Boolean(rawDefaultValue) } : {}),
         defaultValue,
         isOverride: false,
         category: defaultCategoryFor(key),
@@ -107,7 +139,10 @@ router.get("/:key", verifyToken, async (req, res) => {
     }
     res.json({
       key: row.key,
-      value: row.value,
+      value: isSensitiveKey(row.key) ? "" : row.value,
+      ...(isSensitiveKey(row.key)
+        ? { hasValue: Boolean(row.value || rawDefaultValue) }
+        : {}),
       defaultValue,
       isOverride: true,
       category: row.category,
@@ -170,15 +205,18 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       tenantId,
       {
         key,
-        oldValue: prior ? prior.value : null,
-        newValue: String(body.value),
+        oldValue: auditValue(key, prior ? prior.value : null),
+        newValue: auditValue(key, body.value),
       },
     );
 
     res.json({
       key: updated.key,
-      value: updated.value,
-      defaultValue: DEFAULTS[key] !== undefined ? DEFAULTS[key] : null,
+      value: isSensitiveKey(key) ? "" : updated.value,
+      ...(isSensitiveKey(key) ? { hasValue: Boolean(updated.value) } : {}),
+      defaultValue: isSensitiveKey(key)
+        ? null
+        : (DEFAULTS[key] !== undefined ? DEFAULTS[key] : null),
       isOverride: true,
       category: updated.category,
     });
@@ -219,7 +257,7 @@ router.delete("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       existing.id,
       req.user.userId,
       tenantId,
-      { key, oldValue: existing.value, newValue: null },
+      { key, oldValue: auditValue(key, existing.value), newValue: null },
     );
 
     res.status(204).end();

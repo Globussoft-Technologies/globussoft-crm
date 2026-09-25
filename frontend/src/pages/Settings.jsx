@@ -2508,6 +2508,10 @@ export default function Settings() {
             <WhatsAppMetaConfigCard />
           )}
 
+          {hasPermission("settings", "manage") && isGenericVertical && (
+            <GenericRecaptchaSettingsCard notify={notify} />
+          )}
+
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
               webhooks (GlobusPhone lead-sync). Self-contained admin component;
               ADMIN-only + subscription-gated server-side. */}
@@ -3458,6 +3462,112 @@ export default function Settings() {
             </div>
           )}
       </div>
+    </div>
+  );
+}
+
+function GenericRecaptchaSettingsCard({ notify }) {
+  const siteKeySetting = "generic.webForm.recaptcha.siteKey";
+  const secretKeySetting = "generic.webForm.recaptcha.secretKey";
+  const [siteKey, setSiteKey] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [hasSecretKey, setHasSecretKey] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetchApi("/api/tenant-settings")
+      .then((payload) => {
+        if (!active) return;
+        const rows = Array.isArray(payload?.settings) ? payload.settings : [];
+        const site = rows.find((row) => row.key === siteKeySetting);
+        const secret = rows.find((row) => row.key === secretKeySetting);
+        setSiteKey(String(site?.value || payload?.defaults?.[siteKeySetting] || ""));
+        setHasSecretKey(Boolean(
+          secret?.hasValue || payload?.sensitiveDefaults?.[secretKeySetting],
+        ));
+      })
+      .catch((error) => notify.error(error?.message || "Failed to load reCAPTCHA settings"))
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
+  const save = async (event) => {
+    event.preventDefault();
+    if (!siteKey.trim()) {
+      notify.error("Enter the reCAPTCHA Site Key before saving.");
+      return;
+    }
+    if (!secretKey.trim() && !hasSecretKey) {
+      notify.error("Enter the reCAPTCHA Secret Key before saving.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await fetchApi(`/api/tenant-settings/${encodeURIComponent(siteKeySetting)}`, {
+        method: "PUT",
+        body: JSON.stringify({ value: siteKey.trim(), category: "general" }),
+      });
+      if (secretKey.trim()) {
+        await fetchApi(`/api/tenant-settings/${encodeURIComponent(secretKeySetting)}`, {
+          method: "PUT",
+          body: JSON.stringify({ value: secretKey.trim(), category: "general" }),
+        });
+        setHasSecretKey(true);
+        setSecretKey("");
+      }
+      notify.success("reCAPTCHA settings saved");
+    } catch (error) {
+      notify.error(error?.message || "Failed to save reCAPTCHA settings");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
+      <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "0.35rem" }}>
+        Web Form reCAPTCHA
+      </h3>
+      <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
+        Configure Google reCAPTCHA v2 for Generic CRM web forms. The secret key is never displayed.
+      </p>
+      <form onSubmit={save}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
+          <label>
+            <span style={{ display: "block", marginBottom: "0.35rem", fontWeight: "600" }}>Site Key</span>
+            <input
+              type="text"
+              value={siteKey}
+              onChange={(event) => setSiteKey(event.target.value)}
+              placeholder="Google reCAPTCHA site key"
+              disabled={loading || saving}
+            />
+          </label>
+          <label>
+            <span style={{ display: "block", marginBottom: "0.35rem", fontWeight: "600" }}>Secret Key</span>
+            <input
+              type="password"
+              value={secretKey}
+              onChange={(event) => setSecretKey(event.target.value)}
+              placeholder={hasSecretKey ? "Secret key is configured" : "Google reCAPTCHA secret key"}
+              autoComplete="new-password"
+              disabled={loading || saving}
+            />
+          </label>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "1rem" }}>
+          <button type="submit" className="btn-primary" disabled={loading || saving}>
+            {saving ? "Saving..." : "Save reCAPTCHA settings"}
+          </button>
+          {hasSecretKey && <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Secret key configured</span>}
+        </div>
+      </form>
     </div>
   );
 }

@@ -177,7 +177,7 @@ export default function TallyExportActions({
     if (!hasVoucherRows || exportWarnings.length || !hasCheckedConnectorStatus) return;
     const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows });
     const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows });
-    const pushToTally = (allowDuplicate = false) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, allowDuplicate }) });
+    const pushToTally = (options = {}) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, ...options }), silent: true });
     const downloadFallback = () => {
       downloadFile(`${buildBaseFileName(master)}-masters.xml`, mastersXml, "application/xml;charset=utf-8");
       downloadFile(`${buildBaseFileName(master)}-vouchers.xml`, vouchersXml, "application/xml;charset=utf-8");
@@ -191,25 +191,79 @@ export default function TallyExportActions({
     try {
       const result = await pushToTally();
       const voucherResult = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
-      notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0}, altered ${voucherResult?.altered || 0}.`);
+      if (!voucherResult && result.skippedVouchers > 0) {
+        notify.info(`No new vouchers to push. Skipped ${result.skippedVouchers} voucher(s) already sent to Tally.`);
+      } else {
+        const skipped = result.skippedVouchers ? `, skipped ${result.skippedVouchers} already pushed` : "";
+        notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0} new voucher(s), updated ${voucherResult?.altered || 0}${skipped}.`);
+      }
       await loadConnectorStatus();
     } catch (error) {
-      if (error.code === "TALLY_DUPLICATE_PUSH") {
-        const confirmed = await notify.confirm({ title: "Possible duplicate", message: "This export was already pushed to Tally. Continuing may create duplicate records. Do you want to continue?", confirmText: "Continue push", cancelText: "Cancel", destructive: true });
-        if (!confirmed) {
-          notify.info("Push cancelled. No duplicate was created.");
+      if (error.code === "TALLY_EXISTING_VOUCHERS_FOUND") {
+        const existingAction = await notify.confirm({
+          title: "Existing vouchers found",
+          message: `${error.message}\n\nUpdate existing vouchers and recreate any that were deleted from Tally?`,
+          confirmText: "Update existing",
+          cancelText: "More options",
+          confirmValue: "update",
+          cancelValue: "more",
+          dismissible: true,
+        });
+        if (existingAction === "update" || existingAction === true) {
+          try {
+            const updatedResult = await pushToTally({ updateExisting: true });
+            const tally = updatedResult.results?.find((entry) => entry.stage === "vouchers")?.tally;
+            notify.success(`Tally synchronized. Created ${tally?.created || 0} new voucher(s), updated ${tally?.altered || 0}.`);
+          } catch (updateError) {
+            notify.error(updateError.message || "The Tally update failed.");
+          }
+          return;
+        }
+        if (existingAction !== "more") return;
+        const repushConfirmed = await notify.confirm({
+          title: "Re-upload as new vouchers?",
+          message: "This sends every voucher with Create and can produce duplicates for vouchers that still exist in Tally.",
+          confirmText: "Re-upload all",
+          cancelText: "Cancel",
+          destructive: true,
+        });
+        if (!repushConfirmed) {
+          notify.info("Push cancelled. Nothing was sent to Tally.");
           return;
         }
         try {
-          const result = await pushToTally(true);
-          const voucherResult = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
-          notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0}, altered ${voucherResult?.altered || 0}.`);
-          return;
-        } catch (_) {
-          downloadFallback();
-          notify.error("The confirmed push failed. XML files were downloaded automatically.");
+          const repeatedResult = await pushToTally({ forceRepush: true });
+          const tally = repeatedResult.results?.find((entry) => entry.stage === "vouchers")?.tally;
+          notify.success(`Re-uploaded all vouchers. Created ${tally?.created || 0} new voucher(s).`);
+        } catch (retryError) {
+          notify.error(retryError.message || "The repeated Tally push failed.");
+        }
+        return;
+      }
+      if (error.code === "TALLY_NO_NEW_VOUCHERS") {
+        const confirmed = await notify.confirm({
+          title: "No new vouchers",
+          message: `${error.message}\n\nPush all vouchers again?`,
+          confirmText: "Push again",
+          cancelText: "Cancel",
+          destructive: true,
+        });
+        if (!confirmed) {
+          notify.info("Push cancelled. Nothing was sent to Tally.");
           return;
         }
+        try {
+          const repeatedResult = await pushToTally({ forceRepush: true });
+          const tally = repeatedResult.results?.find((entry) => entry.stage === "vouchers")?.tally;
+          notify.success(`Pushed all vouchers again. Created ${tally?.created || 0} new voucher(s).`);
+        } catch (retryError) {
+          notify.error(retryError.message || "The repeated Tally push failed.");
+        }
+        return;
+      }
+      if (error.code === "TALLY_LEGACY_RECEIPT_PARTIAL_MATCH") {
+        notify.error(error.message);
+        return;
       }
       // Keep the export usable even when the local connector/Tally returns an
       // error or the request throws before a response is available.

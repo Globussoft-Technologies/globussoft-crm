@@ -100,6 +100,9 @@ export function NotifyProvider({ children }) {
         message: cfg.message || '',
         confirmText: cfg.confirmText || 'Confirm',
         cancelText: cfg.cancelText || 'Cancel',
+        confirmValue: cfg.confirmValue ?? true,
+        cancelValue: cfg.cancelValue ?? false,
+        dismissible: !!cfg.dismissible,
         destructive: !!cfg.destructive,
       });
     };
@@ -257,8 +260,8 @@ function ModalSlot({ modal, close }) {
 
   if (!modal) return null;
 
-  const cancelValue = modal.kind === 'confirm' ? false : null;
-  const confirmValue = modal.kind === 'confirm' ? true : value;
+  const cancelValue = modal.kind === 'confirm' ? (modal.cancelValue ?? false) : null;
+  const confirmValue = modal.kind === 'confirm' ? (modal.confirmValue ?? true) : value;
 
   return (
     <div
@@ -266,7 +269,7 @@ function ModalSlot({ modal, close }) {
       aria-modal="true"
       aria-labelledby="notify-modal-title"
       data-notify-modal={modal.kind}
-      onClick={() => close(cancelValue)}
+      onClick={() => close(modal.dismissible ? false : cancelValue)}
       style={{
         position: 'fixed', inset: 0, zIndex: 10001,
         background: 'rgba(0,0,0,0.55)',
@@ -292,10 +295,18 @@ function ModalSlot({ modal, close }) {
           border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
         }}
       >
-        <h3
-          id="notify-modal-title"
-          style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.5rem', flexShrink: 0 }}
-        >{modal.title}</h3>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.5rem', flexShrink: 0 }}>
+          <h3
+            id="notify-modal-title"
+            style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600 }}
+          >{modal.title}</h3>
+          {modal.dismissible && <button
+            type="button"
+            onClick={() => close(false)}
+            aria-label="Close dialog"
+            style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary, #6b7280)', cursor: 'pointer', fontSize: '1.25rem', lineHeight: 1, padding: 0 }}
+          >{"\u00D7"}</button>}
+        </div>
         {modal.message && (
           // maxHeight + scroll — an unbounded message (e.g. a long list built
           // by a caller) must never push the confirm/cancel buttons below the

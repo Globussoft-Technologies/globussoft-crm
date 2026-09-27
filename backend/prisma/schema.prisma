@@ -8732,6 +8732,8 @@ model TravelTallyCostCentre {
   name        String    @db.VarChar(180)
   status      String    @default("ACTIVE") @db.VarChar(20)
   syncStatus  String    @default("NOT_CONNECTED") @db.VarChar(30)
+  voucherSyncStatus String? @db.VarChar(30)
+  lastVoucherSyncAt DateTime?
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   itinerary   Itinerary? @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
   tmcTrip     TmcTrip?  @relation(fields: [tmcTripId], references: [id], onDelete: Cascade)

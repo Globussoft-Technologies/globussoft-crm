@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import TallyExportActions from "./TallyExportActions";
 import { fetchApi } from "../../../utils/api";
 
-const { success, error, info } = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
+const { success, error, info, confirm } = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), confirm: vi.fn() }));
 
 vi.mock("../../../components/PermissionGate", () => ({ default: ({ children }) => children }));
-vi.mock("../../../utils/notify", () => ({ useNotify: () => ({ success, error, info }) }));
+vi.mock("../../../utils/notify", () => ({ useNotify: () => ({ success, error, info, confirm }) }));
 vi.mock("../../../utils/api", () => ({
   fetchApi: vi.fn(),
   getAuthToken: vi.fn(() => null),
@@ -42,6 +42,7 @@ describe("TallyExportActions direct connector", () => {
     vi.unstubAllGlobals();
     URL.createObjectURL = vi.fn(() => "blob:tally-export");
     URL.revokeObjectURL = vi.fn();
+    confirm.mockResolvedValue(true);
   });
 
   it("does not rotate connector credentials when the executable download fails", async () => {
@@ -114,5 +115,33 @@ describe("TallyExportActions direct connector", () => {
 
     await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(2));
     expect(error).toHaveBeenCalledWith(expect.stringContaining("XML files were downloaded automatically"));
+  });
+
+  it("offers to update existing vouchers while recreating vouchers deleted from Tally", async () => {
+    let pushes = 0;
+    fetchApi.mockImplementation(async (url, options = {}) => {
+      if (url.endsWith("/status")) return { configured: true, online: true, machineId: "office-pc-1" };
+      if (url.endsWith("/push")) {
+        pushes += 1;
+        const payload = JSON.parse(options.body);
+        if (!payload.updateExisting) {
+          const existing = new Error("One voucher exists");
+          existing.code = "TALLY_EXISTING_VOUCHERS_FOUND";
+          throw existing;
+        }
+        return { success: true, results: [{ stage: "vouchers", tally: { created: 1, altered: 1 } }] };
+      }
+      return {};
+    });
+    render(<TallyExportActions {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Push directly to Tally/i }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ confirmText: "Update existing" })));
+    await waitFor(() => expect(pushes).toBe(2));
+    const pushCalls = fetchApi.mock.calls.filter(([url]) => url.endsWith("/push"));
+    const retryPayload = JSON.parse(pushCalls[1][1].body);
+    expect(retryPayload.updateExisting).toBe(true);
+    expect(pushCalls.every(([, options]) => options.silent)).toBe(true);
+    expect(success).toHaveBeenCalledWith("Tally synchronized. Created 1 new voucher(s), updated 1.");
   });
 });

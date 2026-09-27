@@ -50,6 +50,10 @@ prisma.travelTallyCostCentre = {
   findMany: vi.fn(),
   upsert: vi.fn(),
 };
+prisma.travelTallySyncLog = {
+  ...(prisma.travelTallySyncLog || {}),
+  findMany: vi.fn(),
+};
 prisma.itinerary = { ...(prisma.itinerary || {}), findMany: vi.fn(), findFirst: vi.fn() };
 prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn(), findFirst: vi.fn() };
 prisma.travelQuote = { ...(prisma.travelQuote || {}), findMany: vi.fn(), findFirst: vi.fn() };
@@ -92,6 +96,7 @@ beforeEach(() => {
     prisma.travelTallyMapping,
     prisma.travelTallySyncQueue,
     prisma.travelTallyCostCentre,
+    prisma.travelTallySyncLog,
   ]) {
     for (const fn of Object.values(delegate)) {
       if (typeof fn === "function" && fn.mockReset) fn.mockReset();
@@ -103,6 +108,7 @@ beforeEach(() => {
   prisma.travelTallyMapping.findMany.mockResolvedValue([]);
   prisma.travelTallySyncQueue.findMany.mockResolvedValue([]);
   prisma.travelTallyCostCentre.findMany.mockResolvedValue([]);
+  prisma.travelTallySyncLog.findMany.mockResolvedValue([]);
   prisma.travelTallyCostCentre.upsert.mockImplementation(async ({ create }) => ({ id: create.sourceId, ...create }));
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.itinerary.findFirst.mockReset();
@@ -146,6 +152,20 @@ describe("travel Tally cost centre sources", () => {
     expect(response.body.sourcePagination).toEqual({ page: 2, limit: 100, hasMore: true });
     expect(prisma.travelTallyCostCentre.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 100, take: 101 }));
     expect(prisma.itinerary.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 100, take: 101 }));
+  });
+
+  test("returns the last successful voucher sync time for each cost centre", async () => {
+    const syncedAt = new Date("2026-09-15T10:00:00.000Z");
+    prisma.travelTallyCostCentre.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, sourceType: "ITINERARY", sourceId: 3, code: "TRIP-3", syncStatus: "SYNCED", voucherSyncStatus: "FAILED", lastVoucherSyncAt: syncedAt },
+    ]);
+
+    const response = await request(makeApp()).get("/api/travel/tally/cost-centres").set(auth());
+
+    expect(response.status).toBe(200);
+    expect(response.body.costCentres[0].voucherSyncStatus).toBe("FAILED");
+    expect(response.body.costCentres[0].lastVoucherSyncAt).toBe(syncedAt.toISOString());
+    expect(prisma.travelTallySyncLog.findMany).not.toHaveBeenCalled();
   });
 
   test("prepares missing cost centres in a bounded deterministic batch", async () => {

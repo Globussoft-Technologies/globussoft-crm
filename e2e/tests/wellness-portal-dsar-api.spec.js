@@ -70,6 +70,7 @@ const RUN_TAG = `E2E_WC_PORTAL_DSAR_${Date.now()}`;
 // OTP we can self-mint via WELLNESS_DEMO_OTP=1234 (#238).
 const DEMO_PORTAL_PHONE = '+919876500001';
 const DEMO_OTP = process.env.WELLNESS_DEMO_OTP || '1234';
+const FAKE_SIGNATURE = `data:image/png;base64,${'A'.repeat(900)}`;
 
 // Staff fixtures — used to seed visits/Rx/consents on the demo patient
 // and to probe the cross-tenant rejection path.
@@ -172,7 +173,9 @@ test.beforeAll(async ({ request }) => {
     data: {
       patientId: demoPatientId,
       templateName: 'general',
-      signatureSvg: 'data:image/svg+xml;base64,PHN2Zy8+',
+      // Keep this above the route's 500-character anti-blank threshold so
+      // the DSAR assertions always own at least one stable consent record.
+      signatureSvg: FAKE_SIGNATURE,
     },
   });
   if (consent.ok()) {
@@ -365,12 +368,29 @@ test.describe('POST /api/wellness/portal/export — patient self-DSAR', () => {
     expect(b.status()).toBe(200);
     const bodyB = await b.json();
 
-    // Same patient id, same counts (no rows added in between).
+    // The seeded demo portal patient is intentionally shared with other
+    // portal API specs. With Playwright workers running in parallel, those
+    // specs may add visits, prescriptions, or consents between these two
+    // requests. Exact aggregate equality is therefore not an idempotency
+    // invariant. Instead, verify that each response is internally
+    // consistent and that this spec's own records survive both reads.
     expect(bodyA.patient.id).toBe(bodyB.patient.id);
-    expect(bodyA.counts.visits).toBe(bodyB.counts.visits);
-    expect(bodyA.counts.prescriptions).toBe(bodyB.counts.prescriptions);
-    expect(bodyA.counts.consents).toBe(bodyB.counts.consents);
-    expect(bodyA.counts.treatmentPlans).toBe(bodyB.counts.treatmentPlans);
+    for (const body of [bodyA, bodyB]) {
+      expect(body.counts.visits).toBe(body.visits.length);
+      expect(body.counts.prescriptions).toBe(body.prescriptions.length);
+      expect(body.counts.consents).toBe(body.consents.length);
+      expect(body.counts.treatmentPlans).toBe(body.treatmentPlans.length);
+
+      for (const id of seededVisitIds) {
+        expect(body.visits.some((visit) => visit.id === id)).toBe(true);
+      }
+      for (const id of seededRxIds) {
+        expect(body.prescriptions.some((rx) => rx.id === id)).toBe(true);
+      }
+      for (const id of seededConsentIds) {
+        expect(body.consents.some((consent) => consent.id === id)).toBe(true);
+      }
+    }
     // Both must report audited:true on success.
     expect(bodyA.audited).toBe(true);
     expect(bodyB.audited).toBe(true);

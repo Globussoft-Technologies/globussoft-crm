@@ -507,7 +507,7 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
     const sourceLimit = boundedPositiveInt(req.query.sourceLimit, COST_CENTRE_SOURCE_LIMIT);
     const rowSkip = (page - 1) * limit;
     const sourceSkip = (sourcePage - 1) * sourceLimit;
-    const [rows, itineraries, tmcTrips, quotes, voucherSyncLogs] = await Promise.all([
+    const [rows, itineraries, tmcTrips, quotes] = await Promise.all([
       prisma.travelTallyCostCentre.findMany({
         where: { tenantId },
         include: {
@@ -522,12 +522,6 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
       prisma.itinerary.findMany({ where: { tenantId }, select: { id: true, destination: true, subBrand: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
       prisma.tmcTrip.findMany({ where: { tenantId }, select: { id: true, tripCode: true, destination: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
       prisma.travelQuote.findMany({ where: { tenantId, itineraryId: null }, select: { id: true, subBrand: true, contact: { select: { name: true } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: sourceSkip, take: sourceLimit + 1 }),
-      prisma.travelTallySyncLog.findMany({
-        where: { tenantId, sourceType: "DIRECT_EXPORT", voucherType: "VOUCHERS", status: { in: ["SYNCED", "FAILED"] } },
-        select: { requestPayload: true, createdAt: true, status: true },
-        orderBy: { createdAt: "desc" },
-        take: 1000,
-      }),
     ]);
     const hasMoreRows = rows.length > limit;
     const hasMoreSources = [itineraries, tmcTrips, quotes].some((items) => items.length > sourceLimit);
@@ -536,16 +530,7 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
       ...tmcTrips.slice(0, sourceLimit).map((row) => ({ sourceType: "TMC_TRIP", sourceId: row.id, code: `TMC-TRIP-${row.id}`, label: row.tripCode ? `${row.tripCode} - ${row.destination}` : row.destination || "TMC trip", subBrand: "tmc" })),
       ...quotes.slice(0, sourceLimit).map((row) => ({ sourceType: "QUOTE", sourceId: row.id, code: `QUOTE-${row.id}`, label: row.contact?.name ? `Quote for ${row.contact.name}` : `Quote #${row.id}`, subBrand: row.subBrand })),
     ];
-    const costCentres = rows.slice(0, limit).map((row) => {
-      const matchingLogs = voucherSyncLogs.filter((log) => String(log.requestPayload || "").includes(`<NAME>${row.code}</NAME>`));
-      const latestAttempt = matchingLogs[0];
-      const latestSuccess = matchingLogs.find((log) => log.status === "SYNCED");
-      return {
-        ...row,
-        voucherSyncStatus: latestAttempt?.status || null,
-        lastVoucherSyncAt: latestSuccess?.createdAt || null,
-      };
-    });
+    const costCentres = rows.slice(0, limit);
     res.json({
       costCentres,
       sources,
@@ -1782,8 +1767,9 @@ router.get(
         };
       });
 
-      // Purchase A/c contains only settled supplier payables. Office costs
-      // remain separate so a supplier payment is never counted twice.
+      // Purchase A/c follows the same accrual basis as exported Purchase
+      // vouchers: every supplier bill is counted once, while its later bank
+      // payment only settles the payable and does not add another purchase.
       const calculated = {
         sales: invoices.reduce(
           (sum, invoice) =>
@@ -1793,12 +1779,10 @@ router.get(
             ),
           0,
         ),
-        purchase: matchingPayables
-          .filter((payable) => payable.status === "paid")
-          .reduce(
-            (sum, payable) => sum + Number(payable.amount || 0),
-            0,
-          ) + matchingTripExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
+        purchase: matchingPayables.reduce(
+          (sum, payable) => sum + Number(payable.amount || 0),
+          0,
+        ) + matchingTripExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
         officeExpenses: matchingOfficeExpenses.reduce(
           (sum, expense) => sum + Number(expense.amount || 0),
           0,

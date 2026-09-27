@@ -156,13 +156,8 @@ describe("travel Tally cost centre sources", () => {
 
   test("returns the last successful voucher sync time for each cost centre", async () => {
     const syncedAt = new Date("2026-09-15T10:00:00.000Z");
-    const failedAt = new Date("2026-09-16T10:00:00.000Z");
     prisma.travelTallyCostCentre.findMany.mockResolvedValue([
-      { id: 1, tenantId: 1, sourceType: "ITINERARY", sourceId: 3, code: "TRIP-3", syncStatus: "SYNCED" },
-    ]);
-    prisma.travelTallySyncLog.findMany.mockResolvedValue([
-      { createdAt: failedAt, status: "FAILED", requestPayload: "<VOUCHER><COSTCENTREALLOCATIONS.LIST><NAME>TRIP-3</NAME></COSTCENTREALLOCATIONS.LIST></VOUCHER>" },
-      { createdAt: syncedAt, status: "SYNCED", requestPayload: "<VOUCHER><COSTCENTREALLOCATIONS.LIST><NAME>TRIP-3</NAME></COSTCENTREALLOCATIONS.LIST></VOUCHER>" },
+      { id: 1, tenantId: 1, sourceType: "ITINERARY", sourceId: 3, code: "TRIP-3", syncStatus: "SYNCED", voucherSyncStatus: "FAILED", lastVoucherSyncAt: syncedAt },
     ]);
 
     const response = await request(makeApp()).get("/api/travel/tally/cost-centres").set(auth());
@@ -170,9 +165,7 @@ describe("travel Tally cost centre sources", () => {
     expect(response.status).toBe(200);
     expect(response.body.costCentres[0].voucherSyncStatus).toBe("FAILED");
     expect(response.body.costCentres[0].lastVoucherSyncAt).toBe(syncedAt.toISOString());
-    expect(prisma.travelTallySyncLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId: 1, sourceType: "DIRECT_EXPORT", voucherType: "VOUCHERS", status: { in: ["SYNCED", "FAILED"] } },
-    }));
+    expect(prisma.travelTallySyncLog.findMany).not.toHaveBeenCalled();
   });
 
   test("prepares missing cost centres in a bounded deterministic batch", async () => {

@@ -7,15 +7,8 @@ const { verifyToken } = require("../middleware/auth");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { requirePermission } = require("../middleware/requirePermission");
 const { writeAudit } = require("../lib/audit");
-const {
-  CONNECTOR_PATH,
-  CONNECTOR_PROVIDER,
-  createConnectorCredentials,
-  disconnectConnector,
-  getConnectorStatus,
-  parseTallyResponse,
-  sendTallyJob,
-} = require("../lib/tallyConnectorBridge");
+const tallyConnectorBridge = require("../lib/tallyConnectorBridge");
+const { CONNECTOR_PATH, CONNECTOR_PROVIDER } = tallyConnectorBridge;
 
 const guards = [verifyToken, requireTravelTenant];
 const activePushes = new Set();
@@ -320,6 +313,18 @@ async function updateCostCentreSyncStatus(tenantId, mastersXml, syncStatus) {
   });
 }
 
+async function updateCostCentreVoucherSyncStatus(tenantId, vouchersXml, voucherSyncStatus, lastVoucherSyncAt = undefined) {
+  const codes = [...voucherCostCentreNames(vouchersXml)];
+  if (!codes.length || !prisma.travelTallyCostCentre?.updateMany) return;
+  await prisma.travelTallyCostCentre.updateMany({
+    where: { tenantId, code: { in: codes } },
+    data: {
+      voucherSyncStatus,
+      ...(lastVoucherSyncAt ? { lastVoucherSyncAt } : {}),
+    },
+  });
+}
+
 router.get("/status", ...guards, requirePermission("tally", "read"), async (req, res) => {
   try {
     const integration = await prisma.integration.findUnique({
@@ -331,7 +336,7 @@ router.get("/status", ...guards, requirePermission("tally", "read"), async (req,
       configured: Boolean(credentials),
       credentials,
       connectorUrl: connectorUrlFor(req),
-      ...getConnectorStatus(req.travelTenant.id),
+      ...tallyConnectorBridge.getConnectorStatus(req.travelTenant.id),
     });
   } catch (error) {
     console.error("[tally-connector] status failed:", error.message);
@@ -341,13 +346,13 @@ router.get("/status", ...guards, requirePermission("tally", "read"), async (req,
 
 router.post("/credentials", ...guards, requirePermission("tally", "update"), async (req, res) => {
   try {
-    const generated = createConnectorCredentials();
+    const generated = tallyConnectorBridge.createConnectorCredentials();
     await prisma.integration.upsert({
       where: { tenantId_provider: { tenantId: req.travelTenant.id, provider: CONNECTOR_PROVIDER } },
       create: { tenantId: req.travelTenant.id, provider: CONNECTOR_PROVIDER, token: generated.stored.tokenHash, settings: JSON.stringify({ connectorId: generated.stored.connectorId, createdAt: generated.stored.createdAt }), isActive: true },
       update: { token: generated.stored.tokenHash, settings: JSON.stringify({ connectorId: generated.stored.connectorId, createdAt: generated.stored.createdAt }), isActive: true },
     });
-    disconnectConnector(req.travelTenant.id);
+    tallyConnectorBridge.disconnectConnector(req.travelTenant.id);
     await writeAudit("TravelTally", "ROTATE_CONNECTOR_TOKEN", 0, req.user.userId, req.travelTenant.id, { connectorId: generated.stored.connectorId }).catch((error) => {
       console.warn("[tally-connector] credential audit failed:", error.message);
     });
@@ -398,7 +403,7 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
     const validation = !vouchersValidation.valid ? vouchersValidation : mastersValidation;
     return res.status(400).json({ error: validation.reason, code: "UNSAFE_TALLY_XML" });
   }
-  if (!getConnectorStatus(req.travelTenant.id).online) {
+  if (!tallyConnectorBridge.getConnectorStatus(req.travelTenant.id).online) {
     return res.status(503).json({ error: "Tally connector is offline. Start it on the Tally computer and try again.", code: "TALLY_CONNECTOR_OFFLINE" });
   }
 
@@ -440,7 +445,7 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
     const seenLegacyPurchasePayments = new Set();
     let tallyPresence = new Map();
     for (const entry of uniquePriorLogs) {
-      const tally = entry.status === "FAILED" ? parseTallyResponse(entry.responsePayload) : null;
+      const tally = entry.status === "FAILED" ? tallyConnectorBridge.parseTallyResponse(entry.responsePayload) : null;
       const wasImported = entry.status === "SYNCED" || Number(tally?.created || 0) > 0 || Number(tally?.altered || 0) > 0;
       if (!wasImported) continue;
       for (const key of previouslyExportedVoucherKeys(entry.requestPayload)) exportedKeys.add(key);
@@ -459,8 +464,9 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
         legacyFingerprintKeys.set(legacyEntry.fingerprint, keys);
       }
     }
-    if (!forceRepush && (exportedKeys.size || seenLegacyReceipts.size || seenLegacyPurchasePayments.size)) {
+    if (!forceRepush && currentVoucherKeys.size) {
       const lookupKeys = new Set([
+        ...currentVoucherKeys,
         ...exportedKeys,
         ...seenLegacyReceipts,
         ...seenLegacyPurchasePayments,
@@ -468,7 +474,7 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
       let liveVoucherKeys;
       try {
         const lookupXml = buildVoucherPresenceRequest(companyNameFromImportXml(vouchersXml), lookupKeys);
-        const lookupResult = await sendTallyJob(req.travelTenant.id, lookupXml, { jobType: "EXPORT_VOUCHER_PRESENCE" });
+        const lookupResult = await tallyConnectorBridge.sendTallyJob(req.travelTenant.id, lookupXml, { jobType: "EXPORT_VOUCHER_PRESENCE" });
         const reportedKeys = previouslyExportedVoucherKeys(lookupResult.responseXml);
         tallyPresence = liveVoucherPresence(lookupResult.responseXml);
         const keysWithoutMasterId = [...reportedKeys].filter((key) => !tallyPresence.has(key));
@@ -485,6 +491,13 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
       }
 
       retainOnlyLiveVoucherHistory(exportedKeys, legacyCoverage, legacyFingerprints, legacyFingerprintKeys, liveVoucherKeys);
+      // Tally is the source of truth even when the CRM has no local sync log
+      // (for example after a migration or a previous manual XML import).
+      // Treat every currently-live incoming voucher as already exported so a
+      // normal push can never recreate it with ACTION=Create.
+      for (const key of currentVoucherKeys) {
+        if (liveVoucherKeys.has(key)) exportedKeys.add(key);
+      }
     }
     const filteredVouchers = omitPreviouslyExportedVouchers(vouchersXml, exportedKeys, legacyCoverage, legacyFingerprints);
     const existingCurrentKeys = new Set([...currentVoucherKeys].filter((key) => tallyPresence.has(key)));
@@ -528,8 +541,8 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
     const results = [];
     for (const stage of stages) {
       try {
-        const result = await sendTallyJob(req.travelTenant.id, stage.xml, { jobType: stage.name === "masters" ? "IMPORT_MASTERS" : "IMPORT_VOUCHERS" });
-        const tally = result.tally || parseTallyResponse(result.responseXml);
+        const result = await tallyConnectorBridge.sendTallyJob(req.travelTenant.id, stage.xml, { jobType: stage.name === "masters" ? "IMPORT_MASTERS" : "IMPORT_VOUCHERS" });
+        const tally = result.tally || tallyConnectorBridge.parseTallyResponse(result.responseXml);
         if (!tally.success) {
           throw Object.assign(new Error(tally.lineError || `Tally reported ${tally.errors + tally.exceptions} error(s)`), { code: "TALLY_IMPORT_FAILED", responseXml: result.responseXml, tally });
         }
@@ -541,11 +554,17 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
           await updateCostCentreSyncStatus(req.travelTenant.id, stage.xml, "SYNCED").catch((error) => {
             console.warn("[tally-connector] cost-centre sync status update failed:", error.message);
           });
+        } else {
+          await updateCostCentreVoucherSyncStatus(req.travelTenant.id, vouchersToPush.xml, "SYNCED", new Date()).catch((error) => {
+            console.warn("[tally-connector] voucher sync status update failed:", error.message);
+          });
         }
       } catch (error) {
-        const tally = error.tally || parseTallyResponse(error.responseXml);
+        const tally = error.tally || tallyConnectorBridge.parseTallyResponse(error.responseXml);
         if (stage.name === "masters") {
           await updateCostCentreSyncStatus(req.travelTenant.id, stage.xml, "FAILED").catch(() => {});
+        } else {
+          await updateCostCentreVoucherSyncStatus(req.travelTenant.id, vouchersToPush.xml, "FAILED").catch(() => {});
         }
         await prisma.travelTallySyncLog.create({
           data: { tenantId: req.travelTenant.id, sourceType: "DIRECT_EXPORT", sourceId: 0, voucherType: stage.name.toUpperCase(), status: "FAILED", triggeredByUserId: req.user.userId, requestPayload: syncLogRequestPayload(stage.name, stage.xml, vouchersXml), responsePayload: error.responseXml || null },

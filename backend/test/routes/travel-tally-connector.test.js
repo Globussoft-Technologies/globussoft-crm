@@ -8,9 +8,11 @@ import prisma from "../../lib/prisma.js";
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+const tallyConnectorBridge = requireCJS("../../lib/tallyConnectorBridge");
 const originalConnectorPublicUrl = process.env.TALLY_CONNECTOR_PUBLIC_URL;
 const SAFE_VOUCHER_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 const SAFE_COST_CENTRE_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><COSTCENTRE NAME="TRIP-1" ACTION="Create"><NAME>TRIP-1</NAME></COSTCENTRE></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
+const REFERENCED_VOUCHER_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>Travel Test</SVCURRENTCOMPANY></STATICVARIABLES></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER VCHTYPE="Sales" ACTION="Create"><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><REFERENCE>INV-1</REFERENCE><COSTCENTREALLOCATIONS.LIST><NAME>TRIP-1</NAME></COSTCENTREALLOCATIONS.LIST></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
@@ -21,6 +23,10 @@ prisma.revokedToken.findUnique = vi.fn();
 prisma.integration = { findUnique: vi.fn(), upsert: vi.fn() };
 prisma.auditLog = { create: vi.fn(), findFirst: vi.fn() };
 prisma.travelTallySyncLog = { findMany: vi.fn(), create: vi.fn() };
+prisma.travelTallyCostCentre = { updateMany: vi.fn() };
+
+const connectorStatusSpy = vi.spyOn(tallyConnectorBridge, "getConnectorStatus");
+const sendTallyJobSpy = vi.spyOn(tallyConnectorBridge, "sendTallyJob");
 
 const connectorRouter = requireCJS("../../routes/travel_tally_connector");
 
@@ -47,6 +53,9 @@ beforeEach(() => {
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.travelTallySyncLog.findMany.mockReset().mockResolvedValue([]);
   prisma.travelTallySyncLog.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.travelTallyCostCentre.updateMany.mockReset().mockResolvedValue({ count: 1 });
+  connectorStatusSpy.mockReset().mockReturnValue({ online: false });
+  sendTallyJobSpy.mockReset();
 });
 
 afterEach(() => {
@@ -214,6 +223,46 @@ describe("travel Tally connector routes", () => {
 
     expect(response.status).toBe(503);
     expect(response.body.code).toBe("TALLY_CONNECTOR_OFFLINE");
+  });
+
+  test("checks live Tally and blocks an existing voucher even without local sync history", async () => {
+    connectorStatusSpy.mockReturnValue({ online: true });
+    sendTallyJobSpy.mockResolvedValueOnce({
+      responseXml: "<ENVELOPE><VOUCHER><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><REFERENCE>INV-1</REFERENCE><MASTERID>501</MASTERID></VOUCHER></ENVELOPE>",
+    });
+
+    const response = await request(makeApp())
+      .post("/api/travel/tally/connector/push")
+      .set(auth())
+      .send({ vouchersXml: REFERENCED_VOUCHER_XML });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("TALLY_EXISTING_VOUCHERS_FOUND");
+    expect(sendTallyJobSpy).toHaveBeenCalledTimes(1);
+    expect(sendTallyJobSpy.mock.calls[0][1]).toContain("<TALLYREQUEST>Export</TALLYREQUEST>");
+    expect(prisma.travelTallySyncLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 1 }),
+    }));
+  });
+
+  test("imports a new voucher and persists its cost-centre status", async () => {
+    connectorStatusSpy.mockReturnValue({ online: true });
+    sendTallyJobSpy
+      .mockResolvedValueOnce({ responseXml: "<ENVELOPE></ENVELOPE>" })
+      .mockResolvedValueOnce({ responseXml: "<RESPONSE><CREATED>1</CREATED><ALTERED>0</ALTERED><ERRORS>0</ERRORS><EXCEPTIONS>0</EXCEPTIONS></RESPONSE>" });
+
+    const response = await request(makeApp())
+      .post("/api/travel/tally/connector/push")
+      .set(auth())
+      .send({ vouchersXml: REFERENCED_VOUCHER_XML });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(sendTallyJobSpy).toHaveBeenCalledTimes(2);
+    expect(prisma.travelTallyCostCentre.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, code: { in: ["TRIP-1"] } },
+      data: { voucherSyncStatus: "SYNCED", lastVoucherSyncAt: expect.any(Date) },
+    });
   });
 
   test.each([

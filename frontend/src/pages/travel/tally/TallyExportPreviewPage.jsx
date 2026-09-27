@@ -25,6 +25,37 @@ const SUB_BRAND_OPTIONS = [
 const validSubBrand = (value) => SUB_BRAND_OPTIONS.some((option) => option.value === value);
 const subBrandLabel = (value) => SUB_BRAND_OPTIONS.find((option) => option.value === value)?.label || value;
 const TALLY_PAGE_SIZE_OPTIONS = [10, 20, 50];
+const SOURCE_PAGE_SIZE = 200;
+const COST_CENTRE_PAGE_SIZE = 100;
+
+async function fetchAllOffsetPages(path, responseKey, params = new URLSearchParams()) {
+  const rows = [];
+  let offset = 0;
+  while (true) {
+    const pageParams = new URLSearchParams(params);
+    pageParams.set("limit", String(SOURCE_PAGE_SIZE));
+    pageParams.set("offset", String(offset));
+    const response = await fetchApi(`${path}?${pageParams}`);
+    const pageRows = Array.isArray(response?.[responseKey]) ? response[responseKey] : [];
+    rows.push(...pageRows);
+    offset += pageRows.length;
+    const total = Number(response?.total);
+    if (pageRows.length < SOURCE_PAGE_SIZE || (Number.isFinite(total) && offset >= total)) break;
+  }
+  return rows;
+}
+
+async function fetchAllCostCentres() {
+  const rows = [];
+  let page = 1;
+  while (true) {
+    const response = await fetchApi(`/api/travel/tally/cost-centres?page=${page}&limit=${COST_CENTRE_PAGE_SIZE}`);
+    rows.push(...(Array.isArray(response?.costCentres) ? response.costCentres : []));
+    if (!response?.pagination?.hasMore) break;
+    page += 1;
+  }
+  return rows;
+}
 
 export default function TallyExportPreviewPage() {
   const { tripId } = useParams();
@@ -86,29 +117,29 @@ export default function TallyExportPreviewPage() {
   useEffect(() => {
     let cancelled = false;
     const effectiveSubBrand = subBrandFilter;
-    const itineraryParams = new URLSearchParams({ fields: "summary", limit: "200" });
+    const itineraryParams = new URLSearchParams({ fields: "summary" });
     if (effectiveSubBrand !== "all") itineraryParams.set("subBrand", effectiveSubBrand);
     const tripsRequest = effectiveSubBrand === "all" || effectiveSubBrand === "tmc"
-      ? fetchApi(`/api/travel/trips?fields=summary&limit=200`).catch(() => ({ trips: [] }))
-      : Promise.resolve({ trips: [] });
+      ? fetchAllOffsetPages("/api/travel/trips", "trips", new URLSearchParams({ fields: "summary" })).catch(() => [])
+      : Promise.resolve([]);
     Promise.all([
-      fetchApi(`/api/travel/itineraries?${itineraryParams}`),
+      fetchAllOffsetPages("/api/travel/itineraries", "itineraries", itineraryParams),
       tripsRequest,
       fetchApi(`/api/travel/tally/ledger?subBrand=${encodeURIComponent(effectiveSubBrand)}`),
-      fetchApi("/api/travel/tally/cost-centres").catch(() => ({ costCentres: [] })),
-    ]).then(([tripData, tmcTripData, ledgerData, costCentreData]) => {
+      fetchAllCostCentres().catch(() => []),
+    ]).then(([itineraryRows, tmcTripRows, ledgerData, costCentreRows]) => {
       if (cancelled) return;
       const nextCostCentreStatuses = {};
       const nextLastVoucherSyncTimes = {};
-      (costCentreData?.costCentres || []).forEach((costCentre) => {
+      costCentreRows.forEach((costCentre) => {
         const key = `${costCentre.sourceType}:${costCentre.sourceId}`;
         nextCostCentreStatuses[key] = costCentre.voucherSyncStatus || costCentre.syncStatus || "NOT_CONNECTED";
         if (costCentre.lastVoucherSyncAt) nextLastVoucherSyncTimes[key] = costCentre.lastVoucherSyncAt;
       });
       setCostCentreStatuses(nextCostCentreStatuses);
       setLastVoucherSyncTimes(nextLastVoucherSyncTimes);
-      const itineraryTrips = (tripData?.itineraries || []).map((row) => ({ ...row, ledgerType: "itinerary" }));
-      const tmcTrips = (tmcTripData?.trips || []).map((row) => ({
+      const itineraryTrips = itineraryRows.map((row) => ({ ...row, ledgerType: "itinerary" }));
+      const tmcTrips = tmcTripRows.map((row) => ({
         ...row,
         id: `tmc-${row.id}`,
         tmcTripId: row.id,

@@ -50,6 +50,9 @@
  *  15.  Auth gate: /setup, /enable, /disable all require verifyToken
  *       (no auth header → 401 via the project's verifyToken middleware).
  *       /verify is intentionally unauthenticated (tempToken IS the auth).
+ *  16.  Travel 2FA returns the effective sub-brand scope and configured
+ *       landing metadata used by the Travel sidebar.
+ *  17.  A session-version change invalidates an outstanding 2FA challenge.
  *
  * Test pattern mirrors backend/test/routes/staff.test.js — prisma singleton
  * monkey-patch + supertest with a fake auth middleware for the gated routes,
@@ -72,6 +75,12 @@ import prisma from '../../lib/prisma.js';
 prisma.user = {
   findUnique: vi.fn(),
   update: vi.fn(),
+};
+prisma.userRole = {
+  findFirst: vi.fn(),
+};
+prisma.role = {
+  findFirst: vi.fn(),
 };
 prisma.auditLog = {
   findFirst: vi.fn().mockResolvedValue(null),
@@ -124,6 +133,10 @@ function totpFor(secretBase32) {
 beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.update.mockReset();
+  prisma.userRole.findFirst.mockReset();
+  prisma.userRole.findFirst.mockResolvedValue(null);
+  prisma.role.findFirst.mockReset();
+  prisma.role.findFirst.mockResolvedValue(null);
 });
 
 // ── POST /setup ────────────────────────────────────────────────────
@@ -424,6 +437,78 @@ describe('POST /verify — login-step-2 surface', () => {
     expect(decoded.isOwner).toBe(true);
     expect(decoded.sessionVersion).toBe(4);
     expect(res.body.user.userType).toBe('OWNER');
+  });
+
+  test('travel 2FA returns restricted sub-brand access and configured landing metadata', async () => {
+    const secret = speakeasy.generateSecret({ length: 20 }).base32;
+    const travelUser = {
+      id: 12, email: 'tmc.manager@example.test', name: 'TMC Manager',
+      role: 'MANAGER', userType: 'STAFF', sessionVersion: 2,
+      wellnessRole: null, themePreference: 'system', tenantId: 9,
+      twoFactorEnabled: true, twoFactorSecret: secret,
+      backupCodes: JSON.stringify([]),
+      tenant: { id: 9, name: 'Travel Tenant', slug: 'travel-tenant', vertical: 'travel' },
+    };
+    prisma.user.findUnique
+      .mockResolvedValueOnce(travelUser)
+      .mockResolvedValueOnce({
+        id: 12,
+        role: 'MANAGER',
+        subBrandAccess: JSON.stringify(['tmc']),
+        userRoles: [],
+      });
+    prisma.userRole.findFirst.mockResolvedValue({
+      role: {
+        id: 31,
+        key: 'TRAVEL_MANAGER',
+        name: 'Travel Manager',
+        landingPath: '/travel/trips',
+        dataScope: 'ALL',
+        subBrandScopeJson: JSON.stringify(['tmc']),
+      },
+    });
+    const tempToken = jwt.sign(
+      { userId: 12, awaiting2FA: true, sessionVersion: 2 },
+      JWT_SECRET,
+      { expiresIn: '5m' },
+    );
+
+    const res = await request(makePublicApp())
+      .post('/api/auth/2fa/verify')
+      .send({ tempToken, code: totpFor(secret) });
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.subBrandAccess).toEqual(['tmc']);
+    expect(res.body.user.landingPath).toBe('/travel/trips');
+    expect(res.body.user.primaryRole).toMatchObject({
+      id: 31,
+      key: 'TRAVEL_MANAGER',
+      landingPath: '/travel/trips',
+    });
+  });
+
+  test('rejects a 2FA challenge invalidated by a session-version change', async () => {
+    const secret = speakeasy.generateSecret({ length: 20 }).base32;
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, email: 'revoked@example.test', name: 'Revoked', role: 'USER',
+      userType: 'STAFF', sessionVersion: 5, tenantId: 3,
+      twoFactorEnabled: true, twoFactorSecret: secret,
+      backupCodes: JSON.stringify([]),
+      tenant: { id: 3, name: 'Travel Tenant', vertical: 'travel' },
+    });
+    const staleChallenge = jwt.sign(
+      { userId: 7, awaiting2FA: true, sessionVersion: 4 },
+      JWT_SECRET,
+      { expiresIn: '5m' },
+    );
+
+    const res = await request(makePublicApp())
+      .post('/api/auth/2fa/verify')
+      .send({ tempToken: staleChallenge, code: totpFor(secret) });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toMatch(/challenge expired/i);
+    expect(prisma.userRole.findFirst).not.toHaveBeenCalled();
   });
 
   test('backup code: consumed on success → reuse of same code fails', async () => {

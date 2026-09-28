@@ -10,6 +10,8 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { JWT_SECRET } = require("../config/secrets");
+const { resolvePrimaryRole } = require("../lib/roleResolution");
+const { getSubBrandAccessSet } = require("../middleware/travelGuards");
 // #914 slice 1 — additive HttpOnly cookie set alongside the JWT body
 // (see backend/lib/authCookies.js header for the full migration plan).
 const { setAuthCookie } = require("../lib/authCookies");
@@ -179,6 +181,19 @@ router.post("/verify", async (req, res) => {
       return res.status(400).json({ error: "2FA is not enabled for this account" });
     }
 
+    // A password reset, admin session revocation, or another security event
+    // may increment sessionVersion while the five-minute 2FA challenge is
+    // still open. Do not let that stale challenge mint a fresh session with
+    // the new version. Challenges issued before sessionVersion existed remain
+    // valid until their short expiry for backwards compatibility.
+    if (decoded.sessionVersion !== undefined && decoded.sessionVersion !== null) {
+      const challengeVersion = Number(decoded.sessionVersion);
+      const liveVersion = Number(user.sessionVersion || 0);
+      if (!Number.isFinite(challengeVersion) || challengeVersion !== liveVersion) {
+        return res.status(401).json({ error: "2FA challenge expired, please log in again" });
+      }
+    }
+
     let verified = verifyTotp(user.twoFactorSecret, code);
     let consumedBackupCode = false;
 
@@ -211,6 +226,26 @@ router.post("/verify", async (req, res) => {
     }
 
     const tenantId = user.tenantId || 1;
+    // Travel's sidebar is sub-brand scoped. Match the normal /auth/login and
+    // /auth/me payload so completing 2FA cannot temporarily broaden a user's
+    // navigation or drop its configured landing route. Keep the extra role and
+    // scope lookups out of the generic and wellness 2FA paths.
+    let travelAccessMetadata = {};
+    if (user.tenant?.vertical === "travel") {
+      const primaryRole = await resolvePrimaryRole({
+        id: user.id,
+        role: user.role,
+        tenantId,
+      });
+      const travelSubBrandAccess = await getSubBrandAccessSet(user.id);
+      travelAccessMetadata = {
+        subBrandAccess: travelSubBrandAccess === null
+          ? null
+          : Array.from(travelSubBrandAccess),
+        primaryRole,
+        landingPath: primaryRole?.landingPath || null,
+      };
+    }
     // Issue #180: include unique jti so this session can be revoked individually.
     // Issue #207/#214/#216: also embed wellnessRole so verifyWellnessRole gates
     // work post-2FA login the same as plain /login.
@@ -260,6 +295,7 @@ router.post("/verify", async (req, res) => {
         wellnessRole: user.wellnessRole || null,
         themePreference: user.themePreference || 'system',
         profilePicture: user.profilePicture || null,
+        ...travelAccessMetadata,
       },
       tenant: user.tenant
         ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor }

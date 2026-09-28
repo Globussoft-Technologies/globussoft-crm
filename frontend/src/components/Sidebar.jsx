@@ -211,13 +211,20 @@ const Sidebar = ({
   const subBrandAccess = (() => {
     if (isAdmin) return null;
     const raw = user?.subBrandAccess;
-    if (!raw) return null;
+    if (raw === null || raw === undefined || raw === "") return null;
     try {
-      const arr = JSON.parse(raw);
-      if (!Array.isArray(arr) || arr.length === 0) return null;
+      // /auth/login, /auth/me and /auth/2fa/verify expose the effective
+      // Travel scope as an array. Keep accepting the historical JSON-string
+      // shape so existing persisted sessions continue to work after deploy.
+      const arr = Array.isArray(raw) ? raw : JSON.parse(raw);
+      if (!Array.isArray(arr)) return null;
+      // An explicit empty scope is deny-all, not full access. This mirrors
+      // travelGuards.getSubBrandAccessSet() on the backend.
+      if (arr.length === 0) return [];
       return arr;
     } catch {
-      return null;
+      // Match the backend's malformed-JSON behavior and fail closed.
+      return [];
     }
   })();
   // RBAC: fine-grained permission gate for new sidebar entries. Legacy

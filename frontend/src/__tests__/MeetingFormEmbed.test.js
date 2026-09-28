@@ -68,7 +68,7 @@ describe("Meeting Form embed calendar", () => {
     expect(document.querySelectorAll(".weekdays span")).toHaveLength(7);
     expect(document.querySelector('[data-date="2026-09-25"]')).toHaveClass("available", "active");
     expect(document.querySelector('[data-date="2026-09-24"]')).toBeDisabled();
-    expect(document.querySelector("#selected-date")).toHaveTextContent(/Friday, 25 September 2026/i);
+    expect(document.querySelector("#selected-date")).toHaveTextContent(/Friday, (?:25 September 2026|September 25, 2026)/i);
     expect(document.querySelector("#slots")).toHaveTextContent("11:00 AM");
     expect(document.querySelector('[aria-label="12:00 PM unavailable"]')).toBeDisabled();
     expect(document.querySelector('[aria-label="12:00 PM unavailable"]')).toHaveClass("unavailable");

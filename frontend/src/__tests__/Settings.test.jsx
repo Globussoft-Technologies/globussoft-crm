@@ -87,19 +87,20 @@ vi.mock("../utils/notify", () => ({
   useNotify: () => notifyObj,
 }));
 
-// Settings.jsx pulls ThemeContext + AuthContext from App.jsx; stub the module
-// so the page renders standalone without booting the full app. vi.hoisted
-// keeps setThemeMock available inside the (hoisted) vi.mock factory.
+// Settings.jsx imports the contexts via App.jsx, while usePermissions reads
+// AuthContext directly from appContexts.js. Both must share one context object.
+// Stub App without booting it, and keep setThemeMock available to the factory.
 const { setThemeMock } = vi.hoisted(() => ({ setThemeMock: vi.fn() }));
-vi.mock("../App", () => {
+vi.mock("../App", async () => {
   const React = require("react");
+  const { AuthContext } = await import("../appContexts");
   return {
     ThemeContext: React.createContext({
       theme: "light",
       setTheme: setThemeMock,
       toggleTheme: () => {},
     }),
-    AuthContext: React.createContext({ tenant: null, setTenant: () => {} }),
+    AuthContext,
   };
 });
 

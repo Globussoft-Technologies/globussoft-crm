@@ -209,7 +209,7 @@ describe('verifyToken', () => {
     await verifyToken(req, res, next);
     expect(userFindUniqueMock).toHaveBeenCalledWith({
       where: { id: 7 },
-      select: { deactivatedAt: true, sessionVersion: true },
+      select: { deactivatedAt: true, sessionVersion: true, userType: true },
     });
     expect(next).toHaveBeenCalledOnce();
     expect(req.user).toMatchObject({
@@ -229,6 +229,24 @@ describe('verifyToken', () => {
     await verifyToken(req, res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(req.user.tenantId).toBe(1);
+  });
+
+  test('recovers OWNER permissions from the live user for an existing 2FA token', async () => {
+    userFindUniqueMock.mockResolvedValueOnce({
+      id: 7, deactivatedAt: null, sessionVersion: 0, userType: 'OWNER',
+    });
+    const old2faToken = jwt.sign(
+      { userId: 7, role: 'ADMIN', tenantId: 3, vertical: 'travel' },
+      SECRET,
+    );
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${old2faToken}` },
+    });
+
+    await verifyToken(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user).toMatchObject({ userId: 7, tenantId: 3, userType: 'OWNER', isOwner: true });
   });
 
   test('backfills tenantId=1 when null in token', async () => {

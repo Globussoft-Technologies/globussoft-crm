@@ -37,6 +37,7 @@ import {
   markAuthReady,
   fetchApi,
 } from "./utils/api";
+import { invalidatePermissionCache } from "./hooks/usePermissions";
 
 import {
   VALID_THEME_VALUES,
@@ -1072,6 +1073,9 @@ export default function App() {
   // tabs can rehydrate without forcing a re-login. See utils/api.js for the
   // security trade-off.
   const setToken = (next, opts) => {
+    // Permissions are cached by bearer token. Clear them at every auth
+    // boundary so a new session always fetches its own sidebar grants.
+    invalidatePermissionCache();
     setAuthToken(next, opts);
     setTokenState(next || null);
   };
@@ -1191,6 +1195,7 @@ export default function App() {
         // the user out. The next successful /api call will surface the error.
       } catch (err) {
         if (!cancelled) {
+          invalidatePermissionCache();
           clearAuthToken();
           setUser(null);
           setTenant(null);

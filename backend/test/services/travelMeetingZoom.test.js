@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
 
 const requireCJS = createRequire(import.meta.url);
@@ -12,6 +12,10 @@ const prisma = vi.hoisted(() => {
 });
 
 const zoom = requireCJS("../../services/travelMeetingZoom");
+const credentialEncryption = requireCJS("../../lib/travelMeetingCredentialEncryption");
+const originalCredentialKey = process.env.TRAVEL_MEETING_CREDENTIAL_KEY;
+
+process.env.TRAVEL_MEETING_CREDENTIAL_KEY = "e".repeat(64);
 
 beforeEach(() => {
   prisma.travelMeetingZoomCredential.findUnique.mockReset();
@@ -24,14 +28,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+afterAll(() => {
+  if (originalCredentialKey === undefined) delete process.env.TRAVEL_MEETING_CREDENTIAL_KEY;
+  else process.env.TRAVEL_MEETING_CREDENTIAL_KEY = originalCredentialKey;
+});
+
 describe("travelMeetingZoom", () => {
   it("verifies, stores, and returns masked tenant credentials", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => ({ access_token: "token", scope: "meeting:write:meeting:admin meeting:delete:meeting:admin" }) });
     prisma.travelMeetingZoomCredential.upsert.mockImplementation(async ({ create }) => ({ id: 1, status: "CONNECTED", verifiedAt: new Date(), lastError: null, ...create }));
     const result = await zoom.connect({ tenantId: 8, accountId: "account-1234", clientId: "client-abcd", clientSecret: "super-secret", zoomHostUserId: "host@example.com" });
     const write = prisma.travelMeetingZoomCredential.upsert.mock.calls[0][0].create;
-    expect(write.accountId).toBe("account-1234");
-    expect(write.clientSecret).toBe("super-secret");
+    expect(write.accountId).not.toContain("account-1234");
+    expect(write.clientSecret).not.toContain("super-secret");
+    expect(credentialEncryption.decryptTravelMeetingCredential(write.accountId)).toBe("account-1234");
+    expect(credentialEncryption.decryptTravelMeetingCredential(write.clientSecret)).toBe("super-secret");
     expect(result).toMatchObject({ configured: true, accountId: "****1234", clientId: "****abcd", clientSecretConfigured: true, zoomHostUserId: "host@example.com" });
   });
 
@@ -45,9 +56,9 @@ describe("travelMeetingZoom", () => {
     prisma.travelMeetingZoomCredential.findUnique.mockResolvedValue({
       tenantId: 8,
       status: "CONNECTED",
-      accountId: "tenant-account",
-      clientId: "tenant-client",
-      clientSecret: "tenant-secret",
+      accountId: credentialEncryption.encryptTravelMeetingCredential("tenant-account"),
+      clientId: credentialEncryption.encryptTravelMeetingCredential("tenant-client"),
+      clientSecret: credentialEncryption.encryptTravelMeetingCredential("tenant-secret"),
       zoomHostUserId: "host@example.com",
     });
     const fetchSpy = vi.spyOn(globalThis, "fetch")

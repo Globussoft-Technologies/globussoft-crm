@@ -66,6 +66,92 @@ describe("Travel Meeting Form field validation", () => {
     });
   });
 
+  test("serializes slot claims and rejects overlapping meeting ranges", async () => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 9 }]),
+      travelMeetingSlot: {
+        findFirst: vi.fn().mockResolvedValue({ id: 42 }),
+        count: vi.fn(),
+      },
+    };
+    const start = new Date("2026-10-15T04:30:00Z");
+    const end = new Date("2026-10-15T05:30:00Z");
+    await expect(_internal.assertSlotClaimAvailable(tx, {
+      id: 9,
+      tenantId: 2,
+      timezone: "Asia/Kolkata",
+      bufferBeforeMins: 15,
+      bufferAfterMins: 10,
+      maxBookingsPerDay: null,
+    }, start, end)).rejects.toMatchObject({ code: "SLOT_UNAVAILABLE", status: 409 });
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(tx.travelMeetingSlot.findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 2,
+        meetingFormId: 9,
+        scheduledAt: { lt: new Date("2026-10-15T05:55:00.000Z") },
+        endsAt: { gt: new Date("2026-10-15T04:05:00.000Z") },
+      },
+      select: { id: true },
+    });
+  });
+
+  test("enforces the per-day limit while holding the form lock", async () => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 9 }]),
+      travelMeetingSlot: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(2),
+      },
+    };
+    await expect(_internal.assertSlotClaimAvailable(tx, {
+      id: 9,
+      tenantId: 2,
+      timezone: "Asia/Kolkata",
+      maxBookingsPerDay: 2,
+    }, new Date("2026-10-15T04:30:00Z"), new Date("2026-10-15T05:00:00Z"))).rejects.toMatchObject({
+      code: "DAILY_LIMIT_REACHED",
+      status: 409,
+    });
+  });
+
+  test("refuses to merge booking identity fields from different CRM contacts", () => {
+    expect(() => _internal.chooseBookingContact([
+      { id: 11, email: "school@example.com", phone: "+911111111111" },
+      { id: 12, email: "other@example.com", phone: "+922222222222" },
+    ])).toThrowError(/different CRM contacts/i);
+    expect(_internal.chooseBookingContact([{ id: 11 }])).toEqual({ id: 11 });
+  });
+
+  test("emits booking notifications only to the authenticated tenant room", () => {
+    const emit = vi.fn();
+    const to = vi.fn(() => ({ emit }));
+    _internal.emitTravelMeetingBooked({ to }, { tenantId: 8, id: 14 }, { id: 22 });
+    expect(to).toHaveBeenCalledWith("tenant:8");
+    expect(emit).toHaveBeenCalledWith("travel_meeting_booked", { formId: 14, bookingId: 22 });
+  });
+
+  test("keeps a confirmed booking intact when confirmation delivery fails", async () => {
+    const deliver = vi.fn().mockRejectedValue(new Error("mail provider unavailable"));
+    const update = vi.fn().mockRejectedValue(new Error("status persistence unavailable"));
+    const booking = { id: 22, status: "CONFIRMED", meetingUrl: "https://zoom.us/j/22" };
+    const result = await _internal.persistBookingConfirmationDelivery(
+      { id: 14 },
+      booking,
+      { deliver, bookingModel: { update } },
+    );
+    expect(result).toMatchObject({
+      id: 22,
+      status: "CONFIRMED",
+      meetingUrl: "https://zoom.us/j/22",
+      emailStatus: "FAILED",
+    });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 22 },
+      data: { emailStatus: "FAILED", emailChannel: null },
+    });
+  });
+
   test.each([
     ["email", "not-an-email"],
     ["tel", "abc"],

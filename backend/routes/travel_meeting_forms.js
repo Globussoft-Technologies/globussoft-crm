@@ -427,6 +427,109 @@ async function availabilityFor(form, startDate, days) {
   }));
 }
 
+function bookingConflict(message, code = "SLOT_UNAVAILABLE") {
+  const error = new Error(message);
+  error.status = 409;
+  error.code = code;
+  return error;
+}
+
+async function assertSlotClaimAvailable(tx, form, scheduledAt, endsAt) {
+  // Serialize claims per form. Exact-start unique indexes cannot prevent two
+  // different starts (for example 10:00 and 10:30) from overlapping a
+  // 60-minute meeting, and a pre-transaction availability read is racy.
+  await tx.$queryRaw`SELECT id FROM TravelMeetingForm WHERE id = ${form.id} FOR UPDATE`;
+
+  const bufferPaddingMs = (Number(form.bufferBeforeMins || 0) + Number(form.bufferAfterMins || 0)) * 60_000;
+  const conflictWindowStart = new Date(scheduledAt.getTime() - bufferPaddingMs);
+  const conflictWindowEnd = new Date(endsAt.getTime() + bufferPaddingMs);
+  const conflict = await tx.travelMeetingSlot.findFirst({
+    where: {
+      tenantId: form.tenantId,
+      meetingFormId: form.id,
+      scheduledAt: { lt: conflictWindowEnd },
+      endsAt: { gt: conflictWindowStart },
+    },
+    select: { id: true },
+  });
+  if (conflict) throw bookingConflict("That time was just booked. Please choose another slot.");
+
+  if (form.maxBookingsPerDay != null) {
+    const date = formatInTenantTZ(scheduledAt, form.timezone, "yyyy-MM-dd");
+    const dayStart = parseDateTimeLocalInTZ(`${date}T00:00`, form.timezone);
+    const dayEnd = parseDateTimeLocalInTZ(`${addUtcDays(date, 1)}T00:00`, form.timezone);
+    const dailyCount = await tx.travelMeetingSlot.count({
+      where: {
+        tenantId: form.tenantId,
+        meetingFormId: form.id,
+        scheduledAt: { gte: dayStart, lt: dayEnd },
+      },
+    });
+    if (dailyCount >= form.maxBookingsPerDay) {
+      throw bookingConflict("This meeting form has reached its daily booking limit.", "DAILY_LIMIT_REACHED");
+    }
+  }
+}
+
+function chooseBookingContact(matches, preferredContact = null) {
+  const distinct = new Map(matches.map((row) => [row.id, row]));
+  if (preferredContact) distinct.set(preferredContact.id, preferredContact);
+  if (distinct.size > 1) {
+    throw bookingConflict(
+      "The supplied email and phone match different CRM contacts. Please correct the contact details before booking.",
+      "CONTACT_IDENTITY_CONFLICT",
+    );
+  }
+  return preferredContact || matches[0] || null;
+}
+
+async function resolveBookingContact(form, values, preferredContact = null) {
+  const matches = await prisma.contact.findMany({
+    where: {
+      tenantId: form.tenantId,
+      deletedAt: null,
+      OR: [
+        { email: values.contactEmail },
+        ...(values.contactPhone ? [{ phone: values.contactPhone }] : []),
+      ],
+    },
+    orderBy: { id: "asc" },
+    take: 3,
+  });
+  return chooseBookingContact(matches, preferredContact);
+}
+
+function emitTravelMeetingBooked(io, form, booking) {
+  if (!io) return;
+  io.to(`tenant:${form.tenantId}`).emit("travel_meeting_booked", {
+    formId: form.id,
+    bookingId: booking.id,
+  });
+}
+
+async function persistBookingConfirmationDelivery(form, booking, dependencies = {}) {
+  const deliver = dependencies.deliver || deliverBookingConfirmation;
+  const bookingModel = dependencies.bookingModel || prisma.travelMeetingBooking;
+  try {
+    const email = await deliver(form, booking);
+    return await bookingModel.update({
+      where: { id: booking.id },
+      data: {
+        emailStatus: email.sent ? "SENT" : "FAILED",
+        emailChannel: email.channel,
+        emailMessageId: email.emailMessageId,
+      },
+    });
+  } catch (emailError) {
+    console.error("[travel-meeting-forms] confirmation delivery failed after booking commit:", emailError.message);
+    await bookingModel.update({
+      where: { id: booking.id },
+      data: { emailStatus: "FAILED", emailChannel: null },
+    }).catch(() => {});
+    return { ...booking, emailStatus: "FAILED", emailChannel: null };
+  }
+}
+
 function publicBooking(booking, form) {
   const customFields = parseJson(booking.customFieldsJson, {});
   const names = splitName(booking.contactName, customFields);
@@ -702,6 +805,7 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
   let booking;
   let zoom = null;
   let calendarEvent = null;
+  let bookingCommitted = false;
   try {
     form = await loadPublicForm(req.params.publicKey);
     if (!form || !authorizeConsumer(form, req)) return res.status(403).json({ error: "Website origin is not allowed", code: "ORIGIN_NOT_ALLOWED" });
@@ -735,6 +839,7 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
 
     try {
       booking = await prisma.$transaction(async (tx) => {
+        await assertSlotClaimAvailable(tx, form, scheduledAt, endsAt);
         let row = existingAttempt;
         if (row) {
           row = await tx.travelMeetingBooking.update({
@@ -750,7 +855,7 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
         return row;
       });
     } catch (error) {
-      if (error.code === "P2002") return res.status(409).json({ error: "That time was just booked. Please choose another slot.", code: "SLOT_UNAVAILABLE", date, slots: dates[0]?.slots.filter((slot) => slot.start !== scheduledAt.toISOString()) || [] });
+      if (error.code === "P2002" || error.status === 409) return res.status(409).json({ error: error.message || "That time was just booked. Please choose another slot.", code: error.code === "DAILY_LIMIT_REACHED" ? error.code : "SLOT_UNAVAILABLE", date, slots: dates[0]?.slots.filter((slot) => slot.start !== scheduledAt.toISOString()) || [] });
       throw error;
     }
 
@@ -761,8 +866,8 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
       diagnostic = await prisma.travelDiagnostic.findFirst({ where: { id: Number(slugMatch[1]), reportSlugToken: slugMatch[2], tenantId: form.tenantId, subBrand: "tmc" }, select: { id: true, contactId: true } });
     }
 
-    let contact = diagnostic?.contactId ? await prisma.contact.findFirst({ where: { id: diagnostic.contactId, tenantId: form.tenantId, deletedAt: null } }) : null;
-    if (!contact) contact = await prisma.contact.findFirst({ where: { tenantId: form.tenantId, deletedAt: null, OR: [{ email: values.contactEmail }, ...(values.contactPhone ? [{ phone: values.contactPhone }] : [])] } });
+    const diagnosticContact = diagnostic?.contactId ? await prisma.contact.findFirst({ where: { id: diagnostic.contactId, tenantId: form.tenantId, deletedAt: null } }) : null;
+    let contact = await resolveBookingContact(form, values, diagnosticContact);
 
     if (!form.createZoom || !(await travelMeetingZoom.isConfigured(form.tenantId))) {
       const error = new Error("Zoom is not configured for this meeting form.");
@@ -808,10 +913,14 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
     });
     contact = crmResult.contact;
     booking = crmResult.booking;
-    const email = await deliverBookingConfirmation(form, booking);
-    booking = await prisma.travelMeetingBooking.update({ where: { id: booking.id }, data: { emailStatus: email.sent ? "SENT" : "FAILED", emailChannel: email.channel, emailMessageId: email.emailMessageId } });
+    bookingCommitted = true;
+    booking = await persistBookingConfirmationDelivery(form, booking);
     const delivery = bookingDeliveryStatus(booking);
-    if (req.io) req.io.emit("travel_meeting_booked", { tenantId: form.tenantId, formId: form.id, bookingId: booking.id });
+    try {
+      emitTravelMeetingBooked(req.io, form, booking);
+    } catch (socketError) {
+      console.warn("[travel-meeting-forms] tenant notification failed:", socketError.message);
+    }
     const warning = delivery.status !== "SENT"
       ? "The meeting is confirmed, but the confirmation email could not be sent yet. The CRM team can retry it from Bookings."
       : null;
@@ -823,8 +932,8 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
         prisma.travelMeetingBooking.update({ where: { id: booking.id }, data: { status: "FAILED", failureCode: error.code || "BOOKING_FAILED", failureMessage: String(error.message || "Booking failed").slice(0, 2000) } }).catch(() => {}),
       ]);
     }
-    if (calendarEvent?.externalId && form) await calendar.deleteEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, externalId: calendarEvent.externalId });
-    if (zoom?.meetingId && form) await travelMeetingZoom.deleteMeeting(form.tenantId, zoom.meetingId).catch(() => {});
+    if (!bookingCommitted && calendarEvent?.externalId && form) await calendar.deleteEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, externalId: calendarEvent.externalId });
+    if (!bookingCommitted && zoom?.meetingId && form) await travelMeetingZoom.deleteMeeting(form.tenantId, zoom.meetingId).catch(() => {});
     res.status(error.status || 500).json({ error: error.message || "Booking could not be confirmed", code: error.code || "BOOKING_FAILED", expectedDuration: error.expectedDuration, expectedTimezone: error.expectedTimezone });
   }
 });
@@ -851,4 +960,4 @@ router.get("/meeting-forms/public/:publicKey/bookings/:confirmationToken/calenda
 });
 
 module.exports = router;
-module.exports._internal = { normalizeOrigins, normalizeFields, normalizeWeeklyHours, normalizeEmbedFont, validateConfiguredFieldValues, authorizeConsumer, hashKey, safeEqualHash, dataFromBody, publicConfig, publicBooking, bookingDeliveryStatus };
+module.exports._internal = { normalizeOrigins, normalizeFields, normalizeWeeklyHours, normalizeEmbedFont, validateConfiguredFieldValues, authorizeConsumer, hashKey, safeEqualHash, dataFromBody, publicConfig, publicBooking, bookingDeliveryStatus, assertSlotClaimAvailable, chooseBookingContact, resolveBookingContact, emitTravelMeetingBooked, persistBookingConfirmationDelivery };

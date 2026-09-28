@@ -51,14 +51,24 @@ function publicAssetUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
   if (/^https?:\/\//i.test(raw)) return raw;
-  const base = String(process.env.PUBLIC_BASE_URL || process.env.FRONTEND_URL || process.env.BASE_URL || "https://crm.globusdemos.com")
-    .replace(/\/api\/?$/, "")
-    .replace(/\/$/, "");
-  try {
-    return new URL(raw.startsWith("/") ? raw : `/${raw}`, `${base}/`).toString();
-  } catch {
-    return "";
+  const candidates = [
+    process.env.PUBLIC_BASE_URL,
+    process.env.FRONTEND_URL,
+    process.env.BASE_URL,
+    "https://crm.globusdemos.com",
+  ];
+  for (const candidate of candidates) {
+    try {
+      const parsed = new URL(String(candidate || "").trim());
+      if (!["http:", "https:"].includes(parsed.protocol)) continue;
+      const base = parsed.origin;
+      return new URL(raw.startsWith("/") ? raw : `/${raw}`, `${base}/`).toString();
+    } catch {
+      // Vite/Vitest commonly sets BASE_URL="/". Ignore non-origin values and
+      // continue to the production-safe fallback instead of dropping assets.
+    }
   }
+  return "";
 }
 
 function buildMeetingHtml({ form, text, meetingUrl }) {

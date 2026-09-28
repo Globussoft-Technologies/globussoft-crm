@@ -1,6 +1,10 @@
 "use strict";
 
 const prisma = require("../lib/prisma");
+const {
+  encryptTravelMeetingCredential,
+  decryptTravelMeetingCredential,
+} = require("../lib/travelMeetingCredentialEncryption");
 
 const OAUTH_URL = "https://zoom.us/oauth/token";
 const API_BASE = "https://api.zoom.us";
@@ -48,8 +52,8 @@ function sanitizedStatus(row) {
   return {
     configured: row.status === "CONNECTED",
     status: row.status,
-    accountId: mask(row.accountId),
-    clientId: mask(row.clientId),
+    accountId: mask(decryptTravelMeetingCredential(row.accountId)),
+    clientId: mask(decryptTravelMeetingCredential(row.clientId)),
     clientSecretConfigured: Boolean(row.clientSecret),
     zoomHostUserId: row.zoomHostUserId || "me",
     verifiedAt: row.verifiedAt,
@@ -74,9 +78,9 @@ async function connect({ tenantId, accountId, clientId, clientSecret, zoomHostUs
   assertMeetingScopes(token.scopes);
   const now = new Date();
   const stored = {
-    accountId: values.accountId,
-    clientId: values.clientId,
-    clientSecret: values.clientSecret,
+    accountId: encryptTravelMeetingCredential(values.accountId),
+    clientId: encryptTravelMeetingCredential(values.clientId),
+    clientSecret: encryptTravelMeetingCredential(values.clientSecret),
     zoomHostUserId: values.zoomHostUserId,
     status: "CONNECTED",
     verifiedAt: now,
@@ -101,9 +105,9 @@ async function loadConnection(tenantId) {
   const row = await prisma.travelMeetingZoomCredential.findUnique({ where: { tenantId } });
   if (!row || row.status !== "CONNECTED") throw providerError("Connect Zoom inside Travel CRM → Marketing → Meeting Forms before publishing or booking.", "ZOOM_NOT_CONFIGURED", 409);
   return {
-    accountId: row.accountId,
-    clientId: row.clientId,
-    clientSecret: row.clientSecret,
+    accountId: decryptTravelMeetingCredential(row.accountId),
+    clientId: decryptTravelMeetingCredential(row.clientId),
+    clientSecret: decryptTravelMeetingCredential(row.clientSecret),
     zoomHostUserId: row.zoomHostUserId || "me",
   };
 }

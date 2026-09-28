@@ -50,6 +50,17 @@ describe("unifiedInboxMeetingEmail", () => {
     expect(html.indexOf("Hello Asha")).toBeLessThan(html.indexOf("<img"));
   });
 
+  it("ignores Vite's path-only BASE_URL when resolving stored logo paths", () => {
+    const previous = process.env.BASE_URL;
+    process.env.BASE_URL = "/";
+    try {
+      expect(service.publicAssetUrl("/api/uploads/logo.png")).toBe("https://crm.globusdemos.com/api/uploads/logo.png");
+    } finally {
+      if (previous === undefined) delete process.env.BASE_URL;
+      else process.env.BASE_URL = previous;
+    }
+  });
+
   it("sends through the shared email pipeline and saves the outbound conversation", async () => {
     mocks.prisma.gmailIntegration.findUnique.mockResolvedValue(null);
     mocks.sendEmail.mockResolvedValue({ sent: true });

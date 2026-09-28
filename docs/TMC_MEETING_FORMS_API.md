@@ -22,6 +22,12 @@ The browser receives masked Account/Client identifiers and a boolean indicating 
 
 Required Zoom granular scopes are `meeting:write:meeting:admin` and `meeting:delete:meeting:admin`. Classic apps may use `meeting:write:admin`. A tenant cannot publish a Zoom Meeting Form without a verified connection, and cannot disconnect Zoom while a Meeting Form is published.
 
+Zoom Account ID, Client ID, and Client Secret are encrypted at rest with
+AES-256-GCM. Configure `TRAVEL_MEETING_CREDENTIAL_KEY` as exactly 64 hexadecimal
+characters before connecting Zoom. Keep the key stable and outside source
+control; losing or rotating it without re-encrypting existing rows makes those
+connections unreadable.
+
 ## Integration options
 
 The admin page displays the generated embed code and API URLs. No separate API key needs to be entered, stored, rotated, or sent by either party.

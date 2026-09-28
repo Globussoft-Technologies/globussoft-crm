@@ -489,6 +489,26 @@ describe.skip('DiagnosticDetail  retired advisor brief UI', () => {
     expect(screen.getByLabelText(/Customer/i).textContent).toMatch(/Contact #100/i);
   });
 
+  it('shows dynamic identity answers using labels from the saved template snapshot', async () => {
+    const diagnostic = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      questionsJson: JSON.stringify({
+        bankId: 1,
+        bankVersion: 1,
+        questionsJson: JSON.stringify({
+          questions: [{ id: 'q1', text: 'How many pilgrims?' }],
+          identityFields: [{ id: 'school_code', label: 'School code', type: 'text', enabled: true }],
+        }),
+      }),
+      answersJson: JSON.stringify({ q1: '4', identity: { school_code: 'SCH-42' } }),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagnostic));
+    renderPage();
+    expect(await screen.findByRole('heading', { name: /Submitted identity details/i })).toBeTruthy();
+    expect(screen.getByText('School code')).toBeTruthy();
+    expect(screen.getByText('SCH-42')).toBeTruthy();
+  });
+
   it('falls back to the empty-state when questionsJson is missing  shows answers-map dump', async () => {
     const noQuestions = {
       ...DIAGNOSTIC_NO_BRIEF,

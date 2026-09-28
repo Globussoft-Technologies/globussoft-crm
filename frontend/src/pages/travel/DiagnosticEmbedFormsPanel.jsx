@@ -90,6 +90,22 @@ export function getEmbedPreviewQuestions(bank) {
   }
 }
 
+export function getEmbedPreviewIdentityFields(bank) {
+  try {
+    const parsed = JSON.parse(bank?.questionsJson || '{}');
+    const fields = Array.isArray(parsed?.identityFields)
+      ? parsed.identityFields
+      : [
+          { id: 'name', label: 'Name', type: 'text', enabled: true, required: true },
+          { id: 'email', label: 'Email', type: 'email', enabled: true, required: true },
+          { id: 'phone', label: 'Phone', type: 'tel', enabled: true, required: false },
+        ];
+    return fields.filter((field) => field?.enabled !== false);
+  } catch {
+    return [];
+  }
+}
+
 // Same relative-luminance contrast pick as frontend/public/embed/
 // diagnostic.html's pickReadableText() — keep these two in sync.
 function pickReadableText(hex) {
@@ -168,6 +184,7 @@ export default function DiagnosticEmbedFormsPanel({ subBrand, notify }) {
   };
 
   const previewQuestions = getEmbedPreviewQuestions(currentBank);
+  const previewIdentityFields = getEmbedPreviewIdentityFields(currentBank);
 
   const togglePreviewAnswer = (question, value) => {
     setPreviewAnswers((prev) => {
@@ -280,6 +297,7 @@ export default function DiagnosticEmbedFormsPanel({ subBrand, notify }) {
           <EmbedPreview
             config={config}
             questions={previewQuestions}
+            identityFields={previewIdentityFields}
             hasBank={Boolean(currentBank)}
             previewScreen={previewScreen}
             onScreenChange={setPreviewScreen}
@@ -504,7 +522,7 @@ function CodeTab({ formUrl, iframeCode, scriptCode, copied, onCopy }) {
 // radius — so what an admin sees here matches the real widget) ──────────
 
 function EmbedPreview({
-  config, questions, hasBank, previewScreen, onScreenChange, previewDevice, onDeviceChange, previewAnswers, onToggleAnswer,
+  config, questions, identityFields, hasBank, previewScreen, onScreenChange, previewDevice, onDeviceChange, previewAnswers, onToggleAnswer,
 }) {
   const width = previewDevice === 'mobile' ? 380 : previewDevice === 'tablet' ? 680 : Math.max(360, Math.min(1100, Number(config.maxWidth) || 860));
   const selectedText = config.selectedText || pickReadableText(config.primary);
@@ -578,15 +596,15 @@ function EmbedPreview({
 
         {previewScreen === 'questions' && hasBank && (
           <>
-            {/* Every embed always collects Name/Email/Phone before the
-                submit button — not admin-configurable, so illustrating it
-                here just sets accurate expectations for what a submitter
-                sees, it's not something to toggle. */}
+            {/* Identity fields come from the active template, matching the real widget. */}
             <div style={{ display: 'grid', gridTemplateColumns: previewDevice === 'mobile' ? '1fr' : 'repeat(2, 1fr)', gap: 12, margin: '20px 0' }}>
-              {['Name', 'Email', 'Phone'].map((label) => (
-                <label key={label} style={{ display: 'grid', gap: 6, fontSize: 12.5, fontWeight: 600 }}>
-                  {label}
-                  <input disabled placeholder={label} style={{ padding: '10px 12px', borderRadius: 8, border: '1.5px solid rgba(0,0,0,0.12)', fontSize: 13 }} />
+              {identityFields.map((field) => (
+                <label key={field.id} style={{ display: 'grid', gap: 6, fontSize: 12.5, fontWeight: 600 }}>
+                  <span>{field.label || field.id}{field.required ? ' *' : ''}</span>
+                  {field.type === 'textarea'
+                    ? <textarea disabled rows={3} placeholder={field.placeholder || ''} style={{ padding: '10px 12px', borderRadius: 8, border: '1.5px solid rgba(0,0,0,0.12)', fontSize: 13 }} />
+                    : <input disabled type={field.type || 'text'} placeholder={field.placeholder || ''} style={{ padding: '10px 12px', borderRadius: 8, border: '1.5px solid rgba(0,0,0,0.12)', fontSize: 13 }} />}
+                  {field.helper && <small style={{ fontWeight: 400, opacity: 0.72 }}>{field.helper}</small>}
                 </label>
               ))}
             </div>

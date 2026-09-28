@@ -386,6 +386,26 @@ describe("GET /api/travel/diagnostics/public/form/:tenantSlug/:subBrand", () => 
     expect(res.body.code).toBe("FORM_NOT_FOUND");
   });
 
+  test("returns custom identity fields and validation metadata", async () => {
+    prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(formRow({ isPublished: true }));
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow({
+      questionsJson: JSON.stringify({
+        ...JSON.parse(sampleQuestions),
+        identityFields: [{
+          id: "school_code", label: "School code", type: "text", enabled: true,
+          required: true, minLength: 4, maxLength: 20, pattern: "^SCH-[0-9]+$",
+          validationMessage: "Enter a valid school code",
+        }],
+      }),
+    }));
+    const res = await request(makeApp()).get("/api/travel/diagnostics/public/form/travelstall/travelstall");
+    expect(res.status).toBe(200);
+    expect(res.body.identityFields).toEqual([expect.objectContaining({
+      id: "school_code", required: true, minLength: 4, maxLength: 20,
+      pattern: "^SCH-[0-9]+$", validationMessage: "Enter a valid school code",
+    })]);
+  });
+
   test("adds the required TMC trip-type question from indexed Drive categories", async () => {
     prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(
       formRow({ subBrand: "tmc", isPublished: true }),
@@ -611,6 +631,32 @@ describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit"
       .send(payload);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("EMAIL_REQUIRED");
+  });
+
+  test("validates and stores arbitrary identity fields from the identity object", async () => {
+    const customQuestions = JSON.stringify({
+      ...JSON.parse(sampleQuestions),
+      identityFields: [
+        { id: "name", label: "Name", type: "text", enabled: true, required: true },
+        { id: "email", label: "Email", type: "email", enabled: true, required: true },
+        { id: "school_code", label: "School code", type: "text", enabled: true, required: true, pattern: "^SCH-[0-9]+$" },
+      ],
+    });
+    prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(formRow({ isPublished: true }));
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow({ questionsJson: customQuestions }));
+
+    const invalid = await request(makeApp())
+      .post("/api/travel/diagnostics/public/form/travelstall/travelstall/submit")
+      .send({ answers: { q1: "few" }, identity: { name: "Asha", email: "asha@example.com", school_code: "wrong" } });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toMatchObject({ code: "IDENTITY_FIELD_INVALID", fieldId: "school_code", reason: "pattern" });
+
+    const valid = await request(makeApp())
+      .post("/api/travel/diagnostics/public/form/travelstall/travelstall/submit")
+      .send({ answers: { q1: "few" }, identity: { name: "Asha", email: "asha@example.com", school_code: "SCH-42" } });
+    expect(valid.status).toBe(201);
+    const saved = JSON.parse(prisma.travelDiagnostic.create.mock.calls[0][0].data.answersJson);
+    expect(saved.identity).toMatchObject({ name: "Asha", email: "asha@example.com", school_code: "SCH-42" });
   });
 
   // Per-question required flag (2026-08-24) — admins can mark individual

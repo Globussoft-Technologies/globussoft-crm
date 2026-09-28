@@ -258,6 +258,10 @@ describe('ExplorePage public shell', () => {
     expect(submitCall).toBeTruthy();
     expect(JSON.parse(submitCall[1].body)).toEqual({
       answers: { growth: 'confidence', skills: ['empathy'] },
+      identity: {
+        name: 'Asha Sharma',
+        email: 'asha@example.test',
+      },
       name: 'Asha Sharma',
       email: 'asha@example.test',
     });

@@ -72,6 +72,7 @@ const {
   ensureTmcTripTypeQuestion,
   loadTmcTripTypeCategories,
 } = require("../lib/tmcTripTypePreference");
+const { validateIdentityFieldConfiguration } = require("../lib/diagnosticIdentityFields");
 
 function parseDateRangeBoundary(input, kind) {
   if (!input) return null;
@@ -308,6 +309,15 @@ router.post(
         return res.status(400).json({
           error: "scoringRulesJson must define at least one band",
           code: "EMPTY_BANDS",
+        });
+      }
+      const identityConfigError = validateIdentityFieldConfiguration(
+        JSON.parse(questionsJson).identityFields,
+      );
+      if (identityConfigError) {
+        return res.status(400).json({
+          error: identityConfigError,
+          code: "IDENTITY_FIELDS_INVALID",
         });
       }
 

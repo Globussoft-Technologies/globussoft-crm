@@ -1084,6 +1084,32 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(syncCalls).toBeGreaterThanOrEqual(1);
   });
 
+  it('Sync Now failure renders the Calendar API disabled message as an error alert', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/calendar/google/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleGoogleEvents);
+      }
+      if (url === '/api/calendar/outlook/events') {
+        return Promise.reject(new Error('not connected'));
+      }
+      if (url === '/api/calendar/google/sync' && opts?.method === 'POST') {
+        return Promise.reject(
+          new Error(
+            'Google Calendar API is not enabled for this Google Cloud project. Enable it, wait a few minutes, then click Sync Now again.'
+          )
+        );
+      }
+      return Promise.resolve(null);
+    });
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Sync Now/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/Google Calendar API is not enabled/i);
+    expect(alert).toHaveStyle({ background: 'rgba(239,68,68,0.96)' });
+  });
+
   it('Create-Event submit happy path: POST /<provider>/events fires with the form payload + modal closes', async () => {
     let createCalls = [];
     fetchApiMock.mockImplementation((url, opts) => {

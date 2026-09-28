@@ -23,7 +23,7 @@ vi.mock('../utils/api', () => ({
 }));
 
 import { AuthContext } from '../App';
-import DiagnosticEmbedFormsPanel, { getEmbedPreviewQuestions } from '../pages/travel/DiagnosticEmbedFormsPanel';
+import DiagnosticEmbedFormsPanel, { getEmbedPreviewQuestions, getEmbedPreviewIdentityFields } from '../pages/travel/DiagnosticEmbedFormsPanel';
 
 const notifyObj = {
   error: vi.fn(),
@@ -197,8 +197,8 @@ describe('DiagnosticEmbedFormsPanel — preview parity with the real widget (202
 
     // Progress bar defaults on (config.progress defaults true).
     expect(document.querySelector('div[style*="border-radius: 999px"]')).toBeTruthy();
-    expect(screen.getByText('Name')).toBeInTheDocument();
-    expect(screen.getByText('Email')).toBeInTheDocument();
+    expect(screen.getByText('Name *')).toBeInTheDocument();
+    expect(screen.getByText('Email *')).toBeInTheDocument();
     expect(screen.getByText('Phone')).toBeInTheDocument();
     expect(screen.getByText('See my result')).toBeInTheDocument();
   });
@@ -212,6 +212,21 @@ describe('DiagnosticEmbedFormsPanel — preview parity with the real widget (202
     }));
 
     expect(getEmbedPreviewQuestions({ questionsJson: JSON.stringify({ questions }) })).toEqual(questions);
+  });
+
+  it('uses the active template custom identity fields in the preview', async () => {
+    const bank = {
+      ...BANK,
+      questionsJson: JSON.stringify({
+        questions: [],
+        identityFields: [{ id: 'school_name', label: 'School name', type: 'text', enabled: true, required: true }],
+      }),
+    };
+    expect(getEmbedPreviewIdentityFields(bank)).toEqual([expect.objectContaining({ id: 'school_name' })]);
+    mockLoad({ banks: [bank] });
+    renderPanel();
+    expect(await screen.findByText('School name *')).toBeInTheDocument();
+    expect(screen.queryByText('Phone')).not.toBeInTheDocument();
   });
 
   it('the Result preview shows the "Recommendations heading" text, not just the sample cards', async () => {

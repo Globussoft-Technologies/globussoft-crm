@@ -346,6 +346,7 @@ const RegisterSuccess = lazy(() => import("./pages/RegisterSuccess"));
 const CustomerRegister = lazy(() => import("./pages/CustomerRegister"));
 // Travel vertical (Day 1 scaffolding  Phase 1 pages land per docs/TRAVEL_CRM_PRD.md 7)
 const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
+const TravelMeetingForms = lazy(() => import("./pages/travel/MeetingForms"));
 const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
 const TravelDiagnosticWizard = lazy(
   () => import("./pages/travel/DiagnosticWizard"),
@@ -2876,6 +2877,20 @@ export default function App() {
                                             <Route path="widgets" element={<Navigate to="/forms" replace />} />
                       <Route path="forms" element={<GenericOnly><WebForms /></GenericOnly>} />
                       <Route path="travel/forms" element={<TravelOnly><WebForms scope="travel" /></TravelOnly>} />
+                      <Route
+                        path="travel/meeting-forms"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{ module: "marketing", action: "read" }}
+                              feature="Meeting Forms"
+                              message="Meeting Forms requires the 'marketing.read' permission."
+                            >
+                              <TravelMeetingForms />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
                       <Route path="booking-pages" element={<BookingPages />} />
                       <Route path="signatures" element={<Signatures />} />
                       <Route

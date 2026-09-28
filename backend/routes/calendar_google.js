@@ -159,7 +159,9 @@ router.get("/connect", verifyToken, (req, res) => {
     });
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: "offline",
-      prompt: "consent",
+      // Always let the user choose which Google account owns the calendar.
+      // `consent` also ensures Google can issue a refresh token for syncing.
+      prompt: "select_account consent",
       scope: SCOPES,
       state,
     });
@@ -378,6 +380,17 @@ router.post("/sync", verifyToken, async (req, res) => {
         error:
           "Your Google Calendar connection has expired. Please disconnect and reconnect to resume syncing.",
         code: "RECONNECT_REQUIRED",
+      });
+    }
+    const calendarApiDisabled =
+      /calendar api has not been used|calendar-json\.googleapis\.com|accessNotConfigured|SERVICE_DISABLED/i.test(
+        raw,
+      );
+    if (calendarApiDisabled) {
+      return res.status(503).json({
+        error:
+          "Google Calendar API is not enabled for this Google Cloud project. Enable it, wait a few minutes, then click Sync Now again.",
+        code: "GOOGLE_CALENDAR_API_DISABLED",
       });
     }
     // Deliberate errors carry a status + clear message (e.g. 404 not-connected)

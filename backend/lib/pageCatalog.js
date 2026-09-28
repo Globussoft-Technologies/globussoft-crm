@@ -1091,6 +1091,14 @@ const PAGE_CATALOG = [
     category: 'Travel Marketing',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
+  {
+    path: '/travel/meeting-forms',
+    label: 'Meeting Forms',
+    description: 'Configurable appointment forms, embeds, and booking APIs',
+    category: 'Travel Marketing',
+    vertical: 'travel',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
 
   //  Sales & Pipeline (missing generic CRM routes) 
   {

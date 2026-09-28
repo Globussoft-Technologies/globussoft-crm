@@ -183,6 +183,7 @@ function originCheck(req, res, next) {
     "/api/wellness/portal",
     "/api/attendance/biometric/webhook",
     "/api/travel/itineraries/public/",
+    "/api/travel/meeting-forms/public/",
     "/p/itinerary",
     "/p/payment",
   ];

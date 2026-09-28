@@ -115,7 +115,7 @@ function Toast({ msg, onClose }) {
   // alert icon) instead of a misleading green checkmark. Error toasts also
   // linger longer so the user can actually read a "please reconnect" prompt.
   const isError =
-    /\b(fail|error|expired|reconnect|couldn|could not|denied|invalid|unable|not connected|no sync)\b/i.test(
+    /\b(fail|error|expired|reconnect|couldn|could not|denied|invalid|unable|disabled|not enabled|not connected|no sync)\b/i.test(
       msg || "",
     );
   useEffect(() => {
@@ -124,6 +124,8 @@ function Toast({ msg, onClose }) {
   }, [onClose, isError]);
   return (
     <div
+      role={isError ? "alert" : "status"}
+      aria-live={isError ? "assertive" : "polite"}
       style={{
         position: "fixed",
         top: "1.5rem",

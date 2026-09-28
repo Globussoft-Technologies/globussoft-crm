@@ -171,7 +171,20 @@ Important response fields:
   "identityFields": [
     { "id": "name", "label": "Name", "type": "text", "enabled": true, "required": true },
     { "id": "email", "label": "Email", "type": "email", "enabled": true, "required": true },
-    { "id": "phone", "label": "Phone", "type": "tel", "enabled": true, "required": false }
+    { "id": "phone", "label": "Phone", "type": "tel", "enabled": true, "required": false },
+    {
+      "id": "school_code",
+      "label": "School code",
+      "type": "text",
+      "enabled": true,
+      "required": false,
+      "placeholder": "SCH-100",
+      "helper": "Use the code provided by your school.",
+      "minLength": 4,
+      "maxLength": 20,
+      "pattern": "^SCH-[0-9]+$",
+      "validationMessage": "Enter a valid school code"
+    }
   ],
   "form": {},
   "brandKit": {}
@@ -188,7 +201,9 @@ Rendering rules:
 - Submit a string for a single-choice question.
 - Submit an array of strings for a multi-select question.
 - Enforce `required`, `minSelections`, and `maxSelections` when present.
-- Render identity fields from `identityFields`, including their enabled and required settings.
+- Render every enabled field in `identityFields`; do not hard-code only name, email, and phone.
+- Supported identity types are `text`, `textarea`, `email`, `tel`, `number`, `date`, `time`, and `url`.
+- Apply validation metadata when present: `required`, `minLength`, `maxLength`, `pattern`, `min`, `max`, `placeholder`, `helper`, `autocomplete`, and `validationMessage`.
 
 For the required trip-type question, the customer-facing labels may be edited in the CRM. The option values remain the stable link to the corresponding Travel Knowledge categories. Always display the latest `label` and submit the accompanying `value`; do not derive a value from the label or attempt to match folder names in the client website.
 
@@ -205,13 +220,19 @@ Content-Type: application/json
     "preferred_trip_types": ["international"],
     "question_id_from_get_response": "option_value_from_get_response"
   },
+  "identity": {
+    "name": "School representative",
+    "email": "representative@school.example",
+    "phone": "+919876543210",
+    "school_code": "SCH-100"
+  },
   "name": "School representative",
   "email": "representative@school.example",
   "phone": "+919876543210"
 }
 ```
 
-Do not send labels in place of values. The keys and values must come from the form response.
+Do not send labels in place of values. Question and identity keys must come from the form response. Put all identity values in the `identity` object. The repeated top-level `name`, `email`, and `phone` fields are shown only for backward compatibility with older clients and may be omitted by new integrations.
 
 A successful response has HTTP status `201`:
 
@@ -335,6 +356,7 @@ Common cases:
 | 400 | `REQUIRED_QUESTION_MISSING` | A required answer was not submitted |
 | 400 | `NAME_REQUIRED`, `EMAIL_REQUIRED`, `PHONE_REQUIRED` | A required identity field is missing |
 | 400 | `EMAIL_INVALID`, `PHONE_INVALID` | Identity value failed validation |
+| 400 | `IDENTITY_FIELD_INVALID` | A dynamic identity value failed its configured rule; inspect `fieldId` and `reason` |
 | 400 | `INVALID_SLUG` | The supplied report slug does not have the expected format |
 | 400 | `MISSING_INTERESTS` | No valid recommendation was included in the interest submission |
 | 404 | `TENANT_NOT_FOUND` | The configured tenant slug is incorrect or unavailable |

@@ -264,7 +264,7 @@ describe('POST /api/auth/logout — Set-Cookie clears auth_token (#914 slice 1)'
     // are required claims; jti makes the route hit the revokedToken.upsert
     // path (already mocked to resolve).
     const token = jwt.sign(
-      { userId: 7, tenantId: 1, role: 'ADMIN', jti: 'a'.repeat(32) },
+      { userId: 7, tenantId: 1, role: 'ADMIN', userType: 'STAFF', isOwner: false, jti: 'a'.repeat(32) },
       JWT_SECRET,
       { expiresIn: '5m' }
     );

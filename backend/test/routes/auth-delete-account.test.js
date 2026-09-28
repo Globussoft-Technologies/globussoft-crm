@@ -92,7 +92,7 @@ function makeApp() {
 }
 
 function bearer({ userId = 7, tenantId = 1, role = 'USER', jti } = {}) {
-  const payload = { userId, tenantId, role };
+  const payload = { userId, tenantId, role, userType: 'STAFF', isOwner: false };
   if (jti) payload.jti = jti;
   return 'Bearer ' + jwt.sign(payload, JWT_SECRET, { expiresIn: '5m' });
 }

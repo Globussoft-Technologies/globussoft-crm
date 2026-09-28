@@ -98,6 +98,7 @@ prisma.userRole = {
 // the lockout guard pulls active users from this model.
 prisma.user = {
   findMany: vi.fn(),
+  count: vi.fn(),
   findFirst: vi.fn(),
   findUnique: vi.fn(),
   delete: vi.fn(),
@@ -196,6 +197,107 @@ describe('GET /api/roles pagination', () => {
 
     expect(res.body.pagination).toMatchObject({ page: 1, limit: 100, totalPages: 0 });
     expect(prisma.role.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 100, skip: 0 }));
+  });
+});
+
+describe('Customer role account counts', () => {
+  test('counts CUSTOMER user accounts even when UserRole rows are missing', async () => {
+    prisma.role.findMany.mockResolvedValue([{
+      id: 31,
+      key: 'CUSTOMER',
+      userType: 'CUSTOMER',
+      tenantId: 11,
+      name: 'Customer',
+      permissions: [],
+      _count: { userRoles: 0 },
+      dataScope: null,
+      subBrandScopeJson: null,
+    }]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 401, email: 'customer@example.com', name: 'Customer One', userType: 'CUSTOMER', createdAt: new Date('2026-09-28T00:00:00.000Z') },
+      { id: 402, email: 'customer-two@example.com', name: 'Customer Two', userType: 'CUSTOMER', createdAt: new Date('2026-09-27T00:00:00.000Z') },
+      { id: 403, email: 'customer-three@example.com', name: 'Customer Three', userType: 'CUSTOMER', createdAt: new Date('2026-09-26T00:00:00.000Z') },
+      { id: 404, email: 'customer-four@example.com', name: 'Customer Four', userType: 'CUSTOMER', createdAt: new Date('2026-09-25T00:00:00.000Z') },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 11 })).get('/api/roles');
+
+    expect(res.status).toBe(200);
+    expect(res.body.roles[0].userCount).toBe(4);
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 11, userType: 'CUSTOMER' },
+      select: { id: true, email: true, name: true, userType: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  test('includes customer portal contacts without double-counting linked CRM users', async () => {
+    prisma.role.findMany.mockResolvedValue([{
+      id: 31,
+      key: 'CUSTOMER',
+      userType: 'CUSTOMER',
+      tenantId: 11,
+      name: 'Customer',
+      permissions: [],
+      _count: { userRoles: 0 },
+      dataScope: null,
+      subBrandScopeJson: null,
+    }]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 401, email: 'same@example.com', name: 'CRM Customer', userType: 'CUSTOMER', createdAt: new Date('2026-09-28T00:00:00.000Z') },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 701, email: 'same@example.com', name: 'CRM Customer', createdAt: new Date('2026-09-28T00:00:00.000Z') },
+      { id: 702, email: 'portal@example.com', name: 'Portal Customer', createdAt: new Date('2026-09-27T00:00:00.000Z') },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 11 })).get('/api/roles');
+
+    expect(res.status).toBe(200);
+    expect(res.body.roles[0].userCount).toBe(2);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 11,
+        deletedAt: null,
+        portalPasswordHash: { not: null },
+        OR: [{ portalRole: 'CUSTOMER' }, { portalRole: null }],
+      },
+      select: { id: true, email: true, name: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  test('lists CUSTOMER accounts in the members modal source', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 31,
+      key: 'CUSTOMER',
+      userType: 'CUSTOMER',
+      tenantId: 11,
+      userRoles: [],
+    });
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 501,
+        email: 'customer@example.com',
+        name: 'Customer One',
+        userType: 'CUSTOMER',
+        createdAt: new Date('2026-09-28T00:00:00.000Z'),
+      },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 11 })).get('/api/roles/31/users');
+
+    expect(res.status).toBe(200);
+    expect(res.body.users).toEqual([
+      expect.objectContaining({ id: 501, email: 'customer@example.com', userType: 'CUSTOMER' }),
+    ]);
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 11, userType: 'CUSTOMER' },
+      select: { id: true, email: true, name: true, userType: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
   });
 });
 

@@ -247,10 +247,12 @@ async function assignUsersForTenant(tenantId, roles) {
 
     const legacy = String(u.role || '').toUpperCase();
     let target = null;
-    if (legacy === 'ADMIN') target = roles.adminRole;
+    // userType is authoritative for portal accounts. Older customer rows can
+    // still carry the User column default role='USER'.
+    if (u.userType === 'CUSTOMER') target = roles.customerRole;
+    else if (legacy === 'ADMIN') target = roles.adminRole;
     else if (legacy === 'MANAGER') target = roles.managerRole;
     else if (legacy === 'USER') target = roles.userRole;
-    else if (u.userType === 'CUSTOMER') target = roles.customerRole;
 
     if (!target) {
       stats.usersSkipped++;

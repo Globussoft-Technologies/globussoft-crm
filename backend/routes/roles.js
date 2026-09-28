@@ -160,6 +160,75 @@ async function countAdminUsersForTenant(tenantId) {
   return prisma.userRole.count({ where: { roleId: adminRole.id } });
 }
 
+// Customer accounts can live in either identity store:
+//
+//   - User.userType=CUSTOMER for the authenticated CRM account flow
+//   - Contact.portalPasswordHash for the travel customer-portal flow
+//
+// The travel customer registration bridge can create both rows for the same
+// email, so these must be merged by tenant-scoped email rather than added
+// together. Role._count.userRoles is not a reliable source here because a
+// portal contact does not have a UserRole row at all.
+const customerPortalContactWhere = (tenantId) => ({
+  tenantId,
+  deletedAt: null,
+  portalPasswordHash: { not: null },
+  // Null is retained for legacy portal contacts; the portal treats those as
+  // CUSTOMER. Teacher/parent portal identities are intentionally excluded.
+  OR: [{ portalRole: "CUSTOMER" }, { portalRole: null }],
+});
+
+function customerAccountKey(email, fallback) {
+  const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+  return normalizedEmail ? `email:${normalizedEmail}` : fallback;
+}
+
+async function getCustomerAccounts(tenantId) {
+  const [customerUsers, portalContacts] = await Promise.all([
+    prisma.user.findMany({
+      where: { tenantId, userType: "CUSTOMER" },
+      select: { id: true, email: true, name: true, userType: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.contact.findMany({
+      where: customerPortalContactWhere(tenantId),
+      select: { id: true, email: true, name: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  const accounts = new Map();
+
+  // Prefer the User row when both stores represent the same email. It keeps
+  // the existing role-member actions safe because they operate on User IDs.
+  for (const user of customerUsers || []) {
+    accounts.set(customerAccountKey(user.email, `user:${user.id}`), user);
+  }
+
+  for (const contact of portalContacts || []) {
+    const key = customerAccountKey(contact.email, `contact:${contact.id}`);
+    if (accounts.has(key)) continue;
+    accounts.set(key, {
+      id: `contact-${contact.id}`,
+      contactId: contact.id,
+      email: contact.email,
+      name: contact.name,
+      userType: "CUSTOMER",
+      accountType: "PORTAL_CONTACT",
+      createdAt: contact.createdAt,
+    });
+  }
+
+  return Array.from(accounts.values());
+}
+
+async function countUsersForRole(role, fallbackCount) {
+  if (role?.key !== "CUSTOMER" || role?.userType !== "CUSTOMER") {
+    return fallbackCount;
+  }
+  return (await getCustomerAccounts(role.tenantId)).length;
+}
+
 function deletedContactEmail(userId, tenantId) {
   return `deleted-contact-${tenantId}-${userId}-${Date.now()}@redacted.local`;
 }
@@ -329,6 +398,24 @@ router.get(
       }
 
       const roles = await prisma.role.findMany(findManyArgs);
+      const customerTenantIds = [
+        ...new Set(
+          roles
+            .filter((role) => role.key === "CUSTOMER" && role.userType === "CUSTOMER")
+            .map((role) => role.tenantId),
+        ),
+      ];
+      const customerUserCounts = new Map(
+        await Promise.all(
+          customerTenantIds.map(async (tenantId) => [
+            tenantId,
+            await countUsersForRole(
+              { key: "CUSTOMER", userType: "CUSTOMER", tenantId },
+              0,
+            ),
+          ]),
+        ),
+      );
 
       // Bug 5 — count consistency. The Roles table badge previously
       // rendered `role.permissions.length` (raw count including
@@ -374,7 +461,9 @@ router.get(
             ...roleClean,
             dataScope: normalizeDataScope(dataScope),
             subBrandScope: parseSubBrandScope(subBrandScopeJson),
-            userCount: role._count.userRoles,
+            userCount: role.key === "CUSTOMER" && role.userType === "CUSTOMER"
+              ? customerUserCounts.get(role.tenantId)
+              : role._count.userRoles,
             permissionCount: role.permissions.length,
             visiblePermissionCount: visible.length,
             hiddenPermissionCount: role.permissions.length - visible.length,
@@ -464,11 +553,12 @@ router.get(
       }
 
       const { subBrandScopeJson, dataScope, ...roleClean } = role;
+      const userCount = await countUsersForRole(role, role._count.userRoles);
       res.json({
         ...roleClean,
         dataScope: normalizeDataScope(dataScope),
         subBrandScope: parseSubBrandScope(subBrandScopeJson),
-        userCount: role._count.userRoles,
+        userCount,
         _count: undefined,
       });
     } catch (err) {
@@ -1327,10 +1417,26 @@ router.get(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const users = role.userRoles.map((ur) => ({
+      let users = role.userRoles.map((ur) => ({
         ...ur.user,
         assignedAt: ur.assignedAt,
       }));
+
+      // Keep the Customer members modal consistent with the badge. Customer
+      // accounts can be CRM User rows or portal Contact identities, even when
+      // a legacy/missing UserRole junction row means they are not returned by
+      // role.userRoles.
+      if (role.key === "CUSTOMER" && role.userType === "CUSTOMER") {
+        const assignedAtByUserId = new Map(
+          role.userRoles.map((ur) => [ur.userId, ur.assignedAt]),
+        );
+        users = (await getCustomerAccounts(role.tenantId)).map((user) => ({
+          ...user,
+          assignedAt: user.accountType === "PORTAL_CONTACT"
+            ? null
+            : assignedAtByUserId.get(user.id) || null,
+        }));
+      }
 
       res.json({ roleId, users });
     } catch (err) {

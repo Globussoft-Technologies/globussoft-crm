@@ -124,6 +124,21 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
     }
   });
 
+  test('customer userType takes precedence over a legacy USER role value', async () => {
+    mockPrisma.user.findMany.mockResolvedValue([
+      { id: 77, role: 'USER', userType: 'CUSTOMER' },
+    ]);
+
+    await provisionTenantRbac(12, { vertical: 'travel' });
+
+    const createdRoles = new Map(
+      mockPrisma.role.create.mock.calls.map((call, index) => [call[0].data.key, 100 + index]),
+    );
+    expect(mockPrisma.userRole.create).toHaveBeenCalledWith({
+      data: { userId: 77, roleId: createdRoles.get('CUSTOMER') },
+    });
+  });
+
   test('generic vertical does NOT create wellness clinical roles', async () => {
     await provisionTenantRbac(2, { vertical: 'generic' });
 

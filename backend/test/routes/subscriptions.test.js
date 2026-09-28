@@ -128,7 +128,11 @@ function signToken({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
   // subscriptions.js. Default the token role to ADMIN so the auth gate passes
   // and we exercise the route body. Tests that want to PROBE the role gate
   // override this via the opts argument.
-  return jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '1h' });
+  return jwt.sign(
+    { userId, tenantId, role, userType: 'STAFF', isOwner: false },
+    JWT_SECRET,
+    { expiresIn: '1h' },
+  );
 }
 
 function makeApp() {
@@ -890,7 +894,6 @@ describe('Auth gate - verifyToken enforced on every endpoint', () => {
     expect(res.status).toBe(401);
   });
 });
-
 
 
 

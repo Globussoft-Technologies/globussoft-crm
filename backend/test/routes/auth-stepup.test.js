@@ -106,7 +106,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 // same JWT_SECRET, userId + tenantId + role claims. This is the cleanest way
 // to traverse the auth middleware without mocking it.
 function bearer({ userId = 7, tenantId = 1, role = 'USER' } = {}) {
-  return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '5m' });
+  return 'Bearer ' + jwt.sign(
+    { userId, tenantId, role, userType: 'STAFF', isOwner: false },
+    JWT_SECRET,
+    { expiresIn: '5m' },
+  );
 }
 
 function makeApp() {

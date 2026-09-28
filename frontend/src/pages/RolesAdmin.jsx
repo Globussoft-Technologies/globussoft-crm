@@ -3159,6 +3159,8 @@ function UsersModal({ role, canManage, onClose, onChange }) {
   };
 
   const deleteMember = async (userId) => {
+    const member = members.find((item) => item.id === userId);
+    if (member?.accountType === 'PORTAL_CONTACT') return;
     const ok = await notify.confirm({
       title: 'Delete user account',
       message:
@@ -3264,7 +3266,7 @@ function UsersModal({ role, canManage, onClose, onChange }) {
                 <tr key={u.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                   <Td>{u.name || '—'}</Td>
                   <Td>{u.email}</Td>
-                  <Td>{u.userType || 'STAFF'}</Td>
+                  <Td>{u.accountType === 'PORTAL_CONTACT' ? 'Customer portal' : (u.userType || 'STAFF')}</Td>
                   {canManage && (
                     <Td>
                       <button
@@ -3273,7 +3275,7 @@ function UsersModal({ role, canManage, onClose, onChange }) {
                         className="btn-secondary"
                         disabled={busyUserId === u.id}
                         style={{
-                          display: 'inline-flex',
+                          display: u.accountType === 'PORTAL_CONTACT' ? 'none' : 'inline-flex',
                           alignItems: 'center',
                           gap: '0.3rem',
                           fontSize: '0.75rem',

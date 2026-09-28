@@ -136,7 +136,7 @@ describe('travel promotional website settings', () => {
     expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
   });
 
-  test('stores website and SFTP configuration without returning the secret', async () => {
+  test('stores encrypted SFTP configuration without returning the secret', async () => {
     prisma.tenantSetting.upsert
       .mockResolvedValueOnce({ id: 11, key: WEBSITE_KEY })
       .mockResolvedValueOnce({ id: 12, key: SFTP_KEY });
@@ -154,7 +154,7 @@ describe('travel promotional website settings', () => {
     expect(sftpWrite.create.value).not.toContain('secret');
   });
 
-  test('fails closed instead of storing plaintext when the encryption key is absent', async () => {
+  test('fails closed before writing when the encryption key is absent', async () => {
     const previous = process.env.TRAVEL_HOSTING_CREDENTIAL_KEY;
     delete process.env.TRAVEL_HOSTING_CREDENTIAL_KEY;
     try {
@@ -171,6 +171,19 @@ describe('travel promotional website settings', () => {
     } finally {
       process.env.TRAVEL_HOSTING_CREDENTIAL_KEY = previous;
     }
+  });
+
+  test('deletes website and SFTP settings when hosting is removed', async () => {
+    prisma.tenantSetting.findMany.mockResolvedValue([
+      { id: 11, key: WEBSITE_KEY, value: 'https://client.example.com' },
+      { id: 12, key: SFTP_KEY, value: encryptTravelHostingCredential(JSON.stringify({ host: 'ftp.example.com', username: 'deploy', password: 'secret' })) },
+    ]);
+    const res = await request(makeApp())
+      .put('/api/travel/promotional-website')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ websiteUrl: '', sftp: {} });
+    expect(res.status).toBe(200);
+    expect(prisma.tenantSetting.delete).toHaveBeenCalledTimes(2);
   });
 
   test('tests FTP credentials without requiring a trip folder to exist', async () => {

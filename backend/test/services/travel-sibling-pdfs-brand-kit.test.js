@@ -557,6 +557,22 @@ describe('renderTmcReadinessReport — S52 brand-kit selector', () => {
     expect(buf.length).toBeGreaterThan(2000);
   });
 
+  test('cover profile header keeps the readiness badge separate from school details', async () => {
+    const buf = await renderTmcReadinessReport(tmcReadinessPayloadFixture({
+      engineOutput: { state: 'no_match', icpTier: 'premium', flags: [] },
+    }));
+    const text = extractPdfText(buf);
+    const schoolIndex = text.indexOf('Lotus Valley International');
+    const stateIndex = text.indexOf('Custom concept recommended');
+    const preparedIndex = text.indexOf('Prepared for');
+    const reportDateIndex = text.indexOf('REPORT DATE');
+
+    expect(schoolIndex).toBeGreaterThanOrEqual(0);
+    expect(stateIndex).toBeGreaterThan(schoolIndex);
+    expect(preparedIndex).toBeGreaterThan(stateIndex);
+    expect(reportDateIndex).toBeGreaterThan(preparedIndex);
+  });
+
 
   test('closing CTA renders as plain text without the old teal card box', async () => {
     const buf = await renderTmcReadinessReport(tmcReadinessPayloadFixture());

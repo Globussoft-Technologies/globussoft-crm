@@ -836,10 +836,13 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       if (u.userType === 'OWNER') continue;
       const legacy = String(u.role || '').toUpperCase();
       let target = null;
-      if (legacy === 'ADMIN') target = adminRole;
+      // userType is authoritative for portal accounts. Some legacy customer
+      // rows still carry role='USER' (the User column default), and checking
+      // the legacy role first strands them on the staff USER role forever.
+      if (u.userType === 'CUSTOMER') target = customerRole;
+      else if (legacy === 'ADMIN') target = adminRole;
       else if (legacy === 'MANAGER') target = managerRole;
       else if (legacy === 'USER') target = userRole;
-      else if (u.userType === 'CUSTOMER') target = customerRole;
       if (!target) {
         stats.usersSkipped++;
         continue;

@@ -3088,6 +3088,7 @@ const actionBtnStyle = {
 
 function UsersModal({ role, canManage, onClose, onChange }) {
   const [members, setMembers] = useState([]);
+  const [membersPagination, setMembersPagination] = useState(null);
   const [allStaff, setAllStaff] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isStaffLoading, setIsStaffLoading] = useState(false);
@@ -3096,12 +3097,19 @@ function UsersModal({ role, canManage, onClose, onChange }) {
   const [busyUserId, setBusyUserId] = useState(null);
   const notify = useNotify();
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ page = 1, append = false } = {}) => {
     setIsLoading(true);
     setError('');
     try {
-      const res = await fetchApi(`/api/roles/${role.id}/users`);
-      setMembers(Array.isArray(res?.users) ? res.users : []);
+      const res = await fetchApi(`/api/roles/${role.id}/users?page=${page}&limit=25`);
+      const nextMembers = Array.isArray(res?.users) ? res.users : [];
+      setMembers((current) => {
+        if (!append) return nextMembers;
+        const merged = new Map(current.map((member) => [String(member.id), member]));
+        nextMembers.forEach((member) => merged.set(String(member.id), member));
+        return Array.from(merged.values());
+      });
+      setMembersPagination(res?.pagination || null);
     } catch (err) {
       setError(err.message || 'Could not load users');
     } finally {
@@ -3159,6 +3167,8 @@ function UsersModal({ role, canManage, onClose, onChange }) {
   };
 
   const deleteMember = async (userId) => {
+    const member = members.find((item) => item.id === userId);
+    if (member?.accountType === 'PORTAL_CONTACT') return;
     const ok = await notify.confirm({
       title: 'Delete user account',
       message:
@@ -3264,7 +3274,7 @@ function UsersModal({ role, canManage, onClose, onChange }) {
                 <tr key={u.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                   <Td>{u.name || '—'}</Td>
                   <Td>{u.email}</Td>
-                  <Td>{u.userType || 'STAFF'}</Td>
+                  <Td>{u.accountType === 'PORTAL_CONTACT' ? 'Customer portal' : (u.userType || 'STAFF')}</Td>
                   {canManage && (
                     <Td>
                       <button
@@ -3273,7 +3283,7 @@ function UsersModal({ role, canManage, onClose, onChange }) {
                         className="btn-secondary"
                         disabled={busyUserId === u.id}
                         style={{
-                          display: 'inline-flex',
+                          display: u.accountType === 'PORTAL_CONTACT' ? 'none' : 'inline-flex',
                           alignItems: 'center',
                           gap: '0.3rem',
                           fontSize: '0.75rem',
@@ -3290,6 +3300,20 @@ function UsersModal({ role, canManage, onClose, onChange }) {
           </table>
         )}
       </div>
+
+      {!isLoading && membersPagination?.hasNextPage && (
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => load({
+            page: membersPagination.page + 1,
+            append: true,
+          })}
+          style={{ marginTop: '0.75rem' }}
+        >
+          Load more members
+        </button>
+      )}
 
       <ModalActions>
         <button type="button" onClick={onClose} className="btn-secondary">

@@ -26,7 +26,14 @@ const { KEYS, DEFAULTS, setSetting } = require("../lib/tenantSettings");
 const { writeAudit } = require("../lib/audit");
 
 const ALLOWED_KEYS = Object.values(KEYS);
-const SENSITIVE_KEYS = new Set([KEYS.GENERIC_RECAPTCHA_SECRET_KEY]);
+const SENSITIVE_KEYS = new Set([
+  KEYS.GENERIC_RECAPTCHA_SECRET_KEY,
+  // This key is deliberately managed only by the Travel promotional-site
+  // admin route. It is not part of KEYS because the generic settings editor
+  // must never write it, but GET /tenant-settings historically listed every
+  // row in the tenant and therefore also needs to redact it.
+  "travel.promotionalWebsite.sftp",
+]);
 
 function isSensitiveKey(key) {
   return SENSITIVE_KEYS.has(key);

@@ -140,8 +140,8 @@ router.put('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     const sftp = websiteUrl ? validateSftp(mergedSftp) : null;
     const writes = [];
     if (websiteUrl) {
-      // Encrypt before starting either database write so a missing/invalid
-      // server key cannot leave a partially configured website URL behind.
+      // Resolve encryption before either write so a missing key cannot leave
+      // a partially configured URL or a plaintext credential row behind.
       const encryptedSftp = encryptTravelHostingCredential(JSON.stringify(sftp));
       writes.push(prisma.tenantSetting.upsert({
         where: { tenantId_key: { tenantId, key: WEBSITE_KEY } },

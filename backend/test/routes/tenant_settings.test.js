@@ -92,6 +92,11 @@ describe('GET /api/tenant-settings/', () => {
         value: 'stored-secret',
         category: 'general',
       },
+      {
+        key: 'travel.promotionalWebsite.sftp',
+        value: '{"password":"ftp-secret","privateKey":"private-key"}',
+        category: 'travel-hosting',
+      },
     ]);
     const res = await request(makeApp())
       .get('/api/tenant-settings/')
@@ -100,6 +105,7 @@ describe('GET /api/tenant-settings/', () => {
     expect(res.body.settings).toEqual([
       { key: KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS, value: '7500', category: 'budget' },
       { key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY, value: '', category: 'general', hasValue: true },
+      { key: 'travel.promotionalWebsite.sftp', value: '', category: 'travel-hosting', hasValue: true },
     ]);
     // defaults map MUST include every canonical key so the UI can render
     // the "currently overridden" badge without a second round trip.
@@ -109,8 +115,11 @@ describe('GET /api/tenant-settings/', () => {
     });
     expect(res.body.sensitiveDefaults).toEqual({
       [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: Boolean(DEFAULTS[KEYS.GENERIC_RECAPTCHA_SECRET_KEY]),
+      'travel.promotionalWebsite.sftp': false,
     });
     expect(JSON.stringify(res.body)).not.toContain('stored-secret');
+    expect(JSON.stringify(res.body)).not.toContain('ftp-secret');
+    expect(JSON.stringify(res.body)).not.toContain('private-key');
     expect(res.body.allowedKeys).toEqual(expect.arrayContaining(Object.values(KEYS)));
     // tenant scope MUST come from req.user.tenantId, not body.
     expect(prisma.tenantSetting.findMany).toHaveBeenCalledWith(
@@ -140,6 +149,26 @@ describe('GET /api/tenant-settings/:key', () => {
       isOverride: true,
     });
     expect(JSON.stringify(res.body)).not.toContain('server-only-secret');
+  });
+
+  test('never exposes stored Travel hosting credentials', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      key: 'travel.promotionalWebsite.sftp',
+      value: 'TRAVEL_ENC:v1:credential-ciphertext',
+      category: 'travel-hosting',
+    });
+    const res = await request(makeApp())
+      .get('/api/tenant-settings/travel.promotionalWebsite.sftp')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      key: 'travel.promotionalWebsite.sftp',
+      value: '',
+      defaultValue: null,
+      hasValue: true,
+      isOverride: true,
+    });
+    expect(JSON.stringify(res.body)).not.toContain('credential-ciphertext');
   });
 
   test('returns active value + defaultValue + isOverride=true when row exists', async () => {

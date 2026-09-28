@@ -228,6 +228,7 @@ const Sidebar = ({
   const {
     hasPermission,
     isReady: permissionsReady,
+    error: permissionsError,
     permissions,
     refresh: refreshPermissions,
   } = usePermissions();
@@ -1129,6 +1130,10 @@ const Sidebar = ({
               fontFamily: "var(--font-family)",
               lineHeight: 1.15,
               margin: 0,
+              minWidth: 0,
+              flex: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
           >
             {brand}
@@ -1168,6 +1173,19 @@ const Sidebar = ({
             minHeight: 0,
           }}
         >
+          {isTravel && !permissionsReady && !permissionsError && (
+            <div role="status" style={{ padding: "10px 8px", fontSize: 12, color: "var(--text-secondary)" }}>
+              Loading navigation…
+            </div>
+          )}
+          {isTravel && permissionsError && (
+            <div role="alert" style={{ padding: "10px 8px", fontSize: 12, color: "var(--text-secondary)" }}>
+              Travel navigation is unavailable.{" "}
+              <button type="button" onClick={() => refreshPermissions().catch(() => {})} style={{ border: 0, background: "none", color: "var(--primary-color)", cursor: "pointer", padding: 0, font: "inherit", textDecoration: "underline" }}>
+                Retry
+              </button>
+            </div>
+          )}
           {isWellness
             ? renderWellnessNav({
               Link,

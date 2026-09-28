@@ -215,10 +215,20 @@ router.post("/verify", async (req, res) => {
     // Issue #207/#214/#216: also embed wellnessRole so verifyWellnessRole gates
     // work post-2FA login the same as plain /login.
     const jti = crypto.randomBytes(16).toString("hex");
-    // #325: include vertical on the JWT (matches plain /login) so
-    // verifyWellnessRole can check tenant vertical without a DB hit.
+    // Match /auth/login's session claims. Permission checks use isOwner and
+    // userType; omitting them made an OWNER's post-2FA sidebar look ungranted.
     const token = jwt.sign(
-      { userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, vertical: user.tenant?.vertical || "generic", jti },
+      {
+        userId: user.id,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+        tenantId,
+        vertical: user.tenant?.vertical || "generic",
+        userType: user.userType || 'STAFF',
+        isOwner: user.userType === 'OWNER',
+        sessionVersion: user.sessionVersion || 0,
+        jti,
+      },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -246,6 +256,7 @@ router.post("/verify", async (req, res) => {
         email: user.email,
         name: user.name,
         role: user.role,
+        userType: user.userType || 'STAFF',
         wellnessRole: user.wellnessRole || null,
         themePreference: user.themePreference || 'system',
         profilePicture: user.profilePicture || null,

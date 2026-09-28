@@ -100,7 +100,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 // accept — same JWT_SECRET, userId claim present. This is the cleanest way
 // to traverse the auth middleware without mocking it.
 function bearer({ userId = 7, tenantId = 1, role = 'USER' } = {}) {
-  return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '5m' });
+  return 'Bearer ' + jwt.sign({ userId, tenantId, role, userType: 'STAFF', isOwner: false }, JWT_SECRET, { expiresIn: '5m' });
 }
 
 function makeApp() {
@@ -387,12 +387,43 @@ describe('POST /verify — login-step-2 surface', () => {
     expect(decoded.role).toBe('ADMIN');
     expect(decoded.tenantId).toBe(2);
     expect(decoded.vertical).toBe('wellness');
+    expect(decoded.userType).toBe('STAFF');
+    expect(decoded.isOwner).toBe(false);
+    expect(decoded.sessionVersion).toBe(0);
     expect(decoded.jti).toMatch(/^[a-f0-9]{32}$/); // 16 random bytes hex-encoded
 
     expect(res.body.user.email).toBe('rishu@enhancedwellness.in');
     expect(res.body.user.themePreference).toBe('dark');
     expect(res.body.tenant.vertical).toBe('wellness');
     expect(res.body.tenant.defaultCurrency).toBe('INR');
+  });
+
+  test('owner login after 2FA preserves owner permission claims', async () => {
+    const secret = speakeasy.generateSecret({ length: 20 }).base32;
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, email: 'owner@example.test', name: 'Owner', role: 'ADMIN',
+      userType: 'OWNER', sessionVersion: 4, wellnessRole: null,
+      tenantId: 3, twoFactorEnabled: true, twoFactorSecret: secret,
+      backupCodes: JSON.stringify([]),
+      tenant: { id: 3, name: 'Travel Stall', vertical: 'travel' },
+    });
+    const tempToken = jwt.sign(
+      { userId: 7, awaiting2FA: true, sessionVersion: 4 },
+      JWT_SECRET,
+      { expiresIn: '5m' },
+    );
+
+    const res = await request(makePublicApp())
+      .post('/api/auth/2fa/verify')
+      .send({ tempToken, code: totpFor(secret) });
+
+    expect(res.status).toBe(200);
+    const decoded = jwt.verify(res.body.token, JWT_SECRET);
+    expect(decoded.vertical).toBe('travel');
+    expect(decoded.userType).toBe('OWNER');
+    expect(decoded.isOwner).toBe(true);
+    expect(decoded.sessionVersion).toBe(4);
+    expect(res.body.user.userType).toBe('OWNER');
   });
 
   test('backup code: consumed on success → reuse of same code fails', async () => {

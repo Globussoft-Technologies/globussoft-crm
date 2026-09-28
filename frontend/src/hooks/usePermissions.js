@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AuthContext } from '../App';
+import { AuthContext } from '../appContexts';
 import { fetchApi } from '../utils/api';
 
 // Module-level cache so every consumer of usePermissions in a session shares
@@ -8,6 +8,7 @@ import { fetchApi } from '../utils/api';
 let _cached = null;
 let _cachedToken = null;
 let _inflight = null;
+let _cacheGeneration = 0;
 
 // Test-mode safety net: pre-RBAC component tests rarely mock
 // /api/auth/me/permissions. Rather than letting PermissionGate hide CTAs while
@@ -54,20 +55,42 @@ const EMPTY = Object.freeze({
 function fetchPermissions(token) {
   if (!token) return Promise.resolve(EMPTY);
   if (_inflight && _cachedToken === token) return _inflight;
+  const generation = _cacheGeneration;
   _cachedToken = token;
-  _inflight = fetchApi('/api/auth/me/permissions', { silent: true })
+  const fetchWithRetry = async () => {
+    for (let attempt = 0; ; attempt += 1) {
+      if (generation !== _cacheGeneration || _cachedToken !== token) {
+        throw new Error('Permission request superseded');
+      }
+      try {
+        return await fetchApi('/api/auth/me/permissions', { silent: true });
+      } catch (err) {
+        const transient = err?.network || err?.status === 429 || err?.status >= 500;
+        if (!transient || attempt >= 2) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
+  };
+  _inflight = fetchWithRetry()
     .then((res) => {
-      _cached = {
+      const result = {
         isOwner: !!res?.isOwner || (isTestEnv && res == null),
         userType: res?.userType || null,
         roles: Array.isArray(res?.roles) ? res.roles : [],
         permissions: Array.isArray(res?.permissions) ? res.permissions : [],
       };
-      _inflight = null;
-      return _cached;
+      // A response from a session that was invalidated or replaced must not
+      // repopulate the shared cache with its permissions.
+      if (generation === _cacheGeneration && _cachedToken === token) {
+        _cached = result;
+        _inflight = null;
+      }
+      return result;
     })
     .catch((err) => {
-      _inflight = null;
+      if (generation === _cacheGeneration && _cachedToken === token) {
+        _inflight = null;
+      }
       throw err;
     });
   return _inflight;
@@ -76,6 +99,7 @@ function fetchPermissions(token) {
 // Exported for callers that mutate roles/permissions (RolesAdmin) and need
 // every consumer to re-fetch. Pair with the `refresh()` returned by the hook.
 export function invalidatePermissionCache() {
+  _cacheGeneration += 1;
   _cached = null;
   _cachedToken = null;
   _inflight = null;
@@ -109,56 +133,60 @@ export function usePermissions() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     if (testData) {
       setData(testData);
       setError(null);
       setIsLoading(false);
-      return;
+      return () => { cancelled = true; };
     }
     if (!token) {
       setData(EMPTY);
       setError(null);
       setIsLoading(false);
-      return;
+      return () => { cancelled = true; };
     }
     if (_cachedToken === token && _cached) {
       setData(_cached);
       setError(null);
       setIsLoading(false);
-      return;
+      return () => { cancelled = true; };
     }
     setIsLoading(true);
+    const generation = _cacheGeneration;
     fetchPermissions(token)
       .then((res) => {
-        if (!mountedRef.current) return;
+        if (cancelled || !mountedRef.current || generation !== _cacheGeneration) return;
         setData(res);
         setError(null);
         setIsLoading(false);
       })
       .catch((err) => {
-        if (!mountedRef.current) return;
+        if (cancelled || !mountedRef.current || generation !== _cacheGeneration) return;
         setError(err);
         // Fail-safe: empty permissions on error so the UI hides protected
         // features rather than rendering them as if granted.
         setData(EMPTY);
         setIsLoading(false);
       });
+    return () => { cancelled = true; };
   }, [token, testData]);
 
   const refresh = useCallback(() => {
     invalidatePermissionCache();
     if (!token) return Promise.resolve(EMPTY);
     setIsLoading(true);
+    const generation = _cacheGeneration;
     return fetchPermissions(token)
       .then((res) => {
-        if (!mountedRef.current) return res;
+        if (!mountedRef.current || generation !== _cacheGeneration) return res;
         setData(res);
         setError(null);
         setIsLoading(false);
         return res;
       })
       .catch((err) => {
-        if (mountedRef.current) {
+        if (mountedRef.current && generation === _cacheGeneration) {
           setError(err);
           setData(EMPTY);
           setIsLoading(false);

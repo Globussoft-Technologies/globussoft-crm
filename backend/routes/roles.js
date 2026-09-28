@@ -6,6 +6,7 @@
  */
 
 const express = require("express");
+const { Prisma } = require("@prisma/client");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
@@ -169,64 +170,105 @@ async function countAdminUsersForTenant(tenantId) {
 // email, so these must be merged by tenant-scoped email rather than added
 // together. Role._count.userRoles is not a reliable source here because a
 // portal contact does not have a UserRole row at all.
-const customerPortalContactWhere = (tenantId) => ({
-  tenantId,
-  deletedAt: null,
-  portalPasswordHash: { not: null },
-  // Null is retained for legacy portal contacts; the portal treats those as
-  // CUSTOMER. Teacher/parent portal identities are intentionally excluded.
-  OR: [{ portalRole: "CUSTOMER" }, { portalRole: null }],
-});
+const customerAccountUnionSql = (tenantId, roleId = null) => Prisma.sql`
+  SELECT
+    CONCAT('email:', LOWER(TRIM(u.email))) AS accountKey,
+    u.id AS numericId,
+    u.email,
+    u.name,
+    u.createdAt,
+    'CRM_USER' AS accountType,
+    0 AS sourceRank,
+    ur.assignedAt
+  FROM \`User\` u
+  LEFT JOIN UserRole ur
+    ON ur.userId = u.id
+    AND ur.roleId = ${roleId}
+  WHERE u.tenantId = ${tenantId}
+    AND u.userType = 'CUSTOMER'
 
-function customerAccountKey(email, fallback) {
-  const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
-  return normalizedEmail ? `email:${normalizedEmail}` : fallback;
+  UNION ALL
+
+  SELECT
+    CASE
+      WHEN c.email IS NULL OR TRIM(c.email) = '' THEN CONCAT('contact:', c.id)
+      ELSE CONCAT('email:', LOWER(TRIM(c.email)))
+    END AS accountKey,
+    c.id AS numericId,
+    c.email,
+    c.name,
+    c.createdAt,
+    'PORTAL_CONTACT' AS accountType,
+    1 AS sourceRank,
+    NULL AS assignedAt
+  FROM Contact c
+  WHERE c.tenantId = ${tenantId}
+    AND c.deletedAt IS NULL
+    AND c.portalPasswordHash IS NOT NULL
+    AND (c.portalRole = 'CUSTOMER' OR c.portalRole IS NULL)
+`;
+
+async function countCustomerAccounts(tenantId) {
+  const rows = await prisma.$queryRaw(Prisma.sql`
+    SELECT COUNT(*) AS total
+    FROM (
+      SELECT accountKey
+      FROM (${customerAccountUnionSql(tenantId)}) customer_accounts
+      GROUP BY accountKey
+    ) distinct_accounts
+  `);
+  return Number(rows?.[0]?.total || 0);
 }
 
-async function getCustomerAccounts(tenantId) {
-  const [customerUsers, portalContacts] = await Promise.all([
-    prisma.user.findMany({
-      where: { tenantId, userType: "CUSTOMER" },
-      select: { id: true, email: true, name: true, userType: true, createdAt: true },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.contact.findMany({
-      where: customerPortalContactWhere(tenantId),
-      select: { id: true, email: true, name: true, createdAt: true },
-      orderBy: { createdAt: "desc" },
-    }),
-  ]);
+async function listCustomerAccounts(tenantId, roleId, { page, limit }) {
+  const offset = (page - 1) * limit;
+  const rows = await prisma.$queryRaw(Prisma.sql`
+    SELECT numericId, email, name, createdAt, accountType, assignedAt
+    FROM (
+      SELECT
+        customer_accounts.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY accountKey
+          ORDER BY sourceRank ASC, createdAt DESC, numericId DESC
+        ) AS accountRank
+      FROM (${customerAccountUnionSql(tenantId, roleId)}) customer_accounts
+    ) ranked_accounts
+    WHERE accountRank = 1
+    ORDER BY createdAt DESC, sourceRank ASC, numericId DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
 
-  const accounts = new Map();
-
-  // Prefer the User row when both stores represent the same email. It keeps
-  // the existing role-member actions safe because they operate on User IDs.
-  for (const user of customerUsers || []) {
-    accounts.set(customerAccountKey(user.email, `user:${user.id}`), user);
-  }
-
-  for (const contact of portalContacts || []) {
-    const key = customerAccountKey(contact.email, `contact:${contact.id}`);
-    if (accounts.has(key)) continue;
-    accounts.set(key, {
-      id: `contact-${contact.id}`,
-      contactId: contact.id,
-      email: contact.email,
-      name: contact.name,
+  return (rows || []).map((row) => {
+    const numericId = Number(row.numericId);
+    if (row.accountType === "PORTAL_CONTACT") {
+      return {
+        id: `contact-${numericId}`,
+        contactId: numericId,
+        email: row.email,
+        name: row.name,
+        userType: "CUSTOMER",
+        accountType: "PORTAL_CONTACT",
+        createdAt: row.createdAt,
+        assignedAt: null,
+      };
+    }
+    return {
+      id: numericId,
+      email: row.email,
+      name: row.name,
       userType: "CUSTOMER",
-      accountType: "PORTAL_CONTACT",
-      createdAt: contact.createdAt,
-    });
-  }
-
-  return Array.from(accounts.values());
+      accountType: "CRM_USER",
+      createdAt: row.createdAt,
+      assignedAt: row.assignedAt || null,
+    };
+  });
 }
 
 async function countUsersForRole(role, fallbackCount) {
   if (role?.key !== "CUSTOMER" || role?.userType !== "CUSTOMER") {
     return fallbackCount;
   }
-  return (await getCustomerAccounts(role.tenantId)).length;
+  return countCustomerAccounts(role.tenantId);
 }
 
 function deletedContactEmail(userId, tenantId) {
@@ -362,6 +404,18 @@ router.get(
         }
       }
 
+      let tenantVertical = "generic";
+      try {
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { vertical: true },
+        });
+        tenantVertical = tenant?.vertical || "generic";
+      } catch {
+        // Preserve the existing generic catalog/count behavior on a transient
+        // tenant lookup failure; Travel-only portal identities stay excluded.
+      }
+
       // Backend-level pagination for the /settings Role Recovery
       // section (10 roles per page). Opt-in via ?page so existing
       // callers (Roles & Permissions page, tests) keep the
@@ -398,13 +452,13 @@ router.get(
       }
 
       const roles = await prisma.role.findMany(findManyArgs);
-      const customerTenantIds = [
+      const customerTenantIds = tenantVertical === "travel" ? [
         ...new Set(
           roles
             .filter((role) => role.key === "CUSTOMER" && role.userType === "CUSTOMER")
             .map((role) => role.tenantId),
         ),
-      ];
+      ] : [];
       const customerUserCounts = new Map(
         await Promise.all(
           customerTenantIds.map(async (tenantId) => [
@@ -433,18 +487,7 @@ router.get(
       // disorienting number-jump between the table and the editor.
       // Post-cleanup, the two values are equal and the warning hover
       // text disappears naturally.
-      let visibleCatalog = null;
-      try {
-        const tenant = await prisma.tenant.findUnique({
-          where: { id: tenantId },
-          select: { vertical: true },
-        });
-        const vertical = (tenant && tenant.vertical) || "generic";
-        visibleCatalog = getCatalogForVertical(vertical);
-      } catch {
-        // DB blip — fall through to union (no filter). Worst case the
-        // counts agree as before this change.
-      }
+      const visibleCatalog = getCatalogForVertical(tenantVertical);
       const isVisible = (module, action) => {
         if (!visibleCatalog) return true;
         const actions = visibleCatalog[module];
@@ -461,7 +504,7 @@ router.get(
             ...roleClean,
             dataScope: normalizeDataScope(dataScope),
             subBrandScope: parseSubBrandScope(subBrandScopeJson),
-            userCount: role.key === "CUSTOMER" && role.userType === "CUSTOMER"
+            userCount: tenantVertical === "travel" && role.key === "CUSTOMER" && role.userType === "CUSTOMER"
               ? customerUserCounts.get(role.tenantId)
               : role._count.userRoles,
             permissionCount: role.permissions.length,
@@ -679,7 +722,10 @@ router.put(
       const roleId = parseInt(req.params.id);
       const { name, description, landingPath, dataScope, subBrandScope } = req.body;
 
-      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      const role = await prisma.role.findUnique({
+        where: { id: roleId },
+        include: { tenant: { select: { vertical: true } } },
+      });
       if (!role) {
         return res.status(404).json({ error: "Role not found" });
       }
@@ -1389,10 +1435,47 @@ router.get(
     try {
       const roleId = parseInt(req.params.id);
 
-      const role = await prisma.role.findUnique({
-        where: { id: roleId },
-        include: {
-          userRoles: {
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+
+      if (!role) {
+        return res.status(404).json({ error: "Role not found" });
+      }
+
+      // Tenant-scoping check
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const MAX_LIMIT = 100;
+      let page = parseInt(req.query.page, 10);
+      if (!Number.isInteger(page) || page < 1) page = 1;
+      let limit = parseInt(req.query.limit, 10);
+      if (!Number.isInteger(limit)) limit = 25;
+      else if (limit < 1) limit = 1;
+      else if (limit > MAX_LIMIT) limit = MAX_LIMIT;
+
+      let total;
+      let users;
+
+      // Keep the Customer members modal consistent with the badge. Customer
+      // accounts can be CRM User rows or portal Contact identities, even when
+      // a legacy/missing UserRole junction row means they are not returned by
+      // role.userRoles.
+      if (
+        role.tenant?.vertical === "travel" &&
+        role.key === "CUSTOMER" &&
+        role.userType === "CUSTOMER"
+      ) {
+        [total, users] = await Promise.all([
+          countCustomerAccounts(role.tenantId),
+          listCustomerAccounts(role.tenantId, role.id, { page, limit }),
+        ]);
+      } else {
+        const where = { roleId };
+        const [count, userRoles] = await Promise.all([
+          prisma.userRole.count({ where }),
+          prisma.userRole.findMany({
+            where,
             include: {
               user: {
                 select: {
@@ -1404,41 +1487,31 @@ router.get(
                 },
               },
             },
-          },
-        },
-      });
-
-      if (!role) {
-        return res.status(404).json({ error: "Role not found" });
-      }
-
-      // Tenant-scoping check
-      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      let users = role.userRoles.map((ur) => ({
-        ...ur.user,
-        assignedAt: ur.assignedAt,
-      }));
-
-      // Keep the Customer members modal consistent with the badge. Customer
-      // accounts can be CRM User rows or portal Contact identities, even when
-      // a legacy/missing UserRole junction row means they are not returned by
-      // role.userRoles.
-      if (role.key === "CUSTOMER" && role.userType === "CUSTOMER") {
-        const assignedAtByUserId = new Map(
-          role.userRoles.map((ur) => [ur.userId, ur.assignedAt]),
-        );
-        users = (await getCustomerAccounts(role.tenantId)).map((user) => ({
-          ...user,
-          assignedAt: user.accountType === "PORTAL_CONTACT"
-            ? null
-            : assignedAtByUserId.get(user.id) || null,
+            orderBy: [{ assignedAt: "desc" }, { userId: "desc" }],
+            skip: (page - 1) * limit,
+            take: limit,
+          }),
+        ]);
+        total = count;
+        users = userRoles.map((userRole) => ({
+          ...userRole.user,
+          assignedAt: userRole.assignedAt,
         }));
       }
 
-      res.json({ roleId, users });
+      const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+      res.json({
+        roleId,
+        users,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1,
+        },
+      });
     } catch (err) {
       console.error("[roles] users list error:", err);
       res.status(500).json({ error: "Failed to fetch users" });

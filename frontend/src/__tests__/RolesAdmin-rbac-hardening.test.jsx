@@ -120,8 +120,11 @@ const ADMIN_ROLE = {
 
 function renderPage(roles = [ADMIN_ROLE], extraResponses = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
-    if (Object.prototype.hasOwnProperty.call(extraResponses, url)) {
-      const value = extraResponses[url];
+    const responseKey = Object.keys(extraResponses).find(
+      (key) => url === key || url.startsWith(`${key}?`),
+    );
+    if (responseKey) {
+      const value = extraResponses[responseKey];
       return Promise.resolve(typeof value === 'function' ? value(opts) : value);
     }
     if (url === '/api/roles' && (!opts || !opts.method || opts.method === 'GET')) {

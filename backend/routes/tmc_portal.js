@@ -17,7 +17,6 @@ const { writeAudit } = require("../lib/audit");
 const tmcEngine = require("../lib/tmcDiagnosticEngine");
 const tmcLeadQuality = require("../lib/tmcLeadQuality");
 const travelRag = require("../lib/travelRag");
-const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
 const diagnosticNotifications = require("../lib/diagnosticNotifications");
 const visaDocStore = require("../lib/visaDocStore");
@@ -471,6 +470,15 @@ function parentReviewShape(review) {
     answers: parseReviewAnswers(review.answersJson),
     submittedAt: review.submittedAt,
   };
+}
+
+function buildTeacherReportPdfUrl(diagnostic) {
+  const id = Number(diagnostic?.id);
+  const token = String(diagnostic?.reportSlugToken || "").trim();
+  if (!Number.isInteger(id) || id <= 0 || !/^[0-9a-f]{16}$/i.test(token)) {
+    return null;
+  }
+  return `/api/travel/diagnostics/public/readiness-report/${id}-${token.toLowerCase()}.pdf`;
 }
 
 async function loadParentReviewTrip(req, res) {
@@ -1893,14 +1901,11 @@ router.post(
         ...engineOutput,
         ragResult,
       });
-      // Keep the no-recommendation edge case usable by generating the same
-      // customer-facing PDF immediately. When trips are available, the PDF is
-      // deliberately generated only after the teacher submits trip choices.
+      // The existing readiness-report endpoint validates this random slug
+      // against the tenant-scoped diagnostic before rendering. Do not expose
+      // the generated /api/uploads filename directly from the teacher portal.
       const reportPdfUrl = recommendations.length === 0
-        ? await generateDiagnosticPdfBestEffort(diag, normalizedBank, {
-            ragResult,
-            recommendations,
-          })
+        ? buildTeacherReportPdfUrl({ id: diag.id, reportSlugToken })
         : null;
       const reportReady = recommendations.length === 0;
       res.status(201).json({
@@ -1942,39 +1947,60 @@ router.get(
   requireTeacher,
   async (req, res) => {
     try {
-      const diagnostics = await prisma.travelDiagnostic.findMany({
-        where: {
-          tenantId: Number(req.portal.tenantId),
-          subBrand: "tmc",
-          contactId: Number(req.tmcContact.id),
-        },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: {
-          id: true,
-          engineState: true,
-          createdAt: true,
-          curriculumFitJson: true,
-          reportPdfUrl: true,
-          reportSlugToken: true,
+      const tenantId = Number(req.portal.tenantId);
+      const where = {
+        tenantId,
+        subBrand: "tmc",
+        contactId: Number(req.tmcContact.id),
+      };
+      const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+      const requestedLimit = Number.parseInt(req.query.limit, 10) || 20;
+      const limit = Math.min(100, Math.max(1, requestedLimit));
+      const [diagnostics, total] = await Promise.all([
+        prisma.travelDiagnostic.findMany({
+          where,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          skip: (page - 1) * limit,
+          take: limit,
+          select: {
+            id: true,
+            engineState: true,
+            createdAt: true,
+            curriculumFitJson: true,
+            reportSlugToken: true,
+          },
+        }),
+        prisma.travelDiagnostic.count({ where }),
+      ]);
+      const chosenByDiagnostic = await diagnosticChosenInterests.getChosenInterestsMap({
+        tenantId,
+        diagnosticIds: diagnostics.map((diagnostic) => diagnostic.id),
+      });
+      const history = diagnostics.map((diagnostic) => {
+        const chosenInterests = chosenByDiagnostic.get(diagnostic.id) || null;
+        return {
+          id: diagnostic.id,
+          engineState: diagnostic.engineState,
+          createdAt: diagnostic.createdAt,
+          reportPdfUrl: chosenInterests
+            ? buildTeacherReportPdfUrl(diagnostic)
+            : null,
+          reportReady: Boolean(chosenInterests),
+          hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
+        };
+      });
+      const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+      res.json({
+        diagnostics: history,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1,
         },
       });
-      const history = await Promise.all(
-        diagnostics.map(async (diagnostic) => {
-          const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
-            tenantId: Number(req.portal.tenantId),
-            diagnosticId: diagnostic.id,
-          });
-          return {
-            id: diagnostic.id,
-            engineState: diagnostic.engineState,
-            createdAt: diagnostic.createdAt,
-            reportPdfUrl: chosenInterests ? diagnostic.reportPdfUrl || null : null,
-            reportReady: Boolean(chosenInterests),
-            hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
-          };
-        }),
-      );
-      res.json({ diagnostics: history });
     } catch (err) {
       console.error("[tmc-portal][teacher/diagnostics]", err);
       res.status(500).json({ error: "Failed to load diagnostic reports" });
@@ -2054,7 +2080,9 @@ router.get(
           classificationLabel: "Routed by TMC Engine",
           recommendedTier: "engine",
           createdAt: diagnostic.createdAt,
-          reportPdfUrl: chosenInterests ? diagnostic.reportPdfUrl || null : null,
+          reportPdfUrl: chosenInterests
+            ? buildTeacherReportPdfUrl(diagnostic)
+            : null,
           reportReady: Boolean(chosenInterests),
           recommendations: recommendationPayloadFromDiagnostic(
             diagnostic,
@@ -2111,6 +2139,7 @@ router.post(
           engineScoresJson: true,
           curriculumFitJson: true,
           reportPdfUrl: true,
+          reportSlugToken: true,
         },
       });
       if (!diagnostic)
@@ -2126,61 +2155,11 @@ router.post(
         diagnosticId: diagnostic.id,
         interests,
       });
-      let ragResult = null;
-      try {
-        ragResult = await travelRag.getRagResultForDiagnostic(diagnostic.id);
-      } catch (ragErr) {
-        console.warn(
-          "[tmc-portal][teacher/diagnostics/:id/interests] RAG load failed (non-fatal):",
-          ragErr.message,
-        );
-      }
-
-      let bank = null;
-      try {
-        const snapshot = parseJson(diagnostic.questionsJson, {});
-        if (snapshot.questionsJson) {
-          bank = {
-            id: diagnostic.questionBankId,
-            tenantId: diagnostic.tenantId,
-            subBrand: diagnostic.subBrand,
-            version: snapshot.bankVersion,
-            questionsJson: snapshot.questionsJson,
-          };
-        } else if (diagnostic.questionBankId) {
-          const activeBank = await prisma.travelDiagnosticQuestionBank.findFirst({
-            where: {
-              id: diagnostic.questionBankId,
-              tenantId: diagnostic.tenantId,
-              subBrand: "tmc",
-              isActive: true,
-            },
-          });
-          bank = activeBank
-            ? await ensureTmcTripTypeBank({ prisma, bank: activeBank })
-            : null;
-        }
-      } catch (bankErr) {
-        console.warn(
-          "[tmc-portal][teacher/diagnostics/:id/interests] question snapshot load failed (non-fatal):",
-          bankErr.message,
-        );
-      }
-
-      const recommendations = recommendationPayloadFromDiagnostic(
-        diagnostic,
-        ragResult,
-      );
-      const reportPdfUrl = await generateDiagnosticPdfBestEffort(
-        diagnostic,
-        bank,
-        { ragResult, recommendations },
-      );
       res.json({
         ok: true,
         ...saved,
         reportReady: true,
-        reportPdfUrl: reportPdfUrl || diagnostic.reportPdfUrl || null,
+        reportPdfUrl: buildTeacherReportPdfUrl(diagnostic),
       });
     } catch (err) {
       if (err?.status)

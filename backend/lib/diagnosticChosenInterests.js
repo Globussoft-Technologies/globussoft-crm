@@ -64,6 +64,38 @@ async function getChosenInterests({ tenantId, diagnosticId }) {
 }
 
 /**
+ * Batch-load chosen interests for a diagnostic history page. This avoids one
+ * TenantSetting query per report while preserving the same normalized shape.
+ */
+async function getChosenInterestsMap({ tenantId, diagnosticIds }) {
+  const ids = [...new Set((diagnosticIds || []).map(Number).filter(Number.isInteger))];
+  if (!tenantId || ids.length === 0) return new Map();
+  const keys = ids.map(keyFor);
+  const rows = await prisma.tenantSetting.findMany({
+    where: { tenantId, key: { in: keys }, category: CATEGORY },
+    select: { key: true, value: true },
+  });
+  const result = new Map();
+  for (const row of rows) {
+    const diagnosticId = Number(String(row.key || "").slice(KEY_PREFIX.length));
+    if (!Number.isInteger(diagnosticId)) continue;
+    try {
+      const parsed = JSON.parse(row.value);
+      const interests = normalizeInterests(parsed?.interests);
+      if (interests.length) {
+        result.set(diagnosticId, {
+          interests,
+          submittedAt: parsed?.submittedAt || null,
+        });
+      }
+    } catch {
+      // Treat malformed legacy settings as absent, matching getChosenInterests.
+    }
+  }
+  return result;
+}
+
+/**
  * Save (overwrite) the chosen interests for a diagnostic — resubmitting
  * simply replaces the prior selection, no history is kept.
  *
@@ -95,6 +127,7 @@ async function saveChosenInterests({ tenantId, diagnosticId, interests }) {
 
 module.exports = {
   getChosenInterests,
+  getChosenInterestsMap,
   saveChosenInterests,
   MAX_INTERESTS,
   CATEGORY,

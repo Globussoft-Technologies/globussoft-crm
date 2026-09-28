@@ -8,7 +8,10 @@ describe("TmcTeacherDiagnostics", () => {
 
   beforeEach(() => {
     fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((url, options = {}) => {
-      if (url === "/api/portal/tmc/teacher/diagnostics") {
+      if (
+        url === "/api/portal/tmc/teacher/diagnostics" ||
+        url.startsWith("/api/portal/tmc/teacher/diagnostics?")
+      ) {
         if (options.method === "POST") {
           return new Promise((resolve) => {
             resolveTeacherSubmit = () => resolve({
@@ -91,7 +94,7 @@ describe("TmcTeacherDiagnostics", () => {
             interests: [{ name: "Campus Overnight Adventure", driveLink: "https://example.com/campus-brochure.pdf" }],
             submittedAt: "2026-09-11T00:00:00.000Z",
             reportReady: true,
-            reportPdfUrl: "/api/uploads/diagnostics/diag-42-teacher.pdf",
+            reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
           }),
         });
       }
@@ -151,7 +154,7 @@ describe("TmcTeacherDiagnostics", () => {
     fireEvent.click(screen.getByRole("button", { name: /Submit chosen interests \(1\)/i }));
 
     await waitFor(() => expect(screen.getByText(/Trip choices saved/i)).toBeTruthy());
-    expect(screen.getByRole("link", { name: /Download report PDF/i }).getAttribute("href")).toBe("/api/uploads/diagnostics/diag-42-teacher.pdf");
+    expect(screen.getByRole("link", { name: /Download report PDF/i }).getAttribute("href")).toBe("/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf");
 
     const submitCall = fetchSpy.mock.calls.find(([url, options]) => url === "/api/portal/tmc/teacher/diagnostics" && options.method === "POST");
     expect(JSON.parse(submitCall[1].body)).toMatchObject({

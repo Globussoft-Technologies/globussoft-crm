@@ -19,17 +19,15 @@ const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 prisma.tenant = { ...(prisma.tenant || {}), findUnique: vi.fn() };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn() };
 prisma.user = { ...(prisma.user || {}), findMany: vi.fn() };
-prisma.tenantSetting = { ...(prisma.tenantSetting || {}), findUnique: vi.fn(), upsert: vi.fn() };
+prisma.tenantSetting = { ...(prisma.tenantSetting || {}), findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() };
 prisma.travelDiagnosticQuestionBank = { ...(prisma.travelDiagnosticQuestionBank || {}), findFirst: vi.fn() };
-prisma.travelDiagnostic = { ...(prisma.travelDiagnostic || {}), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() };
+prisma.travelDiagnostic = { ...(prisma.travelDiagnostic || {}), findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), create: vi.fn() };
 prisma.travelDiagnosticRagResult = { ...(prisma.travelDiagnosticRagResult || {}), findUnique: vi.fn() };
 prisma.tmcTripCatalogue = { ...(prisma.tmcTripCatalogue || {}), findMany: vi.fn() };
 prisma.engineWeights = { ...(prisma.engineWeights || {}), findUnique: vi.fn() };
 prisma.travelCurriculumMapping = { ...(prisma.travelCurriculumMapping || {}), findMany: vi.fn() };
 prisma.travelKnowledgeBaseFile = { ...(prisma.travelKnowledgeBaseFile || {}), findMany: vi.fn() };
 
-const pdfModule = requireCJS("../../lib/travelDiagnosticPdf");
-pdfModule.generateDiagnosticPdfBestEffort = vi.fn();
 const tmcPortalRouter = requireCJS("../../routes/tmc_portal");
 
 function makeApp() {
@@ -136,11 +134,12 @@ beforeEach(() => {
   prisma.travelDiagnosticQuestionBank.findFirst.mockReset().mockResolvedValue(bank);
   prisma.travelDiagnostic.findFirst.mockReset().mockResolvedValue({ id: 42, tenantId: 1, contactId: 55, subBrand: "tmc", engineState: "strong_match", createdAt: new Date("2026-09-11T00:00:00.000Z"), engineScoresJson: JSON.stringify({ survivors: [{ trip: catalogueTrip }] }), curriculumFitJson: "[]", reportPdfUrl: "/api/uploads/diagnostics/diag-42-teacher.pdf", reportSlugToken: "0123456789abcdef", questionBankId: 8, questionsJson: JSON.stringify({ bankId: 8, bankVersion: 1, questionsJson: bank.questionsJson }) });
   prisma.travelDiagnostic.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelDiagnostic.count.mockReset().mockResolvedValue(0);
   prisma.travelDiagnosticRagResult.findUnique.mockReset().mockResolvedValue(null);
   prisma.travelDiagnostic.create.mockReset().mockResolvedValue({ id: 42, createdAt: new Date("2026-09-11T00:00:00.000Z") });
-  pdfModule.generateDiagnosticPdfBestEffort.mockReset().mockResolvedValue("/api/uploads/diagnostics/diag-42-teacher.pdf");
   prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.findMany.mockReset().mockResolvedValue([]);
   prisma.tenantSetting.upsert.mockReset().mockResolvedValue({});
   prisma.tmcTripCatalogue.findMany.mockReset().mockResolvedValue([catalogueTrip]);
   prisma.engineWeights.findUnique.mockReset().mockResolvedValue(null);
@@ -371,7 +370,7 @@ describe("TMC teacher diagnostic flow", () => {
     expect(response.body.diagnostic).toMatchObject({
       id: 42,
       classificationLabel: "Routed by TMC Engine",
-      reportPdfUrl: "/api/uploads/diagnostics/diag-42-teacher.pdf",
+      reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
       reportReady: true,
     });
     expect(response.body.diagnostic.recommendations[0]).toMatchObject({ name: catalogueTrip.title });
@@ -403,6 +402,7 @@ describe("TMC teacher diagnostic flow", () => {
         reportSlugToken: "0123456789abcdef",
       },
     ]);
+    prisma.travelDiagnostic.count.mockResolvedValueOnce(1);
 
     const response = await request(makeApp())
       .get("/api/portal/tmc/teacher/diagnostics")
@@ -412,6 +412,47 @@ describe("TMC teacher diagnostic flow", () => {
     expect(response.body.diagnostics).toEqual([
       expect.objectContaining({ id: 42, reportPdfUrl: null, reportReady: false }),
     ]);
+    expect(response.body.pagination).toMatchObject({
+      page: 1,
+      limit: 20,
+      total: 1,
+      totalPages: 1,
+      hasNextPage: false,
+    });
+    expect(prisma.tenantSetting.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  test("batches chosen-interest history and returns signed report URLs", async () => {
+    prisma.travelDiagnostic.findMany.mockResolvedValueOnce([
+      {
+        id: 42,
+        engineState: "strong_match",
+        createdAt: new Date("2026-09-11T00:00:00.000Z"),
+        curriculumFitJson: "[]",
+        reportSlugToken: "0123456789abcdef",
+      },
+    ]);
+    prisma.travelDiagnostic.count.mockResolvedValueOnce(1);
+    prisma.tenantSetting.findMany.mockResolvedValueOnce([{
+      key: "travel.diagnostic.interests.42",
+      value: JSON.stringify({
+        interests: [{ name: catalogueTrip.title }],
+        submittedAt: "2026-09-11T14:00:00.000Z",
+      }),
+    }]);
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/teacher/diagnostics?page=1&limit=20")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.diagnostics[0]).toMatchObject({
+      id: 42,
+      reportReady: true,
+      reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
+    });
+    expect(prisma.tenantSetting.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.tenantSetting.findUnique).not.toHaveBeenCalled();
   });
 
   test("does not expose the staff-only numeric PDF route for legacy reports", async () => {
@@ -445,13 +486,8 @@ describe("TMC teacher diagnostic flow", () => {
     expect(response.body.ok).toBe(true);
     expect(response.body).toMatchObject({
       reportReady: true,
-      reportPdfUrl: "/api/uploads/diagnostics/diag-42-teacher.pdf",
+      reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
     });
-    expect(pdfModule.generateDiagnosticPdfBestEffort).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 42, tenantId: 1, contactId: 55 }),
-      expect.anything(),
-      expect.objectContaining({ recommendations: expect.any(Array) }),
-    );
     expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 42, tenantId: 1, contactId: 55, subBrand: "tmc" },
     }));

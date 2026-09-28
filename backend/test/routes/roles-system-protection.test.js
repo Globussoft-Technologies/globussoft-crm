@@ -114,6 +114,7 @@ prisma.patient = {
   update: vi.fn(),
 };
 prisma.$transaction = vi.fn(async (fn) => fn(prisma));
+prisma.$queryRaw = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -156,6 +157,7 @@ beforeEach(() => {
   });
   // Default: $transaction is a passthrough.
   prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
+  prisma.$queryRaw.mockReset();
   prisma.userRole.count.mockResolvedValue(2);
   delete process.env.RBAC_STRICT_VERTICAL_VALIDATION;
 });
@@ -213,23 +215,13 @@ describe('Customer role account counts', () => {
       dataScope: null,
       subBrandScopeJson: null,
     }]);
-    prisma.user.findMany.mockResolvedValue([
-      { id: 401, email: 'customer@example.com', name: 'Customer One', userType: 'CUSTOMER', createdAt: new Date('2026-09-28T00:00:00.000Z') },
-      { id: 402, email: 'customer-two@example.com', name: 'Customer Two', userType: 'CUSTOMER', createdAt: new Date('2026-09-27T00:00:00.000Z') },
-      { id: 403, email: 'customer-three@example.com', name: 'Customer Three', userType: 'CUSTOMER', createdAt: new Date('2026-09-26T00:00:00.000Z') },
-      { id: 404, email: 'customer-four@example.com', name: 'Customer Four', userType: 'CUSTOMER', createdAt: new Date('2026-09-25T00:00:00.000Z') },
-    ]);
-    prisma.contact.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([{ total: 4n }]);
 
     const res = await request(makeApp({ tenantId: 11 })).get('/api/roles');
 
     expect(res.status).toBe(200);
     expect(res.body.roles[0].userCount).toBe(4);
-    expect(prisma.user.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 11, userType: 'CUSTOMER' },
-      select: { id: true, email: true, name: true, userType: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-    });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
   test('includes customer portal contacts without double-counting linked CRM users', async () => {
@@ -244,28 +236,13 @@ describe('Customer role account counts', () => {
       dataScope: null,
       subBrandScopeJson: null,
     }]);
-    prisma.user.findMany.mockResolvedValue([
-      { id: 401, email: 'same@example.com', name: 'CRM Customer', userType: 'CUSTOMER', createdAt: new Date('2026-09-28T00:00:00.000Z') },
-    ]);
-    prisma.contact.findMany.mockResolvedValue([
-      { id: 701, email: 'same@example.com', name: 'CRM Customer', createdAt: new Date('2026-09-28T00:00:00.000Z') },
-      { id: 702, email: 'portal@example.com', name: 'Portal Customer', createdAt: new Date('2026-09-27T00:00:00.000Z') },
-    ]);
+    prisma.$queryRaw.mockResolvedValue([{ total: 2n }]);
 
     const res = await request(makeApp({ tenantId: 11 })).get('/api/roles');
 
     expect(res.status).toBe(200);
     expect(res.body.roles[0].userCount).toBe(2);
-    expect(prisma.contact.findMany).toHaveBeenCalledWith({
-      where: {
-        tenantId: 11,
-        deletedAt: null,
-        portalPasswordHash: { not: null },
-        OR: [{ portalRole: 'CUSTOMER' }, { portalRole: null }],
-      },
-      select: { id: true, email: true, name: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-    });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
   test('lists CUSTOMER accounts in the members modal source', async () => {
@@ -274,30 +251,69 @@ describe('Customer role account counts', () => {
       key: 'CUSTOMER',
       userType: 'CUSTOMER',
       tenantId: 11,
-      userRoles: [],
+      tenant: { vertical: 'travel' },
     });
-    prisma.user.findMany.mockResolvedValue([
-      {
-        id: 501,
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ total: 1n }])
+      .mockResolvedValueOnce([{
+        numericId: 501,
         email: 'customer@example.com',
         name: 'Customer One',
-        userType: 'CUSTOMER',
         createdAt: new Date('2026-09-28T00:00:00.000Z'),
-      },
-    ]);
-    prisma.contact.findMany.mockResolvedValue([]);
+        accountType: 'CRM_USER',
+        assignedAt: null,
+      }]);
 
-    const res = await request(makeApp({ tenantId: 11 })).get('/api/roles/31/users');
+    const res = await request(makeApp({ tenantId: 11 })).get('/api/roles/31/users?page=1&limit=25');
 
     expect(res.status).toBe(200);
     expect(res.body.users).toEqual([
       expect.objectContaining({ id: 501, email: 'customer@example.com', userType: 'CUSTOMER' }),
     ]);
-    expect(prisma.user.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 11, userType: 'CUSTOMER' },
-      select: { id: true, email: true, name: true, userType: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
+    expect(res.body.pagination).toEqual({
+      page: 1,
+      limit: 25,
+      total: 1,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPreviousPage: false,
     });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  test('keeps portal-contact aggregation isolated to the travel vertical', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 31,
+      key: 'CUSTOMER',
+      userType: 'CUSTOMER',
+      tenantId: 11,
+      tenant: { vertical: 'generic' },
+    });
+    prisma.userRole.count.mockResolvedValue(1);
+    prisma.userRole.findMany.mockResolvedValue([{
+      userId: 601,
+      assignedAt: new Date('2026-09-28T00:00:00.000Z'),
+      user: {
+        id: 601,
+        email: 'generic-customer@example.com',
+        name: 'Generic Customer',
+        userType: 'CUSTOMER',
+        createdAt: new Date('2026-09-27T00:00:00.000Z'),
+      },
+    }]);
+
+    const res = await request(makeApp({ tenantId: 11 })).get('/api/roles/31/users');
+
+    expect(res.status).toBe(200);
+    expect(res.body.users).toEqual([
+      expect.objectContaining({ id: 601, email: 'generic-customer@example.com' }),
+    ]);
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.userRole.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { roleId: 31 },
+      skip: 0,
+      take: 25,
+    }));
   });
 });
 

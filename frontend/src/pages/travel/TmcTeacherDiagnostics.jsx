@@ -285,6 +285,7 @@ export default function TmcTeacherDiagnostics({
   const [answers, setAnswers] = useState({});
   const [reports, setReports] = useState([]);
   const [reportsLoading, setReportsLoading] = useState(true);
+  const [reportsPagination, setReportsPagination] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [validationAttempted, setValidationAttempted] = useState(false);
@@ -310,11 +311,15 @@ export default function TmcTeacherDiagnostics({
     }
   }, [onSessionExpired, token]);
 
-  const loadReports = useCallback(async () => {
+  const loadReports = useCallback(async ({ page = 1, append = false } = {}) => {
     setReportsLoading(true);
     try {
-      const result = await portalApi("/teacher/diagnostics", token);
-      setReports(Array.isArray(result.diagnostics) ? result.diagnostics : []);
+      const result = await portalApi(`/teacher/diagnostics?page=${page}&limit=20`, token);
+      const nextReports = Array.isArray(result.diagnostics) ? result.diagnostics : [];
+      setReports((current) => append
+        ? [...current, ...nextReports.filter((item) => !current.some((existing) => existing.id === item.id))]
+        : nextReports);
+      setReportsPagination(result.pagination || null);
     } catch (err) {
       if ([401, 403, 404].includes(err.status)) onSessionExpired(err.message);
       else setSubmitError(err.message || "Failed to load diagnostic reports.");
@@ -751,6 +756,19 @@ export default function TmcTeacherDiagnostics({
                   </div>
                 </div>
               ))}
+              {reportsPagination?.hasNextPage && (
+                <button
+                  type="button"
+                  onClick={() => loadReports({
+                    page: reportsPagination.page + 1,
+                    append: true,
+                  })}
+                  disabled={reportsLoading}
+                  style={styles.textButton}
+                >
+                  {reportsLoading ? "Loading..." : "Load older reports"}
+                </button>
+              )}
             </div>
           )}
         </section>

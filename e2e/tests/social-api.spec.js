@@ -59,11 +59,13 @@
  * That's enough for cleanup since the unique key is (tenantId, provider) and
  * subsequent tests use upsert.
  *
- * Spec is parallel-safe by tagging every row with a per-run timestamp and
- * never relying on counts of "all rows" — only on presence-by-id or
- * presence-by-RUN_TAG.
+ * Posts and mentions are tagged per run, but account rows are unique by
+ * tenant+provider. Keep this file serial so connect/read/disconnect assertions
+ * cannot race each other through the shared seeded admin tenant.
  */
 const { test, expect } = require('@playwright/test');
+
+test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;

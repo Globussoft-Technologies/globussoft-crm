@@ -532,6 +532,32 @@ describe('anyOfPermissions (RBAC fallback)', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
+  test('explicit wellness-role deny wins over an RBAC permission grant', async () => {
+    const mw = verifyWellnessRole(
+      ['admin', 'manager'],
+      {
+        anyOfPermissions: [{ module: 'prescriptions', action: 'write' }],
+        deny: ['doctor', 'professional'],
+      },
+    );
+    const { req, res, next } = makeReq({
+      user: {
+        role: 'USER',
+        wellnessRole: 'doctor',
+        userId: 42,
+        tenantId: 1,
+      },
+      perms: ['prescriptions.write'],
+    });
+
+    await mw(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.body.code).toBe('WELLNESS_ROLE_FORBIDDEN');
+    expect(next).not.toHaveBeenCalled();
+    expect(requirePermissionModule.getUserPermissions).not.toHaveBeenCalled();
+  });
+
   test('omitting anyOfPermissions leaves behaviour identical to before (literal-only)', async () => {
     // No 2nd argument → no RBAC fallback. USER with no wellnessRole and
     // appointments.read grant still gets 403 because the gate has no

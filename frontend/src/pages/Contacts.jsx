@@ -2,7 +2,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
-import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
+import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, ArrowLeft } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
@@ -187,6 +187,7 @@ const Contacts = () => {
   const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
+  const isGeneric = !isTravel && !isWellness;
   const isAdmin = user?.role === 'ADMIN';
   // Bulk-select + bulk-assign — mirrors Leads.jsx exactly, same backend
   // endpoint (/api/contacts/bulk-assign), so this works unmodified across
@@ -1409,14 +1410,17 @@ const Contacts = () => {
       <ReturnToBanner />
       {/* #488: flex-wrap + gap so the action group wraps cleanly below the title
           on narrow viewports instead of stacking awkwardly over the description. */}
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
-        <div style={{ minWidth: 0, flex: '1 1 240px' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: isGeneric ? 'flex-start' : 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ minWidth: 0, flex: '1 1 240px', display: isGeneric ? 'flex' : undefined, flexDirection: isGeneric ? 'column' : undefined, alignItems: isGeneric ? 'flex-start' : undefined, gap: isGeneric ? '0.75rem' : undefined }}>
+          {isGeneric && <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--surface-color)', color: 'var(--text-primary)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}><ArrowLeft size={16} /> Back</button>}
+          <div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Contacts</h2>
           {/* #143: surface the total count so the user knows what they're looking at,
               matching the parity that /wellness/patients already has. */}
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
             {(total || contacts.length).toLocaleString()} contact{(total || contacts.length) === 1 ? '' : 's'} · manage your leads and customers
           </p>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           {/* Generic-vertical-only "Customize table" column picker — personal
@@ -1731,7 +1735,7 @@ const Contacts = () => {
         {/* Split-table layout: freeze the name column, keep the rest in a
             synced scrollable pane, and preserve the existing filters and
             row actions without changing the fetch or CRUD flows. */}
-        <div className="contacts-split-table">
+        <div className={`contacts-split-table${isGeneric && !loading && sortedContacts.length === 0 ? ' contacts-split-table--generic-empty' : ''}`}>
           <div
             className="contacts-table-frozen-pane"
             style={{ width: contactsFrozenTableWidthPx }}
@@ -2199,6 +2203,7 @@ const Contacts = () => {
           existingContactId={dupModal.existingContactId}
           matchedBy={dupModal.matchedBy}
           contact={dupModal.contact}
+          allowCreateAnyway={!(isGeneric && dupModal.matchedBy === 'email')}
           creating={creatingContact}
           onEditDetails={() => setDupModal(null)}
           onCreateAnyway={() => submitNewContact(true)}

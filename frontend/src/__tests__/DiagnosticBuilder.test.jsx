@@ -42,7 +42,8 @@
  * deps trigger infinite re-render).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -157,14 +158,31 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(tmc.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('defaults to Visual tab and shows seeded example questions + bands', () => {
+  it('defaults to Visual tab and includes the mandatory TMC trip-type question', async () => {
     renderPage();
     const visualTab = screen.getByRole('tab', { name: /Questions/i });
     expect(visualTab.getAttribute('aria-selected')).toBe('true');
-    // The QUESTIONS_EXAMPLE constant seeds 2 questions.
-    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
+    expect(await screen.findByDisplayValue('Which types of trips do you prefer?')).not.toBeDisabled();
+    expect(screen.getByRole('heading', { name: /Questions \(3\)/i })).toBeTruthy();
     // SCORING_EXAMPLE seeds 3 result categories.
     expect(screen.getByRole('heading', { name: /Result categories \(3\)/i })).toBeTruthy();
+  });
+
+  it('places Save and use beside the active template actions', () => {
+    renderPage();
+    const saveButton = screen.getByRole('button', { name: /Save and use template/i });
+    expect(saveButton.parentElement.className).toContain('diagnostic-template-actions');
+    expect(saveButton.className).toContain('diagnostic-template-save-button');
+    expect(saveButton.closest('.diagnostic-template-row')).toBeTruthy();
+    expect(saveButton.parentElement.firstElementChild).toBe(saveButton);
+  });
+
+  it('places New template opposite the Sub-brand heading', () => {
+    renderPage();
+    const newTemplate = screen.getByRole('button', { name: /New template/i });
+    const headingRow = newTemplate.closest('.diagnostic-template-heading');
+    expect(headingRow).toBeTruthy();
+    expect(within(headingRow).getByRole('heading', { name: 'Sub-brand' })).toBeTruthy();
   });
 
   it('switches to JSON tab and renders both textareas with seeded JSON', () => {
@@ -173,6 +191,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     expect(qTextarea.value).toMatch(/"questions"/);
+    expect(qTextarea.value).toMatch(/Which types of trips do you prefer/i);
     expect(qTextarea.value).toMatch(/How many trips do you organize per year/i);
     expect(rTextarea.value).toMatch(/"method": "weighted-sum"/);
     expect(rTextarea.value).toMatch(/"bands"/);
@@ -180,17 +199,76 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
 
   it('Add question appends a new question card to the Visual list', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
     expect(screen.getByRole('heading', { name: /Questions \(3\)/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
+    expect(screen.getByRole('heading', { name: /Questions \(4\)/i })).toBeTruthy();
+  });
+
+  it('adds a custom identity field with API key and validation rules', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Add field/i }));
+    expect(screen.getByLabelText('Identity field 4 maximum length').value).toBe('120');
+    fireEvent.change(screen.getByLabelText('Identity field 4 type'), { target: { value: 'email' } });
+    expect(screen.getByLabelText('Identity field 4 maximum length').value).toBe('254');
+    expect(screen.getByLabelText('Identity field 4 autocomplete').value).toBe('email');
+    fireEvent.change(screen.getByLabelText('Identity field 4 label'), { target: { value: 'School name' } });
+    fireEvent.change(screen.getByLabelText('Identity field 4 key'), { target: { value: 'school_name' } });
+    fireEvent.click(screen.getAllByText('Validation rules')[3]);
+    fireEvent.change(screen.getByLabelText('Identity field 4 minimum length'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Identity field 4 maximum length'), { target: { value: '120' } });
+    fireEvent.change(screen.getByLabelText('Identity field 4 pattern'), { target: { value: '^[A-Za-z ]+$' } });
+    fireEvent.change(screen.getByLabelText('Identity field 4 validation message'), { target: { value: 'Enter the official school name' } });
+
+    openJsonEditor();
+    const parsed = JSON.parse(screen.getByLabelText(/Questions JSON/i).value);
+    expect(parsed.identityFields[3]).toMatchObject({
+      id: 'school_name', label: 'School name', minLength: 3, maxLength: 120,
+      pattern: '^[A-Za-z ]+$', validationMessage: 'Enter the official school name',
+    });
+  });
+
+  it('keeps field-key focus while typing multiple characters', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: /Add field/i }));
+    const fieldKey = screen.getByLabelText('Identity field 4 key');
+
+    await user.clear(fieldKey);
+    await user.type(fieldKey, 'school_code');
+
+    expect(fieldKey.value).toBe('school_code');
+    expect(document.activeElement).toBe(fieldKey);
+  });
+
+  it('collapses identity fields, expands their details, and preserves reorder controls', () => {
+    renderPage();
+    const nameBody = document.getElementById('identity-field-body-0');
+    expect(nameBody.getAttribute('aria-hidden')).toBe('true');
+
+    const expandName = screen.getByRole('button', { name: 'Expand identity field Name' });
+    fireEvent.click(expandName);
+    expect(nameBody.getAttribute('aria-hidden')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Collapse identity field Name' })).toBeTruthy();
+
+    fireEvent.click(within(nameBody).getByText('Validation rules'));
+    const minimumLengthHint = within(nameBody).getByRole('button', {
+      name: 'The fewest characters customers may enter. Leave empty for no minimum.',
+    });
+    fireEvent.mouseEnter(minimumLengthHint);
+    expect(within(nameBody).getByText('The fewest characters customers may enter. Leave empty for no minimum.')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move identity field 2 up' }));
+    openJsonEditor();
+    const parsed = JSON.parse(screen.getByLabelText(/Questions JSON/i).value);
+    expect(parsed.identityFields.map((field) => field.id)).toEqual(['email', 'name', 'phone']);
   });
 
   it('Remove question deletes a question card from the Visual list', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Questions \(3\)/i })).toBeTruthy();
     const removeBtns = screen.getAllByRole('button', { name: /Remove question/i });
     fireEvent.click(removeBtns[0]);
-    expect(screen.getByRole('heading', { name: /Questions \(1\)/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
   });
 
   it('Add category appends a new band card to the Scoring list', () => {
@@ -312,6 +390,39 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(screen.getAllByText(/Options \(4\)/i).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('keeps the protected trip-type question editable but without a question delete action', async () => {
+    renderPage();
+    const questionText = await screen.findByDisplayValue('Which types of trips do you prefer?');
+    expect(questionText).not.toBeDisabled();
+
+    const questionCard = questionText.closest('.diagnostic-question-card');
+    const answerType = within(questionCard).getByRole('combobox');
+    expect(answerType).not.toBeDisabled();
+    const requiredToggle = within(questionCard).getByRole('switch', { name: 'Question 1 required' });
+    expect(requiredToggle).not.toBeDisabled();
+    expect(within(questionCard).getByRole('button', { name: /Add option/i })).toBeTruthy();
+    expect(within(questionCard).queryByRole('button', { name: 'Remove question' })).toBeNull();
+
+    fireEvent.change(answerType, { target: { value: 'single-choice' } });
+    fireEvent.change(questionText, { target: { value: 'Choose one preferred trip category' } });
+    fireEvent.click(requiredToggle);
+    const scoreInput = within(questionCard).getByLabelText('Option 1 score impact');
+    expect(scoreInput).not.toBeDisabled();
+    fireEvent.change(scoreInput, { target: { value: '4' } });
+    fireEvent.click(within(questionCard).getAllByRole('button', { name: /Remove option/i })[0]);
+
+    openJsonEditor();
+    const protectedQuestion = JSON.parse(screen.getByLabelText(/Questions JSON/i).value).questions[0];
+    expect(protectedQuestion).toMatchObject({
+      id: 'preferred_trip_types',
+      text: 'Choose one preferred trip category',
+      type: 'single-choice',
+      required: false,
+      tripTypeOptionsCustomized: true,
+    });
+    expect(protectedQuestion.options).toHaveLength(2);
+  });
+
   it('allows the required TMC trip-type labels to be edited without changing their category identity', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
@@ -387,9 +498,9 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
 
   it('Move-question-down reorders questions in the JSON', () => {
     renderPage();
-    // Find Q1's "Move question down" — the first such button is Q1's.
+    // The first button belongs to the fixed system question; the second is Q1.
     const moveDownBtns = screen.getAllByRole('button', { name: /Move question down/i });
-    fireEvent.click(moveDownBtns[0]);
+    fireEvent.click(moveDownBtns[1]);
     openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     // After moving Q1 down, "Average group size?" (originally Q2) should
@@ -614,8 +725,8 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     renderPage();
     // Move Q2 up → Q2 should now precede Q1 in the JSON.
     const moveUpBtns = screen.getAllByRole('button', { name: /Move question up/i });
-    // moveUpBtns[0] is Q1's (disabled), moveUpBtns[1] is Q2's (enabled).
-    fireEvent.click(moveUpBtns[1]);
+    // The system question remains fixed at index 0; Q2 is the third card.
+    fireEvent.click(moveUpBtns[2]);
     openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     const tripsIdx = qTextarea.value.indexOf('How many trips do you organize per year');

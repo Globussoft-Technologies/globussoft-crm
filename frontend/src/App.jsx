@@ -37,6 +37,7 @@ import {
   markAuthReady,
   fetchApi,
 } from "./utils/api";
+import { invalidatePermissionCache } from "./hooks/usePermissions";
 
 import {
   VALID_THEME_VALUES,
@@ -346,6 +347,7 @@ const RegisterSuccess = lazy(() => import("./pages/RegisterSuccess"));
 const CustomerRegister = lazy(() => import("./pages/CustomerRegister"));
 // Travel vertical (Day 1 scaffolding  Phase 1 pages land per docs/TRAVEL_CRM_PRD.md 7)
 const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
+const TravelMeetingForms = lazy(() => import("./pages/travel/MeetingForms"));
 const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
 const TravelDiagnosticWizard = lazy(
   () => import("./pages/travel/DiagnosticWizard"),
@@ -1071,6 +1073,9 @@ export default function App() {
   // tabs can rehydrate without forcing a re-login. See utils/api.js for the
   // security trade-off.
   const setToken = (next, opts) => {
+    // Permissions are cached by bearer token. Clear them at every auth
+    // boundary so a new session always fetches its own sidebar grants.
+    invalidatePermissionCache();
     setAuthToken(next, opts);
     setTokenState(next || null);
   };
@@ -1190,6 +1195,7 @@ export default function App() {
         // the user out. The next successful /api call will surface the error.
       } catch (err) {
         if (!cancelled) {
+          invalidatePermissionCache();
           clearAuthToken();
           setUser(null);
           setTenant(null);
@@ -2876,6 +2882,20 @@ export default function App() {
                                             <Route path="widgets" element={<Navigate to="/forms" replace />} />
                       <Route path="forms" element={<GenericOnly><WebForms /></GenericOnly>} />
                       <Route path="travel/forms" element={<TravelOnly><WebForms scope="travel" /></TravelOnly>} />
+                      <Route
+                        path="travel/meeting-forms"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{ module: "marketing", action: "read" }}
+                              feature="Meeting Forms"
+                              message="Meeting Forms requires the 'marketing.read' permission."
+                            >
+                              <TravelMeetingForms />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
                       <Route path="booking-pages" element={<BookingPages />} />
                       <Route path="signatures" element={<Signatures />} />
                       <Route

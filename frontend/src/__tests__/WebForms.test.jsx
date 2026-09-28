@@ -58,6 +58,72 @@ describe('public web form embed footer', () => {
     expect(html).toContain('<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>');
   });
 
+  test('honors the per-form powered-by setting while defaulting it on', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('formData.settings.showPoweredBy === false');
+    expect(html).toContain("(footerLink ? '<div class=\"note\">' + footerLink + '</div>' : '')");
+  });
+
+  test('combines a searchable country code with Generic phone submissions only', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain("scope === 'generic' && field.sourceKey === 'phone'");
+    expect(html).toContain('name="phoneCountry"');
+    expect(html).toContain("fd.set('phone', internationalPhone)");
+  });
+
+  test('detects a Generic phone country locally without disclosing visitor IPs', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain("country.value = '+91'");
+    expect(html).toContain('function detectGenericCountryFromLocale');
+    expect(html).toContain('new Intl.Locale(locale).region');
+    expect(html).not.toContain('ipapi.co');
+    expect(html).not.toContain('ipwho.is');
+    expect(html).not.toContain('api.country.is');
+  });
+
+  test('preserves Generic phone country choices made by the visitor', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('phoneState.userEnteredPhone || phoneState.userSelectedCountry');
+    expect(html).toContain("if (!phoneState.applyingDetectedCountry) phoneState.userSelectedCountry = true;");
+    expect(html).toContain("detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
+  });
+
+  test('keeps the Generic CRM email-domain picker opaque across themes', () => {
+    const html = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+
+    expect(html).toContain('web-form-builder-generic');
+    expect(html).toContain('scope === "generic" ? "web-form-builder web-form-builder-generic" : "web-form-builder"');
+    expect(html).toContain('wf-email-domain-popover');
+    expect(html).toContain('background: "var(--wf-popover-bg, #fff)"');
+    expect(html).toContain('zIndex: 1000');
+    expect(html).toContain('opacity: 1 }}');
+    expect(html).toContain('isolation: isolate');
+    expect(html).toContain('opacity: 1 !important');
+    expect(html).toContain('--wf-popover-bg: #ffffff');
+    expect(html).toContain('--wf-popover-bg: #1a1d24');
+  });
+
+  test('limits locale country detection to the Generic CRM runtime', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain("if (scope !== 'generic' || localeCountryDetectionStarted) return;");
+    expect(html).toContain("if (scope !== 'generic') return;");
+  });
+
+  test('contains the Generic multi-step navigation and validation runtime', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('function multiStepConfig()');
+    expect(html).toContain('function validateStep(stepIndex)');
+    expect(html).toContain("document.getElementById('step-next').addEventListener");
+    expect(html).toContain('showStep(currentStepIndex + 1)');
+    expect(html).toContain('showStep(currentStepIndex - 1)');
+  });
+
   test('does not cap long forms in an internal scroll container', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
@@ -72,5 +138,22 @@ describe('public web form embed footer', () => {
     expect(html).toContain('.panel{background:var(--gbs-form');
     expect(html).toContain('.primary{background:var(--gbs-button');
     expect(html).not.toContain('.primary{background:linear-gradient(135deg,#4f46e5,#7c3aed)');
+  });
+
+  test('normalizes Generic CRM phone fields without rejecting valid international lengths', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('function nationalPhoneMaxLength()');
+    expect(html).toContain('return Math.max(1, 15 - countryDigits.length)');
+    expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '16')");
+    expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
+    expect(html).toContain('slice(0, nationalPhoneMaxLength())');
+    expect(html).toContain("rawPhoneInput.trim().charAt(0) === '+'");
+    expect(html).toContain("var numericQuery = query.replace(/^\\+/, '')");
+    expect(html).toContain("option.value.replace(/^\\+/, '') === numericQuery");
+    expect(html).toContain('/^\\+[1-9]\\d{7,14}$/.test(internationalPhone)');
+    expect(html).toContain('Enter a valid international phone number.');
+    expect(html).not.toContain("/^\\d{9,11}$/.test(nationalDigits)");
+    expect(html).not.toContain("genericPhoneInput.setAttribute('pattern'");
   });
 });

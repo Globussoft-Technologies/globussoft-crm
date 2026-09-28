@@ -61,7 +61,7 @@ describe("TMC trip-type preference", () => {
     expect(question.options.every((option) => option.weight === 0)).toBe(true);
   });
 
-  test("repairs edits to the system question instead of duplicating it", () => {
+  test("preserves edits to the protected question instead of resetting them", () => {
     const result = ensureTmcTripTypeQuestion({
       questions: [{
         id: TRIP_TYPE_QUESTION_ID,
@@ -73,9 +73,35 @@ describe("TMC trip-type preference", () => {
     });
 
     expect(result.questions).toHaveLength(1);
-    expect(result.questions[0].required).toBe(true);
-    expect(result.questions[0].type).toBe("multi-select");
-    expect(result.questions[0].options.every((option) => option.weight === 0)).toBe(true);
+    expect(result.questions[0]).toMatchObject({
+      id: TRIP_TYPE_QUESTION_ID,
+      text: "Optional trip type",
+      type: "single-choice",
+      required: false,
+      systemManaged: true,
+    });
+    expect(result.questions[0].options.find((option) => option.category === "International")).toMatchObject({
+      label: "International",
+      weight: 9,
+    });
+  });
+
+  test("does not recreate options after the admin customizes the option list", () => {
+    const result = ensureTmcTripTypeQuestion({
+      questions: [{
+        id: TRIP_TYPE_QUESTION_ID,
+        text: "Choose a trip",
+        type: "single-choice",
+        required: false,
+        systemManaged: true,
+        tripTypeOptionsCustomized: true,
+        options: [{ value: "domestic", label: "Within India", category: "Domestic", weight: 4 }],
+      }],
+    }, ["Domestic", "International", "Overnight Adventure"]);
+
+    expect(result.questions[0].options).toEqual([
+      { value: "domestic", label: "Within India", category: "Domestic", weight: 4 },
+    ]);
   });
 
   test("resolves stored option values and strictly matches selected categories", () => {

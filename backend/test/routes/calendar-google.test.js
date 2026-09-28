@@ -252,7 +252,7 @@ describe('GET /api/calendar/google/connect', () => {
     // Validate the state param round-trips the user + tenant.
     const args = oauth2State.generateAuthUrl.mock.calls[0][0];
     expect(args.access_type).toBe('offline');
-    expect(args.prompt).toBe('consent');
+    expect(args.prompt).toBe('select_account consent');
     expect(Array.isArray(args.scope)).toBe(true);
     const decoded = JSON.parse(
       Buffer.from(args.state, 'base64url').toString('utf8')
@@ -547,6 +547,31 @@ describe('POST /api/calendar/google/sync', () => {
     expect(calendarState.events.list.mock.calls[1][0].pageToken).toBe(
       'token-page-2'
     );
+  });
+
+  test('returns a concise actionable error when Google Calendar API is disabled', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+    const googleError = new Error(
+      'Google Calendar API has not been used in project 935679410545 before or it is disabled.'
+    );
+    googleError.status = 403;
+    calendarState.events.list.mockRejectedValue(googleError);
+
+    const app = makeApp();
+    const res = await request(app).post('/api/calendar/google/sync');
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      error:
+        'Google Calendar API is not enabled for this Google Cloud project. Enable it, wait a few minutes, then click Sync Now again.',
+      code: 'GOOGLE_CALENDAR_API_DISABLED',
+    });
   });
 });
 

@@ -75,27 +75,30 @@ function ensureTmcTripTypeQuestion(questionsDocument, categories = DEFAULT_TRIP_
   const systemQuestion = {
     ...(existing || {}),
     id: TRIP_TYPE_QUESTION_ID,
-    text: TRIP_TYPE_QUESTION_TEXT,
-    type: "multi-select",
-    required: true,
-    minSelections: 1,
     systemManaged: true,
-    options: labels.map((category) => {
+    ...(!existing ? {
+      text: TRIP_TYPE_QUESTION_TEXT,
+      type: "multi-select",
+      required: true,
+      minSelections: 1,
+    } : {}),
+    options: existing?.tripTypeOptionsCustomized === true
+      ? [...(existing.options || [])]
+      : labels.map((category) => {
       const prior = priorOptions.get(categoryKey(category));
       return {
         ...(prior || {}),
         value: prior?.value || optionValue(category),
         label: String(prior?.label || "").trim() || category,
         category,
-        weight: 0,
+        weight: prior?.weight ?? 0,
       };
-    }),
+      }),
   };
-  delete systemQuestion.maxSelections;
-  document.questions = [
-    systemQuestion,
-    ...questions.filter((question) => question?.id !== TRIP_TYPE_QUESTION_ID),
-  ];
+  if (!existing) delete systemQuestion.maxSelections;
+  document.questions = existing
+    ? questions.map((question) => question?.id === TRIP_TYPE_QUESTION_ID ? systemQuestion : question)
+    : [systemQuestion, ...questions];
   return document;
 }
 

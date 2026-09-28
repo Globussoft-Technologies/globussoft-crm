@@ -9,7 +9,7 @@ import { formatMoney } from '../utils/money';
 import { formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
 import {
-  BadgePercent, Trophy, X, IndianRupee, Calendar, Plus, Trash2,
+  BadgePercent, Trophy, X, IndianRupee, Plus, Trash2,
 } from 'lucide-react';
 
 // #626: was hardcoded USD; formatMoney reads tenant currency+locale
@@ -121,11 +121,10 @@ export default function WinLoss() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Calendar size={14} color="var(--text-secondary)" />
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="input" />
+          <div className="win-loss-date-range" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="input-field win-loss-date-input" aria-label="Analysis start date" />
             <span style={{ color: 'var(--text-secondary)' }}>→</span>
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="input" />
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="input-field win-loss-date-input" aria-label="Analysis end date" />
           </div>
           <button onClick={() => setShowReasonModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={16} /> Manage Reasons

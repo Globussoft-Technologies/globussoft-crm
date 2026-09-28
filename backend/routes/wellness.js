@@ -6974,7 +6974,12 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
 // matches how the existing Memberships card describes value to admins.
 router.get(
   "/memberships/dashboard",
-  adminOrPerm("services", "read"),
+  verifyWellnessRole(["admin", "manager"], {
+    anyOfPermissions: [{ module: "services", action: "read" }],
+    // This dashboard exposes organisation-wide commercial aggregates.
+    // Clinical users may read services but must not inherit finance access.
+    deny: ["doctor", "professional"],
+  }),
   async (req, res) => {
     try {
       const now = new Date();

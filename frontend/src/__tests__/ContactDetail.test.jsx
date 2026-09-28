@@ -73,8 +73,8 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42, state } = {}) {
-  return render(
+function renderPage({ contactId = 42, state, vertical } = {}) {
+  const page = (
     <MemoryRouter initialEntries={[state ? { pathname: `/contacts/${contactId}`, state } : `/contacts/${contactId}`]}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
@@ -83,6 +83,9 @@ function renderPage({ contactId = 42, state } = {}) {
       </Routes>
     </MemoryRouter>
   );
+  return render(vertical
+    ? <AuthContext.Provider value={{ tenant: { vertical } }}>{page}</AuthContext.Provider>
+    : page);
 }
 
 async function getProfile() {
@@ -229,5 +232,13 @@ describe('Generic CRM contact tags', () => {
     fireEvent.click(within(picker).getByRole('button', { name: 'Apply tags' }));
 
     await waitFor(() => expect(saveTags).toHaveBeenCalledWith({ key: 'tags' }, ['VIP', 'Prospect', 'Renewal']));
+  });
+
+  it.each(['wellness', 'travel'])('does not request the Generic tag catalog for %s CRM', async (vertical) => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical });
+
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/contacts/tags')).toBe(false);
   });
 });

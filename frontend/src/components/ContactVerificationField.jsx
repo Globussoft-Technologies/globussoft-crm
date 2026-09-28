@@ -138,7 +138,7 @@ export default function ContactVerificationField({
                 disabled={busy || disabled || !emailOk}
                 style={{ ...actionBtn, opacity: busy || !emailOk ? 0.6 : 1 }}
               >
-                {busy && !emailRequested ? "Sending…" : emailRequested ? "Resend" : "Validate"}
+                {busy ? "Sending…" : emailRequested ? "Resend" : "Validate"}
               </button>
             )}
           </div>

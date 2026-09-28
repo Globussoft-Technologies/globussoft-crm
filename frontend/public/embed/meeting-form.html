@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Schedule Your Conversation</title>
+  <style>
+    :root { color-scheme: light; --primary:#0798d4; --ink:#122647; --muted:#64748b; --line:#dbe5ed; --soft:#f5f9fc; }
+    * { box-sizing:border-box; }
+    [hidden] { display:none!important; }
+    body { margin:0; padding:12px; font-family:var(--embed-font, Inter),Arial,sans-serif; font-size:14px; line-height:1.45; color:var(--ink); background:transparent; }
+    button { font-family:inherit; }
+    .card { max-width:820px; margin:auto; background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px; box-shadow:0 12px 36px rgba(18,38,71,.08); }
+    h1 { margin:0 0 4px; font-size:22px; }
+    .meta,.hint { color:var(--muted); font-size:12px; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:18px 0; }
+    label { display:grid; gap:5px; font-size:12px; font-weight:700; }
+    input,select,textarea { width:100%; border:1px solid var(--line); border-radius:7px; padding:10px 11px; font:inherit; color:var(--ink); background:#fff; }
+    textarea { min-height:80px; resize:vertical; }
+    .section { border-top:1px solid var(--line); padding-top:16px; margin-top:16px; }
+    .section h2 { font-size:14px; margin:0 0 3px; }
+    .scheduler { display:grid; grid-template-columns:minmax(290px,1fr) minmax(190px,.72fr); gap:18px; margin-top:14px; }
+    .calendar { min-width:0; padding-right:18px; border-right:1px solid var(--line); }
+    .calendar-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .calendar-title { font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.02em; }
+    .calendar-nav { display:flex; gap:7px; }
+    .calendar-nav button { width:32px; height:32px; border:1px solid var(--line); border-radius:50%; background:#fff; color:var(--ink); cursor:pointer; font-size:18px; line-height:1; }
+    .calendar-nav button:disabled { opacity:.3; cursor:not-allowed; }
+    .weekdays,.calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; text-align:center; }
+    .weekdays { margin-bottom:5px; color:#8ca0b8; font-size:10px; font-weight:800; text-transform:uppercase; }
+    .calendar-day { aspect-ratio:1; min-width:0; border:0; border-radius:50%; background:transparent; color:#b1c0d0; font:inherit; cursor:default; }
+    .calendar-day.has-times { color:#6b7f95; background:#f3f6f8; cursor:pointer; }
+    .calendar-day.available { color:var(--ink); background:#e8f7fc; cursor:pointer; font-weight:700; }
+    .calendar-day.available:hover { outline:2px solid #a7ddf1; }
+    .calendar-day.active { color:#fff; background:var(--primary); outline:none; }
+    .calendar-empty { aspect-ratio:1; }
+    .time-panel { min-width:0; }
+    .selected-date { min-height:40px; margin:0 0 10px; font-size:13px; font-weight:800; line-height:1.35; }
+    .slots { display:grid; grid-template-columns:1fr; gap:7px; max-height:265px; overflow-y:auto; padding-right:5px; }
+    .slot { width:100%; border:1px solid var(--line); border-radius:999px; padding:7px 10px; background:#fff; color:var(--ink); cursor:pointer; font-weight:700; }
+    .slot:hover { border-color:var(--primary); }
+    .slot.active { color:#fff; border-color:var(--primary); background:var(--primary); }
+    .slot.unavailable { color:#94a3b8; border-color:#e2e8f0; background:#f1f5f9; cursor:not-allowed; opacity:.78; text-decoration:line-through; }
+    .slot.unavailable:hover { border-color:#e2e8f0; }
+    .submit { width:100%; margin-top:18px; border:0; border-radius:8px; padding:13px; color:#fff; background:var(--primary); font-weight:800; cursor:pointer; }
+    .submit[disabled] { opacity:.6; cursor:wait; }
+    .loading-row { display:flex; align-items:center; justify-content:center; gap:9px; }
+    .spinner { width:17px; height:17px; flex:0 0 auto; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:meeting-spin .7s linear infinite; }
+    .booking-progress { margin-top:12px; padding:11px 12px; border-radius:8px; color:#075985; background:#edf8fd; }
+    .retry { margin-top:10px; border:0; border-radius:7px; padding:9px 13px; color:#fff; background:var(--primary); font-weight:800; cursor:pointer; }
+    @keyframes meeting-spin { to { transform:rotate(360deg); } }
+    .message { margin-top:12px; border-radius:8px; padding:10px 12px; display:none; }
+    .message.error { display:block; background:#fff1f2; color:#a3122d; }
+    .message.info { display:block; background:#edf8fd; color:#075985; }
+    .confirmed { text-align:center; padding:18px 0; }
+    .confirmed a { display:inline-block; margin:7px 4px; padding:11px 15px; border-radius:7px; text-decoration:none; background:var(--primary); color:#fff; font-weight:800; }
+    .confirmed a.secondary { color:var(--ink); background:var(--soft); border:1px solid var(--line); }
+    @media (max-width:600px) { body{padding:0}.card{border-radius:0;border-left:0;border-right:0;padding:16px}.grid{grid-template-columns:1fr}.scheduler{grid-template-columns:1fr}.calendar{padding-right:0;padding-bottom:16px;border-right:0;border-bottom:1px solid var(--line)}.calendar-day{aspect-ratio:auto;min-height:38px}.slots{grid-template-columns:repeat(2,minmax(0,1fr));max-height:none}.selected-date{min-height:0} }
+  </style>
+</head>
+<body>
+  <main class="card" id="app"><div class="message info loading-row" style="display:flex"><span class="spinner" aria-hidden="true"></span><span>Loading available conversations…</span></div></main>
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const publicKey = params.get('form') || '';
+      const requestedFont = params.get('font') || '';
+      const apiBase = `/api/travel/meeting-forms/public/${encodeURIComponent(publicKey)}`;
+      const app = document.getElementById('app');
+      let config = null;
+      let availability = [];
+      let selectedDate = '';
+      let selectedSlot = null;
+      let visibleMonth = '';
+      let idempotencyKey = self.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+
+      const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const notifyHeight = () => parent.postMessage({ source:'gbs-meeting-form', type:'size', height:document.documentElement.scrollHeight }, '*');
+      const localStart = () => new Intl.DateTimeFormat('en-CA', { timeZone:config?.timezone || 'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date());
+
+      async function fetchJson(url, options, timeoutMs=15000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, { ...(options || {}), signal:controller.signal });
+          const payload = await response.json();
+          return { response, payload };
+        } catch (error) {
+          if (error.name === 'AbortError') throw new Error('The scheduling service took too long to respond. Please retry.');
+          throw error;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      function applyEmbedFont(fontFamily) {
+        const family = String(fontFamily || 'Inter');
+        document.documentElement.style.setProperty('--embed-font', `"${family.replace(/["\\]/g, '')}"`);
+        let link = document.getElementById('meeting-google-font');
+        if (!link) {
+          link = document.createElement('link');
+          link.id = 'meeting-google-font';
+          link.rel = 'stylesheet';
+          document.head.appendChild(link);
+        }
+        link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family).replace(/%20/g, '+')}:wght@400;500;600;700;800&display=swap`;
+      }
+
+      function fieldHtml(field) {
+        const required = field.required ? 'required' : '';
+        const options = (field.options || []).map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
+        const control = field.type === 'select'
+          ? `<select name="${esc(field.key)}" autocomplete="off" ${required}><option value="">Select…</option>${options}</select>`
+          : field.type === 'textarea'
+            ? `<textarea name="${esc(field.key)}" placeholder="${esc(field.placeholder)}" maxlength="5000" autocomplete="off" ${required}></textarea>`
+            : `<input name="${esc(field.key)}" type="${esc(field.type || 'text')}" placeholder="${esc(field.placeholder)}" maxlength="${field.type === 'email' ? 191 : 500}" autocomplete="off" ${field.type === 'tel' ? 'pattern="[+0-9() .-]{7,25}" title="Enter a valid phone number"' : ''} ${required} />`;
+        return `<label>${esc(field.label)}${field.required ? ' *' : ''}${control}</label>`;
+      }
+
+      function render() {
+        app.innerHTML = `<h1>${esc(config.name)}</h1><div class="meta">${esc(config.durationMins)} minutes · Zoom · ${esc(config.timezone)}</div>
+          <form id="booking-form" autocomplete="off"><div class="grid">${config.fields.map(fieldHtml).join('')}</div>
+          <section class="section"><h2>Choose a convenient time</h2><div class="hint">Select an available date and time for your conversation with our team.</div>
+            <div class="scheduler"><div class="calendar"><div class="calendar-head"><div class="calendar-title" id="calendar-title"></div><div class="calendar-nav"><button type="button" id="previous-month" aria-label="Previous month">‹</button><button type="button" id="next-month" aria-label="Next month">›</button></div></div><div class="weekdays"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div><div class="calendar-grid" id="days"></div></div>
+            <div class="time-panel"><div class="selected-date" id="selected-date">Select a date</div><div class="slots" id="slots"><span class="hint">Select an available date first.</span></div></div></div>
+          </section>
+          <div id="message" class="message"></div><div id="booking-progress" class="booking-progress loading-row" role="status" aria-live="polite" hidden><span class="spinner" aria-hidden="true"></span><span>Confirming your conversation and creating the Zoom link…</span></div><button class="submit" id="submit" type="submit">Schedule My Conversation →</button></form>`;
+        renderDays();
+        renderSlots();
+        document.getElementById('previous-month').addEventListener('click', () => changeMonth(-1).catch((error) => showMessage(error.message)));
+        document.getElementById('next-month').addEventListener('click', () => changeMonth(1).catch((error) => showMessage(error.message)));
+        document.getElementById('booking-form').addEventListener('submit', submitBooking);
+        notifyHeight();
+      }
+
+      function monthKey(date) {
+        return date.slice(0, 7);
+      }
+
+      function isViewableDay(day) {
+        if (!day) return false;
+        if (day.available && day.slots?.length) return true;
+        return (day.displaySlots || []).some((slot) => slot.unavailableReason === 'occupied');
+      }
+
+      function monthOffset(value, amount) {
+        const [year, month] = value.split('-').map(Number);
+        const next = new Date(Date.UTC(year, month - 1 + amount, 1));
+        return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}`;
+      }
+
+      function addDays(dateKey, amount) {
+        const date = new Date(`${dateKey}T12:00:00Z`);
+        date.setUTCDate(date.getUTCDate() + amount);
+        return date.toISOString().slice(0, 10);
+      }
+
+      function horizonEnd() {
+        return addDays(localStart(), Math.max(1, Number(config?.bookingHorizonDays || 30)));
+      }
+
+      function daysRemainingFrom(start) {
+        const startTime = new Date(`${start}T12:00:00Z`).getTime();
+        const endTime = new Date(`${horizonEnd()}T12:00:00Z`).getTime();
+        return Math.max(0, Math.floor((endTime - startTime) / 86400000) + 1);
+      }
+
+      function monthIsLoaded(value) {
+        const monthStart = `${value}-01`;
+        const nextMonthStart = `${monthOffset(value, 1)}-01`;
+        const effectiveStart = monthStart < localStart() ? localStart() : monthStart;
+        const monthEnd = addDays(nextMonthStart, -1);
+        const effectiveEnd = monthEnd > horizonEnd() ? horizonEnd() : monthEnd;
+        if (effectiveStart > effectiveEnd) return true;
+        const expected = Math.floor((new Date(`${effectiveEnd}T12:00:00Z`) - new Date(`${effectiveStart}T12:00:00Z`)) / 86400000) + 1;
+        return availability.filter((day) => monthKey(day.date) === value && day.date >= effectiveStart && day.date <= effectiveEnd).length >= expected;
+      }
+
+      async function changeMonth(amount) {
+        const next = monthOffset(visibleMonth, amount);
+        const firstMonth = monthKey(localStart());
+        const lastMonth = monthKey(horizonEnd());
+        if (next < firstMonth || next > lastMonth) return;
+        if (!monthIsLoaded(next)) {
+          await loadAvailability(`${next}-01`, true);
+        }
+        visibleMonth = next;
+        renderDays();
+        renderSlots();
+      }
+
+      function renderDays() {
+        const root = document.getElementById('days');
+        const [year, month] = visibleMonth.split('-').map(Number);
+        const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+        const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        const byDate = new Map(availability.map((day) => [day.date, day]));
+        const cells = Array.from({ length:firstWeekday }, () => '<span class="calendar-empty"></span>');
+        for (let dayNumber = 1; dayNumber <= daysInMonth; dayNumber += 1) {
+          const dateKey = `${visibleMonth}-${String(dayNumber).padStart(2, '0')}`;
+          const day = byDate.get(dateKey);
+          const available = day?.available && day.slots?.length;
+          const hasTimes = isViewableDay(day);
+          const fullLabel = new Date(`${dateKey}T12:00:00Z`).toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric', year:'numeric', timeZone:'UTC' });
+          cells.push(`<button type="button" class="calendar-day ${hasTimes ? 'has-times' : ''} ${available ? 'available' : ''} ${selectedDate === dateKey ? 'active' : ''}" data-date="${dateKey}" aria-label="${esc(fullLabel)}" ${hasTimes ? '' : 'disabled'}>${dayNumber}</button>`);
+        }
+        root.innerHTML = cells.join('');
+        document.getElementById('calendar-title').textContent = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month:'long', year:'numeric', timeZone:'UTC' });
+        document.getElementById('previous-month').disabled = visibleMonth <= monthKey(localStart());
+        document.getElementById('next-month').disabled = visibleMonth >= monthKey(horizonEnd());
+        root.querySelectorAll('[data-date]').forEach((button) => button.addEventListener('click', () => {
+          selectedDate = button.dataset.date; selectedSlot = null; renderDays(); renderSlots();
+        }));
+      }
+
+      function renderSlots() {
+        const day = availability.find((row) => row.date === selectedDate);
+        const root = document.getElementById('slots');
+        const heading = document.getElementById('selected-date');
+        heading.textContent = selectedDate ? new Date(`${selectedDate}T12:00:00Z`).toLocaleDateString(undefined, { weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'UTC' }) : 'Select a date';
+        const displaySlots = day?.displaySlots?.length ? day.displaySlots : (day?.slots || []).map((slot) => ({ ...slot, available:true }));
+        root.innerHTML = displaySlots.length ? displaySlots.map((slot) => `<button type="button" class="slot ${slot.available === false ? 'unavailable' : ''} ${selectedSlot?.start === slot.start ? 'active' : ''}" data-start="${slot.start}" aria-label="${esc(slot.label)}${slot.available === false ? ' unavailable' : ''}" ${slot.available === false ? 'disabled' : ''}>${esc(slot.label)}</button>`).join('') : '<span class="hint">No times configured for this date.</span>';
+        root.querySelectorAll('[data-start]').forEach((button) => button.addEventListener('click', () => {
+          selectedSlot = day.slots.find((slot) => slot.start === button.dataset.start); renderSlots();
+        }));
+        notifyHeight();
+      }
+
+      function showMessage(text, type='error') {
+        const node = document.getElementById('message'); node.className = `message ${type}`; node.textContent = text; notifyHeight();
+      }
+
+      async function loadAvailability(start=localStart(), append=false) {
+        // Keep provider queries bounded. For longer horizons, later months are
+        // loaded in 62-day chunks only when the visitor navigates to them.
+        const days = Math.min(62, daysRemainingFrom(start));
+        if (days < 1) return;
+        const { response, payload } = await fetchJson(`${apiBase}/availability?start=${encodeURIComponent(start)}&days=${days}`);
+        if (!response.ok) throw new Error(payload.error || 'Availability could not be loaded.');
+        if (append) {
+          const merged = new Map(availability.map((day) => [day.date, day]));
+          for (const day of payload.dates || []) merged.set(day.date, day);
+          availability = [...merged.values()].sort((a, b) => a.date.localeCompare(b.date));
+        } else {
+          availability = payload.dates || [];
+        }
+        const firstAvailable = availability.find((day) => day.available && day.slots?.length);
+        const currentDay = availability.find((day) => day.date === selectedDate);
+        if (!isViewableDay(currentDay) && firstAvailable) selectedDate = firstAvailable.date;
+        if (!append) visibleMonth = monthKey(selectedDate || availability[0]?.date || localStart());
+      }
+
+      async function submitBooking(event) {
+        event.preventDefault();
+        if (!selectedSlot) return showMessage('Please select an available date and time.');
+        const form = event.currentTarget;
+        const submit = document.getElementById('submit');
+        const progress = document.getElementById('booking-progress');
+        submit.disabled = true;
+        submit.innerHTML = '<span class="loading-row"><span class="spinner" aria-hidden="true"></span><span>Submitting…</span></span>';
+        progress.hidden = false;
+        form.setAttribute('aria-busy', 'true');
+        const raw = Object.fromEntries(new FormData(event.currentTarget).entries());
+        const known = ['contactName','designation','institution','city','contactEmail','contactPhone'];
+        const body = { scheduledAt:selectedSlot.start, idempotencyKey, diagnosticReportSlug:params.get('diagnostic') || undefined, sourceUrl:document.referrer || undefined, customFields:{} };
+        for (const [key,value] of Object.entries(raw)) known.includes(key) ? body[key] = value : body.customFields[key] = value;
+        try {
+          const { response, payload } = await fetchJson(`${apiBase}/book`, { method:'POST', headers:{'Content-Type':'application/json','Idempotency-Key':idempotencyKey}, body:JSON.stringify(body) }, 30000);
+          if (response.status === 409 && payload.code === 'SLOT_UNAVAILABLE') {
+            await loadAvailability(); selectedSlot = null; renderDays(); renderSlots(); throw new Error(payload.error);
+          }
+          if (!response.ok) throw new Error(payload.error || 'The meeting could not be confirmed.');
+          const booking = payload.booking;
+          app.innerHTML = `<div class="confirmed"><h1>Your Conversation Is Confirmed</h1><p>You're all set, ${esc(booking.name)}.</p><h2>${esc(booking.formattedDate)}</h2><p>${esc(booking.formattedTime)}<br>${esc(booking.durationMins)} minutes · Zoom</p><a href="${esc(booking.meetingUrl)}" target="_blank" rel="noopener">Join Zoom Meeting</a><p class="hint">${booking.emailStatus === 'SENT' ? 'A confirmation email has also been sent.' : 'Your meeting is confirmed. Email delivery is being retried.'}</p></div>`;
+          parent.postMessage({ source:'gbs-meeting-form', type:'confirmed', booking }, '*'); notifyHeight();
+        } catch (error) {
+          showMessage(error.message); submit.disabled = false; submit.textContent = 'Schedule My Conversation →'; progress.hidden = true; form.removeAttribute('aria-busy');
+        }
+      }
+
+      async function boot() {
+        app.innerHTML = '<div class="message info loading-row" style="display:flex"><span class="spinner" aria-hidden="true"></span><span>Loading available conversations…</span></div>';
+        try {
+          const { response, payload } = await fetchJson(apiBase);
+          config = payload;
+          if (!response.ok) throw new Error(config.error || 'Meeting form not found.');
+          applyEmbedFont(requestedFont || config.embedFontFamily);
+          await loadAvailability(); render();
+        } catch (error) {
+          app.innerHTML = `<div class="message error" style="display:block"><strong>Scheduling could not be loaded.</strong><br>${esc(error.message || 'Please check your connection and retry.')}<br><button type="button" class="retry" id="retry-load">Retry</button></div>`;
+          document.getElementById('retry-load').addEventListener('click', boot);
+          notifyHeight();
+        }
+      }
+      boot();
+      new ResizeObserver(notifyHeight).observe(document.body);
+    })();
+  </script>
+</body>
+</html>

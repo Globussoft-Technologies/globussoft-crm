@@ -165,7 +165,7 @@ function makeApp() {
 }
 
 function bearer({ userId = 7, tenantId = 1, role = 'ADMIN', jti } = {}) {
-  const payload = { userId, tenantId, role };
+  const payload = { userId, tenantId, role, userType: 'STAFF', isOwner: false };
   if (jti) payload.jti = jti;
   return 'Bearer ' + jwt.sign(payload, JWT_SECRET, { expiresIn: '5m' });
 }
@@ -591,6 +591,110 @@ describe('POST /api/auth/signup', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/at least 8 characters/i);
   });
+
+  test('duplicate email is rejected only within the selected CRM vertical', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 77 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'existing@example.com',
+        password: 'password123',
+        name: 'Existing User',
+        organizationName: 'New Travel Org',
+        vertical: 'travel',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('EMAIL_ALREADY_EXISTS_IN_VERTICAL');
+    expect(prisma.user.findFirst.mock.calls[0][0].where).toMatchObject({
+      email: 'existing@example.com',
+      tenant: { vertical: 'travel' },
+    });
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+  });
+
+  test('organization-name uniqueness is global across CRM verticals', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.tenant.findFirst.mockResolvedValue({ id: 88 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'new@example.com',
+        password: 'password123',
+        name: 'New User',
+        organizationName: 'Shared Brand',
+        vertical: 'wellness',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORGANIZATION_NAME_ALREADY_EXISTS');
+    expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
+      where: {
+        OR: [
+          { organizationNameKey: 'shared brand' },
+          { name: 'Shared Brand' },
+        ],
+      },
+      select: { id: true },
+    });
+  });
+
+  test('returns 409 when concurrent signup loses the organization-name unique race', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.tenant.findFirst.mockResolvedValue(null);
+    prisma.tenant.create.mockRejectedValue({
+      code: 'P2002',
+      meta: { target: ['organizationNameKey'] },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'race@example.com',
+        password: 'password123',
+        name: 'Race User',
+        organizationName: '  Shared   Brand  ',
+        vertical: 'generic',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORGANIZATION_NAME_ALREADY_EXISTS');
+    expect(prisma.tenant.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Shared Brand',
+        organizationNameKey: 'shared brand',
+      }),
+    }));
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  test('returns 409 when a concurrent same-name signup reports the slug unique key first', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.tenant.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 89 });
+    prisma.tenant.create.mockRejectedValue({
+      code: 'P2002',
+      meta: { target: ['slug'] },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'slug-race@example.com',
+        password: 'password123',
+        name: 'Slug Race User',
+        organizationName: 'Shared Brand',
+        vertical: 'generic',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORGANIZATION_NAME_ALREADY_EXISTS');
+    expect(prisma.tenant.findFirst).toHaveBeenCalledTimes(2);
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
 });
 
 // ── POST /api/auth/register ──────────────────────────────────────────
@@ -750,6 +854,22 @@ describe('POST /api/auth/customer/register', () => {
 // ── POST /api/auth/check-email ───────────────────────────────────────
 
 describe('POST /api/auth/check-email', () => {
+  test('registrationVertical scopes duplicate lookup to that CRM theme', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 501 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'owner@example.com', registrationVertical: 'generic' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.user.findFirst.mock.calls[0][0].where).toEqual({
+      email: 'owner@example.com',
+      deactivatedAt: null,
+      tenant: { vertical: 'generic' },
+    });
+  });
+
   test('known active email → 200 { exists: true }', async () => {
     prisma.user.count.mockResolvedValue(1);
 
@@ -843,6 +963,28 @@ describe('POST /api/auth/check-email', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ exists: false });
     expect(prisma.user.count).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/auth/check-organization-name', () => {
+  test('checks the normalized organization name globally', async () => {
+    prisma.tenant.findFirst.mockResolvedValue({ id: 15 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-organization-name')
+      .send({ name: 'Shared Brand', registrationVertical: 'travel' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
+      where: {
+        OR: [
+          { organizationNameKey: 'shared brand' },
+          { name: 'Shared Brand' },
+        ],
+      },
+      select: { id: true },
+    });
   });
 });
 

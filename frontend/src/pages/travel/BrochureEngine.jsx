@@ -1665,6 +1665,11 @@ function ModelPicker({ catalog, selectedModel, onChange, running, aiProvider, ai
 // ─── Itinerary import ──────────────────────────────────────────────────────
 
 function ItineraryImport({ itineraries, selectedId, onSelect, onImport, importing, imported, disabled }) {
+  const contactLabel = (itinerary) => {
+    const contact = itinerary?.contact;
+    return contact?.name?.trim() || contact?.company?.trim()
+      || (itinerary?.contactId ? `Contact #${itinerary.contactId}` : 'No contact');
+  };
   return (
     <div style={importCard}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -1689,7 +1694,7 @@ function ItineraryImport({ itineraries, selectedId, onSelect, onImport, importin
             <option value="">Select an itinerary…</option>
             {itineraries.map((it) => (
               <option key={it.id} value={String(it.id)}>
-                #{it.id} — {it.destination || 'Unknown'} · {formatDateLabel(it.startDate)} · {it.contact?.name || 'No contact'}
+                #{it.id} — {it.destination || 'Unknown'} · {formatDateLabel(it.startDate)} · {contactLabel(it)}
               </option>
             ))}
           </select>

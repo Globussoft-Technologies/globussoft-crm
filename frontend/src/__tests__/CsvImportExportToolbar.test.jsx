@@ -148,4 +148,27 @@ describe("CsvImportExportToolbar", () => {
     expect(screen.getByRole("button", { name: /Choose CSV file/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Download CSV template/i })).toBeInTheDocument();
   });
+
+  it("shows the schema-backed field type as read-only in the Generic lead mapping wizard", async () => {
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        mappingFields={[{ key: "email", fieldKey: "email", label: "Email", fieldType: "text" }]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+
+    const file = new File(["email\ntest@example.com\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("email\ntest@example.com\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByText("Review the mapping of your fields")).toBeInTheDocument();
+    expect(screen.getByLabelText("Field type for email")).toHaveTextContent("Text field");
+    expect(screen.queryByRole("combobox", { name: "Field type for email" })).toBeNull();
+  });
 });

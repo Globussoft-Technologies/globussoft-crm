@@ -1217,6 +1217,7 @@ router.get(
               fullName: true,
               parentName: true,
               parentPhone: true,
+              parentEmail: true,
               passportExtractedAt: true,
               passportVerifiedAt: true,
               passportRejectedAt: true,
@@ -1236,6 +1237,36 @@ router.get(
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
+      const pendingParentRows = await prisma.pendingTripRegistration.findMany({
+        where: { tenantId: req.travelTenant.id, tripId: trip.id },
+        select: { parentEmail: true },
+      });
+      const parentDocumentsByEmail = await findParentDocumentsForParticipants({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        participants: [...(trip.participants || []), ...(Array.isArray(pendingParentRows) ? pendingParentRows : [])],
+      });
+      const consentDocumentsByEmail = new Map(
+        [...parentDocumentsByEmail.entries()]
+          .map(([email, documents]) => [email, documents.find((document) => (document.documentType || "consent-form") === "consent-form")])
+          .filter(([, document]) => document),
+      );
+      trip.participants = (trip.participants || []).map((participant) => ({
+        ...participant,
+        parentDocuments: (parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [])
+          .map(projectStaffParentDocument),
+        consentDocument: projectStaffConsentDocument(
+          consentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()),
+        ),
+      }));
+      trip.parentConsentDocuments = [...consentDocumentsByEmail.entries()].map(([parentEmail, document]) => ({
+        parentEmail,
+        document: projectStaffConsentDocument(document),
+      }));
+      trip.parentDocuments = [...parentDocumentsByEmail.entries()].map(([parentEmail, documents]) => ({
+        parentEmail,
+        documents: documents.map(projectStaffParentDocument),
+      }));
       if (!tripRequiresPassport(trip.tripType)) {
         trip.documentRequirements = (trip.documentRequirements || [])
           .filter((doc) => String(doc.docType || "").toLowerCase() !== "passport");
@@ -2125,6 +2156,145 @@ async function loadTrip(req) {
   return trip;
 }
 
+function projectStaffConsentDocument(document) {
+  if (!document) return null;
+  return {
+    id: document.id,
+    filename: document.filename,
+    fileSize: document.fileSize,
+    mimeType: document.mimeType,
+    status: document.status,
+    uploadedAt: document.uploadedAt,
+  };
+}
+
+function projectStaffParentDocument(document) {
+  if (!document) return null;
+  return {
+    id: document.id,
+    documentType: document.documentType || "consent-form",
+    filename: document.filename,
+    fileSize: document.fileSize,
+    mimeType: document.mimeType,
+    status: document.status,
+    uploadedAt: document.uploadedAt,
+  };
+}
+
+async function findParentDocumentsForParticipants({ tenantId, tripId, participants, includeFileBlob = false }) {
+  const emails = [...new Set(
+    (participants || [])
+      .map((participant) => String(participant.parentEmail || "").trim().toLowerCase())
+      .filter(Boolean),
+  )];
+  if (!emails.length) return new Map();
+
+  const contacts = await prisma.contact.findMany({
+    where: { tenantId, email: { in: emails } },
+    select: { id: true, email: true },
+  });
+  const contactIds = contacts.map((contact) => contact.id);
+  if (!contactIds.length) return new Map();
+
+  const documentSelect = {
+    id: true,
+    parentContactId: true,
+    documentType: true,
+    tripId: true,
+    filename: true,
+    fileSize: true,
+    mimeType: true,
+    status: true,
+    uploadedAt: true,
+    createdAt: true,
+    fileUrl: true,
+    storage: true,
+    storageKey: true,
+  };
+  if (includeFileBlob) documentSelect.fileBlob = true;
+
+  const documents = await prisma.tmcParentDocument.findMany({
+    where: {
+      tenantId,
+      tripId,
+      parentContactId: { in: contactIds },
+    },
+    orderBy: [{ uploadedAt: "desc" }, { id: "desc" }],
+    select: documentSelect,
+  });
+  const documentByContactId = new Map();
+  for (const document of documents) {
+    const byContact = documentByContactId.get(document.parentContactId) || [];
+    byContact.push(document);
+    documentByContactId.set(document.parentContactId, byContact);
+  }
+
+  const documentByEmail = new Map();
+  for (const contact of contacts) {
+    const documentsForContact = documentByContactId.get(contact.id);
+    if (documentsForContact?.length) documentByEmail.set(String(contact.email || "").trim().toLowerCase(), documentsForContact);
+  }
+  return documentByEmail;
+}
+
+async function findParentConsentDocumentsForParticipants(args) {
+  const documentsByEmail = await findParentDocumentsForParticipants(args);
+  const consentByEmail = new Map();
+  for (const [email, documents] of documentsByEmail.entries()) {
+    const document = documents.find((row) => (row.documentType || "consent-form") === "consent-form");
+    if (document) consentByEmail.set(email, document);
+  }
+  return consentByEmail;
+}
+
+async function readStaffConsentDocumentBuffer(document) {
+  let fileBuffer = document?.fileBlob ? Buffer.from(document.fileBlob) : null;
+  if (!fileBuffer && document?.fileUrl) {
+    fileBuffer = await visaDocStore.readDocBuffer({
+      attachmentUrl: document.fileUrl,
+      attachmentKey: document.storageKey,
+      attachmentStorage: document.storage,
+    });
+  }
+  return fileBuffer;
+}
+
+function sendStaffConsentDocument(res, document, fileBuffer) {
+  const filename = String(document.filename || "consent-form").replace(/[\r\n"]/g, "");
+  res.setHeader("Content-Type", document.mimeType || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  return res.send(fileBuffer);
+}
+
+function sendStaffParentDocument(res, document, fileBuffer) {
+  const filename = String(document.filename || "travel-document").replace(/[\r\n"]/g, "");
+  res.setHeader("Content-Type", document.mimeType || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  return res.send(fileBuffer);
+}
+
+async function loadStaffParentDocument({ tenantId, tripId, parentEmail, documentId }) {
+  const email = String(parentEmail || "").trim().toLowerCase();
+  if (!email) return null;
+  const contact = await prisma.contact.findFirst({
+    where: { tenantId, email },
+    select: { id: true },
+  });
+  if (!contact) return null;
+  return prisma.tmcParentDocument.findFirst({
+    where: { id: documentId, tenantId, tripId, parentContactId: contact.id },
+    select: {
+      id: true,
+      filename: true,
+      mimeType: true,
+      fileBlob: true,
+      fileUrl: true,
+      storage: true,
+      storageKey: true,
+    },
+  });
+}
+
 const PARTICIPANT_IMPORT_MAX_ROWS = 5000;
 
 // POST /api/travel/trips/:id/participants/import
@@ -2297,6 +2467,155 @@ router.get(
         return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trips] participants list error:", e.message);
       res.status(500).json({ error: "Failed to list participants" });
+    }
+  },
+);
+
+// GET /api/travel/trips/:id/participants/:pid/consent-form/file
+// Staff-only view of the signed consent image uploaded from the parent portal.
+// The lookup is scoped to the tenant, trip, participant and matching parent
+// email; a parent document from another trip or participant can never bleed
+// into this participant row.
+router.get(
+  "/trips/:id/participants/:pid/consent-form/file",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const participantId = parseInt(req.params.pid, 10);
+      if (!Number.isFinite(participantId)) {
+        return res.status(400).json({ error: "pid must be a number", code: "INVALID_PARTICIPANT_ID" });
+      }
+      const participant = await prisma.tripParticipant.findFirst({
+        where: { id: participantId, tripId: trip.id },
+        select: { id: true, parentEmail: true },
+      });
+      if (!participant) {
+        return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
+      }
+      const documentsByEmail = await findParentConsentDocumentsForParticipants({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        participants: [participant],
+        includeFileBlob: true,
+      });
+      const document = documentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase());
+      if (!document) {
+        return res.status(404).json({ error: "Consent form not uploaded for this participant", code: "CONSENT_NOT_FOUND" });
+      }
+
+      const fileBuffer = await readStaffConsentDocumentBuffer(document);
+      if (!fileBuffer) {
+        return res.status(404).json({ error: "Consent form file is unavailable", code: "CONSENT_FILE_UNAVAILABLE" });
+      }
+      return sendStaffConsentDocument(res, document, fileBuffer);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant consent view error:", e.message);
+      return res.status(500).json({ error: "Failed to open participant consent form" });
+    }
+  },
+);
+
+// Same staff view for a registration that has not yet been converted into a
+// TripParticipant. This keeps parent-portal uploads visible in the unified
+// Participants tab throughout the registration lifecycle.
+router.get(
+  "/trips/:id/registrations/:rid/consent-form/file",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const { trip, draft } = await loadPendingRegistration(req);
+      const documentsByEmail = await findParentConsentDocumentsForParticipants({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        participants: [{ parentEmail: draft.parentEmail }],
+        includeFileBlob: true,
+      });
+      const document = documentsByEmail.get(String(draft.parentEmail || "").trim().toLowerCase());
+      if (!document) {
+        return res.status(404).json({ error: "Consent form not uploaded for this registration", code: "CONSENT_NOT_FOUND" });
+      }
+      const fileBuffer = await readStaffConsentDocumentBuffer(document);
+      if (!fileBuffer) {
+        return res.status(404).json({ error: "Consent form file is unavailable", code: "CONSENT_FILE_UNAVAILABLE" });
+      }
+      return sendStaffConsentDocument(res, document, fileBuffer);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] registration consent view error:", e.message);
+      return res.status(500).json({ error: "Failed to open registration consent form" });
+    }
+  },
+);
+
+// Staff-only generic view for any parent-portal document on a participant.
+// The document id is still constrained by tenant, trip and matching parent
+// email so an operator cannot use this route to cross participant boundaries.
+router.get(
+  "/trips/:id/participants/:pid/parent-documents/:documentId/file",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const participantId = parseInt(req.params.pid, 10);
+      const documentId = parseInt(req.params.documentId, 10);
+      if (!Number.isFinite(participantId) || !Number.isFinite(documentId)) {
+        return res.status(400).json({ error: "Invalid participant or document id", code: "INVALID_DOCUMENT_ID" });
+      }
+      const participant = await prisma.tripParticipant.findFirst({
+        where: { id: participantId, tripId: trip.id },
+        select: { parentEmail: true },
+      });
+      if (!participant) return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
+      const document = await loadStaffParentDocument({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        parentEmail: participant.parentEmail,
+        documentId,
+      });
+      if (!document) return res.status(404).json({ error: "Parent document not found", code: "DOCUMENT_NOT_FOUND" });
+      const fileBuffer = await readStaffConsentDocumentBuffer(document);
+      if (!fileBuffer) return res.status(404).json({ error: "Parent document file is unavailable", code: "DOCUMENT_FILE_UNAVAILABLE" });
+      return sendStaffParentDocument(res, document, fileBuffer);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant parent document view error:", e.message);
+      return res.status(500).json({ error: "Failed to open parent document" });
+    }
+  },
+);
+
+router.get(
+  "/trips/:id/registrations/:rid/parent-documents/:documentId/file",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const { trip, draft } = await loadPendingRegistration(req);
+      const documentId = parseInt(req.params.documentId, 10);
+      if (!Number.isFinite(documentId)) return res.status(400).json({ error: "documentId must be a number", code: "INVALID_DOCUMENT_ID" });
+      const document = await loadStaffParentDocument({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        parentEmail: draft.parentEmail,
+        documentId,
+      });
+      if (!document) return res.status(404).json({ error: "Parent document not found", code: "DOCUMENT_NOT_FOUND" });
+      const fileBuffer = await readStaffConsentDocumentBuffer(document);
+      if (!fileBuffer) return res.status(404).json({ error: "Parent document file is unavailable", code: "DOCUMENT_FILE_UNAVAILABLE" });
+      return sendStaffParentDocument(res, document, fileBuffer);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] registration parent document view error:", e.message);
+      return res.status(500).json({ error: "Failed to open parent document" });
     }
   },
 );

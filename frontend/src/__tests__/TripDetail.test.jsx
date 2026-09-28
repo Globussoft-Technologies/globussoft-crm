@@ -488,6 +488,15 @@ describe('<TripDetail /> — Participants tab', () => {
     expect(await screen.findByText('1 participant')).toBeInTheDocument();
     // Existing participant row.
     expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Participant list')).toHaveStyle({
+      background: 'var(--surface-hover, var(--subtle-bg))',
+      color: 'var(--text-primary)',
+    });
+    expect(screen.getByRole('region', { name: /Participant records/i })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
     // Add CTA renders unconditionally (no RBAC gate).
     expect(screen.getByRole('button', { name: /Add participant/i })).toBeInTheDocument();
   });
@@ -1732,6 +1741,15 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(await screen.findByTestId('pending-registrations-list')).toBeInTheDocument();
     expect(screen.getByText('Aarav Iyer')).toBeInTheDocument();
     expect(screen.getByText('Registered')).toBeInTheDocument();
+    expect(screen.getByText('Registered participants').parentElement.parentElement).toHaveStyle({
+      background: 'var(--surface-hover, var(--subtle-bg))',
+      color: 'var(--text-primary)',
+    });
+    expect(screen.getByRole('region', { name: /Registered participant records/i })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: 'min(60vh, 520px)',
+      overscrollBehavior: 'contain',
+    });
   });
 
   it('shows "X pending registrations" count next to participants total', async () => {
@@ -2010,6 +2028,40 @@ describe('<TripDetail /> — pending registration document view buttons', () => 
     expect(await screen.findByTestId('view-passport-101')).toBeInTheDocument();
     expect(screen.getByTestId('view-aadhaar-101')).toBeInTheDocument();
     expect(screen.getByTestId('view-parent-consent-101')).toBeInTheDocument();
+  });
+
+  it('shows one parent-portal consent form and opens it for the matching participant', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:participant-consent');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    rawFetchMock.mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(['signed consent'], { type: 'image/png' })),
+    });
+    const trip = makeTrip({
+      participants: [{ id: 901, fullName: 'Anaya Sharma', parentName: 'Riya Sharma', parentEmail: 'parent@example.com' }],
+      parentConsentDocuments: [{
+        parentEmail: 'parent@example.com',
+        document: { id: 501, filename: 'signed-consent.png', mimeType: 'image/png', status: 'in_review' },
+      }],
+    });
+    installFetchMock({ trip });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+
+    expect(await screen.findByTestId('view-participant-consent-901')).toHaveTextContent('Consent form - View');
+    expect(screen.queryByText('Medical consent - View')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('view-participant-consent-901'));
+    await waitFor(() => expect(rawFetchMock).toHaveBeenCalledWith(
+      '/api/travel/trips/101/participants/901/consent-form/file',
+      expect.objectContaining({ headers: { Authorization: 'Bearer test-token' } }),
+    ));
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(
+      'blob:participant-consent',
+      '_blank',
+      'noopener,noreferrer',
+    ));
   });
 
   it('clicking passport View calls the view-url API and opens the signed URL', async () => {

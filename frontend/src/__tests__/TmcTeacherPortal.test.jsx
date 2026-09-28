@@ -6,6 +6,7 @@ describe("TmcTeacherPortal", () => {
   let fetchSpy;
 
   beforeEach(() => {
+    window.history.replaceState({}, "", "/tmc/teacher-portal");
     localStorage.clear();
     localStorage.setItem("tmcTeacherPortalToken", "teacher-token");
     fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
@@ -245,6 +246,13 @@ describe("TmcTeacherPortal", () => {
     await screen.findByRole("heading", { name: "Dashboard" });
     fireEvent.click(await screen.findByRole("button", { name: /Notifications/ }));
     fireEvent.click(await screen.findByRole("button", { name: "New trip assigned to you" }));
+
+    expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
+  });
+
+  it("restores the selected section from the URL after a refresh", async () => {
+    window.history.replaceState({}, "", "/tmc/teacher-portal?view=trips");
+    render(<TmcTeacherPortal />);
 
     expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
   });

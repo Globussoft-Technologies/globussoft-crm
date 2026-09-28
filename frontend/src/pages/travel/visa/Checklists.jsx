@@ -342,20 +342,79 @@ export default function VisaChecklists() {
             <Download size={14} aria-hidden /> XLSX template
           </button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, alignItems: "end" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-            Import file
-            <input
-              ref={importInputRef}
-              type="file"
-              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-              style={inputStyle}
-            />
-          </label>
-          <button type="button" onClick={handleImport} disabled={importing || !importFile} style={{ ...primaryBtn, opacity: importing || !importFile ? 0.6 : 1 }}>
-            <Download size={14} aria-hidden /> {importing ? "Importing..." : "Import rows"}
-          </button>
+        <div style={{ paddingTop: 12, borderTop: "1px solid var(--border-color)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 14, alignItems: "end", maxWidth: 860 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: 5 }}>Import file</div>
+              <label
+                htmlFor="visa-checklist-import-file"
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  minWidth: 0,
+                  minHeight: 44,
+                  padding: 4,
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 9,
+                  background: "var(--input-bg)",
+                  cursor: "pointer",
+                }}
+              >
+                <span style={{ ...secondaryBtn, padding: "0.42rem 0.75rem", flex: "0 0 auto", pointerEvents: "none" }}>
+                  <Upload size={14} aria-hidden /> Choose file
+                </span>
+                <span
+                  title={importFile?.name || "No file selected"}
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    color: importFile ? "var(--text-primary)" : "var(--text-secondary)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  {importFile?.name || "No file selected"}
+                </span>
+                <input
+                  id="visa-checklist-import-file"
+                  ref={importInputRef}
+                  aria-label="Import file"
+                  type="file"
+                  accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  style={{
+                    position: "absolute",
+                    width: 1,
+                    height: 1,
+                    padding: 0,
+                    margin: -1,
+                    overflow: "hidden",
+                    clip: "rect(0, 0, 0, 0)",
+                    whiteSpace: "nowrap",
+                    border: 0,
+                  }}
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={handleImport}
+              disabled={importing || !importFile}
+              style={{
+                ...primaryBtn,
+                flex: "0 0 auto",
+                justifyContent: "center",
+                minHeight: 44,
+                whiteSpace: "nowrap",
+                opacity: importing || !importFile ? 0.6 : 1,
+              }}
+            >
+              <Upload size={14} aria-hidden /> {importing ? "Importing..." : "Import rows"}
+            </button>
+          </div>
         </div>
         {importSummary && (
           <div style={{ ...card, padding: "0.9rem 1rem", background: "var(--input-bg)", borderRadius: 10 }}>

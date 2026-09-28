@@ -10,7 +10,7 @@
 const SENDGRID_API_KEY = () => process.env.SENDGRID_API_KEY || "";
 const FROM_EMAIL = () => process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
-async function sendEmail({ to, subject, text, html }) {
+async function sendEmail({ to, subject, text, html, attachments = [] }) {
   if (!to || !subject) {
     return { sent: false, reason: "missing_to_or_subject" };
   }
@@ -28,6 +28,16 @@ async function sendEmail({ to, subject, text, html }) {
       { type: "text/html", value: html || (text || subject).replace(/\n/g, "<br>") },
     ],
   };
+  if (Array.isArray(attachments) && attachments.length) {
+    payload.attachments = attachments
+      .filter((attachment) => attachment && attachment.filename && attachment.content)
+      .map((attachment) => ({
+        content: attachment.content,
+        filename: attachment.filename,
+        type: attachment.type || "application/octet-stream",
+        disposition: "attachment",
+      }));
+  }
   try {
     const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",

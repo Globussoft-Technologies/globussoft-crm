@@ -69,9 +69,9 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-function renderLeads(authValue = null) {
+function renderLeads(authValue = null, initialEntries = ['/']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={authValue}>
         <Leads />
       </AuthContext.Provider>
@@ -295,7 +295,7 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
-  it('offers a separate product lead when the email already belongs to a lead', async () => {
+  it('blocks a separate Generic lead when the email already belongs to a lead', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (opts?.method === 'POST' && url === '/api/contacts') {
         return Promise.reject({
@@ -312,9 +312,6 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
           },
         });
       }
-      if (opts?.method === 'POST' && url === '/api/contacts?force=true') {
-        return Promise.resolve({ id: 1000, name: 'Alice Smith' });
-      }
       return Promise.resolve([]);
     });
 
@@ -329,25 +326,27 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
         screen.getByText(/registering for another product/i),
       ).toBeInTheDocument();
       expect(
-        screen.getByRole('button', { name: /Create separate product lead/i }),
+        screen.queryByRole('button', { name: /Create separate product lead/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /Edit details/i }),
       ).toBeInTheDocument();
     });
 
     fireEvent.click(
-      screen.getByRole('button', { name: /Create separate product lead/i }),
+      screen.getByRole('button', { name: /Edit details/i }),
     );
 
-    await waitFor(() => {
-      expect(
-        fetchApiMock.mock.calls.some(
-          ([url, opts]) => url === '/api/contacts?force=true' && opts?.method === 'POST',
-        ),
-      ).toBe(true);
-      expect(notifySuccess).toHaveBeenCalledWith(
-        'Separate product lead created successfully',
-      );
-    });
-    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([url, opts]) => url === '/api/contacts?force=true' && opts?.method === 'POST',
+      ),
+    ).toBe(false);
+    expect(notifySuccess).not.toHaveBeenCalledWith(
+      'Separate product lead created successfully',
+    );
+    expect(screen.queryByText('Possible duplicate contact')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Create Lead' })).toBeInTheDocument();
   });
 
   it('input fields carry the correct maxLength attributes', async () => {
@@ -1048,7 +1047,21 @@ const SAMPLE_STAFF = [
 function leadsFetchMock(url, opts) {
   // GET /api/contacts?status=Lead ?? ? seeded list
   if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
-    return Promise.resolve(SAMPLE_LEADS);
+    const params = new URL(url, 'http://crm.test').searchParams;
+    const query = String(params.get('q') || '').toLowerCase();
+    const rows = query
+      ? SAMPLE_LEADS.filter((lead) => [lead.name, lead.email, lead.company, lead.phone, lead.source]
+        .some((value) => String(value || '').toLowerCase().includes(query)))
+      : SAMPLE_LEADS;
+    const page = Number(params.get('page') || 1);
+    const limit = Number(params.get('limit') || 25);
+    return Promise.resolve({
+      data: rows.slice((page - 1) * limit, page * limit),
+      total: rows.length,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(rows.length / limit)),
+    });
   }
   if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
     return Promise.resolve({
@@ -1200,7 +1213,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
           !opts &&
           url.includes('filters='),
       );
@@ -1228,7 +1241,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
           !opts &&
           url.includes('filters='),
       );
@@ -1441,7 +1454,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.change(searchInput, { target: { value: 'globex' } });
     await waitFor(() => {
       // Counter reflects the filtered count + retains the total for context.
-      expect(screen.getByText(/1 of 3 leads match "globex"/)).toBeInTheDocument();
+      expect(screen.getByText(/1 of 1 leads match "globex"/)).toBeInTheDocument();
       // Stale phrasing must not still be on the page.
       expect(screen.queryByText(/3 leads in pipeline/)).toBeNull();
     });
@@ -1449,6 +1462,53 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     await waitFor(() => {
       expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
     });
+  });
+
+  it('returns to API page one when a Generic search changes on a later page', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const params = new URL(url, 'http://crm.test').searchParams;
+        const page = Number(params.get('page') || 1);
+        const query = params.get('q');
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page }],
+          total: query ? 1 : 30,
+          page,
+          limit: 25,
+          totalPages: query ? 1 : 2,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next page' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string' && url.includes('/api/contacts?status=Lead') && url.includes('page=2'),
+    )).toBe(true));
+
+    fetchApiMock.mockClear();
+    fireEvent.change(screen.getByPlaceholderText('Search leads...'), { target: { value: 'alice' } });
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string' && url.includes('q=alice') && url.includes('page=1'),
+    )).toBe(true));
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string' && url.includes('q=alice') && url.includes('page=2'),
+    )).toBe(false);
+  });
+
+  it('applies Generic drill-down filters through the paginated API', async () => {
+    renderLeads(ADMIN_AUTH, ['/leads?source=Referral&assignee=7&callStatus=qualified']);
+
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+        && url.includes('/api/contacts?status=Lead')
+        && url.includes('page=1')
+        && url.includes('leadSource=Referral')
+        && url.includes('assignedToId=7')
+        && url.includes('callifiedLeadStatus=qualified'),
+    )).toBe(true));
   });
 
   it('Convert button PUTs /api/contacts/:id with status="Prospect" (#283)', async () => {
@@ -1778,13 +1838,15 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     notifyError.mockReset();
   });
 
-  it('opens the travel lead profile when clicking a name in the Name column', async () => {
+  it('opens the travel lead preview when clicking a name in the Name column', async () => {
     renderLeads(TRAVEL_AUTH);
     const lilyLink = await screen.findByRole('link', { name: 'Lily' });
-    expect(lilyLink).toHaveAttribute('href', '/travel/leads/50');
+    expect(lilyLink).toHaveAttribute('href', '#lead-preview');
 
     fireEvent.click(lilyLink);
-    expect(navigateMock).toHaveBeenCalledWith('/travel/leads/50');
+    expect(screen.getByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Lily' })).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalledWith('/travel/leads/50');
     expect(screen.getByLabelText('Edit Name for Lily')).toHaveAttribute('type', 'button');
   });
 
@@ -2455,7 +2517,7 @@ describe('Leads Web Form column (generic CRM only)', () => {
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
           !opts &&
           url.includes('filters='),
       );

@@ -45,6 +45,7 @@ prisma.user = {
 };
 prisma.tenant = {
   findUnique: vi.fn().mockResolvedValue(null), // generateUniqueSlug loop terminator
+  findFirst: vi.fn().mockResolvedValue(null),
   create: vi.fn(),
   // T37 / Class B6: ensureRbacOnBoot's discovery path enumerates tenants;
   // provisionTenantRbac itself doesn't normally call findMany on the
@@ -157,6 +158,7 @@ beforeEach(() => {
   prisma.roleWidget.create.mockReset().mockResolvedValue({});
   prisma.user.findMany.mockReset();
   prisma.tenant.findMany.mockReset().mockResolvedValue([]);
+  prisma.tenant.findFirst.mockReset().mockResolvedValue(null);
   // After reset: findFirst delegates to findUnique so per-test
   // findUnique.mockResolvedValue calls cover the login code path too.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
@@ -262,7 +264,7 @@ describe('POST /api/auth/logout — Set-Cookie clears auth_token (#914 slice 1)'
     // are required claims; jti makes the route hit the revokedToken.upsert
     // path (already mocked to resolve).
     const token = jwt.sign(
-      { userId: 7, tenantId: 1, role: 'ADMIN', jti: 'a'.repeat(32) },
+      { userId: 7, tenantId: 1, role: 'ADMIN', userType: 'STAFF', isOwner: false, jti: 'a'.repeat(32) },
       JWT_SECRET,
       { expiresIn: '5m' }
     );

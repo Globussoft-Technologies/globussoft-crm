@@ -211,13 +211,20 @@ const Sidebar = ({
   const subBrandAccess = (() => {
     if (isAdmin) return null;
     const raw = user?.subBrandAccess;
-    if (!raw) return null;
+    if (raw === null || raw === undefined || raw === "") return null;
     try {
-      const arr = JSON.parse(raw);
-      if (!Array.isArray(arr) || arr.length === 0) return null;
+      // /auth/login, /auth/me and /auth/2fa/verify expose the effective
+      // Travel scope as an array. Keep accepting the historical JSON-string
+      // shape so existing persisted sessions continue to work after deploy.
+      const arr = Array.isArray(raw) ? raw : JSON.parse(raw);
+      if (!Array.isArray(arr)) return null;
+      // An explicit empty scope is deny-all, not full access. This mirrors
+      // travelGuards.getSubBrandAccessSet() on the backend.
+      if (arr.length === 0) return [];
       return arr;
     } catch {
-      return null;
+      // Match the backend's malformed-JSON behavior and fail closed.
+      return [];
     }
   })();
   // RBAC: fine-grained permission gate for new sidebar entries. Legacy
@@ -228,6 +235,7 @@ const Sidebar = ({
   const {
     hasPermission,
     isReady: permissionsReady,
+    error: permissionsError,
     permissions,
     refresh: refreshPermissions,
   } = usePermissions();
@@ -1129,6 +1137,10 @@ const Sidebar = ({
               fontFamily: "var(--font-family)",
               lineHeight: 1.15,
               margin: 0,
+              minWidth: 0,
+              flex: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
           >
             {brand}
@@ -1168,6 +1180,19 @@ const Sidebar = ({
             minHeight: 0,
           }}
         >
+          {isTravel && !permissionsReady && !permissionsError && (
+            <div role="status" style={{ padding: "10px 8px", fontSize: 12, color: "var(--text-secondary)" }}>
+              Loading navigation…
+            </div>
+          )}
+          {isTravel && permissionsError && (
+            <div role="alert" style={{ padding: "10px 8px", fontSize: 12, color: "var(--text-secondary)" }}>
+              Travel navigation is unavailable.{" "}
+              <button type="button" onClick={() => refreshPermissions().catch(() => {})} style={{ border: 0, background: "none", color: "var(--primary-color)", cursor: "pointer", padding: 0, font: "inherit", textDecoration: "underline" }}>
+                Retry
+              </button>
+            </div>
+          )}
           {isWellness
             ? renderWellnessNav({
               Link,
@@ -2251,9 +2276,10 @@ function renderTravelNav({
         <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
       </>)}
 
-      {group("Marketing", ["/travel/brochures", "/travel/forms", "/landing-pages", "/admin/brand-kits"], <>
+      {group("Marketing", ["/travel/brochures", "/travel/forms", "/travel/meeting-forms", "/landing-pages", "/admin/brand-kits"], <>
         <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/travel/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/travel/meeting-forms" icon={Clock} label="Meeting Forms" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
       </>)}
@@ -2744,15 +2770,6 @@ function renderGenericNav({
             gap: "0.25rem",
           }}
         >
-          <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
-          {/* RBAC role + permission admin. Shown to anyone with `roles.read`
-              granted via RBAC (typically ADMIN). The page itself rechecks. */}
-          <Link
-            to="/settings/roles"
-            icon={ShieldCheck}
-            label="Roles"
-            requiredPermission={{ module: "roles", action: "read" }}
-          />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
           <Link
@@ -2888,7 +2905,7 @@ function GenericTeamTerritoriesNav({ Link, isManager }) {
       onActivate={setOpenGroup}
     >
       <Link to="/sales-teams" icon={Users} label="Sales Teams" />
-      <Link to="/users" icon={Users} label="Users" />
+      <Link to="/staff" icon={UsersRound} label="Staff" />
       <Link to="/settings/roles" icon={ShieldCheck} label="Roles" />
       <Link to="/territories" icon={Network} label="Territories" />
     </WellnessNavGroup>

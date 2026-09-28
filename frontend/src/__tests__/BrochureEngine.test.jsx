@@ -369,6 +369,7 @@ describe('BrochureEngine page (wizard)', () => {
 
     renderPage();
     await waitFor(() => expect(screen.getByTestId('itinerary-select')).toBeInTheDocument());
+    expect(screen.getByRole('option', { name: /Greenfield Academy/ })).toBeInTheDocument();
     fireEvent.change(screen.getByTestId('itinerary-select'), { target: { value: '42' } });
     fireEvent.click(screen.getByTestId('import-itinerary'));
     await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/filled from itinerary/i)));

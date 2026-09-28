@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Download, KeyRound, UploadCloud } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, UploadCloud } from "lucide-react";
 import PermissionGate from "../../../components/PermissionGate";
 import { fetchApi } from "../../../utils/api";
 import { useNotify } from "../../../utils/notify";
@@ -11,6 +11,7 @@ import {
   buildVoucherRows,
   validateExport,
 } from "./tallyExportBuilder";
+import { downloadTallyConnectorPackage, fetchTallyConnectorBinary } from "./tallyConnectorConfig";
 
 const button = {
   border: 0,
@@ -129,7 +130,6 @@ export default function TallyExportActions({
   const [selectedVoucherType, setSelectedVoucherType] = useState("all");
   const [connectorStatus, setConnectorStatus] = useState(null);
   const [hasCheckedConnectorStatus, setHasCheckedConnectorStatus] = useState(false);
-  const [connectorCredentials, setConnectorCredentials] = useState(null);
   const [generatingCredentials, setGeneratingCredentials] = useState(false);
   const [pushing, setPushing] = useState(false);
   const filteredRows = voucherRows
@@ -155,37 +155,29 @@ export default function TallyExportActions({
     return () => clearInterval(timer);
   }, []);
 
-  const generateConnectorCredentials = async () => {
+  const downloadConnector = async () => {
     setGeneratingCredentials(true);
     try {
+      // Verify and download the executable before rotating the one-time
+      // connector token. A missing binary must never disconnect a working
+      // connector and leave the newly-created token unavailable.
+      const executable = await fetchTallyConnectorBinary();
       const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
-      setConnectorCredentials(credentials);
+      downloadTallyConnectorPackage(credentials, executable);
       await loadConnectorStatus();
-      notify.success("Connector credentials generated. Download the config now; the token is shown only once.");
+      notify.success("Tally Connector ZIP downloaded. Extract it and run the executable beside config.json.");
+    } catch (error) {
+      notify.error(error.message || "Could not download the Tally Connector ZIP.");
     } finally {
       setGeneratingCredentials(false);
     }
-  };
-
-  const downloadConnectorConfig = () => {
-    if (!connectorCredentials) return;
-    downloadFile("config.json", JSON.stringify({
-      serverUrl: connectorCredentials.connectorUrl,
-      customerId: connectorCredentials.customerId,
-      connectorId: connectorCredentials.connectorId,
-      token: connectorCredentials.token,
-      machineId: "office-pc-1",
-      localTallyUrl: "http://127.0.0.1:9000",
-      requestTimeoutMs: 45000,
-      rejectUnauthorized: true,
-    }, null, 2), "application/json;charset=utf-8");
   };
 
   const pushDirectlyToTally = async () => {
     if (!hasVoucherRows || exportWarnings.length || !hasCheckedConnectorStatus) return;
     const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows });
     const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows });
-    const pushToTally = (allowDuplicate = false) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, allowDuplicate }) });
+    const pushToTally = (options = {}) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, ...options }), silent: true });
     const downloadFallback = () => {
       downloadFile(`${buildBaseFileName(master)}-masters.xml`, mastersXml, "application/xml;charset=utf-8");
       downloadFile(`${buildBaseFileName(master)}-vouchers.xml`, vouchersXml, "application/xml;charset=utf-8");
@@ -199,25 +191,79 @@ export default function TallyExportActions({
     try {
       const result = await pushToTally();
       const voucherResult = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
-      notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0}, altered ${voucherResult?.altered || 0}.`);
+      if (!voucherResult && result.skippedVouchers > 0) {
+        notify.info(`No new vouchers to push. Skipped ${result.skippedVouchers} voucher(s) already sent to Tally.`);
+      } else {
+        const skipped = result.skippedVouchers ? `, skipped ${result.skippedVouchers} already pushed` : "";
+        notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0} new voucher(s), updated ${voucherResult?.altered || 0}${skipped}.`);
+      }
       await loadConnectorStatus();
     } catch (error) {
-      if (error.code === "TALLY_DUPLICATE_PUSH") {
-        const confirmed = await notify.confirm({ title: "Possible duplicate", message: "This export was already pushed to Tally. Continuing may create duplicate records. Do you want to continue?", confirmText: "Continue push", cancelText: "Cancel", destructive: true });
-        if (!confirmed) {
-          notify.info("Push cancelled. No duplicate was created.");
+      if (error.code === "TALLY_EXISTING_VOUCHERS_FOUND") {
+        const existingAction = await notify.confirm({
+          title: "Existing vouchers found",
+          message: `${error.message}\n\nUpdate existing vouchers and recreate any that were deleted from Tally?`,
+          confirmText: "Update existing",
+          cancelText: "More options",
+          confirmValue: "update",
+          cancelValue: "more",
+          dismissible: true,
+        });
+        if (existingAction === "update" || existingAction === true) {
+          try {
+            const updatedResult = await pushToTally({ updateExisting: true });
+            const tally = updatedResult.results?.find((entry) => entry.stage === "vouchers")?.tally;
+            notify.success(`Tally synchronized. Created ${tally?.created || 0} new voucher(s), updated ${tally?.altered || 0}.`);
+          } catch (updateError) {
+            notify.error(updateError.message || "The Tally update failed.");
+          }
+          return;
+        }
+        if (existingAction !== "more") return;
+        const repushConfirmed = await notify.confirm({
+          title: "Re-upload as new vouchers?",
+          message: "This sends every voucher with Create and can produce duplicates for vouchers that still exist in Tally.",
+          confirmText: "Re-upload all",
+          cancelText: "Cancel",
+          destructive: true,
+        });
+        if (!repushConfirmed) {
+          notify.info("Push cancelled. Nothing was sent to Tally.");
           return;
         }
         try {
-          const result = await pushToTally(true);
-          const voucherResult = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
-          notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0}, altered ${voucherResult?.altered || 0}.`);
-          return;
-        } catch (_) {
-          downloadFallback();
-          notify.error("The confirmed push failed. XML files were downloaded automatically.");
+          const repeatedResult = await pushToTally({ forceRepush: true });
+          const tally = repeatedResult.results?.find((entry) => entry.stage === "vouchers")?.tally;
+          notify.success(`Re-uploaded all vouchers. Created ${tally?.created || 0} new voucher(s).`);
+        } catch (retryError) {
+          notify.error(retryError.message || "The repeated Tally push failed.");
+        }
+        return;
+      }
+      if (error.code === "TALLY_NO_NEW_VOUCHERS") {
+        const confirmed = await notify.confirm({
+          title: "No new vouchers",
+          message: `${error.message}\n\nPush all vouchers again?`,
+          confirmText: "Push again",
+          cancelText: "Cancel",
+          destructive: true,
+        });
+        if (!confirmed) {
+          notify.info("Push cancelled. Nothing was sent to Tally.");
           return;
         }
+        try {
+          const repeatedResult = await pushToTally({ forceRepush: true });
+          const tally = repeatedResult.results?.find((entry) => entry.stage === "vouchers")?.tally;
+          notify.success(`Pushed all vouchers again. Created ${tally?.created || 0} new voucher(s).`);
+        } catch (retryError) {
+          notify.error(retryError.message || "The repeated Tally push failed.");
+        }
+        return;
+      }
+      if (error.code === "TALLY_LEGACY_RECEIPT_PARTIAL_MATCH") {
+        notify.error(error.message);
+        return;
       }
       // Keep the export usable even when the local connector/Tally returns an
       // error or the request throws before a response is available.
@@ -284,17 +330,12 @@ export default function TallyExportActions({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button type="button" className="btn-secondary" onClick={() => loadConnectorStatus(false)}>Refresh status</button>
             <PermissionGate module="tally" action="update">
-              <button type="button" className="btn-secondary" onClick={generateConnectorCredentials} disabled={generatingCredentials}>
-                <KeyRound size={15} /> {generatingCredentials ? "Generating…" : connectorStatus?.configured ? "Rotate credentials" : "Generate credentials"}
+              <button type="button" className="btn-secondary" onClick={downloadConnector} disabled={generatingCredentials} style={{ background: "#f4512c", borderColor: "#f4512c", color: "#fff" }}>
+                <Download size={15} /> {generatingCredentials ? "Preparing ZIP…" : "Download Tally Connector"}
               </button>
             </PermissionGate>
           </div>
         </div>
-        {connectorCredentials && <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: "rgba(245,158,11,.12)" }}>
-          <strong style={{ display: "block", color: "#f59e0b" }}>Save this configuration now</strong>
-          <small style={{ display: "block", margin: "5px 0 9px", color: "var(--text-secondary)" }}>The connector token cannot be displayed again. Rotating credentials disconnects the previous configuration.</small>
-          <button type="button" className="btn-secondary" onClick={downloadConnectorConfig}><Download size={15} /> Download config.json</button>
-        </div>}
         <small style={{ display: "block", marginTop: 10, color: "var(--text-secondary)" }}>Run the Globussoft connector on the Windows computer where Tally is open on localhost port 9000.</small>
       </div>
       <div style={{ ...validationPanel, marginTop: 12 }}>

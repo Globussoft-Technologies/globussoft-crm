@@ -1273,7 +1273,25 @@ export default function ItineraryTemplates() {
             }}
           >
             {templateTab === 'pdf' && (
-              <style>{`.itinerary-templates-pdf-table th:nth-child(2), .itinerary-templates-pdf-table td:nth-child(2), .itinerary-templates-pdf-table th:nth-child(3), .itinerary-templates-pdf-table td:nth-child(3), .itinerary-templates-pdf-table th:nth-child(4), .itinerary-templates-pdf-table td:nth-child(4), .itinerary-templates-pdf-table th:nth-child(6), .itinerary-templates-pdf-table td:nth-child(6), .itinerary-templates-pdf-table th:nth-child(7), .itinerary-templates-pdf-table td:nth-child(7), .itinerary-templates-pdf-table th:nth-child(8), .itinerary-templates-pdf-table td:nth-child(8), .itinerary-templates-pdf-table th:nth-child(9), .itinerary-templates-pdf-table td:nth-child(9), .itinerary-templates-pdf-table th:nth-child(10), .itinerary-templates-pdf-table td:nth-child(10), .itinerary-templates-pdf-table th:nth-child(11), .itinerary-templates-pdf-table td:nth-child(11) { display: none; }`}</style>
+              <style>{`
+                .itinerary-templates-pdf-table { table-layout: fixed; }
+                .itinerary-templates-pdf-table th:nth-child(2), .itinerary-templates-pdf-table td:nth-child(2),
+                .itinerary-templates-pdf-table th:nth-child(3), .itinerary-templates-pdf-table td:nth-child(3),
+                .itinerary-templates-pdf-table th:nth-child(4), .itinerary-templates-pdf-table td:nth-child(4),
+                .itinerary-templates-pdf-table th:nth-child(6), .itinerary-templates-pdf-table td:nth-child(6),
+                .itinerary-templates-pdf-table th:nth-child(7), .itinerary-templates-pdf-table td:nth-child(7),
+                .itinerary-templates-pdf-table th:nth-child(8), .itinerary-templates-pdf-table td:nth-child(8),
+                .itinerary-templates-pdf-table th:nth-child(9), .itinerary-templates-pdf-table td:nth-child(9),
+                .itinerary-templates-pdf-table th:nth-child(10), .itinerary-templates-pdf-table td:nth-child(10),
+                .itinerary-templates-pdf-table th:nth-child(11), .itinerary-templates-pdf-table td:nth-child(11) { display: none; }
+                .itinerary-templates-pdf-table th:nth-child(1), .itinerary-templates-pdf-table td:nth-child(1) { width: 41%; }
+                .itinerary-templates-pdf-table th:nth-child(5), .itinerary-templates-pdf-table td:nth-child(5) { width: 15%; }
+                .itinerary-templates-pdf-table th:nth-child(12), .itinerary-templates-pdf-table td:nth-child(12) { width: 13%; }
+                .itinerary-templates-pdf-table th:nth-child(13), .itinerary-templates-pdf-table td:nth-child(13) { width: 9%; }
+                .itinerary-templates-pdf-table th:nth-child(14), .itinerary-templates-pdf-table td:nth-child(14) { width: 22%; }
+                .itinerary-templates-pdf-table th, .itinerary-templates-pdf-table td { box-sizing: border-box; vertical-align: middle; }
+                .itinerary-templates-pdf-table td:nth-child(14) > div { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+              `}</style>
             )}
             <table className={templateTab === 'pdf' ? 'itinerary-templates-pdf-table' : undefined} style={{ width: '100%', minWidth: templateTab === 'pdf' ? 760 : ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
               <thead>

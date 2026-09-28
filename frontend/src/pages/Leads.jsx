@@ -17,6 +17,7 @@ import ReturnToBanner from "../components/ReturnToBanner";
 import {
   UserPlus,
   Search,
+  ArrowLeft,
   ArrowRightCircle,
   Eye,
   Plus,
@@ -146,6 +147,16 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const GENERIC_LEADS_PAGE_SIZE = 25;
+const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
+  "name",
+  "email",
+  "phone",
+  "company",
+  "aiScore",
+  "assignedTo",
+  "createdAt",
+]);
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
@@ -184,6 +195,48 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "callifiedAi",
   "callifiedScore",
 ];
+// These columns are system-populated and must not be offered as CSV import
+// destinations. The remaining Customize Table catalog entries are valid CRM
+// field choices for generic lead imports.
+const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
+  "pageUrl",
+  "pageTitle",
+  "pageSource",
+  "referrerUrl",
+  "landingPageUrl",
+  "currentDomain",
+  "formName",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "gclid",
+  "fbclid",
+  "fbc",
+  "fbp",
+  "submittedAt",
+  "browser",
+  "operatingSystem",
+  "deviceType",
+  "createdAt",
+  "lastUpdated",
+  "webForm",
+  "actions",
+  "campaign",
+  "callStatus",
+  "callifiedAi",
+  "callifiedScore",
+]);
+const CSV_IMPORT_FIELD_TYPES = {
+  aiScore: "number",
+  status: "dropdown",
+  birthDate: "date",
+  anniversary: "date",
+  website: "url",
+  linkedin: "url",
+  description: "textarea",
+};
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
   name: 240,
@@ -777,6 +830,15 @@ const leadWebFormName = (lead) =>
   (["website-form", "Landing Page"].includes(lead?.source)
     ? "Landing Page"
     : "");
+const leadTrackingMetadata = (lead) => {
+  const raw = lead?.webFormSubmissions?.[0]?.payloadJson;
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return parsed?._meta?.tracking || {};
+  } catch (_err) {
+    return {};
+  }
+};
 // First/Last name columns (generic Leads table only): pure derivation of
 // Contact.name — first whitespace-separated token vs the remainder. Single
 // token → last name empty (cell renders "—"). No schema backing needed.
@@ -1116,9 +1178,19 @@ const Leads = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const leadRequestSequenceRef = useRef(0);
-  const previousGenericSearchRef = useRef("");
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
+  // Generic CRM uses API pagination; other verticals keep their existing
+  // client-side pagination behavior.
+  const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(GENERIC_LEADS_PAGE_SIZE);
+  const [leadPagination, setLeadPagination] = useState({
+    total: 0,
+    totalPages: 1,
+    page: 1,
+    limit: genericLeadsPageSize,
+  });
+  const genericPageEffectInitializedRef = useRef(false);
+  const genericQueryEffectInitializedRef = useRef(false);
   const [pageInput, setPageInput] = useState("1");
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [columnLayout, setColumnLayout] = useState(() => {
@@ -1433,7 +1505,7 @@ const Leads = () => {
     customFields: {},
   });
 
-  const fetchLeads = async ({ background = false } = {}) => {
+  const fetchLeads = async ({ background = false, pageOverride } = {}) => {
     const requestSequence = ++leadRequestSequenceRef.current;
     if (!background) setLoading(true);
     try {
@@ -1454,11 +1526,44 @@ const Leads = () => {
       const campaignSearchQs = matchingCampaignIds.length
         ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
         : "";
+      const genericFilterQs = isGeneric
+        ? `${sourceFilter ? `&leadSource=${encodeURIComponent(sourceFilter)}` : ""}${campaignFilter ? `&callifiedCampaignId=${encodeURIComponent(campaignFilter)}` : ""}${leadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(leadStatusFilter)}` : ""}${assigneeFilter === "unassigned" ? "&unassigned=true" : assigneeFilter ? `&assignedToId=${encodeURIComponent(assigneeFilter)}` : ""}`
+        : "";
+      const genericSortQs =
+        isGeneric &&
+        GENERIC_LEAD_SERVER_SORT_KEYS.has(sortConfig.key) &&
+        sortConfig.direction
+          ? `&sortBy=${encodeURIComponent(sortConfig.key)}&sortDirection=${sortConfig.direction}`
+          : "";
+      const paginationQs = isGeneric
+        ? `&page=${pageOverride ?? leadsPage + 1}&limit=${genericLeadsPageSize}`
+        : "&limit=500";
       const data = await fetchApi(
-        `/api/contacts?status=Lead&limit=500${genericSearchQs}${campaignSearchQs}${filtersQs}`,
+        `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}`,
       );
-      const rows = Array.isArray(data) ? data : [];
+      const rows = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
       if (requestSequence !== leadRequestSequenceRef.current) return rows;
+      if (isGeneric) {
+        setLeadPagination({
+          total: Number.isFinite(Number(data?.total))
+            ? Number(data.total)
+            : rows.length,
+          totalPages: Math.max(
+            1,
+            Number.isFinite(Number(data?.totalPages))
+              ? Number(data.totalPages)
+              : 1,
+          ),
+          page: Number.isFinite(Number(data?.page))
+            ? Number(data.page)
+            : pageOverride ?? leadsPage + 1,
+          limit: genericLeadsPageSize,
+        });
+      }
       let mergedRows = rows;
       setLeads((previousRows) => {
         const previousById = new Map(previousRows.map((row) => [row.id, row]));
@@ -1626,12 +1731,26 @@ const Leads = () => {
   // that were actually called, so a real call that just completed updates both
   // the Lead Score and the Call Status without a browser reload.
   const refreshAll = async () => {
-    const [freshLeads] = await Promise.all([
+    const [freshLeads, , , , freshCustomFields] = await Promise.all([
       fetchLeads(),
       fetchStaff(),
       loadCallifiedCampaigns(),
       loadAutoCampaignRules(),
+      isGeneric
+        ? fetchApi("/api/lead-custom-fields", { silent: true }).catch(() => [])
+        : Promise.resolve([]),
     ]);
+    if (isGeneric && Array.isArray(freshCustomFields)) {
+      setCustomFieldDefs(freshCustomFields);
+      setVisibleColumns((current) => {
+        if (!Array.isArray(current)) return current;
+        const existing = new Set(current);
+        const additions = freshCustomFields
+          .map((field) => `cf_${field.fieldKey}`)
+          .filter((key) => !existing.has(key));
+        return additions.length ? [...current, ...additions] : current;
+      });
+    }
     if (isGeneric && Array.isArray(freshLeads) && freshLeads.length > 0) {
       // Score + classify only leads that were actually called. This avoids
       // burning Gemini credits / HTTP time on hundreds of untouched leads while
@@ -1859,22 +1978,51 @@ const Leads = () => {
       isFirstFiltersRender.current = false;
       return;
     }
-    fetchLeads();
+    if (!isGeneric) fetchLeads();
   }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Generic CRM lead search is server-backed. Keep the existing local
-  // filtering/rendering behavior intact while exposing the typed value as
-  // `q` in the contacts API request.
+  // Generic CRM page changes fetch only the requested API page. The
+  // first page is loaded by the existing mount effect, so skip the initial
+  // state observation to avoid a second page-1 request.
+  useEffect(() => {
+    if (!isGeneric) return;
+    if (!genericPageEffectInitializedRef.current) {
+      genericPageEffectInitializedRef.current = true;
+      return;
+    }
+    fetchLeads({ background: true });
+  }, [isGeneric, leadsPage, genericLeadsPageSize]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Generic CRM search, fixed filters, advanced filters and supported sorts
+  // all operate on the complete server-side dataset. Reset to page one when
+  // any query input changes; if already on page one, issue the request here.
+  // When the page changes, the page effect above owns the request so the same
+  // query is never sent twice.
   useEffect(() => {
     if (!isGeneric) return undefined;
-    const normalizedSearch = searchTerm.trim();
-    if (normalizedSearch === previousGenericSearchRef.current) return undefined;
-    previousGenericSearchRef.current = normalizedSearch;
+    if (!genericQueryEffectInitializedRef.current) {
+      genericQueryEffectInitializedRef.current = true;
+      return undefined;
+    }
     const timer = setTimeout(() => {
-      fetchLeads({ background: true });
+      if (leadsPage !== 0) {
+        setLeadsPage(0);
+      } else {
+        fetchLeads({ background: true, pageOverride: 1 });
+      }
     }, 250);
     return () => clearTimeout(timer);
-  }, [isGeneric, searchTerm]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    isGeneric,
+    searchTerm,
+    sourceFilter,
+    campaignFilter,
+    leadStatusFilter,
+    assigneeFilter,
+    advancedFilters,
+    sortConfig.key,
+    sortConfig.direction,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response
@@ -3115,6 +3263,7 @@ const Leads = () => {
         // Web-form parity set (same Contact data as the web-form Add-field list).
         key === "firstTouchSource" ||
         key === "lastTouchSource" ||
+        (isGeneric && ["pageUrl", "pageTitle", "pageSource", "referrerUrl", "landingPageUrl", "currentDomain", "formName", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "fbc", "fbp", "submittedAt", "browser", "operatingSystem", "deviceType"].includes(key)) ||
         key === "treatmentOfInterest" ||
         key === "birthDate" ||
         key === "anniversary" ||
@@ -3149,6 +3298,8 @@ const Leads = () => {
       if (key === "firstTouchSource")
         return { key, label: "First Touch Source" };
       if (key === "lastTouchSource") return { key, label: "Last Touch Source" };
+      const trackingLabels = { pageUrl: "Page URL", pageTitle: "Page Title", pageSource: "Page Source", referrerUrl: "Referrer URL", landingPageUrl: "Landing Page URL", currentDomain: "Current Domain", formName: "Form Name / ID", utm_source: "UTM Source", utm_medium: "UTM Medium", utm_campaign: "UTM Campaign", utm_term: "UTM Term", utm_content: "UTM Content", gclid: "Google Click ID", fbclid: "Meta Click ID", fbc: "Meta Click Cookie", fbp: "Meta Browser ID", submittedAt: "Submission Timestamp", browser: "Browser", operatingSystem: "Operating System", deviceType: "Device Type" };
+      if (isGeneric && trackingLabels[key]) return { key, label: trackingLabels[key] };
       if (key === "treatmentOfInterest")
         return { key, label: "Treatment Of Interest" };
       if (key === "birthDate") return { key, label: "Birth Date" };
@@ -3829,7 +3980,7 @@ const Leads = () => {
     }
   };
 
-  const filteredLeads = leads.filter((lead) => {
+  const filteredLeads = isGeneric ? leads : leads.filter((lead) => {
     if (
       !matchesSource(
         isGeneric ? leadSourceLabel(lead, true) : lead.source,
@@ -3882,6 +4033,10 @@ const Leads = () => {
     );
   });
   const sortedLeads = useMemo(() => {
+    // Generic CRM sorting is global and therefore performed by the API.
+    // Re-sorting a single 25-row page locally would make cross-page ordering
+    // misleading even when every individual page looked correct.
+    if (isGeneric) return filteredLeads;
     if (!sortConfig.key || !sortConfig.direction) return filteredLeads;
     const direction = sortConfig.direction === "desc" ? -1 : 1;
     const collator = new Intl.Collator(undefined, {
@@ -3901,7 +4056,7 @@ const Leads = () => {
       }
       return collator.compare(String(aValue), String(bValue)) * direction;
     });
-  }, [filteredLeads, getLeadSortValue, sortConfig.direction, sortConfig.key]);
+  }, [filteredLeads, getLeadSortValue, isGeneric, sortConfig.direction, sortConfig.key]);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   // Batch-load Callified call summaries for visible leads (counts + last score).
@@ -4000,22 +4155,30 @@ const Leads = () => {
 
   const leadsPageCount = Math.max(
     1,
-    Math.ceil(sortedLeads.length / leadsPageSize),
+    isGeneric
+      ? leadPagination.totalPages
+      : Math.ceil(sortedLeads.length / leadsPageSize),
   );
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
   const pageStart =
-    sortedLeads.length === 0 ? 0 : currentLeadsPage * leadsPageSize + 1;
+    sortedLeads.length === 0
+      ? 0
+      : isGeneric
+        ? currentLeadsPage * genericLeadsPageSize + 1
+        : currentLeadsPage * leadsPageSize + 1;
   const pageEnd =
     sortedLeads.length === 0
       ? 0
       : Math.min(
-          sortedLeads.length,
-          currentLeadsPage * leadsPageSize + leadsPageSize,
+          isGeneric ? leadPagination.total : sortedLeads.length,
+          pageStart + sortedLeads.length - 1,
         );
-  const paginatedLeads = sortedLeads.slice(
-    currentLeadsPage * leadsPageSize,
-    currentLeadsPage * leadsPageSize + leadsPageSize,
-  );
+  const paginatedLeads = isGeneric
+    ? sortedLeads
+    : sortedLeads.slice(
+        currentLeadsPage * leadsPageSize,
+        currentLeadsPage * leadsPageSize + leadsPageSize,
+      );
   const leadsRowSyncSignature = leadsRowSyncEnabled
     ? paginatedLeads
         .map((lead) =>
@@ -4263,9 +4426,10 @@ const Leads = () => {
   };
 
   const activeSearchTerm = searchTerm.trim();
+  const totalLeadCount = isGeneric ? leadPagination.total : leads.length;
   const leadsSummary = activeSearchTerm
-    ? `${filteredLeads.length} of ${leads.length} leads match "${activeSearchTerm}"`
-    : `${leads.length} leads in pipeline`;
+    ? `${filteredLeads.length} of ${totalLeadCount} leads match "${activeSearchTerm}"`
+    : `${totalLeadCount} leads in pipeline`;
   const getHeaderCellStyle = (key, extra = {}) => ({
     padding: "1rem",
     color: "var(--text-secondary)",
@@ -4435,6 +4599,16 @@ const Leads = () => {
               );
             }}
           />
+        </td>
+      );
+    }
+    const trackingKeys = ["pageUrl", "pageTitle", "pageSource", "referrerUrl", "landingPageUrl", "currentDomain", "formName", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "fbc", "fbp", "submittedAt", "browser", "operatingSystem", "deviceType"];
+    if (isGeneric && trackingKeys.includes(column.key)) {
+      const metadata = leadTrackingMetadata(lead);
+      const value = metadata[column.key] || (column.key === "submittedAt" ? lead?.webFormSubmissions?.[0]?.submittedAt : "");
+      return (
+        <td style={getBodyCellStyle(column.key, { color: "var(--text-secondary)", fontSize: "0.875rem" })} title={value || undefined}>
+          {value ? String(value) : "—"}
         </td>
       );
     }
@@ -5015,7 +5189,7 @@ const Leads = () => {
         style={{
           marginBottom: "1rem",
           display: "flex",
-          alignItems: "center",
+          alignItems: isGeneric ? "flex-start" : "center",
           justifyContent: "space-between",
           gap: "0.75rem",
           flexWrap: "wrap",
@@ -5024,14 +5198,17 @@ const Leads = () => {
         <div
           style={{
             display: "flex",
-            alignItems: "center",
+            alignItems: isGeneric ? "flex-start" : "center",
+            flexDirection: isGeneric ? "column" : "row",
             gap: "0.75rem",
             minWidth: 0,
             flex: "1 1 240px",
           }}
         >
-          <UserPlus size={24} color="var(--text-primary)" />
-          <div style={{ minWidth: 0 }}>
+          {isGeneric && <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid var(--border-color)", borderRadius: 7, background: "var(--surface-color)", color: "var(--text-primary)", fontWeight: 600, fontSize: 12, cursor: "pointer" }}><ArrowLeft size={16} /> Back</button>}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0 }}>
+            <UserPlus size={24} color="var(--text-primary)" />
+            <div style={{ minWidth: 0 }}>
             <h1
               style={{
                 margin: 0,
@@ -5050,6 +5227,7 @@ const Leads = () => {
             >
               {leadsSummary}
             </p>
+            </div>
           </div>
         </div>
         {/* Generic CRM only: Lead Fields + Create Lead live in the header's
@@ -5118,6 +5296,20 @@ const Leads = () => {
             entity="contacts"
             label="Leads"
             formats={["csv", "xlsx"]}
+            genericLeadWizard={isGeneric}
+            onImported={isGeneric ? refreshAll : undefined}
+            mappingFields={isGeneric ? leadColumnCatalog
+              .filter((field) => !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key))
+              .map((catalogField) => {
+                const key = catalogField.key;
+                const customField = customFieldByKey.get(key);
+                return {
+                  key,
+                  fieldKey: key,
+                  label: catalogField.label || customField?.label || customField?.name || key.replace(/^cf_/, ""),
+                  fieldType: customField?.fieldType || CSV_IMPORT_FIELD_TYPES[key] || "text",
+                };
+              }) : []}
             compact
             endpoints={{
               export: "/api/csv/contacts/export.csv",
@@ -6343,7 +6535,6 @@ const Leads = () => {
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
-                  setLeadsPage(0);
                 }}
                 style={{
                   paddingLeft: "2.5rem",
@@ -7141,11 +7332,15 @@ const Leads = () => {
                       key={lead.id}
                       data-lead-row-id={String(lead.id)}
                       style={{
-                        cursor: "pointer",
+                        cursor: isTravel ? "default" : "pointer",
                       }}
                       className="table-row-hover"
-                      onClick={() => navigate(leadDetailPath(lead))}
-                      title="Open lead detail"
+                      onClick={() => {
+                        // Travel Leads: keep this row on the list for now.
+                        // navigate(leadDetailPath(lead));
+                        if (!isTravel) navigate(leadDetailPath(lead));
+                      }}
+                      title={isTravel ? undefined : "Open lead detail"}
                     >
                       <td
                         style={getBodyCellStyle("name", { fontWeight: "500" })}
@@ -7180,13 +7375,16 @@ const Leads = () => {
                               editOnDisplayClick={false}
                               renderValue={(name) => (
                                 <a
-                                  href={leadDetailPath(lead)}
+                                  href={isTravel ? "#lead-preview" : leadDetailPath(lead)}
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    navigate(leadDetailPath(lead));
+                                    // Travel Leads: keep the profile link inactive for now.
+                                    // navigate(leadDetailPath(lead));
+                                    if (isTravel) setPreviewLead(lead);
+                                    else navigate(leadDetailPath(lead));
                                   }}
-                                  title={`Open profile for ${lead.name || "lead"}`}
+                                  title={isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`}
                                   style={{
                                     minWidth: 0,
                                     overflow: "hidden",
@@ -7364,11 +7562,15 @@ const Leads = () => {
                         key={lead.id}
                         data-lead-row-id={String(lead.id)}
                         style={{
-                          cursor: "pointer",
+                          cursor: isTravel ? "default" : "pointer",
                         }}
                         className="table-row-hover"
-                        onClick={() => navigate(leadDetailPath(lead))}
-                        title="Open lead detail"
+                        onClick={() => {
+                          // Travel Leads: keep this row on the list for now.
+                          // navigate(leadDetailPath(lead));
+                          if (!isTravel) navigate(leadDetailPath(lead));
+                        }}
+                        title={isTravel ? undefined : "Open lead detail"}
                       >
                         {leadUserColumnDefs.map((column) => (
                           <Fragment key={column.key}>
@@ -7543,16 +7745,17 @@ const Leads = () => {
                           >
                             <button
                               onClick={() => {
+                                if (!lead.phone) {
+                                  notify.error("Phone number is required to make a call.");
+                                  return;
+                                }
                                 if (!callifiedConfigured) {
                                   notify.info(
                                     "Configure Callified in Settings → Integrations to make AI calls",
                                   );
                                   return;
                                 }
-                                handleSingleDial(
-                                  lead,
-                                  lead.callifiedCampaignId,
-                                );
+                                setCallifiedCallLead(lead);
                               }}
                               title={
                                 callifiedConfigured
@@ -7903,6 +8106,7 @@ const Leads = () => {
                     <X size={14} />
                   </button>
                 </div>
+                {(!isGeneric || GENERIC_LEAD_SERVER_SORT_KEYS.has(headerMenuState.key)) && <>
                 <button
                   type="button"
                   onClick={() => {
@@ -7959,6 +8163,7 @@ const Leads = () => {
                   <ChevronDown size={15} />
                   <span>Sort descending Z to A</span>
                 </button>
+                </>}
                 {isGeneric && !headerMenuState.fixedExtra && (
                   <>
                     <button
@@ -8529,7 +8734,7 @@ const Leads = () => {
                 whiteSpace: "nowrap",
               }}
             >
-              Showing {pageStart}-{pageEnd} of {filteredLeads.length}
+              Showing {pageStart}-{pageEnd} of {isGeneric ? leadPagination.total : filteredLeads.length}
             </span>
             <div
               style={{
@@ -8550,9 +8755,13 @@ const Leads = () => {
               </label>
               <select
                 id="leads-page-size"
-                value={leadsPageSize}
+                value={isGeneric ? genericLeadsPageSize : leadsPageSize}
                 onChange={(e) => {
-                  setLeadsPageSize(Number(e.target.value));
+                  if (isGeneric) {
+                    setGenericLeadsPageSize(Number(e.target.value));
+                  } else {
+                    setLeadsPageSize(Number(e.target.value));
+                  }
                   setLeadsPage(0);
                 }}
                 className="input-field"
@@ -8564,7 +8773,7 @@ const Leads = () => {
                 }}
                 aria-label="Rows per page"
               >
-                {LEADS_PAGE_SIZE_OPTIONS.map((size) => (
+                {(isGeneric ? [10, 15, 25, 50, 100] : LEADS_PAGE_SIZE_OPTIONS).map((size) => (
                   <option key={size} value={size}>
                     {size}
                   </option>
@@ -8826,13 +9035,21 @@ const Leads = () => {
                 marginTop: "1rem",
               }}
             >
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => navigate(leadDetailPath(previewLeadCurrent))}
-              >
-                Open full detail
-              </button>
+              {!isTravel && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => navigate(leadDetailPath(previewLeadCurrent))}
+                >
+                  Open full detail
+                </button>
+              )}
+              {/* Travel Leads: the full-detail action is intentionally disabled for now.
+                  <button type="button" className="btn-secondary"
+                    onClick={() => navigate(leadDetailPath(previewLeadCurrent))}>
+                    Open full detail
+                  </button>
+              */}
               <button
                 type="button"
                 className="btn-secondary"
@@ -9236,6 +9453,7 @@ const Leads = () => {
           existingContactId={leadDuplicate.existingContactId}
           matchedBy={leadDuplicate.matchedBy}
           contact={leadDuplicate.contact}
+          allowCreateAnyway={!(isGeneric && leadDuplicate.matchedBy === 'email')}
           creating={creatingDuplicateLead}
           createAnywayLabel="Create separate product lead"
           creatingLabel="Creating separate lead…"

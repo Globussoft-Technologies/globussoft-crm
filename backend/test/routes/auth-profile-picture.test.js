@@ -109,7 +109,11 @@ function makeApp() {
 }
 
 function bearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
-  return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '5m' });
+  return 'Bearer ' + jwt.sign(
+    { userId, tenantId, role, userType: 'STAFF', isOwner: false },
+    JWT_SECRET,
+    { expiresIn: '5m' },
+  );
 }
 
 const PNG_BYTES = Buffer.from([

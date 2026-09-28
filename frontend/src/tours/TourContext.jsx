@@ -331,13 +331,16 @@ function TourOverlay({ tour, stepIndex, onPrevious, onNext, onClose, onSkip, onS
 }
 
 export default function ProductTourProvider({ children }) {
-  const { user, tenant } = useContext(AuthContext) || {};
+  const { user, tenant, subscription } = useContext(AuthContext) || {};
   const permissionState = usePermissions();
   const location = useLocation();
   const navigate = useNavigate();
   const tenantId = tenant?.id;
   const userId = user?.userId || user?.id || user?.email;
-  const isAvailable = !!user && (tenant?.vertical || "generic") === "generic";
+  const subscriptionStatus = String(subscription?.subscriptionStatus || "").toUpperCase();
+  const hasTourSubscription = subscriptionStatus === "ACTIVE"
+    || (subscriptionStatus === "TRIAL" && Number(subscription?.daysRemaining || 0) > 0);
+  const isAvailable = !!user && (tenant?.vertical || "generic") === "generic" && hasTourSubscription;
   const [state, setState] = useState(() => readTourState(tenantId, userId));
   const stateRef = useRef(state);
   const [active, setActive] = useState(null);
@@ -473,7 +476,8 @@ export default function ProductTourProvider({ children }) {
   );
   const effectiveEnabled = isAvailable
     && state.organizationEnabled !== false
-    && state.preferences.enabled !== false;
+    && state.preferences.enabled !== false
+    && permissionState.isReady;
   const canManageOrganization = !!user
     && (user?.isOwner === true || ["ADMIN", "OWNER"].includes(String(user?.role || "").toUpperCase()));
 

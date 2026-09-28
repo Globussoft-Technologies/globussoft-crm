@@ -886,6 +886,25 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
+  const viewParentConsentFile = async (path) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(`/api/travel${path}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to open consent form");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) {
+      notify.error(e?.message || "Failed to open consent form");
+    }
+  };
+
   // Phase 8 — approve / reject a PendingTripRegistration. Uses the
   // /registrations/:rid/approve|reject endpoints from Phase 5. Approve
   // creates a TripParticipant{applicationStatus:"approved"} server-
@@ -937,6 +956,24 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // completed registrations in this single participant surface so conversion
   // into TripParticipant does not make the documents disappear.
   const reviewableRegs = pendingRegs;
+  const consentDocumentsByEmail = new Map(
+    (trip.parentConsentDocuments || []).map((row) => [
+      String(row.parentEmail || "").trim().toLowerCase(),
+      row.document,
+    ]),
+  );
+  const parentDocumentsByEmail = new Map(
+    (trip.parentDocuments || []).map((row) => [
+      String(row.parentEmail || "").trim().toLowerCase(),
+      Array.isArray(row.documents) ? row.documents : [],
+    ]),
+  );
+  const parentDocumentLabel = (documentType) => ({
+    passport: "Passport",
+    aadhaar: "Aadhaar",
+    "consent-form": "Consent form",
+    visa: "Visa document",
+  }[documentType] || "Travel document");
 
   return (
     <div>
@@ -1094,14 +1131,20 @@ function ParticipantsTab({ trip, onChange, notify }) {
           participants so they read as one continuous review surface. */}
       {reviewableRegs.length > 0 && (
         <div style={{ background: "var(--surface-color, #fff)", borderRadius: 14, border: "1px solid var(--border-color)", overflow: "hidden", marginBottom: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)" }} data-testid="pending-registrations-list">
-          <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", background: "rgba(241,245,249,0.55)" }}>
+          <div style={{ ...participantTableHeader, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Registered participants</div>
               <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Registration is automatic. Uploaded documents are available below.</div>
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, color: "#2F7A4D", background: "rgba(47,122,77,0.12)", padding: "6px 10px", borderRadius: 999 }}>{reviewableRegs.length} total</span>
           </div>
-          {reviewableRegs.map((r) => {
+          <div
+            data-testid="registered-participants-scroll-area"
+            role="region"
+            aria-label="Registered participant records"
+            style={participantScrollArea}
+          >
+            {reviewableRegs.map((r) => {
             // Parse uploaded document status from extrasJson — booleans only, no raw keys
             let regDocs = {};
             if (r.extrasJson) {
@@ -1109,8 +1152,16 @@ function ParticipantsTab({ trip, onChange, notify }) {
             }
             const hasPassport = !!regDocs.passport;
             const hasAadhaar = !!regDocs.aadhaar;
-            const hasParentConsent = !!(regDocs.parentConsent || regDocs.consentLetter);
-            const hasMedicalConsent = !!regDocs.medicalConsent;
+            const legacyConsentType = regDocs.parentConsent
+              ? "parentConsent"
+              : regDocs.consentLetter
+                ? "consentLetter"
+                : regDocs.medicalConsent
+                  ? "medicalConsent"
+                  : null;
+            const parentConsentDocument = consentDocumentsByEmail.get(String(r.parentEmail || "").trim().toLowerCase());
+            const parentDocuments = parentDocumentsByEmail.get(String(r.parentEmail || "").trim().toLowerCase()) || [];
+            const hasConsent = Boolean(parentConsentDocument || legacyConsentType);
             const docBtnBase = {
               display: "inline-flex", alignItems: "center", gap: 3,
               fontSize: 12, fontWeight: 600, border: "1px solid transparent",
@@ -1144,6 +1195,18 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   </div>
                   {/* Document upload status — clicking "View" opens a 5-min signed URL */}
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
+                    {parentDocuments.length > 0 ? parentDocuments.map((document) => (
+                      <button
+                        key={document.id}
+                        type="button"
+                        style={docUploaded}
+                        onClick={() => viewParentConsentFile(`/trips/${trip.id}/registrations/${r.id}/parent-documents/${document.id}/file`)}
+                        title={`View uploaded ${parentDocumentLabel(document.documentType)}`}
+                        data-testid={`view-registration-document-${r.id}-${document.id}`}
+                      >
+                        <FileText size={11} aria-hidden /> {parentDocumentLabel(document.documentType)} - View
+                      </button>
+                    )) : <>
                     {requiresPassport && (hasPassport ? (
                       <button
                         type="button"
@@ -1174,30 +1237,24 @@ function ParticipantsTab({ trip, onChange, notify }) {
                         <FileText size={11} aria-hidden /> Aadhaar not uploaded
                       </span>
                     )}
-                    {hasParentConsent ? (
+                    {hasConsent ? (
                       <button
                         type="button"
                         style={docUploaded}
-                        onClick={() => viewRegistrationDoc(r.id, regDocs.parentConsent ? "parentConsent" : "consentLetter")}
-                        title="View uploaded parent consent letter"
+                        onClick={() => parentConsentDocument
+                          ? viewParentConsentFile(`/trips/${trip.id}/registrations/${r.id}/consent-form/file`)
+                          : viewRegistrationDoc(r.id, legacyConsentType)}
+                        title="View uploaded consent form"
                         data-testid={`view-parent-consent-${r.id}`}
                       >
-                        <FileText size={11} aria-hidden /> Parent consent letter - View
+                        <FileText size={11} aria-hidden /> Consent form - View
                       </button>
                     ) : (
                       <span style={docMissing} data-testid={`parent-consent-missing-${r.id}`}>
-                        <FileText size={11} aria-hidden /> Parent consent letter not uploaded
+                        <FileText size={11} aria-hidden /> Consent form not uploaded
                       </span>
                     )}
-                    {hasMedicalConsent ? (
-                      <button type="button" style={docUploaded} onClick={() => viewRegistrationDoc(r.id, "medicalConsent")} title="View uploaded medical consent" data-testid={`view-medical-consent-${r.id}`}>
-                        <FileText size={11} aria-hidden /> Medical consent - View
-                      </button>
-                    ) : (
-                      <span style={docMissing} data-testid={`medical-consent-missing-${r.id}`}>
-                        <FileText size={11} aria-hidden /> Medical consent not uploaded
-                      </span>
-                    )}
+                    </>}
                   </div>
                   {r.reviewNotes && (
                     <div style={{ fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic", marginTop: 2 }}>
@@ -1210,24 +1267,31 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </div>
               </div>
             );
-          })}
+            })}
+          </div>
         </div>
       )}
 
       <div style={{ ...listShell, borderRadius: 14, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)" }}>
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-color)", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+        <div style={participantTableHeader}>
           Participant list
         </div>
-        {(trip.participants || []).length === 0 ? (
-          <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-            <Users size={28} aria-hidden style={{ opacity: 0.4 }} />
-            <div>No participants yet</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
-              Click <em>Add participant</em> above to enrol the first student.
+        <div
+          data-testid="participant-list-scroll-area"
+          role="region"
+          aria-label="Participant records"
+          style={participantScrollArea}
+        >
+          {(trip.participants || []).length === 0 ? (
+            <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <Users size={28} aria-hidden style={{ opacity: 0.4 }} />
+              <div>No participants yet</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                Click <em>Add participant</em> above to enrol the first student.
+              </div>
             </div>
-          </div>
-        ) : (
-          trip.participants.map((p) => {
+          ) : (
+            trip.participants.map((p) => {
             // Default to "pending" so legacy rows (pre-applicationStatus
             // column) read as pending review rather than as an unknown
             // status. The schema default already covers new rows.
@@ -1236,6 +1300,10 @@ function ParticipantsTab({ trip, onChange, notify }) {
             const isRejected = false;
             const busy = decidingId === p.id;
             const isApprovalUiEnabled = Boolean(window.__ENABLE_LEGACY_APPROVAL_UI__);
+            const consentDocument = consentDocumentsByEmail.get(String(p.parentEmail || "").trim().toLowerCase()) || p.consentDocument;
+            const parentDocuments = p.parentDocuments?.length
+              ? p.parentDocuments
+              : parentDocumentsByEmail.get(String(p.parentEmail || "").trim().toLowerCase()) || [];
             return (
               <div key={p.id} style={row}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
@@ -1260,6 +1328,32 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
+                  {parentDocuments.length > 0 ? parentDocuments.map((document) => (
+                    <button
+                      key={document.id}
+                      type="button"
+                      style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)" }}
+                      onClick={() => viewParentConsentFile(`/trips/${trip.id}/participants/${p.id}/parent-documents/${document.id}/file`)}
+                      title={`View uploaded ${parentDocumentLabel(document.documentType)}`}
+                      data-testid={`view-participant-document-${p.id}-${document.id}`}
+                    >
+                      <FileText size={11} aria-hidden /> {parentDocumentLabel(document.documentType)} - View
+                    </button>
+                  )) : consentDocument ? (
+                    <button
+                      type="button"
+                      style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)" }}
+                      onClick={() => viewParentConsentFile(`/trips/${trip.id}/participants/${p.id}/consent-form/file`)}
+                      title="View uploaded consent form"
+                      data-testid={`view-participant-consent-${p.id}`}
+                    >
+                      <FileText size={11} aria-hidden /> Consent form - View
+                    </button>
+                  ) : (
+                    <span style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "var(--text-secondary)", cursor: "default" }} data-testid={`participant-consent-missing-${p.id}`}>
+                      <FileText size={11} aria-hidden /> Consent form not uploaded
+                    </span>
+                  )}
                   {/* Approve/Reject CTAs — visible only when an action makes sense.
                       Pending → both. Approved → "Reject" so a wrongly-approved
                       row can be reversed. Rejected → "Approve" so a re-review
@@ -1301,8 +1395,9 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </div>
               </div>
             );
-          })
-        )}
+            })
+          )}
+        </div>
       </div>
     </div>
   );
@@ -3396,6 +3491,20 @@ const backLink = {
 const listShell = {
   background: "var(--bg-color, #111318)", borderRadius: 8,
   border: "1px solid var(--border-color)", overflow: "hidden",
+};
+const participantScrollArea = {
+  maxHeight: "min(60vh, 520px)",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  scrollbarGutter: "stable",
+};
+const participantTableHeader = {
+  padding: "16px 20px",
+  borderBottom: "1px solid var(--border-color)",
+  background: "var(--surface-hover, var(--subtle-bg))",
+  color: "var(--text-primary)",
+  fontSize: 15,
+  fontWeight: 700,
 };
 const row = {
   padding: "10px 14px", display: "flex", justifyContent: "space-between",

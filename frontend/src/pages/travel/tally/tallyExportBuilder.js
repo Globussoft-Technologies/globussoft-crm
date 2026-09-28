@@ -149,6 +149,8 @@ const voucherRowToXml = (row, index, { educationalMode = false, alterExistingRec
     });
   }
 
+  // Educational Mode remains available for test companies that only accept
+  // first-of-month dates. Regular exports use the source accounting date.
   const safeDate = educationalMode
     ? tallyDate(educationalDate || `${dateOnly(new Date().toISOString()).slice(0, 8)}01`)
     : tallyDate(date) || tallyDate(new Date().toISOString());
@@ -308,6 +310,7 @@ export const buildVoucherRows = ({
   accounts,
   commonRows,
   customers,
+  payments = [],
   payables,
   trips,
   tripTaxes,
@@ -376,17 +379,17 @@ export const buildVoucherRows = ({
 
   customers.forEach((row) => {
     const receivedAmount = toTallyAmount(row.amount);
-    // Paid-only export: the Sales voucher tracks the cumulative amount
-    // collected for the customer. The existing invoice reference remains
-    // stable so a later cumulative payment can alter the same vouchers.
-    const invoiceAmount = receivedAmount;
+    // Post the full invoice so Tally maintains the receivable. The receipt
+    // below remains limited to money actually received and settles this bill.
+    // Keep the received amount as a fallback for legacy rows without totals,
+    // and never let the exported bill be smaller than an already received sum.
+    const invoiceAmount = Math.max(
+      receivedAmount,
+      toTallyAmount(row.invoiceTotal ?? row.invoiceAmount),
+    );
     const tripName = tripCostCentreCode(row);
     const customerName = row.name || "Customer";
     const invoiceReference = row.reference || "";
-    const receiptReference = row.reference
-      ? `REC-${row.reference}`
-      : row.paymentReference || `${customerName}-RECEIPT`;
-
     let salesBillReference = "";
     if (invoiceAmount) {
       salesBillReference = pushVoucherRow({
@@ -403,26 +406,45 @@ export const buildVoucherRows = ({
       });
     }
 
-    if (receivedAmount) {
+    const invoicePayments = payments
+      .filter((payment) => Number(payment.invoiceId) === Number(row.id) && Number(payment.amount) > 0)
+      .sort((a, b) => new Date(a.paidAt || 0).getTime() - new Date(b.paidAt || 0).getTime());
+    const receiptEvents = invoicePayments.length
+      ? invoicePayments.map((payment) => ({
+        amount: toTallyAmount(payment.amount),
+        date: payment.paidAt,
+        reference: `REC-PAY-${payment.paymentId}`,
+        ledger: payment.ledger === "cash" ? cashLedgerName : ledgerName("customerPayment", "Bank Ledger"),
+      }))
+      : receivedAmount
+        ? [{
+          amount: receivedAmount,
+          date: row.transactionDate || master.to || master.from,
+          reference: row.reference ? `REC-${row.reference}` : row.paymentReference || `${customerName}-RECEIPT`,
+          ledger: cashLedgerName,
+        }]
+        : [];
+
+    receiptEvents.forEach((receipt) => {
       if (!salesBillReference) {
-        const error = new Error(`Receipt ${receiptReference} has no linked sales invoice reference for ${customerName}`);
+        const error = new Error(`Receipt ${receipt.reference} has no linked sales invoice reference for ${customerName}`);
         error.code = "TALLY_BILL_NOT_FOUND";
         throw error;
       }
       pushVoucherRow({
         voucherId: "receipt",
-        date: dateOnly(row.transactionDate || master.to || master.from),
-        ledger: cashLedgerName,
+        date: dateOnly(receipt.date || master.to || master.from),
+        ledger: receipt.ledger,
         party: customerName,
         trip: tripName,
-        reference: receiptReference,
-        debit: receivedAmount.toFixed(2),
+        reference: receipt.reference,
+        debit: receipt.amount.toFixed(2),
         narration: `${selectedSubBrandLabel} customer receipt`,
         sourceTag: "Customer receipt",
         billReference: salesBillReference,
         useReference: true,
       });
-    }
+    });
   });
 
   payables.forEach((row) => {
@@ -436,37 +458,35 @@ export const buildVoucherRows = ({
     );
     if (!amount) return;
 
+    const purchaseReference = row.reference || row.paymentReference || `SUP-BILL-${row.id || "UNKNOWN"}`;
     const purchaseBillReference = pushVoucherRow({
       voucherId: "purchase",
-      date: dateOnly(row.dueDate || row.paidDate || master.to || master.from),
+      date: dateOnly(row.transactionDate || row.dueDate || row.paidDate || master.to || master.from),
       ledger: ledgerName("supplierPayable", "Purchase Ledger"),
       party: row.name || row.supplierName || "Supplier",
       trip: tripCostCentreCode(row),
-      reference: row.reference || row.paymentReference || "",
+      reference: purchaseReference,
       debit: amount.toFixed(2),
       narration: `${selectedSubBrandLabel} supplier payable`,
       sourceTag: "Supplier payable",
+      useReference: true,
     });
 
     if (paidAmount > 0) {
-      if (!row.reference) {
-        const paymentReference = row.paymentReference || `${row.id || "SUPPLIER"}-PAY`;
-        const error = new Error(`Payment ${paymentReference} has no linked purchase bill reference for ${row.name || row.supplierName || "Supplier"}`);
-        error.code = "TALLY_BILL_NOT_FOUND";
-        throw error;
-      }
       pushVoucherRow({
         voucherId: "payment",
         date: dateOnly(row.paidAt || row.paidDate || master.to || master.from),
-        ledger: cashLedgerName,
+        ledger: String(row.paymentMode || "").toLowerCase() === "cash"
+          ? cashLedgerName
+          : ledgerName("customerPayment", "Bank Ledger"),
         party: row.name || row.supplierName || "Supplier",
         trip: tripCostCentreCode(row),
-        reference:
-          row.paymentReference || row.reference || `${row.id || "SUPPLIER"}-PAY`,
+        reference: `SUP-PAY-${row.id || "UNKNOWN"}`,
         credit: paidAmount.toFixed(2),
         narration: `${selectedSubBrandLabel} supplier payment`,
         sourceTag: "Supplier payment",
         billReference: purchaseBillReference,
+        useReference: true,
       });
     }
   });
@@ -538,6 +558,7 @@ export const buildVoucherRows = ({
         debit: amount.toFixed(2),
         narration: `${ledger} for ${trip.label}`,
         sourceTag: "Tax journal",
+        useReference: true,
       });
     });
   });

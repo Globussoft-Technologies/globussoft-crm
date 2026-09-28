@@ -63,22 +63,20 @@ const verifyToken = async (req, res, next) => {
       verified.tenantId = 1;
     }
 
-    // RBAC: Extract isOwner and userType from token
-    // These fields are set during login and included in the JWT
-    verified.isOwner = verified.isOwner === true; // Ensure boolean
-    verified.userType = verified.userType || 'STAFF'; // Default to STAFF for backward compat
+    // Older 2FA tokens omitted both identity claims. Recover them from the
+    // signed-in user's live row so existing OWNER sessions retain their
+    // permission bypass until they receive a corrected token at next login.
+    const missingIdentityClaims = verified.isOwner === undefined || verified.userType === undefined;
 
     // Load the live account state so deactivated users and stale session
     // versions stop immediately even if their JWT has not expired yet.
-    // This check is gated on the token carrying a sessionVersion claim.
-    // Legacy tokens minted before this change do not carry sessionVersion,
-    // so they continue to work until their natural expiry; that is the
-    // intended migration path.
-    if (verified.sessionVersion !== undefined && verified.sessionVersion !== null) {
+    // Modern tokens carry sessionVersion. Legacy tokens without identity
+    // claims also need one live lookup for owner recovery.
+    if ((verified.sessionVersion !== undefined && verified.sessionVersion !== null) || missingIdentityClaims) {
       try {
         const liveUser = await prisma.user.findUnique({
           where: { id: verified.userId },
-          select: { deactivatedAt: true, sessionVersion: true },
+          select: { deactivatedAt: true, sessionVersion: true, userType: true },
         });
         if (!liveUser) {
           return unauthorized(res, "Invalid Authentication Token");
@@ -86,16 +84,24 @@ const verifyToken = async (req, res, next) => {
         if (liveUser.deactivatedAt) {
           return unauthorized(res, "Account deactivated. Please contact your administrator.");
         }
-        const tokenVersion = Number(verified.sessionVersion);
-        const liveVersion = Number(liveUser.sessionVersion || 0);
-        if (Number.isFinite(tokenVersion) && tokenVersion !== liveVersion) {
-          return unauthorized(res, "Session expired, please log in again");
+        if (verified.sessionVersion !== undefined && verified.sessionVersion !== null) {
+          const tokenVersion = Number(verified.sessionVersion);
+          const liveVersion = Number(liveUser.sessionVersion || 0);
+          if (Number.isFinite(tokenVersion) && tokenVersion !== liveVersion) {
+            return unauthorized(res, "Session expired, please log in again");
+          }
+        }
+        if (missingIdentityClaims) {
+          verified.userType = liveUser.userType || 'STAFF';
+          verified.isOwner = liveUser.userType === 'OWNER';
         }
       } catch (dbErr) {
         console.error("[auth] session-state lookup failed:", dbErr && dbErr.message);
         return unauthorized(res, "Authentication required");
       }
     }
+    verified.isOwner = verified.isOwner === true;
+    verified.userType = verified.userType || 'STAFF';
 
     // Block awaiting2FA temp tokens from accessing protected resources
     if (verified.awaiting2FA === true) {

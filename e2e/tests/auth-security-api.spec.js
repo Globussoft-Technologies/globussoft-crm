@@ -126,6 +126,25 @@ test.describe('Auth/Security — login rate limit wired (#191)', () => {
   });
 });
 
+test.describe('Auth registration preflight — organization theme scope', () => {
+  test('POST /api/auth/check-organization-name accepts an explicit CRM vertical', async ({ request }) => {
+    const uniqueName = `e2e-org-preflight-${Date.now()}-${process.pid}`;
+    const res = await request.post(`${API}/auth/check-organization-name`, {
+      data: { name: uniqueName, registrationVertical: 'generic' },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+
+    expect(res.status(), `body: ${await res.text()}`).toBe(200);
+    expect(await res.json()).toEqual({ exists: false });
+    const headers = res.headers();
+    expect(
+      headers['ratelimit-policy'] || headers['ratelimit-limit'] || headers['x-ratelimit-limit'],
+      'Registration preflight rate limiter is not wired',
+    ).toBeTruthy();
+  });
+});
+
 // ── #169: notifications broadcast requires ADMIN ─────────────────────
 
 test.describe('Auth/Security — broadcast endpoint admin-only (#169)', () => {

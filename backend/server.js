@@ -189,6 +189,26 @@ const ALLOWED_ORIGINS = [
         .filter(Boolean)
     : []),
 ];
+// Public landing pages can be copied to a customer's domain over SFTP. Their
+// forms and availability gate call the CRM's public GET/POST endpoints from
+// that domain. These endpoints are already anonymous by design, so answer
+// their CORS preflights for the requesting origin without widening any
+// authenticated API surface.
+app.use((req, res, next) => {
+  const publicPageRuntimePath = /^\/api\/pages\/[^/]+\/(json|track|submit|registration-draft|registration-documents|payment-order|payment-status)\/?$/.test(req.path);
+  const publicLandingPath = req.path.startsWith("/p/")
+    || publicPageRuntimePath
+    || req.path.startsWith("/api/landing-pages/public/")
+    || req.path.startsWith("/api/travel/meeting-forms/public/");
+  const origin = req.headers.origin;
+  if (!publicLandingPath || !origin) return next();
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, X-GBS-Tracking, Idempotency-Key");
+  if (req.method === "OPTIONS") return res.status(204).end();
+  return next();
+});
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -734,6 +754,7 @@ const landingSitesRoutes = require("./routes/landing_sites");
 const { renderPage } = require("./services/landingPageRenderer");
 const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
+const { router: travelPromotionalWebsiteRoutes } = require("./routes/travel_promotional_website");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
 const userPreferencesRoutes = require("./routes/user_preferences");
 const tourProgressRoutes = require("./routes/tour_progress");
@@ -851,6 +872,7 @@ const callifiedRoutes = require("./routes/callified");
 // wrapper in the cred-stub series (4/4 — adsgpt, ratehawk, callified, this).
 const bookingExpediaRoutes = require("./routes/booking_expedia");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
+const travelMeetingFormsRoutes = require("./routes/travel_meeting_forms");
 // Brochure Engine — wraps the vendored agentic-orchcrm engine behind the
 // CRM's JWT + tenant guard. Subprocess-based bridge (see
 // services/brochureEngineBridge.js) keeps the ESM/CJS boundary clean.
@@ -994,6 +1016,7 @@ app.use("/api", (req, res, next) => {
     "/auth/customer/register",
     "/auth/email-otp",
     "/auth/check-email",
+    "/auth/check-organization-name",
     "/auth/public/tenants",
     "/auth/public/lead-inquiry",
     "/auth/forgot-password",
@@ -1053,6 +1076,7 @@ app.use("/api", (req, res, next) => {
     "/wellness/portal",
     "/attendance/biometric/webhook",
     "/travel/microsites/public",
+    "/travel/meeting-forms/public",
     "/travel/diagnostics/public",
     "/diagnostic-pages/public",
     "/travel/itineraries/public",
@@ -1320,6 +1344,7 @@ app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
 app.use("/api/landing-sites", landingSitesRoutes);
 app.use("/api/tenants", tenantsRoutes);
+app.use("/api/travel/promotional-website", travelPromotionalWebsiteRoutes);
 // /api/tenant-settings — operator-writable cap-override surface backing the
 // per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted
 // next to /api/tenants because the URL space + audience are sibling concerns.
@@ -1517,6 +1542,7 @@ app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/callified", callifiedRoutes);
 app.use("/api/booking-expedia", bookingExpediaRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
+app.use("/api/travel", travelMeetingFormsRoutes);
 // Brochure Engine — paths internally start with /brochures; route file owns
 // verifyToken + requireTravelTenant + requirePermission per endpoint.
 app.use("/api/travel", travelBrochuresRoutes);
@@ -1818,14 +1844,31 @@ app.use("/embed", async (req, res, next) => {
       }
     }
   }
+  // Meeting Forms use an isolated public form key rather than the generic
+  // glbs_ API key. Resolve it here so the existing per-tenant iframe CSP
+  // allowlist also protects the meeting widget.
+  if (!req.user && req.query && typeof req.query.form === "string") {
+    try {
+      const prismaClient = require("./lib/prisma");
+      const meetingForm = await prismaClient.travelMeetingForm.findFirst({
+        where: { publicKey: req.query.form, isActive: true },
+        select: { tenantId: true },
+      });
+      if (meetingForm) {
+        req.user = { tenantId: meetingForm.tenantId, userId: null };
+      }
+    } catch (e) {
+      console.warn("[embed] meeting form tenant resolution failed:", e.message);
+    }
+  }
   // S66 — resolve per-tenant allowlist from req.user.tenantId. The S129
   // block above is what populates req.user.tenantId on the partner-iframe
   // `?key=` path; this block reads it (whether S129 set it or upstream
   // auth set it) and falls through to wildcard when no tenant is resolved.
-  let allowList = ["*"];
+  let allowList = Array.isArray(req.meetingFormEmbedAllowList) ? req.meetingFormEmbedAllowList : ["*"];
   try {
     const tenantId = req.user && req.user.tenantId;
-    if (tenantId) {
+    if (tenantId && !req.meetingFormEmbedAllowList) {
       // Lazy-require the prisma singleton — the canonical const lives
       // further down in the file (line ~1117 below); this mount runs
       // earlier in the middleware stack than that declaration, but
@@ -1889,6 +1932,28 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
     });
   } catch (e) {
     console.error("[embed] gate failed:", e.message);
+    return next();
+  }
+});
+
+// Travel Meeting Forms widget. The public form key resolves the tenant above,
+// which means the normal per-tenant embed allowlist controls who may frame it.
+app.get("/embed/meeting-form.html", async (req, res, next) => {
+  try {
+    const publicKey = req.query.form ? String(req.query.form) : "";
+    if (!/^tmcmf_[A-Za-z0-9_-]{20,}$/.test(publicKey)) {
+      return res.status(404).type("text/plain").send("Meeting form not found");
+    }
+    const prismaClient = require("./lib/prisma");
+    const form = await prismaClient.travelMeetingForm.findFirst({
+      where: { publicKey, isActive: true },
+      select: { id: true },
+    });
+    if (!form) return res.status(404).type("text/plain").send("Meeting form not found");
+    const embedPath = path.join(__dirname, "..", "frontend", "public", "embed", "meeting-form.html");
+    return res.sendFile(embedPath, (err) => { if (err) next(); });
+  } catch (e) {
+    console.error("[embed] meeting form gate failed:", e.message);
     return next();
   }
 });
@@ -2105,35 +2170,23 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
+
+// RBAC is part of the request-serving contract: the first authenticated
+// request can ask for /auth/me/permissions immediately after the server
+// becomes reachable. Keep this reconciliation ahead of listen() so a fresh
+// login cannot cache a partially-provisioned permission set and render a
+// permanently incomplete sidebar until the next login.
+const { runRbacBootSync } = require("./lib/rbacBootSync");
+
+const runRbacBootBeforeTraffic = () => {
+  if (process.env.DISABLE_RBAC_BOOT_SYNC === "1") return Promise.resolve(null);
+  return runRbacBootSync();
+};
+
+const startHttpServer = () => server.listen(PORT, () => {
   console.log(
     `[Backend] Enterprise Express Server running securely on port ${PORT}`,
   );
-
-  // Auto-heal RBAC state on boot so requiredPermission-gated UI (e.g. the
-  // "Roles" sidebar entry) appears consistently across local / dev / prod
-  // without manual seed-rbac-only.js runs. Fire-and-forget: a DB hiccup must
-  // never crash the server. Set DISABLE_RBAC_BOOT_SYNC=1 to opt out.
-  const { ensureRbacOnBoot } = require("./scripts/ensureRbacOnBoot");
-  ensureRbacOnBoot()
-    .then((stats) => {
-      if (!stats) return;
-      const wrote =
-        stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
-      if (wrote > 0) {
-        console.log(
-          `[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`,
-        );
-      } else {
-        console.log("[rbac-boot] RBAC state already compatible — no changes.");
-      }
-    })
-    .catch((err) =>
-      console.error(
-        "[rbac-boot] non-fatal error:",
-        err && err.message ? err.message : err,
-      ),
-    );
 
   // Reconcile User.wellnessRole against the canonical RBAC role on every
   // wellness-tenant user. Heals any drift where a user holds a DOCTOR /
@@ -2241,6 +2294,27 @@ server.listen(PORT, () => {
       );
   }
 });
+
+// Complete the Generic-only stage-assignment backfill before accepting HTTP
+// traffic. This prevents a newly deployed process from briefly returning an
+// empty board for legacy Generic pipelines. Fail-open keeps older local
+// databases bootable until `prisma generate` and `prisma db push` run.
+const { ensureGenericPipelineStageAssignments } = require("./scripts/ensureGenericPipelineStageAssignments");
+runRbacBootBeforeTraffic()
+  .then(() => ensureGenericPipelineStageAssignments())
+  .then((stats) => {
+    if (!stats || stats.assignmentsCreated === 0) return;
+    console.log(
+      `[generic-stage-boot] backfilled ${stats.assignmentsCreated} assignment(s) across ${stats.pipelines} Generic pipeline(s)`,
+    );
+  })
+  .catch((err) =>
+    console.error(
+      "[generic-stage-boot] non-fatal error:",
+      err && err.message ? err.message : err,
+    ),
+  )
+  .finally(startHttpServer);
 
 // Graceful shutdown — required for c8 / V8 line coverage to flush its temp
 // files (V8 only dumps coverage on clean process exit; SIGTERM-without-handler

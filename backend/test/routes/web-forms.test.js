@@ -12,6 +12,9 @@ import prisma from '../../lib/prisma.js';
 
 
 const requireCJS = createRequire(import.meta.url);
+const fs = requireCJS('node:fs');
+const axios = requireCJS('axios');
+axios.post = vi.fn();
 
 const authMw = requireCJS('../../middleware/auth');
 
@@ -89,6 +92,7 @@ prisma.user.findFirst = vi.fn();
 
 const webFormsRouter = requireCJS('../../routes/web_forms');
 const { buildEmbedCode } = webFormsRouter;
+const { normalizeFields, isConditionalFieldVisible } = webFormsRouter;
 prisma.webFormSubmission.count = vi.fn();
 
 
@@ -159,6 +163,7 @@ beforeEach(() => {
   prisma.user.findFirst.mockResolvedValue(null);
 
   emailSender.sendEmail.mockClear();
+  axios.post.mockReset();
   s3Service.uploadImage.mockReset();
   s3Service.uploadImage.mockResolvedValue('https://objectstorage.example.com/n/ns/b/forms/o/travel/web-forms/11/logos/logo.png');
   s3Service.isOciUrl.mockReset();
@@ -175,6 +180,113 @@ describe('web-form embed sizing', () => {
     expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
+  });
+});
+
+describe('Generic conditional fields', () => {
+  const configuredFields = [
+    {
+      id: 'interest',
+      sourceKind: 'custom',
+      sourceKey: 'interest',
+      fieldType: 'dropdown',
+      options: ['WordPress', 'Shopify', 'SEO'],
+      label: 'Are you interested in?',
+    },
+    {
+      id: 'shopify-url',
+      sourceKind: 'custom',
+      sourceKey: 'shopifyUrl',
+      fieldType: 'url',
+      label: 'Shopify Store URL',
+      showWhen: { fieldId: 'interest', fieldKey: 'interest', value: 'Shopify' },
+    },
+  ];
+
+  test('preserves a valid parent and trigger value for Generic forms', () => {
+    const fields = normalizeFields(JSON.stringify(configuredFields), 'generic');
+
+    expect(fields[1].showWhen).toEqual({
+      fieldId: 'interest',
+      fieldKey: 'interest',
+      parentQuestion: 'Are you interested in?',
+      value: 'Shopify',
+    });
+    expect(isConditionalFieldVisible(fields[1], fields, { interest: 'Shopify' })).toBe(true);
+    expect(isConditionalFieldVisible(fields[1], fields, { interest: 'WordPress' })).toBe(false);
+  });
+
+  test('supports multiple children and chained child conditions', () => {
+    const fields = normalizeFields(JSON.stringify([
+      ...configuredFields,
+      {
+        id: 'shopify-plan',
+        sourceKind: 'custom',
+        sourceKey: 'shopifyPlan',
+        fieldType: 'dropdown',
+        options: ['Basic', 'Advanced'],
+        showWhen: { fieldId: 'shopify-url', fieldKey: 'shopifyUrl', value: 'https://shop.example' },
+      },
+    ]), 'generic');
+
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'Shopify', shopifyUrl: 'https://shop.example' })).toBe(true);
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'Shopify', shopifyUrl: 'https://other.example' })).toBe(false);
+  });
+
+  test('requires every ancestor in a nested conditional branch to be visible', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'interest', sourceKind: 'custom', sourceKey: 'interest', fieldType: 'dropdown', options: ['Shopify', 'SEO'] },
+      { id: 'store', sourceKind: 'custom', sourceKey: 'store', fieldType: 'text', showWhen: { fieldId: 'interest', value: 'Shopify' } },
+      { id: 'plan', sourceKind: 'custom', sourceKey: 'plan', fieldType: 'text', showWhen: { fieldId: 'store', value: 'shop.example' } },
+    ]), 'generic');
+
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'Shopify', store: 'shop.example' })).toBe(true);
+    expect(isConditionalFieldVisible(fields[2], fields, { interest: 'SEO', store: 'shop.example' })).toBe(false);
+  });
+
+  test('clears an unlinked typed parent question', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'interest', sourceKind: 'custom', sourceKey: 'interest', fieldType: 'dropdown', label: 'What service do you need?', options: ['SEO', 'Shopify'] },
+      { id: 'details', sourceKind: 'custom', sourceKey: 'details', fieldType: 'text', label: 'Shopify details', showWhen: { parentQuestion: 'What service do you need?', value: 'Shopify' } },
+    ]), 'generic');
+
+    expect(fields[1].showWhen).toBeNull();
+  });
+
+  test('keeps conditional flows separate from contact and lead fields', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name' },
+      { id: 'details', sourceKind: 'custom', sourceKey: 'details', fieldType: 'text', showWhen: { fieldId: 'name', value: 'WordPress' } },
+    ]), 'generic');
+
+    expect(fields[1].showWhen).toBeNull();
+  });
+
+  test('clears self, deleted, invalid-choice, and non-Generic rules safely', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'parent', sourceKind: 'custom', sourceKey: 'parent', fieldType: 'dropdown', options: ['Yes', 'No'] },
+      { id: 'self', sourceKind: 'custom', sourceKey: 'self', fieldType: 'text', showWhen: { fieldId: 'self', value: 'x' } },
+      { id: 'deleted', sourceKind: 'custom', sourceKey: 'deleted', fieldType: 'text', showWhen: { fieldId: 'missing', value: 'x' } },
+      { id: 'invalid', sourceKind: 'custom', sourceKey: 'invalid', fieldType: 'text', showWhen: { fieldId: 'parent', value: 'Maybe' } },
+    ]), 'generic');
+    const travelFields = normalizeFields(JSON.stringify(configuredFields), 'travel');
+
+    expect(fields.slice(1).every((field) => field.showWhen === null)).toBe(true);
+    expect(travelFields[1].showWhen).toBeNull();
+  });
+
+  test('clears cyclic nested rules while preserving valid chains', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'root', sourceKind: 'custom', sourceKey: 'root', fieldType: 'dropdown', options: ['Yes', 'No'] },
+      { id: 'child', sourceKind: 'custom', sourceKey: 'child', fieldType: 'dropdown', options: ['Next'], showWhen: { fieldId: 'root', value: 'Yes' } },
+      { id: 'grandchild', sourceKind: 'custom', sourceKey: 'grandchild', fieldType: 'text', showWhen: { fieldId: 'child', value: 'Next' } },
+      { id: 'cycle-a', sourceKind: 'custom', sourceKey: 'cycleA', fieldType: 'text', showWhen: { fieldId: 'cycle-b', value: 'x' } },
+      { id: 'cycle-b', sourceKind: 'custom', sourceKey: 'cycleB', fieldType: 'text', showWhen: { fieldId: 'cycle-a', value: 'y' } },
+    ]), 'generic');
+
+    expect(fields[1].showWhen.fieldId).toBe('root');
+    expect(fields[2].showWhen.fieldId).toBe('child');
+    expect([fields[3].showWhen, fields[4].showWhen].filter(Boolean)).toHaveLength(0);
   });
 });
 
@@ -415,6 +527,11 @@ describe('PUT /api/forms/:id', () => {
       submitButtonLabel: 'Send request',
       successMessage: 'Received',
       optInEnabled: true,
+      multiStepEnabled: true,
+      steps: [
+        { id: 'contact-details', title: 'Contact details', description: 'Tell us about yourself' },
+        { id: 'requirements', title: 'Requirements', description: '' },
+      ],
     };
 
     prisma.webForm.findFirst.mockResolvedValueOnce({
@@ -459,7 +576,11 @@ describe('PUT /api/forms/:id', () => {
       isActive: false,
       fields: expect.arrayContaining([expect.objectContaining({ label: 'Full name' })]),
       style: expect.objectContaining({ buttonColor: '#99B177' }),
-      settings: expect.objectContaining({ submitButtonLabel: 'Send request' }),
+      settings: expect.objectContaining({
+        submitButtonLabel: 'Send request',
+        multiStepEnabled: true,
+        steps: expect.arrayContaining([expect.objectContaining({ id: 'requirements', title: 'Requirements' })]),
+      }),
     }));
     expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
@@ -468,7 +589,7 @@ describe('PUT /api/forms/:id', () => {
         isActive: false,
         fieldsJson: expect.stringContaining('Full name'),
         styleJson: expect.stringContaining('#99B177'),
-        settingsJson: expect.stringContaining('Send request'),
+        settingsJson: expect.stringContaining('Requirements'),
       }),
     }));
   });
@@ -610,6 +731,29 @@ describe('GET /api/forms/public/:slug', () => {
 
     expect(res.body.embedCode).toContain('/embed/web-form.html?id=1');
 
+    // Existing forms that predate the setting remain branded by default.
+    expect(res.body.settings.showPoweredBy).toBe(true);
+
+  });
+
+  test('preserves an explicit powered-by opt-out in the public payload', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 2,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Unbranded form',
+      slug: 'unbranded-form',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ showPoweredBy: false }),
+    });
+
+    const res = await request(makeApp()).get('/api/forms/public/unbranded-form');
+
+    expect(res.status).toBe(200);
+    expect(res.body.settings.showPoweredBy).toBe(false);
   });
 
   test('resolves the active form by stable numeric id', async () => {
@@ -656,6 +800,193 @@ describe('GET /api/forms/public/:slug', () => {
 
 
 describe('POST /api/forms/public/:slug/submit', () => {
+
+  function mockCaptchaForm({ withFile = false } = {}) {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 83,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Protected form',
+      slug: 'protected-form',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        ...(withFile
+          ? [{ id: 'resume', sourceKind: 'custom', sourceKey: 'resume', fieldType: 'file', label: 'Resume', required: false, hidden: false, width: 'full', options: [] }]
+          : []),
+      ]),
+      styleJson: '{}',
+      settingsJson: JSON.stringify({ recaptchaEnabled: true }),
+    });
+    prisma.tenantSetting.findUnique.mockImplementation((params) => (
+      params.where?.tenantId_key?.key === 'generic.webForm.recaptcha.secretKey'
+        ? { value: 'server-only-secret' }
+        : null
+    ));
+  }
+
+  test('verifies CAPTCHA in the request body and never puts the secret in the URL', async () => {
+    mockCaptchaForm();
+    axios.post.mockResolvedValue({ data: { success: true } });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/protected-form/submit?scope=generic')
+      .field('name', 'Protected Customer')
+      .field('recaptchaToken', 'browser-token');
+
+    expect(response.status).toBe(201);
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://www.google.com/recaptcha/api/siteverify',
+      expect.stringContaining('secret=server-only-secret'),
+      expect.objectContaining({
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 8000,
+      }),
+    );
+    expect(axios.post.mock.calls[0][0]).not.toContain('server-only-secret');
+  });
+
+  test('rejects invalid CAPTCHA before persisting uploaded files or CRM records', async () => {
+    mockCaptchaForm({ withFile: true });
+    axios.post.mockResolvedValue({ data: { success: false } });
+    const writeFile = vi.spyOn(fs.promises, 'writeFile');
+
+    try {
+      const response = await request(makeApp())
+        .post('/api/forms/public/protected-form/submit?scope=generic')
+        .field('name', 'Rejected Customer')
+        .field('recaptchaToken', 'invalid-token')
+        .attach('resume', Buffer.from('not persisted'), {
+          filename: 'resume.txt',
+          contentType: 'text/plain',
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({ code: 'CAPTCHA_FAILED' });
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(prisma.contact.create).not.toHaveBeenCalled();
+      expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
+    } finally {
+      writeFile.mockRestore();
+    }
+  });
+
+  test('rejects more than five attachments before loading the public form', async () => {
+    let pending = request(makeApp())
+      .post('/api/forms/public/any-form/submit?scope=generic');
+    for (let index = 0; index < 6; index += 1) {
+      pending = pending.attach(`file${index}`, Buffer.from(String(index)), {
+        filename: `file-${index}.txt`,
+        contentType: 'text/plain',
+      });
+    }
+    const response = await pending;
+
+    expect(response.status).toBe(413);
+    expect(response.body).toMatchObject({ code: 'UPLOAD_LIMIT_EXCEEDED' });
+    expect(prisma.webForm.findFirst).not.toHaveBeenCalled();
+  });
+
+  function mockGenericPhoneForm() {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 82,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-phone', sourceKind: 'contact', sourceKey: 'phone', fieldType: 'text', label: 'Phone', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: '{}',
+    });
+  }
+
+  test('accepts a complete E.164 Generic phone without phoneCountry for legacy clients', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Generic Customer')
+      .field('phone', '+919876543210');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ phone: '+919876543210' }),
+    }));
+  });
+
+  test('accepts a valid 8-digit Singapore number from the Generic country selector', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Singapore Customer')
+      .field('phoneCountry', '+65')
+      .field('phone', '61234567');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ phone: '+6561234567' }),
+    }));
+  });
+
+  test('rejects a Generic country-selector phone exceeding the E.164 total-length limit', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid Phone Length')
+      .field('phoneCountry', '+91')
+      .field('phone', '98765432123456');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { phone: expect.any(String) },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a Generic country-selector phone below the E.164 total-length minimum', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid Short Phone')
+      .field('phoneCountry', '+91')
+      .field('phone', '12345');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { phone: expect.any(String) },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a Generic phone whose E.164 prefix does not match phoneCountry', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Wrong Prefix')
+      .field('phoneCountry', '+1')
+      .field('phone', '+6561234567');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { phone: expect.any(String) },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
 
   test('creates travel submissions with travel scope and inbound web-form source', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
@@ -736,6 +1067,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
       .post('/api/forms/public/contact-us/submit')
 
+      .set('X-GBS-Tracking', JSON.stringify({ pageUrl: 'https://example.com/pricing', utm_source: 'newsletter' }))
+
       .field('name', 'Jane Doe')
 
       .field('interest', 'A')
@@ -766,6 +1099,12 @@ describe('POST /api/forms/public/:slug/submit', () => {
     const submissionArg = prisma.webFormSubmission.create.mock.calls[0][0].data;
 
     expect(submissionArg.payloadJson).toContain('"interest":["A","B"]');
+    expect(JSON.parse(submissionArg.payloadJson)._meta.tracking).toEqual(expect.objectContaining({
+      pageUrl: 'https://example.com/pricing',
+      utm_source: 'newsletter',
+      formName: 'Contact Us',
+      formId: '1',
+    }));
 
     expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
 

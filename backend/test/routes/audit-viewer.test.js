@@ -68,7 +68,7 @@ function makeApp() {
 
 function tokenFor(role) {
   return jwt.sign(
-    { userId: 1, tenantId: 1, role, email: `${role.toLowerCase()}@test.local` },
+    { userId: 1, tenantId: 1, role, userType: 'STAFF', isOwner: false, email: `${role.toLowerCase()}@test.local` },
     JWT_SECRET,
     { expiresIn: '1h' },
   );

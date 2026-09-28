@@ -206,6 +206,7 @@ function renderSidebar({
   logoUrl = null,
   brandColor = null,
   subBrandAccess = null,
+  legacySubBrandAccessString = false,
   activeSubBrand = null,
   accessiblePages = null, // null → empty catalog (back-compat default)
   permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
@@ -230,7 +231,14 @@ function renderSidebar({
     role,
     userType,
     wellnessRole,
-    subBrandAccess: subBrandAccess === null ? null : JSON.stringify(subBrandAccess),
+    // Login and /auth/me return the effective scope as an array. The optional
+    // legacy shape pins backwards compatibility for sessions persisted before
+    // the API response was normalized.
+    subBrandAccess: subBrandAccess === null
+      ? null
+      : legacySubBrandAccessString
+        ? JSON.stringify(subBrandAccess)
+        : subBrandAccess,
   };
   const tenant = { name: tenantName, vertical, logoUrl, brandColor };
   if (activeSubBrand) window.sessionStorage.setItem('travel.activeSubBrand', activeSubBrand);
@@ -630,6 +638,17 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByLabelText('Switch active sub-brand')).toBeNull();
     });
 
+    it('keeps accepting a legacy JSON-string sub-brand scope', () => {
+      renderSidebar({
+        vertical: 'travel',
+        role: 'MANAGER',
+        subBrandAccess: ['tmc'],
+        legacySubBrandAccessString: true,
+      });
+      expect(screen.getByTestId('travel-sub-brand-sole').textContent).toBe('TMC');
+      expect(screen.queryByText('Travel Stall')).toBeNull();
+    });
+
     it('shows a read-only sub-brand chip (no dropdown) for a single-brand user', () => {
       renderSidebar({
         vertical: 'travel',
@@ -949,22 +968,16 @@ describe('Sidebar — load-bearing render surface', () => {
       }).not.toThrow();
     });
 
-    it('hides switcher when subBrandAccess is empty array (parsed back to null = all-visible)', () => {
-      // An empty-array subBrandAccess on a NON-admin parses back to null per
-      // the SUT's `arr.length === 0` short-circuit, which means "no
-      // restriction" — switcher renders with all 4 options.
+    it('treats an explicit empty sub-brand scope as deny-all', () => {
       renderSidebar({
         vertical: 'travel',
         role: 'MANAGER',
         subBrandAccess: [],
       });
-      const switcher = screen.getByLabelText('Switch active sub-brand');
-      expect(switcher).toBeTruthy();
-      fireEvent.click(switcher);
-      const labels = screen.getAllByRole('option').map((o) => o.textContent);
-      // 4 sub-brands + the "All" placeholder = 5 options total.
-      expect(labels.length).toBe(5);
-      expect(labels.some((l) => l.includes('Visa Sure'))).toBe(true);
+      expect(screen.queryByLabelText('Switch active sub-brand')).toBeNull();
+      expect(screen.queryByTestId('travel-sub-brand-sole')).toBeNull();
+      expect(screen.queryByText('TMC Trips')).toBeNull();
+      expect(screen.queryByText('Travel Stall')).toBeNull();
     });
   });
 

@@ -6,6 +6,6 @@ This application runs on the same Windows computer as Tally and makes an outboun
 2. Copy `config.example.json` to `config.json` and paste the returned URL, connector ID, and one-time token.
 3. In Tally, open the required company and enable the HTTP/XML service on port 9000.
 4. For development, run `npm install` and `npm start`.
-5. For Windows packaging, run `npm run build:windows`, place `config.json` beside the generated EXE, and run `install-startup.ps1` as Administrator.
+5. For Windows packaging, run `npm run build:windows`, place `config.json` beside the generated EXE, and run `install-startup.ps1` as Administrator. The build intentionally packages JavaScript source instead of V8 bytecode so the Windows executable can be built safely on the Linux deployment host.
 
 Never change `localTallyUrl` to a public or remote address. The connector rejects non-local addresses.

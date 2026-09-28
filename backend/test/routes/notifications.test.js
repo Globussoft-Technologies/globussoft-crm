@@ -115,7 +115,11 @@ const requireCJS = createRequire(import.meta.url);
 const { JWT_SECRET } = requireCJS('../../config/secrets');
 
 function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
-  return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '1h' });
+  return 'Bearer ' + jwt.sign(
+    { userId, tenantId, role, userType: 'STAFF', isOwner: false },
+    JWT_SECRET,
+    { expiresIn: '1h' },
+  );
 }
 
 const notificationsRouter = requireCJS('../../routes/notifications');

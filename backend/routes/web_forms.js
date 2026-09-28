@@ -14,10 +14,16 @@ const { sendEmail } = require("../lib/emailSender");
 const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const s3Service = require("../services/s3Service");
+const { sendGenericWebFormWhatsApp } = require("../lib/genericWebFormWhatsApp");
+const axios = require("axios");
+const { DEFAULT_PERSONAL_DOMAINS, cleanDomains, validateEmail } = require("../lib/webFormEmailValidation");
 
 const router = express.Router();
 
 const uploadDir = path.join(__dirname, "..", "uploads", "web-forms");
+const MAX_UPLOAD_FILES = 5;
+const MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_TOTAL_BYTES = 20 * 1024 * 1024;
 
 try {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -68,20 +74,16 @@ const MIME_TO_EXT = {
 };
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
-
-    filename: (_req, file, cb) => {
-      const ext =
-        MIME_TO_EXT[String(file.mimetype || "").toLowerCase()] || ".bin";
-
-      const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-      cb(null, `${stamp}${ext}`);
-    },
-  }),
-
-  limits: { fileSize: 10 * 1024 * 1024 },
+  // Keep files in bounded memory until CAPTCHA and field validation pass.
+  // Disk storage here would let rejected public submissions leave files
+  // behind before the route can verify the CAPTCHA token.
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_UPLOAD_FILE_BYTES,
+    files: MAX_UPLOAD_FILES,
+    fields: 100,
+    parts: 105,
+  },
 
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_FILE_MIMES.has(String(file.mimetype || "").toLowerCase()))
@@ -90,6 +92,27 @@ const upload = multer({
     return cb(new Error("Unsupported attachment type"));
   },
 });
+
+function storedUploadFilename(file) {
+  const ext = MIME_TO_EXT[String(file?.mimetype || "").toLowerCase()] || ".bin";
+  const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${stamp}${ext}`;
+}
+
+function uploadAnyOrReject(req, res, next) {
+  upload.any()(req, res, (error) => {
+    if (!error) return next();
+    const tooLarge = error.code === "LIMIT_FILE_SIZE"
+      || error.code === "LIMIT_FILE_COUNT"
+      || error.code === "LIMIT_PART_COUNT";
+    return res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge
+        ? "Upload limit exceeded (maximum 5 files, 10 MB each)."
+        : (error.message || "Invalid attachment"),
+      code: tooLarge ? "UPLOAD_LIMIT_EXCEEDED" : "INVALID_ATTACHMENT",
+    });
+  });
+}
 
 const logoUpload = multer({
   storage: multer.memoryStorage(),
@@ -115,6 +138,7 @@ function uploadLogoOrReject(req, res, next) {
 
 const FIELD_TYPES = new Set([
   "text",
+  "email",
   "textarea",
   "number",
   "dropdown",
@@ -197,6 +221,13 @@ const LEAD_CUSTOM_TO_CONTACT = {
 };
 const FORM_SCOPES = new Set(["generic", "travel"]);
 
+function notificationValue(value) {
+  if (Array.isArray(value)) return value.map((item) => textOr(item)).filter(Boolean).join(", ");
+  if (value == null) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 function normalizeScope(raw) {
   const scope = textOr(raw, "generic").toLowerCase();
 
@@ -249,6 +280,29 @@ function textOr(raw, fallback = "") {
   const value = String(raw == null ? "" : raw).trim();
 
   return value || fallback;
+}
+
+function normalizeGenericPhone(phone, phoneCountry) {
+  const rawPhone = String(phone || "").trim();
+  const countryDigits = String(phoneCountry || "").replace(/\D/g, "");
+  let normalized = rawPhone.replace(/[\s().-]/g, "");
+
+  if (countryDigits) {
+    if (!/^[1-9]\d{0,2}$/.test(countryDigits)) return null;
+    const countryPrefix = `+${countryDigits}`;
+    if (!normalized.startsWith("+")) {
+      const nationalDigits = normalized.replace(/\D/g, "");
+      normalized = `${countryPrefix}${nationalDigits}`;
+    } else {
+      if (!normalized.startsWith(countryPrefix)) return null;
+    }
+  }
+
+  // Preserve the public endpoint's existing E.164-compatible contract:
+  // callers may submit a complete international number without the optional
+  // phoneCountry field. The embedded Generic form supplies phoneCountry and
+  // is additionally checked for a matching prefix above.
+  return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : null;
 }
 
 function parseJson(raw, fallback) {
@@ -317,7 +371,7 @@ function defaultFields() {
 
       sourceKey: "email",
 
-      fieldType: "text",
+      fieldType: "email",
 
       label: "Email",
 
@@ -375,6 +429,50 @@ function defaultStyle() {
     accentColor: "#12344D",
 
     logoUrl: "",
+    fontSize: 16,
+    fontWeight: 400,
+    labelFontSize: 13,
+    placeholderFontSize: 14,
+    errorFontSize: 13,
+    successFontSize: 16,
+    fieldWidth: 100,
+    fieldHeight: 44,
+    fieldBorderWidth: 1,
+    fieldBorderRadius: 12,
+    fieldBorderColor: "#D8DDEC",
+    fieldFocusBorderColor: "#6366F1",
+    fieldBackgroundColor: "#FFFFFF",
+    placeholderColor: "#6B7280",
+    fieldTextColor: "#111827",
+    layoutColumns: "one",
+    customColumnWidth: 50,
+    rowGap: 9,
+    columnGap: 9,
+    mobileColumns: "one",
+    tabletColumns: "one",
+    containerBackgroundMode: "solid",
+    gradientStart: "#FFFFFF",
+    gradientEnd: "#EEF1FF",
+    gradientAngle: 145,
+    containerBorderColor: "#D8DDEC",
+    containerBorderWidth: 1,
+    containerBorderRadius: 24,
+    containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerPadding: 30,
+    containerMargin: 0,
+    buttonHoverColor: "#0D2639",
+    buttonTextColor: "#FFFFFF",
+    buttonFontSize: 16,
+    buttonBorderColor: "transparent",
+    buttonBorderWidth: 0,
+    buttonBorderRadius: 12,
+    buttonWidth: "auto",
+    buttonHeight: 46,
+    buttonAlignment: "left",
+    buttonLoadingColor: "#12344D",
+    buttonLoadingText: "Submitting...",
+    successMessageColor: "#065F46",
+    errorMessageColor: "#B91C1C",
   };
 }
 
@@ -387,6 +485,8 @@ function defaultSettings() {
     createDeal: false,
 
     submitButtonLabel: "Submit",
+
+    showPoweredBy: true,
 
     successMessage:
       "Thank you! Your information has been received. We will be in touch with you shortly to assist with your account.",
@@ -407,6 +507,17 @@ function defaultSettings() {
     optInLinkUrl: "",
 
     notificationEmail: "",
+    phoneAllowAllCountries: true,
+    phoneAllowedCountries: [],
+    multiStepEnabled: false,
+    steps: [],
+    emailValidationType: "all",
+    blockedEmailDomains: DEFAULT_PERSONAL_DOMAINS,
+    allowedEmailDomains: [],
+    emailMxValidation: false,
+    recaptchaEnabled: false,
+    disabledBlockedEmailDomains: [],
+    disabledAllowedEmailDomains: [],
   };
 }
 
@@ -417,16 +528,27 @@ function normalizeField(field, index) {
     ? field.sourceKind
     : "custom";
 
-  const fieldType = FIELD_TYPES.has(field?.fieldType)
-    ? field.fieldType
-    : "text";
+  const sourceKey = textOr(field?.sourceKey, field?.key || `custom_${index}`);
+  const fieldType = sourceKind === "contact" && sourceKey === "email"
+    ? "email"
+    : FIELD_TYPES.has(field?.fieldType)
+      ? field.fieldType
+      : "text";
+  const showWhen = field?.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey)
+    ? {
+      fieldId: textOr(field.showWhen.fieldId),
+      fieldKey: textOr(field.showWhen.fieldKey),
+      parentQuestion: textOr(field.showWhen.parentQuestion),
+      value: textOr(field.showWhen.value),
+    }
+    : null;
 
   return {
     id: textOr(field?.id, `${sourceKind}-${field?.sourceKey || index}`),
 
     sourceKind,
 
-    sourceKey: textOr(field?.sourceKey, field?.key || `custom_${index}`),
+    sourceKey,
 
     fieldType,
 
@@ -452,28 +574,116 @@ function normalizeField(field, index) {
 
     fileTags: fieldType === "file" ? parseOptions(field?.fileTags) : [],
 
+    showWhen,
+
     width: field?.width === "half" ? "half" : "full",
+    stepId: textOr(field?.stepId),
   };
 }
 
-function normalizeFields(raw) {
+function normalizeFields(raw, scope = "generic") {
   const parsed = parseJson(raw, null);
 
   if (!Array.isArray(parsed) || parsed.length === 0) return defaultFields();
 
-  return parsed.map((field, index) => normalizeField(field, index));
+  const fields = parsed.map((field, index) => normalizeField(field, index));
+
+  if (scope !== "generic") return fields.map((field) => ({ ...field, showWhen: null }));
+
+  const byId = new Map(fields.map((field) => [String(field.id), field]));
+  const bySourceKey = new Map();
+  fields.forEach((field) => {
+    if (field.sourceKey && !bySourceKey.has(String(field.sourceKey))) {
+      bySourceKey.set(String(field.sourceKey), field);
+    }
+  });
+
+  const normalizedFields = fields.map((field) => {
+    const condition = field.showWhen;
+    if (!condition) return field;
+
+    const requestedId = textOr(condition.fieldId);
+    const requestedKey = textOr(condition.fieldKey);
+    const controller = (requestedId && byId.get(requestedId)) ||
+      (requestedKey && bySourceKey.get(requestedKey));
+
+    // Conditional flows are standalone custom-field trees. Invalid,
+    // non-custom, self-referencing, hidden, or file parents are made safe by
+    // clearing the rule. The child then behaves like a normal visible field.
+    if (!controller || controller.sourceKind !== "custom" || String(controller.id) === String(field.id) || controller.hidden || controller.fieldType === "file") {
+      return { ...field, showWhen: null };
+    }
+
+    const value = textOr(condition.value);
+    const controllerOptions = controller.fieldType === "checkbox"
+      ? ["true"]
+      : CHOICE_TYPES.has(controller.fieldType) ? controller.options : [];
+
+    // Choice-based triggers must be one of the configured answers. Scalar
+    // parents use the explicitly entered trigger text.
+    if (controllerOptions.length && value && !controllerOptions.includes(value)) {
+      return { ...field, showWhen: null };
+    }
+
+    return {
+      ...field,
+      showWhen: {
+        fieldId: String(controller.id),
+        fieldKey: String(controller.sourceKey || ""),
+        parentQuestion: String(controller.label || ""),
+        value,
+      },
+    };
+  });
+
+  // A conditional child may itself be a parent, but a cycle would make the
+  // visibility graph impossible to evaluate. Clear cyclic rules so affected
+  // fields remain normal visible fields and valid chains survive.
+  return normalizedFields.map((field) => {
+    if (!field.showWhen) return field;
+
+    const visited = new Set([String(field.id)]);
+    let parent = normalizedFields.find((candidate) => (
+      (field.showWhen.fieldId && String(candidate.id) === String(field.showWhen.fieldId)) ||
+      (!field.showWhen.fieldId && field.showWhen.fieldKey && String(candidate.sourceKey) === String(field.showWhen.fieldKey))
+    ));
+
+    while (parent) {
+      const parentId = String(parent.id);
+      if (visited.has(parentId)) return { ...field, showWhen: null };
+      visited.add(parentId);
+      if (!parent.showWhen) break;
+      parent = normalizedFields.find((candidate) => (
+        (parent.showWhen.fieldId && String(candidate.id) === String(parent.showWhen.fieldId)) ||
+        (!parent.showWhen.fieldId && parent.showWhen.fieldKey && String(candidate.sourceKey) === String(parent.showWhen.fieldKey))
+      ));
+    }
+
+    return field;
+  });
 }
 
 function normalizeStyle(raw) {
   const style = { ...defaultStyle(), ...(parseJson(raw, {}) || {}) };
 
-  return {
-    fontFamily: textOr(style.fontFamily, defaultStyle().fontFamily),
+  const safeColor = (value, fallback) => {
+    const text = String(value == null ? "" : value).trim();
+    return /^(#[0-9a-f]{6}|transparent)$/i.test(text) ? text.toUpperCase() : fallback;
+  };
+  const safeNumber = (value, fallback, min, max) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+  };
+  const safeEnum = (value, allowed, fallback) => allowed.includes(value) ? value : fallback;
+  const fontFamilies = [
+    "Inter, system-ui, sans-serif", "system-ui, sans-serif", "Arial, sans-serif",
+    "Helvetica, Arial, sans-serif", "Georgia, serif", "Tahoma, sans-serif", "Verdana, sans-serif",
+  ];
 
-    backgroundColor: textOr(
-      style.backgroundColor,
-      defaultStyle().backgroundColor,
-    ),
+  return {
+    fontFamily: safeEnum(style.fontFamily, fontFamilies, defaultStyle().fontFamily),
+
+    backgroundColor: textOr(style.backgroundColor, defaultStyle().backgroundColor),
 
     formColor: textOr(style.formColor, defaultStyle().formColor),
 
@@ -481,16 +691,57 @@ function normalizeStyle(raw) {
 
     textColor: textOr(style.textColor, defaultStyle().textColor),
 
-    fieldLabelColor: textOr(
-      style.fieldLabelColor,
-      defaultStyle().fieldLabelColor,
-    ),
+    fieldLabelColor: textOr(style.fieldLabelColor, defaultStyle().fieldLabelColor),
 
     buttonColor: textOr(style.buttonColor, defaultStyle().buttonColor),
 
     accentColor: textOr(style.accentColor, defaultStyle().accentColor),
 
     logoUrl: textOr(style.logoUrl),
+    fontSize: safeNumber(style.fontSize, 16, 10, 32),
+    fontWeight: safeEnum(Number(style.fontWeight), [400, 500, 600, 700], 400),
+    labelFontSize: safeNumber(style.labelFontSize, 13, 9, 24),
+    placeholderFontSize: safeNumber(style.placeholderFontSize, 14, 9, 24),
+    errorFontSize: safeNumber(style.errorFontSize, 13, 9, 24),
+    successFontSize: safeNumber(style.successFontSize, 16, 9, 32),
+    fieldWidth: safeNumber(style.fieldWidth, 100, 50, 100),
+    fieldHeight: safeNumber(style.fieldHeight, 44, 28, 96),
+    fieldBorderWidth: safeNumber(style.fieldBorderWidth, 1, 0, 8),
+    fieldBorderRadius: safeNumber(style.fieldBorderRadius, 12, 0, 40),
+    fieldBorderColor: safeColor(style.fieldBorderColor, "#D8DDEC"),
+    fieldFocusBorderColor: safeColor(style.fieldFocusBorderColor, "#6366F1"),
+    fieldBackgroundColor: safeColor(style.fieldBackgroundColor, "#FFFFFF"),
+    placeholderColor: safeColor(style.placeholderColor, "#6B7280"),
+    fieldTextColor: safeColor(style.fieldTextColor, "#111827"),
+    layoutColumns: safeEnum(style.layoutColumns, ["one", "two"], "one"),
+    customColumnWidth: safeNumber(style.customColumnWidth, 50, 25, 75),
+    rowGap: safeNumber(style.rowGap, 9, 0, 64),
+    columnGap: safeNumber(style.columnGap, 9, 0, 64),
+    mobileColumns: safeEnum(style.mobileColumns, ["one", "two"], "one"),
+    tabletColumns: safeEnum(style.tabletColumns, ["one", "two"], "one"),
+    containerBackgroundMode: safeEnum(style.containerBackgroundMode, ["solid", "gradient"], "solid"),
+    gradientStart: safeColor(style.gradientStart, "#FFFFFF"),
+    gradientEnd: safeColor(style.gradientEnd, "#EEF1FF"),
+    gradientAngle: safeNumber(style.gradientAngle, 145, 0, 360),
+    containerBorderColor: safeColor(style.containerBorderColor, "#D8DDEC"),
+    containerBorderWidth: safeNumber(style.containerBorderWidth, 1, 0, 8),
+    containerBorderRadius: safeNumber(style.containerBorderRadius, 24, 0, 48),
+    containerShadow: safeEnum(style.containerShadow, ["none", "0 24px 70px rgba(30,41,96,.14)", "0 8px 24px rgba(15,23,42,.18)"], defaultStyle().containerShadow),
+    containerPadding: safeNumber(style.containerPadding, 30, 0, 80),
+    containerMargin: safeNumber(style.containerMargin, 0, 0, 80),
+    buttonHoverColor: safeColor(style.buttonHoverColor, "#0D2639"),
+    buttonTextColor: safeColor(style.buttonTextColor, "#FFFFFF"),
+    buttonFontSize: safeNumber(style.buttonFontSize, 16, 10, 32),
+    buttonBorderColor: safeColor(style.buttonBorderColor, "transparent"),
+    buttonBorderWidth: safeNumber(style.buttonBorderWidth, 0, 0, 8),
+    buttonBorderRadius: safeNumber(style.buttonBorderRadius, 12, 0, 40),
+    buttonWidth: safeEnum(style.buttonWidth, ["auto", "full"], "auto"),
+    buttonHeight: safeNumber(style.buttonHeight, 46, 30, 96),
+    buttonAlignment: safeEnum(style.buttonAlignment, ["left", "center", "right", "full"], "left"),
+    buttonLoadingColor: safeColor(style.buttonLoadingColor, "#12344D"),
+    buttonLoadingText: textOr(style.buttonLoadingText, "Submitting...").slice(0, 80),
+    successMessageColor: safeColor(style.successMessageColor, "#065F46"),
+    errorMessageColor: safeColor(style.errorMessageColor, "#B91C1C"),
   };
 }
 
@@ -509,6 +760,13 @@ function normalizeUrl(value) {
 
 function normalizeSettings(raw) {
   const settings = { ...defaultSettings(), ...(parseJson(raw, {}) || {}) };
+  const steps = Array.isArray(settings.steps)
+    ? settings.steps.map((step, index) => ({
+      id: textOr(step?.id, `step-${index + 1}`),
+      title: textOr(step?.title, `Step ${index + 1}`),
+      description: textOr(step?.description),
+    }))
+    : [];
 
   return {
     formTitle: textOr(settings.formTitle),
@@ -521,6 +779,8 @@ function normalizeSettings(raw) {
       settings.submitButtonLabel,
       defaultSettings().submitButtonLabel,
     ),
+
+    showPoweredBy: settings.showPoweredBy !== false,
 
     successMessage: textOr(
       settings.successMessage,
@@ -539,6 +799,20 @@ function normalizeSettings(raw) {
 
     notificationEmail: textOr(settings.notificationEmail),
 
+    phoneAllowAllCountries: settings.phoneAllowAllCountries !== false,
+    phoneAllowedCountries: Array.isArray(settings.phoneAllowedCountries)
+      ? [...new Set(settings.phoneAllowedCountries.map((value) => `+${String(value).replace(/\D/g, "")}`).filter((value) => value !== "+"))]
+      : [],
+
+    multiStepEnabled: Boolean(settings.multiStepEnabled),
+    emailValidationType: settings.emailValidationType === "company" ? "company" : "all",
+    blockedEmailDomains: cleanDomains(settings.blockedEmailDomains || DEFAULT_PERSONAL_DOMAINS),
+    allowedEmailDomains: cleanDomains(settings.allowedEmailDomains),
+    emailMxValidation: Boolean(settings.emailMxValidation),
+    recaptchaEnabled: Boolean(settings.recaptchaEnabled),
+    disabledBlockedEmailDomains: cleanDomains(settings.disabledBlockedEmailDomains),
+    disabledAllowedEmailDomains: cleanDomains(settings.disabledAllowedEmailDomains),
+
     optInEnabled: Boolean(settings.optInEnabled),
 
     optInText: textOr(settings.optInText, defaultSettings().optInText),
@@ -546,6 +820,8 @@ function normalizeSettings(raw) {
     optInLinkText: textOr(settings.optInLinkText),
 
     optInLinkUrl: normalizeUrl(settings.optInLinkUrl),
+    // Do not expose the legacy placeholder page as a real user-created page.
+    steps: steps.length === 1 && steps[0].id === "step-1" && steps[0].title === "Step 1" && !steps[0].description ? [] : steps,
   };
 }
 
@@ -579,7 +855,7 @@ function buildEmbedCode(form, origin) {
     "<!-- Globussoft CRM web form -->",
 
     `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
-    '<script>(function(frame){window.addEventListener("message",function(event){if(!frame||event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form"||event.data.type!=="size")return;var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}});})(document.currentScript.previousElementSibling);</script>',
+    '<script>(function(frame){if(!frame)return;function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}}window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>',
   ].join("\n");
 }
 
@@ -610,7 +886,7 @@ async function ensureUniqueSlug(baseSlug, scope = "generic", excludeId = null) {
 function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
   if (!row) return null;
 
-  const fields = normalizeFields(row.fieldsJson);
+  const fields = normalizeFields(row.fieldsJson, row.scope || "generic");
   const style = normalizeStyle(row.styleJson);
   const settings = normalizeSettings(row.settingsJson);
 
@@ -627,6 +903,9 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
       settings,
       submissionCount,
     };
+    if (row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+      payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
+    }
     if (origin) payload.embedCode = buildEmbedCode(row, origin);
     return payload;
   }
@@ -643,6 +922,10 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
     submissionCount,
   };
 
+  if (isPublic && row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+    payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
+  }
+
   if (origin) payload.embedCode = buildEmbedCode(row, origin);
 
   return payload;
@@ -652,6 +935,31 @@ function readBodyValue(body, key) {
   if (!body || !key) return undefined;
 
   return body[key];
+}
+
+function isConditionalFieldVisible(field, fields, body, evaluating = new Set()) {
+  const condition = field?.showWhen;
+  if (!condition || (!condition.fieldId && !condition.fieldKey)) return true;
+  if (!textOr(condition.value)) return false;
+
+  const fieldId = String(field?.id || field?.sourceKey || "");
+  if (evaluating.has(fieldId)) return false;
+  const nextEvaluating = new Set(evaluating);
+  nextEvaluating.add(fieldId);
+
+  const controller = fields.find((candidate) => (
+    (condition.fieldId && String(candidate.id) === String(condition.fieldId)) ||
+    (!condition.fieldId && condition.fieldKey && String(candidate.sourceKey) === String(condition.fieldKey))
+  ));
+  if (!controller) return true;
+
+  // A nested child can only be visible when every ancestor in its branch is
+  // visible. Do not trust an API caller to omit values for a hidden parent.
+  if (!isConditionalFieldVisible(controller, fields, body, nextEvaluating)) return false;
+
+  const raw = readBodyValue(body, controller.sourceKey);
+  const values = Array.isArray(raw) ? raw : [raw];
+  return values.some((value) => String(value == null ? "" : value) === String(condition.value));
 }
 
 function isTruthyValue(fieldType, raw) {
@@ -839,7 +1147,11 @@ router.get("/public/:slug", async (req, res) => {
     // Form configuration is editable by CRM users. Do not let an embedded
     // browser reuse an older public configuration after a successful save.
     res.set("Cache-Control", "no-store");
-    res.json(shapeForm(form, 0, origin, true));
+    const publicPayload = shapeForm(form, 0, origin, true);
+    if (form.scope === "generic" && publicPayload.settings?.recaptchaEnabled) {
+      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SITE_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SITE_KEY || "" }));
+    }
+    res.json(publicPayload);
   } catch (err) {
     console.error("[web-forms/public] load error:", err && err.message);
 
@@ -847,16 +1159,15 @@ router.get("/public/:slug", async (req, res) => {
   }
 });
 
-router.post("/public/:slug/submit", upload.any(), async (req, res) => {
+router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
   let submitStage = "start";
+  const persistedFilePaths = [];
 
   try {
     const scope = normalizeScope(req.query?.scope);
 
     if (!scope)
       return res.status(400).json({ error: "Invalid form scope", code: "INVALID_FORM_SCOPE" });
-
-    submitStage = "load_form";
 
     submitStage = "load_form";
 
@@ -869,7 +1180,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     submitStage = "normalize_form";
 
-    const fields = normalizeFields(form.fieldsJson);
+    const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
 
     const formScope = form.scope || "generic";
 
@@ -877,7 +1188,66 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     const body = req.body || {};
 
+    let trackingMetadata = null;
+    const trackingHeader = req.get("x-gbs-tracking");
+    if (formScope === "generic" && trackingHeader) {
+      try {
+        const parsed = JSON.parse(String(trackingHeader));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          trackingMetadata = Object.fromEntries(Object.entries(parsed).slice(0, 30).map(([key, value]) => [key, textOr(value).slice(0, 2000)]));
+        }
+      } catch (_err) {
+        trackingMetadata = null;
+      }
+    }
+    if (formScope === "generic") {
+      trackingMetadata = {
+        ...(trackingMetadata || {}),
+        referrerUrl: trackingMetadata?.referrerUrl || textOr(req.get("referer"), ""),
+        browser: trackingMetadata?.browser || textOr(req.get("user-agent"), ""),
+        submittedAt: trackingMetadata?.submittedAt || new Date().toISOString(),
+        formName: trackingMetadata?.formName || form.name,
+        formId: trackingMetadata?.formId || String(form.id),
+      };
+    }
     const files = Array.isArray(req.files) ? req.files : [];
+    const totalUploadBytes = files.reduce(
+      (total, file) => total + Number(file?.size || 0),
+      0,
+    );
+    if (totalUploadBytes > MAX_UPLOAD_TOTAL_BYTES) {
+      return res.status(413).json({
+        error: "Combined attachments must not exceed 20 MB.",
+        code: "UPLOAD_TOTAL_TOO_LARGE",
+      });
+    }
+
+    if (formScope === "generic" && settings.recaptchaEnabled) {
+      const token = textOr(body.recaptchaToken);
+      const secret = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SECRET_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SECRET_KEY || "" }));
+      let verified = false;
+      if (token && secret) {
+        try {
+          const verificationBody = new URLSearchParams({
+            secret,
+            response: token,
+            remoteip: req.ip || "",
+          });
+          const result = await axios.post(
+            "https://www.google.com/recaptcha/api/siteverify",
+            verificationBody.toString(),
+            {
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              timeout: 8000,
+            },
+          );
+          verified = result.data?.success === true;
+        } catch (_error) {
+          verified = false;
+        }
+      }
+      if (!verified) return res.status(400).json({ error: "CAPTCHA verification failed. Please try again.", code: "CAPTCHA_FAILED" });
+    }
 
     const payload = {};
 
@@ -897,6 +1267,11 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     }
 
     for (const field of fields) {
+      if (formScope === "generic" && !isConditionalFieldVisible(field, fields, body)) {
+        payload[field.sourceKey] = null;
+        continue;
+      }
+
       if (field.fieldType === "file") {
         if (field.hidden) continue;
 
@@ -908,18 +1283,21 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
           missing.push(field.label);
 
         for (const file of fieldFiles) {
+          const filename = storedUploadFilename(file);
           fileRecords.push({
             fieldKey: field.sourceKey,
 
             originalName: file.originalname,
 
-            filename: file.filename,
+            filename,
 
             mimeType: file.mimetype,
 
             size: file.size,
 
-            url: `/uploads/web-forms/${file.filename}`,
+            url: `/uploads/web-forms/${filename}`,
+
+            buffer: file.buffer,
           });
         }
 
@@ -1068,29 +1446,27 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
       fieldErrors.name = "Enter a valid name using letters, spaces, hyphens, or apostrophes";
     }
-    if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailValue) || (isGenericForm && emailValue.includes("..")))) {
+    if (emailValue && isGenericForm) {
+      const emailResult = await validateEmail(emailValue, settings);
+      if (!emailResult.valid) fieldErrors.email = emailResult.message;
+    } else if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^\s]+$/.test(emailValue))) {
       fieldErrors.email = "Enter a valid email address";
     }
-    if (phoneValue) {
-      const digits = phoneValue.replace(/\D/g, "");
-      const normalizedPhone = phoneValue.replace(/[\s().-]/g, "");
-      const phoneIsValid = isGenericForm
-        ? /^\+[1-9]\d{7,14}$/.test(normalizedPhone)
-        : /^[+\d][\d\s().-]*$/.test(phoneValue) && digits.length >= 7 && digits.length <= 15;
-      if (!phoneIsValid) {
-        fieldErrors.phone = isGenericForm
-          ? "Enter a valid international phone number with country code, for example +919876543210"
-          : "Enter a valid phone number with 7-15 digits";
-        fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
-      }
-    }
     if (phoneValue && isGenericForm) {
-      const normalizedGenericPhone = phoneValue.replace(/[\s().-]/g, "");
-      if (/^\+[1-9]\d{7,14}$/.test(normalizedGenericPhone)) {
-        contactData.phone = normalizedGenericPhone;
-        delete fieldErrors.phone;
-      } else {
-        fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
+      const submittedPhoneCountry = `+${String(req.body.phoneCountry || "").replace(/\D/g, "")}`;
+      if (!settings.phoneAllowAllCountries && settings.phoneAllowedCountries.length && !settings.phoneAllowedCountries.includes(submittedPhoneCountry)) {
+        fieldErrors.phone = "Please select an allowed country code";
+      }
+      const normalizedGenericPhone = normalizeGenericPhone(
+        phoneValue,
+        req.body.phoneCountry,
+      );
+      if (normalizedGenericPhone) contactData.phone = normalizedGenericPhone;
+      else fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
+    } else if (phoneValue) {
+      const digits = phoneValue.replace(/\D/g, "");
+      if (!/^[+\d][\d\s().-]*$/.test(phoneValue) || digits.length < 7 || digits.length > 15) {
+        fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
       }
     }
     if (companyValue && (companyValue.length < 2 || companyValue.length > 150 || !/[\p{L}]/u.test(companyValue))) {
@@ -1265,6 +1641,9 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     if (fileRecords.length) {
       for (const file of fileRecords) {
+        const filePath = path.join(uploadDir, path.basename(file.filename));
+        await fs.promises.writeFile(filePath, file.buffer, { flag: "wx" });
+        persistedFilePaths.push(filePath);
         await prisma.contactAttachment.create({
           data: {
             filename: file.originalName || file.filename,
@@ -1303,10 +1682,13 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
             ),
 
             userAgent: textOr(req.get("user-agent"), null),
+            ...(trackingMetadata ? { tracking: trackingMetadata } : {}),
           },
         }),
 
-        filesJson: fileRecords.length ? JSON.stringify(fileRecords) : null,
+        filesJson: fileRecords.length
+          ? JSON.stringify(fileRecords.map(({ buffer: _buffer, ...file }) => file))
+          : null,
 
         sourceUrl: textOr(req.get("referer"), textOr(req.get("origin"), null)),
 
@@ -1316,17 +1698,42 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     submitStage = "send_notification";
 
-    if (settings.notificationEnabled && settings.notificationEmail) {
+    if (formScope === "generic" && settings.notificationEnabled && settings.notificationEmail) {
+      const fieldLines = fields
+        .filter((field) => !field.hidden)
+        .map((field) => {
+          if (field.fieldType === "file") {
+            const names = fileRecords
+              .filter((file) => file.fieldKey === field.sourceKey)
+              .map((file) => file.originalName || file.filename);
+            return `${field.label || field.sourceKey}: ${names.join(", ")}`;
+          }
+          return `${field.label || field.sourceKey}: ${notificationValue(payload[field.sourceKey])}`;
+        });
+
+      const attachments = fileRecords
+        .map((file) => {
+          try {
+            if (!file.filename || !Buffer.isBuffer(file.buffer)) return null;
+            return {
+              filename: file.originalName || file.filename,
+              type: file.mimeType || "application/octet-stream",
+              content: file.buffer.toString("base64"),
+            };
+          } catch (_error) {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
       const lines = [
         `New web form submission: ${form.name}`,
 
         `Form slug: ${form.slug}`,
 
-        `Contact: ${contact.name || ""}`,
+        "",
 
-        contact.email ? `Email: ${contact.email}` : null,
-
-        contact.phone ? `Phone: ${contact.phone}` : null,
+        ...fieldLines,
 
         `Submission ID: ${submission.id}`,
 
@@ -1339,6 +1746,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         subject: `New web form submission: ${form.name}`,
 
         text: lines.join("\n"),
+
+        attachments,
       }).catch(() => {});
     }
 
@@ -1354,12 +1763,26 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       message: settings.successMessage,
     };
 
+    // Generic-only, best-effort automation. Never make lead creation depend
+    // on WhatsApp configuration, provider availability, or queue health.
+    if (formScope === "generic") {
+      try {
+        response.whatsapp = await sendGenericWebFormWhatsApp({ form, contact, submissionId: submission.id });
+      } catch (whatsappError) {
+        console.error("[web_forms] generic WhatsApp automation failed:", whatsappError.message);
+        response.whatsapp = { sent: false, code: "WHATSAPP_SEND_FAILED" };
+      }
+    }
+
     if (settings.afterSubmitAction === "redirect" && settings.redirectUrl) {
       response.redirectUrl = settings.redirectUrl;
     }
 
     return res.status(201).json(response);
   } catch (err) {
+    await Promise.allSettled(
+      persistedFilePaths.map((filePath) => fs.promises.unlink(filePath)),
+    );
     console.error("[web-forms/public] submit error:", {
       stage: submitStage,
       message: err && err.message,
@@ -1473,7 +1896,7 @@ router.post("/", verifyToken, async (req, res) => {
 
         isActive: body.isActive !== false,
 
-        fieldsJson: JSON.stringify(normalizeFields(body.fields)),
+        fieldsJson: JSON.stringify(normalizeFields(body.fields, scope)),
 
         styleJson: JSON.stringify(normalizeStyle(body.style)),
 
@@ -1560,7 +1983,7 @@ router.get("/:id/leads", verifyToken, async (req, res) => {
           contact: { select: { id: true, createdAt: true, updatedAt: true } } },
       }),
     ]);
-    const fields = normalizeFields(form.fieldsJson);
+    const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
     res.json({ fields, total, page, limit, leads: submissions.map((row) => {
       const payload = parseJson(row.payloadJson, {}) || {};
       const files = parseJson(row.filesJson, []) || [];
@@ -1652,7 +2075,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (body.isActive !== undefined) data.isActive = Boolean(body.isActive);
 
     if (body.fields !== undefined)
-      data.fieldsJson = JSON.stringify(normalizeFields(body.fields));
+      data.fieldsJson = JSON.stringify(normalizeFields(body.fields, scope));
 
     if (body.style !== undefined)
       data.styleJson = JSON.stringify(normalizeStyle(body.style));
@@ -1724,3 +2147,7 @@ module.exports.defaultFields = defaultFields;
 module.exports.defaultStyle = defaultStyle;
 
 module.exports.defaultSettings = defaultSettings;
+
+module.exports.normalizeFields = normalizeFields;
+
+module.exports.isConditionalFieldVisible = isConditionalFieldVisible;

@@ -1,5 +1,5 @@
 // @ts-check
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
@@ -42,8 +42,22 @@ prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn(), findFirst: vi.f
 prisma.tripParticipant = { ...(prisma.tripParticipant || {}), findMany: vi.fn() };
 prisma.pendingTripRegistration = { ...(prisma.pendingTripRegistration || {}), findMany: vi.fn() };
 prisma.tmcParentTrip = { ...(prisma.tmcParentTrip || {}), findMany: vi.fn() };
+prisma.visaApplication = { ...(prisma.visaApplication || {}), findMany: vi.fn() };
+prisma.visaLetterDocument = { ...(prisma.visaLetterDocument || {}), findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn() };
+prisma.visaLetterGeneration = { ...(prisma.visaLetterGeneration || {}), update: vi.fn() };
+prisma.user = { ...(prisma.user || {}), findMany: vi.fn() };
 
 const { JWT_SECRET } = requireCJS('../../config/secrets');
+const visaLetterStore = requireCJS('../../lib/visaLetterStore');
+const audit = requireCJS('../../lib/audit');
+const notificationService = requireCJS('../../lib/notificationService');
+const originalVisaLetterStore = {
+  readLetterBuffer: visaLetterStore.readLetterBuffer,
+  storeLetterPdf: visaLetterStore.storeLetterPdf,
+  removeLetter: visaLetterStore.removeLetter,
+};
+audit.writeAudit = vi.fn().mockResolvedValue(undefined);
+notificationService.notifyMany = vi.fn().mockResolvedValue(undefined);
 const router = requireCJS('../../routes/tmc_portal');
 
 function makeApp() {
@@ -87,6 +101,25 @@ beforeEach(() => {
   prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
   prisma.pendingTripRegistration.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcParentTrip.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaApplication.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaLetterDocument.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visaLetterDocument.update.mockReset();
+  prisma.visaLetterDocument.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaLetterGeneration.update.mockReset().mockResolvedValue({});
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  visaLetterStore.readLetterBuffer = vi.fn().mockResolvedValue(Buffer.from('%PDF-parent-letter'));
+  visaLetterStore.storeLetterPdf = vi.fn().mockResolvedValue({
+    url: '/api/uploads/visa-letters/signed.pdf',
+    key: 'signed.pdf',
+    storage: 'disk',
+  });
+  visaLetterStore.removeLetter = vi.fn().mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  visaLetterStore.readLetterBuffer = originalVisaLetterStore.readLetterBuffer;
+  visaLetterStore.storeLetterPdf = originalVisaLetterStore.storeLetterPdf;
+  visaLetterStore.removeLetter = originalVisaLetterStore.removeLetter;
 });
 
 describe('TMC portal authentication and tenant isolation', () => {
@@ -124,12 +157,14 @@ describe('TMC portal authentication and tenant isolation', () => {
 });
 
 describe('TMC parent trip isolation', () => {
-  test('a parent link grants only its explicit trip, not every trip owned by that teacher', async () => {
+  test('a parent link grants only its explicit trip, not every trip assigned to the teacher', async () => {
     prisma.contact.findFirst.mockResolvedValue(contact('PARENT'));
     prisma.tmcParentTrip.findMany.mockResolvedValue([
       { id: 1, tripId: 501, createdAt: new Date(), teacher: { id: 70 }, trip: { id: 501, landingPage: null } },
     ]);
-    prisma.tmcTrip.findMany.mockResolvedValue([{ id: 501, tripCode: 'TMC-501', landingPage: null }]);
+    prisma.tmcTrip.findMany.mockResolvedValue([
+      { id: 501, tripCode: 'TMC-501', landingPage: null },
+    ]);
 
     const res = await request(makeApp())
       .get('/api/portal/tmc/parent/trips')
@@ -143,6 +178,114 @@ describe('TMC parent trip isolation', () => {
         id: { in: [501] },
         status: { not: 'cancelled' },
       },
+    }));
+  });
+
+  test('parent visa-letter listing is limited to linked trips and sent letters', async () => {
+    prisma.contact.findFirst.mockResolvedValue(contact('PARENT'));
+    prisma.tmcParentTrip.findMany.mockResolvedValue([{ tripId: 501 }]);
+    prisma.visaApplication.findMany.mockResolvedValue([{
+      id: 901,
+      applicationType: 'student',
+      destinationCountry: 'Vietnam',
+      status: 'intake',
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      trip: { id: 501, tripCode: 'VIET-2026', destination: 'Vietnam', departDate: new Date(), returnDate: new Date() },
+      participant: { id: 701, fullName: 'Rishav Kapoor' },
+      visaLetterDocuments: [{
+        id: 3001,
+        generationId: 2001,
+        documentType: 'Cover Letter',
+        status: 'SENT',
+        generatedFileName: 'cover-letter.pdf',
+      }],
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/portal/tmc/parent/visa-letters')
+      .set(bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body.applications[0]).toMatchObject({
+      id: 901,
+      destinationCountry: 'Vietnam',
+      participant: { fullName: 'Rishav Kapoor' },
+      visaLetters: [{ id: 3001, status: 'SENT' }],
+    });
+    expect(prisma.visaApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        tenantId: 7,
+        tripId: { in: [501] },
+        participant: {
+          parentEmail: 'parent@example.test',
+          tripId: { in: [501] },
+        },
+        visaLetterDocuments: {
+          some: { tenantId: 7, status: { in: ['SENT', 'SIGNED_UPLOADED'] } },
+        },
+      },
+    }));
+  });
+
+  test('parent can download and upload a sent letter only for an accessible trip', async () => {
+    prisma.contact.findFirst.mockResolvedValue(contact('PARENT'));
+    prisma.tmcParentTrip.findMany.mockResolvedValue([{ tripId: 501 }]);
+    const document = {
+      id: 3001,
+      generationId: 2001,
+      visaApplicationId: 901,
+      participantId: 701,
+      documentType: 'Cover Letter',
+      status: 'SENT',
+      generatedFileStorage: 'disk',
+      generatedFileKey: 'generated.pdf',
+      generatedFileName: 'cover-letter.pdf',
+      signedFileKey: null,
+      signedFileStorage: null,
+    };
+    prisma.visaLetterDocument.findFirst.mockResolvedValue(document);
+    prisma.visaLetterDocument.update.mockResolvedValue({
+      ...document,
+      status: 'SIGNED_UPLOADED',
+      signedFileName: 'signed-cover-letter.pdf',
+      signedUploadedAt: new Date('2026-09-02T00:00:00Z'),
+    });
+    prisma.visaLetterDocument.findMany.mockResolvedValue([
+      { status: 'SIGNED_UPLOADED' },
+      { status: 'SENT' },
+    ]);
+
+    const download = await request(makeApp())
+      .get('/api/portal/tmc/parent/visa-letters/3001/generated?download=1')
+      .set(bearer());
+    expect(download.status).toBe(200);
+    expect(download.headers['content-type']).toMatch(/application\/pdf/);
+    expect(download.headers['content-disposition']).toMatch(/attachment/);
+    expect(download.body.toString()).toBe('%PDF-parent-letter');
+
+    const upload = await request(makeApp())
+      .post('/api/portal/tmc/parent/visa-letters/3001/signed-upload')
+      .set(bearer())
+      .attach('file', Buffer.from('%PDF-signed'), {
+        filename: 'signed-cover-letter.pdf',
+        contentType: 'application/pdf',
+      });
+    expect(upload.status).toBe(201);
+    expect(upload.body.letter).toMatchObject({ id: 3001, status: 'SIGNED_UPLOADED' });
+    expect(visaLetterStore.storeLetterPdf).toHaveBeenCalledWith(expect.any(Buffer), expect.objectContaining({
+      applicationId: 901,
+      participantId: 701,
+      kind: 'signed',
+    }));
+    expect(prisma.visaLetterDocument.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tenantId: 7,
+        tripId: { in: [501] },
+        participant: {
+          parentEmail: 'parent@example.test',
+          tripId: { in: [501] },
+        },
+      }),
     }));
   });
 });

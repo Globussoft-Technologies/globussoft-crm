@@ -1142,12 +1142,8 @@ html[data-theme="dark"][data-vertical="travel"],
  *       leaving the modal essentially transparent over the blurred body.
  *       Forcing opaque ensures the modal body never reads as "bright/white".
  *
- *   (2) `[role="dialog"]` — page-level inline-styled dialogs that set their
- *       own `background: 'var(--surface-color)'` get a defensive override
- *       with `!important` so any earlier inline cascade ordering won't beat
- *       us. (Inline `style` attributes have specificity 1000; `!important`
- *       on a rule with selector specificity ~(0,2,1) still wins because
- *       `!important` flips the cascade origin.)
+ *   (2) Dialog panels keep their own opaque surface. Full-screen dialog
+ *       backdrops remain separate so the CRM page stays visible underneath.
  *
  *   (3) Recharts tooltip surface — the recharts library renders its own
  *       `.recharts-default-tooltip` element which reads from contentStyle
@@ -1174,24 +1170,8 @@ html[data-theme="dark"][data-vertical="travel"],
               0 0 0 1px rgba(200, 154, 78, 0.04) !important;
 }
 
-/* Page-level inline-styled dialogs — defensive override.
- * These use inline `background: 'var(--surface-color)'` which already
- * resolves to navy on dark, but the !important rule below pins it against
- * any future inline cascade that might leak through. */
-[data-theme="dark"][data-vertical="travel"] [role="dialog"],
-[data-theme="dark"] [data-vertical="travel"] [role="dialog"] {
-  background: #19243A;
-  color: var(--text-primary);
-  border-color: rgba(200, 154, 78, 0.20);
-}
-/* Don't trample on .card.modal which already has its own scoped rule above —
- * and don't trample on backdrops that ALSO carry role="dialog" (Invoices /
- * Leads / Payments drawers wrap the inner panel with role="dialog" on the
- * outer fixed-position backdrop). For those, the inner panel needs the
- * surface tint; the outer drawer-overlay-style backdrops keep their own
- * dim. The selector targets the panel via "[role=dialog]:not(.modal-overlay)"
- * but no such overlay class exists in this codebase — the rule above is safe
- * because all role=dialog elements in the app ARE the inner panel. */
+/* Keep full-screen dialog backdrops dimmed. Individual travel modal panels
+ * use .card.modal or their own component surface styles. */
 
 /* Recharts tooltip — opaque navy with cream text, gold rim.
  * Pre-fix, recharts's default rendering on travel-dark showed up as the

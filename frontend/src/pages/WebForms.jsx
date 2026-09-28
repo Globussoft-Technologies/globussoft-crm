@@ -1,7 +1,6 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import WebFormLeadsModal from "../components/WebFormLeadsModal";
 import { createPortal } from "react-dom";
-import { Navigate } from "react-router-dom";
 
 
 
@@ -32,7 +31,7 @@ import { useNotify } from "../utils/notify";
 import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, textOrBlank } from "../utils/webForms";
 const CONTACT_FIELD_OPTIONS = [
   { value: "name", label: "Name", fieldType: "text", placeholder: "John Smith" },
-  { value: "email", label: "Email", fieldType: "text", placeholder: "john@acme.com" },
+  { value: "email", label: "Email", fieldType: "email", placeholder: "john@acme.com" },
   { value: "phone", label: "Phone", fieldType: "text", placeholder: "+91 98765 43210" },
 
   { value: "company", label: "Company", fieldType: "text", placeholder: "Acme Corp" },
@@ -71,12 +70,68 @@ const CONTACT_FIELD_OPTIONS = [
  { value: "billingStateCode", label: "Billing state code", fieldType: "text", placeholder: "IN-MH" },
  { value: "gst", label: "GSTIN", fieldType: "text", placeholder: "27ABCDE1234F1Z5" },
   { value: "birthDate", label: "Birth date", fieldType: "date", placeholder: "" },
-{ value: "anniversary", label: "Anniversary", fieldType: "date", placeholder: "" },
+  { value: "anniversary", label: "Anniversary", fieldType: "date", placeholder: "" },
 ];
 
-const CONTACT_FIELD_LABELS = Object.fromEntries(CONTACT_FIELD_OPTIONS.map((item) => [item.value, item.label]));
+// These are the additional Contact-backed columns exposed by the generic
+// Leads Customize table. They are form fields (unlike tracking, Created, and
+// Last Updated, which are captured by the system and must not become inputs).
+const GENERIC_TABLE_CONTACT_FIELD_OPTIONS = [
+  { value: "firstName", label: "First Name", fieldType: "text", placeholder: "John" },
+  { value: "lastName", label: "Last Name", fieldType: "text", placeholder: "Smith" },
+  { value: "medium", label: "Medium", fieldType: "text", placeholder: "Google" },
+  { value: "tags", label: "Tags", fieldType: "text", placeholder: "customer, priority" },
+  { value: "description", label: "Note", fieldType: "textarea", placeholder: "Add a note" },
+];
 
-const CONTACT_FIELD_DEFAULTS = Object.fromEntries(CONTACT_FIELD_OPTIONS.map((item) => [item.value, item]));
+const ALL_CONTACT_FIELD_OPTIONS = [...CONTACT_FIELD_OPTIONS, ...GENERIC_TABLE_CONTACT_FIELD_OPTIONS];
+const GENERIC_TABLE_FIELD_LABELS = {
+  title: "Job Title",
+  status: "Status",
+  assignedToId: "Assigned To",
+  industry: "Service Type",
+  companySize: "No Of Employee",
+  stateCode: "State",
+  treatmentOfInterest: "Treatment Of Interest",
+  birthDate: "Birth Date",
+  billingStateCode: "Billing State Code",
+  firstTouchSource: "First Touch Source",
+  lastTouchSource: "Last Touch Source",
+};
+const GENERIC_CONTACT_FIELD_OPTIONS = [
+  ...CONTACT_FIELD_OPTIONS.slice(0, 4),
+  ...GENERIC_TABLE_CONTACT_FIELD_OPTIONS,
+  ...CONTACT_FIELD_OPTIONS.slice(4),
+].map((item) => ({
+  ...item,
+  label: GENERIC_TABLE_FIELD_LABELS[item.value] || item.label,
+}));
+const GENERIC_AUTOMATIC_TABLE_FIELDS = [
+  ["pageUrl", "Page URL"],
+  ["pageTitle", "Page Title"],
+  ["pageSource", "Page Source"],
+  ["referrerUrl", "Referrer URL"],
+  ["landingPageUrl", "Landing Page URL"],
+  ["currentDomain", "Current Domain"],
+  ["formName", "Form Name / ID"],
+  ["utm_source", "UTM Source"],
+  ["utm_medium", "UTM Medium"],
+  ["utm_campaign", "UTM Campaign"],
+  ["utm_term", "UTM Term"],
+  ["utm_content", "UTM Content"],
+  ["gclid", "Google Click ID"],
+  ["fbclid", "Meta Click ID"],
+  ["fbc", "Meta Click Cookie"],
+  ["fbp", "Meta Browser ID"],
+  ["submittedAt", "Submission Timestamp"],
+  ["browser", "Browser"],
+  ["operatingSystem", "Operating System"],
+  ["deviceType", "Device Type"],
+].map(([value, label]) => ({ value, label }));
+
+const CONTACT_FIELD_LABELS = Object.fromEntries(ALL_CONTACT_FIELD_OPTIONS.map((item) => [item.value, item.label]));
+
+const CONTACT_FIELD_DEFAULTS = Object.fromEntries(ALL_CONTACT_FIELD_OPTIONS.map((item) => [item.value, item]));
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -103,6 +158,7 @@ function restrictToWebFormsFieldList({ transform, activeNodeRect, containerNodeR
 
 const FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text" },
+  { value: "email", label: "Email" },
  { value: "textarea", label: "Textarea" },
 
 
@@ -133,6 +189,125 @@ const FILE_FORMAT_OPTIONS = [
 
 ];
 const DEFAULT_FILE_FORMATS = ["CSV", "XLSX", "JPG", "JPEG", "PNG", "PDF", "DOCX", "PPTX"];
+
+function resolveConditionalParent(field, fields) {
+  const condition = field?.showWhen;
+  if (!condition) return null;
+
+  return fields.find((candidate) => (
+    (condition.fieldId && String(candidate.id) === String(condition.fieldId)) ||
+    (!condition.fieldId && condition.fieldKey && String(candidate.sourceKey) === String(condition.fieldKey))
+  )) || null;
+}
+
+function createsConditionalCycle(candidate, child, fields) {
+  const childId = String(child?.id || "");
+  const visited = new Set();
+  let current = candidate;
+
+  while (current) {
+    const currentId = String(current.id || "");
+    if (!currentId) return false;
+    if (currentId === childId || visited.has(currentId)) return true;
+    visited.add(currentId);
+    current = resolveConditionalParent(current, fields);
+  }
+
+  return false;
+}
+
+function getConditionalDepth(field, fields) {
+  let depth = 1;
+  const visited = new Set();
+  let parent = resolveConditionalParent(field, fields);
+
+  while (parent && !visited.has(String(parent.id))) {
+    visited.add(String(parent.id));
+    depth += 1;
+    parent = resolveConditionalParent(parent, fields);
+  }
+
+  return depth;
+}
+
+function getConditionalPath(field, fields) {
+  const path = [];
+  const visited = new Set();
+  let current = field;
+
+  while (current && !visited.has(String(current.id))) {
+    visited.add(String(current.id));
+    path.unshift(current.label || "Untitled field");
+    current = resolveConditionalParent(current, fields);
+  }
+
+  return path;
+}
+
+function getConditionalRoot(field, fields) {
+  const visited = new Set();
+  let current = field;
+
+  while (current && !visited.has(String(current.id))) {
+    visited.add(String(current.id));
+    const parent = resolveConditionalParent(current, fields);
+    if (!parent) return current;
+    current = parent;
+  }
+
+  return current || field;
+}
+
+function buildConditionalFieldGroups(fields, preserveFieldOrder = false) {
+  const groups = new Map();
+
+  fields.forEach((field, index) => {
+    const root = getConditionalRoot(field, fields);
+    const rootId = String(root?.id || field.id);
+    if (!groups.has(rootId)) {
+      groups.set(rootId, { root, firstIndex: index, fields: [] });
+    }
+    groups.get(rootId).fields.push({ field, index });
+  });
+
+  const groupedFields = Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      fields: [...group.fields].sort((a, b) => {
+        const aIsRoot = String(a.field.id) === String(group.root?.id);
+        const bIsRoot = String(b.field.id) === String(group.root?.id);
+        if (aIsRoot !== bIsRoot) return aIsRoot ? -1 : 1;
+        return a.index - b.index;
+      }),
+    }));
+
+  if (preserveFieldOrder) {
+    return groupedFields.sort((a, b) => a.firstIndex - b.firstIndex);
+  }
+
+  return groupedFields.sort((a, b) => {
+      const isConditionalRoot = (group) => (
+        group.root?.conditionalFlow === true ||
+        String(group.root?.sourceKey || "").startsWith("conditional-root_") ||
+        (group.root?.sourceKind === "custom" && group.root?.fieldType === "dropdown" && !group.root?.showWhen)
+      );
+      const aIsConditionalRoot = isConditionalRoot(a);
+      const bIsConditionalRoot = isConditionalRoot(b);
+
+      // Keep the newest conditional flow above older flows, even when an
+      // existing saved form has the older order in its fields array.
+      if (aIsConditionalRoot && bIsConditionalRoot) {
+        const aCreatedAt = Number(a.root.conditionalCreatedAt || 0);
+        const bCreatedAt = Number(b.root.conditionalCreatedAt || 0);
+        if (aCreatedAt !== bCreatedAt) return bCreatedAt - aCreatedAt;
+        if (!aCreatedAt && !bCreatedAt) return b.firstIndex - a.firstIndex;
+        return String(b.root.sourceKey).localeCompare(String(a.root.sourceKey));
+      }
+      if (aIsConditionalRoot !== bIsConditionalRoot) return aIsConditionalRoot ? -1 : 1;
+      return a.firstIndex - b.firstIndex;
+    });
+}
+
 const FALLBACK_LEAD_CUSTOM_FIELDS = [
   { fieldKey: "industry", label: "Industry", fieldType: "text", options: [], placeholder: "" },
   { fieldKey: "jobRoles", label: "Job Roles", fieldType: "text", options: [], placeholder: "" },
@@ -142,6 +317,7 @@ const FALLBACK_LEAD_CUSTOM_FIELDS = [
 ];
 const CUSTOM_FIELD_TEMPLATES = [
 { fieldType: "text", label: "Text field", helper: "Plain text input" },
+ { fieldType: "email", label: "Email field", helper: "Email address input" },
  { fieldType: "textarea", label: "Textarea", helper: "Long-form text" },
 { fieldType: "number", label: "Number field", helper: "Numeric input" },
  { fieldType: "dropdown", label: "Dropdown field", helper: "Choose one option" },
@@ -179,13 +355,58 @@ function defaultStyle() {
  buttonColor: "#12344D",
  accentColor: "#12344D",
     logoUrl: "",
+    fontSize: 16,
+    fontWeight: 400,
+    labelFontSize: 13,
+    placeholderFontSize: 14,
+    errorFontSize: 13,
+    successFontSize: 16,
+    fieldWidth: 100,
+    fieldHeight: 44,
+    fieldBorderWidth: 1,
+    fieldBorderRadius: 12,
+    fieldBorderColor: "#D8DDEC",
+    fieldFocusBorderColor: "#6366F1",
+    fieldBackgroundColor: "#FFFFFF",
+    placeholderColor: "#6B7280",
+    fieldTextColor: "#111827",
+    layoutColumns: "one",
+    customColumnWidth: 50,
+    rowGap: 9,
+    columnGap: 9,
+    mobileColumns: "one",
+    tabletColumns: "one",
+    containerBackgroundMode: "solid",
+    gradientStart: "#FFFFFF",
+    gradientEnd: "#EEF1FF",
+    gradientAngle: 145,
+    containerBorderColor: "#D8DDEC",
+    containerBorderWidth: 1,
+    containerBorderRadius: 24,
+    containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerPadding: 30,
+    containerMargin: 0,
+    buttonHoverColor: "#0D2639",
+    buttonTextColor: "#FFFFFF",
+    buttonFontSize: 16,
+    buttonBorderColor: "transparent",
+    buttonBorderWidth: 0,
+    buttonBorderRadius: 12,
+    buttonWidth: "auto",
+    buttonHeight: 46,
+    buttonAlignment: "left",
+    buttonLoadingColor: "#12344D",
+    buttonLoadingText: "Submitting...",
+    successMessageColor: "#065F46",
+    errorMessageColor: "#B91C1C",
   };
 }
 
 function defaultSettings() {
- return {
+  return {
   formTitle: "",
   submitButtonLabel: "Submit",
+  showPoweredBy: true,
   successMessage: "Thank you! Your information has been received. We will be in touch with you shortly to assist with your account.",
     afterSubmitAction: "message",
  redirectUrl: "",
@@ -197,8 +418,15 @@ function defaultSettings() {
   optInLinkUrl: "",
   createAccount: false,
   createDeal: false,
-};
+  phoneAllowAllCountries: true,
+    phoneAllowedCountries: [],
+    multiStepEnabled: false,
+    steps: [],
+  };
 }
+const PHONE_COUNTRY_OPTIONS = [
+  ["+1", "United States / Canada"], ["+7", "Russia / Kazakhstan"], ["+20", "Egypt"], ["+27", "South Africa"], ["+30", "Greece"], ["+31", "Netherlands"], ["+32", "Belgium"], ["+33", "France"], ["+34", "Spain"], ["+39", "Italy"], ["+40", "Romania"], ["+41", "Switzerland"], ["+43", "Austria"], ["+44", "United Kingdom"], ["+45", "Denmark"], ["+46", "Sweden"], ["+47", "Norway"], ["+48", "Poland"], ["+49", "Germany"], ["+51", "Peru"], ["+52", "Mexico"], ["+53", "Cuba"], ["+54", "Argentina"], ["+55", "Brazil"], ["+56", "Chile"], ["+57", "Colombia"], ["+58", "Venezuela"], ["+60", "Malaysia"], ["+61", "Australia"], ["+62", "Indonesia"], ["+63", "Philippines"], ["+64", "New Zealand"], ["+65", "Singapore"], ["+66", "Thailand"], ["+81", "Japan"], ["+82", "South Korea"], ["+84", "Vietnam"], ["+86", "China"], ["+90", "Türkiye"], ["+91", "India"], ["+92", "Pakistan"], ["+93", "Afghanistan"], ["+94", "Sri Lanka"], ["+95", "Myanmar"], ["+98", "Iran"], ["+211", "South Sudan"], ["+212", "Morocco"], ["+213", "Algeria"], ["+216", "Tunisia"], ["+218", "Libya"], ["+220", "Gambia"], ["+221", "Senegal"], ["+222", "Mauritania"], ["+223", "Mali"], ["+224", "Guinea"], ["+225", "Ivory Coast"], ["+226", "Burkina Faso"], ["+227", "Niger"], ["+228", "Togo"], ["+229", "Benin"], ["+230", "Mauritius"], ["+231", "Liberia"], ["+232", "Sierra Leone"], ["+233", "Ghana"], ["+234", "Nigeria"], ["+235", "Chad"], ["+236", "Central African Republic"], ["+237", "Cameroon"], ["+238", "Cape Verde"], ["+239", "Sao Tome and Principe"], ["+240", "Equatorial Guinea"], ["+241", "Gabon"], ["+242", "Republic of the Congo"], ["+243", "DR Congo"], ["+244", "Angola"], ["+245", "Guinea-Bissau"], ["+246", "British Indian Ocean Territory"], ["+248", "Seychelles"], ["+249", "Sudan"], ["+250", "Rwanda"], ["+251", "Ethiopia"], ["+252", "Somalia"], ["+253", "Djibouti"], ["+254", "Kenya"], ["+255", "Tanzania"], ["+256", "Uganda"], ["+257", "Burundi"], ["+258", "Mozambique"], ["+260", "Zambia"], ["+261", "Madagascar"], ["+262", "Reunion"], ["+263", "Zimbabwe"], ["+264", "Namibia"], ["+265", "Malawi"], ["+266", "Lesotho"], ["+267", "Botswana"], ["+268", "Eswatini"], ["+269", "Comoros"], ["+290", "Saint Helena"], ["+291", "Eritrea"], ["+297", "Aruba"], ["+298", "Faroe Islands"], ["+299", "Greenland"], ["+350", "Gibraltar"], ["+351", "Portugal"], ["+352", "Luxembourg"], ["+353", "Ireland"], ["+354", "Iceland"], ["+355", "Albania"], ["+356", "Malta"], ["+357", "Cyprus"], ["+358", "Finland"], ["+359", "Bulgaria"], ["+370", "Lithuania"], ["+371", "Latvia"], ["+372", "Estonia"], ["+373", "Moldova"], ["+374", "Armenia"], ["+375", "Belarus"], ["+376", "Andorra"], ["+377", "Monaco"], ["+378", "San Marino"], ["+380", "Ukraine"], ["+381", "Serbia"], ["+382", "Montenegro"], ["+383", "Kosovo"], ["+385", "Croatia"], ["+386", "Slovenia"], ["+387", "Bosnia and Herzegovina"], ["+389", "North Macedonia"], ["+420", "Czechia"], ["+421", "Slovakia"], ["+971", "United Arab Emirates"], ["+974", "Qatar"], ["+975", "Bhutan"], ["+976", "Mongolia"], ["+977", "Nepal"], ["+992", "Tajikistan"], ["+993", "Turkmenistan"], ["+994", "Azerbaijan"], ["+995", "Georgia"], ["+996", "Kyrgyzstan"], ["+998", "Uzbekistan"],
+];
 
 function defaultField(sourceKind = "contact", sourceKey = "name", label = "Name", fieldType = "text") {
 
@@ -216,6 +444,7 @@ defaultValue: "",
   helpText: "",
   required: false,
    hidden: false,
+  showWhen: null,
 width: "full",
     optionsText: Array.isArray(contactDefaults.options) ? contactDefaults.options.join(", ") : "",
    fileFormats: resolvedFieldType === "file" ? DEFAULT_FILE_FORMATS : [],
@@ -428,7 +657,11 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-  const fieldType = FIELD_TYPE_OPTIONS.some((item) => item.value === field?.fieldType) ? field.fieldType : (CONTACT_FIELD_DEFAULTS[sourceKey]?.fieldType || "text");
+  const fieldType = sourceKind === "contact" && sourceKey === "email"
+    ? "email"
+    : FIELD_TYPE_OPTIONS.some((item) => item.value === field?.fieldType)
+      ? field.fieldType
+      : (CONTACT_FIELD_DEFAULTS[sourceKey]?.fieldType || "text");
 
 
 
@@ -670,6 +903,15 @@ function normalizeField(field, index, leadFields = []) {
 
     allowMultipleFiles: Boolean(field?.allowMultipleFiles),
 
+    showWhen: field?.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey)
+      ? {
+        fieldId: textOrBlank(field.showWhen.fieldId),
+        fieldKey: textOrBlank(field.showWhen.fieldKey),
+        parentQuestion: textOrBlank(field.showWhen.parentQuestion),
+        value: textOrBlank(field.showWhen.value),
+      }
+      : null,
+
 
 
 
@@ -685,6 +927,8 @@ function normalizeField(field, index, leadFields = []) {
 
 
     fileTagsText: Array.isArray(field?.fileTags) ? field.fileTags.join(", ") : String(field?.fileTagsText || ""),
+
+    stepId: textOrBlank(field?.stepId),
 
 
 
@@ -910,8 +1154,16 @@ function normalizeForm(raw, leadFields = []) {
 
     settings: (() => {
       const merged = { ...defaultSettings(), ...(base.settings || {}) };
+      const steps = Array.isArray(merged.steps)
+        ? merged.steps.map((step, index) => ({
+          id: String(step?.id || `step-${index + 1}`),
+          title: String(step?.title || `Step ${index + 1}`),
+          description: String(step?.description || ""),
+        }))
+        : [];
       if ((base.settings || {}).formTitle == null && base.name) merged.formTitle = String(base.name);
-      return merged;
+      const userSteps = steps.length === 1 && steps[0].id === "step-1" && steps[0].title === "Step 1" && !steps[0].description ? [] : steps;
+      return { ...merged, steps: userSteps };
     })(),
 
 
@@ -1008,7 +1260,7 @@ function splitOptions(text) {
 
 
 
-  return String(text || "").split(",").map((item) => item.trim()).filter(Boolean).slice(0, 50);
+  return String(text || "").split(/[,\n]/).map((item) => item.trim()).filter(Boolean).slice(0, 50);
 
 
 
@@ -1264,7 +1516,7 @@ function emptyFieldFor(kind, leadFields, sourceKey = "", fieldType = "text", lab
 
 
 
-  const labelMap = {
+  const _labelMap = {
 
 
 
@@ -1424,7 +1676,8 @@ function emptyFieldFor(kind, leadFields, sourceKey = "", fieldType = "text", lab
 
 
 
-  return defaultField("custom", `custom_${Date.now().toString(36)}`, labelMap[resolvedType] || "Custom field", resolvedType);
+  // Custom questions start blank so the form owner can enter every value manually.
+  return defaultField("custom", `custom_${Date.now().toString(36)}`, label, resolvedType);
 
 
 
@@ -1504,7 +1757,7 @@ function Section({ id, step, title, subtitle, children }) {
 
 
 
-    <section id={id} className="card" style={{ position: "relative", zIndex: id === "wf-fields" ? 20 : 1, overflow: "visible", padding: 20, background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 14, color: "var(--text-primary)", boxShadow: "var(--wf-shadow)" }}>
+    <section id={id} className="card" style={{ position: "relative", zIndex: id === "wf-fields" ? 20 : 1, overflow: "visible", padding: 20, background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 14, color: "var(--text-primary)", boxShadow: "var(--wf-shadow)", scrollMarginTop: id === "wf-style" ? 16 : undefined }}>
 
 
 
@@ -2000,6 +2253,15 @@ function ColorField({ label, value, onChange, fallback }) {
 
 
 
+}
+
+function StyleNumberField({ label, value, min, max, step = 1, onChange }) {
+  return (
+    <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+      <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>{label}</span>
+      <input className="input-field" type="number" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </label>
+  );
 }
 
 
@@ -2960,7 +3222,7 @@ function toggleFormat(formats, value) {
 
 
 
-function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
+function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFields, scope, onChange, onMove, onRemove, phoneSettings, onPhoneSettingsChange, onAddConditionalChild, steps = [], multiStepEnabled = false, formScope = scope || "generic", formSettings, onFormSettingsChange }) {
 
 
 
@@ -2976,6 +3238,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
+  const isConditional = scope === "generic" && Boolean(field.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey));
   const isChoice = CHOICE_FIELD_TYPES.has(field.fieldType);
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(field.id) });
@@ -3042,6 +3305,36 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
       : CONTACT_FIELD_DEFAULTS[field.sourceKey]?.options || [];
 
+  const getConditionalOptions = (candidate) => {
+    if (!candidate) return [];
+    if (candidate.fieldType === "checkbox") return ["true"];
+    if (candidate.sourceKind === "lead_custom") {
+      const leadOptions = leadFields.find((item) => item.fieldKey === candidate.sourceKey)?.options || [];
+      return leadOptions.length ? leadOptions : splitOptions(candidate.optionsText);
+    }
+    if (candidate.sourceKind === "custom") return splitOptions(candidate.optionsText);
+    if (CHOICE_FIELD_TYPES.has(candidate.fieldType)) {
+      const configuredOptions = splitOptions(candidate.optionsText);
+      return configuredOptions.length ? configuredOptions : CONTACT_FIELD_DEFAULTS[candidate.sourceKey]?.options || [];
+    }
+    return [];
+  };
+  const conditionalParentFields = scope === "generic"
+    ? (conditionalFlowFields.length ? conditionalFlowFields : allFields).filter((candidate) => (
+      String(candidate.id) !== String(field.id) &&
+      !candidate.hidden &&
+      candidate.fieldType !== "file" &&
+      getConditionalOptions(candidate).length > 0 &&
+      !createsConditionalCycle(candidate, field, allFields)
+    ))
+    : [];
+  const selectedConditionalField = resolveConditionalParent(field, conditionalParentFields) || null;
+  const conditionalOptions = getConditionalOptions(selectedConditionalField);
+  const branchOptions = scope === "generic" ? getConditionalOptions(field) : [];
+  const conditionalDepth = isConditional ? getConditionalDepth(field, allFields) : 0;
+  const conditionalPath = isConditional ? getConditionalPath(field, allFields) : [];
+  const fieldTypeOptions = editableFieldTypes;
+
 
 
 
@@ -3073,6 +3366,34 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
   const [formatPickerOpen, setFormatPickerOpen] = useState(false);
+  const [domainDraft, setDomainDraft] = useState({ blockedEmailDomains: "", allowedEmailDomains: "" });
+
+  useEffect(() => {
+    const closeDomainPickers = (event) => {
+      document.querySelectorAll("details[data-email-domain-picker][open]").forEach((picker) => {
+        if (!picker.contains(event.target)) picker.removeAttribute("open");
+      });
+    };
+    document.addEventListener("click", closeDomainPickers);
+    return () => document.removeEventListener("click", closeDomainPickers);
+  }, []);
+
+  const updateDomainList = (key, domain, checked) => {
+    if (!formSettings || !onFormSettingsChange) return;
+    const current = Array.isArray(formSettings[key]) ? formSettings[key] : [];
+    const disabledKey = key === "blockedEmailDomains" ? "disabledBlockedEmailDomains" : "disabledAllowedEmailDomains";
+    const disabled = Array.isArray(formSettings[disabledKey]) ? formSettings[disabledKey] : [];
+    const nextDisabled = checked ? disabled.filter((item) => item !== domain) : [...new Set([...disabled, domain])];
+    onFormSettingsChange({ ...formSettings, [key]: [...new Set([...current, domain])], [disabledKey]: nextDisabled });
+  };
+
+  const addDomain = (key) => {
+    const domain = String(domainDraft[key] || "").trim().toLowerCase().replace(/^@+/, "").replace(/\.+$/, "");
+    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/i.test(domain)) return;
+    const current = Array.isArray(formSettings?.[key]) ? formSettings[key] : [];
+    if (!current.includes(domain)) onFormSettingsChange({ ...formSettings, [key]: [...current, domain] });
+    setDomainDraft((value) => ({ ...value, [key]: "" }));
+  };
 
 
 
@@ -4336,7 +4657,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-    <div ref={setNodeRef} className="wf-field-card" style={fieldCardStyle}>
+    <div ref={setNodeRef} className="wf-field-card" style={{ ...fieldCardStyle, overflow: formScope === "generic" && field.sourceKind === "contact" && field.sourceKey === "email" ? "visible" : undefined }}>
 
 
 
@@ -4672,7 +4993,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-        <div data-testid="wf-field-editor-grid" className="wf-field-editor-grid" style={{ display: "grid", gridTemplateColumns: field.hidden ? "minmax(220px, 1fr) minmax(220px, max-content)" : "minmax(220px, 1fr) minmax(180px, 0.8fr) minmax(260px, max-content)", gap: 16, minWidth: 0, alignItems: "start" }}>
+        <div data-testid="wf-field-editor-grid" className="wf-field-editor-grid" style={{ display: "grid", gridTemplateColumns: field.hidden ? "minmax(220px, 1fr) minmax(220px, max-content)" : "minmax(220px, 1fr) minmax(180px, 0.8fr) minmax(260px, max-content)", gap: 10, minWidth: 0, alignItems: "start" }}>
 
 
 
@@ -4752,6 +5073,15 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
+          {multiStepEnabled && steps.length > 0 ? (
+            <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Form step</span>
+              <select className="input-field" value={field.stepId || steps[0].id} onChange={(e) => onChange(index, { stepId: e.target.value })}>
+                {steps.map((step, stepIndex) => <option key={step.id} value={step.id}>{step.title || `Step ${stepIndex + 1}`}</option>)}
+              </select>
+            </label>
+          ) : null}
+
           {field.hidden ? (
 
             <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
@@ -4790,6 +5120,10 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
                 <input className="input-field" type="url" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
 
+              ) : field.fieldType === "email" ? (
+
+                <input className="input-field" type="email" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
+
               ) : (
 
                 <input className="input-field" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
@@ -4798,9 +5132,9 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
             </label>
 
-          ) : field.sourceKind === "custom" ? (
+          ) : (
 
-            <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 0.8fr) minmax(200px, 1fr)", gap: 10, minWidth: 0, alignItems: "start" }}>
 
               <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
@@ -4809,13 +5143,17 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
                 <select
                   className="input-field"
                   value={field.fieldType}
-                  onChange={(e) => onChange(index, {
-                    fieldType: e.target.value,
-                    optionsText: CHOICE_FIELD_TYPES.has(e.target.value) ? field.optionsText || "" : "",
-                  })}
+                  onChange={(e) => {
+                    const nextType = e.target.value;
+                    onChange(index, {
+                      fieldType: nextType,
+                      showWhen: field.showWhen || null,
+                      optionsText: CHOICE_FIELD_TYPES.has(nextType) ? field.optionsText || "" : "",
+                    });
+                  }}
                 >
-                  {editableFieldTypes.map((item) => (
-                    <option key={item.value} value={item.value}>
+                  {fieldTypeOptions.map((item) => (
+                    <option key={item.value} value={item.value} disabled={item.disabled}>
                       {item.label}
                     </option>
                   ))}
@@ -4829,7 +5167,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
                   <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
 
-                  <textarea className="input-field" rows={3} value={field.optionsText} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Google, Referral, Event" />
+                  <textarea className="input-field" rows={4} value={field.optionsText || ""} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Type one option per line (or use commas)" />
 
                 </label>
 
@@ -4846,16 +5184,6 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
               )}
 
             </div>
-
-          ) : (
-
-            <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
-
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Placeholder</span>
-
-              <input className="input-field" value={field.placeholder} onChange={(e) => onChange(index, { placeholder: e.target.value })} placeholder="E.g. john.smith@acmecorp.com" />
-
-            </label>
 
           )}
 
@@ -4874,7 +5202,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 14, justifyContent: "flex-end", flexWrap: "nowrap", minWidth: 0, width: "max-content", justifySelf: "end" }}>
+          <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "flex-end", flexWrap: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "wrap" : "nowrap", flexDirection: "row", minWidth: 0, width: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "100%" : "max-content", gridColumn: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "1 / -1" : "auto", justifySelf: "end", alignSelf: "start" }}>
 
 
 
@@ -5001,9 +5329,15 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-
             </label>
 
+            {field.sourceKey === "phone" && phoneSettings ? (
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap", paddingTop: 2 }}>
+                <span style={{ fontWeight: 700 }}>Countries:</span>
+                <select value={phoneSettings.phoneAllowAllCountries !== false ? "all" : "selected"} onChange={(e) => onPhoneSettingsChange({ ...phoneSettings, phoneAllowAllCountries: e.target.value === "all" })} style={{ fontSize: 12, padding: "3px 5px", borderRadius: 6 }}><option value="all">All</option><option value="selected">Selected</option></select>
+                {phoneSettings.phoneAllowAllCountries === false ? <select multiple size={1} value={phoneSettings.phoneAllowedCountries || []} onChange={(e) => onPhoneSettingsChange({ ...phoneSettings, phoneAllowedCountries: Array.from(e.target.selectedOptions).map((option) => option.value) })} title="Select one or more allowed country codes" style={{ width: 145, height: 26, fontSize: 12, padding: "2px 5px", borderRadius: 6 }}>{PHONE_COUNTRY_OPTIONS.map(([code, name]) => <option key={code} value={code}>{code} - {name}</option>)}</select> : null}
+              </div>
+            ) : null}
 
 
 
@@ -5017,6 +5351,25 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
+
+
+            {formScope === "generic" && field.sourceKind === "contact" && field.sourceKey === "email" && formSettings && onFormSettingsChange ? (
+              <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", flexBasis: "100%", order: 2, color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>Email validation
+                  <select className="input-field" style={{ width: 150, padding: "0.35rem 0.45rem" }} value={formSettings.emailValidationType || "all"} onChange={(e) => onFormSettingsChange({ ...formSettings, emailValidationType: e.target.value })}>
+                    <option value="all">Allow all email addresses</option><option value="company">Company email only</option>
+                  </select>
+                </label>
+                {formSettings.emailValidationType === "company" ? ["blockedEmailDomains", "allowedEmailDomains"].map((key) => {
+                  const label = key === "blockedEmailDomains" ? "Blocked" : "Allowed";
+                  const domains = Array.isArray(formSettings[key]) ? formSettings[key] : [];
+                  const disabledKey = key === "blockedEmailDomains" ? "disabledBlockedEmailDomains" : "disabledAllowedEmailDomains";
+                  const disabled = Array.isArray(formSettings[disabledKey]) ? formSettings[disabledKey] : [];
+                  return <details key={key} data-email-domain-picker="true" style={{ position: "relative" }}><summary style={{ cursor: "pointer" }}>{label} ({domains.filter((domain) => !disabled.includes(domain)).length})</summary><div className="wf-email-domain-popover" style={{ position: "absolute", right: 0, top: "100%", zIndex: 1000, minWidth: 230, maxHeight: 230, overflowY: "auto", marginTop: 6, padding: 10, border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--wf-popover-bg, #fff)", boxShadow: "0 8px 20px rgba(0,0,0,.14)", opacity: 1 }}><div style={{ display: "grid", gap: 6 }}>{domains.map((domain) => <label key={domain} style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={!disabled.includes(domain)} onChange={(e) => updateDomainList(key, domain, e.target.checked)} />{domain}</label>)}</div><div style={{ position: "sticky", bottom: 0, display: "flex", gap: 5, marginTop: 8, paddingTop: 8, background: "var(--wf-popover-bg, #fff)" }}><input className="input-field" style={{ minWidth: 0, padding: "0.35rem" }} value={domainDraft[key]} onChange={(e) => setDomainDraft((value) => ({ ...value, [key]: e.target.value }))} placeholder="customdomain.com" /><button type="button" className="btn-secondary" onClick={() => addDomain(key)}>Add</button></div></div></details>;
+                }) : null}
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><input type="checkbox" checked={Boolean(formSettings.emailMxValidation)} onChange={(e) => onFormSettingsChange({ ...formSettings, emailMxValidation: e.target.checked })} />Valid MX</label>
+              </div>
+            ) : null}
 
             <button type="button" className="btn-secondary" onClick={() => onRemove(index)} title="Delete field" style={{ padding: "0.55rem 0.65rem", color: "var(--text-secondary)", borderColor: "var(--border-color)", background: "var(--surface-hover)" }}>
 
@@ -5099,119 +5452,77 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-        {field.sourceKind !== "custom" && isChoice ? (
+        {scope === "generic" && isConditional ? (
 
+          <div style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--wf-border)", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(180px, 0.8fr)", gap: 10 }}>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--wf-border)" }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>
+              Conditional level {conditionalDepth}{conditionalPath.length > 1 ? ` · ${conditionalPath.join(" → ")}` : ""}
+            </div>
 
             <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <textarea className="input-field" rows={3} value={field.optionsText} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="One, Two, Three" />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Parent question</span>
+              <select
+                className="input-field"
+                value={field.showWhen?.fieldId || ""}
+                onChange={(e) => {
+                   const parent = conditionalParentFields.find((candidate) => String(candidate.id) === e.target.value);
+                  const options = getConditionalOptions(parent);
+                  onChange(index, { showWhen: parent ? { fieldId: parent.id, fieldKey: parent.sourceKey, parentQuestion: parent.label, value: options[0] || "" } : null });
+                }}
+              >
+                <option value="">Select the root question</option>
+                 {conditionalParentFields.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
+              </select>
             </label>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+            {selectedConditionalField ? (
+              <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Child answer</span>
+                {conditionalOptions.length > 0 ? (
+                  <select
+                    className="input-field"
+                    value={field.showWhen?.value || ""}
+                    onChange={(e) => onChange(index, { showWhen: { ...field.showWhen, value: e.target.value } })}
+                  >
+                    {conditionalOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    className="input-field"
+                    value={field.showWhen?.value || ""}
+                    onChange={(e) => onChange(index, { showWhen: { ...field.showWhen, value: e.target.value } })}
+                    placeholder="Enter the value that should show this field"
+                  />
+                )}
+              </label>
+            ) : null}
 
           </div>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         ) : null}
+
+        {scope === "generic" && branchOptions.length > 0 && onAddConditionalChild ? (
+          <div style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px dashed var(--wf-border)", display: "grid", gap: 8 }}>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 700 }}>
+              Add a child question for an answer
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {branchOptions.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => onAddConditionalChild(field.id, option)}
+                  style={{ fontSize: 12, padding: "0.45rem 0.65rem" }}
+                >
+                  + {option}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
 
 
 
@@ -5324,7 +5635,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick, onClose }) {
+function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope = "generic", onPick, onClose }) {
 
 
 
@@ -5758,7 +6069,9 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
 
-  const contactItems = CONTACT_FIELD_OPTIONS.filter((item) => matches(item.label, item.value) && !existingFieldKeys.has(`contact:${item.value}`));
+  const contactFieldOptions = scope === "generic" ? GENERIC_CONTACT_FIELD_OPTIONS : CONTACT_FIELD_OPTIONS;
+  const contactItems = contactFieldOptions.filter((item) => matches(item.label, item.value) && !existingFieldKeys.has(`contact:${item.value}`));
+  const automaticItems = scope === "generic" ? GENERIC_AUTOMATIC_TABLE_FIELDS.filter((item) => matches(item.label, item.value)) : [];
 
 
 
@@ -5992,7 +6305,7 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
 
-        {contactItems.length || leadItems.length ? (
+        {contactItems.length || leadItems.length || automaticItems.length ? (
 
 
 
@@ -6233,6 +6546,18 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
         ) : <div className="wf-field-picker-empty">No matching fields.</div>}
+
+        {automaticItems.length > 0 ? (
+          <>
+            <div className="wf-field-picker-heading">AUTOMATICALLY CAPTURED</div>
+            {automaticItems.map((item) => (
+              <div key={item.value} className="wf-field-picker-item" style={{ opacity: 0.62, cursor: "default" }} title="Captured automatically when the form is submitted">
+                <span>{item.label}</span>
+                <small>automatic</small>
+              </div>
+            ))}
+          </>
+        ) : null}
 
 
 
@@ -6592,6 +6917,8 @@ export default function WebForms({ scope = "generic" }) {
 
 
   const [selectedForm, setSelectedForm] = useState(null);
+  const [activeBuilderStepId, setActiveBuilderStepId] = useState("step-1");
+  const [pageDialog, setPageDialog] = useState(null);
 
   const [builderOpen, setBuilderOpen] = useState(false);
 
@@ -8049,6 +8376,35 @@ export default function WebForms({ scope = "generic" }) {
 
       fields[index] = { ...(fields[index] || {}), ...patch };
 
+      if (current?.scope === "generic" && Object.prototype.hasOwnProperty.call(patch, "stepId")) {
+        const changedField = fields[index];
+        const isConditionalRoot = !changedField.showWhen && (
+          changedField?.conditionalFlow === true ||
+          String(changedField?.sourceKey || "").startsWith("conditional-root_")
+        );
+        if (isConditionalRoot) {
+          const descendantIds = new Set([String(changedField.id)]);
+          let foundDescendant = true;
+          while (foundDescendant) {
+            foundDescendant = false;
+            fields.forEach((field) => {
+              const condition = field?.showWhen;
+              const parentMatches = condition && (
+                (condition.fieldId && descendantIds.has(String(condition.fieldId))) ||
+                (condition.fieldKey && fields.some((candidate) => descendantIds.has(String(candidate.id)) && String(candidate.sourceKey) === String(condition.fieldKey)))
+              );
+              if (parentMatches && !descendantIds.has(String(field.id))) {
+                descendantIds.add(String(field.id));
+                foundDescendant = true;
+              }
+            });
+          }
+          fields.forEach((field) => {
+            if (descendantIds.has(String(field.id))) field.stepId = patch.stepId;
+          });
+        }
+      }
+
 
 
 
@@ -8271,6 +8627,32 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
+      if (current?.scope === "generic") {
+        const groups = buildConditionalFieldGroups(fields, true);
+        const selectedGroup = groups.find((group) =>
+          group.fields.some(({ field }) => String(field.id) === String(fields[index]?.id))
+        );
+        const isConditionalGroup = selectedGroup && (
+          selectedGroup.fields.length > 1 ||
+          selectedGroup.root?.conditionalFlow === true ||
+          String(selectedGroup.root?.sourceKey || "").startsWith("conditional-root_") ||
+          selectedGroup.fields.some(({ field }) => Boolean(field.showWhen))
+        );
+
+        if (isConditionalGroup) {
+          const blockIndex = groups.findIndex((group) => group === selectedGroup);
+          const nextBlockIndex = blockIndex + delta;
+          if (nextBlockIndex < 0 || nextBlockIndex >= groups.length) return current;
+
+          const blocks = groups.map((group) => [...group.fields]
+            .sort((a, b) => a.index - b.index)
+            .map(({ field }) => field));
+          const [block] = blocks.splice(blockIndex, 1);
+          blocks.splice(nextBlockIndex, 0, block);
+          return { ...(current || {}), fields: blocks.flat() };
+        }
+      }
+
       const nextIndex = index + delta;
 
 
@@ -8408,8 +8790,46 @@ export default function WebForms({ scope = "generic" }) {
       return;
     }
 
-    applyDraft((current) => ({ ...(current || {}), fields: [...(current?.fields || []), emptyFieldFor(kind, leadFields, sourceKey, fieldType, label)] }));
+    applyDraft((current) => {
+      const field = emptyFieldFor(kind, leadFields, sourceKey, fieldType, label);
+      if (current?.settings?.multiStepEnabled && activeBuilderStepId) field.stepId = activeBuilderStepId;
+      return { ...(current || {}), fields: [...(current?.fields || []), field] };
+    });
 
+  };
+
+  const addConditionalFlow = () => {
+    if (selectedForm?.scope !== "generic") return;
+
+    const root = {
+      ...emptyFieldFor("custom", leadFields, "", "dropdown", ""),
+      sourceKey: uid("conditional-root"),
+      conditionalFlow: true,
+      conditionalCreatedAt: Date.now(),
+      stepId: selectedForm?.settings?.multiStepEnabled ? activeBuilderStepId : "",
+      label: "",
+      fieldType: "dropdown",
+      optionsText: "",
+      showWhen: null,
+    };
+
+    applyDraft((current) => ({
+      ...(current || {}),
+      fields: [root, ...(current?.fields || [])],
+    }));
+  };
+
+  const addFormStep = () => {
+    setPageDialog({ title: "", description: "" });
+  };
+
+  const createFormStep = () => {
+    if (!pageDialog) return;
+    const steps = selectedForm?.settings?.steps || [];
+    const nextSteps = [...steps, { id: uid("step"), title: String(pageDialog.title || "").trim() || `Step ${steps.length + 1}`, description: String(pageDialog.description || "").trim() }];
+    setActiveBuilderStepId(nextSteps[nextSteps.length - 1].id);
+    applyDraft((current) => ({ ...(current || {}), settings: { ...(current?.settings || {}), multiStepEnabled: true, steps: nextSteps } }));
+    setPageDialog(null);
   };
 
   const toggleFieldPicker = async () => {
@@ -8433,6 +8853,39 @@ export default function WebForms({ scope = "generic" }) {
 
     setFieldPickerOpen(false);
 
+  };
+
+  const addConditionalChild = (parentFieldId, answer) => {
+    if (selectedForm?.scope !== "generic") return;
+
+    const parent = (selectedForm.fields || []).find((field) => String(field.id) === String(parentFieldId));
+    if (!parent) return;
+
+    const alreadyAdded = (selectedForm.fields || []).some((field) => (
+      field.showWhen &&
+      String(field.showWhen.fieldId || "") === String(parent.id) &&
+      String(field.showWhen.value || "") === String(answer)
+    ));
+    if (alreadyAdded) {
+      notifyRef.current?.error?.(`A child question already exists for ${answer}.`);
+      return;
+    }
+
+    const child = {
+      ...emptyFieldFor("custom", leadFields, "", "text", ""),
+      sourceKey: uid("conditional"),
+      label: "",
+      showWhen: {
+        fieldId: parent.id,
+        fieldKey: parent.sourceKey,
+        value: String(answer),
+      },
+    };
+
+    applyDraft((current) => ({
+      ...(current || {}),
+      fields: [...(current?.fields || []), { ...child, stepId: current?.settings?.multiStepEnabled ? (parent.stepId || activeBuilderStepId) : "" }],
+    }));
   };
 
   const handleDragEnd = ({ active, over }) => {
@@ -8505,7 +8958,34 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-    applyDraft((current) => ({ ...(current || {}), fields: (current?.fields || []).filter((_, i) => i !== index) }));
+    applyDraft((current) => {
+      const removed = current?.fields?.[index];
+      const allFields = current?.fields || [];
+      const fieldsToRemove = new Set(removed ? [String(removed.id)] : []);
+      const sourceKeysToRemove = new Set(removed?.sourceKey ? [String(removed.sourceKey)] : []);
+
+      // Remove the complete descendant tree, including grandchildren whose
+      // parent is itself being removed.
+      let changed = true;
+      while (changed) {
+        changed = false;
+        allFields.forEach((field) => {
+          const condition = field.showWhen;
+          const pointsToRemoved = condition && (
+            (condition.fieldId && fieldsToRemove.has(String(condition.fieldId))) ||
+            (condition.fieldKey && sourceKeysToRemove.has(String(condition.fieldKey)))
+          );
+          if (pointsToRemoved && !fieldsToRemove.has(String(field.id))) {
+            fieldsToRemove.add(String(field.id));
+            if (field.sourceKey) sourceKeysToRemove.add(String(field.sourceKey));
+            changed = true;
+          }
+        });
+      }
+
+      const fields = allFields.filter((field) => !fieldsToRemove.has(String(field.id)));
+      return { ...(current || {}), fields };
+    });
 
 
 
@@ -9824,6 +10304,11 @@ export default function WebForms({ scope = "generic" }) {
 
   const previewSrc = selectedForm ? buildWebFormPreviewUrl(selectedForm, origin) : "";
 
+  const builderFields = selectedForm?.fields || [];
+  const builderFieldGroups = selectedForm?.scope === "generic"
+    ? buildConditionalFieldGroups(builderFields, true)
+    : builderFields.map((field, index) => ({ root: field, firstIndex: index, fields: [{ field, index }] }));
+
 
 
 
@@ -9870,7 +10355,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-    <div className="web-form-builder" style={{ padding: "1.5rem", display: "grid", gap: 16, alignContent: "start", color: "var(--text-primary)", animation: "fadeIn 0.2s ease" }}>
+    <div className={scope === "generic" ? "web-form-builder web-form-builder-generic" : "web-form-builder"} style={{ padding: "1.5rem", display: "grid", gap: 16, alignContent: "start", color: "var(--text-primary)", animation: "fadeIn 0.2s ease" }}>
 
 
 
@@ -10143,6 +10628,27 @@ export default function WebForms({ scope = "generic" }) {
 
 
           --wf-field-shadow: 0 6px 18px rgba(0, 0, 0, 0.10);
+
+        }
+
+        .web-form-builder-generic {
+          --wf-popover-bg: #ffffff;
+        }
+
+        html[data-theme="dark"] .web-form-builder-generic,
+        [data-theme="dark"] .web-form-builder-generic {
+          --wf-popover-bg: #1a1d24;
+        }
+
+        .web-form-builder-generic .wf-email-domain-popover {
+          isolation: isolate;
+          color: var(--text-primary);
+          opacity: 1 !important;
+        }
+
+        .web-form-builder-generic .wf-email-domain-popover .input-field {
+          opacity: 1 !important;
+        }
 
 
 
@@ -10922,7 +11428,7 @@ export default function WebForms({ scope = "generic" }) {
         .wf-builder-context strong {
           min-width: 0;
           color: var(--text-primary);
-          overflow: hidden;
+          overflow: visible;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
@@ -13338,7 +13844,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
           gap: 12px;
-          overflow: hidden;
+          overflow: visible;
           position: relative;
 
 
@@ -13356,6 +13862,60 @@ export default function WebForms({ scope = "generic" }) {
 
 
         }
+
+        .wf-conditional-group {
+          display: grid;
+          gap: 10px;
+          padding: 12px;
+          border: 1px solid rgba(91, 107, 255, 0.28);
+          border-left: 4px solid var(--accent-color, #5b6bff);
+          border-radius: 16px;
+          background: color-mix(in srgb, var(--accent-color, #5b6bff) 5%, var(--surface-color));
+        }
+
+        .wf-conditional-group-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          color: var(--text-primary);
+          font-size: 0.82rem;
+          font-weight: 700;
+        }
+
+        .wf-conditional-group-header small {
+          color: var(--text-secondary);
+          font-weight: 600;
+        }
+
+        .wf-conditional-group-fields {
+          display: grid;
+          gap: 10px;
+        }
+
+        .wf-conditional-child-card {
+          margin-left: clamp(12px, 4vw, 44px);
+          padding: 12px;
+          border: 1px solid var(--border-color);
+          border-left: 3px solid var(--accent-color, #5b6bff);
+          border-radius: 12px;
+          background: var(--surface-hover, rgba(91, 107, 255, 0.045));
+        }
+
+        .wf-conditional-child-heading {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          margin: 0 0 10px;
+          color: var(--text-secondary);
+          font-size: 0.78rem;
+        }
+
+        .wf-conditional-child-heading strong { color: var(--text-primary); }
+        .wf-conditional-child-heading em { color: var(--accent-color, #5b6bff); font-style: normal; font-weight: 700; }
+
+        .wf-add-page-modal-surface { background: #ffffff; }
+        :root[data-theme="dark"] .wf-add-page-modal-surface { background: #171a21; }
 
 
 
@@ -17464,7 +18024,7 @@ export default function WebForms({ scope = "generic" }) {
           <div className="wf-builder-grid">
            <aside className="card wf-step-rail">
           <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-fields")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>1</span>Add fields</button>
-          <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-style")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>2</span>Customize text and colors</button>
+          <button type="button" className="btn-secondary wf-step-button" onClick={() => { const section = document.getElementById("wf-style"); if (!section) return; window.scrollTo({ top: section.getBoundingClientRect().top + window.scrollY - 16, behavior: "smooth" }); }}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>2</span>Customize text and colors</button>
              <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-settings")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>3</span>Settings</button>
           </aside>
            <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
@@ -17481,19 +18041,56 @@ export default function WebForms({ scope = "generic" }) {
                   <button ref={fieldPickerButtonRef} type="button" className="btn-secondary" onClick={toggleFieldPicker}>
            <Type size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add contact fields <ChevronDown size={14} style={{ marginLeft: 6, verticalAlign: "middle" }} />
           </button>
-              {/* <button type="button" className="btn-secondary" onClick={() => addField("custom")}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add custom field</button> */}
 
                       <button type="button" className="btn-secondary" onClick={() => addField("file")}><Paperclip size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add field for file attachment</button>
-               <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} existingFields={selectedForm?.fields || []} onPick={handlePickField} onClose={() => setFieldPickerOpen(false)} />
+                      {selectedForm?.scope === "generic" ? (
+                        <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+                          <button type="button" className="btn-secondary" onClick={addConditionalFlow}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add conditional flow</button>
+                          <button type="button" className="btn-secondary" onClick={addFormStep}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add page</button>
+                        </div>
+                      ) : null}
+               <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} existingFields={selectedForm?.fields || []} scope={selectedForm?.scope || "generic"} onPick={handlePickField} onClose={() => setFieldPickerOpen(false)} />
                  </div>
 
                     {leadFields.length === 0 ? <div style={{ marginBottom: 12, color: "var(--text-secondary)", fontSize: "0.88rem" }}>Lead custom fields are not configured yet. You can still build the form with contact and custom fields.</div> : null}
                    <div className="wf-fields-list">
                  <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis, restrictToWebFormsFieldList]} onDragEnd={handleDragEnd}>
                         <SortableContext items={(selectedForm.fields || []).map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
-                          {(selectedForm.fields || []).map((field, index) => (
-                            <FieldCard key={field.id} field={field} index={index} leadFields={leadFields} onChange={updateField} onMove={moveField} onRemove={removeField} />
-                          ))}
+                          {builderFieldGroups.map((group) => {
+                            const groupFields = group.fields.map(({ field }) => field);
+                            const renderField = ({ field, index }) => (
+                              <FieldCard key={field.id} field={field} index={index} allFields={builderFields} conditionalFlowFields={groupFields} leadFields={leadFields} scope={selectedForm.scope} onChange={updateField} onMove={moveField} onRemove={removeField} phoneSettings={selectedForm.scope === "generic" && field.sourceKey === "phone" ? selectedForm.settings : null} onPhoneSettingsChange={(settings) => applyDraft({ settings })} onAddConditionalChild={addConditionalChild} steps={selectedForm.settings.steps} multiStepEnabled={selectedForm.settings.multiStepEnabled} formScope={selectedForm.scope} formSettings={selectedForm.settings} onFormSettingsChange={(settings) => applyDraft({ settings })} />
+                            );
+
+                            if (group.fields.length === 1) return renderField(group.fields[0]);
+
+                            return (
+                              <div key={`conditional-group-${group.root?.id || group.firstIndex}`} className="wf-conditional-group" aria-label={`Conditional flow starting with ${group.root?.label || "parent question"}`}>
+                                <div className="wf-conditional-group-header">
+                                  <span>Conditional flow</span>
+                                  <small>Starts with: {group.root?.label || "Parent question"} · {group.fields.length} questions</small>
+                                  <small>For each child: choose its parent question and answer. A child can become the next parent.</small>
+                                </div>
+                                <div className="wf-conditional-group-fields">
+                                  {group.fields.map((entry, entryIndex) => (
+                                    entryIndex === 0
+                                      ? renderField(entry)
+                                      : (
+                                        <div key={`conditional-child-${entry.field.id}`} className="wf-conditional-child-card">
+                                          <div className="wf-conditional-child-heading">
+                                            <span aria-hidden="true">↳</span>
+                                            <strong>Show question</strong>
+                                            <span>when answer is</span>
+                                            <em>{entry.field.showWhen?.value || "Not specified"}</em>
+                                          </div>
+                                          {renderField(entry)}
+                                        </div>
+                                      )
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </SortableContext>
                       </DndContext>
                  </div>
@@ -17558,10 +18155,94 @@ export default function WebForms({ scope = "generic" }) {
                           <ColorField label="Color of field labels *" value={selectedForm.style.fieldLabelColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldLabelColor: value } })} fallback="#666666" />
                         </div>
                       </div>
+                      {selectedForm.scope === "generic" ? (
+                        <div className="wf-style-divider" style={{ display: "grid", gap: 18 }}>
+                          <div className="wf-style-kicker">Typography</div>
+                          <div className="wf-style-grid-colors">
+                            <StyleNumberField label="Font size (px)" value={selectedForm.style.fontSize} min={10} max={32} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fontSize: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Font weight</span><select className="input-field" value={selectedForm.style.fontWeight} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontWeight: Number(e.target.value) } })}>{[400, 500, 600, 700].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                            <StyleNumberField label="Label size (px)" value={selectedForm.style.labelFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, labelFontSize: value } })} />
+                            <StyleNumberField label="Placeholder size (px)" value={selectedForm.style.placeholderFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, placeholderFontSize: value } })} />
+                            <StyleNumberField label="Error message size (px)" value={selectedForm.style.errorFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, errorFontSize: value } })} />
+                            <StyleNumberField label="Success message size (px)" value={selectedForm.style.successFontSize} min={9} max={32} onChange={(value) => applyDraft({ style: { ...selectedForm.style, successFontSize: value } })} />
+                          </div>
+                          <div className="wf-style-kicker">Fields</div>
+                          <div className="wf-style-grid-colors">
+                            <StyleNumberField label="Field width (%)" value={selectedForm.style.fieldWidth} min={50} max={100} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldWidth: value } })} />
+                            <StyleNumberField label="Field height (px)" value={selectedForm.style.fieldHeight} min={28} max={96} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldHeight: value } })} />
+                            <StyleNumberField label="Border width (px)" value={selectedForm.style.fieldBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderWidth: value } })} />
+                            <StyleNumberField label="Border radius (px)" value={selectedForm.style.fieldBorderRadius} min={0} max={40} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderRadius: value } })} />
+                            <ColorField label="Border color" value={selectedForm.style.fieldBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderColor: value } })} fallback="#D8DDEC" />
+                            <ColorField label="Focus border color" value={selectedForm.style.fieldFocusBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldFocusBorderColor: value } })} fallback="#6366F1" />
+                            <ColorField label="Field background" value={selectedForm.style.fieldBackgroundColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBackgroundColor: value } })} fallback="#FFFFFF" />
+                            <ColorField label="Placeholder color" value={selectedForm.style.placeholderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, placeholderColor: value } })} fallback="#6B7280" />
+                            <ColorField label="Text color" value={selectedForm.style.fieldTextColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldTextColor: value } })} fallback="#111827" />
+                          </div>
+                          <div className="wf-style-kicker">Layout</div>
+                          <div className="wf-style-grid-colors">
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Desktop columns</span><select className="input-field" value={selectedForm.style.layoutColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, layoutColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                            <StyleNumberField label="Custom column width (%)" value={selectedForm.style.customColumnWidth} min={25} max={75} onChange={(value) => applyDraft({ style: { ...selectedForm.style, customColumnWidth: value } })} />
+                            <StyleNumberField label="Row gap (px)" value={selectedForm.style.rowGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, rowGap: value } })} />
+                            <StyleNumberField label="Column gap (px)" value={selectedForm.style.columnGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, columnGap: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Tablet layout</span><select className="input-field" value={selectedForm.style.tabletColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, tabletColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile layout</span><select className="input-field" value={selectedForm.style.mobileColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, mobileColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                          </div>
+                          <div className="wf-style-kicker">Form Container</div>
+                          <div className="wf-style-grid-colors">
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Background</span><select className="input-field" value={selectedForm.style.containerBackgroundMode} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerBackgroundMode: e.target.value } })}><option value="solid">Solid background</option><option value="gradient">Gradient background</option></select></label>
+                            {selectedForm.style.containerBackgroundMode === "gradient" ? <>
+                              <ColorField label="Gradient start" value={selectedForm.style.gradientStart} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientStart: value } })} fallback="#FFFFFF" />
+                              <ColorField label="Gradient end" value={selectedForm.style.gradientEnd} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientEnd: value } })} fallback="#EEF1FF" />
+                              <StyleNumberField label="Gradient angle (degrees)" value={selectedForm.style.gradientAngle} min={0} max={360} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientAngle: value } })} />
+                            </> : null}
+                            <ColorField label="Container border" value={selectedForm.style.containerBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerBorderColor: value } })} fallback="#D8DDEC" />
+                            <StyleNumberField label="Container border width (px)" value={selectedForm.style.containerBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerBorderWidth: value } })} />
+                            <StyleNumberField label="Container radius (px)" value={selectedForm.style.containerBorderRadius} min={0} max={48} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerBorderRadius: value } })} />
+                            <StyleNumberField label="Container padding (px)" value={selectedForm.style.containerPadding} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerPadding: value } })} />
+                            <StyleNumberField label="Container margin (px)" value={selectedForm.style.containerMargin} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerMargin: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Shadow</span><select className="input-field" value={selectedForm.style.containerShadow} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerShadow: e.target.value } })}><option value="none">None</option><option value="0 24px 70px rgba(30,41,96,.14)">Soft</option><option value="0 8px 24px rgba(15,23,42,.18)">Compact</option></select></label>
+                          </div>
+                          <div className="wf-style-kicker">Button</div>
+                          <div className="wf-style-grid-colors">
+                            <ColorField label="Hover color" value={selectedForm.style.buttonHoverColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonHoverColor: value } })} fallback="#0D2639" />
+                            <ColorField label="Button text color" value={selectedForm.style.buttonTextColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonTextColor: value } })} fallback="#FFFFFF" />
+                            <StyleNumberField label="Button font size (px)" value={selectedForm.style.buttonFontSize} min={10} max={32} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonFontSize: value } })} />
+                            <StyleNumberField label="Button height (px)" value={selectedForm.style.buttonHeight} min={30} max={96} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonHeight: value } })} />
+                            <StyleNumberField label="Button radius (px)" value={selectedForm.style.buttonBorderRadius} min={0} max={40} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderRadius: value } })} />
+                            <ColorField label="Button border" value={selectedForm.style.buttonBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderColor: value } })} fallback="#12344D" />
+                            <StyleNumberField label="Button border width (px)" value={selectedForm.style.buttonBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderWidth: value } })} />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Width</span><select className="input-field" value={selectedForm.style.buttonWidth} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonWidth: e.target.value } })}><option value="auto">Auto</option><option value="full">Full width</option></select></label>
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Alignment</span><select className="input-field" value={selectedForm.style.buttonAlignment} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonAlignment: e.target.value } })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="full">Full width</option></select></label>
+                            <ColorField label="Loading color" value={selectedForm.style.buttonLoadingColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonLoadingColor: value } })} fallback="#12344D" />
+                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Loading text</span><input className="input-field" value={selectedForm.style.buttonLoadingText} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonLoadingText: e.target.value } })} /></label>
+                          </div>
+                          <div className="wf-style-kicker">Messages</div>
+                          <div className="wf-style-grid-colors">
+                            <ColorField label="Success message color" value={selectedForm.style.successMessageColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, successMessageColor: value } })} fallback="#065F46" />
+                            <ColorField label="Error message color" value={selectedForm.style.errorMessageColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, errorMessageColor: value } })} fallback="#B91C1C" />
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </Section>
-                  <Section id="wf-settings" step={3} title="Settings" subtitle="Choose what happens after submit and how the submission should be routed.">
+                 <Section id="wf-settings" step={3} title="Settings" subtitle="Choose what happens after submit and how the submission should be routed.">
                     <div className="wf-settings-stack">
+                      {selectedForm.scope === "generic" ? (<div className="wf-settings-block">
+                        <label className="wf-settings-toggle">
+                          <input type="checkbox" checked={Boolean(selectedForm.settings.recaptchaEnabled)} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, recaptchaEnabled: e.target.checked } })} />
+                          <span>Enable reCAPTCHA</span>
+                        </label>
+                      </div>) : null}
+                      <div className="wf-settings-block">
+                        <label className="wf-settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedForm.settings.showPoweredBy !== false}
+                            onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, showPoweredBy: e.target.checked } })}
+                          />
+                          <span>Show “Powered By GlobusCRM” on this web form</span>
+                        </label>
+                      </div>
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">
                           <input
@@ -17676,6 +18357,31 @@ export default function WebForms({ scope = "generic" }) {
           </div>
         </div>
       ), document.body) : null}
+
+      {pageDialog ? (
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, minHeight: "100%", zIndex: 60, background: "var(--wf-modal-overlay, rgba(3, 6, 16, 0.28))", backdropFilter: "blur(2px)", display: "grid", placeItems: "start center", padding: "clamp(24px, 8vh, 96px) 16px" }} role="dialog" aria-modal="true" aria-labelledby="add-page-title">
+          <div className="wf-add-page-modal-surface" style={{ width: "min(100%, 520px)", color: "var(--text-primary, #182033)", border: "1px solid var(--border-color, rgba(148, 163, 184, 0.35))", borderRadius: 16, boxShadow: "0 24px 70px rgba(15, 23, 42, 0.24)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1rem 1.1rem", borderBottom: "1px solid var(--border-color, rgba(255,255,255,0.08))" }}>
+              <strong id="add-page-title">Add form page</strong>
+              <button type="button" className="btn-secondary" onClick={() => setPageDialog(null)} aria-label="Close add page dialog"><X size={16} /></button>
+            </div>
+            <div style={{ display: "grid", gap: 14, padding: 18 }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span>Page title *</span>
+                <input autoFocus className="input-field" value={pageDialog.title} onChange={(e) => setPageDialog((current) => ({ ...current, title: e.target.value }))} placeholder="Enter page title" />
+              </label>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span>Page description (optional)</span>
+                <textarea className="input-field" rows={3} value={pageDialog.description} onChange={(e) => setPageDialog((current) => ({ ...current, description: e.target.value }))} placeholder="Tell users what to complete on this page" />
+              </label>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button type="button" className="btn-secondary" onClick={() => setPageDialog(null)}>Cancel</button>
+                <button type="button" className="btn-primary" onClick={createFormStep} disabled={!String(pageDialog.title || "").trim()}>Add page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showEmbed && selectedForm ? (
         <div style={modalShellStyle()}>

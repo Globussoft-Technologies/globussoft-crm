@@ -373,6 +373,7 @@ jobs:
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \
+            tests/travel-meeting-forms-api.spec.js \
             tests/web-form-leads-api.spec.js \
             tests/sales-teams-api.spec.js \
             tests/geocode-api.spec.js \
@@ -380,6 +381,7 @@ jobs:
             tests/wellness-geofence-zones-api.spec.js \
             tests/contacts-api.spec.js \
             tests/deals-api.spec.js \
+            tests/pipelines.spec.js \
             tests/surveys-api.spec.js \
             tests/external-api.spec.js \
             tests/wellness-clinical-api.spec.js \
@@ -476,6 +478,7 @@ jobs:
             tests/knowledge-base-api.spec.js \
             tests/landing-pages-api.spec.js \
             tests/landing-pages-travel-api.spec.js \
+            tests/travel-promotional-website-api.spec.js \
             tests/landing-pages-registration-form-api.spec.js \
             tests/landing-page-pending-registration-api.spec.js \
             tests/landing-pages-versions-api.spec.js \
@@ -840,10 +843,16 @@ jobs:
             echo "after  SHA: $(git rev-parse --short HEAD)"
             git log --oneline -3
 
+            cd ~/globussoft-crm/tally-connector
+            echo "=== build Windows Tally connector ==="
+            npm ci --include=dev --no-audit --no-fund --loglevel=error 2>&1 | tail -5
+            npm run build:windows 2>&1 | tail -5
+            test -s dist/TallyConnector.exe
+
             # The brochure engine is vendored under agentic-orchcrm/ and the
             # backend spawns tsx from its node_modules at runtime. Install its
             # deps before starting the backend.
-            cd agentic-orchcrm
+            cd ~/globussoft-crm/agentic-orchcrm
             echo "=== agentic-orchcrm npm install ==="
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
 
@@ -1262,7 +1271,7 @@ jobs:
           script: |
             set -euo pipefail
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            cd /home/empcloud-development/globussoft-crm
+            cd /home/empcloud-development/globussoft-crm-staging
 
             echo "=== git state before ==="
             echo "before SHA: $(git rev-parse --short HEAD)"
@@ -1272,7 +1281,13 @@ jobs:
             echo "after  SHA: $(git rev-parse --short HEAD)"
             git log --oneline -3
 
-            cd backend
+            cd "$HOME/globussoft-crm-staging/tally-connector"
+            echo "=== build Windows Tally connector ==="
+            npm ci --include=dev --no-audit --no-fund --loglevel=error 2>&1 | tail -5
+            npm run build:windows 2>&1 | tail -5
+            test -s dist/TallyConnector.exe
+
+            cd "$HOME/globussoft-crm-staging/backend"
             echo "=== npm install ==="
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
 
@@ -1311,9 +1326,9 @@ jobs:
             echo "=== pm2 restart ==="
             # If the process entry is stale (e.g. host rebooted and the old
             # PID is gone), fall back to deleting the entry and starting fresh.
-            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3 || {
-              pm2 delete globussoft-crm-backend 2>&1 || true
-              pm2 start server.js --name globussoft-crm-backend 2>&1 | tail -3
+            pm2 restart globussoft-crm-staging-backend --update-env 2>&1 | tail -3 || {
+              pm2 delete globussoft-crm-staging-backend 2>&1 || true
+              pm2 start server.js --name globussoft-crm-staging-backend 2>&1 | tail -3
             }
             echo "staging backend restarted"
 
@@ -1329,7 +1344,7 @@ jobs:
           script: |
             set -euo pipefail
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            cd /home/empcloud-development/globussoft-crm/frontend
+            cd /home/empcloud-development/globussoft-crm-staging/frontend
 
             echo "=== npm install ==="
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5

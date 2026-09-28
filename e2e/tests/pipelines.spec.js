@@ -109,6 +109,37 @@ test.describe('Pipelines API — smoke', () => {
     expect(Array.isArray(await deals.json())).toBe(true);
   });
 
+  test('POST /api/pipelines atomically assigns Generic CRM stages', async ({ request }) => {
+    const reusable = await request.get(`${API}/pipeline_stages?reusable=true`, { headers: auth() });
+    expect(reusable.status()).toBe(200);
+    const reusableStages = await reusable.json();
+    expect(Array.isArray(reusableStages)).toBe(true);
+    expect(reusableStages.length).toBeGreaterThan(0);
+
+    const selectedStage = reusableStages[0];
+    const tag = `E2E_ATOMIC_PIPELINE_${Date.now()}`;
+    const create = await request.post(`${API}/pipelines`, {
+      headers: auth(),
+      data: {
+        name: tag,
+        stages: [{ stageId: selectedStage.id }],
+      },
+    });
+    expect(create.status()).toBe(201);
+    const pipeline = await create.json();
+    createdIds.push(pipeline.id);
+
+    const assigned = await request.get(`${API}/pipeline_stages?pipelineId=${pipeline.id}`, { headers: auth() });
+    expect(assigned.status()).toBe(200);
+    const assignedStages = await assigned.json();
+    expect(assignedStages).toHaveLength(1);
+    expect(assignedStages[0]).toEqual(expect.objectContaining({
+      id: selectedStage.id,
+      pipelineId: pipeline.id,
+      position: 0,
+    }));
+  });
+
   test('PUT /api/pipelines/:id with non-numeric id returns 400', async ({ request }) => {
     const res = await request.put(`${API}/pipelines/not-a-number`, {
       headers: auth(),

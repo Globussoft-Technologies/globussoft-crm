@@ -26,6 +26,9 @@ vi.mock("./useTravelTallyMaster", () => ({
   }),
 }));
 vi.mock("./tallyMath", () => ({
+  rowMatchesTrip: (row, tripId) => String(row.itineraryId) === String(tripId)
+    || String(row.tripId) === String(tripId).replace(/^tmc-/, "")
+    || String(row.quoteId) === String(tripId).replace(/^quote-/, ""),
   getTripLedgerRows: ({ trips }) => trips.map((trip) => ({
     id: trip.id,
     label: trip.destination || `Trip #${trip.id}`,
@@ -166,6 +169,93 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
     await waitFor(() => expect(screen.queryByText("TMC Corporate Trip")).not.toBeInTheDocument());
     expect(fetchApi).toHaveBeenCalledWith(expect.stringContaining("subBrand=rfu"));
     expect(fetchApi).toHaveBeenCalledWith("/api/travel/tally/ledger?subBrand=rfu");
+  });
+
+  it("loads every itinerary page before applying client-side search", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      if (url.includes("/itineraries")) {
+        const offset = Number(new URL(url, "https://crm.test").searchParams.get("offset") || 0);
+        return offset === 0
+          ? { itineraries: Array.from({ length: 200 }, (_, index) => ({ id: index + 1, destination: `Trip ${index + 1}` })), total: 201 }
+          : { itineraries: [{ id: 201, destination: "Trip 201" }], total: 201 };
+      }
+      if (url.includes("/trips")) return { trips: [], total: 0 };
+      if (url.includes("/ledger")) return { customerDetails: [], payableDetails: [] };
+      if (url.includes("/cost-centres")) return { costCentres: [], pagination: { hasMore: false } };
+      return {};
+    });
+
+    render(<TallyExportPreviewPage />);
+    const search = await screen.findByLabelText("Search trips by name or ID");
+    fireEvent.change(search, { target: { value: "Trip 201" } });
+
+    expect(await screen.findByText("Trip 201")).toBeInTheDocument();
+    expect(fetchApi).toHaveBeenCalledWith(expect.stringContaining("offset=200"));
+  });
+
+  it("loads every cost-centre page before deriving trip sync status", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      if (url.includes("/itineraries")) return { itineraries: [{ id: 2, destination: "Complete Status Trip" }], total: 1 };
+      if (url.includes("/trips")) return { trips: [], total: 0 };
+      if (url.includes("/ledger")) return { customerDetails: [], paymentDetails: [], payableDetails: [] };
+      if (url.includes("/cost-centres?page=1")) {
+        return { costCentres: [], pagination: { hasMore: true } };
+      }
+      if (url.includes("/cost-centres?page=2")) {
+        return { costCentres: [{ sourceType: "ITINERARY", sourceId: 2, voucherSyncStatus: "FAILED" }], pagination: { hasMore: false } };
+      }
+      return {};
+    });
+
+    render(<TallyExportPreviewPage />);
+
+    expect((await screen.findAllByText("Failed")).length).toBeGreaterThan(0);
+    expect(fetchApi).toHaveBeenCalledWith(expect.stringContaining("cost-centres?page=2"));
+  });
+
+  it("marks a synced trip when vouchers were added after its last successful push", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      if (url.includes("/itineraries")) return { itineraries: [{ id: 1, destination: "Goa", status: "completed" }] };
+      if (url.includes("/trips")) return { trips: [] };
+      if (url.includes("/ledger")) return {
+        customerDetails: [{ id: 11, itineraryId: 1, amount: 0, transactionDate: "2026-09-16T10:00:00.000Z" }],
+        paymentDetails: [],
+        payableDetails: [],
+      };
+      if (url.includes("/cost-centres")) return {
+        costCentres: [{ sourceType: "ITINERARY", sourceId: 1, syncStatus: "SYNCED", lastVoucherSyncAt: "2026-09-15T10:00:00.000Z" }],
+      };
+      return {};
+    });
+
+    render(<TallyExportPreviewPage />);
+
+    expect((await screen.findAllByText("New vouchers pending")).length).toBeGreaterThan(1);
+    expect(screen.getByText("1 new voucher(s) to push")).toBeInTheDocument();
+  });
+
+  it("shows Failed when the cost centre synced but the latest voucher import failed", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: true };
+      if (url.includes("/itineraries")) return { itineraries: [{ id: 1, destination: "Goa", status: "completed" }] };
+      if (url.includes("/trips")) return { trips: [] };
+      if (url.includes("/ledger")) return { customerDetails: [], paymentDetails: [], payableDetails: [] };
+      if (url.includes("/cost-centres")) return {
+        costCentres: [{ sourceType: "ITINERARY", sourceId: 1, syncStatus: "SYNCED", voucherSyncStatus: "FAILED" }],
+      };
+      return {};
+    });
+
+    render(<TallyExportPreviewPage />);
+
+    expect((await screen.findAllByText("Failed")).length).toBeGreaterThan(1);
   });
 
   it("restores the sub-brand from the URL and keeps it in the preview link", async () => {

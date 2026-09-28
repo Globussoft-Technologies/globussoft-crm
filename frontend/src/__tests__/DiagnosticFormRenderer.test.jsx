@@ -131,3 +131,43 @@ describe('DiagnosticFormRenderer — option text position', () => {
     expect(optionRow.style.justifyContent).toBe('center');
   });
 });
+
+describe('DiagnosticFormRenderer — dynamic identity fields', () => {
+  it('renders custom fields with helper text and browser validation metadata', () => {
+    render(
+      <DiagnosticFormRenderer
+        config={baseConfig()}
+        questions={QUESTIONS}
+        identityFields={[{
+          id: 'school_code', label: 'School code', type: 'text', enabled: true,
+          required: true, minLength: 4, maxLength: 20, pattern: '^SCH-',
+          placeholder: 'SCH-100', helper: 'Use the code from your profile.',
+        }]}
+        identity={{}}
+        mode="preview"
+        preview
+      />,
+    );
+    const control = screen.getByLabelText(/School code/i);
+    expect(control.required).toBe(true);
+    expect(control.minLength).toBe(4);
+    expect(control.maxLength).toBe(20);
+    expect(control.pattern).toBe('^SCH-');
+    expect(control.placeholder).toBe('SCH-100');
+    expect(screen.getByText('Use the code from your profile.')).toBeTruthy();
+  });
+
+  it('renders long-text identity fields as textareas', () => {
+    render(
+      <DiagnosticFormRenderer
+        config={baseConfig()}
+        questions={QUESTIONS}
+        identityFields={[{ id: 'notes', label: 'Notes', type: 'textarea', enabled: true }]}
+        identity={{}}
+        mode="preview"
+        preview
+      />,
+    );
+    expect(screen.getByLabelText('Notes').tagName).toBe('TEXTAREA');
+  });
+});

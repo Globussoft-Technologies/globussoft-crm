@@ -83,6 +83,11 @@ const normalizeBankDetails = (value) => ({
   ),
 });
 
+const hasValidAccountNumber = (bankDetails) => {
+  const accountNumber = String(bankDetails?.accountNumber || "").trim();
+  return !accountNumber || /^\d{9,18}$/.test(accountNumber);
+};
+
 const normalizeMasterDetails = (value) => ({
   companyName: String(value?.companyName || ""),
   mailingName: String(value?.mailingName || ""),
@@ -251,6 +256,12 @@ router.put(
       const bankDetails = normalizeBankDetails(
         req.body?.bankDetails || req.body || {},
       );
+      if (!hasValidAccountNumber(bankDetails)) {
+        return res.status(400).json({
+          error: "Bank account number must contain 9 to 18 digits.",
+          code: "INVALID_BANK_ACCOUNT_NUMBER",
+        });
+      }
       await setSetting(
         req.travelTenant.id,
         TALLY_BANK_DETAILS_KEY,
@@ -302,6 +313,12 @@ router.put(
   async (req, res) => {
     try {
       const masterDetails = normalizeMasterDetails(req.body?.masterDetails || req.body || {});
+      if (!hasValidAccountNumber(masterDetails.bankDetails)) {
+        return res.status(400).json({
+          error: "Bank account number must contain 9 to 18 digits.",
+          code: "INVALID_BANK_ACCOUNT_NUMBER",
+        });
+      }
       await setSetting(
         req.travelTenant.id,
         TALLY_MASTER_DETAILS_KEY,
@@ -513,8 +530,9 @@ router.get("/tally/cost-centres", verifyToken, requireTravelTenant, requirePermi
       ...tmcTrips.slice(0, sourceLimit).map((row) => ({ sourceType: "TMC_TRIP", sourceId: row.id, code: `TMC-TRIP-${row.id}`, label: row.tripCode ? `${row.tripCode} - ${row.destination}` : row.destination || "TMC trip", subBrand: "tmc" })),
       ...quotes.slice(0, sourceLimit).map((row) => ({ sourceType: "QUOTE", sourceId: row.id, code: `QUOTE-${row.id}`, label: row.contact?.name ? `Quote for ${row.contact.name}` : `Quote #${row.id}`, subBrand: row.subBrand })),
     ];
+    const costCentres = rows.slice(0, limit);
     res.json({
-      costCentres: rows.slice(0, limit),
+      costCentres,
       sources,
       pagination: { page, limit, hasMore: hasMoreRows },
       sourcePagination: { page: sourcePage, limit: sourceLimit, hasMore: hasMoreSources },
@@ -1483,16 +1501,18 @@ router.get(
       const paymentTotalsByInvoice = {};
       const installmentTotalsByInvoice = {};
       const successfulPayments = [];
+      const successfulInstallments = [];
       if (invoices.length > 0) {
         const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
         const installmentRows = await prisma.tripInstalmentPayment.findMany({
           where: { invoiceId: { in: [...invoiceIds] } },
-          select: { invoiceId: true, paidAmount: true },
+          select: { id: true, invoiceId: true, paidAmount: true, paidAt: true, createdAt: true },
         });
         for (const row of installmentRows) {
           if (!row.invoiceId) continue;
           installmentTotalsByInvoice[row.invoiceId] =
             (installmentTotalsByInvoice[row.invoiceId] || 0) + Number(row.paidAmount || 0);
+          if (Number(row.paidAmount || 0) > 0) successfulInstallments.push(row);
         }
         const paymentCandidates = await prisma.payment.findMany({
           where: {
@@ -1684,7 +1704,24 @@ router.get(
       // Return each successful customer payment separately for the Bank and
       // Cash Ledger views. Statement imports remain available through their
       // own workflow, but are not customer receipt rows.
-      const paymentDetails = successfulPayments.sort(
+      const paymentDetails = [
+        ...successfulPayments,
+        ...successfulInstallments
+          .filter((payment) => !paymentTotalsByInvoice[payment.invoiceId])
+          .map((payment) => ({
+            id: `installment-${payment.id}`,
+            invoiceId: payment.invoiceId,
+            travelInvoiceId: payment.invoiceId,
+            amount: Number(payment.paidAmount || 0),
+            currency: "INR",
+            gateway: "installment",
+            gatewayId: `INST-${payment.id}`,
+            status: "SUCCESS",
+            paidAt: payment.paidAt || payment.createdAt,
+            createdAt: payment.createdAt,
+            metadata: null,
+          })),
+      ].sort(
         (a, b) =>
           new Date(b.paidAt || b.createdAt).getTime() -
             new Date(a.paidAt || a.createdAt).getTime() ||
@@ -1718,6 +1755,7 @@ router.get(
           currency: payment.currency || invoice?.currency || "INR",
           paymentMethod: method,
           paidAt: payment.paidAt || payment.createdAt,
+          createdAt: payment.createdAt,
           reference: payment.gatewayId || null,
           subBrand: invoice?.subBrand || null,
           quoteId: invoice?.quoteId || null,
@@ -1729,8 +1767,9 @@ router.get(
         };
       });
 
-      // Purchase A/c contains only settled supplier payables. Office costs
-      // remain separate so a supplier payment is never counted twice.
+      // Purchase A/c follows the same accrual basis as exported Purchase
+      // vouchers: every supplier bill is counted once, while its later bank
+      // payment only settles the payable and does not add another purchase.
       const calculated = {
         sales: invoices.reduce(
           (sum, invoice) =>
@@ -1740,12 +1779,10 @@ router.get(
             ),
           0,
         ),
-        purchase: matchingPayables
-          .filter((payable) => payable.status === "paid")
-          .reduce(
-            (sum, payable) => sum + Number(payable.amount || 0),
-            0,
-          ) + matchingTripExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
+        purchase: matchingPayables.reduce(
+          (sum, payable) => sum + Number(payable.amount || 0),
+          0,
+        ) + matchingTripExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
         officeExpenses: matchingOfficeExpenses.reduce(
           (sum, expense) => sum + Number(expense.amount || 0),
           0,
@@ -1866,6 +1903,7 @@ router.get(
           paymentTotalsByInvoice[invoice.id] || installmentTotalsByInvoice[invoice.id] || 0,
         );
         return {
+          id: invoice.id,
           reference: invoice.invoiceNum,
           paymentReference: paymentDetails.find((payment) => payment.travelInvoiceId === invoice.id)?.gatewayId || null,
           name: contactMap[invoice.contactId]?.name || "Customer",
@@ -1876,6 +1914,7 @@ router.get(
           paymentRecordMissing:
             invoice.status === "Paid" && receivedType === "legacy-paid",
           transactionDate: invoice.createdAt,
+          createdAt: invoice.createdAt,
           invoiceTotal,
           taxableAmount: Math.max(0, invoiceTotal - gstAmount - Number(invoice.tcsAmount || 0)),
           outstandingAmount: Math.max(0, invoiceTotal - received),
@@ -1910,6 +1949,7 @@ router.get(
           category: expense.category,
           amount: Number(expense.amount || 0),
           transactionDate: expense.expenseDate || expense.createdAt,
+          createdAt: expense.createdAt,
           itineraryId:
             Number.isInteger(expenseTripId) && expenseTripId > 0
               ? expenseTripId
@@ -1984,10 +2024,9 @@ router.get(
         }));
       });
 
-      // Return only settled supplier payments because Pending and Scheduled
-      // records remain on the dedicated Payables page and are not purchases.
+      // Export the supplier bill when the payable exists. Settlement remains a
+      // separate Payment voucher and is emitted only after the payable is paid.
       const supplierPayableDetails = matchingPayables
-          .filter((payable) => payable.status === "paid")
           .map((payable) => {
             const payableTripId =
               payable.itineraryId ||
@@ -2001,6 +2040,7 @@ router.get(
             category: payable.supplier?.supplierCategory || "other",
             description: payable.description,
             amount: Number(payable.amount || 0),
+            paidAmount: payable.status === "paid" ? Number(payable.amount || 0) : 0,
             currency: payable.currency || "INR",
             dueDate: payable.dueDate,
             status: payable.status,
@@ -2008,6 +2048,8 @@ router.get(
             paymentMode: payable.paymentMode,
             paymentReference: payable.paymentReference,
             transactionDate: payable.createdAt,
+            createdAt: payable.createdAt,
+            updatedAt: payable.updatedAt,
             subBrand: payable.supplier?.subBrand || null,
             quoteId: quoteIdFromPayableNotes(payable.notes),
             itineraryId: payableTripId,
@@ -2045,7 +2087,7 @@ router.get(
         };
       });
 
-      const supplierPaymentRows = supplierPayableDetails.map((payable) => ({
+      const supplierPaymentRows = supplierPayableDetails.filter((payable) => payable.status === "paid").map((payable) => ({
         paymentId: `supplier-payable-${payable.id}`,
         transactionType: "purchase",
         customer: payable.name,

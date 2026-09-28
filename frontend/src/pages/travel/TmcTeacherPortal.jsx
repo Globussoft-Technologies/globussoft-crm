@@ -23,9 +23,11 @@ import {
   UserRound,
 } from "lucide-react";
 import TmcTeacherDiagnostics from "./TmcTeacherDiagnostics";
+import { persistTmcPortalView, readTmcPortalView } from "../../utils/tmcPortalView";
 
 const TOKEN_KEY = "tmcTeacherPortalToken";
 const THEME_KEY = "tmcTeacherPortalTheme";
+const TEACHER_PORTAL_VIEWS = new Set(["dashboard", "diagnostic", "trips", "reviews", "profile"]);
 
 const portalInteractionStyles = `
   [data-tmc-teacher-portal="true"] button:not([disabled]):not([data-tmc-no-hover]),
@@ -190,7 +192,7 @@ export default function TmcTeacherPortal() {
   const [diagnosticReports, setDiagnosticReports] = useState([]);
   const [teacherReviews, setTeacherReviews] = useState([]);
   const [reviewSaving, setReviewSaving] = useState(false);
-  const [activeView, setActiveView] = useState("dashboard");
+  const [activeView, setActiveView] = useState(() => readTmcPortalView(TEACHER_PORTAL_VIEWS));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [login, setLogin] = useState({ email: "", password: "" });
@@ -203,6 +205,10 @@ export default function TmcTeacherPortal() {
       /* ignore storage restrictions */
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    persistTmcPortalView(activeView, TEACHER_PORTAL_VIEWS);
+  }, [activeView]);
 
   const toggleTheme = useCallback(() => {
     setThemeMode((current) => (current === "dark" ? "light" : "dark"));

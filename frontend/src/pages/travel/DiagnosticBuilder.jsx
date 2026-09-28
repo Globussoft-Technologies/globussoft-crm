@@ -24,7 +24,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  AlertTriangle, Check, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
+  AlertTriangle, Check, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Download, FileJson, Info, Lightbulb, Pencil, Plus, Save, Settings, Trash2, Upload, X,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
@@ -51,9 +51,7 @@ const QUESTION_TYPES = [
   { value: 'multi-select', label: 'Multiple select' },
 ];
 
-const QUESTIONS_EXAMPLE = JSON.stringify(
-  {
-    questions: [
+const EXAMPLE_QUESTIONS = [
       {
         id: 'q1',
         text: 'How many trips do you organize per year?',
@@ -74,11 +72,33 @@ const QUESTIONS_EXAMPLE = JSON.stringify(
           { value: 'large', label: '50+', weight: 5 },
         ],
       },
+];
+
+const TMC_TRIP_TYPE_QUESTION = {
+  id: 'preferred_trip_types',
+  text: 'Which types of trips do you prefer?',
+  type: 'multi-select',
+  required: true,
+  minSelections: 1,
+  systemManaged: true,
+  options: ['Day Trips', 'Domestic', 'International'].map((category) => ({
+    value: category.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+    label: category,
+    category,
+    weight: 0,
+  })),
+};
+
+function questionsTemplateFor(subBrand) {
+  return JSON.stringify({
+    questions: [
+      ...(String(subBrand).toLowerCase() === 'tmc' ? [TMC_TRIP_TYPE_QUESTION] : []),
+      ...EXAMPLE_QUESTIONS,
     ],
-  },
-  null,
-  2,
-);
+  }, null, 2);
+}
+
+const QUESTIONS_EXAMPLE = questionsTemplateFor('travelstall');
 
 const SCORING_EXAMPLE = JSON.stringify(
   {
@@ -100,7 +120,7 @@ export default function DiagnosticBuilder() {
 
   const [mode, setMode] = useState('visual');
   const [subBrand, setSubBrand] = useState('tmc');
-  const [qJson, setQJson] = useState(QUESTIONS_EXAMPLE);
+  const [qJson, setQJson] = useState(() => questionsTemplateFor('tmc'));
   const [rJson, setRJson] = useState(SCORING_EXAMPLE);
   const [saving, setSaving] = useState(false);
   const [loadingBank, setLoadingBank] = useState(true);
@@ -153,14 +173,14 @@ export default function DiagnosticBuilder() {
 
   const beginTemplateDraft = useCallback((name) => {
     const resolvedName = String(name || '').trim() || defaultTemplateName();
-    setQJson(QUESTIONS_EXAMPLE);
+    setQJson(questionsTemplateFor(subBrand));
     setRJson(SCORING_EXAMPLE);
     setSelectedBankId('');
     setTemplateName(resolvedName);
     setBankInfo({ existing: false, templateName: resolvedName });
     setSavedSnapshot(null);
     setIsCreatingTemplate(true);
-  }, [defaultTemplateName]);
+  }, [defaultTemplateName, subBrand]);
 
   const loadBanks = useCallback(async (preferredId = null) => {
     setLoadingBank(true);
@@ -276,6 +296,31 @@ export default function DiagnosticBuilder() {
       q = JSON.parse(qJson);
       if (!q || typeof q !== 'object' || !Array.isArray(q.questions) || q.questions.length === 0) {
         errors.push('questionsJson must contain a non-empty "questions" array');
+      } else if (q.identityFields !== undefined) {
+        if (!Array.isArray(q.identityFields)) {
+          errors.push('identityFields must be an array');
+        } else {
+          const ids = new Set();
+          q.identityFields.forEach((field, index) => {
+            const id = String(field?.id || '').trim();
+            if (!/^[a-z][a-z0-9_]{0,63}$/.test(id)) errors.push(`Identity field ${index + 1} needs a valid field key`);
+            else if (ids.has(id)) errors.push(`Identity field key "${id}" is duplicated`);
+            ids.add(id);
+            if (!String(field?.label || '').trim()) errors.push(`Identity field ${index + 1} needs a label`);
+            if (field?.pattern) {
+              try { new RegExp(field.pattern); } catch { errors.push(`Identity field ${index + 1} has an invalid regular expression`); }
+            }
+            if (field?.minLength != null && field?.maxLength != null && Number(field.minLength) > Number(field.maxLength)) {
+              errors.push(`Identity field ${index + 1} minimum length cannot exceed maximum length`);
+            }
+            if (field?.min != null && field?.max != null) {
+              const minExceedsMax = field.type === 'number'
+                ? Number(field.min) > Number(field.max)
+                : String(field.min) > String(field.max);
+              if (minExceedsMax) errors.push(`Identity field ${index + 1} minimum value cannot exceed maximum value`);
+            }
+          });
+        }
       }
     } catch (e) {
       errors.push(`questionsJson is not valid JSON: ${e.message}`);
@@ -526,7 +571,18 @@ export default function DiagnosticBuilder() {
       </header>
 
       <section style={templateCard}>
-        <h2 style={cardTitle}>Sub-brand</h2>
+        <div className="diagnostic-template-heading" style={{ ...subCardHeader, marginBottom: 12, flexWrap: 'wrap' }}>
+          <h2 style={{ ...cardTitle, marginBottom: 0 }}>Sub-brand</h2>
+          <button
+            className="diagnostic-new-template-button"
+            type="button"
+            onClick={onClickNewTemplate}
+            style={{ ...secondaryBtn, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            title="Start a new template from scratch"
+          >
+            <Plus size={14} aria-hidden /> New template
+          </button>
+        </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {SUB_BRANDS.map((s) => (
             <button
@@ -542,8 +598,8 @@ export default function DiagnosticBuilder() {
         </div>
         <div style={{ marginTop: 16 }}>
           <Field label="Active template" info="Choose the saved diagnostic template to edit and use for this travel brand. Each save creates a new version, so a template can have several versions listed here — the newest is shown first.">
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <div style={{ flex: '1 1 320px', minWidth: 240 }}>
+            <div className="diagnostic-template-row" style={templateControlRow}>
+              <div style={{ minWidth: 0 }}>
                 <TemplatePicker
                   banks={banks}
                   loading={loadingBank}
@@ -559,7 +615,23 @@ export default function DiagnosticBuilder() {
                   onBulkDelete={onBulkDeleteTemplates}
                 />
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div className="diagnostic-template-actions" style={templateActionGroup}>
+                {(mode === 'visual' || mode === 'json') && (
+                  <button
+                    className="diagnostic-template-save-button"
+                    type="button"
+                    onClick={onSaveAndUse}
+                    disabled={saving}
+                    style={{
+                      ...(saving ? primaryBtnDisabled : primaryBtn),
+                      boxShadow: '0 5px 14px rgba(79, 70, 229, 0.24)',
+                    }}
+                    aria-label={isCreatingTemplate ? 'Create and use template' : 'Save and use template'}
+                    title={isCreatingTemplate ? 'Create this template and make it active' : 'Save changes and make this template active'}
+                  >
+                    <Save size={16} aria-hidden /> {saving ? 'Saving...' : isCreatingTemplate ? 'Create and use' : 'Save and use'}
+                  </button>
+                )}
                 {bankInfo?.existing && !isCreatingTemplate && (
                   <button
                     type="button"
@@ -582,9 +654,6 @@ export default function DiagnosticBuilder() {
                     <Trash2 size={14} aria-hidden /> {deletingTemplate ? 'Deleting...' : 'Delete'}
                   </button>
                 )}
-                <button type="button" onClick={onClickNewTemplate} style={primaryBtn} title="Start a new template from scratch">
-                  <Plus size={14} aria-hidden /> New template
-                </button>
               </div>
             </div>
           </Field>
@@ -703,23 +772,6 @@ export default function DiagnosticBuilder() {
         </div>
       )}
 
-      {/* Only the Visual/Advanced-JSON tabs edit qJson/rJson — Public Form
-          and Recommendation Settings each have their own dedicated Save
-          button for a completely different payload, so showing this bar
-          there too was a redundant, overlapping second "Save" control. */}
-      {(mode === 'visual' || mode === 'json') && (
-        <div style={saveBar}>
-          <button
-            type="button"
-            onClick={onSaveAndUse}
-            disabled={saving}
-            style={saving ? primaryBtnDisabled : { ...primaryBtn, boxShadow: '0 8px 24px rgba(79, 70, 229, 0.35)' }}
-            aria-label={isCreatingTemplate ? 'Create and use template' : 'Save and use template'}
-          >
-            <Save size={16} aria-hidden /> {saving ? 'Saving...' : isCreatingTemplate ? 'Create and use' : 'Save and use'}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -926,35 +978,227 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
 }
 
 const DEFAULT_BANK_IDENTITY_FIELDS = [
-  { id: 'name', label: 'Name', type: 'text', enabled: true, required: true },
-  { id: 'email', label: 'Email', type: 'email', enabled: true, required: true },
-  { id: 'phone', label: 'Phone', type: 'tel', enabled: true, required: false },
+  { id: 'name', label: 'Name', type: 'text', enabled: true, required: true, maxLength: 120, autocomplete: 'name' },
+  { id: 'email', label: 'Email', type: 'email', enabled: true, required: true, maxLength: 254, autocomplete: 'email' },
+  { id: 'phone', label: 'Phone', type: 'tel', enabled: true, required: false, autocomplete: 'tel' },
 ];
 
+const IDENTITY_FIELD_TYPES = [
+  ['text', 'Short text'], ['textarea', 'Long text'], ['email', 'Email'],
+  ['tel', 'Phone'], ['number', 'Number'], ['date', 'Date'], ['time', 'Time'], ['url', 'Website URL'],
+];
+
+const IDENTITY_FIELD_TYPE_DEFAULTS = {
+  text: { maxLength: 120 },
+  textarea: { maxLength: 2000 },
+  email: { maxLength: 254, autocomplete: 'email' },
+  tel: { minLength: 10, maxLength: 25, autocomplete: 'tel' },
+  number: {},
+  date: {},
+  time: {},
+  url: { maxLength: 2048, autocomplete: 'url' },
+};
+
+const IDENTITY_FIELD_TYPE_VALIDATION_HINTS = {
+  text: 'Text length and any pattern rules below are checked before submission.',
+  textarea: 'Long-text length and any pattern rules below are checked before submission.',
+  email: 'A valid email format is always required when a value is entered.',
+  tel: 'Phone format and a total of 10 to 15 digits are always checked.',
+  number: 'Only a valid number is accepted; optional minimum and maximum values can be added below.',
+  date: 'Only a valid calendar date is accepted; optional date limits can be added below.',
+  time: 'Only a valid time is accepted; optional time limits can be added below.',
+  url: 'Only a valid HTTP or HTTPS web address is accepted.',
+};
+
+function defaultsForIdentityFieldType(type) {
+  return {
+    type,
+    minLength: undefined,
+    maxLength: undefined,
+    pattern: undefined,
+    min: undefined,
+    max: undefined,
+    validationMessage: undefined,
+    autocomplete: '',
+    ...(IDENTITY_FIELD_TYPE_DEFAULTS[type] || {}),
+  };
+}
+
 function normalizeBankIdentityFields(fields) {
-  const saved = Array.isArray(fields) ? fields : [];
-  return DEFAULT_BANK_IDENTITY_FIELDS.map((fallback) => {
-    const field = saved.find((item) => item?.id === fallback.id);
-    return { ...fallback, ...(field || {}) };
-  });
+  return (Array.isArray(fields) ? fields : DEFAULT_BANK_IDENTITY_FIELDS).map((field) => ({
+    type: 'text', enabled: true, required: false, ...field,
+  }));
 }
 
 function IdentityFieldsBankEditor({ fields, onChange }) {
-  const update = (id, patch) => onChange(fields.map((field) => field.id === id ? { ...field, ...patch } : field));
+  const [expandedFieldIds, setExpandedFieldIds] = useState(() => new Set());
+  const nextRenderKey = useRef(0);
+  const renderKeys = useRef([]);
+  while (renderKeys.current.length < fields.length) {
+    renderKeys.current.push(`identity-field-editor-${nextRenderKey.current++}`);
+  }
+  if (renderKeys.current.length > fields.length) {
+    renderKeys.current.length = fields.length;
+  }
+  const fieldExpansionId = (field, index) => field.id || `identity_field_${index}`;
+  const update = (index, patch) => {
+    const previousId = fieldExpansionId(fields[index], index);
+    const nextField = { ...fields[index], ...patch };
+    const nextId = fieldExpansionId(nextField, index);
+    if (previousId !== nextId && expandedFieldIds.has(previousId)) {
+      setExpandedFieldIds((current) => {
+        const next = new Set(current);
+        next.delete(previousId);
+        next.add(nextId);
+        return next;
+      });
+    }
+    onChange(fields.map((field, fieldIndex) => fieldIndex === index ? nextField : field));
+  };
+  const toggleField = (field, index) => {
+    const id = fieldExpansionId(field, index);
+    setExpandedFieldIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const addField = () => {
+    const used = new Set(fields.map((field) => field.id));
+    let suffix = fields.length + 1;
+    let id = `custom_field_${suffix}`;
+    while (used.has(id)) id = `custom_field_${++suffix}`;
+    renderKeys.current.push(`identity-field-editor-${nextRenderKey.current++}`);
+    onChange([...fields, {
+      id, label: 'New field', enabled: true, required: false,
+      ...defaultsForIdentityFieldType('text'),
+    }]);
+    setExpandedFieldIds((current) => new Set(current).add(id));
+  };
+  const removeField = (index) => {
+    const id = fieldExpansionId(fields[index], index);
+    setExpandedFieldIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+    renderKeys.current.splice(index, 1);
+    onChange(fields.filter((_, fieldIndex) => fieldIndex !== index));
+  };
+  const moveField = (index, direction) => {
+    const target = index + direction;
+    if (target < 0 || target >= fields.length) return;
+    const next = fields.slice();
+    [next[index], next[target]] = [next[target], next[index]];
+    [renderKeys.current[index], renderKeys.current[target]] = [renderKeys.current[target], renderKeys.current[index]];
+    onChange(next);
+  };
   return (
     <div style={{ ...subCard, marginTop: 16, marginBottom: 0 }}>
-      <div style={subCardHeader}><strong>Identity fields</strong><span style={microHint}>Used by Public Form, Embed Form, and public API submissions.</span></div>
+      <div style={subCardHeader}>
+        <div><strong>Identity fields</strong><span style={{ ...microHint, display: 'block' }}>Used by Public Form, Embed Form, and public API submissions.</span></div>
+        <button type="button" onClick={addField} style={addBtn}><Plus size={14} aria-hidden /> Add field</button>
+      </div>
       <div style={fieldGrid}>
-        {fields.map((field) => (
-          <div key={field.id} style={{ display: 'grid', gap: 8, padding: 12, border: '1px solid var(--border-color)', borderRadius: 8 }}>
-            <input aria-label={`${field.id} field label`} value={field.label} onChange={(e) => update(field.id, { label: e.target.value })} style={input} />
+        {fields.map((field, index) => {
+          const expansionId = fieldExpansionId(field, index);
+          const expanded = expandedFieldIds.has(expansionId);
+          const fieldName = field.label || field.id || `Field ${index + 1}`;
+          const typeName = IDENTITY_FIELD_TYPES.find(([value]) => value === field.type)?.[1] || 'Short text';
+          return (
+          <div
+            key={renderKeys.current[index]}
+            style={{
+              alignSelf: 'start', minWidth: 0, padding: 12,
+              border: `1px solid ${expanded ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`,
+              borderRadius: 8, gridColumn: expanded ? '1 / -1' : 'auto',
+              background: expanded ? 'var(--surface-color)' : 'transparent',
+              transition: 'border-color 180ms ease, background-color 180ms ease',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => toggleField(field, index)}
+                aria-expanded={expanded}
+                aria-controls={`identity-field-body-${index}`}
+                aria-label={`${expanded ? 'Collapse' : 'Expand'} identity field ${fieldName}`}
+                style={identityFieldExpandButton}
+              >
+                <ChevronRight
+                  size={16}
+                  aria-hidden
+                  style={{ flexShrink: 0, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 180ms ease' }}
+                />
+                <span style={{ minWidth: 0, textAlign: 'left' }}>
+                  <strong style={{ display: 'block', fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fieldName}</strong>
+                  <span style={identityFieldSummary}>{typeName} · {field.enabled === false ? 'Hidden' : field.required ? 'Required' : 'Optional'}</span>
+                </span>
+              </button>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <IconBtn onClick={() => moveField(index, -1)} disabled={index === 0} title="Move up" aria-label={`Move identity field ${index + 1} up`}><ChevronUp size={14} aria-hidden /></IconBtn>
+                <IconBtn onClick={() => moveField(index, 1)} disabled={index === fields.length - 1} title="Move down" aria-label={`Move identity field ${index + 1} down`}><ChevronDown size={14} aria-hidden /></IconBtn>
+                <IconBtn onClick={() => removeField(index)} title="Remove field" aria-label={`Remove identity field ${index + 1}`} danger><Trash2 size={14} aria-hidden /></IconBtn>
+              </div>
+            </div>
+            <div
+              id={`identity-field-body-${index}`}
+              aria-hidden={!expanded}
+              style={{
+                display: 'grid', gridTemplateRows: expanded ? '1fr' : '0fr',
+                opacity: expanded ? 1 : 0,
+                visibility: expanded ? 'visible' : 'hidden',
+                transition: expanded
+                  ? 'grid-template-rows 220ms ease, opacity 160ms ease'
+                  : 'grid-template-rows 220ms ease, opacity 160ms ease, visibility 0s linear 220ms',
+              }}
+            >
+            <div style={{ minHeight: 0, overflow: expanded ? 'visible' : 'hidden', display: 'grid', gap: 10 }}>
+            <div style={{ ...identityEditorGrid, paddingTop: 14 }}>
+              <Field label="Label" info="The name customers see above this field on the diagnostic form."><input aria-label={`Identity field ${index + 1} label`} value={field.label || ''} onChange={(e) => update(index, { label: e.target.value })} style={input} /></Field>
+              <Field label="Field key" info="Stable API key: lowercase letters, numbers, and underscores.">
+                <input aria-label={`Identity field ${index + 1} key`} value={field.id || ''} onChange={(e) => update(index, { id: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '').replace(/^[^a-z]+/, '') })} style={input} />
+              </Field>
+              <Field label="Input type" info="Controls the input shown to customers and its built-in browser validation.">
+                <select aria-label={`Identity field ${index + 1} type`} value={field.type || 'text'} onChange={(e) => update(index, defaultsForIdentityFieldType(e.target.value))} style={input}>
+                  {IDENTITY_FIELD_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </Field>
+              <Field label="Placeholder" info="A short example or prompt displayed inside the empty input."><input aria-label={`Identity field ${index + 1} placeholder`} value={field.placeholder || ''} onChange={(e) => update(index, { placeholder: e.target.value })} style={input} /></Field>
+              <Field label="Help text" info="Supporting guidance displayed with the field to help customers answer correctly."><input aria-label={`Identity field ${index + 1} help text`} value={field.helper || ''} onChange={(e) => update(index, { helper: e.target.value })} style={input} /></Field>
+              <Field label="Autocomplete" info="A standard browser autocomplete value, such as name, email, tel, or organization."><input aria-label={`Identity field ${index + 1} autocomplete`} value={field.autocomplete || ''} onChange={(e) => update(index, { autocomplete: e.target.value })} placeholder="e.g. organization" style={input} /></Field>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-              <label style={identityToggleLabel}><input type="checkbox" checked={field.enabled !== false} onChange={(e) => update(field.id, { enabled: e.target.checked })} /> Show</label>
-              <label style={identityToggleLabel}><input type="checkbox" checked={Boolean(field.required)} onChange={(e) => update(field.id, { required: e.target.checked })} /> Required</label>
+              <label style={identityToggleLabel}><input type="checkbox" checked={field.enabled !== false} onChange={(e) => update(index, { enabled: e.target.checked })} /> Show <InfoHint text="Include this field on Public Forms, Embed Forms, and public API form definitions." /></label>
+              <label style={identityToggleLabel}><input type="checkbox" checked={Boolean(field.required)} onChange={(e) => update(index, { required: e.target.checked })} /> Required <InfoHint text="Customers must provide a valid value for this field before submitting." /></label>
+            </div>
+            <details style={identityValidationSection}>
+              <summary style={identityValidationSummary}>Validation rules <InfoHint text="Optional restrictions used to verify this field before a diagnostic can be submitted." /></summary>
+              <div style={identityBuiltInValidationHint}>
+                <CheckCircle size={13} aria-hidden style={{ flexShrink: 0 }} />
+                <span><strong>Built-in validation:</strong> {IDENTITY_FIELD_TYPE_VALIDATION_HINTS[field.type || 'text']}</span>
+              </div>
+              <div style={{ ...identityEditorGrid, marginTop: 12, paddingBottom: 2 }}>
+                {!['number', 'date', 'time'].includes(field.type) && <>
+                  <Field label="Minimum length" info="The fewest characters customers may enter. Leave empty for no minimum."><input aria-label={`Identity field ${index + 1} minimum length`} type="number" min="0" max="5000" value={field.minLength ?? ''} onChange={(e) => update(index, { minLength: e.target.value === '' ? undefined : Number(e.target.value) })} style={input} /></Field>
+                  <Field label="Maximum length" info="The greatest number of characters accepted. Leave empty for no custom maximum."><input aria-label={`Identity field ${index + 1} maximum length`} type="number" min="1" max="5000" value={field.maxLength ?? ''} onChange={(e) => update(index, { maxLength: e.target.value === '' ? undefined : Number(e.target.value) })} style={input} /></Field>
+                  <Field label="Pattern (regular expression)" info="An optional regular expression the complete answer must match, for example ^SCH-[0-9]+$."><input aria-label={`Identity field ${index + 1} pattern`} value={field.pattern || ''} onChange={(e) => update(index, { pattern: e.target.value })} placeholder="e.g. ^SCH-[0-9]+$" style={input} /></Field>
+                </>}
+                {['number', 'date', 'time'].includes(field.type) && <>
+                  <Field label="Minimum value" info={`The earliest or smallest ${field.type} value accepted. Leave empty for no minimum.`}><input aria-label={`Identity field ${index + 1} minimum value`} type={field.type} value={field.min ?? ''} onChange={(e) => update(index, { min: e.target.value === '' ? undefined : field.type === 'number' ? Number(e.target.value) : e.target.value })} style={input} /></Field>
+                  <Field label="Maximum value" info={`The latest or largest ${field.type} value accepted. Leave empty for no maximum.`}><input aria-label={`Identity field ${index + 1} maximum value`} type={field.type} value={field.max ?? ''} onChange={(e) => update(index, { max: e.target.value === '' ? undefined : field.type === 'number' ? Number(e.target.value) : e.target.value })} style={input} /></Field>
+                </>}
+                <Field label="Validation message" info="Custom guidance shown when the answer does not satisfy these validation rules."><input aria-label={`Identity field ${index + 1} validation message`} value={field.validationMessage || ''} onChange={(e) => update(index, { validationMessage: e.target.value })} placeholder="Shown when the value is invalid" style={input} /></Field>
+              </div>
+            </details>
+            </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
+      {fields.length === 0 && <p style={emptyHint}>No identity fields are shown. Add one to collect contact or organisation details.</p>}
     </div>
   );
 }
@@ -1071,11 +1315,17 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
     onChange({ options: opts.map((o, j) => (j === i ? { ...o, ...patch } : o)) });
 
   const addOption = () => {
-    onChange({ options: [...opts, { value: '', label: '', weight: 0 }] });
+    onChange({
+      options: [...opts, { value: '', label: '', weight: 0 }],
+      ...(systemManaged ? { tripTypeOptionsCustomized: true } : {}),
+    });
   };
 
   const removeOption = (i) =>
-    onChange({ options: opts.filter((_, j) => j !== i) });
+    onChange({
+      options: opts.filter((_, j) => j !== i),
+      ...(systemManaged ? { tripTypeOptionsCustomized: true } : {}),
+    });
 
   const autoFillScores = () => {
     if (!opts.length) return;
@@ -1086,27 +1336,26 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
   };
 
   return (
-    <div style={subCard}>
+    <div className="diagnostic-question-card" data-protected-question={systemManaged || undefined} style={subCard}>
       <div style={subCardHeader}>
         <div>
           <span style={{ fontWeight: 700 }}>Question {index + 1}</span>
           <div style={microHint}>This is what the customer will answer on the public diagnostic form.</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: question.required ? 'var(--success-color, #3ecf7e)' : 'var(--text-secondary)', cursor: systemManaged ? 'default' : 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: question.required ? 'var(--success-color, #3ecf7e)' : 'var(--text-secondary)', cursor: 'pointer' }}>
             Required
             <PillToggle
               active={Boolean(question.required)}
               onChange={() => onChange({ required: !question.required })}
               label={`Question ${index + 1} required`}
-              disabled={systemManaged}
             />
           </label>
           <div style={{ display: 'flex', gap: 4 }}>
-            <IconBtn onClick={onMoveUp} disabled={systemManaged || index === 0} title="Move up" aria-label="Move question up">
+            <IconBtn onClick={onMoveUp} disabled={index === 0} title="Move up" aria-label="Move question up">
               <ChevronUp size={14} aria-hidden />
             </IconBtn>
-            <IconBtn onClick={onMoveDown} disabled={systemManaged || index === total - 1} title="Move down" aria-label="Move question down">
+            <IconBtn onClick={onMoveDown} disabled={index === total - 1} title="Move down" aria-label="Move question down">
               <ChevronDown size={14} aria-hidden />
             </IconBtn>
             {!systemManaged && (
@@ -1127,7 +1376,6 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
             value={question.type || 'single-choice'}
             onChange={(e) => onChange({ type: e.target.value })}
             style={input}
-            disabled={systemManaged}
           >
             {QUESTION_TYPES.map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
@@ -1154,7 +1402,6 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
               });
             }}
             style={input}
-            disabled={systemManaged}
           />
         </Field>
       </div>
@@ -1169,14 +1416,14 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
                 : 'Each option has customer text and a score impact used by the diagnostic result.'}
             </div>
           </div>
-          {!systemManaged && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button type="button" onClick={autoFillScores} disabled={!opts.length} style={secondaryBtnSmall} title="Fill simple 0-10 score impacts based on option order">
               <Lightbulb size={12} aria-hidden /> Auto-fill scores
             </button>
             <button type="button" onClick={addOption} style={addBtnSmall}>
               <Plus size={12} aria-hidden /> Add option
             </button>
-          </div>}
+          </div>
         </div>
         {opts.length === 0 ? (
           <p style={{ ...emptyHint, fontSize: 12 }}>No options yet.</p>
@@ -1221,14 +1468,11 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
                   step={1}
                   onChange={(e) => updateOption(i, { weight: clampScoreImpact(e.target.value) })}
                   style={{ ...input, textAlign: 'center', fontWeight: 700 }}
-                  disabled={systemManaged}
                   aria-label={`Option ${i + 1} score impact`}
                 />
-                {systemManaged ? <span /> : (
-                  <IconBtn onClick={() => removeOption(i)} title="Remove option" aria-label={`Remove option ${i + 1}`} danger>
-                    <Trash2 size={14} aria-hidden />
-                  </IconBtn>
-                )}
+                <IconBtn onClick={() => removeOption(i)} title="Remove option" aria-label={`Remove option ${i + 1}`} danger>
+                  <Trash2 size={14} aria-hidden />
+                </IconBtn>
               </div>
             ))}
           </div>
@@ -1244,7 +1488,10 @@ function normalizeQuestions(questions) {
   const usedQuestionIds = new Set();
   return questions.map((question, index) => {
     let id = String(question.id || '').trim();
-    if (!id) id = uniqueKey(buildQuestionId(question.text, index), usedQuestionIds);
+    const ordinaryQuestionIndex = questions
+      .slice(0, index + 1)
+      .filter((item) => item?.systemManaged !== true).length - 1;
+    if (!id) id = uniqueKey(buildQuestionId(question.text, ordinaryQuestionIndex), usedQuestionIds);
     usedQuestionIds.add(id);
 
     const usedOptionValues = new Set();
@@ -1724,6 +1971,10 @@ function InfoHint({ text }) {
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}
       onBlur={() => setOpen(false)}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       style={infoHintWrap}
     >
       <Info size={13} aria-hidden style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
@@ -2195,6 +2446,19 @@ const templateCard = {
   padding: '22px 24px',
   marginBottom: 18,
 };
+const templateControlRow = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(280px, 520px) minmax(0, 1fr)',
+  alignItems: 'start',
+  gap: 10,
+};
+const templateActionGroup = {
+  display: 'flex',
+  justifyContent: 'flex-start',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+};
 const cardTitle = { margin: 0, marginBottom: 12, fontSize: 16 };
 const subCard = {
   background: 'var(--bg-color)', borderRadius: 8, padding: 14,
@@ -2282,25 +2546,6 @@ const secondaryBtnSmall = {
   ...secondaryBtn,
   padding: '6px 9px', fontSize: 12,
 };
-// Sticky (not fixed) footer bar — the app's scrollable region is `<main
-// className="app-main">` (see components/Layout.jsx), not the viewport, and
-// it sits beside the sidebar rather than under it. `position: sticky`
-// against that ancestor keeps the button reachable without scrolling to the
-// page bottom while staying correctly confined to the content column (a
-// fixed/viewport-relative bar would either sit under the sidebar or need
-// its offset hardcoded and re-broken every time the sidebar width changes).
-const saveBar = {
-  position: 'sticky',
-  bottom: 0,
-  zIndex: 20,
-  marginTop: 16,
-  padding: '12px 0',
-  display: 'flex',
-  justifyContent: 'flex-end',
-  background: 'var(--bg-color)',
-  borderTop: '1px solid var(--border-color)',
-  boxShadow: '0 -8px 24px rgba(15, 23, 42, 0.12)',
-};
 const dangerBtn = {
   ...secondaryBtn,
   color: 'var(--danger-color)',
@@ -2343,6 +2588,36 @@ const input = {
 const fieldGrid = {
   display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
   gap: 16, marginTop: 6,
+};
+const identityEditorGrid = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
+  gap: 10,
+};
+const identityFieldExpandButton = {
+  display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1,
+  padding: 0, border: 0, background: 'transparent', color: 'var(--text-primary)',
+  fontFamily: 'inherit', cursor: 'pointer',
+};
+const identityFieldSummary = {
+  display: 'block', marginTop: 2, color: 'var(--text-secondary)',
+  fontSize: 11, lineHeight: 1.3, fontWeight: 400,
+};
+const identityValidationSection = {
+  marginTop: 2,
+  padding: '10px 0 12px',
+  borderTop: '1px solid var(--border-color)',
+};
+const identityValidationSummary = {
+  display: 'list-item',
+  width: 'fit-content', cursor: 'pointer',
+  fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)',
+};
+const identityBuiltInValidationHint = {
+  display: 'flex', alignItems: 'flex-start', gap: 6,
+  marginTop: 10, padding: '8px 10px', borderRadius: 6,
+  background: 'var(--subtle-bg, rgba(91, 110, 248, 0.06))',
+  color: 'var(--text-secondary)', fontSize: 11, lineHeight: 1.45,
 };
 const topKSection = {
   marginTop: 16, padding: 14, borderRadius: 10,
@@ -2655,6 +2930,21 @@ const diagnosticBuilderCss = `
     box-shadow: 0 0 0 2px var(--primary-color, #5b6cff) !important;
   }
 
+  .diagnostic-template-save-button {
+    justify-content: center;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 1100px) {
+    .diagnostic-template-row {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .diagnostic-template-actions {
+      justify-content: flex-start !important;
+    }
+  }
+
   @media (max-width: 760px) {
     .diagnostic-settings-actions {
       width: 100%;
@@ -2668,7 +2958,13 @@ const diagnosticBuilderCss = `
     .diagnostic-option-layout {
       grid-template-columns: 1fr 96px 28px !important;
     }
+
+    .diagnostic-template-save-button {
+      width: 100%;
+      min-height: 44px;
+    }
   }
+
 
   .diagnostic-weight-range {
     appearance: none;

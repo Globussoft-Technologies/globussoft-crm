@@ -1427,6 +1427,45 @@ router.get("/", async (req, res) => {
       }
       where.source = { startsWith: prefix };
     }
+    // Generic CRM Leads pagination sends these fixed-filter values so the
+    // total/page metadata is calculated from the filtered dataset rather than
+    // from a larger unfiltered page. Keep this separate from the existing
+    // cross-vertical `source` prefix contract.
+    if ((req.user.vertical || "generic") === "generic") {
+      if (req.query.leadSource !== undefined) {
+        const leadSource = String(req.query.leadSource);
+        if (leadSource.length < 1 || leadSource.length > 128) {
+          return res.status(400).json({
+            error: "leadSource must be a non-empty string ≤128 chars",
+            code: "INVALID_LEAD_SOURCE",
+            field: "leadSource",
+          });
+        }
+        where.source = leadSource;
+      }
+      if (req.query.callifiedCampaignId !== undefined) {
+        const campaignId = Number(req.query.callifiedCampaignId);
+        if (!Number.isInteger(campaignId) || campaignId < 1) {
+          return res.status(400).json({
+            error: "callifiedCampaignId must be a positive integer",
+            code: "INVALID_CALLIFIED_CAMPAIGN_ID",
+            field: "callifiedCampaignId",
+          });
+        }
+        where.callifiedCampaignId = campaignId;
+      }
+      if (req.query.callifiedLeadStatus !== undefined) {
+        const callifiedLeadStatus = String(req.query.callifiedLeadStatus);
+        if (callifiedLeadStatus.length < 1 || callifiedLeadStatus.length > 64) {
+          return res.status(400).json({
+            error: "callifiedLeadStatus must be a non-empty string ≤64 chars",
+            code: "INVALID_CALLIFIED_LEAD_STATUS",
+            field: "callifiedLeadStatus",
+          });
+        }
+        where.callifiedLeadStatus = callifiedLeadStatus;
+      }
+    }
     // Freshsales-style "Filter by" panel — ?filters=<JSON array>, each entry
     // {field, operator, values}. `field` is either a FILTERABLE_FIELDS key
     // (never trust a raw column name from the client into a Prisma
@@ -1625,7 +1664,7 @@ router.get("/", async (req, res) => {
         tasks: true,
         assignedTo: { select: { id: true, name: true, email: true } },
         webFormSubmissions: {
-          select: { id: true, webForm: { select: { id: true, name: true } } },
+          select: { id: true, payloadJson: true, sourceUrl: true, submittedAt: true, webForm: { select: { id: true, name: true } } },
           orderBy: { submittedAt: "desc" },
           take: 1,
         },
@@ -2061,55 +2100,9 @@ router.get("/filter-values/:field", async (req, res) => {
 });
 
 // Generic CRM tag catalog. Contact ↔ tag membership continues to use the
+router.delete("/tags", async (req, res) => {
 // existing Contact.tagsJson field; the tenant setting stores shared names and
 // colors so every contact renders the same tag color after a reload.
-router.get('/tags', async (req, res) => {
-  try {
-    if (!await requireGenericContactTags(req, res)) return;
-    const catalog = await readContactTagCatalog(req.user.tenantId);
-    res.json({ tags: catalog.sort((a, b) => a.name.localeCompare(b.name)) });
-  } catch (_err) {
-    res.status(500).json({ error: 'Failed to fetch contact tags' });
-  }
-});
-
-router.post('/tags', async (req, res) => {
-  try {
-    if (!await requireGenericContactTags(req, res)) return;
-    const name = normalizeContactTagValue(req.body?.name);
-    const color = normalizeContactTagColor(req.body?.color) || defaultContactTagColor(name);
-    if (!name) return res.status(400).json({ error: 'Tag name is required', code: 'TAG_NAME_REQUIRED' });
-    if (CONTACT_TAG_CONTROL_RE.test(name)) return res.status(400).json({ error: 'Tag contains invalid control characters', code: 'INVALID_TAG' });
-    if (name.length > CONTACT_TAG_MAX_LENGTH) return res.status(400).json({ error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`, code: 'TAG_TOO_LONG' });
-    const catalog = await readContactTagCatalog(req.user.tenantId);
-    const existing = catalog.find((tag) => tag.name.toLowerCase() === name.toLowerCase());
-    if (existing) return res.json(existing);
-    const created = { name, color };
-    await writeContactTagCatalog(req.user.tenantId, [...catalog, created]);
-    res.status(201).json(created);
-  } catch (_err) {
-    res.status(500).json({ error: 'Failed to create contact tag' });
-  }
-});
-
-router.patch('/tags/:tagName', async (req, res) => {
-  try {
-    if (!await requireGenericContactTags(req, res)) return;
-    const name = normalizeContactTagValue(req.params.tagName);
-    const color = normalizeContactTagColor(req.body?.color);
-    if (!name || !color) return res.status(400).json({ error: 'A valid tag name and color are required', code: 'INVALID_TAG_COLOR' });
-    const catalog = await readContactTagCatalog(req.user.tenantId);
-    const index = catalog.findIndex((tag) => tag.name.toLowerCase() === name.toLowerCase());
-    const updated = index >= 0 ? { ...catalog[index], color } : { name, color };
-    const next = index >= 0 ? catalog.map((tag, itemIndex) => itemIndex === index ? updated : tag) : [...catalog, updated];
-    await writeContactTagCatalog(req.user.tenantId, next);
-    res.json(updated);
-  } catch (_err) {
-    res.status(500).json({ error: 'Failed to update contact tag' });
-  }
-});
-
-router.delete("/tags", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const tag = normalizeContactTagValue(req.body?.tag);
@@ -2159,6 +2152,9 @@ router.delete("/tags", async (req, res) => {
       });
       updatedContacts += 1;
     }
+    // Only Generic CRM owns the shared tag catalog. Wellness and Travel keep
+    // their existing contact-tag behavior and must not read or mutate this
+    // Generic tenant setting.
     const tenant = await prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { vertical: true },
@@ -2175,6 +2171,55 @@ router.delete("/tags", async (req, res) => {
     return res.json({ deletedTag: tag, status: statusScope, updatedContacts });
   } catch (_err) {
     return res.status(500).json({ error: "Failed to delete tag" });
+  }
+});
+
+// Generic CRM tag catalog. Contact/tag membership continues to use the
+// existing Contact.tagsJson field; the tenant setting stores shared names and
+// colors so every contact renders the same tag color after a reload.
+router.get('/tags', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    res.json({ tags: catalog.sort((a, b) => a.name.localeCompare(b.name)) });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch contact tags' });
+  }
+});
+
+router.post('/tags', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const name = normalizeContactTagValue(req.body?.name);
+    const color = normalizeContactTagColor(req.body?.color) || defaultContactTagColor(name);
+    if (!name) return res.status(400).json({ error: 'Tag name is required', code: 'TAG_NAME_REQUIRED' });
+    if (CONTACT_TAG_CONTROL_RE.test(name)) return res.status(400).json({ error: 'Tag contains invalid control characters', code: 'INVALID_TAG' });
+    if (name.length > CONTACT_TAG_MAX_LENGTH) return res.status(400).json({ error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`, code: 'TAG_TOO_LONG' });
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    const existing = catalog.find((tag) => tag.name.toLowerCase() === name.toLowerCase());
+    if (existing) return res.json(existing);
+    const created = { name, color };
+    await writeContactTagCatalog(req.user.tenantId, [...catalog, created]);
+    res.status(201).json(created);
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to create contact tag' });
+  }
+});
+
+router.patch('/tags/:tagName', async (req, res) => {
+  try {
+    if (!await requireGenericContactTags(req, res)) return;
+    const name = normalizeContactTagValue(req.params.tagName);
+    const color = normalizeContactTagColor(req.body?.color);
+    if (!name || !color) return res.status(400).json({ error: 'A valid tag name and color are required', code: 'INVALID_TAG_COLOR' });
+    const catalog = await readContactTagCatalog(req.user.tenantId);
+    const index = catalog.findIndex((tag) => tag.name.toLowerCase() === name.toLowerCase());
+    const updated = index >= 0 ? { ...catalog[index], color } : { name, color };
+    const next = index >= 0 ? catalog.map((tag, itemIndex) => itemIndex === index ? updated : tag) : [...catalog, updated];
+    await writeContactTagCatalog(req.user.tenantId, next);
+    res.json(updated);
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to update contact tag' });
   }
 });
 
@@ -2392,22 +2437,27 @@ router.post("/", async (req, res) => {
         });
         if (dup) {
           const c = dup.contact;
-          return res.status(409).json({
-            error:
-              "A contact with this email or phone already exists in your CRM",
-            code: "DUPLICATE_CONTACT",
-            matchedBy: dup.matchedBy,
-            existingContactId: c.id,
-            contact: {
-              id: c.id,
-              name: c.name,
-              email: c.email,
-              phone: c.phone ? normalizePhoneValue(c.phone) : c.phone,
-              company: c.company,
-              status: c.status,
-              subBrand: c.subBrand,
-            },
-          });
+          const genericDuplicateEmail =
+            (req.user.vertical || "generic") === "generic" &&
+            dup.matchedBy === "email";
+          if (!force || genericDuplicateEmail) {
+            return res.status(409).json({
+              error:
+                "A contact with this email or phone already exists in your CRM",
+              code: "DUPLICATE_CONTACT",
+              matchedBy: dup.matchedBy,
+              existingContactId: c.id,
+              contact: {
+                id: c.id,
+                name: c.name,
+                email: c.email,
+                phone: c.phone ? normalizePhoneValue(c.phone) : c.phone,
+                company: c.company,
+                status: c.status,
+                subBrand: c.subBrand,
+              },
+            });
+          }
         }
       } catch (e) {
         // Helper failure is non-fatal — log + fall through to the
@@ -2716,15 +2766,65 @@ router.get("/:id/activities", async (req, res) => {
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const where = { contactId: id, tenantId: req.user.tenantId };
-    const [data, total] = await Promise.all([
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    const isGeneric = tenant?.vertical === "generic";
+    const offset = (page - 1) * limit;
+    const mergeWindow = offset + limit;
+    const callLogWhere = {
+      contactId: id,
+      tenantId: req.user.tenantId,
+      provider: "callified",
+    };
+    const [activityRows, activityTotal, callLogs, callLogTotal] = await Promise.all([
       prisma.activity.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: limit,
-        skip: (page - 1) * limit,
+        take: isGeneric ? mergeWindow : limit,
+        skip: isGeneric ? 0 : offset,
       }),
       prisma.activity.count({ where }),
+      isGeneric
+        ? prisma.callLog.findMany({
+            where: callLogWhere,
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: mergeWindow,
+          })
+        : Promise.resolve([]),
+      isGeneric ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
     ]);
+    let merged = activityRows;
+    if (isGeneric) {
+      const seenCallLogIds = new Set();
+      const callActivities = callLogs.reduce((rows, callLog) => {
+        if (seenCallLogIds.has(callLog.id)) return rows;
+        seenCallLogIds.add(callLog.id);
+        const status = String(callLog.status || "INITIATED").toUpperCase();
+        rows.push({
+          id: `callified-${callLog.id}`,
+          type: "Call",
+          description: `Callified call ${status.toLowerCase()}`,
+          createdAt: callLog.createdAt,
+          contactId: callLog.contactId,
+          userId: callLog.userId,
+          provider: "callified",
+          status,
+          callLogId: callLog.id,
+        });
+        return rows;
+      }, []);
+      merged = [...activityRows, ...callActivities].sort((a, b) => {
+        const createdDifference = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (createdDifference !== 0) return createdDifference;
+        return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
+      });
+    }
+    const total = isGeneric ? activityTotal + callLogTotal : activityTotal;
+    const data = isGeneric
+      ? merged.slice(offset, offset + limit)
+      : merged;
     res.json({
       data,
       total,

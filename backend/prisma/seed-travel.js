@@ -22,6 +22,7 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
+const { seedTmcConsentTemplates } = require("./seed-tmc-consent-templates");
 
 if (!process.env.DATABASE_URL) {
   console.error("Error: DATABASE_URL not set in .env file");
@@ -80,6 +81,8 @@ async function main() {
 
   // 2. Users — Day 1 minimum to demo per-role landing.
   // Passwords all "password123" to match the existing demo convention.
+  await seedTmcConsentTemplates(prisma, tenant.id);
+
   const pw = await bcrypt.hash("password123", 10);
   const trialStartDate = new Date();
   const trialEndsAt = new Date(Date.now() + 15 * 86400000);

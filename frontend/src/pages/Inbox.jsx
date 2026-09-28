@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useContext } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Mail,
   ArrowRight,
@@ -245,6 +246,7 @@ function formatStaffOptionLabel(staff) {
 }
 
 export default function Inbox() {
+  const navigate = useNavigate();
   const notify = useNotify();
   const { user, tenant } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === "travel";
@@ -253,9 +255,22 @@ export default function Inbox() {
   const travelComposeTo = isTravel && typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("travelComposeTo")
     : "";
+  const wellnessComposeTo = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessComposeTo")
+    : "";
+  const wellnessComposeReturnTo = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessComposeReturnTo")
+    : "";
   const travelScheduleContactId = isTravel && typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("travelScheduleContactId")
     : "";
+  const wellnessScheduleContactId = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessScheduleContactId")
+    : "";
+  const wellnessScheduleReturnTo = isWellness && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("wellnessScheduleReturnTo")
+    : "";
+  const scheduleContactId = travelScheduleContactId || wellnessScheduleContactId;
   const canAssignMeetingStaff = user?.role === "ADMIN";
   const [emails, setEmails] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -264,14 +279,15 @@ export default function Inbox() {
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
 
-  const [showCompose, setShowCompose] = useState(Boolean(isTravel && travelComposeTo));
+  const [showCompose, setShowCompose] = useState(Boolean((isTravel && travelComposeTo) || (isWellness && wellnessComposeTo)));
   const [composeData, setComposeData] = useState(() => ({
-    to: travelComposeTo || "",
+    to: travelComposeTo || wellnessComposeTo || "",
     cc: "",
     bcc: "",
     subject: "",
     body: "",
   }));
+  const [composeContactId, setComposeContactId] = useState("");
   const [composeTone, setComposeTone] = useState("professional");
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false);
@@ -310,19 +326,21 @@ export default function Inbox() {
   const [detail, setDetail] = useState(null);
 
   useEffect(() => {
-    if (!isTravel || !travelComposeTo) return;
+    const composeTo = isTravel ? travelComposeTo : wellnessComposeTo;
+    if ((!isTravel && !isWellness) || !composeTo) return;
     setComposeData((current) => ({
       ...current,
-      to: travelComposeTo,
+      to: composeTo,
     }));
     setShowCompose(true);
-  }, [isTravel, travelComposeTo]);
+  }, [isTravel, isWellness, travelComposeTo, wellnessComposeTo]);
 
   useEffect(() => {
-    if (!isTravel || !travelScheduleContactId) return;
-    setMeetData((current) => ({ ...current, contactId: travelScheduleContactId }));
+    const contactId = isTravel ? travelScheduleContactId : wellnessScheduleContactId;
+    if ((!isTravel && !isWellness) || !contactId) return;
+    setMeetData((current) => ({ ...current, contactId }));
     setShowMeet(true);
-  }, [isTravel, travelScheduleContactId]);
+  }, [isTravel, isWellness, travelScheduleContactId, wellnessScheduleContactId]);
 
   // Opening an email marks it read: optimistic local update (clears the
   // blue dot immediately) + persist via POST /api/communications/inbox/:id/read
@@ -460,7 +478,7 @@ export default function Inbox() {
     }
   };
 
-  const closeCompose = () => {
+  const closeCompose = (returnToOrigin = true) => {
     setShowCompose(false);
     setShowCcBcc(false);
     setShowRecipientSuggestions(false);
@@ -470,8 +488,20 @@ export default function Inbox() {
     setDraftingEmail(false);
     setLoadingSubjects(false);
     setComposeData({ to: "", cc: "", bcc: "", subject: "", body: "" });
+    setComposeContactId("");
     setComposeAttachments([]);
     composeFileInputRef.current = null;
+    if (returnToOrigin && isWellness && wellnessComposeReturnTo?.startsWith("/")) {
+      navigate(wellnessComposeReturnTo);
+    }
+  };
+
+  const closeMeet = (returnToOrigin = true) => {
+    setShowMeet(false);
+    setMeetData({ contactId: "", date: "", time: "", description: "", staffIds: [] });
+    if (returnToOrigin && isWellness && wellnessScheduleReturnTo?.startsWith("/")) {
+      navigate(wellnessScheduleReturnTo);
+    }
   };
 
   const meetingStaffOptions = staffMembers
@@ -486,11 +516,13 @@ export default function Inbox() {
       key: `contact-${contact.id}`,
       email: contact.email || "",
       name: contact.name || "",
+      contactId: /^\d+$/.test(String(contact.id)) ? String(contact.id) : "",
     })),
     ...patients.map((patient) => ({
       key: `patient-${patient.id}`,
       email: patient.email || "",
       name: patient.name || "",
+      contactId: "",
     })),
   ].filter((entry) => entry.email || entry.name);
 
@@ -503,11 +535,12 @@ export default function Inbox() {
     : composeRecipientOptions;
   const visibleRecipientSuggestions = filteredRecipientSuggestions.slice(0, 6);
 
-  const handleRecipientSelect = (email) => {
+  const handleRecipientSelect = (recipient) => {
     setComposeData((prev) => ({
       ...prev,
-      to: replaceRecipientQuery(prev.to, email),
+      to: replaceRecipientQuery(prev.to, recipient.email),
     }));
+    setComposeContactId(recipient.contactId || "");
     setShowRecipientSuggestions(false);
   };
 
@@ -519,7 +552,7 @@ export default function Inbox() {
   };
 
   const handleLoadSubjects = useCallback(async () => {
-    const context = composeData.body.trim() || composeData.to.trim() || "follow up";
+    const context = composeData.subject.trim() || composeData.body.trim() || composeData.to.trim() || "follow up";
     setLoadingSubjects(true);
     try {
       const data = await fetchApi("/api/ai/subject-lines", {
@@ -541,22 +574,26 @@ export default function Inbox() {
     } finally {
       setLoadingSubjects(false);
     }
-  }, [composeData.body, composeData.to, notify]);
+  }, [composeData.body, composeData.subject, composeData.to, notify]);
 
   const handleComposeDraft = useCallback(async () => {
-    const context = composeData.body.trim() || composeData.to.trim() || "follow up";
+    const subject = composeData.subject.trim();
+    const context = composeData.body.trim() || subject || composeData.to.trim() || "follow up";
+    const subjectContext = subject || context;
     setDraftingEmail(true);
     try {
       const [subjectData, draftData] = await Promise.all([
         fetchApi("/api/ai/subject-lines", {
           method: "POST",
-          body: JSON.stringify({ context, count: 5 }),
+          body: JSON.stringify({ context: subjectContext, count: 5 }),
         }),
         fetchApi("/api/ai/draft", {
           method: "POST",
           body: JSON.stringify({
             context,
+            subject,
             tone: composeTone,
+            contactId: composeContactId || undefined,
             recipientEmail: composeData.to.split(",")[0]?.trim() || "",
           }),
         }),
@@ -578,7 +615,7 @@ export default function Inbox() {
     } finally {
       setDraftingEmail(false);
     }
-  }, [composeData.body, composeData.to, composeTone, notify]);
+  }, [composeContactId, composeData.body, composeData.subject, composeData.to, composeTone, notify]);
 
   const formatAttachmentSize = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -659,7 +696,7 @@ export default function Inbox() {
       });
 
       notify.success("Email sent successfully.");
-      closeCompose();
+      closeCompose(false);
       await loadEmailsPage({ page: 1, reset: true });
     } catch (err) {
       console.error(err);
@@ -864,8 +901,7 @@ export default function Inbox() {
       }
 
       notify[hasDeliveryIssue ? "info" : "success"](parts.join(" "));
-      setShowMeet(false);
-      setMeetData({ contactId: "", date: "", time: "", description: "", staffIds: [] });
+      closeMeet(false);
     } catch (err) {
       console.error(err);
       notify.error("Failed to schedule meeting.");
@@ -1234,6 +1270,7 @@ export default function Inbox() {
                     }}
                     onChange={(e) => {
                       setComposeData({ ...composeData, to: e.target.value });
+                      setComposeContactId("");
                       setShowRecipientSuggestions(true);
                     }}
                     placeholder="client@company.com (comma-separated for multiple)"
@@ -1265,7 +1302,7 @@ export default function Inbox() {
                           aria-label={entry.email}
                           onMouseDown={(event) => {
                             event.preventDefault();
-                            handleRecipientSelect(entry.email);
+                            handleRecipientSelect(entry);
                           }}
                           style={{
                             width: "100%",
@@ -1692,10 +1729,10 @@ export default function Inbox() {
                   onChange={(e) => setMeetData({ ...meetData, contactId: e.target.value })}
                 >
                   <option value="">-- Choose Contact --</option>
-                  {contacts.filter((c) => c.email || String(c.id) === String(travelScheduleContactId)).length > 0 && (
+                  {contacts.filter((c) => c.email || String(c.id) === String(scheduleContactId)).length > 0 && (
                     <optgroup label="Contacts">
                       {contacts
-                        .filter((c) => c.email || String(c.id) === String(travelScheduleContactId))
+                        .filter((c) => c.email || String(c.id) === String(scheduleContactId))
                         .map((c) => (
                           <option key={`c-${c.id}`} value={c.id}>
                             {c.email}
@@ -1856,7 +1893,7 @@ export default function Inbox() {
               >
                 <button
                   type="button"
-                  onClick={() => setShowMeet(false)}
+                  onClick={() => closeMeet()}
                   style={{
                     background: "transparent",
                     color: "var(--text-secondary)",

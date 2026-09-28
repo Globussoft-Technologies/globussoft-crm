@@ -723,7 +723,7 @@ async function assertValidItemTypeExtended(itemType, tenantId) {
 // breakdown of cost + GST + tcs lines), pdfUrl, and micrositeUrl —
 // every one of these is a sensitive value that picker / dropdown
 // callers don't need. Pass `?fields=summary` to opt into the slim
-// projection (id + subBrand + contactId + destination + status + dates
+// projection (id + subBrand + contactId + contact display identity + destination + status + dates
 // + totalAmount + currency + createdAt; the share token + pricing JSON
 // + PDF URL are SQL-dropped at the Prisma layer). The slim path also
 // SKIPS the `items` include (picker callers don't need per-item bodies).
@@ -827,7 +827,13 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       skip,
     };
     if (isSummary) {
-      findManyArgs.select = listProjection("Itinerary", false);
+      findManyArgs.select = {
+        ...listProjection("Itinerary", false),
+        // Picker-safe relation: brochure/quote selectors need the same
+        // identity shown on the itinerary list. Keep phone/email and every
+        // other contact field SQL-dropped on this slim endpoint.
+        contact: { select: { id: true, name: true, company: true } },
+      };
     } else {
       findManyArgs.include = {
         items: { orderBy: { position: "asc" } },

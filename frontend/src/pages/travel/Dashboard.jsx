@@ -188,13 +188,6 @@ export default function TravelDashboard() {
                 icon={Ticket}
                 label="Web check-ins"
                 value={data.webCheckins?.total ?? 0}
-                accent={
-                  (data.webCheckins?.missed ?? 0) > 0 ? (
-                    <span style={{ color: "var(--danger-color)", fontWeight: 600 }}>
-                      {data.webCheckins.missed} missed
-                    </span>
-                  ) : null
-                }
                 footer={`${data.webCheckins?.done ?? 0} delivered · ${data.webCheckins?.pending ?? 0} pending · ${data.webCheckins?.missed ?? 0} missed`}
                 link="/travel/web-checkins"
               />

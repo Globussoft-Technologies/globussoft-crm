@@ -641,6 +641,42 @@ describe('<VisaAdvisorDashboard /> — visa letter packet generator', () => {
     expect(await screen.findByTestId('letter-packet-result')).toHaveTextContent(/Generated 1 letter/i);
   });
 
+  it('uses the application trip and participant binding when generating a new application packet', async () => {
+    const detail = makeDetail({
+      tripId: 9001,
+      participantId: 501,
+      trip: {
+        id: 9001,
+        tripCode: 'tokyo-spring',
+        destination: 'Japan',
+        departDate: '2026-09-10',
+        returnDate: '2026-09-20',
+      },
+      participant: { id: 501, fullName: 'Aarav Sharma' },
+    });
+    let generateCall = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (
+        url === '/api/travel/visa/applications/301/letters/generate' &&
+        opts && opts.method === 'POST'
+      ) {
+        generateCall = { url, opts };
+        return Promise.resolve({ generated: [], skipped: [] });
+      }
+      if (typeof url === 'string' && url === '/api/travel/visa/applications/301') {
+        return Promise.resolve(detail);
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByTestId('letter-binding-summary');
+    fireEvent.click(screen.getByTestId('generate-letter-packet'));
+
+    await waitFor(() => expect(generateCall).toBeTruthy());
+    expect(JSON.parse(generateCall.opts.body)).toEqual({});
+  });
+
   it('Remove on a packet row confirms, DELETEs the row, and refreshes the list', async () => {
     let appState = makeDetail({
       visaLetterDocuments: [

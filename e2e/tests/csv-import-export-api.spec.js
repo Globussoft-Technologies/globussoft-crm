@@ -13,6 +13,7 @@
  *   GET  /membership-plans/export.csv     — admin/manager
  *   POST /membership-plans/import.csv     — upsert by name + JSON entitlements
  *   GET  /bookings/export.csv             — admin/manager (export only)
+ *   GET  /contacts/import-history          — Generic tenant only
  *
  * Coverage targets:
  *   - export: HTTP 200 + Content-Type text/csv + UTF-8 BOM byte 0xFEFF as
@@ -32,6 +33,7 @@ const UTF8_BOM = "﻿";
 
 let adminToken = null;
 let userToken = null;
+let genericAdminToken = null;
 
 async function login(request, email, password) {
   const r = await request.post(`${BASE_URL}/api/auth/login`, {
@@ -51,6 +53,10 @@ async function getUser(request) {
   if (!userToken) userToken = await login(request, "user@wellness.demo", "password123");
   return userToken;
 }
+async function getGenericAdmin(request) {
+  if (!genericAdminToken) genericAdminToken = await login(request, "admin@globussoft.com", "password123");
+  return genericAdminToken;
+}
 
 const headers = (token) => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" });
 const csvHeaders = (token) => ({ Authorization: `Bearer ${token}`, "Content-Type": "text/csv" });
@@ -68,6 +74,41 @@ test.describe("CSV Export — auth + role gate", () => {
     if (!token) test.skip(true, "user login unavailable");
     const res = await request.get(`${BASE_URL}/api/csv/services/export.csv`, { headers: headers(token) });
     expect(res.status()).toBe(403);
+  });
+});
+
+test.describe("Generic contacts import history", () => {
+  test("persists a successful import and returns tenant-scoped history", async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin login unavailable");
+    const email = `${RUN_TAG.replace(/[^a-z0-9]/gi, "")}@example.test`;
+    const csvBody = ["name,email", `${RUN_TAG} Contact,${email}`].join("\r\n");
+
+    const imported = await request.post(`${BASE_URL}/api/csv/contacts/import.csv`, {
+      headers: csvHeaders(token),
+      data: csvBody,
+    });
+    const importedBody = await imported.json();
+    expect(imported.status(), JSON.stringify(importedBody)).toBe(200);
+
+    const history = await request.get(`${BASE_URL}/api/csv/contacts/import-history`, {
+      headers: headers(token),
+    });
+    const rows = await history.json();
+    expect(history.status(), JSON.stringify(rows)).toBe(200);
+    expect(Array.isArray(rows)).toBe(true);
+    expect(rows.some((row) => Array.isArray(row.contacts)
+      && row.contacts.some((contact) => contact.email === email))).toBe(true);
+  });
+
+  test("does not expose the Generic history surface to Wellness", async ({ request }) => {
+    const token = await getAdmin(request);
+    const res = await request.get(`${BASE_URL}/api/csv/contacts/import-history`, {
+      headers: headers(token),
+    });
+
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("IMPORT_HISTORY_NOT_AVAILABLE");
   });
 });
 

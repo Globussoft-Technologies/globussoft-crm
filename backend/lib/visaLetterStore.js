@@ -19,25 +19,7 @@ function safeSegment(value, fallback = "item") {
   return out || fallback;
 }
 
-async function storeLetterPdf(buffer, opts = {}) {
-  const applicationId = Number.isFinite(Number(opts.applicationId)) ? Number(opts.applicationId) : "unknown";
-  const participantId = Number.isFinite(Number(opts.participantId)) ? Number(opts.participantId) : "unknown";
-  const kind = safeSegment(opts.kind || "generated");
-  const fileName = safeSegment(opts.fileName || "visa-letter.pdf", "visa-letter.pdf");
-  const prefix = `applications-${applicationId}/participants-${participantId}/${kind}`;
-
-  if (s3Service.BUCKET_NAME) {
-    const url = await s3Service.uploadFile(
-      buffer,
-      fileName,
-      LETTER_MIME_TYPE,
-      `visa-letters/${prefix}`,
-      { contentDisposition: `inline; filename="${fileName}"` },
-    );
-    const key = s3Service.extractKeyFromUrl(url) || String(url || "").replace(/^undefined\//, "");
-    return { storage: s3Service.isOciUrl(url) ? "ocs" : "s3", url, key };
-  }
-
+function storeLetterOnDisk(buffer, prefix, fileName) {
   const dir = path.join(uploadDir, prefix);
   ensureDir(dir);
   const storedName = `${crypto.randomUUID()}-${fileName}`;
@@ -48,6 +30,37 @@ async function storeLetterPdf(buffer, opts = {}) {
     url: `/api/uploads/visa-letters/${prefix}/${storedName}`,
     key: `${prefix}/${storedName}`,
   };
+}
+
+async function storeLetterPdf(buffer, opts = {}) {
+  const applicationId = Number.isFinite(Number(opts.applicationId)) ? Number(opts.applicationId) : "unknown";
+  const participantId = Number.isFinite(Number(opts.participantId)) ? Number(opts.participantId) : "unknown";
+  const kind = safeSegment(opts.kind || "generated");
+  const fileName = safeSegment(opts.fileName || "visa-letter.pdf", "visa-letter.pdf");
+  const prefix = `applications-${applicationId}/participants-${participantId}/${kind}`;
+
+  if (s3Service.BUCKET_NAME) {
+    try {
+      const url = await s3Service.uploadFile(
+        buffer,
+        fileName,
+        LETTER_MIME_TYPE,
+        `visa-letters/${prefix}`,
+        { contentDisposition: `inline; filename="${fileName}"` },
+      );
+      const key = s3Service.extractKeyFromUrl(url) || String(url || "").replace(/^undefined\//, "");
+      if (url && key) return { storage: s3Service.isOciUrl(url) ? "ocs" : "s3", url, key };
+      throw new Error("Object storage returned no file URL");
+    } catch (error) {
+      // A stale bucket/credential configuration should not make an otherwise
+      // valid visa packet impossible to generate. The shared storage service
+      // already supports disk-backed uploads; preserve that same behavior for
+      // letter packets and keep the storage failure visible to operators.
+      console.warn(`[visa-letter-store] cloud upload failed; using disk fallback: ${error?.message || String(error)}`);
+    }
+  }
+
+  return storeLetterOnDisk(buffer, prefix, fileName);
 }
 
 async function readLetterBuffer(descriptor) {

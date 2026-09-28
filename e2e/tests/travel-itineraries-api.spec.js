@@ -1359,6 +1359,14 @@ test.describe("Travel itineraries API — slim-shape opt-in (#920 S3)", () => {
       expect(it).toHaveProperty("id");
       expect(it).toHaveProperty("subBrand");
       expect(it).toHaveProperty("contactId");
+      expect(it).toHaveProperty("contact");
+      if (it.contact) {
+        expect(it.contact).toHaveProperty("id");
+        expect(it.contact).toHaveProperty("name");
+        expect(it.contact).toHaveProperty("company");
+        expect(it.contact).not.toHaveProperty("email");
+        expect(it.contact).not.toHaveProperty("phone");
+      }
       expect(it).toHaveProperty("destination");
       expect(it).toHaveProperty("status");
       // SQL-dropped — never appear on slim path.

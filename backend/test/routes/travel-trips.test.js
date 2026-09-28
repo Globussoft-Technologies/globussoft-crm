@@ -111,6 +111,14 @@ prisma.tripParticipant = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.contact = {
+  findFirst: vi.fn(),
+  findMany: vi.fn(),
+};
+prisma.tmcParentDocument = {
+  findMany: vi.fn(),
+  findFirst: vi.fn(),
+};
 prisma.tripDocumentRequirement = {
   findFirst: vi.fn(),
   findMany: vi.fn(),
@@ -220,6 +228,10 @@ beforeEach(() => {
   prisma.tripParticipant.create.mockReset();
   prisma.tripParticipant.update.mockReset();
   prisma.tripParticipant.delete.mockReset();
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tmcParentDocument.findMany.mockReset().mockResolvedValue([]);
+  prisma.tmcParentDocument.findFirst.mockReset().mockResolvedValue(null);
   prisma.tripDocumentRequirement.findFirst.mockReset();
   prisma.tripDocumentRequirement.findMany.mockReset().mockResolvedValue([]);
   prisma.tripDocumentRequirement.create.mockReset();
@@ -553,6 +565,116 @@ describe('GET /api/travel/trips/:id', () => {
     expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 100, tenantId: 1 } }),
     );
+  });
+
+  test('attaches the latest parent-portal consent form to the matching participant', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'bali2026',
+      tenantId: 1,
+      participants: [{ id: 50, fullName: 'Aarav', parentEmail: 'parent@example.com' }],
+      documentRequirements: [],
+    });
+    prisma.contact.findMany.mockResolvedValue([{ id: 55, email: 'parent@example.com' }]);
+    prisma.tmcParentDocument.findMany.mockResolvedValue([{
+      id: 901,
+      parentContactId: 55,
+      filename: 'signed-consent.png',
+      fileSize: 128,
+      mimeType: 'image/png',
+      status: 'in_review',
+      uploadedAt: new Date('2026-09-23T10:00:00.000Z'),
+      createdAt: new Date('2026-09-23T10:00:00.000Z'),
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.participants[0].consentDocument).toMatchObject({
+      id: 901,
+      filename: 'signed-consent.png',
+      status: 'in_review',
+    });
+    expect(res.body.parentConsentDocuments).toEqual([
+      { parentEmail: 'parent@example.com', document: expect.objectContaining({ id: 901 }) },
+    ]);
+  });
+
+  test('staff can view a parent-uploaded consent form for one participant', async () => {
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, parentEmail: 'parent@example.com' });
+    prisma.contact.findMany.mockResolvedValue([{ id: 55, email: 'parent@example.com' }]);
+    prisma.tmcParentDocument.findMany.mockResolvedValue([{
+      id: 901,
+      parentContactId: 55,
+      filename: 'signed-consent.png',
+      fileSize: 12,
+      mimeType: 'image/png',
+      status: 'in_review',
+      uploadedAt: new Date('2026-09-23T10:00:00.000Z'),
+      createdAt: new Date('2026-09-23T10:00:00.000Z'),
+      fileBlob: Buffer.from('signed consent image'),
+      fileUrl: null,
+      storage: 'db',
+      storageKey: null,
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/participants/50/consent-form/file')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/image\/png/);
+    expect(res.headers['content-disposition']).toMatch(/inline/);
+    expect(res.body.toString()).toBe('signed consent image');
+  });
+
+  test('returns all latest parent documents and lets staff view a non-consent document', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'bali2026',
+      participants: [{ id: 50, fullName: 'Aarav', parentEmail: 'parent@example.com' }],
+      documentRequirements: [],
+    });
+    prisma.pendingTripRegistration.findMany.mockResolvedValue([]);
+    prisma.contact.findMany.mockResolvedValue([{ id: 55, email: 'parent@example.com' }]);
+    prisma.tmcParentDocument.findMany.mockResolvedValue([
+      {
+        id: 902,
+        parentContactId: 55,
+        documentType: 'passport',
+        filename: 'passport.pdf',
+        fileSize: 12,
+        mimeType: 'application/pdf',
+        status: 'in_review',
+        uploadedAt: new Date('2026-09-23T11:00:00.000Z'),
+        createdAt: new Date('2026-09-23T11:00:00.000Z'),
+      },
+    ]);
+
+    const tripResponse = await request(makeApp())
+      .get('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(tripResponse.status).toBe(200);
+    expect(tripResponse.body.participants[0].parentDocuments).toEqual([
+      expect.objectContaining({ id: 902, documentType: 'passport', filename: 'passport.pdf' }),
+    ]);
+
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, parentEmail: 'parent@example.com' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 55 });
+    prisma.tmcParentDocument.findFirst.mockResolvedValue({
+      id: 902,
+      filename: 'passport.pdf',
+      mimeType: 'application/pdf',
+      fileBlob: Buffer.from('passport scan'),
+    });
+    const fileResponse = await request(makeApp())
+      .get('/api/travel/trips/100/participants/50/parent-documents/902/file')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(fileResponse.status).toBe(200);
+    expect(fileResponse.headers['content-type']).toMatch(/application\/pdf/);
+    expect(fileResponse.body.toString()).toBe('passport scan');
   });
 
   test('cross-tenant trip lookup returns 404 NOT_FOUND', async () => {

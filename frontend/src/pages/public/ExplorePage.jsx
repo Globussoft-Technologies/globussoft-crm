@@ -198,6 +198,7 @@ export default function ExplorePage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             answers,
+            identity,
             ...identity,
             ...(JSON.parse(sessionStorage.getItem("exploreCatalogueInterest") || "null")
               ? { catalogueInterest: JSON.parse(sessionStorage.getItem("exploreCatalogueInterest")) }
@@ -664,7 +665,9 @@ function DiagnosticPanel({
   submitting,
 }) {
   const questions = Array.isArray(config?.questions) ? config.questions : [];
-  const identityFields = getIdentityFields(config?.form);
+  const identityFields = Array.isArray(config?.identityFields)
+    ? config.identityFields.filter((field) => field?.enabled !== false)
+    : getIdentityFields(config?.form);
   const trips = getRecommendedTrips(report);
   const curriculumFit = Array.isArray(report?.curriculumFit?.recommendations)
     ? report.curriculumFit.recommendations
@@ -738,15 +741,32 @@ function DiagnosticPanel({
                       {field.label}
                       {field.required ? " *" : ""}
                     </span>
-                    <input
-                      type={field.type}
-                      value={identity[field.id] || ""}
-                      required={field.required}
-                      placeholder={field.placeholder}
-                      onChange={(event) =>
-                        onIdentityChange({ ...identity, [field.id]: event.target.value })
-                      }
-                    />
+                    {field.type === "textarea" ? (
+                      <textarea
+                        value={identity[field.id] || ""}
+                        required={field.required}
+                        minLength={field.minLength}
+                        maxLength={field.maxLength}
+                        pattern={field.pattern || undefined}
+                        placeholder={field.placeholder}
+                        onChange={(event) => onIdentityChange({ ...identity, [field.id]: event.target.value })}
+                      />
+                    ) : (
+                      <input
+                        type={field.type || "text"}
+                        value={identity[field.id] || ""}
+                        required={field.required}
+                        minLength={field.minLength}
+                        maxLength={field.maxLength}
+                        pattern={field.pattern || undefined}
+                        min={field.min}
+                        max={field.max}
+                        autoComplete={field.autocomplete}
+                        placeholder={field.placeholder}
+                        onChange={(event) => onIdentityChange({ ...identity, [field.id]: event.target.value })}
+                      />
+                    )}
+                    {field.helper && <small>{field.helper}</small>}
                   </label>
                 ))}
               </div>

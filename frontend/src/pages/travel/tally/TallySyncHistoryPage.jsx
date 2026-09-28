@@ -119,6 +119,7 @@ function SyncDetailModal({ row, onClose }) {
   const createdAt = new Date(row.createdAt);
   const request = formatPayload(row.requestPayload, "No request payload recorded.");
   const response = formatPayload(row.responsePayload, "No Tally response recorded.");
+  const directExport = summarizeDirectExport(row);
 
   return <div className="tally-history-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="tally-history-modal" role="dialog" aria-modal="true" aria-labelledby="tally-sync-detail-title">
@@ -134,11 +135,21 @@ function SyncDetailModal({ row, onClose }) {
       <div className="tally-history-summary">
         <Detail label="Status" value={humanize(row.status)} color={STATUS_COLORS[row.status]} />
         <Detail label="Source" value={humanize(row.sourceType)} />
-        <Detail label="Voucher type" value={humanize(row.voucherType)} />
-        <Detail label="Tally voucher" value={row.tallyVoucherNumber || row.tallyVoucherId || "—"} />
-        <Detail label="Party" value={row.queue?.partyName || "—"} />
-        <Detail label="Amount" value={row.queue?.amount == null ? "—" : Number(row.queue.amount).toLocaleString("en-IN", { style: "currency", currency: "INR" })} />
-        <Detail label="Triggered by" value={row.triggeredByUserId || "System"} />
+        <Detail label="Voucher type" value={directExport?.voucherTypes || humanize(row.voucherType)} />
+        <Detail
+          label={directExport ? "Vouchers in batch" : "Tally voucher"}
+          value={directExport?.voucherCount
+            ? `${directExport.voucherCount} (${directExport.references.join(", ")})`
+            : row.tallyVoucherNumber || row.tallyVoucherId || "—"}
+        />
+        <Detail label={directExport ? "Parties in batch" : "Party"} value={directExport?.parties || row.queue?.partyName || "—"} />
+        <Detail
+          label={directExport ? "Voucher totals" : "Amount"}
+          value={directExport?.amountByType == null
+            ? row.queue?.amount == null ? "—" : Number(row.queue.amount).toLocaleString("en-IN", { style: "currency", currency: "INR" })
+            : directExport.amountByType}
+        />
+        <Detail label="Triggered by" value={row.triggeredByUserId ? `User #${row.triggeredByUserId}` : "System"} />
       </div>
 
       <div className="tally-history-payloads">
@@ -147,6 +158,58 @@ function SyncDetailModal({ row, onClose }) {
       </div>
     </section>
   </div>;
+}
+
+function summarizeDirectExport(row) {
+  if (row.sourceType !== "DIRECT_EXPORT" || !row.requestPayload || row.voucherType !== "VOUCHERS") return null;
+  try {
+    const xml = String(row.requestPayload);
+    const vouchers = xml.match(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/gi) || [];
+    if (!vouchers.length) return null;
+
+    const typeCounts = new Map();
+    const typeAmounts = new Map();
+    const references = new Set();
+    const parties = new Set();
+    vouchers.forEach((voucher) => {
+      const type = voucher.match(/\bVCHTYPE="([^"]+)"/i)?.[1] || readXmlValue(voucher, "VOUCHERTYPENAME") || "Voucher";
+      typeCounts.set(type, (typeCounts.get(type) || 0) + 1);
+      const reference = readXmlValue(voucher, "VOUCHERNUMBER");
+      if (reference) references.add(reference);
+
+      const entries = voucher.match(/<(?:ALL)?LEDGERENTRIES\.LIST\b[^>]*>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || [];
+      const partyEntry = entries.find((entry) => readXmlValue(entry, "ISPARTYLEDGER").toLowerCase() === "yes");
+      if (partyEntry) {
+        const party = readXmlValue(partyEntry, "LEDGERNAME");
+        if (party) parties.add(party);
+      }
+      const partyAmount = parseTallyAmount(readXmlValue(partyEntry || "", "AMOUNT"));
+      const fallbackAmount = entries.reduce((sum, entry) => sum + parseTallyAmount(readXmlValue(entry, "AMOUNT")), 0) / 2;
+      const voucherAmount = Math.abs(Number.isFinite(partyAmount) && partyAmount !== 0 ? partyAmount : fallbackAmount);
+      typeAmounts.set(type, (typeAmounts.get(type) || 0) + voucherAmount);
+    });
+
+    return {
+      voucherCount: vouchers.length,
+      voucherTypes: [...typeCounts].map(([type, count]) => `${humanize(type)} (${count})`).join(", "),
+      references: [...references].slice(0, 3).concat(references.size > 3 ? [`+${references.size - 3} more`] : []),
+      parties: parties.size ? `${parties.size} (${[...parties].slice(0, 2).join(", ")}${parties.size > 2 ? ", …" : ""})` : "No party ledger",
+      amountByType: [...typeAmounts].map(([type, total]) => `${humanize(type)}: ${total.toLocaleString("en-IN", { style: "currency", currency: "INR" })}`).join(" · "),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function readXmlValue(xml, tagName) {
+  const escapedTag = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const value = String(xml).match(new RegExp(`<${escapedTag}\\b[^>]*>([\\s\\S]*?)</${escapedTag}>`, "i"))?.[1];
+  return value ? value.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").trim() : "";
+}
+
+function parseTallyAmount(value) {
+  const amount = Number(String(value || "").replace(/,/g, "").trim());
+  return Number.isFinite(amount) ? Math.abs(amount) : 0;
 }
 
 function Detail({ label, value, color }) {

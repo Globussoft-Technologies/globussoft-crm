@@ -668,6 +668,13 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     });
     if (adminCreated) {
       await grantAllPermissions(stats, adminRole.id, vertical);
+    } else if (vertical === 'generic' || vertical === 'travel') {
+      // Generic and travel ADMIN are full-access system roles. Keep existing
+      // roles aligned with their vertical catalog so deployments that add
+      // modules do not leave only the new permission-gated sidebar groups
+      // empty after the next login. ensureRolePermission is additive and
+      // idempotent, so already-current tenants incur no writes.
+      await grantAllPermissions(stats, adminRole.id, vertical);
     }
 
     const { role: managerRole, wasCreated: managerCreated } = await ensureRole(stats, {
@@ -829,10 +836,13 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       if (u.userType === 'OWNER') continue;
       const legacy = String(u.role || '').toUpperCase();
       let target = null;
-      if (legacy === 'ADMIN') target = adminRole;
+      // userType is authoritative for portal accounts. Some legacy customer
+      // rows still carry role='USER' (the User column default), and checking
+      // the legacy role first strands them on the staff USER role forever.
+      if (u.userType === 'CUSTOMER') target = customerRole;
+      else if (legacy === 'ADMIN') target = adminRole;
       else if (legacy === 'MANAGER') target = managerRole;
       else if (legacy === 'USER') target = userRole;
-      else if (u.userType === 'CUSTOMER') target = customerRole;
       if (!target) {
         stats.usersSkipped++;
         continue;

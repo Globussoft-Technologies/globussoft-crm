@@ -28,6 +28,10 @@ function Field({
   placeholder,
   type = "text",
   required = false,
+  inputMode,
+  maxLength,
+  pattern,
+  normalizeValue = (nextValue) => nextValue,
 }) {
   return (
     <label style={label}>
@@ -36,8 +40,11 @@ function Field({
       <input
         type={type}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onChange(normalizeValue(event.target.value))}
         placeholder={placeholder}
+        inputMode={inputMode}
+        maxLength={maxLength}
+        pattern={pattern}
         style={input}
       />
     </label>
@@ -166,7 +173,16 @@ export default function TallyMasterSection({
         </label>
         <Field title="Bank name" value={master.bankDetails?.bankName || ""} onChange={updateMaster("bankDetails.bankName")} placeholder="Bank name" />
         <Field title="Account name" value={master.bankDetails?.accountName || ""} onChange={updateMaster("bankDetails.accountName")} placeholder="Account holder name" />
-        <Field title="Account number" value={master.bankDetails?.accountNumber || ""} onChange={updateMaster("bankDetails.accountNumber")} placeholder="Account number" />
+        <Field
+          title="Account number"
+          value={master.bankDetails?.accountNumber || ""}
+          onChange={updateMaster("bankDetails.accountNumber")}
+          placeholder="9–18 digit account number"
+          inputMode="numeric"
+          maxLength={18}
+          pattern="[0-9]{9,18}"
+          normalizeValue={(value) => value.replace(/\D/g, "").slice(0, 18)}
+        />
         <Field title="IFSC code" value={master.bankDetails?.ifscCode || ""} onChange={updateMaster("bankDetails.ifscCode")} placeholder="IFSC code" />
         <Field title="Branch" value={master.bankDetails?.branchName || ""} onChange={updateMaster("bankDetails.branchName")} placeholder="Branch name" />
         <Field title="UPI ID" value={master.bankDetails?.upiId || ""} onChange={updateMaster("bankDetails.upiId")} placeholder="upi@bank" />

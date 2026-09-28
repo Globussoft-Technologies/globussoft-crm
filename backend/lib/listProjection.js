@@ -129,6 +129,7 @@ const PROJECTIONS = Object.freeze({
     id: true,
     tripCode: true,      // display name (tenant-unique slug)
     destination: true,   // location label (non-PII)
+    tripType: true,      // visa picker eligibility (international/domestic/day_trip)
     status: true,        // filter on the trip-list UI
     departDate: true,    // sort key
     returnDate: true,    // duration display (date math, non-PII)

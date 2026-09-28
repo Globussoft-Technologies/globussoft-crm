@@ -173,6 +173,8 @@ BEGIN
       ON tb.TABLE_SCHEMA = col.TABLE_SCHEMA AND tb.TABLE_NAME = col.TABLE_NAME
     WHERE col.TABLE_SCHEMA = DATABASE()
       AND tb.TABLE_TYPE = 'BASE TABLE'
+      -- AuditLog is immutable evidence. Rewriting details invalidates its stored hash.
+      AND LOWER(col.TABLE_NAME) <> 'auditlog'
       AND col.DATA_TYPE IN ('char','varchar','tinytext','text','mediumtext','longtext');
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 
@@ -209,12 +211,17 @@ empty in the local dump):
 | pendingtripregistration.extrasJson | 3 |
 | tenant.logoUrl | 2 |
 | user.profilePicture | 2 |
-| auditlog.details | 1 |
 | brandkit.logoUrl | 1 |
 | travelbrandprofile.payload | 1 |
 | travelbrochure.brandJson | 1 |
 | visit.photosAfter | 1 |
 | visit.photosBefore | 1 |
+
+`auditlog.details` is deliberately excluded even when it contains the old URL.
+Audit details are hash-chained historical evidence; rewriting them invalidates
+the stored digest. If an older version of this runbook already rewrote an audit
+row, use `backend/scripts/repair-audit-storage-url.js` to restore it only after
+the script proves the reverse substitution matches the existing hash.
 
 Sanity check: the list should be plausible URL-bearing columns, counts should
 look like real data volume. `whatsappmessage.mediaUrl` will dominate and is
@@ -244,6 +251,8 @@ BEGIN
       ON tb.TABLE_SCHEMA = col.TABLE_SCHEMA AND tb.TABLE_NAME = col.TABLE_NAME
     WHERE col.TABLE_SCHEMA = DATABASE()
       AND tb.TABLE_TYPE = 'BASE TABLE'
+      -- Never rewrite hash-chained audit content.
+      AND LOWER(col.TABLE_NAME) <> 'auditlog'
       AND col.DATA_TYPE IN ('char','varchar','tinytext','text','mediumtext','longtext');
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 

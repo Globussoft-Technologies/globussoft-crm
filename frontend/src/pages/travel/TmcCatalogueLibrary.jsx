@@ -168,7 +168,7 @@ export default function TmcCatalogueLibrary() {
       || (statusFilter === "crm-itineraries" && inCrmItineraries);
     return matchesSearch && matchesStatus;
   });
-  const pageSize = 24;
+  const pageSize = 25;
   const totalPages = Math.max(1, Math.ceil(visibleFiles.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageFiles = visibleFiles.slice((safePage - 1) * pageSize, safePage * pageSize);

@@ -93,10 +93,44 @@ export default function TravelDiagnosticPublicForm() {
       setSubmitError(`Please answer "${missing.text}" before submitting — it's required.`);
       return;
     }
+    const activeIdentityFields = Array.isArray(formConfig?.identityFields)
+      ? formConfig.identityFields.filter((field) => field?.enabled !== false)
+      : [];
+    for (const field of activeIdentityFields) {
+      const value = String(identity[field.id] || "").trim();
+      let invalid = false;
+      if (field.required && !value) invalid = true;
+      if (value && field.minLength != null && value.length < Number(field.minLength)) invalid = true;
+      if (value && field.maxLength != null && value.length > Number(field.maxLength)) invalid = true;
+      if (value && field.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) invalid = true;
+      if (value && field.type === "tel") {
+        const digits = value.replace(/\D/g, "");
+        if (!/^\+?[0-9][0-9\s().-]+$/.test(value) || digits.length < 10 || digits.length > 15) invalid = true;
+      }
+      if (value && field.type === "url") {
+        try {
+          const url = new URL(value);
+          if (!['http:', 'https:'].includes(url.protocol)) invalid = true;
+        } catch { invalid = true; }
+      }
+      if (value && field.type === "number" && !Number.isFinite(Number(value))) invalid = true;
+      if (value && field.min != null && (field.type === "number" ? Number(value) < Number(field.min) : value < String(field.min))) invalid = true;
+      if (value && field.max != null && (field.type === "number" ? Number(value) > Number(field.max) : value > String(field.max))) invalid = true;
+      if (value && field.pattern) {
+        try { if (!new RegExp(field.pattern).test(value)) invalid = true; } catch { invalid = true; }
+      }
+      if (invalid) {
+        setSubmitError(field.validationMessage || `Please enter a valid value for "${field.label || field.id}".`);
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       const payload = {
         answers,
+        identity,
+        // Keep the original top-level fields for older API consumers while
+        // custom fields travel in the additive identity object.
         ...identity,
       };
       const r = await fetch(

@@ -109,6 +109,22 @@ function parseQuestionList(rawSnapshot) {
   return [];
 }
 
+function parseIdentityFieldList(rawSnapshot) {
+  if (!rawSnapshot) return [];
+  let snapshot = rawSnapshot;
+  if (typeof snapshot === "string") {
+    try { snapshot = JSON.parse(snapshot); } catch { return []; }
+  }
+  let inner = snapshot?.questionsJson;
+  if (typeof inner === "string") {
+    try { inner = JSON.parse(inner); } catch { return []; }
+  }
+  const fields = Array.isArray(inner?.identityFields)
+    ? inner.identityFields
+    : Array.isArray(snapshot?.identityFields) ? snapshot.identityFields : [];
+  return fields.filter((field) => field?.enabled !== false && field?.id);
+}
+
 function parseAnswers(raw) {
   if (!raw) return {};
   if (typeof raw === "object") return raw;
@@ -454,6 +470,11 @@ export default function DiagnosticDetail() {
 
   const questions = parseQuestionList(diag?.questionsJson);
   const answers = parseAnswers(diag?.answersJson);
+  const identityFields = parseIdentityFieldList(diag?.questionsJson);
+  const identityAnswers = answers.identity && typeof answers.identity === "object" && !Array.isArray(answers.identity)
+    ? answers.identity
+    : {};
+  const submittedIdentityFields = identityFields.filter((field) => formatAnswer(identityAnswers[field.id]));
   const isCatalogueInterest = diag?.source === "public_catalogue_interest";
   const catalogueInterest = answers.catalogueInterest || {};
   const subBrandLabel = SUB_BRAND_LABEL[diag?.subBrand] || diag?.subBrand || "";
@@ -496,6 +517,22 @@ export default function DiagnosticDetail() {
             <CustomerInfo icon={Mail} label="Email" value={diag.contact?.email} />
             <CustomerInfo icon={Phone} label="Phone" value={diag.contact?.phone} />
             {diag.contactId && <CustomerInfo icon={Hash} label="Contact ID" value={`#${diag.contactId}`} />}
+          </div>
+        </section>
+      )}
+
+      {submittedIdentityFields.length > 0 && (
+        <section style={card}>
+          <h2 style={cardTitle}>Submitted identity details</h2>
+          <div style={customerGrid}>
+            {submittedIdentityFields.map((field) => (
+              <div key={field.id}>
+                <span style={kvLabel}>{field.label || field.id}</span>
+                <div style={{ marginTop: 5, fontWeight: 600, overflowWrap: "anywhere" }}>
+                  {formatAnswer(identityAnswers[field.id])}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}

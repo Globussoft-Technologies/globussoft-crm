@@ -282,27 +282,37 @@ function QuestionBlock({
 function IdentityFields({ fields, identity, onChange, theme, styling }) {
   return (
     <div style={identityGrid}>
-      {fields.map((f) => (
+      {fields.map((f) => {
+        const controlProps = {
+          value: identity[f.id] || "",
+          onChange: onChange ? (e) => onChange({ ...identity, [f.id]: e.target.value }) : undefined,
+          onInvalid: f.validationMessage ? (e) => e.currentTarget.setCustomValidity(f.validationMessage) : undefined,
+          onInput: f.validationMessage ? (e) => e.currentTarget.setCustomValidity("") : undefined,
+          readOnly: !onChange,
+          style: input(theme, styling),
+          required: f.required,
+          placeholder: f.placeholder || "",
+          minLength: f.minLength,
+          maxLength: f.maxLength,
+          pattern: f.pattern || undefined,
+          min: f.min,
+          max: f.max,
+          autoComplete: f.autocomplete || undefined,
+          'aria-describedby': f.helper ? `identity-help-${f.id}` : undefined,
+        };
+        return (
         <label key={f.id} style={fieldLabel(theme)}>
           <span>
             {f.label}
             {f.required && " *"}
           </span>
-          <input
-            type={f.type || "text"}
-            value={identity[f.id] || ""}
-            onChange={
-              onChange
-                ? (e) => onChange({ ...identity, [f.id]: e.target.value })
-                : undefined
-            }
-            readOnly={!onChange}
-            style={input(theme, styling)}
-            required={f.required}
-            placeholder={f.placeholder || ""}
-          />
+          {f.type === 'textarea'
+            ? <textarea {...controlProps} rows={3} />
+            : <input {...controlProps} type={f.type || "text"} />}
+          {f.helper && <small id={`identity-help-${f.id}`} style={{ color: theme.textColor, opacity: 0.72, lineHeight: 1.35 }}>{f.helper}</small>}
         </label>
-      ))}
+        );
+      })}
     </div>
   );
 }

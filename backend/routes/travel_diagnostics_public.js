@@ -56,6 +56,10 @@ const {
 const { verifyToken } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const { sanitizeText } = require("../lib/sanitizeJson");
+const {
+  normalizeIdentityFields,
+  validateIdentitySubmission,
+} = require("../lib/diagnosticIdentityFields");
 
 const VALID_LOGO_PLACEMENTS = new Set([
   "top-center",
@@ -285,7 +289,7 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
     let identityFields = null;
     try {
       const parsed = JSON.parse(bank.questionsJson);
-      identityFields = Array.isArray(parsed.identityFields) ? parsed.identityFields : null;
+      identityFields = normalizeIdentityFields(parsed.identityFields, form);
       questions = (parsed.questions || []).map((q) => ({
         id: q.id,
         text: q.text,
@@ -413,7 +417,7 @@ router.post(
       }
       assertValidSubBrand(subBrand);
 
-      const { answers, name, email, phone, catalogueInterest, interestOnly } = req.body || {};
+      const { answers, identity, name, email, phone, catalogueInterest, interestOnly } = req.body || {};
 
       const tenant = await resolveTravelTenantBySlug(tenantSlug);
       if (!tenant) {
@@ -508,44 +512,26 @@ router.post(
 
       // Validate identity fields against form config.
       const bankIdentityFields = getBankIdentityFields(bank.questionsJson, form);
-      const nameField = bankIdentityFields.find((field) => field.id === "name");
-      const emailField = bankIdentityFields.find((field) => field.id === "email");
-      const phoneField = bankIdentityFields.find((field) => field.id === "phone");
-      const cleanName = sanitizeText(String(name || "").trim());
-      const cleanEmail = sanitizeText(String(email || "").trim());
-      const cleanPhone = sanitizeText(String(phone || "").trim());
-      if (cleanName.length > 120) {
-        return res.status(400).json({ error: "Name must be 120 characters or fewer", code: "NAME_INVALID" });
-      }
-      if (nameField?.enabled && nameField.required && !cleanName) {
-        return res
-          .status(400)
-          .json({ error: "Name is required", code: "NAME_REQUIRED" });
-      }
-      if (emailField?.enabled && emailField.required && !cleanEmail) {
-        return res
-          .status(400)
-          .json({ error: "Email is required", code: "EMAIL_REQUIRED" });
-      }
-      if (emailField?.enabled && emailField.required && !isValidEmail(cleanEmail)) {
-        return res
-          .status(400)
-          .json({ error: "Email is invalid", code: "EMAIL_INVALID" });
-      }
-      if (emailField?.enabled && cleanEmail && cleanEmail.length > 254) {
-        return res.status(400).json({ error: "Email must be 254 characters or fewer", code: "EMAIL_INVALID" });
-      }
-      if (phoneField?.enabled && phoneField.required && !cleanPhone) {
-        return res
-          .status(400)
-          .json({ error: "Phone is required", code: "PHONE_REQUIRED" });
-      }
-      if (phoneField?.enabled && cleanPhone && !isValidPhone(cleanPhone)) {
+      const identityResult = validateIdentitySubmission({
+        fields: bankIdentityFields,
+        identity,
+        legacyValues: { name, email, phone },
+      });
+      if (identityResult.error) {
+        const canonicalCode = {
+          name: identityResult.error.reason === "required" ? "NAME_REQUIRED" : "NAME_INVALID",
+          email: identityResult.error.reason === "required" ? "EMAIL_REQUIRED" : "EMAIL_INVALID",
+          phone: identityResult.error.reason === "required" ? "PHONE_REQUIRED" : "PHONE_INVALID",
+        }[identityResult.error.fieldId];
         return res.status(400).json({
-          error: "Phone must contain 10 to 15 digits, optionally with a leading +",
-          code: "PHONE_INVALID",
+          ...identityResult.error,
+          code: canonicalCode || identityResult.error.code,
         });
       }
+      const cleanIdentity = identityResult.values;
+      const cleanName = cleanIdentity.name || "";
+      const cleanEmail = cleanIdentity.email || "";
+      const cleanPhone = cleanIdentity.phone || "";
 
       const { bank: parsed, warnings: parseWarnings } = parseBank(
         bank.questionsJson,
@@ -659,9 +645,11 @@ router.post(
           }
         : null;
 
-      const storedAnswers = safeCatalogueInterest
-        ? { ...safeAnswers, catalogueInterest: safeCatalogueInterest }
-        : safeAnswers;
+      const storedAnswers = {
+        ...safeAnswers,
+        identity: cleanIdentity,
+        ...(safeCatalogueInterest ? { catalogueInterest: safeCatalogueInterest } : {}),
+      };
 
       const snapshot = JSON.stringify({
         bankId: bank.id,
@@ -1002,20 +990,11 @@ function parseJsonOrNull(raw) {
 }
 
 function getBankIdentityFields(questionsJson, legacyForm) {
-  const defaults = [
-    { id: "name", enabled: legacyForm.includeName !== false, required: legacyForm.nameRequired !== false },
-    { id: "email", enabled: legacyForm.includeEmail !== false, required: legacyForm.emailRequired !== false },
-    { id: "phone", enabled: legacyForm.includePhone !== false, required: legacyForm.phoneRequired === true },
-  ];
   try {
     const saved = JSON.parse(questionsJson || "{}").identityFields;
-    if (!Array.isArray(saved)) return defaults;
-    return defaults.map((fallback) => {
-      const field = saved.find((item) => item?.id === fallback.id);
-      return field ? { ...fallback, enabled: field.enabled !== false, required: Boolean(field.required) } : fallback;
-    });
+    return normalizeIdentityFields(saved, legacyForm);
   } catch {
-    return defaults;
+    return normalizeIdentityFields(undefined, legacyForm);
   }
 }
 
@@ -1247,18 +1226,6 @@ function reportSlugTokenMatches(storedToken, suppliedToken) {
   const supplied = Buffer.from(String(suppliedToken).toLowerCase(), "utf8");
   if (stored.length !== supplied.length) return false;
   return crypto.timingSafeEqual(stored, supplied);
-}
-
-function isValidEmail(s) {
-  const value = String(s || "").trim();
-  return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function isValidPhone(s) {
-  const value = String(s || "").trim();
-  if (!/^\+?[0-9\s().-]+$/.test(value)) return false;
-  const digits = value.replace(/\D/g, "");
-  return digits.length >= 10 && digits.length <= 15;
 }
 
 function numberOrNull(v) {

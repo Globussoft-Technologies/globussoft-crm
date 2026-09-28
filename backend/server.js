@@ -198,13 +198,14 @@ app.use((req, res, next) => {
   const publicPageRuntimePath = /^\/api\/pages\/[^/]+\/(json|track|submit|registration-draft|registration-documents|payment-order|payment-status)\/?$/.test(req.path);
   const publicLandingPath = req.path.startsWith("/p/")
     || publicPageRuntimePath
-    || req.path.startsWith("/api/landing-pages/public/");
+    || req.path.startsWith("/api/landing-pages/public/")
+    || req.path.startsWith("/api/travel/meeting-forms/public/");
   const origin = req.headers.origin;
   if (!publicLandingPath || !origin) return next();
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, X-GBS-Tracking");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, X-GBS-Tracking, Idempotency-Key");
   if (req.method === "OPTIONS") return res.status(204).end();
   return next();
 });
@@ -871,6 +872,7 @@ const callifiedRoutes = require("./routes/callified");
 // wrapper in the cred-stub series (4/4 — adsgpt, ratehawk, callified, this).
 const bookingExpediaRoutes = require("./routes/booking_expedia");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
+const travelMeetingFormsRoutes = require("./routes/travel_meeting_forms");
 // Brochure Engine — wraps the vendored agentic-orchcrm engine behind the
 // CRM's JWT + tenant guard. Subprocess-based bridge (see
 // services/brochureEngineBridge.js) keeps the ESM/CJS boundary clean.
@@ -1074,6 +1076,7 @@ app.use("/api", (req, res, next) => {
     "/wellness/portal",
     "/attendance/biometric/webhook",
     "/travel/microsites/public",
+    "/travel/meeting-forms/public",
     "/travel/diagnostics/public",
     "/diagnostic-pages/public",
     "/travel/itineraries/public",
@@ -1539,6 +1542,7 @@ app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/callified", callifiedRoutes);
 app.use("/api/booking-expedia", bookingExpediaRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
+app.use("/api/travel", travelMeetingFormsRoutes);
 // Brochure Engine — paths internally start with /brochures; route file owns
 // verifyToken + requireTravelTenant + requirePermission per endpoint.
 app.use("/api/travel", travelBrochuresRoutes);
@@ -1840,14 +1844,31 @@ app.use("/embed", async (req, res, next) => {
       }
     }
   }
+  // Meeting Forms use an isolated public form key rather than the generic
+  // glbs_ API key. Resolve it here so the existing per-tenant iframe CSP
+  // allowlist also protects the meeting widget.
+  if (!req.user && req.query && typeof req.query.form === "string") {
+    try {
+      const prismaClient = require("./lib/prisma");
+      const meetingForm = await prismaClient.travelMeetingForm.findFirst({
+        where: { publicKey: req.query.form, isActive: true },
+        select: { tenantId: true },
+      });
+      if (meetingForm) {
+        req.user = { tenantId: meetingForm.tenantId, userId: null };
+      }
+    } catch (e) {
+      console.warn("[embed] meeting form tenant resolution failed:", e.message);
+    }
+  }
   // S66 — resolve per-tenant allowlist from req.user.tenantId. The S129
   // block above is what populates req.user.tenantId on the partner-iframe
   // `?key=` path; this block reads it (whether S129 set it or upstream
   // auth set it) and falls through to wildcard when no tenant is resolved.
-  let allowList = ["*"];
+  let allowList = Array.isArray(req.meetingFormEmbedAllowList) ? req.meetingFormEmbedAllowList : ["*"];
   try {
     const tenantId = req.user && req.user.tenantId;
-    if (tenantId) {
+    if (tenantId && !req.meetingFormEmbedAllowList) {
       // Lazy-require the prisma singleton — the canonical const lives
       // further down in the file (line ~1117 below); this mount runs
       // earlier in the middleware stack than that declaration, but
@@ -1911,6 +1932,28 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
     });
   } catch (e) {
     console.error("[embed] gate failed:", e.message);
+    return next();
+  }
+});
+
+// Travel Meeting Forms widget. The public form key resolves the tenant above,
+// which means the normal per-tenant embed allowlist controls who may frame it.
+app.get("/embed/meeting-form.html", async (req, res, next) => {
+  try {
+    const publicKey = req.query.form ? String(req.query.form) : "";
+    if (!/^tmcmf_[A-Za-z0-9_-]{20,}$/.test(publicKey)) {
+      return res.status(404).type("text/plain").send("Meeting form not found");
+    }
+    const prismaClient = require("./lib/prisma");
+    const form = await prismaClient.travelMeetingForm.findFirst({
+      where: { publicKey, isActive: true },
+      select: { id: true },
+    });
+    if (!form) return res.status(404).type("text/plain").send("Meeting form not found");
+    const embedPath = path.join(__dirname, "..", "frontend", "public", "embed", "meeting-form.html");
+    return res.sendFile(embedPath, (err) => { if (err) next(); });
+  } catch (e) {
+    console.error("[embed] meeting form gate failed:", e.message);
     return next();
   }
 });

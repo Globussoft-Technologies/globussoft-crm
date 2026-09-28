@@ -497,7 +497,7 @@
           { id: "phone", label: "Phone", type: "tel", enabled: form.includePhone !== false, required: form.phoneRequired === true },
         ];
         return (custom.length ? custom : fallback).filter(function (field) {
-          return field && field.enabled !== false && ["name", "email", "phone"].indexOf(field.id) !== -1;
+          return field && field.enabled !== false && /^[a-z][a-z0-9_]{0,63}$/.test(String(field.id || ""));
         }).map(function (field) {
           // A bank-owned definition is the shared source of truth for
           // Public Form, Embed Form and API validation. Only legacy forms
@@ -515,10 +515,23 @@
         var fields = configuredIdentityFields(form, data && data.identityFields);
         if (!fields.length) return "";
         return '<div class="identity">' + fields.map(function (field) {
-          var type = field.type === "tel" || field.type === "email" ? field.type : "text";
+          var allowedTypes = ["text", "email", "tel", "number", "date", "time", "url", "textarea"];
+          var type = allowedTypes.indexOf(field.type) !== -1 ? field.type : "text";
           var required = field.required ? " required" : "";
+          var validation = required +
+            (field.minLength != null ? ' minlength="' + esc(field.minLength) + '"' : "") +
+            (field.maxLength != null ? ' maxlength="' + esc(field.maxLength) + '"' : "") +
+            (field.pattern ? ' pattern="' + esc(field.pattern) + '"' : "") +
+            (field.min != null ? ' min="' + esc(field.min) + '"' : "") +
+            (field.max != null ? ' max="' + esc(field.max) + '"' : "") +
+            (field.placeholder ? ' placeholder="' + esc(field.placeholder) + '"' : "") +
+            ' autocomplete="' + esc(field.autocomplete || field.id) + '"' +
+            (field.validationMessage ? ' data-validation-message="' + esc(field.validationMessage) + '"' : "");
+          var control = type === "textarea"
+            ? '<textarea name="' + esc(field.id) + '" rows="3"' + validation + '></textarea>'
+            : '<input name="' + esc(field.id) + '" type="' + type + '"' + validation + '>';
           return '<label class="field">' + esc(field.label || field.id) + (field.required ? " *" : "") +
-            '<input name="' + esc(field.id) + '" type="' + type + '" autocomplete="' + esc(field.id) + '"' + required + '></label>';
+            control + (field.helper ? '<small>' + esc(field.helper) + '</small>' : '') + '</label>';
         }).join("") + "</div>";
       }
 
@@ -572,7 +585,14 @@
 
         syncSelectedStyles();
         updateProgress();
-        document.getElementById("gbs-diagnostic-form").addEventListener("submit", submit);
+        var diagnosticForm = document.getElementById("gbs-diagnostic-form");
+        diagnosticForm.querySelectorAll("[data-validation-message]").forEach(function (control) {
+          control.addEventListener("invalid", function () {
+            control.setCustomValidity(control.getAttribute("data-validation-message") || "");
+          });
+          control.addEventListener("input", function () { control.setCustomValidity(""); });
+        });
+        diagnosticForm.addEventListener("submit", submit);
         resize();
         try { parent.postMessage({ source: "gbs-diagnostic-embed", type: "form_loaded" }, "*"); } catch (e) { /* non-fatal */ }
       }
@@ -809,11 +829,16 @@
       function submit(event) {
         event.preventDefault();
         var form = event.currentTarget;
+        if (!form.reportValidity()) return;
         var button = form.querySelector("button");
         var answers = {};
         (data.questions || []).forEach(function (q) {
           var values = Array.prototype.slice.call(form.querySelectorAll('[name="' + CSS.escape(String(q.id)) + '"]:checked')).map(function (el) { return el.value; });
           answers[q.id] = q.type === "multi-select" ? values : (values[0] || "");
+        });
+        var identity = {};
+        configuredIdentityFields((data && data.form) || {}, data && data.identityFields).forEach(function (field) {
+          identity[field.id] = fieldValue(form, field.id);
         });
 
         button.disabled = true;
@@ -822,7 +847,13 @@
         fetch("/api/travel/diagnostics/public/form/" + encodeURIComponent(tenant) + "/" + encodeURIComponent(subBrand) + "/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answers: answers, name: fieldValue(form, "name"), email: fieldValue(form, "email"), phone: fieldValue(form, "phone") }),
+          body: JSON.stringify({
+            answers: answers,
+            identity: identity,
+            name: identity.name || "",
+            email: identity.email || "",
+            phone: identity.phone || ""
+          }),
         })
           .then(function (res) {
             return res.json().then(function (body) {

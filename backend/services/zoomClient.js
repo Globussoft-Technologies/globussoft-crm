@@ -114,4 +114,19 @@ async function createMeeting({ topic, startTime, durationMins, timezone, agenda 
   };
 }
 
-module.exports = { isEnabled, getAccessToken, createMeeting };
+// Compensation helper used by atomic booking orchestration. If calendar
+// creation fails after Zoom succeeded, remove the orphaned meeting before the
+// slot is released. It is intentionally a no-op when Zoom is not configured.
+async function deleteMeeting(meetingId) {
+  if (!isEnabled() || !meetingId) return false;
+  const token = await module.exports.getAccessToken();
+  const response = await fetch(`${API_BASE}/meetings/${encodeURIComponent(meetingId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (response.ok || response.status === 404) return true;
+  const detail = await response.text().catch(() => "");
+  throw new Error(`Zoom delete-meeting failed (${response.status}): ${detail.slice(0, 200)}`);
+}
+
+module.exports = { isEnabled, getAccessToken, createMeeting, deleteMeeting };

@@ -207,6 +207,10 @@ model Tenant {
   travelDiagnostics                   TravelDiagnostic[]
   travelDiagQuestionBanks             TravelDiagnosticQuestionBank[]
   travelDiagnosticPublicForms         TravelDiagnosticPublicForm[]
+  travelMeetingForms                  TravelMeetingForm[]
+  travelMeetingBookings               TravelMeetingBooking[]
+  travelMeetingSlots                  TravelMeetingSlot[]
+  travelMeetingZoomCredential         TravelMeetingZoomCredential?
   itineraries                         Itinerary[]
   // #907 slice 4 — Itinerary template library (Pre-loaded ~50, expand over time).
   // Subsequent slices: CRUD route + admin library UI + "Create from template" hook.
@@ -3856,6 +3860,132 @@ model Booking {
   travelPurchaseOrders TravelPurchaseOrder[]
 
   @@index([tenantId, scheduledAt])
+}
+
+// Travel CRM / Marketing — configurable meeting forms. These tables are
+// intentionally isolated from the legacy BookingPage + Booking models so the
+// travel workflow can add atomic slot locking, API/embed credentials and
+// integration state without changing generic or wellness booking behaviour.
+model TravelMeetingForm {
+  id                  Int       @id @default(autoincrement())
+  tenantId            Int
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subBrand            String    @default("tmc")
+  name                String
+  slug                String
+  publicKey           String    @unique
+  apiKeyHash          String
+  hostUserId          Int
+  durationMins        Int       @default(30)
+  timezone            String    @default("Asia/Kolkata")
+  slotIntervalMins    Int       @default(30)
+  bufferBeforeMins    Int       @default(0)
+  bufferAfterMins     Int       @default(0)
+  minimumNoticeMins   Int       @default(120)
+  bookingHorizonDays  Int       @default(60)
+  maxBookingsPerDay   Int?
+  allowedStartDate    DateTime?
+  allowedEndDate      DateTime?
+  weeklyHoursJson     String    @db.Text
+  dateOverridesJson   String?   @db.Text
+  blackoutDatesJson   String?   @db.Text
+  fieldsJson          String    @db.Text
+  allowedOriginsJson  String?   @db.Text
+  calendarProvider    String    @default("google") // google | outlook
+  createZoom          Boolean   @default(true)
+  embedFontFamily     String    @default("Inter")
+  emailSubject        String    @default("Your Conversation with TMC is Confirmed")
+  emailBody           String    @db.LongText
+  emailLogoUrl        String?   @db.Text
+  confirmationMessage String?   @db.Text
+  isActive            Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  bookings TravelMeetingBooking[]
+  slots    TravelMeetingSlot[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, hostUserId])
+}
+
+model TravelMeetingBooking {
+  id                Int               @id @default(autoincrement())
+  tenantId          Int
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingFormId     Int
+  meetingForm       TravelMeetingForm @relation(fields: [meetingFormId], references: [id], onDelete: Cascade)
+  idempotencyKey    String
+  confirmationToken String            @unique
+  contactName       String
+  designation       String?
+  institution       String?
+  city              String?
+  contactEmail      String
+  contactPhone      String?
+  scheduledAt       DateTime
+  endsAt            DateTime
+  timezone          String
+  status            String            @default("PROCESSING") // PROCESSING | CONFIRMED | FAILED | CANCELED | COMPLETED
+  meetingType       String            @default("ZOOM")
+  zoomMeetingId     String?
+  meetingUrl        String?           @db.Text
+  calendarProvider  String?
+  calendarEventId   String?
+  contactId         Int?
+  diagnosticId      Int?
+  source            String            @default("Talk to an Expert")
+  customFieldsJson  String?           @db.Text
+  emailStatus       String            @default("PENDING") // PENDING | SENT | FAILED
+  emailChannel      String? // unified_inbox (calendar_invite is retained only for legacy rows)
+  emailMessageId    Int?
+  failureCode       String?
+  failureMessage    String?           @db.Text
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([tenantId, meetingFormId, idempotencyKey])
+  @@index([tenantId, meetingFormId, scheduledAt])
+  @@index([tenantId, contactId])
+  @@index([tenantId, status])
+}
+
+// Unique active slot claim. Failed/cancelled orchestration deletes this row,
+// releasing the slot while retaining the booking attempt for audit/support.
+model TravelMeetingSlot {
+  id            Int               @id @default(autoincrement())
+  tenantId      Int
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  meetingFormId Int
+  meetingForm   TravelMeetingForm @relation(fields: [meetingFormId], references: [id], onDelete: Cascade)
+  bookingId     Int               @unique
+  scheduledAt   DateTime
+  endsAt        DateTime
+  createdAt     DateTime          @default(now())
+
+  @@unique([tenantId, meetingFormId, scheduledAt])
+  @@index([tenantId, meetingFormId, endsAt])
+}
+
+// Travel Meeting Forms only — one tenant-owned Zoom Server-to-Server OAuth
+// connection. Credentials are never returned through an API; admin reads expose
+// masked identifiers and a configured boolean only.
+model TravelMeetingZoomCredential {
+  id             Int       @id @default(autoincrement())
+  tenantId       Int       @unique
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accountId      String    @db.Text
+  clientId       String    @db.Text
+  clientSecret   String    @db.Text
+  zoomHostUserId String    @default("me")
+  status         String    @default("CONNECTED") // CONNECTED | DISCONNECTED | ERROR
+  verifiedAt     DateTime?
+  lastError      String?   @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([tenantId, status])
 }
 
 // ── Email Scheduling + Signatures ────────────────────────────────

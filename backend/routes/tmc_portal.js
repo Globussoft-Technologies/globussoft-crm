@@ -11,6 +11,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requireAnyPermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { sanitizeText } = require("../lib/sanitizeJson");
+const { validateIdentitySubmission } = require("../lib/diagnosticIdentityFields");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
@@ -628,6 +629,13 @@ function projectTeacherIdentityField(field) {
     enabled: field.enabled !== false,
     required: isDiagnosticRequired(field.required),
     placeholder: field.placeholder || null,
+    minLength: Number.isInteger(field.minLength) ? field.minLength : undefined,
+    maxLength: Number.isInteger(field.maxLength) ? field.maxLength : undefined,
+    pattern: field.pattern || undefined,
+    min: field.min != null && field.min !== "" && Number.isFinite(Number(field.min)) ? Number(field.min) : undefined,
+    max: field.max != null && field.max !== "" && Number.isFinite(Number(field.max)) ? Number(field.max) : undefined,
+    validationMessage: field.validationMessage || undefined,
+    autocomplete: field.autocomplete || undefined,
   };
 }
 
@@ -701,6 +709,12 @@ function projectTeacherQuestion(question) {
             helper: field.helper || null,
             type: normalizeDiagnosticType(field.type, field.options || []),
             required: isDiagnosticRequired(field.required),
+            placeholder: field.placeholder || undefined,
+            minLength: Number.isInteger(field.minLength) ? field.minLength : undefined,
+            maxLength: Number.isInteger(field.maxLength) ? field.maxLength : undefined,
+            pattern: field.pattern || undefined,
+            validationMessage: field.validationMessage || undefined,
+            autocomplete: field.autocomplete || undefined,
             min: Number.isInteger(minFieldSelections)
               ? minFieldSelections
               : undefined,
@@ -1706,7 +1720,19 @@ router.post(
             .trim()
             .slice(0, 40);
         }
-        answers.contact = contact;
+        const identityResult = validateIdentitySubmission({
+          fields: contactFields,
+          identity: contact,
+        });
+        if (identityResult.error) {
+          return res.status(400).json({
+            ...identityResult.error,
+            code: identityResult.error.fieldId === "email"
+              ? (identityResult.error.reason === "required" ? "EMAIL_REQUIRED" : "EMAIL_INVALID")
+              : identityResult.error.code,
+          });
+        }
+        answers.contact = identityResult.values;
       }
       const validationError = validateDiagnosticAnswers(
         answers,

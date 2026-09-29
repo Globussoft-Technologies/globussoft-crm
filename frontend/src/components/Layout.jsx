@@ -158,6 +158,8 @@ const Layout = () => {
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
+  const isGenericLeadsPage =
+    !isWellness && !isTravel && location.pathname === "/leads";
   // The softphone FAB is fixed at bottom-right (2rem/2rem) — on WhatsApp chat,
   // the inbox page, and the Gmail compose page it overlaps the docked composer.
   // Hide it only on those routes; every other page keeps it unchanged.
@@ -591,7 +593,7 @@ const Layout = () => {
             minWidth: 0,
             minHeight: 0,
             overflowX: "hidden",
-            overflowY: popupScrollLocked ? "hidden" : "auto",
+            overflowY: popupScrollLocked || isGenericLeadsPage ? "hidden" : "auto",
             padding: "0",
             backgroundColor: "transparent",
           }}

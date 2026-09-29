@@ -246,6 +246,26 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   email: 220,
   company: 190,
   phone: 150,
+  pageUrl: 180,
+  pageTitle: 180,
+  pageSource: 170,
+  referrerUrl: 180,
+  landingPageUrl: 200,
+  currentDomain: 190,
+  formName: 180,
+  utm_source: 150,
+  utm_medium: 150,
+  utm_campaign: 170,
+  utm_term: 150,
+  utm_content: 170,
+  gclid: 170,
+  fbclid: 170,
+  fbc: 170,
+  fbp: 170,
+  submittedAt: 190,
+  browser: 160,
+  operatingSystem: 190,
+  deviceType: 160,
   aiScore: 118,
   source: LEADS_SOURCE_COLUMN_MIN_WIDTH,
   medium: 150,
@@ -278,6 +298,16 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   gst: 180,
   billingStateCode: 150,
   actions: LEADS_ACTIONS_COLUMN_WIDTH,
+};
+const LEADS_GENERIC_LABEL_MIN_WIDTHS = {
+  pageUrl: 180,
+  pageTitle: 180,
+  pageSource: 170,
+  referrerUrl: 180,
+  landingPageUrl: 200,
+  currentDomain: 190,
+  formName: 180,
+  operatingSystem: 190,
 };
 
 const inlineBuiltinCellStyle = {
@@ -1198,10 +1228,9 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
-  // Generic CRM: no top scrollbar — the native bottom scrollbar of the
-  // scroll pane is the only horizontal bar. Other verticals keep the
-  // sticky top bar + hidden bottom bar exactly as before.
-  const showLeadsTopScrollbar = !isGeneric;
+  // Generic CRM keeps synchronized top and sticky-bottom scrollbars available;
+  // other verticals retain their existing top-only presentation.
+  const showLeadsTopScrollbar = true;
   // ADMINs always get the full assignment UI. Travel non-admins can also
   // reassign the leads they own, but only to non-admin staff targets.
   const isAdmin = auth?.user?.role === "ADMIN";
@@ -1530,6 +1559,9 @@ const Leads = () => {
     if (key === "assignedTo") {
       return Math.max(configuredWidth, LEADS_ASSIGNED_COLUMN_MIN_WIDTH);
     }
+    if (isGeneric && LEADS_GENERIC_LABEL_MIN_WIDTHS[key]) {
+      return Math.max(configuredWidth, LEADS_GENERIC_LABEL_MIN_WIDTHS[key]);
+    }
     return configuredWidth;
   };
   const setColumnWidth = (key, width) => {
@@ -1547,7 +1579,14 @@ const Leads = () => {
               : LEADS_COLUMN_MIN_WIDTH;
     const maxWidth =
       key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
-    const nextWidth = Math.max(minWidth, Math.min(Math.round(width), maxWidth));
+    const genericLabelMinWidth = isGeneric
+      ? LEADS_GENERIC_LABEL_MIN_WIDTHS[key] || 0
+      : 0;
+    const nextWidth = Math.max(
+      minWidth,
+      genericLabelMinWidth,
+      Math.min(Math.round(width), maxWidth),
+    );
     setColumnLayout((prev) => ({
       widths: { ...(prev.widths || {}), [key]: nextWidth },
       collapsed: { ...(prev.collapsed || {}), [key]: false },
@@ -3398,7 +3437,7 @@ const Leads = () => {
       if (key === "firstTouchSource")
         return { key, label: "First Touch Source" };
       if (key === "lastTouchSource") return { key, label: "Last Touch Source" };
-      const trackingLabels = { pageUrl: "Page URL", pageTitle: "Page Title", pageSource: "Page Source", referrerUrl: "Referrer URL", landingPageUrl: "Landing Page URL", currentDomain: "Current Domain", formName: "Form Name / ID", utm_source: "UTM Source", utm_medium: "UTM Medium", utm_campaign: "UTM Campaign", utm_term: "UTM Term", utm_content: "UTM Content", gclid: "Google Click ID", fbclid: "Meta Click ID", fbc: "Meta Click Cookie", fbp: "Meta Browser ID", submittedAt: "Submission Timestamp", browser: "Browser", operatingSystem: "Operating System", deviceType: "Device Type" };
+      const trackingLabels = { pageUrl: "Page URL", pageTitle: "Page Title", pageSource: "Page Source", referrerUrl: "Referrer URL", landingPageUrl: "Landing Page", currentDomain: "Current Domain", formName: "Form Name", utm_source: "UTM Source", utm_medium: "UTM Medium", utm_campaign: "UTM Campaign", utm_term: "UTM Term", utm_content: "UTM Content", gclid: "Google Click ID", fbclid: "Meta Click ID", fbc: "Meta Click Cookie", fbp: "Meta Browser ID", submittedAt: "Submission Timestamp", browser: "Browser", operatingSystem: "Operating System", deviceType: "Device Type" };
       if (isGeneric && trackingLabels[key]) return { key, label: trackingLabels[key] };
       if (key === "treatmentOfInterest")
         return { key, label: "Treatment Of Interest" };
@@ -4622,13 +4661,13 @@ const Leads = () => {
             title={isGeneric ? label : undefined}
             style={{
               flex: 1,
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              minWidth: isGeneric ? 0 : undefined,
+              overflow: isGeneric ? "visible" : "hidden",
+              textOverflow: isGeneric ? "clip" : "ellipsis",
               // Generic CRM: narrow columns truncate with … instead of
               // wrapping onto a second line; hover reveals the full name
               // via title. Other verticals keep the wrapping behavior.
-              whiteSpace: isGeneric ? "nowrap" : "normal",
+              whiteSpace: "normal",
               lineHeight: 1.2,
             }}
           >
@@ -5326,7 +5365,22 @@ const Leads = () => {
   const headerSubmenuMaxHeight = headerMenuRect ? headerMenuMaxHeight : 0;
 
   return (
-    <div style={{ padding: "2rem", animation: "fadeIn 0.3s ease" }}>
+    <div
+      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}`}
+      style={{
+        padding: "2rem",
+        animation: "fadeIn 0.3s ease",
+        ...(isGeneric
+          ? {
+              width: "100%",
+              maxWidth: "100%",
+              minWidth: 0,
+              boxSizing: "border-box",
+              overflowX: "hidden",
+            }
+          : {}),
+      }}
+    >
       {/* Renders only when this page was opened as a drill-down from a report. */}
       <ReturnToBanner />
       <header
@@ -5418,10 +5472,18 @@ const Leads = () => {
         )}
       </header>
       <div
+        className={isGeneric ? "leads-actions-toolbar" : undefined}
         style={{
           ...compactToolbarSurfaceStyle,
           marginBottom: "1rem",
           justifyContent: "flex-start",
+          ...(isGeneric
+            ? {
+                minHeight: "62px",
+                flex: "0 0 auto",
+                boxSizing: "border-box",
+              }
+            : {}),
         }}
       >
         <button
@@ -6621,7 +6683,7 @@ const Leads = () => {
       )}
 
       <div
-        className={isGeneric ? undefined : "card"}
+        className={isGeneric ? "leads-content-shell" : "card"}
         style={
           isGeneric
             ? { display: "flex", flexDirection: "column", gap: "1rem" }
@@ -6629,6 +6691,7 @@ const Leads = () => {
         }
       >
         <div
+          className={isGeneric ? "leads-toolbar-shell" : undefined}
           style={{
             display: "flex",
             alignItems: "center",
@@ -6646,6 +6709,9 @@ const Leads = () => {
                   borderRadius: "12px",
                   background: "var(--surface-color)",
                   order: 1,
+                  minHeight: "70px",
+                  flex: "0 0 auto",
+                  boxSizing: "border-box",
                 }
               : { borderBottom: "1px solid var(--border-color)" }),
           }}
@@ -7409,8 +7475,7 @@ const Leads = () => {
             className="leads-table-frozen-pane"
             style={{ width: leadsFrozenTableWidthPx }}
           >
-            {/* 16px offset matching the top scrollbar height — only needed
-                when the top bar is rendered (non-generic). */}
+            {/* Keep the frozen Name pane aligned with the top scrollbar. */}
             {showLeadsTopScrollbar && (
               <div className="leads-table-frozen-spacer" />
             )}
@@ -7566,8 +7631,9 @@ const Leads = () => {
               scrollWidth={leadsScrollableTableMinWidth}
               stickyTop
               stickyTopOffset={0}
-              hideBottomScrollbar={showLeadsTopScrollbar}
-              hideTopBar={!showLeadsTopScrollbar}
+              hideBottomScrollbar={showLeadsTopScrollbar && !isGeneric}
+              verticalOverflow="visible"
+              stickyBottom={isGeneric}
             >
               <table
                 ref={leadsScrollableTableRef}

@@ -577,6 +577,7 @@ const Sidebar = ({
     [setActiveSubBrand, navigate],
   );
   const defaultBranding = getDomainBranding();
+  const isTmcDomain = defaultBranding.logoUrl === "/tmc.png";
   const sidebarDefaultLogoUrl = defaultBranding.faviconUrl || defaultBranding.logoUrl;
   const brand = tenant?.name || defaultBranding.name;
   // Single logo source (2026-07-08): the active sub-brand's fallback-resolved
@@ -1086,7 +1087,7 @@ const Sidebar = ({
         aria-label="Main navigation"
         data-tour="welcome-sidebar"
         data-search-highlight-scope="global-search"
-        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}`}
+        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}${isTravel && isTmcDomain ? " travel-sidebar-tmc" : ""}`}
         style={{
           width: isTravel ? (isTravelCollapsed ? "64px" : "240px") : "250px",
           height: "100vh",
@@ -1110,7 +1111,7 @@ const Sidebar = ({
           }}
         >
           <img
-            className={`travel-sidebar-logo${defaultBranding.logoUrl === "/tmc.png" ? " travel-sidebar-logo--tmc" : ""}`}
+            className={`travel-sidebar-logo${isTmcDomain ? " travel-sidebar-logo--tmc" : ""}`}
             src={logoUrl || sidebarDefaultLogoUrl}
             alt={brand}
             onError={(e) => {
@@ -1145,8 +1146,8 @@ const Sidebar = ({
               margin: 0,
               minWidth: 0,
               flex: 1,
-              whiteSpace: "normal",
-              overflowWrap: "break-word",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
           >
             {brand}

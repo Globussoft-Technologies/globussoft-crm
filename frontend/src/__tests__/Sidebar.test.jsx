@@ -817,12 +817,12 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(heading.textContent).toBe('Globussoft Enterprise');
     });
 
-    it('wraps a long organization name instead of truncating it', () => {
+    it('keeps the existing travel header sizing outside the TMC domain', () => {
       renderSidebar({ tenantName: 'The modern classroom', vertical: 'travel' });
       const heading = screen.getByRole('heading', { level: 1 });
       expect(heading).toHaveTextContent('The modern classroom');
-      expect(heading.style.whiteSpace).toBe('normal');
-      expect(heading.style.textOverflow).not.toBe('ellipsis');
+      expect(heading.closest('aside')).not.toHaveClass('travel-sidebar-tmc');
+      expect(heading.style.textOverflow).toBe('ellipsis');
     });
 
     it('renders a logo image with the tenant name as alt text', () => {
@@ -867,6 +867,7 @@ describe('Sidebar — load-bearing render surface', () => {
       const defaultLogo = screen.getByRole('img', { name: 'The Modern Classroom' });
       expect(defaultLogo).toHaveAttribute('src', '/tmc-logo.png');
       expect(defaultLogo).toHaveClass('travel-sidebar-logo--tmc');
+      expect(defaultLogo.closest('aside')).toHaveClass('travel-sidebar-tmc');
       unmount();
 
       renderSidebar({

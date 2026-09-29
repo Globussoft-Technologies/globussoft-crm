@@ -2378,16 +2378,13 @@ body[data-vertical="travel"] .app-sidebar {
 
 body[data-vertical="travel"] .travel-sidebar-header {
   margin-bottom: 0 !important;
-  gap: 0.5rem !important;
+  gap: 0.6rem !important;
 }
 
 body[data-vertical="travel"] .travel-sidebar-brand-name {
   color: var(--text-primary);
-  font-size: 0.9rem !important;
-  font-weight: 650 !important;
-  line-height: 1.2 !important;
-  white-space: normal;
-  overflow-wrap: break-word;
+  font-size: 0.98rem !important;
+  white-space: nowrap;
 }
 
 body[data-vertical="travel"] .travel-sidebar-logo {
@@ -2396,7 +2393,21 @@ body[data-vertical="travel"] .travel-sidebar-logo {
   border-radius: 8px !important;
 }
 
-body[data-vertical="travel"] .travel-sidebar-logo--tmc {
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-header {
+  gap: 0.5rem !important;
+}
+
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-brand-name {
+  font-size: 0.9rem !important;
+  font-weight: 650 !important;
+  line-height: 1.2 !important;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: break-word;
+  text-overflow: clip;
+}
+
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-logo--tmc {
   width: 46px !important;
   height: 46px !important;
   object-fit: contain !important;
@@ -2406,7 +2417,7 @@ body[data-vertical="travel"] .travel-sidebar-logo--tmc {
 
 /* Use the square TMC mark in dark mode, including when a wide saved logo
    would otherwise be cropped into the sidebar's small logo slot. */
-html[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-logo--tmc {
+html[data-theme="dark"] body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-logo--tmc {
   content: url("/tmc-logo.png");
   object-fit: contain !important;
   background: transparent !important;
@@ -2416,8 +2427,8 @@ html[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-logo--tmc {
 body[data-vertical="travel"] .travel-sidebar-collapse {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   margin-left: auto;
   border: 0;
   border-radius: 10px;
@@ -2427,6 +2438,11 @@ body[data-vertical="travel"] .travel-sidebar-collapse {
   color: var(--text-primary);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-collapse {
+  width: 30px;
+  height: 30px;
 }
 
 body[data-vertical="travel"] .travel-sidebar-collapse:hover {

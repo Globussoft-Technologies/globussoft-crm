@@ -203,6 +203,8 @@ beforeEach(() => {
   prisma.webForm.upsert.mockReset();
   prisma.webFormSubmission.create.mockReset();
   delete process.env.PUBLIC_LEAD_TENANT_SLUG;
+  delete process.env.SENDGRID_API_KEY;
+  delete process.env.FRONTEND_URL;
   emailOtp.enforceRegistrationOtp.mockReset().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
   // T37 / Class B6 — keep self-heal seam permissive across tests.
   prisma.userRole.count.mockReset().mockResolvedValue(1);
@@ -1209,6 +1211,61 @@ describe('POST /api/auth/forgot-password', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ack', code: 'RESET_LINK_REQUESTED' });
+  });
+
+  test('TMC origin sends a TMC-branded reset link back to the dedicated host', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 7, email: 'teacher@themodernclassroom.in' });
+    process.env.SENDGRID_API_KEY = 'test-sendgrid-key';
+    const originalFetch = globalThis.fetch;
+    const sendgridFetch = vi.fn().mockResolvedValue({ ok: true });
+    globalThis.fetch = sendgridFetch;
+
+    try {
+      const res = await request(makeApp())
+        .post('/api/auth/forgot-password')
+        .set('Origin', 'https://app.themodernclassroom.in')
+        .send({ email: 'teacher@themodernclassroom.in' });
+
+      expect(res.status).toBe(200);
+      await vi.waitFor(() => expect(sendgridFetch).toHaveBeenCalledOnce());
+      const [url, options] = sendgridFetch.mock.calls[0];
+      const payload = JSON.parse(options.body);
+      const content = payload.content.map((entry) => entry.value).join('\n');
+
+      expect(url).toBe('https://api.sendgrid.com/v3/mail/send');
+      expect(payload.subject).toBe('Reset your The Modern Classroom password');
+      expect(content).toContain('https://app.themodernclassroom.in/reset-password?token=');
+      expect(content).not.toContain('crm.globusdemos.com/reset-password');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('unapproved origin cannot control the reset link or branding', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 7, email: 'admin@globussoft.com' });
+    process.env.SENDGRID_API_KEY = 'test-sendgrid-key';
+    process.env.FRONTEND_URL = 'https://crm.globusdemos.com/api/';
+    const originalFetch = globalThis.fetch;
+    const sendgridFetch = vi.fn().mockResolvedValue({ ok: true });
+    globalThis.fetch = sendgridFetch;
+
+    try {
+      const res = await request(makeApp())
+        .post('/api/auth/forgot-password')
+        .set('Origin', 'https://attacker.example')
+        .send({ email: 'admin@globussoft.com' });
+
+      expect(res.status).toBe(200);
+      await vi.waitFor(() => expect(sendgridFetch).toHaveBeenCalledOnce());
+      const payload = JSON.parse(sendgridFetch.mock.calls[0][1].body);
+      const content = payload.content.map((entry) => entry.value).join('\n');
+
+      expect(payload.subject).toBe('Reset your Globussoft CRM password');
+      expect(content).toContain('https://crm.globusdemos.com/reset-password?token=');
+      expect(content).not.toContain('attacker.example');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

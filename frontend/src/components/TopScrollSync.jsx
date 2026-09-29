@@ -41,11 +41,20 @@ const TopScrollSync = ({
   useEffect(() => {
     const top = topRef.current;
     const bottom = bottomRef.current;
+    const stickyBottomElement = stickyBottomRef.current;
     if (!bottom) return undefined;
+
+    const content = bottom.firstElementChild;
+    const originalContentStyle = content
+      ? {
+          position: content.style.position,
+          left: content.style.left,
+          transform: content.style.transform,
+        }
+      : null;
 
     const setHorizontalPosition = (position) => {
       if (stickyBottom) {
-        const content = bottom.firstElementChild;
         if (content) {
           // Keep the table in the normal layout flow so sticky table headers
           // continue to anchor to the outer vertical table viewport. A
@@ -55,15 +64,15 @@ const TopScrollSync = ({
           content.style.left = `-${position}px`;
           content.style.transform = "none";
         }
-        if (stickyBottomRef.current) {
-          stickyBottomRef.current.scrollLeft = position;
+        if (stickyBottomElement) {
+          stickyBottomElement.scrollLeft = position;
         }
         return;
       }
       bottom.scrollLeft = position;
     };
     if (stickyBottom) {
-      setHorizontalPosition(stickyBottomRef.current?.scrollLeft || 0);
+      setHorizontalPosition(stickyBottomElement?.scrollLeft || 0);
     }
 
     const onTopScroll = () => {
@@ -82,21 +91,26 @@ const TopScrollSync = ({
     const onStickyBottomScroll = () => {
       if (syncingFrom.current === "top" || syncingFrom.current === "bottom") return;
       syncingFrom.current = "sticky-bottom";
-      setHorizontalPosition(stickyBottomRef.current.scrollLeft);
-      if (top) top.scrollLeft = stickyBottomRef.current.scrollLeft;
+      setHorizontalPosition(stickyBottomElement.scrollLeft);
+      if (top) top.scrollLeft = stickyBottomElement.scrollLeft;
       syncingFrom.current = null;
     };
 
     if (top) top.addEventListener("scroll", onTopScroll);
     bottom.addEventListener("scroll", onBottomScroll);
-    if (stickyBottomRef.current) {
-      stickyBottomRef.current.addEventListener("scroll", onStickyBottomScroll);
+    if (stickyBottomElement) {
+      stickyBottomElement.addEventListener("scroll", onStickyBottomScroll);
     }
     return () => {
       if (top) top.removeEventListener("scroll", onTopScroll);
       bottom.removeEventListener("scroll", onBottomScroll);
-      if (stickyBottomRef.current) {
-        stickyBottomRef.current.removeEventListener("scroll", onStickyBottomScroll);
+      if (stickyBottomElement) {
+        stickyBottomElement.removeEventListener("scroll", onStickyBottomScroll);
+      }
+      if (content && originalContentStyle) {
+        content.style.position = originalContentStyle.position;
+        content.style.left = originalContentStyle.left;
+        content.style.transform = originalContentStyle.transform;
       }
     };
   }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar, stickyBottom]);

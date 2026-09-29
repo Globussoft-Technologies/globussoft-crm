@@ -673,9 +673,18 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const bottomScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__bottom');
-    // Generic CRM: no top scrollbar — the native bottom bar is visible.
-    expect(bottomScroll).not.toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
-    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top')).toBeNull();
+    // Generic CRM uses synchronized top and sticky-bottom controls while the
+    // native scrollbar stays hidden behind the split-table viewport.
+    expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top')).toBeTruthy();
+    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom')).toBeTruthy();
+
+    const genericPage = container.querySelector('.leads-page-root--generic');
+    const actionsToolbar = container.querySelector('.leads-actions-toolbar');
+    const filtersToolbar = container.querySelector('.leads-toolbar-shell');
+    expect(genericPage).toBeTruthy();
+    expect(actionsToolbar.style.height).toBe('');
+    expect(filtersToolbar.style.height).toBe('');
   });
 
   it('persists dragged column widths for the Leads table layout', async () => {

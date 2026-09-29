@@ -1228,10 +1228,7 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
-  // Generic CRM: no top scrollbar — the native bottom scrollbar of the
-  // scroll pane is the only horizontal bar. Other verticals keep the
-  // sticky top bar + hidden bottom bar exactly as before.
-  // Generic CRM keeps both synchronized horizontal scrollbars available;
+  // Generic CRM keeps synchronized top and sticky-bottom scrollbars available;
   // other verticals retain their existing top-only presentation.
   const showLeadsTopScrollbar = true;
   // ADMINs always get the full assignment UI. Travel non-admins can also
@@ -5475,15 +5472,15 @@ const Leads = () => {
         )}
       </header>
       <div
+        className={isGeneric ? "leads-actions-toolbar" : undefined}
         style={{
           ...compactToolbarSurfaceStyle,
           marginBottom: "1rem",
           justifyContent: "flex-start",
           ...(isGeneric
             ? {
-                flex: "0 0 62px",
-                height: "62px",
                 minHeight: "62px",
+                flex: "0 0 auto",
                 boxSizing: "border-box",
               }
             : {}),
@@ -6712,9 +6709,8 @@ const Leads = () => {
                   borderRadius: "12px",
                   background: "var(--surface-color)",
                   order: 1,
-                  height: "70px",
                   minHeight: "70px",
-                  flex: "0 0 70px",
+                  flex: "0 0 auto",
                   boxSizing: "border-box",
                 }
               : { borderBottom: "1px solid var(--border-color)" }),

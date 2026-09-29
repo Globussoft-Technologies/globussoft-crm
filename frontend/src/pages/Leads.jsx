@@ -163,6 +163,8 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
+const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
+const LEADS_NAME_COLUMN_MAX_WIDTH = 380;
 const LEADS_ACTIONS_COLUMN_WIDTH = 176;
 const LEADS_SOURCE_COLUMN_MIN_WIDTH = 190;
 const LEADS_ASSIGNED_COLUMN_MIN_WIDTH = 190;
@@ -1476,7 +1478,12 @@ const Leads = () => {
     const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
     return {
-      name: Math.ceil(Math.max(LEADS_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth)),
+      name: Math.ceil(
+        Math.min(
+          LEADS_NAME_COLUMN_MAX_WIDTH,
+          Math.max(LEADS_NAME_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth),
+        ),
+      ),
       phone: Math.ceil(Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth)),
     };
   }, [leads]);
@@ -1503,7 +1510,14 @@ const Leads = () => {
     if (columnLayout.collapsed?.[key]) return LEADS_COLUMN_COLLAPSED_WIDTH;
     const configuredWidth =
       Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
-    if (key === "name" || key === "phone") {
+    if (key === "name") {
+      const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
+      return Math.min(
+        LEADS_NAME_COLUMN_MAX_WIDTH,
+        Math.max(autoFitLeadColumnWidths[key], manuallySizedWidth),
+      );
+    }
+    if (key === "phone") {
       const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
       return Math.max(autoFitLeadColumnWidths[key], manuallySizedWidth);
     }
@@ -1522,14 +1536,17 @@ const Leads = () => {
     const minWidth =
       key === "actions"
         ? LEADS_ACTIONS_COLUMN_WIDTH
-        : key === "name" || key === "phone"
-          ? autoFitLeadColumnWidths[key]
+        : key === "name"
+          ? LEADS_NAME_COLUMN_MIN_WIDTH
+          : key === "phone"
+            ? autoFitLeadColumnWidths[key]
           : key === "source"
             ? LEADS_SOURCE_COLUMN_MIN_WIDTH
             : key === "assignedTo"
               ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
               : LEADS_COLUMN_MIN_WIDTH;
-    const maxWidth = Number.POSITIVE_INFINITY;
+    const maxWidth =
+      key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
     const nextWidth = Math.max(minWidth, Math.min(Math.round(width), maxWidth));
     setColumnLayout((prev) => ({
       widths: { ...(prev.widths || {}), [key]: nextWidth },

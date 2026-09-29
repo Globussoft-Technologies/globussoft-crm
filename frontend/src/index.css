@@ -3119,24 +3119,28 @@ html[data-theme="dark"] .travel-flight-details-box {
 }
 
 .top-scroll-sync__top,
-.top-scroll-sync__bottom {
+.top-scroll-sync__bottom,
+.top-scroll-sync__sticky-bottom {
   scrollbar-width: auto;
   scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar,
-.top-scroll-sync__bottom::-webkit-scrollbar {
+.top-scroll-sync__bottom::-webkit-scrollbar,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar {
   height: 16px;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-track,
-.top-scroll-sync__bottom::-webkit-scrollbar-track {
+.top-scroll-sync__bottom::-webkit-scrollbar-track,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-track {
   background: rgba(128, 128, 128, 0.12);
   border-radius: 8px;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-thumb,
-.top-scroll-sync__bottom::-webkit-scrollbar-thumb {
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb {
   background: rgba(128, 128, 128, 0.72);
   border: 3px solid transparent;
   background-clip: padding-box;
@@ -3146,12 +3150,14 @@ html[data-theme="dark"] .travel-flight-details-box {
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-thumb:active,
-.top-scroll-sync__bottom::-webkit-scrollbar-thumb:active {
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb:active,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb:active {
   cursor: grabbing;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-thumb:hover,
-.top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb:hover {
   background: rgba(128, 128, 128, 0.95);
   border: 2px solid transparent;
   background-clip: padding-box;
@@ -3636,17 +3642,55 @@ table.leads-table thead th {
    flush to the top of the scroll viewport (no 16px gap strip). Scoped to
    the --no-topbar modifier — all other usages keep top: 16px. */
 .leads-split-table--no-topbar table.leads-table thead th {
-  top: 0;
+  top: 16px;
+}
+
+.leads-split-table--no-topbar
+  .leads-table-frozen-pane table.leads-table thead,
+.leads-split-table--no-topbar
+  .leads-table-scroll-pane table.leads-table thead {
+  background-color: var(--modal-bg);
+}
+
+.leads-split-table--no-topbar
+  .leads-table-frozen-pane table.leads-table thead tr,
+.leads-split-table--no-topbar
+  .leads-table-scroll-pane table.leads-table thead tr {
+  background-color: var(--modal-bg);
 }
 
 /* Generic CRM Leads: keep the column headings pinned while the rows move,
    and use the compact neutral scrollbars from the table reference layout. */
 .leads-split-table--no-topbar {
-  max-height: none !important;
-  overflow: visible !important;
+  max-height: calc(100vh - 24rem) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   scrollbar-width: auto;
   scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
   scrollbar-gutter: stable;
+}
+
+.leads-page-root--generic {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.leads-page-root--generic .leads-content-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.leads-page-root--generic .leads-toolbar-shell {
+  flex: 0 0 auto;
+}
+
+.leads-page-root--generic .leads-split-table--no-topbar {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none !important;
 }
 
 .leads-split-table--no-topbar::-webkit-scrollbar {
@@ -3693,6 +3737,24 @@ table.leads-table thead th {
 .leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
   background: rgba(128, 128, 128, 0.95);
   border-width: 2px;
+}
+
+.leads-split-table--no-topbar
+  .top-scroll-sync__bottom.top-scroll-sync__bottom--hidden-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.leads-split-table--no-topbar
+  .top-scroll-sync__bottom.top-scroll-sync__bottom--hidden-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Generic CRM uses the synchronized scrollbar at the top of the table. Keep
+   the bottom proxy available for scroll syncing internally, but do not render
+   a second visible horizontal scrollbar. */
+.leads-split-table--no-topbar .top-scroll-sync__sticky-bottom {
+  display: none;
 }
 
 table.leads-table thead tr:first-child th {

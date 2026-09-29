@@ -2617,12 +2617,12 @@ const Leads = () => {
 
     setCallSettingsSaving(true);
     try {
-      await Promise.all(settings.map(([key, value]) =>
-        fetchApi(`/api/tenant-settings/${key}`, {
-          method: "PUT",
-          body: JSON.stringify({ value: String(value), category: "feature-flag" }),
+      await fetchApi("/api/tenant-settings/callified", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: settings.map(([key, value]) => ({ key, value: String(value) })),
         }),
-      ));
+      });
       setDnpMaxRetries(normalized.dnpMaxRetries);
       setDnpIntervalMinutes(normalized.dnpIntervalMinutes);
       setDnpDayInterval(normalized.dnpDayInterval);

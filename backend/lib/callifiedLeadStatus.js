@@ -38,7 +38,15 @@ function normalizeLeadStatus(raw) {
   if (s.includes("qualified") || s.includes("hot")) return CALL_STATUS.QUALIFIED;
   if (s.includes("junk") || s.includes("cold")) return CALL_STATUS.JUNK;
   if (s.includes("pending") || s.includes("follow_up") || s.includes("unclear")) return CALL_STATUS.PENDING;
-  if (s.includes("dnp") || s.includes("not_picked") || s.includes("no_answer") || s.includes("unanswered")) {
+  if (
+    s.includes("dnp") ||
+    s.includes("not_picked") ||
+    s.includes("no_answer") ||
+    s.includes("unanswered") ||
+    s.includes("busy") ||
+    s.includes("voicemail") ||
+    s.includes("failed")
+  ) {
     return CALL_STATUS.DNP;
   }
   if (s.includes("connected") || s.includes("in_progress") || s.includes("calling")) {
@@ -332,6 +340,9 @@ function classifyConclusion(review) {
   if (outcome === "not_interested") {
     return { status: CALL_STATUS.JUNK, reason: review?.summary || "Customer is not interested." };
   }
+  if (normalizeLeadStatus(outcome) === CALL_STATUS.DNP) {
+    return { status: CALL_STATUS.DNP, reason: review?.summary || "Call was not answered / did not connect." };
+  }
   return {
     status: CALL_STATUS.PENDING,
     reason: review?.summary || "Call needs follow-up; no confirmed appointment or clear rejection.",
@@ -366,6 +377,9 @@ function isActiveCall(log) {
 
 function hasRealConversation(review, transcript) {
   const outcome = String(review?.call_outcome || review?.callOutcome || "").trim();
+  // Provider terminal non-answer outcomes are authoritative. Merely having a
+  // review object for a busy/failed/voicemail call is not a conversation.
+  if (normalizeLeadStatus(outcome) === CALL_STATUS.DNP) return false;
   if (outcome) return true;
   if (review && Number(review.quality_score) > 0) return true;
   const text = transcript?.transcript_text || transcript?.transcript || transcript?.text || "";

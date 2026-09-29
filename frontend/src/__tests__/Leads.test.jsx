@@ -2040,6 +2040,13 @@ function callifiedFetchMock(url, opts) {
 }
 
 describe('Leads — Callified campaign column + bulk dial + call summary', () => {
+  const findSavedCallSetting = (key) => {
+    const batchCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/tenant-settings/callified' && opts?.method === 'PUT',
+    );
+    if (!batchCall) return undefined;
+    return JSON.parse(batchCall[1].body).settings.find((entry) => entry.key === key);
+  };
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(callifiedFetchMock);
@@ -2305,16 +2312,10 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.auto_dial_new_leads.enabled') &&
-          opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      expect(body.value).toBe('false');
-      expect(body.category).toBe('feature-flag');
+      expect(findSavedCallSetting('feature.callified.auto_dial_new_leads.enabled')).toEqual({
+        key: 'feature.callified.auto_dial_new_leads.enabled',
+        value: 'false',
+      });
     });
   });
 
@@ -2338,15 +2339,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.dnp_retry.max_retries') &&
-          opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      expect(body.value).toBe('5');
+      expect(findSavedCallSetting('feature.callified.dnp_retry.max_retries')?.value).toBe('5');
     });
   });
 
@@ -2367,16 +2360,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          url === '/api/tenant-settings/feature.callified.auto_refresh.enabled' &&
-          opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      expect(JSON.parse(putCall[1].body)).toEqual({
-        value: 'false',
-        category: 'feature-flag',
-      });
+      expect(findSavedCallSetting('feature.callified.auto_refresh.enabled')?.value).toBe('false');
     });
     await waitFor(() => expect(screen.getByText(/Auto-refresh off/i)).toBeInTheDocument());
   });
@@ -2444,13 +2428,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          url === '/api/tenant-settings/feature.callified.pending_retry.max_retries' &&
-          opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      expect(JSON.parse(putCall[1].body).value).toBe('4');
+      expect(findSavedCallSetting('feature.callified.pending_retry.max_retries')?.value).toBe('4');
     });
   });
 
@@ -2473,15 +2451,9 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(within(dialog).getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
-      expect(fetchApiMock.mock.calls.some(([url, opts]) =>
-        url === '/api/tenant-settings/feature.callified.dnp_retry.mode' &&
-        JSON.parse(opts.body).value === 'scheduled')).toBe(true);
-      expect(fetchApiMock.mock.calls.some(([url, opts]) =>
-        url === '/api/tenant-settings/feature.callified.dnp_retry.day_interval' &&
-        JSON.parse(opts.body).value === '3')).toBe(true);
-      expect(fetchApiMock.mock.calls.some(([url, opts]) =>
-        url === '/api/tenant-settings/feature.callified.dnp_retry.time_local' &&
-        JSON.parse(opts.body).value === '14:30')).toBe(true);
+      expect(findSavedCallSetting('feature.callified.dnp_retry.mode')?.value).toBe('scheduled');
+      expect(findSavedCallSetting('feature.callified.dnp_retry.day_interval')?.value).toBe('3');
+      expect(findSavedCallSetting('feature.callified.dnp_retry.time_local')?.value).toBe('14:30');
     });
   });
 
@@ -2502,23 +2474,8 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
-      const leadsCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.assign_staff.leads_per_user') &&
-          opts?.method === 'PUT',
-      );
-      expect(leadsCall).toBeDefined();
-      expect(JSON.parse(leadsCall[1].body).value).toBe('3');
-      const logicCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.assign_staff.logic') &&
-          opts?.method === 'PUT',
-      );
-      expect(logicCall).toBeDefined();
-      const body = JSON.parse(logicCall[1].body);
-      expect(body.value).toBe('random');
+      expect(findSavedCallSetting('feature.callified.assign_staff.leads_per_user')?.value).toBe('3');
+      expect(findSavedCallSetting('feature.callified.assign_staff.logic')?.value).toBe('random');
     });
   });
 });

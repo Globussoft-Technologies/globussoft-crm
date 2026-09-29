@@ -529,6 +529,34 @@ describe('GET /api/integrations/callified/config — tenant-safe credential resp
 });
 
 describe('PUT /api/integrations/callified/config — cached JWT invalidation', () => {
+  test('blank masked-form credentials preserve the stored fallback login', async () => {
+    prisma.integration.findUnique.mockResolvedValue({
+      token: null,
+      settings: JSON.stringify({
+        email: 'admin@example.com',
+        password: 'stored-password',
+        baseUrl: 'https://old.callified.example.com',
+      }),
+    });
+    prisma.integration.upsert.mockResolvedValue({
+      isActive: true,
+      updatedAt: new Date('2026-09-29T10:00:00Z'),
+    });
+
+    const res = await request(makeApp({ tenantId: 73 }))
+      .put('/api/integrations/callified/config')
+      .send({ email: '', password: '', baseUrl: 'https://new.callified.example.com' });
+
+    expect(res.status).toBe(200);
+    const upsert = prisma.integration.upsert.mock.calls[0][0];
+    expect(JSON.parse(upsert.update.settings)).toMatchObject({
+      email: 'admin@example.com',
+      password: 'stored-password',
+      baseUrl: 'https://new.callified.example.com',
+    });
+    expect(upsert.update.isActive).toBe(true);
+  });
+
   test('successful credential update clears the current tenant token cache', async () => {
     prisma.integration.findUnique.mockResolvedValue(null);
     prisma.integration.upsert.mockResolvedValue({
@@ -879,7 +907,6 @@ describe('GET /api/integrations/callified/sso — 302 redirect', () => {
     expect(res.text).toBe('User not found');
   });
 });
-
 
 
 

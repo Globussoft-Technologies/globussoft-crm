@@ -206,16 +206,18 @@ async function processPendingRetries(now = new Date()) {
           continue;
         }
 
+        const enqueued = getAutoDialQueue().enqueue({
+          tenantId: Number(tenantId), contactId: contact.id,
+          campaignId: contact.callifiedCampaignId, userId: null, retryAttempt: true,
+        });
+        // Only consume a retry after the queue accepts it. A duplicate or
+        // in-flight lead must retain its retry budget and due timestamp.
+        if (!enqueued) continue;
         await prisma.contact.update({
           where: { id: contact.id, tenantId: Number(tenantId) },
           data: {
-            callifiedDnpRetryCount: { increment: 1 },
             callifiedDnpNextRetryAt: nextRetryAt,
           },
-        });
-        getAutoDialQueue().enqueue({
-          tenantId: Number(tenantId), contactId: contact.id,
-          campaignId: contact.callifiedCampaignId, userId: null,
         });
       }
     }
@@ -291,19 +293,20 @@ async function processDnpRetries(now = new Date()) {
             continue;
           }
 
-          await prisma.contact.update({
-            where: { id: contact.id, tenantId: Number(tenantId) },
-            data: {
-              callifiedDnpRetryCount: { increment: 1 },
-              callifiedDnpNextRetryAt: nextRetryAt,
-            },
-          });
-
-          getAutoDialQueue().enqueue({
+          const enqueued = getAutoDialQueue().enqueue({
             tenantId: Number(tenantId),
             contactId: contact.id,
             campaignId: contact.callifiedCampaignId,
             userId: null,
+            retryAttempt: true,
+          });
+          if (!enqueued) continue;
+
+          await prisma.contact.update({
+            where: { id: contact.id, tenantId: Number(tenantId) },
+            data: {
+              callifiedDnpNextRetryAt: nextRetryAt,
+            },
           });
 
           console.log(

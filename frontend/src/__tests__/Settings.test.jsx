@@ -254,6 +254,40 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(email.closest("form")).toHaveAttribute("autocomplete", "off");
   });
 
+  it("omits blank masked fallback credentials when updating another Callified field", async () => {
+    const defaultFetch = buildDefaultFetch();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/integrations/callified/config" && !opts) {
+        return Promise.resolve({
+          isActive: true,
+          apiKey: "••••••••••••••••",
+          hasFallbackAuth: true,
+          baseUrl: "https://old.callified.example.com",
+        });
+      }
+      if (url === "/api/integrations/callified/config" && opts?.method === "PUT") {
+        return Promise.resolve({ success: true, isActive: true });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderSettings();
+    const baseUrl = await screen.findByDisplayValue("https://old.callified.example.com");
+    fireEvent.change(baseUrl, { target: { value: "https://new.callified.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /Update Configuration/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === "/api/integrations/callified/config" && opts?.method === "PUT",
+      );
+      expect(call).toBeDefined();
+      const body = JSON.parse(call[1].body);
+      expect(body.baseUrl).toBe("https://new.callified.example.com");
+      expect(body).not.toHaveProperty("email");
+      expect(body).not.toHaveProperty("password");
+    });
+  });
+
   it("renders travel admin promotional hosting settings and saves the selected transfer mapping", async () => {
     const user = userEvent.setup();
     const travelTenant = { ...baseTenant, vertical: "travel" };

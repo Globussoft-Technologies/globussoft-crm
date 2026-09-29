@@ -37,6 +37,9 @@ prisma.tenantSetting = {
   upsert: vi.fn(),
   delete: vi.fn(),
 };
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
+prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
@@ -75,6 +78,8 @@ beforeEach(() => {
   prisma.tenantSetting.findUnique.mockReset();
   prisma.tenantSetting.upsert.mockReset();
   prisma.tenantSetting.delete.mockReset();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  prisma.$transaction.mockClear();
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
 });
@@ -328,6 +333,76 @@ describe('PUT /api/tenant-settings/:key', () => {
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
     expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/tenant-settings/callified', () => {
+  test('validates then saves all Generic Callified settings in one transaction', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    prisma.tenantSetting.upsert
+      .mockResolvedValueOnce({
+        id: 201,
+        key: KEYS.CALLIFIED_DNP_RETRY_ENABLED,
+        value: 'true',
+        category: 'feature-flag',
+      })
+      .mockResolvedValueOnce({
+        id: 202,
+        key: KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES,
+        value: '4',
+        category: 'feature-flag',
+      });
+
+    const res = await request(makeApp())
+      .put('/api/tenant-settings/callified')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ settings: [
+        { key: KEYS.CALLIFIED_DNP_RETRY_ENABLED, value: 'true' },
+        { key: KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES, value: '4' },
+      ] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true });
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledTimes(2);
+    expect(prisma.tenantSetting.upsert.mock.calls[0][0].where).toEqual({
+      tenantId_key: { tenantId: 1, key: KEYS.CALLIFIED_DNP_RETRY_ENABLED },
+    });
+  });
+
+  test('rejects non-Callified keys before opening the transaction', async () => {
+    const res = await request(makeApp())
+      .put('/api/tenant-settings/callified')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ settings: [{ key: KEYS.LLM_MONTHLY_CAP_USD_CENTS, value: '5000' }] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_SETTING_KEY' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rejects a duplicate key so the batch remains unambiguous', async () => {
+    const key = KEYS.CALLIFIED_AUTO_REFRESH_ENABLED;
+    const res = await request(makeApp())
+      .put('/api/tenant-settings/callified')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ settings: [{ key, value: 'true' }, { key, value: 'false' }] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'DUPLICATE_SETTING_KEY' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('does not expose Generic Callified settings to another CRM theme', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    const res = await request(makeApp())
+      .put('/api/tenant-settings/callified')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ settings: [{ key: KEYS.CALLIFIED_AUTO_REFRESH_ENABLED, value: 'true' }] });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'CALLIFIED_SETTINGS_NOT_AVAILABLE' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
 

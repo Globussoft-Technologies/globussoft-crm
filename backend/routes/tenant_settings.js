@@ -147,6 +147,91 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
+// ─── PUT /callified — atomically save the Generic CRM Callified panel ──
+//
+// The Leads dialog presents these values as one form. Persist them in one DB
+// transaction so a validation/database failure cannot leave a partially
+// updated retry policy behind.
+router.put("/callified", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    if (!tenant || tenant.vertical !== "generic") {
+      return res.status(404).json({
+        error: "Callified lead settings are unavailable for this tenant",
+        code: "CALLIFIED_SETTINGS_NOT_AVAILABLE",
+      });
+    }
+    const settings = Array.isArray(req.body?.settings) ? req.body.settings : null;
+    if (!settings || settings.length === 0 || settings.length > 30) {
+      return res.status(400).json({
+        error: "settings must be a non-empty array with at most 30 entries",
+        code: "INVALID_SETTINGS_BATCH",
+      });
+    }
+
+    const seen = new Set();
+    const normalized = [];
+    for (const entry of settings) {
+      const key = String(entry?.key || "");
+      if (!key.startsWith("feature.callified.") || !isKnownKey(key)) {
+        return res.status(400).json({ error: `Invalid Callified setting key: ${key}`, code: "INVALID_SETTING_KEY" });
+      }
+      if (seen.has(key)) {
+        return res.status(400).json({ error: `Duplicate setting key: ${key}`, code: "DUPLICATE_SETTING_KEY" });
+      }
+      if (entry?.value === undefined || entry?.value === null || entry?.value === "") {
+        return res.status(400).json({ error: `value is required for ${key}`, code: "MISSING_VALUE" });
+      }
+      const validation = validateTenantSettingValue(key, entry.value);
+      if (!validation.ok) {
+        return res.status(400).json({ error: validation.error, code: validation.code });
+      }
+      seen.add(key);
+      normalized.push({ key, value: String(entry.value), category: "feature-flag" });
+    }
+
+    const changes = await prisma.$transaction(async (tx) => {
+      const saved = [];
+      for (const entry of normalized) {
+        const prior = await tx.tenantSetting.findUnique({
+          where: { tenantId_key: { tenantId, key: entry.key } },
+          select: { value: true },
+        });
+        const row = await tx.tenantSetting.upsert({
+          where: { tenantId_key: { tenantId, key: entry.key } },
+          create: { tenantId, ...entry },
+          update: { value: entry.value, category: entry.category },
+        });
+        saved.push({ row, priorValue: prior?.value ?? null });
+      }
+      return saved;
+    });
+
+    for (const { row, priorValue } of changes) {
+      await writeAudit(
+        "TenantSetting",
+        priorValue == null ? "CREATE" : "UPDATE",
+        row.id,
+        req.user.userId,
+        tenantId,
+        { key: row.key, oldValue: priorValue, newValue: row.value },
+      );
+    }
+
+    return res.json({
+      success: true,
+      settings: changes.map(({ row }) => ({ key: row.key, value: row.value, category: row.category })),
+    });
+  } catch (e) {
+    console.error("[tenant-settings] Callified batch put error:", e.message);
+    return res.status(500).json({ error: "Failed to save Callified settings", code: "CALLIFIED_SETTINGS_SAVE_FAILED" });
+  }
+});
+
 // ─── GET /:key — single setting; returns default if no row exists ────
 //
 // `isOverride: true` means a TenantSetting row exists and is in force;

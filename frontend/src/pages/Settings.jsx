@@ -806,12 +806,16 @@ export default function Settings() {
     setCallifiedSaving(true);
     setCallifiedMsg("");
     try {
+      const credentialUpdates = {};
+      if (callifiedEmail.trim()) credentialUpdates.email = callifiedEmail.trim();
+      if (callifiedPassword && callifiedPassword !== MASKED_CALLIFIED_KEY) {
+        credentialUpdates.password = callifiedPassword;
+      }
       await fetchApi("/api/integrations/callified/config", {
         method: "PUT",
         body: JSON.stringify({
           apiKey: callifiedApiKey,
-          email: callifiedEmail,
-          password: callifiedPassword,
+          ...credentialUpdates,
           baseUrl: callifiedBaseUrl,
           webhookSecret: callifiedWebhookSecret,
         }),

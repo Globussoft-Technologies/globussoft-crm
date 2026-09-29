@@ -107,6 +107,24 @@ prisma.tenantSetting.findUnique = vi.fn();
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
 
 const callifiedRouter = requireCJS('../../routes/callified');
+const {
+  classifyConclusion,
+  hasRealConversation,
+} = requireCJS('../../lib/callifiedLeadStatus');
+
+describe('Callified terminal outcome mapping', () => {
+  test.each(['no_answer', 'busy', 'voicemail', 'failed', 'unanswered'])(
+    'maps %s to DNP instead of Pending',
+    (callOutcome) => {
+      const review = { call_outcome: callOutcome, summary: `Provider outcome: ${callOutcome}` };
+      expect(classifyConclusion(review)).toEqual({
+        status: 'dnp',
+        reason: `Provider outcome: ${callOutcome}`,
+      });
+      expect(hasRealConversation(review, null)).toBe(false);
+    },
+  );
+});
 
 function makeApp() {
   const app = express();

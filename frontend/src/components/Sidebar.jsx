@@ -150,6 +150,7 @@ import { getGenericAccessByPath } from "../utils/sidebarSearch";
 // by the fallback-resolved effective brand for the active sub-brand  never
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
 import { useEffectiveBrand } from "../hooks/useEffectiveBrand";
+import { getDomainBranding } from "../utils/domainBranding";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -575,7 +576,10 @@ const Sidebar = ({
     },
     [setActiveSubBrand, navigate],
   );
-  const brand = tenant?.name || "Globussoft";
+  const defaultBranding = getDomainBranding();
+  const isTmcDomain = defaultBranding.logoUrl === "/tmc.png";
+  const sidebarDefaultLogoUrl = defaultBranding.faviconUrl || defaultBranding.logoUrl;
+  const brand = tenant?.name || defaultBranding.name;
   // Single logo source (2026-07-08): the active sub-brand's fallback-resolved
   // logo when one exists, else the tenant-wide default  never both shown
   // at once. Non-travel tenants (effectiveBrand always resolved with
@@ -1083,7 +1087,7 @@ const Sidebar = ({
         aria-label="Main navigation"
         data-tour="welcome-sidebar"
         data-search-highlight-scope="global-search"
-        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}`}
+        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}${isTravel && isTmcDomain ? " travel-sidebar-tmc" : ""}`}
         style={{
           width: isTravel ? (isTravelCollapsed ? "64px" : "240px") : "250px",
           height: "100vh",
@@ -1107,11 +1111,14 @@ const Sidebar = ({
           }}
         >
           <img
-            className="travel-sidebar-logo"
-            src={logoUrl || "/globussoft-logo.png"}
+            className={`travel-sidebar-logo${isTmcDomain ? " travel-sidebar-logo--tmc" : ""}`}
+            src={logoUrl || sidebarDefaultLogoUrl}
             alt={brand}
             onError={(e) => {
-              if (e.currentTarget.src.indexOf("/globussoft-logo.png") === -1) {
+              const failedUrl = e.currentTarget.getAttribute("src");
+              if (failedUrl !== sidebarDefaultLogoUrl) {
+                e.currentTarget.src = sidebarDefaultLogoUrl;
+              } else if (failedUrl !== "/globussoft-logo.png") {
                 e.currentTarget.src = "/globussoft-logo.png";
               }
             }}

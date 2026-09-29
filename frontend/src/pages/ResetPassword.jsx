@@ -8,6 +8,7 @@ import { useContext, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import PasswordInput from '../components/PasswordInput';
 import { AuthContext } from '../App';
+import { getDomainBranding } from '../utils/domainBranding';
 
 function passwordStrength(p) {
   let s = 0;
@@ -20,6 +21,7 @@ function passwordStrength(p) {
 }
 
 export default function ResetPassword() {
+  const branding = getDomainBranding();
   const navigate = useNavigate();
   const { setToken } = useContext(AuthContext);
   const token = new URLSearchParams(window.location.search).get('token') || '';
@@ -92,11 +94,18 @@ export default function ResetPassword() {
       }}>
         {/* Logo */}
         <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-          <img
-            src="/globussoft-logo-pdf.png"
-            alt="Globussoft CRM"
-            style={{ maxWidth: 200, height: 'auto' }}
-          />
+          {branding.logoUrl === '/tmc.png' ? (
+            <span className="login-logo--tmc" style={{ display: 'inline-block', width: '100%', maxWidth: 200, position: 'relative' }}>
+              <img src={branding.logoUrl} alt={branding.name} style={{ display: 'block', width: '100%', height: 'auto' }} />
+              <img className="login-logo--tmc-dark" src="/tmc-dark.png" alt="" aria-hidden="true" />
+            </span>
+          ) : (
+            <img
+              src={branding.logoUrl}
+              alt={branding.name}
+              style={{ maxWidth: 200, height: 'auto' }}
+            />
+          )}
         </div>
 
         <h2 style={{ margin: '0 0 0.25rem', fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>

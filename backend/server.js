@@ -154,6 +154,7 @@ initSentry(app);
 const ALLOWED_ORIGINS = [
   "https://crm.globusdemos.com",
   "http://localhost:5173",
+  "http://tmc.localhost:5173",
   "http://localhost:5000",
   // #657 — keep 127.0.0.1 and localhost in lockstep. Some test runners
   // (Playwright, supertest) resolve BASE_URL through 127.0.0.1 even when
@@ -173,6 +174,7 @@ const ALLOWED_ORIGINS = [
   // that fetches the public CRM-rendered landing-page HTML from the browser.
   "https://themodernclassroom.in",
   "https://www.themodernclassroom.in",
+  "https://app.themodernclassroom.in",
   // Dr. Enhance Wellness external marketing site — submits public enquiries
   // and also consumes the public wellness catalog + payment endpoints.
   // Hardcoded because it's part of the product surface, not a one-off env

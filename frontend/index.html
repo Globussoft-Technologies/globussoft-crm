@@ -20,6 +20,19 @@
          lands, this meta tag is inert. -->
     <meta name="csp-nonce" content="__CSP_NONCE__" />
     <title>Globussoft CRM</title>
+    <script>
+      (() => {
+        const tmcHosts = new Set([
+          "app.themodernclassroom.in",
+          "tmc.localhost",
+        ]);
+        if (!tmcHosts.has(window.location.hostname.toLowerCase())) return;
+        document.title = "The Modern Classroom";
+        document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]').forEach((link) => {
+          link.href = "/tmc-logo.png";
+        });
+      })();
+    </script>
   </head>
   <body>
     <!-- #868 (BUG-T19): apply theme BEFORE React mounts to avoid a white

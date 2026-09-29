@@ -157,7 +157,8 @@ describe('<Login /> — page surface', () => {
   it('renders the heading, sign-in copy, and email + password inputs on initial mount', () => {
     renderLogin();
     expect(screen.getByRole('img', { name: /Globussoft CRM/i })).toBeInTheDocument();
-    expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument();
+    expect(screen.getByText(/Create an organization\?/i)).toBeInTheDocument();
     // Post-46247368 refactor: email + password inputs render EMPTY on
     // initial mount (the hardcoded admin@globussoft.com / password123
     // defaults were removed; demo creds now live on the quick-login
@@ -169,6 +170,15 @@ describe('<Login /> — page surface', () => {
     expect(passwordInput).toBeInTheDocument();
     expect(passwordInput.value).toBe('');
     expect(screen.getByRole('button', { name: /Sign In$/i })).toBeInTheDocument();
+  });
+
+  it('marks the Modern Classroom logo for the dark-theme image swap', () => {
+    window.location.hostname = 'tmc.localhost';
+    const { container } = renderLogin();
+    expect(screen.getByRole('img', { name: 'The Modern Classroom' }))
+      .toHaveAttribute('src', '/tmc.png');
+    expect(container.querySelector('.login-logo--tmc-dark'))
+      .toHaveAttribute('src', '/tmc-dark.png');
   });
 
   // Helper: type the canonical demo credentials into the empty form so

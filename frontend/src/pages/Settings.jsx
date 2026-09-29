@@ -644,6 +644,7 @@ export default function Settings() {
         try {
           await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
             method: "DELETE",
+            silent: true,
           });
         } catch (settingErr) {
           if (settingErr?.status !== 404) throw settingErr;

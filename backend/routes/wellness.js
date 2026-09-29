@@ -2973,7 +2973,6 @@ router.post(
       if (linkedCustomerUser && existing.email) {
         const conflict = await prisma.user.findFirst({
           where: {
-            tenantId: req.user.tenantId,
             email: existing.email,
             id: { not: linkedCustomerUser.id },
           },

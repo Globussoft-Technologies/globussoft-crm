@@ -55,11 +55,11 @@ router.get("/users", verifyToken, async (req, res) => {
 // POST /api/tenants/users — invite user into current tenant (ADMIN only)
 router.post("/users", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    const { email, name, password, role } = req.body;
+    const { email: rawEmail, name, password, role } = req.body;
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
-    // Email is unique per-tenant — only block if it already exists in THIS org.
-    const existing = await prisma.user.findFirst({ where: { email, tenantId: req.user.tenantId } });
+    const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(400).json({ error: "User with this email already exists" });
 
     const hashed = await bcrypt.hash(password, 10);
@@ -75,6 +75,9 @@ router.post("/users", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     });
     res.status(201).json(user);
   } catch (err) {
+    if (err && err.code === "P2002") {
+      return res.status(409).json({ error: "User with this email already exists" });
+    }
     console.error("[tenants] invite user error:", err);
     res.status(500).json({ error: "Failed to invite user" });
   }

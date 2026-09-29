@@ -69,6 +69,7 @@ async function generateUniqueSlug(base) {
 // Find-or-create user given a verified SSO identity. Creates a new tenant for net-new users.
 async function findOrCreateSsoUser({ provider, providerId, email, name }) {
   if (!email) throw new Error("SSO provider did not return an email");
+  email = email.trim().toLowerCase();
 
   const providerIdField = provider === "google" ? "googleId" : "microsoftId";
 
@@ -79,9 +80,8 @@ async function findOrCreateSsoUser({ provider, providerId, email, name }) {
   });
   if (user) return user;
 
-  // 2. Look up by email — link existing local account. Email is unique
-  // per-tenant now (not globally), so findFirst rather than findUnique.
-  user = await prisma.user.findFirst({ where: { email }, include: { tenant: true } });
+  // 2. Look up by the global login email and link an existing local account.
+  user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
   if (user) {
     user = await prisma.user.update({
       where: { id: user.id },

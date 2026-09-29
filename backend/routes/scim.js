@@ -196,7 +196,8 @@ router.get("/v2/Users", scimAuth, async (req, res) => {
 router.post("/v2/Users", scimAuth, async (req, res) => {
   try {
     const body = req.body || {};
-    const userName = body.userName || (body.emails && body.emails[0] && body.emails[0].value);
+    const rawUserName = body.userName || (body.emails && body.emails[0] && body.emails[0].value);
+    const userName = typeof rawUserName === "string" ? rawUserName.trim().toLowerCase() : "";
     if (!userName) {
       return res.status(400).json({
         schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"],
@@ -205,9 +206,7 @@ router.post("/v2/Users", scimAuth, async (req, res) => {
       });
     }
 
-    // Reject duplicates within this tenant (email is unique per-tenant, not
-    // globally — so findFirst scoped to the SCIM token's tenant).
-    const existing = await prisma.user.findFirst({ where: { email: userName, tenantId: req.scim.tenantId } });
+    const existing = await prisma.user.findUnique({ where: { email: userName } });
     if (existing) {
       return res.status(409).json({
         schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"],
@@ -235,6 +234,13 @@ router.post("/v2/Users", scimAuth, async (req, res) => {
 
     res.status(201).json(toScimUser(created));
   } catch (err) {
+    if (err && err.code === "P2002") {
+      return res.status(409).json({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"],
+        status: "409",
+        detail: "User already exists.",
+      });
+    }
     console.error("[scim] users create error:", err);
     res.status(500).json({ status: "500", detail: "Failed to create user." });
   }

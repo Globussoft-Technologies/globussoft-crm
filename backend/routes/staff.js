@@ -560,13 +560,9 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       }
     }
 
-    // Email is composite-unique with tenantId (@@unique([email, tenantId])
-    // on schema.prisma:546) — not a standalone @unique. The bare findUnique
-    // throws PrismaClientValidationError under the current schema. Scope
-    // the dup check to THIS admin's tenant via findFirst so the same email
-    // can legitimately exist in other tenants.
-    const existing = await prisma.user.findFirst({
-      where: { email: email.toLowerCase(), tenantId: req.user.tenantId },
+    const normalizedEmail = email.trim().toLowerCase();
+    const existing = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
     });
     if (existing) {
       return res
@@ -597,7 +593,7 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       const user = await tx.user.create({
         data: {
           name: name.trim(),
-          email: email.toLowerCase(),
+          email: normalizedEmail,
           password: passwordHash,
           role,
           ...(vertical === "generic" ? {

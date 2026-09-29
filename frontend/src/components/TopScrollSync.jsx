@@ -28,9 +28,12 @@ const TopScrollSync = ({
   stickyTopOffset = 0,
   hideBottomScrollbar = false,
   hideTopBar = false,
+  verticalOverflow = "visible",
+  stickyBottom = false,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
+  const stickyBottomRef = useRef(null);
   const syncingFrom = useRef(null);
   const [measuredWidth, setMeasuredWidth] = useState(0);
   const [clientWidth, setClientWidth] = useState(0);
@@ -38,28 +41,65 @@ const TopScrollSync = ({
   useEffect(() => {
     const top = topRef.current;
     const bottom = bottomRef.current;
-    if (!top || !bottom) return undefined;
+    if (!bottom) return undefined;
+
+    const setHorizontalPosition = (position) => {
+      if (stickyBottom) {
+        const content = bottom.firstElementChild;
+        if (content) {
+          // Keep the table in the normal layout flow so sticky table headers
+          // continue to anchor to the outer vertical table viewport. A
+          // transform on the table creates a containing block that prevents
+          // the scrollable header from staying aligned while rows move.
+          content.style.position = "relative";
+          content.style.left = `-${position}px`;
+          content.style.transform = "none";
+        }
+        if (stickyBottomRef.current) {
+          stickyBottomRef.current.scrollLeft = position;
+        }
+        return;
+      }
+      bottom.scrollLeft = position;
+    };
+    if (stickyBottom) {
+      setHorizontalPosition(stickyBottomRef.current?.scrollLeft || 0);
+    }
 
     const onTopScroll = () => {
-      if (syncingFrom.current === "bottom") return;
+      if (syncingFrom.current === "bottom" || syncingFrom.current === "sticky-bottom") return;
       syncingFrom.current = "top";
-      bottom.scrollLeft = top.scrollLeft;
+      setHorizontalPosition(top.scrollLeft);
       syncingFrom.current = null;
     };
     const onBottomScroll = () => {
-      if (syncingFrom.current === "top") return;
+      if (syncingFrom.current === "top" || syncingFrom.current === "sticky-bottom") return;
       syncingFrom.current = "bottom";
-      top.scrollLeft = bottom.scrollLeft;
+      if (top) top.scrollLeft = bottom.scrollLeft;
+      setHorizontalPosition(bottom.scrollLeft);
+      syncingFrom.current = null;
+    };
+    const onStickyBottomScroll = () => {
+      if (syncingFrom.current === "top" || syncingFrom.current === "bottom") return;
+      syncingFrom.current = "sticky-bottom";
+      setHorizontalPosition(stickyBottomRef.current.scrollLeft);
+      if (top) top.scrollLeft = stickyBottomRef.current.scrollLeft;
       syncingFrom.current = null;
     };
 
-    top.addEventListener("scroll", onTopScroll);
+    if (top) top.addEventListener("scroll", onTopScroll);
     bottom.addEventListener("scroll", onBottomScroll);
+    if (stickyBottomRef.current) {
+      stickyBottomRef.current.addEventListener("scroll", onStickyBottomScroll);
+    }
     return () => {
-      top.removeEventListener("scroll", onTopScroll);
+      if (top) top.removeEventListener("scroll", onTopScroll);
       bottom.removeEventListener("scroll", onBottomScroll);
+      if (stickyBottomRef.current) {
+        stickyBottomRef.current.removeEventListener("scroll", onStickyBottomScroll);
+      }
     };
-  }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar]);
+  }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar, stickyBottom]);
 
   useEffect(() => {
     if (scrollWidth !== undefined) return undefined;
@@ -134,17 +174,46 @@ const TopScrollSync = ({
       ) : null}
       <div
         ref={bottomRef}
-        className={`top-scroll-sync__bottom${hideBottomScrollbar ? " top-scroll-sync__bottom--hidden-scrollbar" : ""}`}
+        className={`top-scroll-sync__bottom${hideBottomScrollbar || stickyBottom ? " top-scroll-sync__bottom--hidden-scrollbar" : ""}`}
         style={{
-          overflowX: forceScrollbar ? "scroll" : "auto",
+          overflowX: stickyBottom
+            ? "visible"
+            : forceScrollbar
+              ? "scroll"
+              : "auto",
+          overflowY: verticalOverflow,
           minWidth: 0,
           maxWidth: "100%",
+          // The generic Leads table translates its content for horizontal
+          // scrolling while the outer viewport remains vertically scrollable.
+          // Clip that translated content at the scroll-pane boundary so it
+          // cannot paint over the frozen Name column.
+          clipPath: stickyBottom ? "inset(0)" : undefined,
           scrollbarWidth: hideBottomScrollbar ? "none" : "auto",
           msOverflowStyle: hideBottomScrollbar ? "none" : "auto",
         }}
       >
         {children}
       </div>
+      {stickyBottom && (forceScrollbar || hasHorizontalOverflow) ? (
+        <div
+          ref={stickyBottomRef}
+          className="top-scroll-sync__sticky-bottom"
+          style={{
+            overflowX: forceScrollbar ? "scroll" : "auto",
+            overflowY: "hidden",
+            height: "16px",
+            minWidth: 0,
+            maxWidth: "100%",
+            position: "sticky",
+            bottom: 0,
+            zIndex: 6,
+            background: "var(--surface-color)",
+          }}
+        >
+          <div style={{ width: spacerWidth, height: "1px" }} />
+        </div>
+      ) : null}
     </div>
   );
 };

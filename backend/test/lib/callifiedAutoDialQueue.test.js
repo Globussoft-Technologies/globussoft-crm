@@ -43,6 +43,7 @@ Module._cache[leadStatusPath] = {
       YET_TO_CALL: 'yet_to_call',
       CONNECTED: 'connected',
       DNP: 'dnp',
+      PENDING: 'pending',
       QUALIFIED: 'qualified',
       JUNK: 'junk',
     },
@@ -55,6 +56,7 @@ Module._cache[leadStatusPath] = {
 const dnpEnginePath = requireCJS.resolve('../../lib/callifiedDnpRetryEngine.js');
 const scheduleDnpRetryMock = vi.fn().mockResolvedValue({ id: 11 });
 const clearDnpRetryStateMock = vi.fn().mockResolvedValue({ id: 11 });
+const schedulePendingRetryMock = vi.fn().mockResolvedValue({ id: 11 });
 Module._cache[dnpEnginePath] = {
   id: dnpEnginePath,
   filename: dnpEnginePath,
@@ -62,6 +64,7 @@ Module._cache[dnpEnginePath] = {
   exports: {
     scheduleDnpRetry: scheduleDnpRetryMock,
     clearDnpRetryState: clearDnpRetryStateMock,
+    schedulePendingRetry: schedulePendingRetryMock,
   },
 };
 
@@ -81,6 +84,7 @@ describe('callifiedAutoDialQueue', () => {
     assignQualifiedLeadRoundRobinMock.mockReset().mockResolvedValue(101);
     scheduleDnpRetryMock.mockReset().mockResolvedValue({ id: 11 });
     clearDnpRetryStateMock.mockReset().mockResolvedValue({ id: 11 });
+    schedulePendingRetryMock.mockReset().mockResolvedValue({ id: 11 });
 
     prisma.contact = prisma.contact || {};
     prisma.contact.findUnique = vi.fn().mockResolvedValue({
@@ -108,6 +112,10 @@ describe('callifiedAutoDialQueue', () => {
 
   test('isDialable returns true for DNP leads (retries are allowed)', () => {
     expect(isDialable({ status: 'Lead', callifiedCampaignId: 42, phone: '+919876543210', callifiedLeadStatus: 'dnp' })).toBe(true);
+  });
+
+  test('isDialable returns true for pending leads scheduled for follow-up', () => {
+    expect(isDialable({ status: 'Lead', callifiedCampaignId: 42, phone: '+919876543210', callifiedLeadStatus: 'pending' })).toBe(true);
   });
 
   test('isDialable returns false for already-called outcomes', () => {

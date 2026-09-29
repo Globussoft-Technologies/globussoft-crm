@@ -229,6 +229,40 @@ export default function CallifiedCallDetailsDrawer({ lead, onClose }) {
     const outOf = score > 5 ? 10 : 5;
     const sentiment = review.sentiment || "neutral";
     const appointment = Boolean(review.appointment_booked);
+    const callOutcome = String(review.call_outcome || review.callOutcome || "")
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, "_");
+    const outcomeBadge = appointment || callOutcome === "appointment_booked"
+      ? {
+          label: "Appointment booked",
+          background: "rgba(16, 185, 129, 0.1)",
+          color: "var(--success-color)",
+          Icon: Calendar,
+        }
+      : callOutcome === "pending" || callOutcome === "follow_up" || callOutcome === "unclear"
+        ? {
+            label: "Pending",
+            background: "rgba(139, 92, 246, 0.1)",
+            color: "var(--accent-color)",
+            Icon: Clock,
+          }
+        : callOutcome === "not_interested"
+          ? {
+              label: "Not interested",
+              background: "rgba(239, 68, 68, 0.1)",
+              color: "#ef4444",
+              Icon: AlertCircle,
+            }
+          : {
+              // Older Callified responses did not include call_outcome. Keep
+              // their existing appointment-only meaning instead of guessing.
+              label: "No appointment",
+              background: "rgba(239, 68, 68, 0.1)",
+              color: "#ef4444",
+              Icon: Calendar,
+            };
+    const OutcomeIcon = outcomeBadge.Icon;
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -273,14 +307,14 @@ export default function CallifiedCallDetailsDrawer({ lead, onClose }) {
               borderRadius: "999px",
               fontSize: "0.75rem",
               fontWeight: 600,
-              background: appointment ? "rgba(16, 185, 129, 0.1)" : "rgba(239, 68, 68, 0.1)",
-              color: appointment ? "var(--success-color)" : "#ef4444",
+              background: outcomeBadge.background,
+              color: outcomeBadge.color,
               display: "inline-flex",
               alignItems: "center",
               gap: "0.25rem",
             }}
           >
-            <Calendar size={12} /> {appointment ? "Appointment booked" : "No appointment"}
+            <OutcomeIcon size={12} /> {outcomeBadge.label}
           </span>
         </div>
 

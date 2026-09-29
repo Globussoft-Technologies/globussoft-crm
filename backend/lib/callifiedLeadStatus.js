@@ -8,7 +8,6 @@
 
 const prisma = require("./prisma");
 const callifiedClient = require("../services/callifiedClient");
-const { routeRequest, llmEnabled } = require("./llmRouter");
 const { getSetting, KEYS } = require("./tenantSettings");
 const { notify } = require("./notificationService");
 
@@ -19,6 +18,7 @@ const CALL_STATUS = {
   YET_TO_CALL: "yet_to_call",
   CONNECTED: "connected",
   DNP: "dnp",
+  PENDING: "pending",
   QUALIFIED: "qualified",
   JUNK: "junk",
 };
@@ -27,6 +27,7 @@ const VALID_LEAD_STATUSES = [
   CALL_STATUS.YET_TO_CALL,
   CALL_STATUS.CONNECTED,
   CALL_STATUS.DNP,
+  CALL_STATUS.PENDING,
   CALL_STATUS.QUALIFIED,
   CALL_STATUS.JUNK,
 ];
@@ -36,6 +37,7 @@ function normalizeLeadStatus(raw) {
   const s = String(raw).toLowerCase().trim().replace(/\s+/g, "_");
   if (s.includes("qualified") || s.includes("hot")) return CALL_STATUS.QUALIFIED;
   if (s.includes("junk") || s.includes("cold")) return CALL_STATUS.JUNK;
+  if (s.includes("pending") || s.includes("follow_up") || s.includes("unclear")) return CALL_STATUS.PENDING;
   if (s.includes("dnp") || s.includes("not_picked") || s.includes("no_answer") || s.includes("unanswered")) {
     return CALL_STATUS.DNP;
   }
@@ -163,7 +165,7 @@ async function fetchLatestCallReviewForContact(tenantId, contactId) {
 
   let bestCandidate = null;
   for (const callifiedLeadId of leadIds) {
-    const logForLead = logs.find((l) => {
+    let logForLead = logs.find((l) => {
       let id = l.providerCallId;
       try {
         const parsed = JSON.parse(l.notes || "{}");
@@ -177,10 +179,32 @@ async function fetchLatestCallReviewForContact(tenantId, contactId) {
     // repeated polls, so the notes we already stored in fetchAndStoreCallDetails
     // act as a stable secondary source.
     const notes = parseLogNotes(logForLead);
-    const apiDetails = await callifiedClient.getCallDetails(tenantId, callifiedLeadId).catch((e) => {
-      console.error(`[callified] getCallDetails failed for lead ${callifiedLeadId}: ${e.message}`);
-      return { transcripts: [], reviews: [] };
-    });
+    // Refresh and persist the provider state before classifying. This prevents
+    // a completed/cut call from remaining "connected" merely because the
+    // locally cached CallLog has not been opened in the call-details drawer.
+    let apiDetails = null;
+    try {
+      apiDetails = await callifiedClient.fetchAndStoreCallDetails({
+        tenantId,
+        callifiedLeadId,
+        contactId: Number(contactId),
+        updateScore: true,
+        initiatedAt: logForLead.createdAt,
+      });
+    } catch (e) {
+      console.error(`[callified] fetchAndStoreCallDetails failed for lead ${callifiedLeadId}: ${e.message}`);
+    }
+    // Keep compatibility with callers/tests that provide only the older
+    // getCallDetails seam, and retain a read-only fallback if persistence fails.
+    if (!apiDetails) {
+      apiDetails = await callifiedClient.getCallDetails(tenantId, callifiedLeadId).catch((e) => {
+        console.error(`[callified] getCallDetails failed for lead ${callifiedLeadId}: ${e.message}`);
+        return { transcripts: [], reviews: [] };
+      });
+    }
+    if (apiDetails.callStatus) {
+      logForLead = { ...logForLead, status: apiDetails.callStatus };
+    }
     const apiReviews = Array.isArray(apiDetails.reviews) ? apiDetails.reviews : [];
     const noteReviews = (Array.isArray(notes.reviews) ? notes.reviews : []).filter(
       (nr) => nr && !nr.error && !apiReviews.some(
@@ -247,6 +271,8 @@ async function updateCallLogNotesWithReview(tenantId, contactId, review) {
       quality_score: review.quality_score,
       summary: review.summary,
       appointment_booked: review.appointment_booked,
+      call_outcome: review.call_outcome || review.callOutcome,
+      failure_reason: review.failure_reason,
       what_went_well: review.what_went_well,
       what_went_wrong: review.what_went_wrong,
       coaching_insight: review.coaching_insight,
@@ -265,7 +291,7 @@ function fallbackClassify(review, transcript) {
   if (!review) {
     const transcriptText = transcript?.transcript_text || transcript?.transcript || transcript?.text || "";
     if (String(transcriptText).trim().length > 10) {
-      return { status: CALL_STATUS.QUALIFIED, reason: "Real conversation detected; review pending." };
+      return { status: CALL_STATUS.PENDING, reason: "Real conversation detected; Callified result is pending." };
     }
     return { status: CALL_STATUS.YET_TO_CALL, reason: "No Callified review data available yet." };
   }
@@ -280,7 +306,36 @@ function fallbackClassify(review, transcript) {
   if (score <= 2) {
     return { status: CALL_STATUS.JUNK, reason: `Low Callified score ${score}/5.` };
   }
-  return { status: CALL_STATUS.JUNK, reason: `Neutral Callified score ${score}/5.` };
+  return { status: CALL_STATUS.PENDING, reason: `Neutral Callified score ${score}/5; follow-up is required.` };
+}
+
+function hasConclusionSignal(review) {
+  return Boolean(
+    review && (
+      review.call_outcome ||
+      review.callOutcome ||
+      isTruthy(review.appointment_booked)
+    )
+  );
+}
+
+function classifyConclusion(review) {
+  const appointmentBooked = isTruthy(review?.appointment_booked);
+  const outcome = String(review?.call_outcome || review?.callOutcome || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "_");
+
+  if (appointmentBooked || outcome === "appointment_booked") {
+    return { status: CALL_STATUS.QUALIFIED, reason: review?.summary || "Appointment booked." };
+  }
+  if (outcome === "not_interested") {
+    return { status: CALL_STATUS.JUNK, reason: review?.summary || "Customer is not interested." };
+  }
+  return {
+    status: CALL_STATUS.PENDING,
+    reason: review?.summary || "Call needs follow-up; no confirmed appointment or clear rejection.",
+  };
 }
 
 function isMissedCall(log) {
@@ -292,24 +347,32 @@ function isMissedCall(log) {
 function isActiveCall(log) {
   if (!log) return false;
   const status = String(log.status || "").toLowerCase();
-  // A live conversation is always active regardless of age.
-  if (status === "in_progress" || status === "connected" || status === "in_call" || status === "calling") return true;
+  const createdAt = log?.createdAt ? new Date(log.createdAt).getTime() : 0;
+  const ageMs = createdAt > 0 ? Date.now() - createdAt : Number.POSITIVE_INFINITY;
+  // Provider refreshes can fail or old provider records can disappear. Never
+  // trust a cached CONNECTED state forever: Callified calls are capped, and a
+  // state older than the pending-call threshold is necessarily stale.
+  if (status === "in_progress" || status === "connected" || status === "in_call" || status === "calling") {
+    const maxActiveAgeMs = Number(process.env.CALLIFIED_ACTIVE_CALL_MAX_MS) || 5 * 60 * 1000;
+    return ageMs >= 0 && ageMs < maxActiveAgeMs;
+  }
   // Ringing/dialing/initiated states are only "connecting" for a short window.
   // After that, the call clearly did not connect and should fall through to DNP.
   if (status === "initiated" || status === "dialing" || status === "ringing") {
-    const createdAt = log?.createdAt ? new Date(log.createdAt).getTime() : 0;
-    return createdAt > 0 && Date.now() - createdAt < 60 * 1000;
+    return ageMs >= 0 && ageMs < 60 * 1000;
   }
   return false;
 }
 
 function hasRealConversation(review, transcript) {
+  const outcome = String(review?.call_outcome || review?.callOutcome || "").trim();
+  if (outcome) return true;
   if (review && Number(review.quality_score) > 0) return true;
   const text = transcript?.transcript_text || transcript?.transcript || transcript?.text || "";
   return String(text).trim().length > 10;
 }
 
-async function classifyLeadStatus(tenantId, contactId, { userId = null } = {}) {
+async function classifyLeadStatus(tenantId, contactId) {
   const { hasCall, log, review, transcript } = await fetchLatestCallReviewForContact(tenantId, contactId);
 
   // "New" means the lead has never been dialed. Everything else is a call
@@ -340,85 +403,19 @@ async function classifyLeadStatus(tenantId, contactId, { userId = null } = {}) {
     return { status: CALL_STATUS.DNP, source: "score", reason: "Call was not answered / did not connect." };
   }
 
-  // Fallback classification is always computed from the Callified review/score.
-  // It acts as the source of truth when Gemini is unavailable, and as a guard
-  // rail when Gemini returns a result that contradicts hard signals.
+  // Callified's transcript conclusion is authoritative. Its score is the
+  // automatic fallback when an explicit outcome has not arrived yet; no
+  // second CRM LLM pass or user-facing mode switch is required.
   const fallback = fallbackClassify(review, transcript);
 
-  // If the tenant has disabled AI transcript classification, use the fallback.
-  const aiTranscriptEnabled = await getSetting(tenantId, KEYS.CALLIFIED_AI_TRANSCRIPT_ENABLED, {
-    coerce: (v) => String(v).toLowerCase() !== "false",
-  });
-  if (!aiTranscriptEnabled) {
-    console.log(`[callified] AI transcript classification disabled for tenant ${tenantId}; using score/appointment fallback for contact ${contactId}.`);
-    return { status: fallback.status, source: "score", reason: fallback.reason };
+  // Prefer Callified's explicit conclusion. If it has not arrived yet, use
+  // Callified's quality score; a conversation with neither remains Pending.
+  if (hasConclusionSignal(review)) {
+    const conclusion = classifyConclusion(review);
+    console.log(`[callified] classified contact ${contactId} as ${conclusion.status} from transcript conclusion`);
+    return { ...conclusion, source: "transcripts_api" };
   }
-
-  // If no Gemini key is configured, use the score/appointment fallback directly.
-  const geminiReady = await llmEnabled("callified-lead-status", tenantId).catch((e) => {
-    console.error(`[callified] llmEnabled check failed for tenant ${tenantId}: ${e.message}`);
-    return false;
-  });
-  if (!geminiReady) {
-    console.log(`[callified] No Gemini key available for tenant ${tenantId}; using score/appointment fallback for contact ${contactId}.`);
-    return { status: fallback.status, source: "score", reason: fallback.reason };
-  }
-
-  const transcriptText = transcript?.transcript_text || transcript?.transcript || transcript?.text || "";
-  const reviewPayload = review
-    ? {
-      sentiment: review.sentiment,
-      quality_score: review.quality_score,
-      appointment_booked: isTruthy(review.appointment_booked),
-      summary: review.summary,
-    }
-    : null;
-
-  const payload = {
-    transcript: transcriptText,
-    review: reviewPayload,
-    hasTranscript: !!transcriptText,
-    hasReview: !!reviewPayload,
-    __surface: "leads-callified-transcript",
-    __userId: userId,
-  };
-
-  try {
-    const result = await routeRequest({ task: "callified-lead-status", payload, tenantId });
-    let parsed;
-    try {
-      parsed = JSON.parse(result.text || "{}");
-    } catch (_) {
-      console.error(`[callified] Gemini returned non-JSON for contact ${contactId}: ${result.text}. Falling back to score.`);
-      return { status: fallback.status, source: "score", reason: fallback.reason };
-    }
-    let status = normalizeLeadStatus(parsed.status);
-    let source = "gemini";
-    let reason = parsed.reason || "Classified by Gemini";
-
-    // Guard rail: if Gemini contradicts hard Callified signals, trust the data.
-    const score = Number(review?.quality_score) || 0;
-    const appointmentBooked = isTruthy(review?.appointment_booked);
-    if (appointmentBooked || score >= 4) {
-      if (status !== CALL_STATUS.QUALIFIED) {
-        console.log(`[callified] Gemini returned ${status} but review signals qualified (appointment=${appointmentBooked}, score=${score}); overriding to qualified.`);
-        status = CALL_STATUS.QUALIFIED;
-        source = "score";
-        reason = fallback.reason;
-      }
-    } else if (score <= 2 && status === CALL_STATUS.QUALIFIED) {
-      console.log(`[callified] Gemini returned qualified but review score is low (${score}); overriding to junk.`);
-      status = CALL_STATUS.JUNK;
-      source = "score";
-      reason = fallback.reason;
-    }
-
-    console.log(`[callified] classified contact ${contactId} as ${status} (source=${source})`);
-    return { status, source, reason };
-  } catch (e) {
-    console.error(`[callified] Gemini classification failed for contact ${contactId}: ${e.message}`);
-    return { status: fallback.status, source: "score", reason: fallback.reason };
-  }
+  return { status: fallback.status, source: "score", reason: fallback.reason };
 }
 
 async function assignQualifiedLead(tenantId, contactId, status, options = {}) {
@@ -583,6 +580,7 @@ module.exports = {
   normalizeLeadStatus,
   isTruthy,
   fallbackClassify,
+  classifyConclusion,
   isMissedCall,
   isActiveCall,
   hasRealConversation,

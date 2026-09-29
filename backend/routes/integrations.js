@@ -781,8 +781,12 @@ router.get("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, 
 
     res.json({
       apiKey: row?.token ? "••••••••••••••••" : "",
-      email: settings.email || "",
-      password: settings.password ? "••••••••••••••••" : "",
+      // Never return fallback credentials to the browser. Besides reducing
+      // exposure, blank fields prevent saved login details from becoming
+      // editable form state in another tenant's browser session.
+      email: "",
+      password: "",
+      hasFallbackAuth: !!(settings.email && settings.password),
       baseUrl: settings.baseUrl || envBaseUrl,
       webhookSecret: settings.webhookSecret ? "••••••••••••••••" : "",
       isActive: !!row?.isActive,

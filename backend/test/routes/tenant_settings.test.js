@@ -206,6 +206,21 @@ describe('GET /api/tenant-settings/:key', () => {
     // string regardless of whether an override row exists.
     expect(res.body.value).toBe(String(DEFAULTS[KEYS.RATEHAWK_MONTHLY_CAP_USD_CENTS]));
   });
+
+  test('automatic Leads refresh is enabled by default when no override exists', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get(`/api/tenant-settings/${KEYS.CALLIFIED_AUTO_REFRESH_ENABLED}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      key: KEYS.CALLIFIED_AUTO_REFRESH_ENABLED,
+      value: 'true',
+      defaultValue: 'true',
+      isOverride: false,
+    });
+  });
 });
 
 describe('PUT /api/tenant-settings/:key', () => {

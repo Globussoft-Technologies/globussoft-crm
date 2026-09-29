@@ -494,7 +494,39 @@ describe('POST /api/integrations/disconnect — ADMIN gate + soft disable', () =
   });
 });
 
-// ─── PUT /callified/config ─────────────────────────────────────────────
+// ─── GET/PUT /callified/config ─────────────────────────────────────────
+
+describe('GET /api/integrations/callified/config — tenant-safe credential response', () => {
+  test('uses the authenticated tenant and never returns stored fallback credentials', async () => {
+    prisma.integration.findUnique.mockResolvedValue({
+      token: 'generic-tenant-api-key',
+      settings: JSON.stringify({
+        email: 'wellness-user@example.com',
+        password: 'wellness-password',
+        baseUrl: 'https://tenant.callified.example.com',
+      }),
+      isActive: true,
+      updatedAt: new Date('2026-09-28T10:00:00Z'),
+    });
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/integrations/callified/config');
+
+    expect(res.status).toBe(200);
+    expect(prisma.integration.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_provider: { tenantId: 42, provider: 'callified' } },
+    });
+    expect(res.body).toMatchObject({
+      email: '',
+      password: '',
+      hasFallbackAuth: true,
+      isActive: true,
+      baseUrl: 'https://tenant.callified.example.com',
+    });
+    expect(JSON.stringify(res.body)).not.toContain('wellness-user@example.com');
+    expect(JSON.stringify(res.body)).not.toContain('wellness-password');
+  });
+});
 
 describe('PUT /api/integrations/callified/config — cached JWT invalidation', () => {
   test('successful credential update clears the current tenant token cache', async () => {

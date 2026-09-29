@@ -225,6 +225,35 @@ describe("<Settings /> — page shell + representative card pin", () => {
     );
   });
 
+  it("keeps Callified fallback credentials blank and opts out of login autofill", async () => {
+    const defaultFetch = buildDefaultFetch();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/integrations/callified/config") {
+        return Promise.resolve({
+          isActive: true,
+          apiKey: "••••••••••••••••",
+          email: "wellness-user@example.com",
+          password: "••••••••••••••••",
+          baseUrl: "https://tenant.callified.example.com",
+        });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderSettings();
+    await screen.findByRole("heading", { name: /Callified Integration/i });
+
+    const email = document.getElementById("callified-fallback-email");
+    const password = document.getElementById("callified-fallback-password");
+    expect(email).toHaveValue("");
+    expect(password).toHaveValue("");
+    expect(email).toHaveAttribute("autocomplete", "off");
+    expect(email).toHaveAttribute("data-form-type", "other");
+    expect(password).toHaveAttribute("autocomplete", "new-password");
+    expect(password).toHaveAttribute("data-1p-ignore", "true");
+    expect(email.closest("form")).toHaveAttribute("autocomplete", "off");
+  });
+
   it("renders travel admin promotional hosting settings and saves the selected transfer mapping", async () => {
     const user = userEvent.setup();
     const travelTenant = { ...baseTenant, vertical: "travel" };

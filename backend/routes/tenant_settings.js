@@ -80,10 +80,41 @@ function validateTenantSettingValue(key, rawValue) {
       return { ok: false, code: "INVALID_DNP_MAX_RETRIES", error: "DNP max retries must be an integer between 1 and 10." };
     }
   }
+  if (key === KEYS.CALLIFIED_PENDING_RETRY_MAX_RETRIES) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      return { ok: false, code: "INVALID_PENDING_MAX_RETRIES", error: "Pending max retries must be an integer between 1 and 10." };
+    }
+  }
   if (key === KEYS.CALLIFIED_DNP_RETRY_INTERVAL_MINUTES) {
     const n = Number(rawValue);
-    if (!Number.isInteger(n) || n < 5 || n > 24 * 60) {
-      return { ok: false, code: "INVALID_DNP_INTERVAL", error: "DNP retry interval must be an integer between 5 minutes and 24 hours." };
+    if (!Number.isInteger(n) || n < 5 || n > 30 * 24 * 60) {
+      return { ok: false, code: "INVALID_DNP_INTERVAL", error: "DNP retry interval must be between 5 minutes and 30 days." };
+    }
+  }
+  if (key === KEYS.CALLIFIED_PENDING_RETRY_INTERVAL_MINUTES) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 5 || n > 30 * 24 * 60) {
+      return { ok: false, code: "INVALID_PENDING_INTERVAL", error: "Pending retry interval must be between 5 minutes and 30 days." };
+    }
+  }
+  if ([KEYS.CALLIFIED_DNP_RETRY_MODE, KEYS.CALLIFIED_PENDING_RETRY_MODE].includes(key) && !["delay", "scheduled"].includes(String(rawValue))) {
+    return { ok: false, code: "INVALID_RETRY_MODE", error: "Retry mode must be delay or scheduled." };
+  }
+  if ([KEYS.CALLIFIED_DNP_RETRY_DAY_INTERVAL, KEYS.CALLIFIED_PENDING_RETRY_DAY_INTERVAL].includes(key)) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 1 || n > 30) {
+      return { ok: false, code: "INVALID_RETRY_DAY_INTERVAL", error: "Retry day interval must be between 1 and 30 days." };
+    }
+  }
+  if ([KEYS.CALLIFIED_DNP_RETRY_TIME_LOCAL, KEYS.CALLIFIED_PENDING_RETRY_TIME_LOCAL].includes(key) && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(rawValue))) {
+    return { ok: false, code: "INVALID_RETRY_TIME", error: "Retry time must use HH:mm format." };
+  }
+  if (key === KEYS.CALLIFIED_RETRY_TIMEZONE) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: String(rawValue) }).format(new Date());
+    } catch {
+      return { ok: false, code: "INVALID_RETRY_TIMEZONE", error: "Retry timezone must be a valid IANA timezone." };
     }
   }
   return { ok: true };

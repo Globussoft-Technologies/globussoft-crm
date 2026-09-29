@@ -48,6 +48,7 @@ function dialKey(tenantId, contactId) {
 const DIALABLE_CALL_STATUSES = new Set([
   CALL_STATUS.YET_TO_CALL,
   CALL_STATUS.DNP,
+  CALL_STATUS.PENDING,
 ]);
 
 function isDialable(contact) {
@@ -163,6 +164,10 @@ async function runDelayedClassification(tenantId, contactId, userId, attempt = 1
     } else if (classification.status === CALL_STATUS.DNP) {
       await getDnpRetryEngine().scheduleDnpRetry(tenantId, contactId).catch((e) => {
         console.error(`[callifiedAutoDial] scheduleDnpRetry failed for contact ${contactId}:`, e.message);
+      });
+    } else if (classification.status === CALL_STATUS.PENDING) {
+      await getDnpRetryEngine().schedulePendingRetry(tenantId, contactId).catch((e) => {
+        console.error(`[callifiedAutoDial] schedulePendingRetry failed for contact ${contactId}:`, e.message);
       });
     }
 

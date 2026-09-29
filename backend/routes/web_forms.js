@@ -854,7 +854,7 @@ function buildEmbedCode(form, origin) {
   return [
     "<!-- Globussoft CRM web form -->",
 
-    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" allow="geolocation" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
     '<script>(function(frame){if(!frame)return;function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}}window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>',
   ].join("\n");
 }

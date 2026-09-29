@@ -156,6 +156,7 @@
       var resizeTimer = null;
       var hostContext = {};
       var localeCountryDetectionStarted = false;
+      var phoneCountryDetectionStarted = false;
 
 
 
@@ -191,6 +192,13 @@
       Object.keys(phoneCountryIsoByCode).forEach(function(code){ phoneCountryCodeByIso[phoneCountryIsoByCode[code]] = code; });
       phoneCountryCodeByIso.CA = '+1';
       phoneCountryCodeByIso.KZ = '+7';
+      var phoneCountryIsoByTimeZone = {
+        'Europe/Berlin':'DE', 'Europe/London':'GB', 'Europe/Paris':'FR', 'Europe/Moscow':'RU',
+        'Asia/Kolkata':'IN', 'Asia/Dubai':'AE', 'Asia/Tokyo':'JP', 'Asia/Shanghai':'CN',
+        'Asia/Singapore':'SG', 'Asia/Seoul':'KR', 'Australia/Sydney':'AU',
+        'America/New_York':'US', 'America/Chicago':'US', 'America/Denver':'US',
+        'America/Los_Angeles':'US', 'America/Toronto':'CA', 'America/Sao_Paulo':'BR'
+      };
       function phoneCountryFlag(code){
         var iso = phoneCountryIsoByCode[code];
         if (!iso) return '🌐';
@@ -227,12 +235,55 @@
         var detectedCode = phoneCountryCodeByIso[String(iso || '').toUpperCase()];
         if (!detectedCode || !Array.from(country.options).some(function(option){ return option.value === detectedCode; })) return;
         if (restrictedCountries && allowedCountries.indexOf(detectedCode) === -1) return;
-        if (String(input.value || '').trim() || phoneState.userEnteredPhone || phoneState.userSelectedCountry) return;
+        if (phoneState.userEnteredPhone || phoneState.userSelectedCountry) return;
         phoneState.applyingDetectedCountry = true;
         country.value = detectedCode;
         country.dispatchEvent(new Event('change'));
         phoneState.applyingDetectedCountry = false;
         applyRule();
+      }
+      function applyDetectedPhoneCountry(country, detectedIso, input, allowedCountries, restrictedCountries, applyRule, phoneState){
+        var detectedCode = phoneCountryCodeByIso[String(detectedIso || '').toUpperCase()];
+        if (!detectedCode || !Array.from(country.options).some(function(option){ return option.value === detectedCode; })) return false;
+        if (restrictedCountries && allowedCountries.indexOf(detectedCode) === -1) return false;
+        if (phoneState.userEnteredPhone || phoneState.userSelectedCountry) return false;
+        phoneState.applyingDetectedCountry = true;
+        country.value = detectedCode;
+        country.dispatchEvent(new Event('change'));
+        phoneState.applyingDetectedCountry = false;
+        applyRule();
+        return true;
+      }
+      function fetchJsonWithTimeout(url, timeoutMs){
+        var controller = typeof AbortController === 'function' ? new AbortController() : null;
+        var timer = controller ? setTimeout(function(){ controller.abort(); }, timeoutMs) : null;
+        return fetch(url, { headers: { 'Accept': 'application/json' }, signal: controller ? controller.signal : undefined })
+          .then(function(response){ if (!response.ok) throw new Error('country lookup failed'); return response.json(); })
+          .finally(function(){ if (timer) clearTimeout(timer); });
+      }
+      function detectGenericCountryFromLocationOrIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState){
+        if (scope !== 'generic' || phoneCountryDetectionStarted) return;
+        phoneCountryDetectionStarted = true;
+        var apply = function(iso){ return applyDetectedPhoneCountry(country, iso, input, allowedCountries, restrictedCountries, applyRule, phoneState); };
+        var lookupIp = function(){ return fetchJsonWithTimeout('https://ipapi.co/json/', 2500).then(function(result){ return result && result.country_code; }); };
+        var lookupLocation = function(){
+          return new Promise(function(resolve, reject){
+            if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== 'function') { reject(new Error('location unavailable')); return; }
+            navigator.geolocation.getCurrentPosition(function(position){
+              var coords = position.coords;
+              fetchJsonWithTimeout('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=3&lat=' + encodeURIComponent(coords.latitude) + '&lon=' + encodeURIComponent(coords.longitude), 3000)
+                .then(function(result){ resolve(result && result.address && result.address.country_code); }, reject);
+            }, reject, { timeout: 3000, maximumAge: 86400000 });
+          });
+        };
+        lookupLocation().then(function(iso){ if (!apply(iso)) detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState); })
+          .catch(function(){ return lookupIp().then(function(iso){ if (!apply(iso)) detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState); }); })
+          .catch(function(){ detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState); });
+      }
+      function detectGenericCountryFromTimeZone(country, input, allowedCountries, restrictedCountries, applyRule, phoneState){
+        var timeZone = '';
+        try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_error) {}
+        return applyDetectedPhoneCountry(country, phoneCountryIsoByTimeZone[timeZone], input, allowedCountries, restrictedCountries, applyRule, phoneState);
       }
       function setupGenericPhone(){
         if (scope !== 'generic') return;
@@ -274,7 +325,8 @@
           applyRule();
         });
         applyRule();
-        detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
+        detectGenericCountryFromTimeZone(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
+        detectGenericCountryFromLocationOrIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
       }
       window.addEventListener('message', function(event){ if(event.data && event.data.source === 'gbs-web-form-host' && event.data.type === 'context'){ hostContext = { pageUrl: String(event.data.pageUrl || ''), pageTitle: String(event.data.pageTitle || '') }; } });
 

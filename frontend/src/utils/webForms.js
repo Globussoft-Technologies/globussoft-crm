@@ -26,7 +26,9 @@ export function slugifyWebFormName(value, fallback = "web-form") {
 export function buildWebFormPreviewUrl(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
   const preview = encodeURIComponent(JSON.stringify(form || {}));
-  return base + '/embed/web-form.html#preview=' + preview;
+  // Preview forms are local development surfaces and must not retain a stale
+  // cached copy of the embedded runtime after it changes.
+  return base + '/embed/web-form.html?previewVersion=' + Date.now() + '#preview=' + preview;
 }
 
 export function buildPublicUrl(form, origin) {
@@ -45,7 +47,7 @@ export function buildWebFormEmbedCode(form, origin) {
   const title = escapeHtml(form?.name || 'Web form');
   return [
     '<!-- Globussoft CRM web form -->',
-    `<iframe src="${base}/embed/web-form.html?${query}" title="${title}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}" title="${title}" allow="geolocation" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
     '<script>(function(frame){window.addEventListener("message",function(event){if(!frame||event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form"||event.data.type!=="size")return;var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}});})(document.currentScript.previousElementSibling);</script>',
     `<p><a href="${buildPublicUrl(form, origin)}" target="_blank" rel="noopener noreferrer">Open public form</a></p>`,
   ].join('\n');

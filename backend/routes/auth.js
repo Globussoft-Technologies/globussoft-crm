@@ -408,7 +408,7 @@ router.post("/check-organization-name", registerLimiter, async (req, res) => {
 // HTTP response goes out before the SendGrid round-trip even completes,
 // so timing is also identical. On dev/local with no API key, the link
 // is logged to stdout so QA can still complete the flow.
-async function sendPasswordResetEmail(toEmail, token, frontendBase) {
+async function sendPasswordResetEmail(toEmail, token, frontendBase, brandName = "Globussoft CRM") {
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
   const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
   const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
@@ -422,10 +422,10 @@ async function sendPasswordResetEmail(toEmail, token, frontendBase) {
     const payload = {
       personalizations: [{ to: [{ email: toEmail }] }],
       from: { email: FROM_EMAIL },
-      subject: "Reset your Globussoft CRM password",
+      subject: `Reset your ${brandName} password`,
       content: [
-        { type: "text/plain", value: `Click this link to reset your Globussoft CRM password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.` },
-        { type: "text/html", value: `<p>Click the link below to reset your Globussoft CRM password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>` }
+        { type: "text/plain", value: `Click this link to reset your ${brandName} password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.` },
+        { type: "text/html", value: `<p>Click the link below to reset your ${brandName} password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>` }
       ]
     };
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
@@ -1520,10 +1520,25 @@ router.post("/forgot-password", async (req, res) => {
       // suffix so a deployment whose FRONTEND_URL is mistakenly set to the
       // API base (e.g. https://host/api) still produces a working SPA link
       // instead of https://host/api/reset-password → "Authentication required".
-      const frontendBase = (process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`)
+      // Use TMC branding only for its explicitly approved production and
+      // local origins. Do not derive reset links from arbitrary Host headers.
+      const requestOrigin = req.get("origin") || "";
+      const tmcOrigins = new Set([
+        "https://app.themodernclassroom.in",
+        "http://tmc.localhost:5173",
+      ]);
+      const isTmcOrigin = tmcOrigins.has(requestOrigin);
+      const frontendBase = (isTmcOrigin
+        ? requestOrigin
+        : process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`)
         .replace(/\/+$/, "")
         .replace(/\/api$/i, "");
-      sendPasswordResetEmail(user.email, token, frontendBase).catch(() => { });
+      sendPasswordResetEmail(
+        user.email,
+        token,
+        frontendBase,
+        isTmcOrigin ? "The Modern Classroom" : "Globussoft CRM",
+      ).catch(() => { });
     }
 
     // Identical body for known + unknown emails (anti-enumeration). Token

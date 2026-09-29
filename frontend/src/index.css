@@ -1,5 +1,19 @@
 @import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap");
 
+.login-logo--tmc-dark {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  clip-path: inset(0 0 47% 30%);
+  pointer-events: none;
+}
+
+html[data-theme="dark"] .login-logo--tmc-dark {
+  display: block;
+}
+
 :root {
   --bg-color: #0b0c10;
   --surface-color: rgba(22, 24, 29, 0.4);
@@ -2364,13 +2378,16 @@ body[data-vertical="travel"] .app-sidebar {
 
 body[data-vertical="travel"] .travel-sidebar-header {
   margin-bottom: 0 !important;
-  gap: 0.6rem !important;
+  gap: 0.5rem !important;
 }
 
 body[data-vertical="travel"] .travel-sidebar-brand-name {
   color: var(--text-primary);
-  font-size: 0.98rem !important;
-  white-space: nowrap;
+  font-size: 0.9rem !important;
+  font-weight: 650 !important;
+  line-height: 1.2 !important;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 body[data-vertical="travel"] .travel-sidebar-logo {
@@ -2379,11 +2396,28 @@ body[data-vertical="travel"] .travel-sidebar-logo {
   border-radius: 8px !important;
 }
 
+body[data-vertical="travel"] .travel-sidebar-logo--tmc {
+  width: 46px !important;
+  height: 46px !important;
+  object-fit: contain !important;
+  background: transparent !important;
+  border-radius: 50% !important;
+}
+
+/* Use the square TMC mark in dark mode, including when a wide saved logo
+   would otherwise be cropped into the sidebar's small logo slot. */
+html[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-logo--tmc {
+  content: url("/tmc-logo.png");
+  object-fit: contain !important;
+  background: transparent !important;
+  border-radius: 50% !important;
+}
+
 body[data-vertical="travel"] .travel-sidebar-collapse {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   margin-left: auto;
   border: 0;
   border-radius: 10px;

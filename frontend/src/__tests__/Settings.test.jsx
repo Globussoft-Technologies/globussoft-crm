@@ -357,6 +357,26 @@ describe("<Settings /> — page shell + representative card pin", () => {
     });
   });
 
+  it("saves organization details when the blank review redirect has no override", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/tenant-settings/travel.externalReviewUrl" && opts?.method === "DELETE") {
+        return Promise.reject(Object.assign(new Error("Tenant setting not found"), { status: 404 }));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    renderSettings();
+    await screen.findByDisplayValue("Acme Corp");
+    fireEvent.click(screen.getByRole("button", { name: /Save Organization Details/i }));
+
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith("Organization details updated"));
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      "/api/tenant-settings/travel.externalReviewUrl",
+      expect.objectContaining({ method: "DELETE", silent: true }),
+    );
+    expect(notifyObj.error).not.toHaveBeenCalled();
+  });
+
   // 5 — Appearance card theme radios
   it("renders the three theme options under the Appearance card and clicking one calls setTheme + notify.success", async () => {
     const user = userEvent.setup();

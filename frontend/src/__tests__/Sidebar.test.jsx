@@ -47,6 +47,13 @@ import { ActiveSubBrandProvider } from '../utils/subBrand';
 const notifyObj = { error: vi.fn(), success: vi.fn(), info: vi.fn(), confirm: vi.fn() };
 const socketObj = { on: vi.fn(), disconnect: vi.fn() };
 const ACTIVE_SUB_BRAND_STORAGE_KEY = 'travel.activeSubBrand';
+const { defaultBranding } = vi.hoisted(() => ({
+  defaultBranding: { name: 'Globussoft CRM', logoUrl: '/globussoft-logo-pdf.png', faviconUrl: '/logo-header-nobg.png' },
+}));
+vi.mock('../utils/domainBranding', () => ({
+  getDomainBranding: () => defaultBranding,
+  applyDomainBranding: vi.fn(),
+}));
 
 vi.mock('../utils/adsgpt', () => ({
   launchAdsGptAs: vi.fn(),
@@ -270,6 +277,9 @@ function renderSidebar({
 }
 
 beforeEach(() => {
+  defaultBranding.name = 'Globussoft CRM';
+  defaultBranding.logoUrl = '/globussoft-logo-pdf.png';
+  defaultBranding.faviconUrl = '/logo-header-nobg.png';
   consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
     const first = String(args[0] ?? '');
     if (
@@ -807,11 +817,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(heading.textContent).toBe('Globussoft Enterprise');
     });
 
+    it('wraps a long organization name instead of truncating it', () => {
+      renderSidebar({ tenantName: 'The modern classroom', vertical: 'travel' });
+      const heading = screen.getByRole('heading', { level: 1 });
+      expect(heading).toHaveTextContent('The modern classroom');
+      expect(heading.style.whiteSpace).toBe('normal');
+      expect(heading.style.textOverflow).not.toBe('ellipsis');
+    });
+
     it('renders a logo image with the tenant name as alt text', () => {
-      // Drift: the header now always renders the bundled
-      // /globussoft-logo.png asset (tenant.logoUrl is no longer wired into the
-      // header img src). The alt text still reflects tenant.name, which is the
-      // contract that screen-reader announcement actually depends on.
       renderSidebar({
         tenantName: 'Brand X',
         logoUrl: 'https://cdn.example.test/logo.png',
@@ -822,7 +836,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(img.getAttribute('alt')).toBe('Brand X');
     });
 
-    it('falls back to "Globussoft" when tenant has no name', () => {
+    it('uses the domain title when tenant has no name', () => {
       // null tenant.name path
       render(
         <MemoryRouter initialEntries={['/dashboard']}>
@@ -841,7 +855,29 @@ describe('Sidebar — load-bearing render surface', () => {
         </MemoryRouter>,
       );
       const heading = screen.getByRole('heading', { level: 1 });
-      expect(heading.textContent).toBe('Globussoft');
+      expect(heading.textContent).toBe('Globussoft CRM');
+      expect(screen.getByRole('img', { name: 'Globussoft CRM' })).toHaveAttribute('src', '/logo-header-nobg.png');
+    });
+
+    it('uses the domain logo by default and a saved logo and title from Settings when present', () => {
+      defaultBranding.name = 'The Modern Classroom';
+      defaultBranding.logoUrl = '/tmc.png';
+      defaultBranding.faviconUrl = '/tmc-logo.png';
+      const { unmount } = renderSidebar({ tenantName: 'The Modern Classroom', vertical: 'travel' });
+      const defaultLogo = screen.getByRole('img', { name: 'The Modern Classroom' });
+      expect(defaultLogo).toHaveAttribute('src', '/tmc-logo.png');
+      expect(defaultLogo).toHaveClass('travel-sidebar-logo--tmc');
+      unmount();
+
+      renderSidebar({
+        tenantName: 'The modern school',
+        logoUrl: '/uploads/custom-logo.png',
+        vertical: 'travel',
+      });
+      const customLogo = screen.getByRole('img', { name: 'The modern school' });
+      expect(customLogo).toHaveAttribute('src', '/uploads/custom-logo.png');
+      fireEvent.error(customLogo);
+      expect(customLogo).toHaveAttribute('src', '/tmc-logo.png');
     });
   });
 

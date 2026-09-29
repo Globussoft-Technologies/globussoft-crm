@@ -24,6 +24,7 @@ import Avatar from "./Avatar";
 // user cannot dismiss it until they pay (or sign out).
 import SubscriptionGate from "./SubscriptionGate";
 import { AuthContext, ThemeContext } from "../App";
+import { getDomainBranding } from "../utils/domainBranding";
 import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
@@ -282,7 +283,10 @@ const Layout = () => {
   // #704: document.title reflects tenant.name so operators with many open
   // tabs can pick out the CRM tab fast. Falls back to the app-wide brand.
   useEffect(() => {
-    document.title = tenant?.name ? `${tenant.name} — CRM` : "Globussoft CRM";
+    const branding = getDomainBranding();
+    document.title = branding.title !== "Globussoft CRM"
+      ? branding.title
+      : tenant?.name ? `${tenant.name} — CRM` : branding.title;
   }, [tenant?.name]);
 
   const handleLogout = async () => {

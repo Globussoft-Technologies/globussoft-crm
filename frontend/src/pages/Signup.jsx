@@ -3,8 +3,10 @@ import { useNavigate, Link } from "react-router-dom";
 import { AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
 import EmailOtpField from "../components/EmailOtpField";
+import { getDomainBranding } from "../utils/domainBranding";
 
 const Signup = () => {
+  const branding = getDomainBranding();
   const [name, setName] = useState("");
   const [organizationName, setOrganizationName] = useState("");
   const [organizationNameTaken, setOrganizationNameTaken] = useState(false);
@@ -108,17 +110,24 @@ const Signup = () => {
         style={{ width: "100%", maxWidth: "420px", padding: "2rem" }}
       >
         <div style={{ textAlign: "center", marginBottom: "2rem" }}>
-          <img
-            src="/globussoft-logo-pdf.png"
-            alt="Globussoft CRM"
-            style={{
-              maxWidth: "280px",
-              height: "auto",
-              marginBottom: "1rem",
-              display: "block",
-              margin: "0 auto 1rem auto",
-            }}
-          />
+          {branding.logoUrl === "/tmc.png" ? (
+            <span className="login-logo--tmc" style={{ display: "block", maxWidth: "280px", margin: "0 auto 1rem auto", position: "relative" }}>
+              <img src={branding.logoUrl} alt={branding.name} style={{ display: "block", width: "100%", height: "auto" }} />
+              <img className="login-logo--tmc-dark" src="/tmc-dark.png" alt="" aria-hidden="true" />
+            </span>
+          ) : (
+            <img
+              src={branding.logoUrl}
+              alt={branding.name}
+              style={{
+                maxWidth: "280px",
+                height: "auto",
+                marginBottom: "1rem",
+                display: "block",
+                margin: "0 auto 1rem auto",
+              }}
+            />
+          )}
           <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem" }}>
             Create your organization
           </p>

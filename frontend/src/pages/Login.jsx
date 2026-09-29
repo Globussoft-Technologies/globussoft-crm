@@ -4,6 +4,7 @@ import { Mail, Square } from "lucide-react";
 import { AuthContext, ThemeContext } from "../App";
 import { safeNext } from "../utils/safeNext";
 import { resolveThemePreference } from "../utils/themePreference";
+import { getDomainBranding } from "../utils/domainBranding";
 import PasswordInput from "../components/PasswordInput";
 
 // SSO providers (Google / Microsoft) hidden for now — pending tenant-level
@@ -20,6 +21,7 @@ const SHOW_QUICK_LOGIN =
   !HIDE_QUICK_LOGIN_HOSTS.has(window.location.hostname);
 
 const Login = () => {
+  const branding = getDomainBranding();
   // Read URL params up-front so the email field can be pre-filled from the
   // marketing-site handoff (?email=...) instead of the demo default.
   const _initialSearchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
@@ -460,7 +462,8 @@ const Login = () => {
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
-        height: "100vh",
+        minHeight: "100vh",
+        padding: "1.5rem 1rem",
       }}
     >
       <div
@@ -468,21 +471,28 @@ const Login = () => {
         style={{ width: "100%", maxWidth: "400px", padding: "2rem" }}
       >
         <div style={{ textAlign: "center", marginBottom: "2rem" }}>
-          <img
-            src="/globussoft-logo-pdf.png"
-            alt="Globussoft CRM"
-            style={{
-              maxWidth: "280px",
-              height: "auto",
-              marginBottom: "1rem",
-              display: "block",
-              margin: "0 auto 1rem auto",
-            }}
-          />
+          {branding.logoUrl === "/tmc.png" ? (
+            <span className="login-logo--tmc" style={{ display: "block", maxWidth: "280px", margin: "0 auto 1rem auto", position: "relative" }}>
+              <img src={branding.logoUrl} alt={branding.name} style={{ display: "block", width: "100%", height: "auto" }} />
+              <img className="login-logo--tmc-dark" src="/tmc-dark.png" alt="" aria-hidden="true" />
+            </span>
+          ) : (
+            <img
+              src={branding.logoUrl}
+              alt={branding.name}
+              style={{
+                maxWidth: "280px",
+                height: "auto",
+                marginBottom: "1rem",
+                display: "block",
+                margin: "0 auto 1rem auto",
+              }}
+            />
+          )}
           <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem" }}>
             {require2FA
               ? "Two-factor verification required"
-              : "Sign into your CRM account"}
+              : "Sign into your account"}
           </p>
         </div>
 
@@ -1022,7 +1032,7 @@ const Login = () => {
               }}
             >
               <span style={{ color: "var(--text-secondary)" }}>
-                Don't have an account?{" "}
+                Create an organization?{" "}
               </span>
               <Link
                 to="/signup"

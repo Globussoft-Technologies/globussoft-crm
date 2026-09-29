@@ -70,7 +70,7 @@ const URL_TOKEN_RE = /^https?:\/\/[^/]+/i;
 // Loopback origin with any (or no) port — http://localhost:5174,
 // http://127.0.0.1:5173, etc. Used for the non-production dev bypass in
 // originCheck(); see the comment at that call site.
-const LOOPBACK_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+const LOOPBACK_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|tmc\.localhost)(:\d+)?$/i;
 
 /**
  * Build the allowlist of origins permitted to make state-changing requests.
@@ -81,6 +81,7 @@ function buildAllowlist() {
   const defaults = [
     "https://crm.globusdemos.com",
     "http://localhost:5173",
+    "http://tmc.localhost:5173",
     "http://localhost:5000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5000",
@@ -94,6 +95,7 @@ function buildAllowlist() {
     "https://app.empcloud.com",
     "https://themodernclassroom.in",
     "https://www.themodernclassroom.in",
+    "https://app.themodernclassroom.in",
   ];
   const envOne = process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [];
   const envMany = process.env.CORS_ALLOWED_ORIGINS

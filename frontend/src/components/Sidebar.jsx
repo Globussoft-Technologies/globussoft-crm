@@ -150,6 +150,7 @@ import { getGenericAccessByPath } from "../utils/sidebarSearch";
 // by the fallback-resolved effective brand for the active sub-brand  never
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
 import { useEffectiveBrand } from "../hooks/useEffectiveBrand";
+import { getDomainBranding } from "../utils/domainBranding";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -575,7 +576,9 @@ const Sidebar = ({
     },
     [setActiveSubBrand, navigate],
   );
-  const brand = tenant?.name || "Globussoft";
+  const defaultBranding = getDomainBranding();
+  const sidebarDefaultLogoUrl = defaultBranding.faviconUrl || defaultBranding.logoUrl;
+  const brand = tenant?.name || defaultBranding.name;
   // Single logo source (2026-07-08): the active sub-brand's fallback-resolved
   // logo when one exists, else the tenant-wide default  never both shown
   // at once. Non-travel tenants (effectiveBrand always resolved with
@@ -1107,11 +1110,14 @@ const Sidebar = ({
           }}
         >
           <img
-            className="travel-sidebar-logo"
-            src={logoUrl || "/globussoft-logo.png"}
+            className={`travel-sidebar-logo${defaultBranding.logoUrl === "/tmc.png" ? " travel-sidebar-logo--tmc" : ""}`}
+            src={logoUrl || sidebarDefaultLogoUrl}
             alt={brand}
             onError={(e) => {
-              if (e.currentTarget.src.indexOf("/globussoft-logo.png") === -1) {
+              const failedUrl = e.currentTarget.getAttribute("src");
+              if (failedUrl !== sidebarDefaultLogoUrl) {
+                e.currentTarget.src = sidebarDefaultLogoUrl;
+              } else if (failedUrl !== "/globussoft-logo.png") {
                 e.currentTarget.src = "/globussoft-logo.png";
               }
             }}
@@ -1139,8 +1145,8 @@ const Sidebar = ({
               margin: 0,
               minWidth: 0,
               flex: 1,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              whiteSpace: "normal",
+              overflowWrap: "break-word",
             }}
           >
             {brand}

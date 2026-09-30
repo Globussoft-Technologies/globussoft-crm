@@ -939,7 +939,7 @@ function buildLeadStatusTooltip(lead, { maxRetries = 3 } = {}) {
   const parts = [`Basis: ${sourceLabel}`];
   if (reason) parts.push(`Reason: ${reason}`);
   if (
-    lead.callifiedLeadStatus === CALL_STATUS.DNP &&
+    [CALL_STATUS.DNP, CALL_STATUS.PENDING].includes(normalizeCallStatus(lead.callifiedLeadStatus)) &&
     typeof lead.callifiedDnpRetryCount === "number"
   ) {
     parts.push(`Retry: ${lead.callifiedDnpRetryCount}/${maxRetries}`);
@@ -966,6 +966,7 @@ const CALL_STATUS = {
   YET_TO_CALL: "yet_to_call",
   CONNECTED: "connected",
   DNP: "dnp",
+  PENDING: "pending",
   QUALIFIED: "qualified",
   JUNK: "junk",
 };
@@ -979,6 +980,7 @@ const CALL_STATUS_OPTIONS = [
   },
   { value: CALL_STATUS.JUNK, label: "Junk", color: "#fff", bg: "#ef4444" },
   { value: CALL_STATUS.DNP, label: "DNP", color: "#fff", bg: "#6b7280" },
+  { value: CALL_STATUS.PENDING, label: "Pending", color: "#fff", bg: "#8b5cf6" },
   {
     value: CALL_STATUS.CONNECTED,
     label: "Connecting",
@@ -998,6 +1000,8 @@ function normalizeCallStatus(raw) {
   const s = String(raw).toLowerCase().trim().replace(/\s+/g, "_");
   if (s === "hot" || s.includes("qualified")) return CALL_STATUS.QUALIFIED;
   if (s === "cold" || s.includes("junk")) return CALL_STATUS.JUNK;
+  if (s.includes("pending") || s.includes("follow_up") || s.includes("unclear"))
+    return CALL_STATUS.PENDING;
   if (s.includes("dnp") || s.includes("not_picked") || s.includes("no_answer"))
     return CALL_STATUS.DNP;
   if (
@@ -1015,6 +1019,89 @@ function getCallStatusMeta(raw) {
   return (
     CALL_STATUS_OPTIONS.find((o) => o.value === normalized) ||
     CALL_STATUS_OPTIONS.find((o) => o.value === CALL_STATUS.YET_TO_CALL)
+  );
+}
+
+const RETRY_TIMEZONES = [
+  "UTC", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Europe/London",
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "Australia/Sydney",
+];
+
+function RetryTimingControls({
+  prefix, mode, onModeChange, intervalMinutes, onIntervalChange,
+  dayInterval, onDayIntervalChange, timeLocal, onTimeLocalChange,
+  timezone, onTimezoneChange, disabled,
+}) {
+  const days = Math.floor(intervalMinutes / 1440);
+  const hours = Math.floor((intervalMinutes % 1440) / 60);
+  const minutes = intervalMinutes % 60;
+  const clampDelay = (nextDays, nextHours, nextMinutes) => Math.max(
+    5,
+    Math.min(30 * 1440, nextDays * 1440 + nextHours * 60 + nextMinutes),
+  );
+  const timezones = RETRY_TIMEZONES.includes(timezone)
+    ? RETRY_TIMEZONES
+    : [timezone, ...RETRY_TIMEZONES];
+  const fieldStyle = {
+    width: "100%", padding: "0.5rem 0.6rem", borderRadius: "8px",
+    border: "1px solid var(--border-color)", background: "var(--surface)",
+    color: "var(--text-primary)", fontSize: "0.82rem",
+  };
+  const labelStyle = { display: "block", fontSize: "0.72rem", color: "var(--text-secondary)", marginBottom: "0.25rem" };
+
+  return (
+    <div className="call-settings-schedule" style={{ border: "1px solid var(--border-color)", borderRadius: "10px", padding: "0.75rem", background: "color-mix(in srgb, var(--surface) 82%, transparent)" }}>
+      <div className="call-settings-segmented" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.3rem", padding: "0.2rem", borderRadius: "9px", background: "var(--surface-hover)", marginBottom: "0.75rem" }}>
+        {[{ value: "delay", label: "After a delay" }, { value: "scheduled", label: "Scheduled time" }].map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            disabled={disabled}
+            aria-pressed={mode === option.value}
+            onClick={() => onModeChange(option.value)}
+            style={{
+              border: mode === option.value ? "1px solid var(--primary-color, var(--accent-color))" : "1px solid transparent",
+              borderRadius: "7px", padding: "0.45rem", cursor: disabled ? "not-allowed" : "pointer",
+              background: mode === option.value ? "var(--surface)" : "transparent",
+              color: mode === option.value ? "var(--primary-color, var(--accent-color))" : "var(--text-secondary)",
+              fontWeight: 600, fontSize: "0.78rem",
+            }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "delay" ? (
+        <>
+          <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "0.55rem" }}>
+            Retry after {days ? `${days}d ` : ""}{hours}h {minutes}m
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.5rem" }}>
+            <div><label htmlFor={`${prefix}-delay-days`} style={labelStyle}>Days</label><input id={`${prefix}-delay-days`} type="number" min={0} max={30} value={days} disabled={disabled} onChange={(e) => onIntervalChange(clampDelay(Math.max(0, Number(e.target.value) || 0), hours, minutes))} style={fieldStyle} /></div>
+            <div><label htmlFor={`${prefix}-delay-hours`} style={labelStyle}>Hours</label><input id={`${prefix}-delay-hours`} type="number" min={0} max={23} value={hours} disabled={disabled} onChange={(e) => onIntervalChange(clampDelay(days, Math.max(0, Math.min(23, Number(e.target.value) || 0)), minutes))} style={fieldStyle} /></div>
+            <div><label htmlFor={`${prefix}-delay-minutes`} style={labelStyle}>Minutes</label><input id={`${prefix}-delay-minutes`} type="number" min={0} max={59} value={minutes} disabled={disabled} onChange={(e) => onIntervalChange(clampDelay(days, hours, Math.max(0, Math.min(59, Number(e.target.value) || 0))))} style={fieldStyle} /></div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "0.55rem" }}>
+            Retry every {dayInterval} day{dayInterval === 1 ? "" : "s"} at {timeLocal}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 110px), 1fr))", gap: "0.5rem" }}>
+            <div><label htmlFor={`${prefix}-day-interval`} style={labelStyle}>Every N days</label><input id={`${prefix}-day-interval`} type="number" min={1} max={30} value={dayInterval} disabled={disabled} onChange={(e) => onDayIntervalChange(Math.max(1, Math.min(30, Number(e.target.value) || 1)))} style={fieldStyle} /></div>
+            <div><label htmlFor={`${prefix}-time-local`} style={labelStyle}>Time of day</label><input id={`${prefix}-time-local`} type="time" value={timeLocal} disabled={disabled} onChange={(e) => onTimeLocalChange(e.target.value)} style={fieldStyle} /></div>
+          </div>
+          <div style={{ marginTop: "0.5rem" }}>
+            <label htmlFor={`${prefix}-timezone`} style={labelStyle}>Timezone</label>
+            <select id={`${prefix}-timezone`} value={timezone} disabled={disabled} onChange={(e) => onTimezoneChange(e.target.value)} style={fieldStyle}>
+              {timezones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+            </select>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1242,6 +1329,8 @@ const Leads = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const leadRequestSequenceRef = useRef(0);
+  const fetchLeadsRef = useRef(null);
+  const classifyVisibleLeadsRef = useRef(null);
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
   // Generic CRM uses API pagination; other verticals keep their existing
@@ -1343,34 +1432,35 @@ const Leads = () => {
   const [callQueueActive, setCallQueueActive] = useState(false);
   const [callStatusDrawerOpen, setCallStatusDrawerOpen] = useState(false);
   const [classifyingLeads, setClassifyingLeads] = useState(new Set());
-  // Generic CRM Leads page — AI transcript classification toggle (gear menu next
-  // to the Lead Status column). Default true matches the tenant-setting default.
-  const [aiTranscriptEnabled, setAiTranscriptEnabled] = useState(true);
-  const [aiTranscriptSaving, setAiTranscriptSaving] = useState(false);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [callSettingsSaving, setCallSettingsSaving] = useState(false);
   // Generic CRM Leads page — DNP retry settings (max retries + interval).
   const [dnpRetryEnabled, setDnpRetryEnabled] = useState(true);
   const [dnpMaxRetries, setDnpMaxRetries] = useState(3);
   const [dnpIntervalMinutes, setDnpIntervalMinutes] = useState(60);
+  const [dnpRetryMode, setDnpRetryMode] = useState("delay");
+  const [dnpDayInterval, setDnpDayInterval] = useState(1);
+  const [dnpTimeLocal, setDnpTimeLocal] = useState("10:00");
   const [dnpSettingsLoading, setDnpSettingsLoading] = useState(false);
-  const [dnpSettingsSaving, setDnpSettingsSaving] = useState({
-    enabled: false,
-    maxRetries: false,
-    interval: false,
-  });
+  const [pendingRetryEnabled, setPendingRetryEnabled] = useState(true);
+  const [savedPendingRetryEnabled, setSavedPendingRetryEnabled] = useState(true);
+  const [pendingMaxRetries, setPendingMaxRetries] = useState(3);
+  const [pendingIntervalMinutes, setPendingIntervalMinutes] = useState(60);
+  const [pendingRetryMode, setPendingRetryMode] = useState("delay");
+  const [pendingDayInterval, setPendingDayInterval] = useState(1);
+  const [pendingTimeLocal, setPendingTimeLocal] = useState("10:00");
+  const [retryTimezone, setRetryTimezone] = useState("UTC");
+  const [pendingSettingsLoading, setPendingSettingsLoading] = useState(false);
   // Generic CRM Leads page — auto-dial new leads toggle.
   const [autoDialNewLeadsEnabled, setAutoDialNewLeadsEnabled] = useState(true);
-  const [autoDialNewLeadsSaving, setAutoDialNewLeadsSaving] = useState(false);
+  // Generic CRM Leads page — background lead/call-status refresh toggle.
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [savedAutoRefreshEnabled, setSavedAutoRefreshEnabled] = useState(true);
   // Generic CRM Leads page — qualified lead auto-assignment settings.
   const [assignStaffEnabled, setAssignStaffEnabled] = useState(true);
   const [assignStaffLogic, setAssignStaffLogic] = useState("round_robin");
   const [assignStaffLeadsPerUser, setAssignStaffLeadsPerUser] = useState(1);
   const [assignSettingsLoading, setAssignSettingsLoading] = useState(false);
-  const [assignSettingsSaving, setAssignSettingsSaving] = useState({
-    enabled: false,
-    logic: false,
-    leadsPerUser: false,
-  });
   const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
@@ -1870,6 +1960,14 @@ const Leads = () => {
   // that were actually called, so a real call that just completed updates both
   // the Lead Score and the Call Status without a browser reload.
   const refreshAll = async () => {
+    if (isGeneric) {
+      await fetchApi("/api/callified/leads/sync-call-statuses", {
+        method: "POST",
+        silent: true,
+      }).catch((e) => {
+        console.error("[leads] call-status sync failed:", e?.message);
+      });
+    }
     const [freshLeads, , , , freshCustomFields] = await Promise.all([
       fetchLeads(),
       fetchStaff(),
@@ -1891,9 +1989,9 @@ const Leads = () => {
       });
     }
     if (isGeneric && Array.isArray(freshLeads) && freshLeads.length > 0) {
-      // Score + classify only leads that were actually called. This avoids
-      // burning Gemini credits / HTTP time on hundreds of untouched leads while
-      // still updating status/score for contacts that have fresh Callified data.
+      // Classify only leads that were actually called. Classification consumes
+      // Callified's conclusion first and its score as the fallback; it does not
+      // require a separate Gemini scoring pass.
       const visibleIds = freshLeads.map((l) => l.id);
       try {
         const summaryRes = await fetchApi(
@@ -1901,31 +1999,91 @@ const Leads = () => {
         );
         const summaries = summaryRes?.summaries || {};
         const calledLeadIds = freshLeads
-          .filter((l) => (summaries[l.id]?.callCount || 0) > 0)
+          .filter(
+            (l) =>
+              (summaries[l.id]?.callCount || 0) > 0 ||
+              normalizeCallStatus(l.callifiedLeadStatus) === CALL_STATUS.CONNECTED,
+          )
           .map((l) => l.id);
 
         if (calledLeadIds.length > 0) {
-          await fetchApi("/api/ai_scoring/contacts", {
-            method: "POST",
-            body: JSON.stringify({ contactIds: calledLeadIds }),
-          });
-          const scoredLeads = await fetchLeads({ background: true });
-          // Re-classify called leads so Qualified/Junk/DNP refreshes from the
-          // latest transcript/score (e.g. a preliminary Junk gets corrected to Qualified).
-          if (Array.isArray(scoredLeads) && scoredLeads.length > 0) {
+          const syncedLeads = await fetchLeads({ background: true });
+          if (Array.isArray(syncedLeads) && syncedLeads.length > 0) {
             const calledSet = new Set(calledLeadIds);
-            classifyVisibleLeads(
-              scoredLeads.filter((l) => calledSet.has(l.id)),
-              { force: true },
+            await classifyVisibleLeadsRef.current?.(
+              syncedLeads.filter((l) => calledSet.has(l.id)),
+              { force: true, silent: true },
             );
           }
         }
       } catch (e) {
-        console.error("[leads] aiScore/classify refresh failed:", e?.message);
+        console.error("[leads] Callified classify refresh failed:", e?.message);
       }
     }
     notify.success("Refreshed");
   };
+  fetchLeadsRef.current = fetchLeads;
+
+  // Keep generic Callified outcomes current without requiring the operator to
+  // press Refresh. Poll quickly while a call is active, then back off. The
+  // backend owns transcript classification/retries; this loop syncs provider
+  // state, classifies active rows, and pauses when the tab is not visible.
+  useEffect(() => {
+    if (!isGeneric || !savedAutoRefreshEnabled) return undefined;
+    let cancelled = false;
+    let inFlight = false;
+    let timer;
+
+    const schedule = () => {
+      if (cancelled) return;
+      const hasActiveCall = callQueueActive || leads.some(
+        (lead) => normalizeCallStatus(lead.callifiedLeadStatus) === CALL_STATUS.CONNECTED,
+      );
+      timer = window.setTimeout(tick, hasActiveCall ? 10_000 : 30_000);
+    };
+    const tick = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible" || inFlight) {
+        schedule();
+        return;
+      }
+      inFlight = true;
+      try {
+        await fetchApi("/api/callified/leads/sync-call-statuses", {
+          method: "POST",
+          silent: true,
+        }).catch(() => null);
+        const freshLeads = await fetchLeadsRef.current?.({ background: true });
+        const connectedLeads = Array.isArray(freshLeads)
+          ? freshLeads.filter(
+              (lead) => normalizeCallStatus(lead.callifiedLeadStatus) === CALL_STATUS.CONNECTED,
+            )
+          : [];
+        if (connectedLeads.length > 0) {
+          await classifyVisibleLeadsRef.current?.(connectedLeads, {
+            force: true,
+            silent: true,
+          });
+        }
+      } catch (e) {
+        console.error("[leads] automatic call-status refresh failed:", e?.message);
+      } finally {
+        inFlight = false;
+        schedule();
+      }
+    };
+
+    schedule();
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && !inFlight) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [isGeneric, savedAutoRefreshEnabled, callQueueActive, leads]);
 
   // Backfill assignment for qualified leads that slipped through without an owner.
   // Handles existing leads created before auto-assignment, transient backend
@@ -1957,7 +2115,7 @@ const Leads = () => {
   // and post-call flows pick up the latest transcript/score.
   const classifyVisibleLeads = async (leadRows, options = {}) => {
     if (!isGeneric || !Array.isArray(leadRows)) return;
-    const { force = false } = options;
+    const { force = false, silent = false } = options;
     const candidates = leadRows.filter((l) => {
       if (!l?.id) return false;
       if (force) {
@@ -1986,6 +2144,7 @@ const Leads = () => {
         try {
           const r = await fetchApi(`/api/callified/leads/${lead.id}/classify`, {
             method: "POST",
+            silent,
           });
           if (r?.id) resultById.set(r.id, r);
         } catch (e) {
@@ -2039,6 +2198,7 @@ const Leads = () => {
       });
     }
   };
+  classifyVisibleLeadsRef.current = classifyVisibleLeads;
 
   useEffect(() => {
     fetchLeads().then((rows) => {
@@ -2212,19 +2372,6 @@ const Leads = () => {
     loadCallifiedCampaigns();
   }, [loadCallifiedCampaigns]);
 
-  // Generic CRM Leads page — load the AI transcript classification tenant setting.
-  const loadAiTranscriptSetting = useCallback(async () => {
-    if (!isGeneric) return;
-    try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.ai_transcript.enabled",
-      );
-      setAiTranscriptEnabled(String(d?.value).toLowerCase() !== "false");
-    } catch (_e) {
-      setAiTranscriptEnabled(true);
-    }
-  }, [isGeneric]);
-
   // Generic CRM Leads page — load auto-dial new leads tenant setting.
   const loadAutoDialNewLeadsSetting = useCallback(async () => {
     if (!isGeneric) return;
@@ -2238,174 +2385,129 @@ const Leads = () => {
     }
   }, [isGeneric]);
 
-  const saveAiTranscriptEnabled = async (next) => {
-    if (!isAdmin) {
-      notify.info(
-        "Only admins can change AI transcript classification settings.",
-      );
-      return;
-    }
-    setAiTranscriptSaving(true);
-    try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.ai_transcript.enabled",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: next ? "true" : "false",
-            category: "feature-flag",
-          }),
-        },
-      );
-      setAiTranscriptEnabled(String(d?.value).toLowerCase() !== "false");
-      notify.success(
-        `AI transcript classification ${next ? "enabled" : "disabled"}`,
-      );
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save AI transcript setting");
-      // Re-sync so the toggle reflects the server truth.
-      loadAiTranscriptSetting();
-    } finally {
-      setAiTranscriptSaving(false);
-    }
-  };
-
   // Generic CRM Leads page — load DNP retry tenant settings.
   const loadDnpRetrySettings = useCallback(async () => {
     if (!isGeneric) return;
     setDnpSettingsLoading(true);
     try {
-      const [enabledRes, maxRes, intervalRes] = await Promise.all([
+      const [enabledRes, maxRes, intervalRes, modeRes, dayRes, timeRes, timezoneRes] = await Promise.all([
         fetchApi("/api/tenant-settings/feature.callified.dnp_retry.enabled"),
-        fetchApi(
-          "/api/tenant-settings/feature.callified.dnp_retry.max_retries",
-        ),
-        fetchApi(
-          "/api/tenant-settings/feature.callified.dnp_retry.interval_minutes",
-        ),
+        fetchApi("/api/tenant-settings/feature.callified.dnp_retry.max_retries"),
+        fetchApi("/api/tenant-settings/feature.callified.dnp_retry.interval_minutes"),
+        fetchApi("/api/tenant-settings/feature.callified.dnp_retry.mode"),
+        fetchApi("/api/tenant-settings/feature.callified.dnp_retry.day_interval"),
+        fetchApi("/api/tenant-settings/feature.callified.dnp_retry.time_local"),
+        fetchApi("/api/tenant-settings/feature.callified.retry.timezone"),
       ]);
       setDnpRetryEnabled(String(enabledRes?.value).toLowerCase() !== "false");
-      const parsedMax = Number(maxRes?.value);
-      setDnpMaxRetries(Number.isFinite(parsedMax) ? parsedMax : 3);
-      const parsedInterval = Number(intervalRes?.value);
-      setDnpIntervalMinutes(
-        Number.isFinite(parsedInterval) ? parsedInterval : 60,
-      );
+      setDnpMaxRetries(Number(maxRes?.value) || 3);
+      setDnpIntervalMinutes(Number(intervalRes?.value) || 60);
+      setDnpRetryMode(modeRes?.value === "scheduled" ? "scheduled" : "delay");
+      setDnpDayInterval(Number(dayRes?.value) || 1);
+      setDnpTimeLocal(String(timeRes?.value || "10:00"));
+      setRetryTimezone(String(timezoneRes?.value || "UTC"));
     } catch (_e) {
-      // Keep defaults on error.
       setDnpRetryEnabled(true);
       setDnpMaxRetries(3);
       setDnpIntervalMinutes(60);
+      setDnpRetryMode("delay");
+      setDnpDayInterval(1);
+      setDnpTimeLocal("10:00");
     } finally {
       setDnpSettingsLoading(false);
     }
   }, [isGeneric]);
 
-  const saveDnpRetryEnabled = async (next) => {
-    if (!isAdmin) {
-      notify.info("Only admins can change DNP retry settings.");
-      return;
-    }
-    setDnpSettingsSaving((prev) => ({ ...prev, enabled: true }));
+  const loadAutoRefreshSetting = useCallback(async () => {
+    if (!isGeneric) return;
     try {
       const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.dnp_retry.enabled",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: next ? "true" : "false",
-            category: "feature-flag",
-          }),
-        },
+        "/api/tenant-settings/feature.callified.auto_refresh.enabled",
       );
-      setDnpRetryEnabled(String(d?.value).toLowerCase() !== "false");
-      notify.success(`DNP auto-retry ${next ? "enabled" : "disabled"}`);
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save DNP retry setting");
-      loadDnpRetrySettings();
-    } finally {
-      setDnpSettingsSaving((prev) => ({ ...prev, enabled: false }));
+      const enabled = String(d?.value).toLowerCase() !== "false";
+      setAutoRefreshEnabled(enabled);
+      setSavedAutoRefreshEnabled(enabled);
+    } catch (_e) {
+      setAutoRefreshEnabled(true);
+      setSavedAutoRefreshEnabled(true);
     }
+  }, [isGeneric]);
+
+  const saveDnpRetryEnabled = async (next) => {
+    setDnpRetryEnabled(Boolean(next));
   };
 
   const saveDnpMaxRetries = async (next) => {
-    if (!isAdmin) return;
     const value = Math.max(1, Math.min(Number(next) || 3, 10));
-    setDnpSettingsSaving((prev) => ({ ...prev, maxRetries: true }));
-    try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.dnp_retry.max_retries",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: String(value),
-            category: "feature-flag",
-          }),
-        },
-      );
-      const parsed = Number(d?.value);
-      setDnpMaxRetries(Number.isFinite(parsed) ? parsed : value);
-      notify.success(`Max retries set to ${value}`);
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save max retries");
-      loadDnpRetrySettings();
-    } finally {
-      setDnpSettingsSaving((prev) => ({ ...prev, maxRetries: false }));
-    }
+    setDnpMaxRetries(value);
   };
 
   const saveDnpIntervalMinutes = async (next) => {
-    if (!isAdmin) return;
-    const value = Math.max(5, Math.min(Number(next) || 60, 24 * 60));
-    setDnpSettingsSaving((prev) => ({ ...prev, interval: true }));
-    try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.dnp_retry.interval_minutes",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: String(value),
-            category: "feature-flag",
-          }),
-        },
-      );
-      const parsed = Number(d?.value);
-      setDnpIntervalMinutes(Number.isFinite(parsed) ? parsed : value);
-      notify.success("Retry interval updated");
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save retry interval");
-      loadDnpRetrySettings();
-    } finally {
-      setDnpSettingsSaving((prev) => ({ ...prev, interval: false }));
-    }
+    const value = Math.max(5, Math.min(Number(next) || 60, 30 * 24 * 60));
+    setDnpIntervalMinutes(value);
   };
 
   // Generic CRM Leads page — auto-dial new leads toggle.
-  const saveAutoDialNewLeadsEnabled = async (next) => {
-    if (!isAdmin) {
-      notify.info("Only admins can change call settings.");
-      return;
-    }
-    setAutoDialNewLeadsSaving(true);
+  const saveDnpScheduleSetting = async (part, key, rawValue) => {
+    void key;
+    if (part === "mode") setDnpRetryMode(rawValue === "scheduled" ? "scheduled" : "delay");
+    if (part === "dayInterval") setDnpDayInterval(Math.max(1, Math.min(Number(rawValue) || 1, 30)));
+    if (part === "timeLocal") setDnpTimeLocal(String(rawValue || "10:00"));
+    if (part === "timezone") setRetryTimezone(String(rawValue || "UTC"));
+  };
+  const loadPendingRetrySettings = useCallback(async () => {
+    if (!isGeneric) return;
+    setPendingSettingsLoading(true);
     try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.auto_dial_new_leads.enabled",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: next ? "true" : "false",
-            category: "feature-flag",
-          }),
-        },
-      );
-      setAutoDialNewLeadsEnabled(String(d?.value).toLowerCase() !== "false");
-      notify.success(`Auto-dial new leads ${next ? "enabled" : "disabled"}`);
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save auto-dial setting");
-      loadCallSettings();
+      const [enabledRes, maxRes, intervalRes, modeRes, dayRes, timeRes] = await Promise.all([
+        fetchApi("/api/tenant-settings/feature.callified.pending_retry.enabled"),
+        fetchApi("/api/tenant-settings/feature.callified.pending_retry.max_retries"),
+        fetchApi("/api/tenant-settings/feature.callified.pending_retry.interval_minutes"),
+        fetchApi("/api/tenant-settings/feature.callified.pending_retry.mode"),
+        fetchApi("/api/tenant-settings/feature.callified.pending_retry.day_interval"),
+        fetchApi("/api/tenant-settings/feature.callified.pending_retry.time_local"),
+      ]);
+      const enabled = String(enabledRes?.value).toLowerCase() !== "false";
+      setPendingRetryEnabled(enabled);
+      setSavedPendingRetryEnabled(enabled);
+      setPendingMaxRetries(Number(maxRes?.value) || 3);
+      setPendingIntervalMinutes(Number(intervalRes?.value) || 60);
+      setPendingRetryMode(modeRes?.value === "scheduled" ? "scheduled" : "delay");
+      setPendingDayInterval(Number(dayRes?.value) || 1);
+      setPendingTimeLocal(String(timeRes?.value || "10:00"));
+    } catch (_e) {
+      setPendingRetryEnabled(true);
+      setSavedPendingRetryEnabled(true);
+      setPendingMaxRetries(3);
+      setPendingIntervalMinutes(60);
+      setPendingRetryMode("delay");
+      setPendingDayInterval(1);
+      setPendingTimeLocal("10:00");
     } finally {
-      setAutoDialNewLeadsSaving(false);
+      setPendingSettingsLoading(false);
     }
+  }, [isGeneric]);
+
+  const savePendingSetting = async (part, key, rawValue) => {
+    void key;
+    let value = rawValue;
+    if (part === "maxRetries") value = Math.max(1, Math.min(Number(rawValue) || 3, 10));
+    if (part === "interval") value = Math.max(5, Math.min(Number(rawValue) || 60, 30 * 24 * 60));
+    if (part === "enabled") setPendingRetryEnabled(Boolean(value));
+    if (part === "maxRetries") setPendingMaxRetries(Number(value) || 3);
+    if (part === "interval") setPendingIntervalMinutes(Number(value) || 60);
+    if (part === "mode") setPendingRetryMode(value === "scheduled" ? "scheduled" : "delay");
+    if (part === "dayInterval") setPendingDayInterval(Math.max(1, Math.min(Number(value) || 1, 30)));
+    if (part === "timeLocal") setPendingTimeLocal(String(value || "10:00"));
+    if (part === "timezone") setRetryTimezone(String(value || "UTC"));
+  };
+
+  const saveAutoDialNewLeadsEnabled = async (next) => {
+    setAutoDialNewLeadsEnabled(Boolean(next));
+  };
+
+  const saveAutoRefreshEnabled = async (next) => {
+    setAutoRefreshEnabled(Boolean(next));
   };
 
   // Generic CRM Leads page — qualified lead auto-assignment settings.
@@ -2443,106 +2545,106 @@ const Leads = () => {
   }, [isGeneric]);
 
   const saveAssignStaffEnabled = async (next) => {
-    if (!isAdmin) {
-      notify.info("Only admins can change call settings.");
-      return;
-    }
-    setAssignSettingsSaving((prev) => ({ ...prev, enabled: true }));
-    try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.assign_staff.enabled",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: next ? "true" : "false",
-            category: "feature-flag",
-          }),
-        },
-      );
-      setAssignStaffEnabled(String(d?.value).toLowerCase() !== "false");
-      notify.success(
-        `Auto-assign qualified leads ${next ? "enabled" : "disabled"}`,
-      );
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save assignment setting");
-      loadAssignStaffSettings();
-    } finally {
-      setAssignSettingsSaving((prev) => ({ ...prev, enabled: false }));
-    }
+    setAssignStaffEnabled(Boolean(next));
   };
 
   const saveAssignStaffLogic = async (next) => {
-    if (!isAdmin) return;
     const value = ["round_robin", "random"].includes(String(next).toLowerCase())
       ? String(next).toLowerCase()
       : "round_robin";
-    setAssignSettingsSaving((prev) => ({ ...prev, logic: true }));
-    try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.assign_staff.logic",
-        {
-          method: "PUT",
-          body: JSON.stringify({ value, category: "feature-flag" }),
-        },
-      );
-      const saved = String(d?.value).toLowerCase();
-      setAssignStaffLogic(
-        ["round_robin", "random"].includes(saved) ? saved : value,
-      );
-      notify.success(
-        `Assignment logic set to ${value === "round_robin" ? "Round robin" : "Random"}`,
-      );
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save assignment logic");
-      loadAssignStaffSettings();
-    } finally {
-      setAssignSettingsSaving((prev) => ({ ...prev, logic: false }));
-    }
+    setAssignStaffLogic(value);
   };
 
   const saveAssignStaffLeadsPerUser = async (next) => {
-    if (!isAdmin) return;
     const value = Math.max(1, Math.min(Number(next) || 1, 50));
-    setAssignSettingsSaving((prev) => ({ ...prev, leadsPerUser: true }));
-    try {
-      const d = await fetchApi(
-        "/api/tenant-settings/feature.callified.assign_staff.leads_per_user",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: String(value),
-            category: "feature-flag",
-          }),
-        },
-      );
-      const parsed = Number(d?.value);
-      setAssignStaffLeadsPerUser(Number.isFinite(parsed) ? parsed : value);
-      notify.success(`Leads per user set to ${value}`);
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to save leads per user");
-      loadAssignStaffSettings();
-    } finally {
-      setAssignSettingsSaving((prev) => ({ ...prev, leadsPerUser: false }));
-    }
+    setAssignStaffLeadsPerUser(value);
   };
-
-  const dnpIntervalHours = Math.floor(dnpIntervalMinutes / 60);
-  const dnpIntervalMins = dnpIntervalMinutes % 60;
 
   // Generic CRM Leads page — load all call settings in one place.
   const loadCallSettings = useCallback(async () => {
     await Promise.all([
-      loadAiTranscriptSetting(),
       loadAutoDialNewLeadsSetting(),
+      loadAutoRefreshSetting(),
       loadDnpRetrySettings(),
+      loadPendingRetrySettings(),
       loadAssignStaffSettings(),
     ]);
   }, [
-    loadAiTranscriptSetting,
     loadAutoDialNewLeadsSetting,
+    loadAutoRefreshSetting,
     loadDnpRetrySettings,
+    loadPendingRetrySettings,
     loadAssignStaffSettings,
   ]);
+
+  const closeCallSettings = useCallback(() => {
+    setAiSettingsOpen(false);
+    // Discard unsaved draft values and restore the last server state.
+    loadCallSettings();
+  }, [loadCallSettings]);
+
+  const saveAllCallSettings = async () => {
+    if (!isAdmin || callSettingsSaving) return;
+    const normalized = {
+      dnpMaxRetries: Math.max(1, Math.min(Number(dnpMaxRetries) || 3, 10)),
+      dnpIntervalMinutes: Math.max(5, Math.min(Number(dnpIntervalMinutes) || 60, 30 * 24 * 60)),
+      dnpDayInterval: Math.max(1, Math.min(Number(dnpDayInterval) || 1, 30)),
+      pendingMaxRetries: Math.max(1, Math.min(Number(pendingMaxRetries) || 3, 10)),
+      pendingIntervalMinutes: Math.max(5, Math.min(Number(pendingIntervalMinutes) || 60, 30 * 24 * 60)),
+      pendingDayInterval: Math.max(1, Math.min(Number(pendingDayInterval) || 1, 30)),
+      assignStaffLeadsPerUser: Math.max(1, Math.min(Number(assignStaffLeadsPerUser) || 1, 50)),
+    };
+    const settings = [
+      ["feature.callified.auto_dial_new_leads.enabled", autoDialNewLeadsEnabled],
+      ["feature.callified.auto_refresh.enabled", autoRefreshEnabled],
+      ["feature.callified.dnp_retry.enabled", dnpRetryEnabled],
+      ["feature.callified.dnp_retry.max_retries", normalized.dnpMaxRetries],
+      ["feature.callified.dnp_retry.interval_minutes", normalized.dnpIntervalMinutes],
+      ["feature.callified.dnp_retry.mode", dnpRetryMode],
+      ["feature.callified.dnp_retry.day_interval", normalized.dnpDayInterval],
+      ["feature.callified.dnp_retry.time_local", dnpTimeLocal],
+      ["feature.callified.pending_retry.enabled", pendingRetryEnabled],
+      ["feature.callified.pending_retry.max_retries", normalized.pendingMaxRetries],
+      ["feature.callified.pending_retry.interval_minutes", normalized.pendingIntervalMinutes],
+      ["feature.callified.pending_retry.mode", pendingRetryMode],
+      ["feature.callified.pending_retry.day_interval", normalized.pendingDayInterval],
+      ["feature.callified.pending_retry.time_local", pendingTimeLocal],
+      ["feature.callified.retry.timezone", retryTimezone],
+      ["feature.callified.assign_staff.enabled", assignStaffEnabled],
+      ["feature.callified.assign_staff.logic", assignStaffLogic],
+      ["feature.callified.assign_staff.leads_per_user", normalized.assignStaffLeadsPerUser],
+    ];
+
+    setCallSettingsSaving(true);
+    try {
+      await fetchApi("/api/tenant-settings/callified", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: settings.map(([key, value]) => ({ key, value: String(value) })),
+        }),
+      });
+      setDnpMaxRetries(normalized.dnpMaxRetries);
+      setDnpIntervalMinutes(normalized.dnpIntervalMinutes);
+      setDnpDayInterval(normalized.dnpDayInterval);
+      setPendingMaxRetries(normalized.pendingMaxRetries);
+      setPendingIntervalMinutes(normalized.pendingIntervalMinutes);
+      setPendingDayInterval(normalized.pendingDayInterval);
+      setAssignStaffLeadsPerUser(normalized.assignStaffLeadsPerUser);
+      setSavedAutoRefreshEnabled(autoRefreshEnabled);
+      setSavedPendingRetryEnabled(pendingRetryEnabled);
+      setAiSettingsOpen(false);
+      notify.success(
+        !savedPendingRetryEnabled && pendingRetryEnabled
+          ? "Call settings saved. Existing eligible Pending leads will be scheduled within one minute using this retry interval."
+          : "Call settings saved",
+      );
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to save call settings");
+      await loadCallSettings();
+    } finally {
+      setCallSettingsSaving(false);
+    }
+  };
 
   useEffect(() => {
     loadCallSettings();
@@ -2562,11 +2664,11 @@ const Leads = () => {
   useEffect(() => {
     if (!aiSettingsOpen) return undefined;
     const onKey = (e) => {
-      if (e.key === "Escape") setAiSettingsOpen(false);
+      if (e.key === "Escape") closeCallSettings();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aiSettingsOpen]);
+  }, [aiSettingsOpen, closeCallSettings]);
 
   const openCreate = () => setCreating(true);
   const closeCreate = () => {
@@ -5496,6 +5598,11 @@ const Leads = () => {
         >
           <RefreshCw size={14} /> Refresh
         </button>
+        {isGeneric && (
+          <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }} title={savedAutoRefreshEnabled ? "Every 10 seconds during calls and every 30 seconds otherwise; paused in background tabs" : "Automatic refresh is disabled in Call Settings"}>
+            Auto-refresh {savedAutoRefreshEnabled ? "on" : "off"}
+          </span>
+        )}
 
         {(isGeneric || isWellness) && (
           <CsvImportExportToolbar
@@ -5960,6 +6067,7 @@ const Leads = () => {
 
                         {!isAdmin && (
                           <div
+                            className="call-settings-admin-note"
                             style={{
                               fontSize: "0.75rem",
                               color: "var(--text-secondary)",
@@ -6819,9 +6927,10 @@ const Leads = () => {
                   title="Call settings"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setAiSettingsOpen((o) => !o);
+                    if (aiSettingsOpen) closeCallSettings();
+                    else setAiSettingsOpen(true);
                   }}
-                  disabled={aiTranscriptSaving}
+                  disabled={callSettingsSaving}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
@@ -6835,6 +6944,7 @@ const Leads = () => {
                   createPortal(
                     <>
                       <div
+                        className="call-settings-backdrop"
                         style={{
                           position: "fixed",
                           inset: 0,
@@ -6845,10 +6955,11 @@ const Leads = () => {
                           justifyContent: "center",
                           padding: "1rem",
                         }}
-                        onClick={() => setAiSettingsOpen(false)}
+                        onClick={closeCallSettings}
                         aria-hidden="true"
                       />
                       <div
+                        className="call-settings-dialog"
                         role="dialog"
                         aria-label="Call settings"
                         aria-modal="true"
@@ -6870,6 +6981,7 @@ const Leads = () => {
                         }}
                       >
                         <div
+                          className="call-settings-header"
                           style={{
                             display: "flex",
                             alignItems: "center",
@@ -6877,18 +6989,17 @@ const Leads = () => {
                             marginBottom: "1rem",
                           }}
                         >
-                          <h3
-                            style={{
-                              margin: 0,
-                              fontSize: "1rem",
-                              color: "var(--text-primary)",
-                            }}
-                          >
-                            Call Settings
-                          </h3>
+                          <div className="call-settings-heading">
+                            <span className="call-settings-heading-icon"><Settings size={18} /></span>
+                            <span>
+                              <h3>Call Settings</h3>
+                              <span>Configure calling automation and lead outcomes</span>
+                            </span>
+                          </div>
                           <button
+                            className="call-settings-close"
                             type="button"
-                            onClick={() => setAiSettingsOpen(false)}
+                            onClick={closeCallSettings}
                             aria-label="Close call settings"
                             style={{
                               background: "none",
@@ -6904,8 +7015,9 @@ const Leads = () => {
                         </div>
 
                         {/* 1. Auto Dial New Leads */}
-                        <div style={{ marginBottom: "1rem" }}>
+                        <div className="call-settings-section" style={{ marginBottom: "1rem" }}>
                           <div
+                            className="call-settings-section-title"
                             style={{
                               fontSize: "0.75rem",
                               fontWeight: 600,
@@ -6930,7 +7042,7 @@ const Leads = () => {
                             <input
                               type="checkbox"
                               checked={autoDialNewLeadsEnabled}
-                              disabled={autoDialNewLeadsSaving || !isAdmin}
+                              disabled={callSettingsSaving || !isAdmin}
                               onChange={(e) => {
                                 saveAutoDialNewLeadsEnabled(e.target.checked);
                               }}
@@ -6947,9 +7059,67 @@ const Leads = () => {
                           }}
                         />
 
-                        {/* 2. DNP Settings */}
-                        <div style={{ marginBottom: "1rem" }}>
+                        {/* Automatic Refresh */}
+                        <div className="call-settings-section" style={{ marginBottom: "1rem" }}>
                           <div
+                            className="call-settings-section-title"
+                            style={{
+                              fontSize: "0.75rem",
+                              fontWeight: 600,
+                              color: "var(--text-secondary)",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.03em",
+                              marginBottom: "0.5rem",
+                            }}
+                          >
+                            Automatic Refresh
+                          </div>
+                          <label
+                            style={{
+                              display: "flex",
+                              alignItems: "flex-start",
+                              gap: "0.5rem",
+                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              fontSize: "0.85rem",
+                              color: "var(--text-primary)",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={autoRefreshEnabled}
+                              disabled={callSettingsSaving || !isAdmin}
+                              onChange={(e) => saveAutoRefreshEnabled(e.target.checked)}
+                              style={{ marginTop: "0.15rem" }}
+                            />
+                            <span>
+                              Enable automatic lead refresh
+                              <span
+                                style={{
+                                  display: "block",
+                                  marginTop: "0.2rem",
+                                  color: "var(--text-secondary)",
+                                  fontSize: "0.75rem",
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                Refreshes every 10 seconds during calls and every 30 seconds otherwise. Manual refresh remains available.
+                              </span>
+                            </span>
+                          </label>
+                        </div>
+
+                        <div
+                          style={{
+                            height: "1px",
+                            background: "var(--border-color)",
+                            margin: "0.75rem 0",
+                          }}
+                        />
+
+                        {/* 2. DNP Settings */}
+                        <div className="call-settings-section call-settings-section-expandable" style={{ marginBottom: "1rem" }}>
+                          <div
+                            className="call-settings-section-title"
                             style={{
                               fontSize: "0.75rem",
                               fontWeight: 600,
@@ -6977,7 +7147,7 @@ const Leads = () => {
                               checked={dnpRetryEnabled}
                               disabled={
                                 dnpSettingsLoading ||
-                                dnpSettingsSaving.enabled ||
+                                callSettingsSaving ||
                                 !isAdmin
                               }
                               onChange={(e) => {
@@ -7015,7 +7185,7 @@ const Leads = () => {
                                   value={dnpMaxRetries}
                                   disabled={
                                     dnpSettingsLoading ||
-                                    dnpSettingsSaving.maxRetries ||
+                                    callSettingsSaving ||
                                     !isAdmin
                                   }
                                   onChange={(e) => {
@@ -7035,155 +7205,21 @@ const Leads = () => {
                                 />
                               </div>
 
-                              <div>
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    alignItems: "center",
-                                    marginBottom: "0.35rem",
-                                  }}
-                                >
-                                  <span
-                                    style={{
-                                      fontSize: "0.8rem",
-                                      color: "var(--text-secondary)",
-                                    }}
-                                  >
-                                    Retry interval
-                                  </span>
-                                  <span
-                                    style={{
-                                      fontSize: "0.8rem",
-                                      fontWeight: 600,
-                                      color: "var(--text-primary)",
-                                    }}
-                                  >
-                                    Retry after {dnpIntervalHours}h{" "}
-                                    {dnpIntervalMins}m
-                                  </span>
-                                </div>
+                              <RetryTimingControls
+                                prefix="dnp"
+                                mode={dnpRetryMode}
+                                onModeChange={(value) => saveDnpScheduleSetting("mode", "feature.callified.dnp_retry.mode", value)}
+                                intervalMinutes={dnpIntervalMinutes}
+                                onIntervalChange={(value) => { setDnpIntervalMinutes(value); saveDnpIntervalMinutes(value); }}
+                                dayInterval={dnpDayInterval}
+                                onDayIntervalChange={(value) => saveDnpScheduleSetting("dayInterval", "feature.callified.dnp_retry.day_interval", value)}
+                                timeLocal={dnpTimeLocal}
+                                onTimeLocalChange={(value) => saveDnpScheduleSetting("timeLocal", "feature.callified.dnp_retry.time_local", value)}
+                                timezone={retryTimezone}
+                                onTimezoneChange={(value) => saveDnpScheduleSetting("timezone", "feature.callified.retry.timezone", value)}
+                                disabled={dnpSettingsLoading || callSettingsSaving || !isAdmin}
+                              />
 
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: "0.75rem",
-                                  }}
-                                >
-                                  <div>
-                                    <label
-                                      htmlFor="dnp-interval-hours"
-                                      style={{
-                                        display: "block",
-                                        fontSize: "0.75rem",
-                                        color: "var(--text-secondary)",
-                                        marginBottom: "0.2rem",
-                                      }}
-                                    >
-                                      Hours
-                                    </label>
-                                    <input
-                                      id="dnp-interval-hours"
-                                      type="number"
-                                      min={0}
-                                      max={24}
-                                      step={1}
-                                      value={dnpIntervalHours}
-                                      disabled={
-                                        dnpSettingsLoading ||
-                                        dnpSettingsSaving.interval ||
-                                        !isAdmin
-                                      }
-                                      onChange={(e) => {
-                                        const hours = Math.max(
-                                          0,
-                                          Math.min(
-                                            24,
-                                            Number(e.target.value) || 0,
-                                          ),
-                                        );
-                                        const minutes =
-                                          hours === 0
-                                            ? Math.max(5, dnpIntervalMins)
-                                            : hours === 24
-                                              ? 0
-                                              : dnpIntervalMins;
-                                        const nextMinutes =
-                                          hours * 60 + minutes;
-                                        setDnpIntervalMinutes(nextMinutes);
-                                        saveDnpIntervalMinutes(nextMinutes);
-                                      }}
-                                      style={{
-                                        width: "70px",
-                                        padding: "0.35rem 0.5rem",
-                                        borderRadius: "6px",
-                                        border: "1px solid var(--border-color)",
-                                        background: "var(--surface)",
-                                        color: "var(--text-primary)",
-                                      }}
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label
-                                      htmlFor="dnp-interval-minutes"
-                                      style={{
-                                        display: "block",
-                                        fontSize: "0.75rem",
-                                        color: "var(--text-secondary)",
-                                        marginBottom: "0.2rem",
-                                      }}
-                                    >
-                                      Minutes
-                                    </label>
-                                    <input
-                                      id="dnp-interval-minutes"
-                                      type="number"
-                                      min={dnpIntervalHours === 0 ? 5 : 0}
-                                      max={59}
-                                      step={1}
-                                      value={dnpIntervalMins}
-                                      disabled={
-                                        dnpSettingsLoading ||
-                                        dnpSettingsSaving.interval ||
-                                        !isAdmin ||
-                                        dnpIntervalHours === 24
-                                      }
-                                      onChange={(e) => {
-                                        const minutes =
-                                          dnpIntervalHours === 0
-                                            ? Math.max(
-                                                5,
-                                                Math.min(
-                                                  59,
-                                                  Number(e.target.value) || 0,
-                                                ),
-                                              )
-                                            : Math.max(
-                                                0,
-                                                Math.min(
-                                                  59,
-                                                  Number(e.target.value) || 0,
-                                                ),
-                                              );
-                                        const nextMinutes =
-                                          dnpIntervalHours * 60 + minutes;
-                                        setDnpIntervalMinutes(nextMinutes);
-                                        saveDnpIntervalMinutes(nextMinutes);
-                                      }}
-                                      style={{
-                                        width: "70px",
-                                        padding: "0.35rem 0.5rem",
-                                        borderRadius: "6px",
-                                        border: "1px solid var(--border-color)",
-                                        background: "var(--surface)",
-                                        color: "var(--text-primary)",
-                                      }}
-                                    />
-                                  </div>
-                                </div>
-                              </div>
                             </div>
                           )}
                         </div>
@@ -7196,9 +7232,64 @@ const Leads = () => {
                           }}
                         />
 
-                        {/* 3. Assigning Staff */}
-                        <div style={{ marginBottom: "1rem" }}>
+                        {/* 3. Pending Settings */}
+                        <div className="call-settings-section call-settings-section-expandable" style={{ marginBottom: "1rem" }}>
+                          <div className="call-settings-section-title" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "0.5rem" }}>
+                            Pending Settings
+                          </div>
+                          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: isAdmin ? "pointer" : "not-allowed", fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "0.75rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={pendingRetryEnabled}
+                              disabled={pendingSettingsLoading || callSettingsSaving || !isAdmin}
+                              onChange={(e) => savePendingSetting("enabled", "feature.callified.pending_retry.enabled", e.target.checked)}
+                            />
+                            Enable automatic pending retries
+                          </label>
+                          {pendingRetryEnabled && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                              <div>
+                                <label htmlFor="pending-max-retries" style={{ display: "block", fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "0.35rem" }}>
+                                  Max retries
+                                </label>
+                                <input
+                                  id="pending-max-retries"
+                                  aria-label="Pending max retries"
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  value={pendingMaxRetries}
+                                  disabled={pendingSettingsLoading || callSettingsSaving || !isAdmin}
+                                  onChange={(e) => setPendingMaxRetries(Number(e.target.value))}
+                                  onBlur={(e) => savePendingSetting("maxRetries", "feature.callified.pending_retry.max_retries", e.target.value)}
+                                  style={{ width: "70px", padding: "0.35rem 0.5rem", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--surface)", color: "var(--text-primary)" }}
+                                />
+                              </div>
+
+                              <RetryTimingControls
+                                prefix="pending"
+                                mode={pendingRetryMode}
+                                onModeChange={(value) => savePendingSetting("mode", "feature.callified.pending_retry.mode", value)}
+                                intervalMinutes={pendingIntervalMinutes}
+                                onIntervalChange={(value) => { setPendingIntervalMinutes(value); savePendingSetting("interval", "feature.callified.pending_retry.interval_minutes", value); }}
+                                dayInterval={pendingDayInterval}
+                                onDayIntervalChange={(value) => savePendingSetting("dayInterval", "feature.callified.pending_retry.day_interval", value)}
+                                timeLocal={pendingTimeLocal}
+                                onTimeLocalChange={(value) => savePendingSetting("timeLocal", "feature.callified.pending_retry.time_local", value)}
+                                timezone={retryTimezone}
+                                onTimezoneChange={(value) => savePendingSetting("timezone", "feature.callified.retry.timezone", value)}
+                                disabled={pendingSettingsLoading || callSettingsSaving || !isAdmin}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div style={{ height: "1px", background: "var(--border-color)", margin: "0.75rem 0" }} />
+
+                        {/* 4. Assigning Staff */}
+                        <div className="call-settings-section call-settings-section-expandable" style={{ marginBottom: "1rem" }}>
                           <div
+                            className="call-settings-section-title"
                             style={{
                               fontSize: "0.75rem",
                               fontWeight: 600,
@@ -7226,7 +7317,7 @@ const Leads = () => {
                               checked={assignStaffEnabled}
                               disabled={
                                 assignSettingsLoading ||
-                                assignSettingsSaving.enabled ||
+                                callSettingsSaving ||
                                 !isAdmin
                               }
                               onChange={(e) => {
@@ -7262,7 +7353,7 @@ const Leads = () => {
                                   value={assignStaffLogic}
                                   disabled={
                                     assignSettingsLoading ||
-                                    assignSettingsSaving.logic ||
+                                    callSettingsSaving ||
                                     !isAdmin
                                   }
                                   onChange={(e) => {
@@ -7307,7 +7398,7 @@ const Leads = () => {
                                     value={assignStaffLeadsPerUser}
                                     disabled={
                                       assignSettingsLoading ||
-                                      assignSettingsSaving.leadsPerUser ||
+                                      callSettingsSaving ||
                                       !isAdmin
                                     }
                                     onChange={(e) => {
@@ -7343,9 +7434,10 @@ const Leads = () => {
                           }}
                         />
 
-                        {/* 4. Qualified Status */}
-                        <div>
+                        {/* 5. Classification */}
+                        <div className="call-settings-section">
                           <div
+                            className="call-settings-section-title"
                             style={{
                               fontSize: "0.75rem",
                               fontWeight: 600,
@@ -7355,28 +7447,11 @@ const Leads = () => {
                               marginBottom: "0.5rem",
                             }}
                           >
-                            Qualified Status
+                            Classification
                           </div>
-                          <label
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
-                              fontSize: "0.85rem",
-                              color: "var(--text-primary)",
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={aiTranscriptEnabled}
-                              disabled={aiTranscriptSaving || !isAdmin}
-                              onChange={(e) => {
-                                saveAiTranscriptEnabled(e.target.checked);
-                              }}
-                            />
-                            Use AI to qualify using transcripts
-                          </label>
+                          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                            Callified transcript outcomes are used first. When no explicit outcome is available, the Callified quality score is used automatically as the fallback.
+                          </div>
                         </div>
 
                         {!isAdmin && (
@@ -7390,6 +7465,24 @@ const Leads = () => {
                             Only admins can change these settings.
                           </div>
                         )}
+                        <div className="call-settings-save-note" style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", position: "sticky", bottom: 0, background: "var(--bg-color)", paddingTop: "0.9rem" }}>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={closeCallSettings}
+                            disabled={callSettingsSaving}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            onClick={saveAllCallSettings}
+                            disabled={callSettingsSaving || !isAdmin}
+                          >
+                            {callSettingsSaving ? "Saving…" : "Save changes"}
+                          </button>
+                        </div>
                       </div>
                     </>,
                     document.body,

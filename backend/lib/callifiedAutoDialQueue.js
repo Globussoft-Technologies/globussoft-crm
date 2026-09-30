@@ -48,6 +48,7 @@ function dialKey(tenantId, contactId) {
 const DIALABLE_CALL_STATUSES = new Set([
   CALL_STATUS.YET_TO_CALL,
   CALL_STATUS.DNP,
+  CALL_STATUS.PENDING,
 ]);
 
 function isDialable(contact) {
@@ -79,14 +80,14 @@ async function wasRecentlyDialed(tenantId, contactId, sinceMs = 60 * 1000) {
   return Boolean(recent);
 }
 
-function enqueue({ tenantId, contactId, campaignId, userId }) {
+function enqueue({ tenantId, contactId, campaignId, userId, retryAttempt = false }) {
   if (!tenantId || !contactId || !campaignId) {
     console.log("[callifiedAutoDial] enqueue skipped: missing tenantId/contactId/campaignId", {
       tenantId,
       contactId,
       campaignId,
     });
-    return;
+    return false;
   }
 
   // Deduplicate: only one pending auto-dial per contact (queued or in-flight).
@@ -96,7 +97,7 @@ function enqueue({ tenantId, contactId, campaignId, userId }) {
   );
   if (existing || inFlight.has(key)) {
     console.log(`[callifiedAutoDial] duplicate enqueue skipped for contact ${contactId}`);
-    return;
+    return false;
   }
 
   queue.push({
@@ -104,6 +105,7 @@ function enqueue({ tenantId, contactId, campaignId, userId }) {
     contactId: Number(contactId),
     campaignId: Number(campaignId),
     userId: userId ? Number(userId) : null,
+    retryAttempt: Boolean(retryAttempt),
     enqueuedAt: Date.now(),
     attempts: 0,
   });
@@ -111,6 +113,7 @@ function enqueue({ tenantId, contactId, campaignId, userId }) {
     `[callifiedAutoDial] enqueued contact ${contactId} (tenant ${tenantId}, campaign ${campaignId})`,
   );
   wakeProcessor();
+  return true;
 }
 
 /**
@@ -145,12 +148,13 @@ async function runDelayedClassification(tenantId, contactId, userId, attempt = 1
       return;
     }
 
+    const boundedReason = String(classification.reason || "").slice(0, 190);
     await prisma.contact.update({
-      where: { id: contactId },
+      where: { id: contactId, tenantId },
       data: {
         callifiedLeadStatus: classification.status,
         callifiedLeadStatusSource: classification.source,
-        callifiedLeadStatusReason: classification.reason,
+        callifiedLeadStatusReason: boundedReason,
         callifiedLeadStatusUpdatedAt: new Date(),
       },
     });
@@ -163,6 +167,10 @@ async function runDelayedClassification(tenantId, contactId, userId, attempt = 1
     } else if (classification.status === CALL_STATUS.DNP) {
       await getDnpRetryEngine().scheduleDnpRetry(tenantId, contactId).catch((e) => {
         console.error(`[callifiedAutoDial] scheduleDnpRetry failed for contact ${contactId}:`, e.message);
+      });
+    } else if (classification.status === CALL_STATUS.PENDING) {
+      await getDnpRetryEngine().schedulePendingRetry(tenantId, contactId).catch((e) => {
+        console.error(`[callifiedAutoDial] schedulePendingRetry failed for contact ${contactId}:`, e.message);
       });
     }
 
@@ -224,8 +232,17 @@ async function processNext() {
     // still ringing the callee.
     const priorStatus = contact.callifiedLeadStatus || CALL_STATUS.YET_TO_CALL;
     item.priorStatus = priorStatus;
+    // A scheduled retry is charged only after it reaches the actual dial path.
+    // Queue duplicates and cooldown/no-longer-dialable skips therefore do not
+    // exhaust the tenant's configured retry budget.
+    if (item.retryAttempt) {
+      await prisma.contact.update({
+        where: { id: contactId, tenantId },
+        data: { callifiedDnpRetryCount: { increment: 1 } },
+      });
+    }
     await prisma.contact.update({
-      where: { id: contactId },
+      where: { id: contactId, tenantId },
       data: {
         callifiedLeadStatus: CALL_STATUS.CONNECTED,
         callifiedLeadStatusSource: "auto_dial",

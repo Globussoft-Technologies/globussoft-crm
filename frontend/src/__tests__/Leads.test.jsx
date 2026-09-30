@@ -2029,6 +2029,10 @@ function callifiedFetchMock(url, opts) {
     }
   }
   if (typeof url === 'string' && url.startsWith('/api/tenant-settings/') && !opts) {
+    if (url.endsWith('.mode')) return Promise.resolve({ value: 'delay' });
+    if (url.endsWith('.day_interval')) return Promise.resolve({ value: '1' });
+    if (url.endsWith('.time_local')) return Promise.resolve({ value: '10:00' });
+    if (url.endsWith('.timezone')) return Promise.resolve({ value: 'Asia/Kolkata' });
     return Promise.resolve({ value: 'true', defaultValue: 'true', isOverride: false });
   }
   if (opts?.method === 'PUT' || opts?.method === 'POST') return Promise.resolve({ ok: true });
@@ -2036,6 +2040,13 @@ function callifiedFetchMock(url, opts) {
 }
 
 describe('Leads — Callified campaign column + bulk dial + call summary', () => {
+  const findSavedCallSetting = (key) => {
+    const batchCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/tenant-settings/callified' && opts?.method === 'PUT',
+    );
+    if (!batchCall) return undefined;
+    return JSON.parse(batchCall[1].body).settings.find((entry) => entry.key === key);
+  };
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(callifiedFetchMock);
@@ -2251,53 +2262,41 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     expect(screen.queryByText('Callified Score')).toBeNull();
   });
 
-  it('Call Settings popover shows all four sections', async () => {
+  it('Call Settings popover shows all six sections', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
     expect(screen.getByText(/Auto Dial New Leads/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic dialing for new leads/i)).toBeInTheDocument();
+    expect(screen.getByText(/Automatic Refresh/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enable automatic lead refresh/i)).toBeInTheDocument();
     expect(screen.getByText(/DNP Settings/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic DNP retries/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pending Settings/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enable automatic pending retries/i)).toBeInTheDocument();
     expect(screen.getByText(/Assigning Staff/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Auto-assign qualified leads to staff/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Assign logic/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Leads per user before moving to next/i)).toBeInTheDocument();
-    expect(screen.getByText(/Qualified Status/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Use AI to qualify using transcripts/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Classification$/i)).toBeInTheDocument();
+    expect(screen.getByText(/transcript outcomes are used first/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Save changes/i })).toBeInTheDocument();
   });
 
-  it('toggling AI classification saves immediately', async () => {
+  it('classification is automatic and does not expose the obsolete AI toggle', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
     fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
-    const toggle = screen.getByLabelText(/Use AI to qualify using transcripts/i);
-    expect(toggle).toBeInTheDocument();
-    expect(toggle.checked).toBe(true);
-
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.ai_transcript.enabled') &&
-          opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      expect(body.value).toBe('false');
-      expect(body.category).toBe('feature-flag');
-    });
-    await waitFor(() => {
-      expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/disabled/i));
-    });
+    expect(screen.queryByLabelText(/Use Callified transcript conclusions/i)).toBeNull();
+    expect(screen.getByText(/quality score is used automatically as the fallback/i)).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      String(url).includes('feature.callified.ai_transcript.enabled') && opts?.method === 'PUT')).toBe(false);
   });
 
-  it('toggling auto-dial new leads saves the right endpoint', async () => {
+  it('stages auto-dial changes until Save changes is pressed', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
@@ -2308,17 +2307,15 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
     fireEvent.click(toggle);
 
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      String(url).includes('feature.callified.auto_dial_new_leads.enabled') && opts?.method === 'PUT')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
     await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.auto_dial_new_leads.enabled') &&
-          opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      expect(body.value).toBe('false');
-      expect(body.category).toBe('feature-flag');
+      expect(findSavedCallSetting('feature.callified.auto_dial_new_leads.enabled')).toEqual({
+        key: 'feature.callified.auto_dial_new_leads.enabled',
+        value: 'false',
+      });
     });
   });
 
@@ -2331,22 +2328,132 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     expect(screen.getByText(/DNP Settings/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic DNP retries/i)).toBeInTheDocument();
 
-    const maxRetriesInput = screen.getByLabelText(/Max retries/i);
+    const maxRetriesInput = document.getElementById('dnp-max-retries');
     expect(maxRetriesInput).toBeInTheDocument();
 
     fireEvent.change(maxRetriesInput, { target: { value: '5' } });
     fireEvent.blur(maxRetriesInput);
 
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      String(url).includes('feature.callified.dnp_retry.max_retries') && opts?.method === 'PUT')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
     await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.dnp_retry.max_retries') &&
-          opts?.method === 'PUT',
+      expect(findSavedCallSetting('feature.callified.dnp_retry.max_retries')?.value).toBe('5');
+    });
+  });
+
+  it('automatic refresh defaults on and can be disabled in Call Settings', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    const toggle = screen.getByLabelText(/Enable automatic lead refresh/i);
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      url === '/api/tenant-settings/feature.callified.auto_refresh.enabled' && opts?.method === 'PUT')).toBe(false);
+    expect(screen.getByText(/Auto-refresh on/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => {
+      expect(findSavedCallSetting('feature.callified.auto_refresh.enabled')?.value).toBe('false');
+    });
+    await waitFor(() => expect(screen.getByText(/Auto-refresh off/i)).toBeInTheDocument());
+  });
+
+  it('manual refresh syncs Callified state and classifies called leads', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/callified/leads/sync-call-statuses',
+        expect.objectContaining({ method: 'POST', silent: true }),
       );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      expect(body.value).toBe('5');
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/callified/leads/11/classify',
+        expect.objectContaining({ method: 'POST', silent: true }),
+      );
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Refreshed');
+  });
+
+  it('manual refresh reclassifies a legacy Connecting lead even without a call summary', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve([{
+          ...CALLIFIED_LEADS[0],
+          callifiedLeadStatus: 'connected',
+        }]);
+      }
+      if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary')) {
+        return Promise.resolve({ summaries: {} });
+      }
+      return callifiedFetchMock(url, opts);
+    });
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/callified/leads/11/classify',
+        expect.objectContaining({ method: 'POST', silent: true }),
+      );
+    });
+  });
+
+  it('pending retry settings save independently through tenant settings', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    expect(screen.getByLabelText(/Enable automatic pending retries/i)).toBeInTheDocument();
+    const maxRetriesInput = screen.getByLabelText(/Pending max retries/i);
+    fireEvent.change(maxRetriesInput, { target: { value: '4' } });
+    fireEvent.blur(maxRetriesInput);
+
+    expect(fetchApiMock.mock.calls.some(([url, opts]) =>
+      url === '/api/tenant-settings/feature.callified.pending_retry.max_retries' && opts?.method === 'PUT')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => {
+      expect(findSavedCallSetting('feature.callified.pending_retry.max_retries')?.value).toBe('4');
+    });
+  });
+
+  it('supports day-based scheduled retries with a time and timezone', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    const dialog = screen.getByRole('dialog', { name: /Call settings/i });
+    const scheduledButtons = within(dialog).getAllByRole('button', { name: /Scheduled time/i });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(scheduledButtons[0]);
+
+    const everyDays = within(dialog).getByLabelText(/Every N days/i);
+    fireEvent.change(everyDays, { target: { value: '3' } });
+    const time = within(dialog).getByLabelText(/Time of day/i);
+    fireEvent.change(time, { target: { value: '14:30' } });
+
+    expect(fetchApiMock.mock.calls.some(([, opts]) => opts?.method === 'PUT')).toBe(false);
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => {
+      expect(findSavedCallSetting('feature.callified.dnp_retry.mode')?.value).toBe('scheduled');
+      expect(findSavedCallSetting('feature.callified.dnp_retry.day_interval')?.value).toBe('3');
+      expect(findSavedCallSetting('feature.callified.dnp_retry.time_local')?.value).toBe('14:30');
     });
   });
 
@@ -2360,34 +2467,15 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     // Default logic is round-robin, so the leads-per-user input is visible.
     const leadsInput = screen.getByLabelText(/Leads per user before moving to next/i);
     fireEvent.change(leadsInput, { target: { value: '3' } });
-    fireEvent.blur(leadsInput);
-
-    await waitFor(() => {
-      const leadsCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.assign_staff.leads_per_user') &&
-          opts?.method === 'PUT',
-      );
-      expect(leadsCall).toBeDefined();
-      const body = JSON.parse(leadsCall[1].body);
-      expect(body.value).toBe('3');
-    });
-
-    fetchApiMock.mockClear();
     const logicSelect = screen.getByLabelText(/Assign logic/i);
     fireEvent.change(logicSelect, { target: { value: 'random' } });
 
+    expect(fetchApiMock.mock.calls.some(([, opts]) => opts?.method === 'PUT')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
     await waitFor(() => {
-      const logicCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) =>
-          typeof url === 'string' &&
-          url.startsWith('/api/tenant-settings/feature.callified.assign_staff.logic') &&
-          opts?.method === 'PUT',
-      );
-      expect(logicCall).toBeDefined();
-      const body = JSON.parse(logicCall[1].body);
-      expect(body.value).toBe('random');
+      expect(findSavedCallSetting('feature.callified.assign_staff.leads_per_user')?.value).toBe('3');
+      expect(findSavedCallSetting('feature.callified.assign_staff.logic')?.value).toBe('random');
     });
   });
 });

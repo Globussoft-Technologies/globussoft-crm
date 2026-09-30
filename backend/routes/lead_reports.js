@@ -330,6 +330,7 @@ router.get("/lead-quality", async (req, res) => {
       qualified: 0,
       junk: 0,
       dnp: 0,
+      pending: 0,
       connected: 0,
       untouched: 0,
       converted: 0,
@@ -350,6 +351,7 @@ router.get("/lead-quality", async (req, res) => {
       if (call === M.CALL_STATUS.QUALIFIED) totals.qualified += 1;
       else if (call === M.CALL_STATUS.JUNK) totals.junk += 1;
       else if (call === M.CALL_STATUS.DNP) totals.dnp += 1;
+      else if (call === M.CALL_STATUS.PENDING) totals.pending += 1;
       else if (call === M.CALL_STATUS.CONNECTED) totals.connected += 1;
       else totals.untouched += 1;
       if (converted) totals.converted += 1;
@@ -410,6 +412,7 @@ router.get("/lead-quality", async (req, res) => {
         qualified: totals.qualified,
         junk: totals.junk,
         dnp: totals.dnp,
+        pending: totals.pending,
         connected: totals.connected,
         untouched: totals.untouched,
         converted: totals.converted,

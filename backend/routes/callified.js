@@ -35,6 +35,7 @@ const {
 const {
   clearDnpRetryState,
   scheduleDnpRetry,
+  schedulePendingRetry,
 } = require("../lib/callifiedDnpRetryEngine");
 const { startBrowserCall } = require("../lib/callifiedAgentBridge");
 const { sendCallifiedError } = require("../lib/callifiedErrors");
@@ -843,9 +844,8 @@ router.get("/calls/lead/:leadId/latest", verifyToken, async (req, res) => {
 /**
  * POST /api/callified/leads/:leadId/classify
  *
- * Classifies a CRM lead as qualified/junk/dnp/yet_to_call based on the latest
- * Callified call transcript. Uses Gemini 2.5 Flash Lite when available; falls
- * back to the Callified review score + appointment_booked flag. Qualified leads
+ * Classifies a CRM lead as qualified/junk/pending/dnp/yet_to_call based on the
+ * latest Callified transcript conclusion. Qualified leads
  * with no current assignee are automatically assigned to the next staff user in
  * round-robin.
  */
@@ -862,10 +862,14 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
     if (!contact) return res.status(404).json({ error: "Lead not found" });
 
     const classification = await classifyLeadStatus(req.user.tenantId, leadId, { userId: req.user.userId });
+    // Prisma's optional String columns map to VARCHAR(191) by default. Provider
+    // summaries can be much longer, so store a compact reason while returning
+    // the complete reason to the caller.
+    const storedReason = String(classification.reason || "").slice(0, 190);
     const updateData = {
       callifiedLeadStatus: classification.status,
       callifiedLeadStatusSource: classification.source,
-      callifiedLeadStatusReason: classification.reason,
+      callifiedLeadStatusReason: storedReason,
       callifiedLeadStatusUpdatedAt: new Date(),
     };
 
@@ -880,6 +884,14 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
         data: updateData,
         include: { assignedTo: { select: { id: true, name: true, email: true } } },
       });
+
+      if (classification.status === CALL_STATUS.DNP) {
+        await scheduleDnpRetry(req.user.tenantId, leadId).catch(() => {});
+      } else if (classification.status === CALL_STATUS.PENDING) {
+        await schedulePendingRetry(req.user.tenantId, leadId).catch(() => {});
+      } else {
+        await clearDnpRetryState(leadId).catch(() => {});
+      }
 
       res.json({
         id: updated.id,
@@ -898,8 +910,8 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
       throw updateErr;
     }
   } catch (e) {
-    console.error("[callified] leads/:leadId/classify error:", e.message);
-    res.status(500).json({ error: "Failed to classify lead" });
+    console.error("[callified] leads/:leadId/classify error:", e.code || "UNKNOWN", e.message);
+    res.status(500).json({ error: "Failed to classify lead", code: "CLASSIFICATION_FAILED" });
   }
 });
 
@@ -933,6 +945,9 @@ router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
       // A manual DNP override starts a fresh retry streak.
       updateData.callifiedDnpRetryCount = 0;
     }
+    if (normalized === CALL_STATUS.PENDING) {
+      updateData.callifiedDnpRetryCount = 0;
+    }
     if (normalized === CALL_STATUS.QUALIFIED && !contact.assignedToId) {
       const assignedToId = await assignQualifiedLeadRoundRobin(req.user.tenantId, leadId, normalized);
       if (assignedToId) updateData.assignedToId = assignedToId;
@@ -949,10 +964,12 @@ router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
       await scheduleDnpRetry(req.user.tenantId, leadId).catch((e) => {
         console.error(`[callified] failed to schedule DNP retry for contact ${leadId}:`, e.message);
       });
-    } else {
-      await clearDnpRetryState(leadId).catch((e) => {
-        console.error(`[callified] failed to clear DNP retry state for contact ${leadId}:`, e.message);
+    } else if (normalized === CALL_STATUS.PENDING) {
+      await schedulePendingRetry(req.user.tenantId, leadId).catch((e) => {
+        console.error(`[callified] failed to schedule pending retry for contact ${leadId}:`, e.message);
       });
+    } else {
+      await clearDnpRetryState(leadId).catch((e) => console.error(`[callified] failed to clear retry state for contact ${leadId}:`, e.message));
     }
 
     res.json({

@@ -7007,3 +7007,285 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
    backdrops use that role, and painting them with --modal-bg hides the CRM
    page instead of dimming it. Individual modal panels own their surface
    background (for example .generic-import-wizard and .cp-modal). */
+
+/* Generic CRM Call Settings — Ant Design Menu-inspired hierarchy. */
+.call-settings-backdrop {
+  background: rgba(15, 23, 42, 0.52) !important;
+  backdrop-filter: blur(3px);
+}
+
+.call-settings-dialog {
+  width: min(92vw, 540px) !important;
+  max-height: min(88vh, 780px) !important;
+  padding: 0 16px 14px !important;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent) !important;
+  border-radius: 16px !important;
+  background: color-mix(in srgb, var(--bg-color) 94%, #f5f7fa) !important;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28) !important;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 35%, transparent) transparent;
+  scrollbar-gutter: stable;
+}
+
+.call-settings-dialog::-webkit-scrollbar {
+  width: 8px;
+}
+
+.call-settings-dialog::-webkit-scrollbar-track {
+  margin-block: 12px;
+  background: transparent;
+}
+
+.call-settings-dialog::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
+  background-clip: padding-box;
+}
+
+.call-settings-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 -16px 12px !important;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-color) 96%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.call-settings-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 11px;
+}
+
+.call-settings-heading-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--primary-color, var(--accent-color));
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent);
+}
+
+.call-settings-heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.call-settings-heading > span:last-child > span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.call-settings-close {
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px !important;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.call-settings-close:hover {
+  color: var(--text-primary) !important;
+  background: var(--surface-hover) !important;
+}
+
+.call-settings-section {
+  position: relative;
+  margin: 0 0 10px !important;
+  padding: 13px 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-color) 85%, transparent);
+  border-radius: 11px;
+  background: var(--surface, var(--surface-color));
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.call-settings-section:hover {
+  border-color: color-mix(in srgb, var(--primary-color, var(--accent-color)) 28%, var(--border-color));
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+}
+
+.call-settings-section-title {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px !important;
+  color: var(--text-primary) !important;
+  font-size: 0.72rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.045em !important;
+  padding-inline: 2px;
+}
+
+.call-settings-section-title::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 2px;
+  background: var(--primary-color, var(--accent-color));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+}
+
+.call-settings-section > label {
+  display: grid !important;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center !important;
+  min-height: 28px;
+  column-gap: 10px !important;
+  margin-bottom: 0 !important;
+  font-size: 0.84rem !important;
+  line-height: 1.4;
+}
+
+.call-settings-section > label > input[type="checkbox"] {
+  position: relative;
+  width: 34px;
+  height: 19px;
+  flex: 0 0 34px;
+  margin: 0 !important;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  align-self: start;
+  margin-top: 1px !important;
+  background: color-mix(in srgb, var(--text-secondary) 32%, var(--surface, var(--surface-color, #fff)));
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.call-settings-section > label > input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.28);
+  transition: transform 160ms ease;
+}
+
+.call-settings-section > label > input[type="checkbox"]:checked {
+  background: var(--primary-color, var(--accent-color));
+}
+
+.call-settings-section > label > input[type="checkbox"]:checked::before {
+  transform: translateX(15px);
+}
+
+.call-settings-section > label > input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, var(--accent-color)) 22%, transparent);
+}
+
+.call-settings-section > label > input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.call-settings-section-expandable > div:last-child {
+  margin-top: 12px;
+  margin-left: 44px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 76%, transparent);
+}
+
+.call-settings-dialog > .call-settings-section + div[style*="height"] {
+  display: none !important;
+}
+
+.call-settings-schedule {
+  padding: 10px !important;
+  border-color: color-mix(in srgb, var(--border-color) 82%, transparent) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--bg-color) 70%, var(--surface)) !important;
+}
+
+.call-settings-segmented {
+  gap: 2px !important;
+  padding: 3px !important;
+  background: color-mix(in srgb, var(--border-color) 42%, transparent) !important;
+}
+
+.call-settings-segmented button {
+  min-height: 34px;
+  border: 0 !important;
+}
+
+.call-settings-segmented button[aria-pressed="true"] {
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+}
+
+.call-settings-dialog input[type="number"],
+.call-settings-dialog input[type="time"],
+.call-settings-dialog select {
+  min-height: 36px;
+  border-color: var(--border-color) !important;
+  border-radius: 8px !important;
+  background: var(--surface, var(--surface-color)) !important;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.call-settings-dialog input[type="number"]:focus,
+.call-settings-dialog input[type="time"]:focus,
+.call-settings-dialog select:focus {
+  border-color: var(--primary-color, var(--accent-color)) !important;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent);
+}
+
+.call-settings-admin-note,
+.call-settings-save-note {
+  margin: 12px 2px 2px !important;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.call-settings-save-note span {
+  margin-right: 4px;
+  color: #16a34a;
+  font-weight: 700;
+}
+
+@media (max-width: 520px) {
+  .call-settings-dialog {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 28px) !important;
+    padding-inline: 12px !important;
+  }
+
+  .call-settings-header {
+    margin-inline: -12px !important;
+    padding-inline: 14px;
+  }
+
+  .call-settings-section {
+    padding: 12px;
+  }
+
+  .call-settings-section-expandable > div:last-child {
+    margin-left: 0;
+  }
+}
+
+[data-theme="dark"] .call-settings-dialog {
+  background: color-mix(in srgb, var(--bg-color) 95%, #111827) !important;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.5) !important;
+}

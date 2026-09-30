@@ -80,10 +80,41 @@ function validateTenantSettingValue(key, rawValue) {
       return { ok: false, code: "INVALID_DNP_MAX_RETRIES", error: "DNP max retries must be an integer between 1 and 10." };
     }
   }
+  if (key === KEYS.CALLIFIED_PENDING_RETRY_MAX_RETRIES) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      return { ok: false, code: "INVALID_PENDING_MAX_RETRIES", error: "Pending max retries must be an integer between 1 and 10." };
+    }
+  }
   if (key === KEYS.CALLIFIED_DNP_RETRY_INTERVAL_MINUTES) {
     const n = Number(rawValue);
-    if (!Number.isInteger(n) || n < 5 || n > 24 * 60) {
-      return { ok: false, code: "INVALID_DNP_INTERVAL", error: "DNP retry interval must be an integer between 5 minutes and 24 hours." };
+    if (!Number.isInteger(n) || n < 5 || n > 30 * 24 * 60) {
+      return { ok: false, code: "INVALID_DNP_INTERVAL", error: "DNP retry interval must be between 5 minutes and 30 days." };
+    }
+  }
+  if (key === KEYS.CALLIFIED_PENDING_RETRY_INTERVAL_MINUTES) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 5 || n > 30 * 24 * 60) {
+      return { ok: false, code: "INVALID_PENDING_INTERVAL", error: "Pending retry interval must be between 5 minutes and 30 days." };
+    }
+  }
+  if ([KEYS.CALLIFIED_DNP_RETRY_MODE, KEYS.CALLIFIED_PENDING_RETRY_MODE].includes(key) && !["delay", "scheduled"].includes(String(rawValue))) {
+    return { ok: false, code: "INVALID_RETRY_MODE", error: "Retry mode must be delay or scheduled." };
+  }
+  if ([KEYS.CALLIFIED_DNP_RETRY_DAY_INTERVAL, KEYS.CALLIFIED_PENDING_RETRY_DAY_INTERVAL].includes(key)) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 1 || n > 30) {
+      return { ok: false, code: "INVALID_RETRY_DAY_INTERVAL", error: "Retry day interval must be between 1 and 30 days." };
+    }
+  }
+  if ([KEYS.CALLIFIED_DNP_RETRY_TIME_LOCAL, KEYS.CALLIFIED_PENDING_RETRY_TIME_LOCAL].includes(key) && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(rawValue))) {
+    return { ok: false, code: "INVALID_RETRY_TIME", error: "Retry time must use HH:mm format." };
+  }
+  if (key === KEYS.CALLIFIED_RETRY_TIMEZONE) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: String(rawValue) }).format(new Date());
+    } catch {
+      return { ok: false, code: "INVALID_RETRY_TIMEZONE", error: "Retry timezone must be a valid IANA timezone." };
     }
   }
   return { ok: true };
@@ -113,6 +144,91 @@ router.get("/", verifyToken, async (req, res) => {
   } catch (e) {
     console.error("[tenant-settings] list error:", e.message);
     res.status(500).json({ error: "Failed to list tenant settings" });
+  }
+});
+
+// ─── PUT /callified — atomically save the Generic CRM Callified panel ──
+//
+// The Leads dialog presents these values as one form. Persist them in one DB
+// transaction so a validation/database failure cannot leave a partially
+// updated retry policy behind.
+router.put("/callified", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    if (!tenant || tenant.vertical !== "generic") {
+      return res.status(404).json({
+        error: "Callified lead settings are unavailable for this tenant",
+        code: "CALLIFIED_SETTINGS_NOT_AVAILABLE",
+      });
+    }
+    const settings = Array.isArray(req.body?.settings) ? req.body.settings : null;
+    if (!settings || settings.length === 0 || settings.length > 30) {
+      return res.status(400).json({
+        error: "settings must be a non-empty array with at most 30 entries",
+        code: "INVALID_SETTINGS_BATCH",
+      });
+    }
+
+    const seen = new Set();
+    const normalized = [];
+    for (const entry of settings) {
+      const key = String(entry?.key || "");
+      if (!key.startsWith("feature.callified.") || !isKnownKey(key)) {
+        return res.status(400).json({ error: `Invalid Callified setting key: ${key}`, code: "INVALID_SETTING_KEY" });
+      }
+      if (seen.has(key)) {
+        return res.status(400).json({ error: `Duplicate setting key: ${key}`, code: "DUPLICATE_SETTING_KEY" });
+      }
+      if (entry?.value === undefined || entry?.value === null || entry?.value === "") {
+        return res.status(400).json({ error: `value is required for ${key}`, code: "MISSING_VALUE" });
+      }
+      const validation = validateTenantSettingValue(key, entry.value);
+      if (!validation.ok) {
+        return res.status(400).json({ error: validation.error, code: validation.code });
+      }
+      seen.add(key);
+      normalized.push({ key, value: String(entry.value), category: "feature-flag" });
+    }
+
+    const changes = await prisma.$transaction(async (tx) => {
+      const saved = [];
+      for (const entry of normalized) {
+        const prior = await tx.tenantSetting.findUnique({
+          where: { tenantId_key: { tenantId, key: entry.key } },
+          select: { value: true },
+        });
+        const row = await tx.tenantSetting.upsert({
+          where: { tenantId_key: { tenantId, key: entry.key } },
+          create: { tenantId, ...entry },
+          update: { value: entry.value, category: entry.category },
+        });
+        saved.push({ row, priorValue: prior?.value ?? null });
+      }
+      return saved;
+    });
+
+    for (const { row, priorValue } of changes) {
+      await writeAudit(
+        "TenantSetting",
+        priorValue == null ? "CREATE" : "UPDATE",
+        row.id,
+        req.user.userId,
+        tenantId,
+        { key: row.key, oldValue: priorValue, newValue: row.value },
+      );
+    }
+
+    return res.json({
+      success: true,
+      settings: changes.map(({ row }) => ({ key: row.key, value: row.value, category: row.category })),
+    });
+  } catch (e) {
+    console.error("[tenant-settings] Callified batch put error:", e.message);
+    return res.status(500).json({ error: "Failed to save Callified settings", code: "CALLIFIED_SETTINGS_SAVE_FAILED" });
   }
 });
 

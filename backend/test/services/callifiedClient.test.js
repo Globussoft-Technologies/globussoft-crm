@@ -834,3 +834,55 @@ describe('phone normalization', () => {
     expect(c.isNormalizedPhoneFormat('+91-9176955432')).toBe(false);
   });
 });
+
+describe('transcript response normalization', () => {
+  test('flattens the nested campaign response and keeps the conclusion', () => {
+    const c = loadClient();
+    const rows = c.normalizeTranscriptPayload([{
+      campaign_id: 123,
+      campaign_name: 'Sales Campaign',
+      leads: [{
+        lead_id: 456,
+        calls: [{
+          id: 789,
+          transcript: [],
+          conclusion: {
+            appointment_booked: false,
+            call_outcome: 'pending',
+            summary: 'Follow-up required.',
+          },
+        }],
+      }],
+    }], 456);
+
+    expect(rows).toEqual([expect.objectContaining({
+      id: 789,
+      lead_id: 456,
+      campaign_id: 123,
+      conclusion: expect.objectContaining({ call_outcome: 'pending' }),
+    })]);
+  });
+
+  test('preserves the existing flat transcript response', () => {
+    const c = loadClient();
+    const payload = [{ id: 1, transcript_text: 'Hello' }];
+    expect(c.normalizeTranscriptPayload(payload, 456)).toBe(payload);
+  });
+
+  test('treats a nested Callified conclusion as a completed call even with an empty transcript', () => {
+    const c = loadClient();
+    const rows = c.normalizeTranscriptPayload([{
+      campaign_id: 123,
+      leads: [{
+        lead_id: 456,
+        calls: [{
+          id: 789,
+          transcript: [],
+          conclusion: { call_outcome: 'pending', appointment_booked: false },
+        }],
+      }],
+    }], 456);
+
+    expect(c.inferCallStatus([], rows[0], new Date())).toBe('COMPLETED');
+  });
+});

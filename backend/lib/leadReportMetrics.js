@@ -24,6 +24,7 @@ const CALL_STATUS = {
   YET_TO_CALL: "yet_to_call",
   CONNECTED: "connected",
   DNP: "dnp",
+  PENDING: "pending",
   QUALIFIED: "qualified",
   JUNK: "junk",
 };
@@ -33,6 +34,8 @@ function normalizeCallStatus(raw) {
   const s = String(raw).toLowerCase().trim().replace(/\s+/g, "_");
   if (s === "hot" || s.includes("qualified")) return CALL_STATUS.QUALIFIED;
   if (s === "cold" || s.includes("junk")) return CALL_STATUS.JUNK;
+  if (s.includes("pending") || s.includes("follow_up") || s.includes("unclear"))
+    return CALL_STATUS.PENDING;
   if (s.includes("dnp") || s.includes("not_picked") || s.includes("no_answer"))
     return CALL_STATUS.DNP;
   if (s.includes("connected") || s.includes("in_progress") || s.includes("calling"))

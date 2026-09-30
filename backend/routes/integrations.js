@@ -781,8 +781,12 @@ router.get("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, 
 
     res.json({
       apiKey: row?.token ? "••••••••••••••••" : "",
-      email: settings.email || "",
-      password: settings.password ? "••••••••••••••••" : "",
+      // Never return fallback credentials to the browser. Besides reducing
+      // exposure, blank fields prevent saved login details from becoming
+      // editable form state in another tenant's browser session.
+      email: "",
+      password: "",
+      hasFallbackAuth: !!(settings.email && settings.password),
       baseUrl: settings.baseUrl || envBaseUrl,
       webhookSecret: settings.webhookSecret ? "••••••••••••••••" : "",
       isActive: !!row?.isActive,
@@ -816,7 +820,13 @@ router.put("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, 
       : (row?.token || null);
 
     const settings = {
-      email: typeof email === "string" ? email.trim() : (existingSettings.email || ""),
+      // The GET endpoint deliberately never returns stored credentials. The
+      // settings form therefore sends empty credential fields when an admin
+      // changes only the URL/webhook. Treat those blanks as "unchanged" so a
+      // harmless save cannot silently disable fallback authentication.
+      email: (typeof email === "string" && email.trim())
+        ? email.trim()
+        : (existingSettings.email || ""),
       password: (typeof password === "string" && password && password !== "••••••••••••••••")
         ? password
         : (existingSettings.password || ""),
@@ -859,6 +869,5 @@ router.put("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, 
 });
 
 module.exports = router;
-
 
 

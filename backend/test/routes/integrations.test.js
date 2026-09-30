@@ -494,9 +494,69 @@ describe('POST /api/integrations/disconnect — ADMIN gate + soft disable', () =
   });
 });
 
-// ─── PUT /callified/config ─────────────────────────────────────────────
+// ─── GET/PUT /callified/config ─────────────────────────────────────────
+
+describe('GET /api/integrations/callified/config — tenant-safe credential response', () => {
+  test('uses the authenticated tenant and never returns stored fallback credentials', async () => {
+    prisma.integration.findUnique.mockResolvedValue({
+      token: 'generic-tenant-api-key',
+      settings: JSON.stringify({
+        email: 'wellness-user@example.com',
+        password: 'wellness-password',
+        baseUrl: 'https://tenant.callified.example.com',
+      }),
+      isActive: true,
+      updatedAt: new Date('2026-09-28T10:00:00Z'),
+    });
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/integrations/callified/config');
+
+    expect(res.status).toBe(200);
+    expect(prisma.integration.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_provider: { tenantId: 42, provider: 'callified' } },
+    });
+    expect(res.body).toMatchObject({
+      email: '',
+      password: '',
+      hasFallbackAuth: true,
+      isActive: true,
+      baseUrl: 'https://tenant.callified.example.com',
+    });
+    expect(JSON.stringify(res.body)).not.toContain('wellness-user@example.com');
+    expect(JSON.stringify(res.body)).not.toContain('wellness-password');
+  });
+});
 
 describe('PUT /api/integrations/callified/config — cached JWT invalidation', () => {
+  test('blank masked-form credentials preserve the stored fallback login', async () => {
+    prisma.integration.findUnique.mockResolvedValue({
+      token: null,
+      settings: JSON.stringify({
+        email: 'admin@example.com',
+        password: 'stored-password',
+        baseUrl: 'https://old.callified.example.com',
+      }),
+    });
+    prisma.integration.upsert.mockResolvedValue({
+      isActive: true,
+      updatedAt: new Date('2026-09-29T10:00:00Z'),
+    });
+
+    const res = await request(makeApp({ tenantId: 73 }))
+      .put('/api/integrations/callified/config')
+      .send({ email: '', password: '', baseUrl: 'https://new.callified.example.com' });
+
+    expect(res.status).toBe(200);
+    const upsert = prisma.integration.upsert.mock.calls[0][0];
+    expect(JSON.parse(upsert.update.settings)).toMatchObject({
+      email: 'admin@example.com',
+      password: 'stored-password',
+      baseUrl: 'https://new.callified.example.com',
+    });
+    expect(upsert.update.isActive).toBe(true);
+  });
+
   test('successful credential update clears the current tenant token cache', async () => {
     prisma.integration.findUnique.mockResolvedValue(null);
     prisma.integration.upsert.mockResolvedValue({
@@ -847,7 +907,6 @@ describe('GET /api/integrations/callified/sso — 302 redirect', () => {
     expect(res.text).toBe('User not found');
   });
 });
-
 
 
 

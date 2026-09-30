@@ -2396,6 +2396,17 @@ try {
   );
 }
 
+// Callified dialing and retry processing are operational queue services, not
+// optional reporting/maintenance crons. Keep them running in local development
+// even when DISABLE_CRONS=1; otherwise new-lead calls work while DNP/Pending
+// retries silently never run. Automated tests remain opted out.
+if (process.env.NODE_ENV !== "test" && process.env.DISABLE_CALLIFIED_AUTOMATION !== "1") {
+  const { startProcessor: startCallifiedAutoDial } = require("./lib/callifiedAutoDialQueue");
+  startCallifiedAutoDial();
+  const { startDnpRetryEngine } = require("./lib/callifiedDnpRetryEngine");
+  startDnpRetryEngine();
+}
+
 // DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-
 // coverage runs on a different port) without double-firing reminders, blasts,
 // orchestrator runs, etc. against the shared DB. Set ONLY on the secondary
@@ -2416,14 +2427,6 @@ if (process.env.DISABLE_CRONS === "1") {
   // Initialize Lead Scoring Engine (runs every 10 min, immediate first tick)
   const { initLeadScoringCron } = require("./cron/leadScoringEngine");
   initLeadScoringCron(io);
-
-  // Initialize Callified new-lead auto-dial queue (processes one lead at a time).
-  const { startProcessor: startCallifiedAutoDial } = require("./lib/callifiedAutoDialQueue");
-  startCallifiedAutoDial();
-
-  // Initialize Callified DNP retry engine (re-dials DNP leads on a schedule).
-  const { startDnpRetryEngine } = require("./lib/callifiedDnpRetryEngine");
-  startDnpRetryEngine();
 
   // Initialize Recurring Invoice Engine (runs daily at 6 AM)
   const { initRecurringInvoiceCron } = require("./cron/recurringInvoiceEngine");

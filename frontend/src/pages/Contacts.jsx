@@ -188,6 +188,10 @@ const Contacts = () => {
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
   const isGeneric = !isTravel && !isWellness;
+  // Generic and Travel share tenant-scoped lead custom fields and column
+  // preferences. Wellness keeps its separate patient field surfaces.
+  const supportsLeadCustomFields = isGeneric || isTravel;
+  const supportsColumnCustomization = isGeneric || isTravel;
   const isAdmin = user?.role === 'ADMIN';
   // Bulk-select + bulk-assign — mirrors Leads.jsx exactly, same backend
   // endpoint (/api/contacts/bulk-assign), so this works unmodified across
@@ -201,16 +205,16 @@ const Contacts = () => {
   // Membership filtering is applied by the contacts API so it covers the
   // entire view before limit/offset are applied.
   const [activeViewId, setActiveViewId] = useState(null);
-  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  // Generic + Travel tenant-scoped Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
-  // Generic-vertical-only "Customize table" column-visibility picker
+  // Generic + Travel "Customize table" column-visibility picker
   // (personal per-user preference — see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column".
   const [visibleColumns, setVisibleColumns] = useState(null);
   const isColVisible = useCallback((key) => {
-    if (isWellness || isTravel || visibleColumns === null) return true;
+    if (!supportsColumnCustomization || visibleColumns === null) return true;
     return visibleColumns.includes(key);
-  }, [isTravel, isWellness, visibleColumns]);
+  }, [supportsColumnCustomization, visibleColumns]);
   const staffBrandSuffix = (member) => {
     if (!isTravel) return '';
     const brands = accessibleSubBrands(member).map(subBrandShortLabel);
@@ -538,16 +542,16 @@ const Contacts = () => {
     setPageInput(String(clampedPage));
   };
 
-  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
-  // Own effect keyed on [isWellness, isTravel] (not the mount-only effect
+  // Generic + Travel tenant-scoped Lead custom fields (Settings > Lead Fields).
+  // Own effect keyed on the supported-field flag (not the mount-only effect
   // above) so it re-fires once AuthContext's tenant finishes loading —
   // tenant can still be undefined on the very first render.
   useEffect(() => {
-    if (isWellness || isTravel) return;
+    if (!supportsLeadCustomFields) return;
     fetchApi('/api/lead-custom-fields')
       .then(d => setCustomFieldDefs(Array.isArray(d) ? d : []))
       .catch(() => setCustomFieldDefs([]));
-  }, [isWellness, isTravel]);
+  }, [supportsLeadCustomFields]);
 
   const handleAssign = async (contactId, assignedToId) => {
     await fetchApi(`/api/contacts/${contactId}/assign`, {
@@ -757,11 +761,11 @@ const Contacts = () => {
   const visibleCustomFieldDefs = useMemo(
     () =>
       customFieldDefs.filter((f) =>
-        isWellness || isTravel || visibleColumns === null
+        !supportsColumnCustomization || visibleColumns === null
           ? true
           : visibleColumns.includes(`cf_${f.fieldKey}`),
       ),
-    [customFieldDefs, isTravel, isWellness, visibleColumns],
+    [customFieldDefs, supportsColumnCustomization, visibleColumns],
   );
 
   const contactsFrozenColumnDefs = useMemo(
@@ -1423,9 +1427,9 @@ const Contacts = () => {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          {/* Generic-vertical-only "Customize table" column picker — personal
+          {/* Generic + Travel "Customize table" column picker — personal
               per-user preference, matches the Freshsales reference UI. */}
-          {!isWellness && !isTravel && (
+          {supportsColumnCustomization && (
             <ColumnPicker tableKey="contacts" onColumnsChange={setVisibleColumns} />
           )}
           {/* Generic-vertical-only "Saved Views" — tenant-shared named lists

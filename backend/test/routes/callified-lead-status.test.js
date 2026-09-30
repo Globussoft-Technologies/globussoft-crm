@@ -107,6 +107,24 @@ prisma.tenantSetting.findUnique = vi.fn();
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
 
 const callifiedRouter = requireCJS('../../routes/callified');
+const {
+  classifyConclusion,
+  hasRealConversation,
+} = requireCJS('../../lib/callifiedLeadStatus');
+
+describe('Callified terminal outcome mapping', () => {
+  test.each(['no_answer', 'busy', 'voicemail', 'failed', 'unanswered'])(
+    'maps %s to DNP instead of Pending',
+    (callOutcome) => {
+      const review = { call_outcome: callOutcome, summary: `Provider outcome: ${callOutcome}` };
+      expect(classifyConclusion(review)).toEqual({
+        status: 'dnp',
+        reason: `Provider outcome: ${callOutcome}`,
+      });
+      expect(hasRealConversation(review, null)).toBe(false);
+    },
+  );
+});
 
 function makeApp() {
   const app = express();
@@ -139,6 +157,7 @@ beforeEach(() => {
   prisma.$transaction.mockReset().mockImplementation(async (cb) => cb(prisma));
 
   const callifiedClient = requireCJS('../../services/callifiedClient');
+  callifiedClient.fetchAndStoreCallDetails.mockReset();
   callifiedClient.getCallDetails.mockReset().mockResolvedValue({ transcripts: [], reviews: [] });
 });
 
@@ -354,6 +373,98 @@ describe('PUT /api/callified/leads/:leadId/lead-status', () => {
 });
 
 describe('POST /api/callified/leads/:leadId/classify', () => {
+  test('refreshes a connected Callified attempt before choosing its final status', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: 101, callifiedLeadStatus: 'connected',
+    });
+    prisma.callLog.findMany.mockResolvedValue([{
+      id: 1,
+      contactId: 11,
+      provider: 'callified',
+      providerCallId: '3001',
+      status: 'CONNECTED',
+      createdAt: new Date(),
+      notes: JSON.stringify({ callifiedLeadId: '3001' }),
+    }]);
+    const callifiedClient = requireCJS('../../services/callifiedClient');
+    callifiedClient.fetchAndStoreCallDetails.mockResolvedValue({
+      callStatus: 'COMPLETED',
+      transcripts: [{ id: 9, transcript_text: 'Tomorrow at 3 PM works for me.' }],
+      reviews: [{
+        transcript_id: 9,
+        appointment_booked: true,
+        call_outcome: 'appointment_booked',
+        quality_score: 5,
+        summary: 'Appointment confirmed.',
+      }],
+    });
+    prisma.contact.update.mockImplementation(({ data }) => Promise.resolve({
+      id: 11,
+      assignedToId: 101,
+      assignedTo: { id: 101, name: 'Owner', email: 'owner@test.local' },
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.callifiedLeadStatus).toBe('qualified');
+    expect(callifiedClient.fetchAndStoreCallDetails).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 1,
+      callifiedLeadId: '3001',
+      contactId: 11,
+    }));
+  });
+
+  test('stores a bounded status reason when Callified returns a long summary', async () => {
+    const longSummary = 'Detailed outcome '.repeat(30);
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: 101, callifiedLeadStatus: 'connected',
+    });
+    prisma.callLog.findMany.mockResolvedValue([{
+      id: 1,
+      contactId: 11,
+      provider: 'callified',
+      providerCallId: '3001',
+      status: 'COMPLETED',
+      createdAt: new Date(),
+      notes: JSON.stringify({ callifiedLeadId: '3001' }),
+    }]);
+    const callifiedClient = requireCJS('../../services/callifiedClient');
+    callifiedClient.fetchAndStoreCallDetails.mockResolvedValue({
+      callStatus: 'COMPLETED',
+      transcripts: [{ id: 9, transcript_text: 'Confirmed.' }],
+      reviews: [{
+        transcript_id: 9,
+        appointment_booked: true,
+        call_outcome: 'appointment_booked',
+        quality_score: 5,
+        summary: longSummary,
+      }],
+    });
+    prisma.contact.update.mockImplementation(({ data }) => Promise.resolve({
+      id: 11,
+      assignedToId: 101,
+      assignedTo: null,
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const update = prisma.contact.update.mock.calls
+      .map(([args]) => args)
+      .find((args) => args.data.callifiedLeadStatusReason);
+    expect(update.data.callifiedLeadStatusReason).toHaveLength(190);
+    expect(res.body.reason).toBe(longSummary);
+  });
+
   test('classify returns qualified and auto-assigns unassigned lead', async () => {
     prisma.contact.findFirst.mockResolvedValue({
       id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: null,
@@ -405,7 +516,7 @@ describe('POST /api/callified/leads/:leadId/classify', () => {
         contactId: 11,
         provider: 'callified',
         notes: JSON.stringify({
-          reviews: [{ quality_score: 1.5, appointment_booked: false }],
+          reviews: [{ quality_score: 1.5, appointment_booked: false, call_outcome: 'not_interested' }],
         }),
       },
     ]);
@@ -475,6 +586,38 @@ describe('POST /api/callified/leads/:leadId/classify', () => {
     expect(prisma.user.findMany).not.toHaveBeenCalled();
   });
 
+  test('classify expires a connected state after five minutes when provider details are unavailable', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: 'connected',
+    });
+    prisma.contact.update.mockImplementation(({ data }) => Promise.resolve({
+      id: 11, assignedToId: null, assignedTo: null, ...data,
+    }));
+    prisma.callLog.findMany.mockResolvedValue([{
+      id: 1,
+      contactId: 11,
+      provider: 'callified',
+      providerCallId: '3001',
+      status: 'CONNECTED',
+      createdAt: new Date(Date.now() - 6 * 60 * 1000),
+      notes: JSON.stringify({ callifiedLeadId: '3001', reviews: [] }),
+    }]);
+    const callifiedClient = requireCJS('../../services/callifiedClient');
+    callifiedClient.fetchAndStoreCallDetails.mockRejectedValue(new Error('Old provider record unavailable'));
+    callifiedClient.getCallDetails.mockRejectedValue(new Error('Old provider record unavailable'));
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.callifiedLeadStatus).toBe('dnp');
+    const statusUpdate = prisma.contact.update.mock.calls
+      .map(([args]) => args)
+      .find((args) => args.data.callifiedLeadStatus);
+    expect(statusUpdate.data.callifiedLeadStatus).toBe('dnp');
+  });
+
   test('classify returns dnp when a completed call has no transcript or review', async () => {
     prisma.contact.findFirst.mockResolvedValue({
       id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: null,
@@ -536,15 +679,14 @@ describe('POST /api/callified/leads/:leadId/classify', () => {
     expect(routeRequestMock).not.toHaveBeenCalled();
   });
 
-  test('AI transcript classification enabled → routeRequest receives __surface and __userId', async () => {
+  test('transcript conclusion enabled defaults an unknown outcome to pending without Gemini', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
     llmEnabledMock.mockResolvedValue(true);
-    routeRequestMock.mockResolvedValue({ text: JSON.stringify({ status: 'qualified', reason: 'Gemini says qualified' }) });
     prisma.contact.findFirst.mockResolvedValue({
       id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: null,
     });
     prisma.contact.update.mockResolvedValue({
-      id: 11, assignedToId: null, callifiedLeadStatus: 'qualified', assignedTo: null,
+      id: 11, assignedToId: null, callifiedLeadStatus: 'pending', assignedTo: null,
     });
     prisma.user.findMany.mockResolvedValue([
       { id: 101, role: 'ADMIN', deactivatedAt: null },
@@ -555,8 +697,8 @@ describe('POST /api/callified/leads/:leadId/classify', () => {
 
     const callifiedClient = requireCJS('../../services/callifiedClient');
     callifiedClient.getCallDetails.mockResolvedValue({
-      transcripts: [{ id: 1, created_at: new Date().toISOString(), transcript_text: 'Hello this is a test conversation.' }],
-      reviews: [{ quality_score: 3, appointment_booked: false, sentiment: 'neutral' }],
+      transcripts: [{ id: 1, created_at: new Date().toISOString(), transcript_text: '' }],
+      reviews: [{ quality_score: 0, appointment_booked: false, sentiment: 'neutral', call_outcome: 'pending' }],
     });
 
     prisma.callLog.findMany.mockResolvedValue([
@@ -573,18 +715,8 @@ describe('POST /api/callified/leads/:leadId/classify', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.callifiedLeadStatus).toBe('qualified');
-    expect(routeRequestMock).toHaveBeenCalledTimes(1);
-    expect(routeRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        task: 'callified-lead-status',
-        tenantId: 1,
-        payload: expect.objectContaining({
-          __surface: 'leads-callified-transcript',
-          __userId: 7,
-        }),
-      }),
-    );
+    expect(res.body.callifiedLeadStatus).toBe('pending');
+    expect(routeRequestMock).not.toHaveBeenCalled();
   });
 
   test('classify falls back to the last transcript when created_at is missing', async () => {

@@ -105,10 +105,22 @@ const KEYS = {
   CALLIFIED_AI_TRANSCRIPT_ENABLED:       "feature.callified.ai_transcript.enabled",
   // Generic CRM Leads page — auto-dial new leads toggle.
   CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED:  "feature.callified.auto_dial_new_leads.enabled",
+  // Generic CRM Leads page — background lead/call-status refresh toggle.
+  CALLIFIED_AUTO_REFRESH_ENABLED:          "feature.callified.auto_refresh.enabled",
   // Generic CRM Leads page — DNP retry scheduler settings.
   CALLIFIED_DNP_RETRY_ENABLED:           "feature.callified.dnp_retry.enabled",
   CALLIFIED_DNP_RETRY_MAX_RETRIES:       "feature.callified.dnp_retry.max_retries",
-  CALLIFIED_DNP_RETRY_INTERVAL_MINUTES:  "feature.callified.dnp_retry.interval_minutes",
+  CALLIFIED_DNP_RETRY_INTERVAL_MINUTES:   "feature.callified.dnp_retry.interval_minutes",
+  CALLIFIED_DNP_RETRY_MODE:               "feature.callified.dnp_retry.mode",
+  CALLIFIED_DNP_RETRY_DAY_INTERVAL:       "feature.callified.dnp_retry.day_interval",
+  CALLIFIED_DNP_RETRY_TIME_LOCAL:         "feature.callified.dnp_retry.time_local",
+  CALLIFIED_PENDING_RETRY_ENABLED:        "feature.callified.pending_retry.enabled",
+  CALLIFIED_PENDING_RETRY_MAX_RETRIES:    "feature.callified.pending_retry.max_retries",
+  CALLIFIED_PENDING_RETRY_INTERVAL_MINUTES: "feature.callified.pending_retry.interval_minutes",
+  CALLIFIED_PENDING_RETRY_MODE:           "feature.callified.pending_retry.mode",
+  CALLIFIED_PENDING_RETRY_DAY_INTERVAL:   "feature.callified.pending_retry.day_interval",
+  CALLIFIED_PENDING_RETRY_TIME_LOCAL:     "feature.callified.pending_retry.time_local",
+  CALLIFIED_RETRY_TIMEZONE:               "feature.callified.retry.timezone",
   // Generic CRM Leads page — auto-campaign assignment rules (replaces the
   // single tenant.callifiedAutoCampaignId default). Each rule maps a lead
   // column + normalised value to a Callified campaign id.
@@ -172,10 +184,22 @@ const DEFAULTS = {
   [KEYS.CALLIFIED_AI_TRANSCRIPT_ENABLED]: "true",
   // Generic CRM Leads page — auto-dial new leads enabled by default.
   [KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED]: "true",
+  // Generic CRM Leads page — background refresh enabled by default.
+  [KEYS.CALLIFIED_AUTO_REFRESH_ENABLED]: "true",
   // Generic CRM Leads page — DNP retry defaults.
   [KEYS.CALLIFIED_DNP_RETRY_ENABLED]: "true",
   [KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES]: 3,
   [KEYS.CALLIFIED_DNP_RETRY_INTERVAL_MINUTES]: 60,
+  [KEYS.CALLIFIED_DNP_RETRY_MODE]: "delay",
+  [KEYS.CALLIFIED_DNP_RETRY_DAY_INTERVAL]: 1,
+  [KEYS.CALLIFIED_DNP_RETRY_TIME_LOCAL]: "10:00",
+  [KEYS.CALLIFIED_PENDING_RETRY_ENABLED]: "true",
+  [KEYS.CALLIFIED_PENDING_RETRY_MAX_RETRIES]: 3,
+  [KEYS.CALLIFIED_PENDING_RETRY_INTERVAL_MINUTES]: 60,
+  [KEYS.CALLIFIED_PENDING_RETRY_MODE]: "delay",
+  [KEYS.CALLIFIED_PENDING_RETRY_DAY_INTERVAL]: 1,
+  [KEYS.CALLIFIED_PENDING_RETRY_TIME_LOCAL]: "10:00",
+  [KEYS.CALLIFIED_RETRY_TIMEZONE]: "UTC",
   // Generic CRM Leads page — auto-campaign assignment rules default.
   [KEYS.CALLIFIED_AUTO_CAMPAIGN_RULES]: JSON.stringify({ enabled: false, rules: [] }),
   // Generic CRM Leads page — qualified lead auto-assignment defaults.

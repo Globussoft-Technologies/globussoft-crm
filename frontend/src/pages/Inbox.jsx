@@ -696,7 +696,11 @@ export default function Inbox() {
 
   const handleComposeDraft = useCallback(async () => {
     const subject = composeData.subject.trim();
-    const context = composeData.body.trim() || subject || composeData.to.trim() || "follow up";
+    // A subject is the explicit intent for this generation. Once an AI draft
+    // has populated the body, preferring composeData.body here would feed that
+    // previous draft back into the next request even when the user changed
+    // the subject. Use the body only as a fallback for subject-less drafts.
+    const context = subject || composeData.body.trim() || composeData.to.trim() || "follow up";
     const subjectContext = subject || context;
     setDraftingEmail(true);
     try {

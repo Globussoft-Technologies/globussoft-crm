@@ -174,7 +174,7 @@ const ConvertedLeads = () => {
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
   const [customPageSize, setCustomPageSize] = useState('');
   const [statusUpdatePending, setStatusUpdatePending] = useState(false);
-  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  // Generic and Travel tenant-scoped Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // #366: per-status counts powering the chip labels, e.g. "Prospect (12)".
   const [statusCounts, setStatusCounts] = useState({});
@@ -233,11 +233,11 @@ const ConvertedLeads = () => {
   }, [selectedStatus]);
 
   useEffect(() => {
-    if (isWellness || isTravel) return;
+    if (isWellness) return;
     fetchApi('/api/lead-custom-fields')
       .then(d => setCustomFieldDefs(Array.isArray(d) ? d : []))
       .catch(() => setCustomFieldDefs([]));
-  }, [isWellness, isTravel]);
+  }, [isWellness]);
 
   const handleStatusChange = (status) => {
     setSelectedStatus(status);
@@ -649,7 +649,7 @@ const ConvertedLeads = () => {
                 {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>
-                {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields). */}
+                {/* Generic + Travel tenant-scoped Lead custom fields (Settings > Lead Fields). */}
                 {customFieldDefs.map(f => (
                   <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
                 ))}
@@ -717,7 +717,7 @@ const ConvertedLeads = () => {
                       {lead.source || 'Organic'}
                     </span>
                   </td>
-                  {/* Generic-vertical-only Lead custom fields  value or a
+                  {/* Generic + Travel tenant-scoped Lead custom fields  value or a
                       dash for leads that predate the field. */}
                   {customFieldDefs.map(f => {
                     const raw = lead.customFields?.[f.fieldKey];

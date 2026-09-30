@@ -1,5 +1,5 @@
 // Lead Custom Fields — admin-configurable extra fields on Contact/Lead
-// records (generic vertical only; see Settings > Lead Fields).
+// records (generic and travel verticals; see Settings > Lead Fields).
 //
 // Purpose-built for Contact/Lead, deliberately NOT built on the existing
 // generic CustomEntity/CustomField/CustomValue EAV system (routes/
@@ -18,6 +18,28 @@ const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
+
+// Definitions and values are tenant-scoped, but keep the vertical boundary
+// explicit as well. This prevents a Wellness tenant (or a future unsupported
+// vertical) from using the Generic/Travel field-management surface directly.
+router.use(async (req, res, next) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    if (!tenant || !["generic", "travel"].includes(tenant.vertical)) {
+      return res.status(403).json({
+        error: "Lead custom fields are only available for the generic and travel CRM verticals",
+        code: "VERTICAL_NOT_SUPPORTED",
+      });
+    }
+    next();
+  } catch (err) {
+    console.error("[lead-custom-fields] vertical-check error:", err && err.message);
+    res.status(500).json({ error: "Failed to verify tenant vertical" });
+  }
+});
 
 const VALID_FIELD_TYPES = new Set(["text", "textarea", "number", "dropdown", "radio", "date", "url", "checkbox", "multiselect"]);
 const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);

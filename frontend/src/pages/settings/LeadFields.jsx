@@ -2,7 +2,7 @@
  * /settings/lead-fields — Lead Custom Fields admin page.
  *
  * Backend: /api/lead-custom-fields (routes/lead_custom_fields.js).
- * ADMIN-only page (RoleGuard wrap at the App.jsx route). Generic vertical
+ * ADMIN-only page (RoleGuard wrap at the App.jsx route). Generic and Travel
  * only — wellness/travel tenants never see this page's Settings link, and
  * the route itself is additionally guarded here so a direct URL visit from
  * a non-generic tenant is redirected rather than rendering.
@@ -287,7 +287,6 @@ function renderFieldPreview(field, optionsText) {
 export default function LeadFields() {
   const { tenant } = useContext(AuthContext) || {};
   const isWellness = tenant?.vertical === "wellness";
-  const isTravel = tenant?.vertical === "travel";
 
   const notify = useNotify();
   const [fields, setFields] = useState([]);
@@ -349,9 +348,7 @@ export default function LeadFields() {
 
   // Generic-vertical-only feature — redirect wellness/travel tenants away
   // rather than rendering an inapplicable admin page for them.
-  if (isWellness || isTravel) {
-    return <Navigate to="/settings" replace />;
-  }
+  if (isWellness) return <Navigate to="/settings" replace />;
 
   const resetCreateForm = () => {
     setCreating(false);

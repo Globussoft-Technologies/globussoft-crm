@@ -1,5 +1,6 @@
 const prisma = require("../lib/prisma");
 const { sendEmail } = require("../lib/emailSender");
+const { readTenantConfig } = require("./travelSendGrid");
 const { google } = require("googleapis");
 const { buildRawMessage } = require("../lib/gmailMessage");
 const { formatInTenantTZ } = require("../lib/datetime");
@@ -7,6 +8,7 @@ const { formatInTenantTZ } = require("../lib/datetime");
 const GOOGLE_CLIENT_ID = () => process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = () => process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
 const GMAIL_REDIRECT_URI = () => process.env.GMAIL_REDIRECT_URI || process.env.GOOGLE_GMAIL_REDIRECT_URI || "http://localhost:5000/api/gmail/callback";
+const MEETING_BUTTON_MARKER = "[[TMC_MEETING_BUTTON]]";
 
 function escapeHtml(value) {
   return String(value == null ? "" : value).replace(/[&<>"']/g, (char) => ({
@@ -26,13 +28,14 @@ function templateValues(form, booking) {
     timezone: booking.timezone,
     duration: String(form.durationMins),
     meeting_url: booking.meetingUrl || "",
+    meeting_button: MEETING_BUTTON_MARKER,
     institution: booking.institution || "",
   };
 }
 
 function renderMeetingTemplate({ form, booking }) {
   const values = templateValues(form, booking);
-  const subject = interpolate(form.emailSubject, values);
+  const subject = interpolate(form.emailSubject, { ...values, meeting_button: "Join Meeting" });
   const configuredBody = interpolate(form.emailBody, values);
   const text = configuredBody || [
     `Hi ${values.name},`,
@@ -44,7 +47,11 @@ function renderMeetingTemplate({ form, booking }) {
     "",
     `Join Zoom Meeting: ${values.meeting_url}`,
   ].join("\n");
-  return { values, subject, text };
+  const plainText = text.replaceAll(
+    MEETING_BUTTON_MARKER,
+    values.meeting_url ? `Join Meeting: ${values.meeting_url}` : "",
+  );
+  return { values, subject, text, plainText };
 }
 
 function publicAssetUrl(value) {
@@ -73,10 +80,17 @@ function publicAssetUrl(value) {
 
 function buildMeetingHtml({ form, text, meetingUrl }) {
   const escapedMeetingUrl = escapeHtml(meetingUrl);
-  let linkedBody = escapeHtml(text);
-  if (escapedMeetingUrl) {
-    linkedBody = linkedBody.replace(escapedMeetingUrl, `<a href="${escapedMeetingUrl}" style="display:inline-block;padding:12px 18px;background:#0798d4;color:#fff;text-decoration:none;border-radius:6px">Join Zoom Meeting</a>`);
-  }
+  const escapedButtonMarker = escapeHtml(MEETING_BUTTON_MARKER);
+  const meetingLink = escapedMeetingUrl
+    ? `<a href="${escapedMeetingUrl}" style="color:#2563eb;text-decoration:underline">${escapedMeetingUrl}</a>`
+    : "";
+  const meetingButton = escapedMeetingUrl
+    ? `<a href="${escapedMeetingUrl}" style="display:inline-block;padding:12px 18px;background:#0798d4;color:#fff;text-decoration:none;border-radius:6px;font-weight:700">Join Meeting</a>`
+    : "";
+  const linkedBody = escapeHtml(text)
+    .split(escapedButtonMarker)
+    .map((segment) => (escapedMeetingUrl ? segment.split(escapedMeetingUrl).join(meetingLink) : segment))
+    .join(meetingButton);
   const body = linkedBody
     .split(/\n\s*\n/)
     .filter(Boolean)
@@ -143,16 +157,26 @@ async function sendThroughConnectedInbox({ form, booking, subject, text, html })
 }
 
 async function sendMeetingConfirmation({ form, booking }) {
-  const { values, subject, text } = renderMeetingTemplate({ form, booking });
+  const { values, subject, text, plainText } = renderMeetingTemplate({ form, booking });
   const html = buildMeetingHtml({ form, text, meetingUrl: values.meeting_url });
 
-  // Prefer the host's mailbox already connected to Unified Inbox. If that
-  // connection is missing, expired, or rejected, still try the transactional
-  // sender before reporting the confirmation as failed.
-  const inboxResult = await sendThroughConnectedInbox({ form, booking, subject, text, html });
+  // A tenant-configured SendGrid account is an explicit delivery choice and
+  // takes precedence over the host's connected Gmail mailbox. Without a
+  // tenant override, preserve the existing Gmail -> backend SendGrid flow.
+  // A corrupt encrypted override fails visibly instead of silently using a
+  // different sender.
+  let tenantSendGridConfigured = false;
+  try {
+    tenantSendGridConfigured = Boolean(await readTenantConfig(booking.tenantId));
+  } catch {
+    tenantSendGridConfigured = true;
+  }
+  const inboxResult = tenantSendGridConfigured
+    ? null
+    : await sendThroughConnectedInbox({ form, booking, subject, text: plainText, html });
   const sendGridResult = inboxResult?.sent
     ? null
-    : await sendEmail({ to: booking.contactEmail, subject, text, html });
+    : await sendEmail({ tenantId: booking.tenantId, to: booking.contactEmail, subject, text: plainText, html });
   const result = inboxResult?.sent ? inboxResult : sendGridResult;
   const failureReason = result?.sent
     ? null

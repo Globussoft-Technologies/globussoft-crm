@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 
 const requireCJS = createRequire(import.meta.url);
-const { buildAvailability } = requireCJS("../../lib/travelMeetingAvailability");
+const { buildAvailability, storedDateKey } = requireCJS("../../lib/travelMeetingAvailability");
 
 function form(overrides = {}) {
   return {
@@ -27,6 +27,21 @@ function form(overrides = {}) {
 }
 
 describe("travelMeetingAvailability", () => {
+  it("keeps stored date-only boundaries on their selected calendar day", () => {
+    expect(storedDateKey(new Date("2026-10-01T23:59:59.999Z"))).toBe("2026-10-01");
+    expect(storedDateKey("2026-10-01")).toBe("2026-10-01");
+  });
+
+  it("returns past dates as unavailable without exposing past time controls", () => {
+    const dates = buildAvailability({
+      form: form(),
+      startDate: "2026-09-28",
+      days: 1,
+      now: new Date("2026-09-29T06:00:00Z"),
+    });
+    expect(dates[0]).toMatchObject({ date: "2026-09-28", available: false, slots: [], displaySlots: [] });
+  });
+
   it("creates timezone-correct slots from customizable weekly hours", () => {
     const dates = buildAvailability({ form: form(), startDate: "2026-09-28", days: 1, now: new Date("2026-09-01T00:00:00Z") });
     expect(dates[0].slots).toHaveLength(4);

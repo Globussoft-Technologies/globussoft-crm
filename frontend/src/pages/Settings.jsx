@@ -160,6 +160,12 @@ export default function Settings() {
   const [promotionalWebsiteSaving, setPromotionalWebsiteSaving] = useState(false);
   const [promotionalWebsiteTesting, setPromotionalWebsiteTesting] = useState(false);
   const [promotionalWebsiteStatus, setPromotionalWebsiteStatus] = useState(null);
+  const [travelEmail, setTravelEmail] = useState({ apiKey: "", fromEmail: "", fromName: "" });
+  const [travelEmailStatus, setTravelEmailStatus] = useState(null);
+  const [travelEmailLoading, setTravelEmailLoading] = useState(false);
+  const [travelEmailSaving, setTravelEmailSaving] = useState(false);
+  const [travelEmailRemoving, setTravelEmailRemoving] = useState(false);
+  const [showTravelEmailKey, setShowTravelEmailKey] = useState(false);
   // #611: email-message retention toggle. Industry-default ON for any CRM
   // that claims to track customer comms. Pre-fix the default was OFF, sent
   // emails vanished, Sent folder stayed empty, threading broke.
@@ -289,6 +295,23 @@ export default function Settings() {
       })
       .catch(() => setPromotionalWebsiteStatus(null))
       .finally(() => setPromotionalWebsiteLoading(false));
+  }, [ctxTenant?.vertical, ctxUser?.role, canManageSettings]);
+
+  useEffect(() => {
+    if (ctxTenant?.vertical !== "travel" || ctxUser?.role !== "ADMIN" || !canManageSettings) return undefined;
+    setTravelEmailLoading(true);
+    fetchApi("/api/travel/email-provider")
+      .then((status) => {
+        setTravelEmailStatus(status || null);
+        setTravelEmail((current) => ({
+          ...current,
+          apiKey: "",
+          fromEmail: status?.fromEmail || "",
+          fromName: status?.fromName || "",
+        }));
+      })
+      .catch(() => setTravelEmailStatus(null))
+      .finally(() => setTravelEmailLoading(false));
   }, [ctxTenant?.vertical, ctxUser?.role, canManageSettings]);
 
   // Multi-brand (BrandKit) list — travel vertical only (sub-brands are a
@@ -733,6 +756,43 @@ export default function Settings() {
       notify.error(err?.body?.error || err?.message || "Transfer connection failed.");
     } finally {
       setPromotionalWebsiteTesting(false);
+    }
+  };
+
+  const handleSaveTravelEmail = async (e) => {
+    e.preventDefault();
+    setTravelEmailSaving(true);
+    try {
+      const saved = await fetchApi("/api/travel/email-provider", {
+        method: "PUT",
+        body: JSON.stringify({
+          ...(travelEmail.apiKey ? { apiKey: travelEmail.apiKey } : {}),
+          fromEmail: travelEmail.fromEmail.trim(),
+          fromName: travelEmail.fromName.trim(),
+        }),
+      });
+      setTravelEmailStatus(saved);
+      setTravelEmail((current) => ({ ...current, apiKey: "", fromEmail: saved.fromEmail || "", fromName: saved.fromName || "" }));
+      setShowTravelEmailKey(false);
+      notify.success("Travel SendGrid settings saved. Travel emails will now use this account.");
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to save Travel SendGrid settings.");
+    } finally {
+      setTravelEmailSaving(false);
+    }
+  };
+
+  const handleRemoveTravelEmail = async () => {
+    setTravelEmailRemoving(true);
+    try {
+      const status = await fetchApi("/api/travel/email-provider", { method: "DELETE" });
+      setTravelEmailStatus(status);
+      setTravelEmail({ apiKey: "", fromEmail: "", fromName: "" });
+      notify.success("Travel SendGrid removed. Travel emails will use the backend default account.");
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to remove Travel SendGrid settings.");
+    } finally {
+      setTravelEmailRemoving(false);
     }
   };
 
@@ -1313,6 +1373,52 @@ export default function Settings() {
               </p>
             )}
           </div>
+
+          {ctxTenant?.vertical === "travel" && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && (
+            <div className="card" data-testid="travel-email-provider-card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
+              <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Mail size={20} color="var(--accent-color)" /> Travel Email Delivery (SendGrid BYOK)
+              </h3>
+              <p style={{ color: "var(--text-secondary)", margin: "0 0 1.25rem", lineHeight: 1.5 }}>
+                Use your own SendGrid account for Travel CRM emails and choose the sender recipients see. The API key is encrypted and never returned to the browser. If no tenant account is configured, the CRM uses its existing backend SendGrid account.
+              </p>
+              {travelEmailLoading ? <p style={{ color: "var(--text-secondary)" }}>Loading Travel email settings…</p> : (
+                <form onSubmit={handleSaveTravelEmail} autoComplete="off">
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "1rem" }}>
+                    <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                      <label className="form-label" htmlFor="travel-sendgrid-api-key">SendGrid API key</label>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <input id="travel-sendgrid-api-key" type={showTravelEmailKey ? "text" : "password"} className="input-field" value={travelEmail.apiKey} onChange={(e) => setTravelEmail((current) => ({ ...current, apiKey: e.target.value }))} placeholder={travelEmailStatus?.configured ? `Saved (${travelEmailStatus.apiKeyLast4 || "hidden"}) — leave blank to keep it` : "SG.xxxxx.yyyyy"} autoComplete="new-password" data-1p-ignore="true" />
+                        <button type="button" className="btn-secondary" aria-label={showTravelEmailKey ? "Hide SendGrid API key" : "Show SendGrid API key"} onClick={() => setShowTravelEmailKey((shown) => !shown)} style={{ padding: "0.6rem 0.8rem" }}>{showTravelEmailKey ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+                      </div>
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label" htmlFor="travel-sendgrid-from-email">Verified sender email</label>
+                      <input id="travel-sendgrid-from-email" type="email" required className="input-field" value={travelEmail.fromEmail} onChange={(e) => setTravelEmail((current) => ({ ...current, fromEmail: e.target.value }))} placeholder="meetings@yourdomain.com" />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label" htmlFor="travel-sendgrid-from-name">Sender name</label>
+                      <input id="travel-sendgrid-from-name" type="text" required maxLength="100" className="input-field" value={travelEmail.fromName} onChange={(e) => setTravelEmail((current) => ({ ...current, fromName: e.target.value }))} placeholder="Your Travel Company" />
+                    </div>
+                  </div>
+                  <p style={{ margin: "0.8rem 0 0", color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.5 }}>
+                    The sender email or its domain must be authenticated in this SendGrid account. Saving an unverified address may cause SendGrid to reject messages.
+                  </p>
+                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginTop: "1.25rem" }}>
+                    <button type="submit" className="btn-primary" disabled={travelEmailSaving || travelEmailRemoving || (!travelEmailStatus?.configured && !travelEmail.apiKey)}>{travelEmailSaving ? "Saving…" : travelEmailStatus?.configured ? "Update SendGrid" : "Save SendGrid"}</button>
+                    {travelEmailStatus?.configured && <button type="button" className="btn-secondary" onClick={handleRemoveTravelEmail} disabled={travelEmailSaving || travelEmailRemoving}>{travelEmailRemoving ? "Removing…" : "Use Backend Default"}</button>}
+                    <span style={{ color: travelEmailStatus?.configured ? "var(--success-color, #16a34a)" : "var(--text-secondary)", fontSize: "0.875rem" }}>
+                      {travelEmailStatus?.configured
+                        ? `Tenant SendGrid active: ${travelEmailStatus.fromName} <${travelEmailStatus.fromEmail}>`
+                        : travelEmailStatus?.fallback?.configured
+                          ? `Using backend default: ${travelEmailStatus.fallback.fromEmail}`
+                          : "No SendGrid account is currently configured."}
+                    </span>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
 
           {ctxTenant?.vertical === "travel" && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && (
             <div

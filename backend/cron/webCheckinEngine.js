@@ -105,7 +105,7 @@ async function runWebCheckinTick(now = new Date()) {
       milestone,
       portalUrl: PORTAL_URL,
     });
-    const res = await emailSender.sendEmail({ to, subject: mail.subject, text: mail.text, html: mail.html });
+    const res = await emailSender.sendEmail({ tenantId: row.tenantId, to, subject: mail.subject, text: mail.text, html: mail.html });
     if (res.sent) summary.sent += 1;
     // Record the milestone as sent regardless of delivery outcome (logged/sent)
     // so a re-tick doesn't retry a no-key send forever. A hard failure is rare

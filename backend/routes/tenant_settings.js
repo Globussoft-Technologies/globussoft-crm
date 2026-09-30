@@ -33,6 +33,9 @@ const SENSITIVE_KEYS = new Set([
   // must never write it, but GET /tenant-settings historically listed every
   // row in the tenant and therefore also needs to redact it.
   "travel.promotionalWebsite.sftp",
+  // Managed only by /api/travel/email-provider. The value is encrypted at
+  // rest, but the generic TenantSetting API must not expose the ciphertext.
+  "travel.email.sendgrid",
 ]);
 
 function isSensitiveKey(key) {

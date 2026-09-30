@@ -5254,6 +5254,7 @@ router.post(
           const name = contact.name || "there";
           if (contact.email) {
             const r = await sendEmail({
+              tenantId: req.travelTenant.id,
               to: contact.email,
               subject: `Your travel quote${amt ? ` — ${amt}` : ""}`,
               text: `Hi ${name},\n\nYour travel quote is ready${amt ? ` (${amt})` : ""}. The amount shown includes the applicable tax and markup. View it here:\n${shareUrl}\n\nYou can accept it right from that page.\n\nThank you.`,

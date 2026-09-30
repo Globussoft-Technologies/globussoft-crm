@@ -89,7 +89,7 @@ async function runTravelReviewTick(now = new Date()) {
       customerName: contact.name,
       reviewUrl: reviewUrl(token),
     });
-    const res = await emailSender.sendEmail({ to: contact.email, subject: mail.subject, text: mail.text, html: mail.html });
+    const res = await emailSender.sendEmail({ tenantId: itin.tenantId, to: contact.email, subject: mail.subject, text: mail.text, html: mail.html });
     if (res.sent) summary.sent += 1;
     // Mirror to the customer's in-app portal bell (no SMS — no phone collected).
     // The booking detail in the portal hosts the review form. Best-effort.

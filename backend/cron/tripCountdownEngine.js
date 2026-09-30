@@ -140,7 +140,7 @@ async function runTripCountdownTick(now = new Date()) {
       continue;
     }
 
-    const res = await emailSender.sendEmail({ to: contact.email, subject: nudge.subject, text: nudge.text, html: nudge.html });
+    const res = await emailSender.sendEmail({ tenantId: itin.tenantId, to: contact.email, subject: nudge.subject, text: nudge.text, html: nudge.html });
     const status = res.sent ? "sent" : res.reason === "no_api_key" ? "logged" : "failed";
     if (res.sent) summary.sent += 1;
     await prisma.tripCountdownNudge

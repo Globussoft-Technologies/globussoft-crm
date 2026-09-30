@@ -527,6 +527,7 @@ async function notifyCustomerPaymentConfirmation(itin, paidMajor, balanceDue, po
         `<p>Your invoice / receipt: <a href="${receiptUrl}" target="_blank" rel="noopener noreferrer">${receiptUrl}</a></p>` +
         `<p>&mdash; ${(itin.tenant && itin.tenant.name) || "Travel Stall"}</p>`;
       await sendEmail({
+        tenantId: itin.tenantId,
         to: contact.email,
         subject: `Payment received — ${dest} booking confirmed`,
         text,
@@ -5456,6 +5457,7 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
         // so ItineraryDetail's existing button is byte-unchanged).
         if (auto && contact.email) {
           const emailResult = await sendEmail({
+            tenantId: req.travelTenant.id,
             to: contact.email,
             subject: `Your ${destLabel} itinerary is ready`,
             text:

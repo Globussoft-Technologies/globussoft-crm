@@ -15,6 +15,7 @@ const {
   parseJson,
   normalizeWindows,
   validDateKey,
+  storedDateKey,
   addUtcDays,
 } = require("../lib/travelMeetingAvailability");
 const calendar = require("../services/travelMeetingCalendar");
@@ -31,7 +32,12 @@ const GOOGLE_FONTS = new Set([
   "Roboto Slab", "Bebas Neue", "Oswald", "Barlow", "Rubik", "Mulish", "Quicksand",
 ]);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PHONE_RE = /^\+?[0-9][0-9\s().-]{6,24}$/;
+const URL_LIKE_RE = /(?:https?:\/\/|www\.|(?:^|\s)[^\s@]+\.(?:com|org|net|in|co|edu|io|ai)(?:[/?#:]|\s|$))/i;
+const UNICODE_LETTER_RE = /\p{L}/u;
+const NAME_RE = /^[\p{L}\p{M}][\p{L}\p{M}\s.'’()-]*$/u;
+const CITY_RE = /^[\p{L}\p{M}][\p{L}\p{M}\s.'’(),-]*$/u;
+const DESIGNATION_RE = /^[\p{L}\p{M}\d][\p{L}\p{M}\d\s&.,'’()/+-]*$/u;
+const INSTITUTION_RE = /^[\p{L}\p{M}\d][\p{L}\p{M}\d\s&.,'’()/-]*$/u;
 const emailLogoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 },
@@ -212,7 +218,7 @@ function normalizeFields(raw) {
 
 function validateConfiguredFieldValues(configuredFields, values) {
   const missing = [];
-  const invalid = [];
+  const fieldErrors = {};
   for (const field of configuredFields) {
     const value = String(values[field.key] ?? "").trim();
     if (field.required && !value) {
@@ -220,14 +226,43 @@ function validateConfiguredFieldValues(configuredFields, values) {
       continue;
     }
     if (!value) continue;
-    if (field.type === "email" && !EMAIL_RE.test(value)) invalid.push(field.key);
-    if (field.type === "tel" && !PHONE_RE.test(value)) invalid.push(field.key);
-    if (field.type === "select" && !(field.options || []).includes(value)) invalid.push(field.key);
-    if (field.type === "text" && value.length > 500) invalid.push(field.key);
-    if (field.type === "textarea" && value.length > 5000) invalid.push(field.key);
+    const key = String(field.key || "").toLowerCase();
+    const label = field.label || "This field";
+    const isPhone = field.type === "tel" || ["contactphone", "phone"].includes(key);
+    const isEmail = field.type === "email" || ["contactemail", "email"].includes(key);
+    let message = "";
+
+    if (/\p{C}/u.test(value)) message = `${label} contains unsupported characters`;
+    else if (isEmail && (value.length > 191 || !EMAIL_RE.test(value))) message = `Enter a valid ${label.toLowerCase()}`;
+    else if (isPhone) {
+      if (!/^\d{7,15}$/.test(value)) {
+        message = `${label} must contain only 7 to 15 digits`;
+      }
+    } else if (field.type === "select" && !(field.options || []).includes(value)) message = `Choose a valid ${label.toLowerCase()} option`;
+    else if (["contactname", "firstname", "lastname"].includes(key)) {
+      if (value.length < 2 || value.length > 160 || URL_LIKE_RE.test(value) || !NAME_RE.test(value)) {
+        message = `${label} must be 2 to 160 characters and contain a valid name`;
+      }
+    } else if (key === "designation") {
+      if (value.length < 2 || value.length > 160 || URL_LIKE_RE.test(value) || !UNICODE_LETTER_RE.test(value) || !DESIGNATION_RE.test(value) || /(?:\p{L}|\p{M})\d|\d(?:\p{L}|\p{M})/u.test(value)) {
+        message = `${label} must be 2 to 160 characters and contain a valid role or title`;
+      }
+    } else if (["institution", "school"].includes(key)) {
+      if (value.length < 2 || value.length > 200 || URL_LIKE_RE.test(value) || !UNICODE_LETTER_RE.test(value) || !INSTITUTION_RE.test(value)) {
+        message = `${label} must contain a valid institution name and cannot be a URL`;
+      }
+    } else if (key === "city") {
+      if (value.length < 2 || value.length > 120 || URL_LIKE_RE.test(value) || !CITY_RE.test(value)) {
+        message = `${label} must be 2 to 120 characters and contain a valid city name`;
+      }
+    } else if (field.type === "text" && value.length > 500) message = `${label} must be 500 characters or fewer`;
+    else if (field.type === "textarea" && value.length > 5000) message = `${label} must be 5,000 characters or fewer`;
+
+    if (message) fieldErrors[field.key] = message;
   }
   if (missing.length) return { error: "Complete all required fields", code: "MISSING_REQUIRED_FIELDS", fields: missing };
-  if (invalid.length) return { error: "One or more form fields contain an invalid value", code: "INVALID_FIELD_VALUE", fields: invalid };
+  const invalid = Object.keys(fieldErrors);
+  if (invalid.length) return { error: "Correct the highlighted form fields", code: "INVALID_FIELD_VALUE", fields: invalid, fieldErrors };
   return null;
 }
 
@@ -266,6 +301,8 @@ function publicConfig(form) {
     subBrand: form.subBrand,
     durationMins: form.durationMins,
     bookingHorizonDays: form.bookingHorizonDays,
+    allowedStartDate: storedDateKey(form.allowedStartDate),
+    allowedEndDate: storedDateKey(form.allowedEndDate),
     timezone: form.timezone,
     embedFontFamily: form.embedFontFamily || "Inter",
     fields: parseJson(form.fieldsJson, DEFAULT_FIELDS).filter((field) => field.enabled !== false),
@@ -333,6 +370,25 @@ function dataFromBody(body, existing = null) {
   }
   const weeklyHours = normalizeWeeklyHours(body.weeklyHours ?? existing?.weeklyHoursJson ?? DEFAULT_WEEKLY_HOURS);
   const fields = normalizeFields(body.fields ?? existing?.fieldsJson ?? DEFAULT_FIELDS);
+  const blackoutDates = (body.blackoutDates ?? parseJson(existing?.blackoutDatesJson, []))
+    .filter?.(validDateKey) || [];
+  const allowedStartDate = optionalDate(body.allowedStartDate, existing?.allowedStartDate);
+  const allowedEndDate = optionalDate(body.allowedEndDate, existing?.allowedEndDate, true);
+  const startDateKey = storedDateKey(allowedStartDate);
+  const endDateKey = storedDateKey(allowedEndDate);
+  const todayKey = formatInTenantTZ(new Date(), timezone, "yyyy-MM-dd");
+  if (startDateKey && endDateKey && endDateKey < startDateKey) {
+    const error = new Error("End date cannot be earlier than start date");
+    error.status = 400;
+    error.code = "INVALID_DATE_RANGE";
+    throw error;
+  }
+  if (endDateKey && endDateKey < todayKey) {
+    const error = new Error("End date cannot be earlier than today");
+    error.status = 400;
+    error.code = "END_DATE_IN_PAST";
+    throw error;
+  }
   return {
     name,
     slug: slugify(body.slug ?? existing?.slug ?? name),
@@ -346,11 +402,11 @@ function dataFromBody(body, existing = null) {
     minimumNoticeMins: boundedInt(body.minimumNoticeMins ?? existing?.minimumNoticeMins, 120, 0, 43_200),
     bookingHorizonDays: boundedInt(body.bookingHorizonDays ?? existing?.bookingHorizonDays, 60, 1, 730),
     maxBookingsPerDay: body.maxBookingsPerDay === null || body.maxBookingsPerDay === "" ? null : boundedInt(body.maxBookingsPerDay ?? existing?.maxBookingsPerDay, 20, 1, 500),
-    allowedStartDate: optionalDate(body.allowedStartDate, existing?.allowedStartDate),
-    allowedEndDate: optionalDate(body.allowedEndDate, existing?.allowedEndDate, true),
+    allowedStartDate,
+    allowedEndDate,
     weeklyHoursJson: sanitizeJsonForStringColumn(weeklyHours),
     dateOverridesJson: sanitizeJsonForStringColumn(body.dateOverrides ?? parseJson(existing?.dateOverridesJson, {})),
-    blackoutDatesJson: sanitizeJsonForStringColumn((body.blackoutDates ?? parseJson(existing?.blackoutDatesJson, [])).filter?.(validDateKey) || []),
+    blackoutDatesJson: sanitizeJsonForStringColumn([...new Set(blackoutDates)].sort()),
     fieldsJson: sanitizeJsonForStringColumn(fields),
     // Retain the legacy per-form value for backwards-compatible reads. New
     // authorization uses Tenant.embedAllowlistJson, configured once in CRM Settings.
@@ -709,6 +765,42 @@ router.delete("/meeting-forms/:id(\\d+)/email-logo", verifyToken, requireTravelT
   }
 });
 
+router.delete("/meeting-forms/:id(\\d+)", verifyToken, requireTravelTenant, requirePermission("marketing", "write"), async (req, res) => {
+  try {
+    const form = await prisma.travelMeetingForm.findFirst({
+      where: { id: Number(req.params.id), tenantId: req.user.tenantId, subBrand: "tmc" },
+      include: { _count: { select: { bookings: true } } },
+    });
+    if (!form) return res.status(404).json({ error: "Meeting form not found", code: "NOT_FOUND" });
+    if (form._count.bookings > 0) {
+      return res.status(409).json({
+        error: "This Meeting Form has booking history and cannot be deleted. Unpublish it to stop new bookings.",
+        code: "MEETING_FORM_HAS_BOOKINGS",
+        bookingCount: form._count.bookings,
+      });
+    }
+    const deleted = await prisma.travelMeetingForm.deleteMany({
+      where: {
+        id: form.id,
+        tenantId: req.user.tenantId,
+        subBrand: "tmc",
+        bookings: { none: {} },
+      },
+    });
+    if (deleted.count === 0) {
+      return res.status(409).json({
+        error: "This Meeting Form now has booking history and cannot be deleted. Unpublish it to stop new bookings.",
+        code: "MEETING_FORM_HAS_BOOKINGS",
+      });
+    }
+    await deleteOwnedEmailLogo(form.emailLogoUrl, req.user.tenantId, form.id);
+    await writeAudit("TravelMeetingForm", "DELETE", form.id, req.user.userId, req.user.tenantId, { name: form.name });
+    res.json({ success: true, id: form.id });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Meeting Form could not be deleted", code: error.code || "MEETING_FORM_DELETE_FAILED" });
+  }
+});
+
 router.get("/meeting-forms/:id(\\d+)", verifyToken, requireTravelTenant, requirePermission("marketing", "read"), async (req, res) => {
   const row = await prisma.travelMeetingForm.findFirst({ where: { id: Number(req.params.id), tenantId: req.user.tenantId, subBrand: "tmc" } });
   if (!row) return res.status(404).json({ error: "Meeting form not found", code: "NOT_FOUND" });
@@ -815,7 +907,16 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
     const values = normalized.values;
     const configuredFields = parseJson(form.fieldsJson, DEFAULT_FIELDS).filter((field) => field.enabled !== false);
     const customFields = normalized.customFields;
-    const combined = { ...customFields, ...normalized.aliases, ...values };
+    const combined = {
+      ...customFields,
+      ...normalized.aliases,
+      ...values,
+      ...body,
+      contactName: body.contactName ?? values.contactName,
+      contactEmail: body.contactEmail ?? body.email ?? values.contactEmail,
+      contactPhone: body.contactPhone ?? body.phone ?? values.contactPhone,
+      institution: body.institution ?? body.school ?? values.institution,
+    };
     const fieldValidation = validateConfiguredFieldValues(configuredFields, combined);
     if (fieldValidation) return res.status(400).json(fieldValidation);
     if (!values.contactName || !EMAIL_RE.test(values.contactEmail)) return res.status(400).json({ error: "A valid name and email are required", code: "INVALID_CONTACT" });
@@ -886,7 +987,7 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
       form,
       booking: { ...booking, ...values, scheduledAt, timezone: form.timezone, meetingUrl: zoom.joinUrl },
     });
-    calendarEvent = await calendar.createEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, title: calendarCopy.subject, description: calendarCopy.text, start: scheduledAt, end: endsAt, attendeeEmail: values.contactEmail, contactId: contact?.id || null, meetingUrl: zoom.joinUrl });
+    calendarEvent = await calendar.createEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, title: calendarCopy.subject, description: calendarCopy.plainText, start: scheduledAt, end: endsAt, attendeeEmail: values.contactEmail, contactId: contact?.id || null, meetingUrl: zoom.joinUrl });
 
     // Update CRM only after both provider resources exist, so integration
     // failures can never leave behind a false "Meeting Booked" lead state.

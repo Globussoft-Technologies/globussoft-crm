@@ -7,21 +7,30 @@
 // { sent: false, reason: "no_api_key" } so dev/CI exercise the surrounding
 // logic without real delivery.
 
-const SENDGRID_API_KEY = () => process.env.SENDGRID_API_KEY || "";
-const FROM_EMAIL = () => process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+const { resolveSendGridConfig } = require("../services/travelSendGrid");
 
-async function sendEmail({ to, subject, text, html, attachments = [] }) {
+async function sendEmail({ tenantId = null, to, subject, text, html, attachments = [] }) {
   if (!to || !subject) {
     return { sent: false, reason: "missing_to_or_subject" };
   }
-  const key = SENDGRID_API_KEY();
+  let provider;
+  try {
+    provider = await resolveSendGridConfig(tenantId);
+  } catch (error) {
+    console.error(`[Email] Tenant SendGrid configuration failed for tenant ${tenantId}:`, error.message);
+    return { sent: false, reason: "tenant_sendgrid_config_invalid", source: "tenant" };
+  }
+  const key = provider.apiKey;
   if (!key) {
     console.log(`[Email] SendGrid not configured — email to ${to} ("${subject}") logged, not sent`);
-    return { sent: false, reason: "no_api_key" };
+    return { sent: false, reason: "no_api_key", source: provider.source };
   }
   const payload = {
     personalizations: [{ to: [{ email: to }] }],
-    from: { email: FROM_EMAIL() },
+    from: {
+      email: provider.fromEmail,
+      ...(provider.fromName ? { name: provider.fromName } : {}),
+    },
     subject,
     content: [
       { type: "text/plain", value: text || subject },
@@ -46,14 +55,14 @@ async function sendEmail({ to, subject, text, html, attachments = [] }) {
     });
     if (resp.ok) {
       console.log(`[Email] Sent to ${to}: "${subject}"`);
-      return { sent: true };
+      return { sent: true, from: provider.fromEmail, source: provider.source };
     }
     const t = await resp.text();
     console.error(`[Email] SendGrid error ${resp.status}: ${t}`);
-    return { sent: false, reason: `sendgrid_${resp.status}` };
+    return { sent: false, reason: `sendgrid_${resp.status}`, source: provider.source };
   } catch (err) {
     console.error("[Email] send failed:", err.message);
-    return { sent: false, reason: err.message };
+    return { sent: false, reason: err.message, source: provider.source };
   }
 }
 

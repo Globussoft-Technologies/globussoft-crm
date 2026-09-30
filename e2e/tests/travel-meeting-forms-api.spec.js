@@ -71,6 +71,68 @@ test('Create validation rejects an enabled Select field without options', async 
   expect((await response.json()).code).toBe('SELECT_OPTIONS_REQUIRED');
 });
 
+test('Create validation rejects invalid Meeting Form date limits', async ({ request }) => {
+  const token = await login(request, 'yasin@travelstall.in');
+  const hostsResponse = await request.get(`${BASE_URL}/api/travel/meeting-forms/hosts`, { headers: auth(token) });
+  expect(hostsResponse.status()).toBe(200);
+  const hosts = await hostsResponse.json();
+  test.skip(!hosts[0], 'Travel tenant has no eligible staff host');
+
+  const invertedRange = await request.post(`${BASE_URL}/api/travel/meeting-forms`, {
+    headers: auth(token),
+    data: {
+      name: 'Invalid date range probe',
+      hostUserId: hosts[0].id,
+      timezone: 'Asia/Kolkata',
+      allowedStartDate: '2099-02-10',
+      allowedEndDate: '2099-02-09',
+    },
+  });
+  expect(invertedRange.status()).toBe(400);
+  expect(await invertedRange.json()).toMatchObject({ code: 'INVALID_DATE_RANGE' });
+
+  const pastEndDate = await request.post(`${BASE_URL}/api/travel/meeting-forms`, {
+    headers: auth(token),
+    data: {
+      name: 'Past end date probe',
+      hostUserId: hosts[0].id,
+      timezone: 'Asia/Kolkata',
+      allowedEndDate: '2000-01-01',
+    },
+  });
+  expect(pastEndDate.status()).toBe(400);
+  expect(await pastEndDate.json()).toMatchObject({ code: 'END_DATE_IN_PAST' });
+});
+
+test('Travel admin can delete a Meeting Form that has no bookings', async ({ request }) => {
+  const token = await login(request, 'yasin@travelstall.in');
+  const hostsResponse = await request.get(`${BASE_URL}/api/travel/meeting-forms/hosts`, { headers: auth(token) });
+  expect(hostsResponse.status()).toBe(200);
+  const hosts = await hostsResponse.json();
+  test.skip(!hosts[0], 'Travel tenant has no eligible staff host');
+
+  const marker = `${Date.now()}-${process.pid}`;
+  const createResponse = await request.post(`${BASE_URL}/api/travel/meeting-forms`, {
+    headers: auth(token),
+    data: {
+      name: `Delete form probe ${marker}`,
+      slug: `delete-form-probe-${marker}`,
+      hostUserId: hosts[0].id,
+      timezone: 'Asia/Kolkata',
+      isActive: false,
+    },
+  });
+  expect(createResponse.status()).toBe(201);
+  const created = await createResponse.json();
+
+  const deleteResponse = await request.delete(`${BASE_URL}/api/travel/meeting-forms/${created.id}`, { headers: auth(token) });
+  expect(deleteResponse.status()).toBe(200);
+  expect(await deleteResponse.json()).toMatchObject({ success: true, id: created.id });
+
+  const readResponse = await request.get(`${BASE_URL}/api/travel/meeting-forms/${created.id}`, { headers: auth(token) });
+  expect(readResponse.status()).toBe(404);
+});
+
 test('Unknown public form does not disclose tenant data', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/travel/meeting-forms/public/tmcmf_not_a_real_form`);
   expect(response.status()).toBe(404);

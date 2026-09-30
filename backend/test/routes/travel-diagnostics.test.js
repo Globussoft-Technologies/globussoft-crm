@@ -829,9 +829,11 @@ describe('GET /diagnostics/notification-settings', () => {
     // environment's actual value.
     const priorKey = process.env.SENDGRID_API_KEY;
     delete process.env.SENDGRID_API_KEY;
-    prisma.tenantSetting.findUnique.mockResolvedValue({
-      value: JSON.stringify({ recipients: [{ userId: 7, channels: ['db', 'email'] }] }),
-    });
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => (
+      where?.tenantId_key?.key === 'travel.email.sendgrid'
+        ? null
+        : { value: JSON.stringify({ recipients: [{ userId: 7, channels: ['db', 'email'] }] }) }
+    ));
     prisma.user.findMany.mockResolvedValue([{ id: 7, name: 'Priya', email: 'priya@example.com', phone: null }]);
     whatsappWebClient.isConnected.mockReturnValue(true);
 
@@ -863,6 +865,20 @@ describe('GET /diagnostics/notification-settings', () => {
   test('email availability reflects SENDGRID_API_KEY', async () => {
     const prior = process.env.SENDGRID_API_KEY;
     process.env.SENDGRID_API_KEY = 'test-key';
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/notification-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.body.channelAvailability.email).toBe(true);
+    if (prior === undefined) delete process.env.SENDGRID_API_KEY;
+    else process.env.SENDGRID_API_KEY = prior;
+  });
+
+  test('email availability reflects tenant SendGrid without a backend key', async () => {
+    const prior = process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_KEY;
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => (
+      where?.tenantId_key?.key === 'travel.email.sendgrid' ? { id: 88 } : null
+    ));
     const res = await request(makeApp())
       .get('/api/travel/diagnostics/notification-settings?subBrand=tmc')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);

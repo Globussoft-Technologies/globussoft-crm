@@ -38,6 +38,7 @@ const llmRouter = require("../lib/llmRouter");
 const { buildTravelAiErrorResponse } = require("../lib/travelAiError");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { sendEmail } = require("../lib/emailSender");
+const { isSendGridConfigured } = require("../services/travelSendGrid");
 const waWebClient = require("../services/whatsappWebClient");
 //  TMC diagnostic engine modules (T2 / T3 / T6 / T7)  used by T8
 // Require via shared `module.exports.<fn>` indirection so the test suite
@@ -538,6 +539,7 @@ router.get(
       assertValidSubBrand(subBrand);
       const tenantId = req.travelTenant.id;
       const stored = await diagnosticNotificationSettings.getNotificationRecipients({ tenantId, subBrand });
+      const emailAvailable = await isSendGridConfigured(tenantId);
 
       const users = stored.length
         ? await prisma.user.findMany({
@@ -565,7 +567,7 @@ router.get(
         recipients,
         channelAvailability: {
           db: true,
-          email: Boolean(process.env.SENDGRID_API_KEY),
+          email: emailAvailable,
           whatsapp: whatsappWebClient.isConnected(tenantId),
         },
       });
@@ -1311,6 +1313,7 @@ router.post(
 
       if (emailEnabled && contactEmail) {
         const result = await sendEmail({
+          tenantId: req.travelTenant.id,
           to: contactEmail,
           subject: "Your readiness report is ready",
           text:

@@ -175,6 +175,7 @@ async function runPaymentRemindersForTenant(tenantId) {
           `Pay now: ${portalLink}`,
         ].join("\n");
         await sendEmail({
+          tenantId,
           to: participant.parentEmail,
           subject,
           text: reminderText,

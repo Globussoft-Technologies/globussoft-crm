@@ -19,7 +19,10 @@ vi.mock("../utils/notify", () => ({
   useNotify: () => notifyObj,
 }));
 
-const { setThemeMock } = vi.hoisted(() => ({ setThemeMock: vi.fn() }));
+const { authContextValue, setThemeMock } = vi.hoisted(() => ({
+  authContextValue: { tenant: null, setTenant: () => {} },
+  setThemeMock: vi.fn(),
+}));
 vi.mock("../App", () => {
   const React = require("react");
   return {
@@ -28,7 +31,7 @@ vi.mock("../App", () => {
       setTheme: setThemeMock,
       toggleTheme: () => {},
     }),
-    AuthContext: React.createContext({ tenant: null, setTenant: () => {} }),
+    AuthContext: React.createContext(authContextValue),
   };
 });
 
@@ -88,6 +91,7 @@ beforeEach(() => {
   notifyObj.confirm.mockReset();
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
   setThemeMock.mockReset();
+  authContextValue.tenant = null;
   serverFields = baseFields.map((field) => ({
     ...field,
     options: Array.isArray(field.options) ? [...field.options] : field.options,
@@ -133,6 +137,15 @@ beforeEach(() => {
 });
 
 describe("<LeadFields />", () => {
+  it("redirects travel tenants without fetching generic lead fields", () => {
+    authContextValue.tenant = { vertical: "travel" };
+
+    renderLeadFields();
+
+    expect(fetchApiMock).not.toHaveBeenCalled();
+    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
+  });
+
   it("shows a drag handle and reorders without flashing the loading state", async () => {
     const user = userEvent.setup();
 

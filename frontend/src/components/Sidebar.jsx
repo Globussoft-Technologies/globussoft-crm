@@ -243,11 +243,19 @@ const Sidebar = ({
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
   const [openWellnessGroup, setOpenWellnessGroup] = useState(null);
+  const [openGenericGroup, setOpenGenericGroup] = useState(null);
   // Travel groups stay expanded by default to keep the full navigation
   // discoverable, while allowing each product area to be collapsed in place.
   const [openTravelSections, setOpenTravelSections] = useState({});
   const [isTravelCollapsed, setIsTravelCollapsed] = useState(false);
   const location = useLocation();
+
+  // Generic navigation uses the same one-level flyout pattern as Wellness.
+  // Always close the active flyout after navigation, including redirects and
+  // browser history changes that do not originate from a submenu click.
+  useEffect(() => {
+    setOpenGenericGroup(null);
+  }, [location.pathname]);
 
   // T2.1: ref to the <aside> so the focus-trap effect below can locate
   // focusable descendants. Also used to read the drawer's bounding rect for
@@ -1261,10 +1269,9 @@ const Sidebar = ({
                 permissionsReady,
                 counts,
                 user,
-                // Only isMobileViewport is needed: the generic nav's one
-                // collapsible group (GenericLeadsNavGroup) owns its open state
-                // locally, so hovering it no longer re-renders the whole nav.
                 isMobileViewport,
+                openGenericGroup,
+                onOpenGenericGroup: setOpenGenericGroup,
               })}
         </nav>
       </aside>
@@ -1442,55 +1449,19 @@ const WELLNESS_CATEGORY_ICON = {
   "Inventory Admin": ClipboardList,
   User: UserCircle,
   Admin: Shield,
+  // Generic CRM flyout categories. WellnessNavGroup is shared so both
+  // verticals retain identical mouse, keyboard and mobile behavior.
+  Sales: Briefcase,
+  Communication: MessageSquare,
+  "Work Management": CheckSquare,
+  "Customer Support": Ticket,
+  "Marketing & Automation": Megaphone,
+  "Documents & Delivery": FileText,
+  "Analytics & Reports": BarChart3,
+  "Team & Access": UsersRound,
+  Administration: Shield,
+  Platform: Database,
 };
-
-// The generic nav's single collapsible group ("Leads"), owning its open state
-// LOCALLY instead of lifting it to the Sidebar. Two reasons, both bugs we hit
-// by lifting it first:
-//
-//   1. STUCK PANEL. WellnessNavGroup closes when `activeGroup` moves to another
-//      label. In the wellness nav every sibling is also a group, so hovering any
-//      of them reassigns it. In the generic nav every sibling is a plain <Link>,
-//      so nothing ever reassigned it — and clicking the trigger pins it open,
-//      which defeats the mouse-leave timer. The panel then hung over the next
-//      page you navigated to. The pathname effect below is the actual fix.
-//   2. RE-RENDER COST. Hover called the Sidebar's setState, re-rendering the
-//      entire nav (hundreds of NavLinks) twice per hover — open and close. Local
-//      state confines that to this subtree.
-//
-// Only one group exists in the generic nav, so "one open at a time" is satisfied
-// by construction and needs no shared state.
-function GenericLeadsNavGroup({ Link, counts = {}, isMobileViewport = false }) {
-  const [openGroup, setOpenGroup] = useState(null);
-  const { pathname } = useLocation();
-
-  // Close on navigation. Covers every exit route — clicking an item inside the
-  // panel, clicking a different sidebar link, or a programmatic redirect.
-  useEffect(() => {
-    setOpenGroup(null);
-  }, [pathname]);
-
-  return (
-    <WellnessNavGroup
-      label="Leads"
-      dataTour="leads-group"
-      paths={["/leads", "/converted-leads", "/lead-reports", "/lead-routing", "/lead-scoring"]}
-      isMobileViewport={isMobileViewport}
-      activeGroup={openGroup}
-      // WellnessNavGroup calls this with a label AND with an updater fn
-      // (deactivatePanel); a raw setState handles both.
-      onActivate={setOpenGroup}
-    >
-      <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
-      <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
-      {/* managerOnly is handled inside <Link>, so ADMIN/MANAGER-only entries
-          stay hidden for lower roles exactly as they were before grouping. */}
-      <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly requiredPermission={{ module: "lead_scoring", action: "read" }} />
-      <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} />
-      <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
-    </WellnessNavGroup>
-  );
-}
 
 function WellnessNavGroup({
   label,
@@ -2608,7 +2579,6 @@ function renderTravelNavLegacy({
 
 function renderGenericNav({
   Link,
-  ExtLink,
   AdsGptLink,
   CallifiedLink,
   isAdmin,
@@ -2617,12 +2587,59 @@ function renderGenericNav({
   permissionsReady = false,
   counts = {},
   isMobileViewport = false,
+  openGenericGroup = null,
+  onOpenGenericGroup = () => { },
 }) {
-  // Generic-nav finance links use the per-link `requiredPermission` prop
-  // directly; the hook references here keep the destructure stable for
-  // when we promote generic to the same fully-dynamic shape wellness uses.
-  void hasPermission;
-  void permissionsReady;
+  const canRenderLink = (props) => {
+    const canonical = getGenericAccessByPath(props.to);
+    const adminOnly = canonical ? Boolean(canonical.adminOnly) : props.adminOnly;
+    const managerOnly = canonical ? Boolean(canonical.managerOnly) : props.managerOnly;
+    const requiredPermission = canonical?.requiredPermission || props.requiredPermission;
+    if (canonical?.hideForAdmin && isAdmin) return false;
+    if (canonical?.userOnly && isManager) return false;
+    if (adminOnly && !isAdmin) return false;
+    if (managerOnly && !isManager) return false;
+    if (
+      requiredPermission &&
+      (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  const visitChildren = (nodes, visitor) => Children.toArray(nodes).some((child) => {
+    if (child === null || child === undefined || child === false) return false;
+    if (!isValidElement(child)) return false;
+    if (child.type === Fragment) return visitChildren(child.props.children, visitor);
+    return visitor(child);
+  });
+
+  const renderGroup = (label, children, dataTour) => {
+    const hasVisibleChild = visitChildren(
+      children,
+      (child) => child.type !== Link || canRenderLink(child.props),
+    );
+    if (!hasVisibleChild) return null;
+    const paths = [];
+    visitChildren(children, (child) => {
+      if (child.props?.to) paths.push(child.props.to);
+      return false;
+    });
+    return (
+      <WellnessNavGroup
+        label={label}
+        dataTour={dataTour}
+        paths={paths}
+        isMobileViewport={isMobileViewport}
+        activeGroup={openGenericGroup}
+        onActivate={onOpenGenericGroup}
+      >
+        {children}
+      </WellnessNavGroup>
+    );
+  };
+
   return (
     <>
       {/* Core  Home is the role-aware widget dashboard for non-admins.
@@ -2637,308 +2654,119 @@ function renderGenericNav({
           wellness sidebar; keep both branches in sync. */}
       {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
       {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
-      <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
-      {/* WhatsApp (Meta Cloud API) agent inbox. The generic nav is a HARDCODED
-          list — unlike the wellness nav it does NOT read the page catalog — so
-          this link is what actually surfaces /whatsapp; the catalog row only
-          feeds permission metadata and landing-page choices.
-          Left ungated to match its neighbours (/inbox, /contacts, /pipeline are
-          all ungated here): the Link gate is hide-by-default and hasPermission
-          short-circuits only for isOwner, so a `whatsapp.read` requirement
-          would hide the entry from any admin lacking that explicit grant. Access
-          is still enforced server-side — the routes carry verifyToken (+ADMIN on
-          config) and thread responses PII-mask for low-trust viewers (#681). To
-          gate it anyway, add requiredPermission={{ module: "whatsapp", action:
-          "read" }} and grant whatsapp.read in Roles & Permissions.
-          Travel has its own Wati entry in renderTravelNav; wellness reaches its
-          copy through the catalog. */}
-      <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
-      <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
-          <Link to="/pipeline" icon={Briefcase} label="Deals and Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
-      {hasPermission("leads", "read") && (
-        <GenericLeadsNavGroup Link={Link} counts={counts} isMobileViewport={isMobileViewport} />
-      )}
-      <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
-      <Link
-        to="/tasks"
-        icon={CheckSquare}
-        label="Task Queue"
-        count={counts.tasks}
-        requiredPermission={{ module: "tasks", action: "read" }}
-      />
-      <Link
-        to="/tickets"
-        icon={Ticket}
-        label="Tickets"
-        count={counts.tickets}
-        requiredPermission={{ module: "tickets", action: "read" }}
-      />
-      {/* #474: label was "Calendar" pointing at /calendar-sync  the integration
-          settings page (Google/Outlook bindings), not an event calendar. Users
-          clicked expecting a day/week agenda view. There IS no generic event
-          calendar in this CRM (wellness has /wellness/calendar; generic does
-          not yet). Rename to match the destination so the affordance matches
-          reality; a future event-list /calendar route can be added separately
-          and re-promoted to the bare "Calendar" label then. */}
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
-      <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
+      {renderGroup("Sales", <>
+        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/pipeline" icon={Briefcase} label="Deals and Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
+        <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
+        <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
+        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
+        <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
+        <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
+      </>)}
 
-      <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
-      <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
-      <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-      <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
-      <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
-      <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
-      <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
-      <Link to="/document-tracking" icon={Eye} label="Doc Tracking" requiredPermission={{ module: "documents", action: "read" }} />
+      {renderGroup("Leads", <>
+        <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly requiredPermission={{ module: "lead_scoring", action: "read" }} />
+        <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
+      </>, "leads-group")}
 
-      {/* Finance items gated on per-module read perms so a custom role
-          without billing access doesn't see the surfaces at all. */}
-      <Link
-        to="/invoices"
-        icon={Receipt}
-        label="Invoices"
-        requiredPermission={{ module: "invoices", action: "read" }}
-      />
-      <Link
-        to="/estimates"
-        icon={FileSpreadsheet}
-        label="Estimates"
-        requiredPermission={{ module: "estimates", action: "read" }}
-      />
-      <Link
-        to="/expenses"
-        icon={IndianRupee}
-        label="Expenses"
-        requiredPermission={{ module: "expenses", action: "read" }}
-      />
-      <Link
-        to="/contracts"
-        icon={FileText}
-        label="Contracts"
-        requiredPermission={{ module: "contracts", action: "read" }}
-      />
-      <Link to="/projects" icon={FolderKanban} label="Projects" requiredPermission={{ module: "projects", action: "read" }} />
+      {renderGroup("Communication", <>
+        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+        <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+        <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
+        <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
+      </>)}
 
-      <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
-      <Link
-        to="/forecasting"
-        icon={TrendingUp}
-        label="Forecasting"
-        managerOnly
-      />
-      <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
-      <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
-      <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly requiredPermission={{ module: "pipeline", action: "read" }} />
-      <Link to="/reports" icon={BarChart3} label="Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
-      {/* Lead Reports cluster — productivity (daily/weekly/monthly), lead
-          quality, follow-up tracking, source analysis, lead-stage funnel
-          builder, meetings & site visits, visited-but-not-booked nurturing.
-          Manager-gated like its Reports/Funnel neighbours; the API behind it
-          is ADMIN/MANAGER-only server-side too. */}
-      <Link
-        to="/agent-reports"
-        icon={Trophy}
-        label="Agent Reports"
-        managerOnly
-      />
-      <Link
-        to="/dashboards"
-        icon={LayoutDashboard}
-        label="Dashboards"
-        managerOnly
-      />
-      <Link
-        to="/custom-reports"
-        icon={BarChart3}
-        label="Custom Reports"
-        managerOnly
-      />
-      <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
-      <GenericTeamTerritoriesNav Link={Link} isManager={isManager} />
+      {renderGroup("Work Management", <>
+        <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+        <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
+        <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
+      </>)}
 
-      <Link to="/marketing" icon={Send} label="Marketing" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
-      <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "sequences", action: "read" }} />
-      <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} />
-      <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
-      <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
-      <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} />
-      {/* Marketplace Leads sidebar link removed by request. Route stays
-          mounted in App.jsx so /marketplace-leads is reachable by deep
-          link / direct URL. */}
+      {renderGroup("Customer Support", <>
+        <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} requiredPermission={{ module: "tickets", action: "read" }} />
+        <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+        <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
+      </>)}
 
-      <Link
-        to="/knowledge-base"
-        icon={BookOpen}
-        label="Knowledge Base"
-        managerOnly
-      />
-      <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly requiredPermission={{ module: "surveys", action: "read" }} />
-      <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
-      <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
-      <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly requiredPermission={{ module: "cpq", action: "read" }} />
-      {/* Generic CRM workflow automation. Kept in the generic navigation only;
-          travel and wellness render their own vertical navigation branches. */}
-      <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
+      {renderGroup("Marketing & Automation", <>
+        <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
+        <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/marketing" icon={Send} label="Marketing" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "sequences", action: "read" }} />
+        <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} />
+        <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
+        <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
+        <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} />
+        <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly requiredPermission={{ module: "surveys", action: "read" }} />
+      </>)}
 
-      {/* Admin section. Opens for the legacy `ADMIN` role-string AND for any
-          custom role granted `roles.read` via RBAC  without the latter,
-          custom-admin users would never see the Roles link (the only entry
-          in this block gated by permission rather than strict role-string)
-          even though /settings/roles route + RolesAdmin page are designed
-          to admit them. The inner `adminOnly` links keep gating on the
-          legacy role string, so a custom role with only roles.read sees just
-          the Roles entry under this divider  which is the correct UX. */}
-      {(isAdmin || (permissionsReady && hasPermission("roles", "read"))) && (
-        <div
-          style={{
-            paddingTop: "0.75rem",
-            marginTop: "0.5rem",
-            borderTop: "1px solid var(--border-color)",
-            display: "flex",
-            flexDirection: "column",
-            gap: "0.25rem",
-          }}
-        >
-          <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
-          <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
-          <Link
-            to="/field-permissions"
-            icon={Shield}
-            label="Field Permissions"
-            adminOnly
-          />
-          {/* #917 slice 5  CSP Violations admin (consumes GET /api/csp/violations
-              shipped slice 3; page shipped slice 4 at /admin/csp-violations). */}
-          <Link
-            to="/admin/csp-violations"
-            icon={ShieldAlert}
-            label="CSP Violations"
-            adminOnly
-          />
-          {/* S128  Embed allowlist admin (Tenant.embedAllowlistJson editor).
-              Pairs with CSP Violations: both surface iframe-embed security
-              controls in one cluster. */}
-          <Link
-            to="/admin/embed-allowlist"
-            icon={Shield}
-            label="Embed Allowlist"
-            adminOnly
-          />
-          {/* PRD_STATUS_PAGE  Platform status admin (declare incidents, post updates). */}
-          <Link
-            to="/admin/status"
-            icon={Activity}
-            label="Status"
-            adminOnly
-          />
-          {/* PRD Gap 1.5 / 1.6  Commission profiles + revenue goals admin pages. */}
-          <Link
-            to="/commission-profiles"
-            icon={Award}
-            label="Commission Profiles"
-            adminOnly
-          />
-          <Link
-            to="/commission-data"
-            icon={Award}
-            label="Commission Data"
-            adminOnly
-          />
-          <Link
-            to="/revenue-goals"
-            icon={Target}
-            label="Revenue Goals"
-            adminOnly
-          />
-          <Link to="/channels" icon={Radio} label="Channels" adminOnly />
-          <Link
-            to="/industry-templates"
-            icon={Building2}
-            label="Industry Templates"
-            adminOnly
-          />
-          <Link to="/sandbox" icon={Database} label="Sandbox" adminOnly />
-          <Link to="/objects" icon={Database} label="App Builder" adminOnly />
-          <Link
-            to="/currencies"
-            icon={IndianRupee}
-            label="Currencies"
-            adminOnly
-          />
-          <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
-          <Link to="/developer" icon={Code} label="Developers" adminOnly />
-          <Link
-            to="/data-import-export"
-            icon={Database}
-            label="Import / Export"
-            adminOnly
-          />
-          <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
-        </div>
-      )}
+      {renderGroup("Documents & Delivery", <>
+        <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
+        <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
+        <Link to="/document-tracking" icon={Eye} label="Doc Tracking" requiredPermission={{ module: "documents", action: "read" }} />
+        <Link to="/contracts" icon={FileText} label="Contracts" requiredPermission={{ module: "contracts", action: "read" }} />
+        <Link to="/projects" icon={FolderKanban} label="Projects" requiredPermission={{ module: "projects", action: "read" }} />
+      </>)}
 
-      {!isAdmin && isManager && (
-        <div
-          style={{
-            paddingTop: "0.75rem",
-            marginTop: "0.5rem",
-            borderTop: "1px solid var(--border-color)",
-            display: "flex",
-            flexDirection: "column",
-            gap: "0.25rem",
-          }}
-        >
-          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
-          <Link to="/data-import-export" icon={Database} label="Import / Export" requiredPermission={{ module: "settings", action: "manage" }} />
-          <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
-        </div>
-      )}
+      {renderGroup("Finance", <>
+        <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} />
+        <Link to="/expenses" icon={IndianRupee} label="Expenses" requiredPermission={{ module: "expenses", action: "read" }} />
+        <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
+        <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly requiredPermission={{ module: "cpq", action: "read" }} />
+      </>)}
 
-      {!isAdmin && !isManager && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
-        </div>
-      )}
+      {renderGroup("Analytics & Reports", <>
+        <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
+        <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/reports" icon={BarChart3} label="Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
+        <Link to="/agent-reports" icon={Trophy} label="Agent Reports" managerOnly />
+        <Link to="/dashboards" icon={LayoutDashboard} label="Dashboards" managerOnly />
+        <Link to="/custom-reports" icon={BarChart3} label="Custom Reports" managerOnly />
+        <Link to="/revenue-goals" icon={Target} label="Revenue Goals" managerOnly />
+      </>)}
+
+      {renderGroup("Team & Access", <>
+        <Link to="/sales-teams" icon={Users} label="Sales Teams" managerOnly />
+        <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
+        <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
+        <Link to="/territories" icon={Network} label="Territories" managerOnly />
+        <Link to="/field-permissions" icon={Shield} label="Field Permissions" adminOnly />
+      </>)}
+
+      {renderGroup("Administration", <>
+        <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
+        <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
+        <Link to="/admin/csp-violations" icon={ShieldAlert} label="CSP Violations" adminOnly />
+        <Link to="/admin/embed-allowlist" icon={Shield} label="Embed Allowlist" adminOnly />
+        <Link to="/admin/status" icon={Activity} label="Status" adminOnly />
+        <Link to="/commission-profiles" icon={Award} label="Commission Profiles" adminOnly />
+        <Link to="/commission-data" icon={Award} label="Commission Data" adminOnly />
+        <Link to="/channels" icon={Radio} label="Channels" adminOnly />
+        <Link to="/industry-templates" icon={Building2} label="Industry Templates" adminOnly />
+        <Link to="/currencies" icon={IndianRupee} label="Currencies" adminOnly />
+        <Link to="/data-import-export" icon={Database} label="Import / Export" managerOnly requiredPermission={{ module: "settings", action: "manage" }} />
+      </>)}
+
+      {renderGroup("Platform", <>
+        <Link to="/sandbox" icon={Database} label="Sandbox" adminOnly />
+        <Link to="/objects" icon={Database} label="App Builder" adminOnly />
+        <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
+        <Link to="/developer" icon={Code} label="Developers" adminOnly />
+      </>)}
+
+      <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
 
       {/* User Notification Settings  only for regular users, not admin/manager */}
       {!isAdmin && !isManager && (
-        <div
-          style={{
-            paddingTop: "0.75rem",
-            marginTop: "0.5rem",
-            borderTop: "1px solid var(--border-color)",
-            display: "flex",
-            flexDirection: "column",
-            gap: "0.25rem",
-          }}
-        >
-          <Link
-            to="/notification-settings"
-            icon={Settings}
-            label="Notification Settings"
-          />
-        </div>
+        <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
       )}
     </>
-  );
-}
-
-function GenericTeamTerritoriesNav({ Link, isManager }) {
-  const [openGroup, setOpenGroup] = useState(null);
-  if (!isManager) return null;
-  return (
-    <WellnessNavGroup
-      label="Team & Territories"
-      paths={["/sales-teams", "/staff", "/settings/roles", "/territories"]}
-      activeGroup={openGroup}
-      onActivate={setOpenGroup}
-    >
-      <Link to="/sales-teams" icon={Users} label="Sales Teams" />
-      <Link to="/staff" icon={UsersRound} label="Staff" />
-      <Link to="/settings/roles" icon={ShieldCheck} label="Roles" />
-      <Link to="/territories" icon={Network} label="Territories" />
-    </WellnessNavGroup>
   );
 }
 

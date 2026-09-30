@@ -246,6 +246,26 @@ router.get("/inbox", async (req, res) => {
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
     else if (req.query.folder === 'inbox') where.direction = 'INBOUND';
 
+    // Generic CRM inbox search is evaluated before pagination so matches on
+    // later pages are not silently omitted. Other verticals keep their
+    // established inbox query contract unchanged.
+    if ((req.user.vertical || "generic") === "generic" && req.query.q !== undefined) {
+      const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+      if (!q || q.length > 200) {
+        return res.status(400).json({
+          error: "q must be a non-empty string ≤200 chars",
+          code: "INVALID_SEARCH",
+          field: "q",
+        });
+      }
+      where.OR = [
+        { from: { contains: q } },
+        { to: { contains: q } },
+        { subject: { contains: q } },
+        { body: { contains: q } },
+      ];
+    }
+
     // Generic CRM's date-range filter. Keep the query additive so existing
     // callers (including wellness/travel inboxes) retain their behaviour.
     const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
@@ -270,7 +290,7 @@ router.get("/inbox", async (req, res) => {
       prisma.emailMessage.findMany({
         where,
         include: { contact: true },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take,
       }),
@@ -304,13 +324,16 @@ router.get("/inbox", async (req, res) => {
 // hence this single-id endpoint. Tenant-scoped via updateMany; 404 when
 // the id isn't in this tenant.
 router.post("/inbox/mark-all-read", async (req, res) => {
-  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
+  if ((req.user.vertical || "generic") !== "generic") {
+    return res.status(403).json({ error: "Bulk inbox actions are only available in Generic CRM", code: "VERTICAL_NOT_SUPPORTED" });
+  }
+  const canAccess = await hasModuleAction(req.user, "Communications", "WRITE");
   if (!canAccess) {
     return res.status(403).json({ error: "You don't have permission to access Communications" });
   }
   try {
     const result = await prisma.emailMessage.updateMany({
-      where: { tenantId: req.user.tenantId, read: false },
+      where: { tenantId: req.user.tenantId, direction: "INBOUND", read: false },
       data: { read: true },
     });
     res.json({ updated: result.count, read: true });
@@ -320,13 +343,16 @@ router.post("/inbox/mark-all-read", async (req, res) => {
 });
 
 router.post("/inbox/mark-all-unread", async (req, res) => {
-  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
+  if ((req.user.vertical || "generic") !== "generic") {
+    return res.status(403).json({ error: "Bulk inbox actions are only available in Generic CRM", code: "VERTICAL_NOT_SUPPORTED" });
+  }
+  const canAccess = await hasModuleAction(req.user, "Communications", "WRITE");
   if (!canAccess) {
     return res.status(403).json({ error: "You don't have permission to access Communications" });
   }
   try {
     const result = await prisma.emailMessage.updateMany({
-      where: { tenantId: req.user.tenantId },
+      where: { tenantId: req.user.tenantId, direction: "INBOUND" },
       data: { read: false },
     });
     res.json({ updated: result.count, read: false });

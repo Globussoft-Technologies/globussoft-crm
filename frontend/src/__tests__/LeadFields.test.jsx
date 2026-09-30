@@ -132,18 +132,31 @@ beforeEach(() => {
       });
     }
 
+    if (/^\/api\/lead-custom-fields\/\d+\/move$/.test(url) && method === "POST") {
+      const id = Number(url.split("/").at(-2));
+      const direction = JSON.parse(opts.body).direction;
+      const ordered = sortedServerFields();
+      const currentIndex = ordered.findIndex((field) => field.id === id);
+      const targetIndex = currentIndex + (direction === "up" ? -1 : 1);
+      if (currentIndex >= 0 && targetIndex >= 0 && targetIndex < ordered.length) {
+        [ordered[currentIndex], ordered[targetIndex]] = [ordered[targetIndex], ordered[currentIndex]];
+        serverFields = ordered.map((field, index) => ({ ...field, displayOrder: index + 1 }));
+      }
+      return Promise.resolve({ moved: currentIndex >= 0 && targetIndex >= 0 && targetIndex < ordered.length });
+    }
+
     return Promise.resolve([]);
   });
 });
 
 describe("<LeadFields />", () => {
-  it("redirects travel tenants without fetching generic lead fields", () => {
+  it("keeps Travel CRM lead fields available", async () => {
     authContextValue.tenant = { vertical: "travel" };
 
     renderLeadFields();
 
-    expect(fetchApiMock).not.toHaveBeenCalled();
-    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeInTheDocument());
+    expect(fetchApiMock).toHaveBeenCalledWith(expect.stringContaining("/api/lead-custom-fields?"));
   });
 
   it("shows a drag handle and reorders without flashing the loading state", async () => {
@@ -178,5 +191,31 @@ describe("<LeadFields />", () => {
       expect(rows[0]).toHaveTextContent("Beta");
       expect(rows[1]).toHaveTextContent("Alpha");
     });
+  });
+
+  it("moves a page-boundary field using the server-side tenant ordering", async () => {
+    const user = userEvent.setup();
+    serverFields = Array.from({ length: 11 }, (_, index) => ({
+      id: index + 1,
+      label: `Field ${index + 1}`,
+      fieldKey: `field_${index + 1}`,
+      fieldType: "text",
+      options: null,
+      isRequired: false,
+      displayOrder: index + 1,
+    }));
+
+    renderLeadFields();
+    await waitFor(() => expect(screen.getByText("Field 10")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /Move Field 10 down/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields/10/move", {
+        method: "POST",
+        body: JSON.stringify({ direction: "down" }),
+      });
+    });
+    expect(sortedServerFields()[9].id).toBe(11);
+    expect(sortedServerFields()[10].id).toBe(10);
   });
 });

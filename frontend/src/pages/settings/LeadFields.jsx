@@ -287,7 +287,6 @@ function renderFieldPreview(field, optionsText) {
 export default function LeadFields() {
   const { tenant } = useContext(AuthContext) || {};
   const isWellness = tenant?.vertical === "wellness";
-  const isTravel = tenant?.vertical === "travel";
 
   const notify = useNotify();
   const [fields, setFields] = useState([]);
@@ -342,14 +341,14 @@ export default function LeadFields() {
   };
 
   useEffect(() => {
-    if (isWellness || isTravel) return; // gated below anyway; skip the fetch
+    if (isWellness) return; // gated below anyway; skip the fetch
     load({ pageToLoad: page });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, isWellness, isTravel]);
+  }, [page, isWellness]);
 
-  // Generic-vertical-only feature — redirect wellness/travel tenants away
-  // rather than rendering an inapplicable admin page for them.
-  if (isWellness || isTravel) return <Navigate to="/settings" replace />;
+  // Lead fields are supported by Generic and Travel CRM. Wellness uses its
+  // own patient-field model and must stay outside this shared definition UI.
+  if (isWellness) return <Navigate to="/settings" replace />;
 
   const resetCreateForm = () => {
     setCreating(false);
@@ -434,9 +433,9 @@ export default function LeadFields() {
     }
   };
 
-  // No bulk /reorder endpoint exists for this resource, so we sync the full
-  // ordering through the existing per-field PUT. The field set is small enough
-  // that the extra calls are an acceptable tradeoff for a much smoother UX.
+  // Reorder rows already loaded on the current page through the existing
+  // per-field PUT contract. Page-boundary moves use the atomic server endpoint
+  // below because the adjacent definition is not present in this page slice.
   const syncFieldOrder = async (nextFields) => {
     if (!Array.isArray(nextFields) || !nextFields.length || reordering) return;
     const orderedFields = normalizeFieldOrder(nextFields, pageOffset);
@@ -462,8 +461,29 @@ export default function LeadFields() {
 
   const handleMoveField = async (index, direction) => {
     const swapIndex = index + direction;
-    if (swapIndex < 0 || swapIndex >= fields.length || reordering) return;
-    await syncFieldOrder(arrayMove(fields, index, swapIndex));
+    if (reordering) return;
+    if (swapIndex >= 0 && swapIndex < fields.length) {
+      await syncFieldOrder(arrayMove(fields, index, swapIndex));
+      return;
+    }
+
+    const absoluteIndex = pageOffset + index;
+    const targetAbsoluteIndex = absoluteIndex + direction;
+    if (targetAbsoluteIndex < 0 || targetAbsoluteIndex >= totalFields) return;
+
+    setReordering(true);
+    try {
+      await fetchApi(`/api/lead-custom-fields/${fields[index].id}/move`, {
+        method: "POST",
+        body: JSON.stringify({ direction: direction < 0 ? "up" : "down" }),
+      });
+      await load({ silent: true });
+    } catch (err) {
+      notify.error(err?.message || "Failed to reorder fields");
+      await load({ silent: true });
+    } finally {
+      setReordering(false);
+    }
   };
 
   const handleDragEnd = async ({ active, over }) => {
@@ -698,8 +718,6 @@ export default function LeadFields() {
     </div>
   );
 }
-
-
 
 
 

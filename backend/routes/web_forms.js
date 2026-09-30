@@ -999,8 +999,17 @@ function genericFieldTypeError(field, raw) {
   }
   if (field.fieldType === "date") {
     const value = textOr(raw);
-    const date = new Date(`${value}T00:00:00Z`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(date.getTime())) return `${fieldLabel} must be a valid date`;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    const date = match ? new Date(`${value}T00:00:00Z`) : null;
+    const isExactCalendarDate = Boolean(
+      match &&
+        date &&
+        !Number.isNaN(date.getTime()) &&
+        date.getUTCFullYear() === Number(match[1]) &&
+        date.getUTCMonth() + 1 === Number(match[2]) &&
+        date.getUTCDate() === Number(match[3]),
+    );
+    if (!isExactCalendarDate) return `${fieldLabel} must be a valid date`;
   }
   if (["dropdown", "radio"].includes(field.fieldType) && !options.includes(textOr(raw))) {
     return `${fieldLabel} must be selected from the available options`;

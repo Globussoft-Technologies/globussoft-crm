@@ -908,6 +908,42 @@ describe('POST /api/forms/public/:slug/submit', () => {
     });
   }
 
+  function mockGenericDateForm() {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 84,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Event registration',
+      slug: 'event-registration',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-birth-date', sourceKind: 'contact', sourceKey: 'birthDate', fieldType: 'date', label: 'Birth date', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: '{}',
+    });
+  }
+
+  test('rejects an impossible calendar date before persisting a Generic lead', async () => {
+    mockGenericDateForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/event-registration/submit?scope=generic')
+      .field('name', 'Calendar Customer')
+      .field('birthDate', '2026-02-31');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_FIELD_TYPES',
+      fields: { birthDate: 'Birth date must be a valid date' },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
+  });
+
   test('accepts a complete E.164 Generic phone without phoneCountry for legacy clients', async () => {
     mockGenericPhoneForm();
 

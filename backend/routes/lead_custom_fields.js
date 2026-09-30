@@ -170,6 +170,47 @@ router.post("/", adminOnly, async (req, res) => {
   }
 });
 
+// POST /api/lead-custom-fields/:id/move — move one definition by one position.
+// Reordering is resolved against the complete tenant-scoped list so moving the
+// first/last row on a paginated screen also swaps with the adjacent page.
+router.post("/:id/move", adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) return res.status(400).json({ error: "Invalid field id", code: "INVALID_ID" });
+
+    const direction = req.body?.direction;
+    if (!["up", "down"].includes(direction)) {
+      return res.status(400).json({ error: "direction must be up or down", code: "INVALID_DIRECTION" });
+    }
+
+    const definitions = await prisma.leadCustomFieldDefinition.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true },
+      orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
+    });
+    const currentIndex = definitions.findIndex((definition) => definition.id === id);
+    if (currentIndex < 0) return res.status(404).json({ error: "Field not found", code: "NOT_FOUND" });
+
+    const targetIndex = currentIndex + (direction === "up" ? -1 : 1);
+    if (targetIndex < 0 || targetIndex >= definitions.length) {
+      return res.json({ moved: false });
+    }
+
+    const reordered = [...definitions];
+    [reordered[currentIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[currentIndex]];
+    await prisma.$transaction(
+      reordered.map((definition, index) => prisma.leadCustomFieldDefinition.update({
+        where: { id: definition.id },
+        data: { displayOrder: index + 1 },
+      })),
+    );
+    res.json({ moved: true });
+  } catch (err) {
+    console.error("[lead-custom-fields] move error:", err && err.message);
+    res.status(500).json({ error: "Failed to reorder lead custom field" });
+  }
+});
+
 // PUT /api/lead-custom-fields/:id — update label/options/required/order (ADMIN only)
 // fieldType and fieldKey are immutable after creation — changing a field's
 // type after values have been stored against it would silently orphan or

@@ -307,6 +307,7 @@ export default function Inbox() {
 
   const [emailFolder, setEmailFolder] = useState("all");
   const [inboxSearch, setInboxSearch] = useState("");
+  const [debouncedInboxSearch, setDebouncedInboxSearch] = useState("");
   const [inboxDateFrom, setInboxDateFrom] = useState("");
   const [inboxDateTo, setInboxDateTo] = useState("");
   const [markingAllRead, setMarkingAllRead] = useState(false);
@@ -324,6 +325,7 @@ export default function Inbox() {
   const inboxActionsRef = useRef(null);
   const loadMoreLockRef = useRef(false);
   const emailPaginationRef = useRef(emailPagination);
+  const inboxRequestSequenceRef = useRef(0);
 
   const [showMeet, setShowMeet] = useState(false);
   const [meetData, setMeetData] = useState({
@@ -375,6 +377,9 @@ export default function Inbox() {
     (() => {
       const params = new URLSearchParams();
       if (emailFolder !== "all") params.set("folder", emailFolder);
+      if (isGeneric && debouncedInboxSearch.trim()) {
+        params.set("q", debouncedInboxSearch.trim());
+      }
       if (isGeneric && inboxDateFrom) params.set("dateFrom", inboxDateFrom);
       if (isGeneric && inboxDateTo) params.set("dateTo", inboxDateTo);
       const query = params.toString();
@@ -383,6 +388,14 @@ export default function Inbox() {
   const inboxPathRef = useRef(inboxPath);
 
   const didInitialLoadRef = useRef(false);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedInboxSearch(inboxSearch),
+      250,
+    );
+    return () => window.clearTimeout(timer);
+  }, [inboxSearch]);
+
   useEffect(() => {
     emailPaginationRef.current = emailPagination;
   }, [emailPagination]);
@@ -407,12 +420,15 @@ export default function Inbox() {
     const currentInboxPath = inboxPathRef.current;
 
     if (
-      (page > 1 && !currentPagination.hasMore) ||
-      currentPagination.loading ||
-      currentPagination.loadingMore
+      !reset &&
+      ((page > 1 && !currentPagination.hasMore) ||
+        currentPagination.loading ||
+        currentPagination.loadingMore)
     ) {
       return [];
     }
+
+    const requestSequence = ++inboxRequestSequenceRef.current;
 
     setEmailPagination((prev) => ({
       ...prev,
@@ -428,6 +444,8 @@ export default function Inbox() {
       const rows = extractPagedRows(data, "emails");
       const pagination = extractPagination(data, page, pageSize, rows);
 
+      if (requestSequence !== inboxRequestSequenceRef.current) return [];
+
       setEmails((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
       setEmailPagination((prev) => ({
         ...prev,
@@ -436,14 +454,16 @@ export default function Inbox() {
 
       return rows;
     } catch (err) {
-      console.error(err);
+      if (requestSequence === inboxRequestSequenceRef.current) console.error(err);
       return [];
     } finally {
-      setEmailPagination((prev) => ({
-        ...prev,
-        loading: false,
-        loadingMore: false,
-      }));
+      if (requestSequence === inboxRequestSequenceRef.current) {
+        setEmailPagination((prev) => ({
+          ...prev,
+          loading: false,
+          loadingMore: false,
+        }));
+      }
     }
   }, []);
 
@@ -455,7 +475,7 @@ export default function Inbox() {
       try {
         setLoading(true);
         if (canAssignMeetingStaff) setStaffLoading(true);
-        const [emailRows, contactData, patientData, staffData] = await Promise.all([
+        const [, contactData, patientData, staffData] = await Promise.all([
           loadEmailsPage({ page: 1, reset: true }),
           fetchApi("/api/contacts"),
           fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({ patients: [] })),
@@ -465,7 +485,6 @@ export default function Inbox() {
         ]);
 
         if (cancelled) return;
-        setEmails(Array.isArray(emailRows) ? emailRows : []);
         setContacts(Array.isArray(contactData) ? contactData : []);
         const patientList = patientData?.patients || patientData;
         setPatients(Array.isArray(patientList) ? patientList : []);
@@ -538,9 +557,7 @@ export default function Inbox() {
       label: formatStaffOptionLabel(staff),
     }));
 
-  const visibleInboxEmails = isGeneric && inboxSearch.trim()
-    ? emails.filter((email) => `${email.from} ${email.to} ${email.subject} ${email.body}`.toLowerCase().includes(inboxSearch.trim().toLowerCase()))
-    : emails;
+  const visibleInboxEmails = emails;
 
   const markAllInboxEmailsRead = async () => {
     if (!isGeneric || markingAllRead) return;

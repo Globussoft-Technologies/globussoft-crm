@@ -226,7 +226,7 @@ describe('<Login /> — page surface', () => {
     window.location.hostname = 'app.customer-example.com';
     renderLogin();
 
-    expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument();
     expect(screen.queryByText(/Generic CRM — click to log in/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Enhanced Wellness — Demo — click to log in/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Travel Stall — Demo — click to log in/i)).not.toBeInTheDocument();

@@ -322,12 +322,22 @@ describe('GET /plans - active plans', () => {
         features: null,
         description: 'Pro tier',
       },
+      {
+        id: 3,
+        name: 'Starter~m2',
+        price: '499.00',
+        currency: 'INR',
+        billingIntervalDays: 30,
+        features: '["leads","contacts"]',
+        description: 'Legacy duplicate Starter tier',
+      },
     ]);
 
     const res = await authedGet(makeApp(), '/api/subscriptions/plans');
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
+    expect(res.body.map((plan) => plan.name)).toEqual(['Starter', 'Pro']);
     // `formatPlan` returns a richer envelope than the original spec assumed 
     // it includes `planKey`, `pricing`, `displayOrder`, `popular`, `accentColor`,
     // `cta`, `featuresLabel`, `isActive` in addition to the core 6. Pin the

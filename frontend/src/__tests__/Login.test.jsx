@@ -146,7 +146,7 @@ describe('<Login /> — page surface', () => {
     // observable + reversible.
     originalLocation = window.location;
     delete window.location;
-    window.location = { href: '', pathname: '/login', search: '' };
+    window.location = { href: '', hostname: 'localhost', pathname: '/login', search: '' };
   });
 
   afterEach(() => {
@@ -157,7 +157,8 @@ describe('<Login /> — page surface', () => {
   it('renders the heading, sign-in copy, and email + password inputs on initial mount', () => {
     renderLogin();
     expect(screen.getByRole('img', { name: /Globussoft CRM/i })).toBeInTheDocument();
-    expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument();
+    expect(screen.getByText(/Create an organization\?/i)).toBeInTheDocument();
     // Post-46247368 refactor: email + password inputs render EMPTY on
     // initial mount (the hardcoded admin@globussoft.com / password123
     // defaults were removed; demo creds now live on the quick-login
@@ -169,6 +170,15 @@ describe('<Login /> — page surface', () => {
     expect(passwordInput).toBeInTheDocument();
     expect(passwordInput.value).toBe('');
     expect(screen.getByRole('button', { name: /Sign In$/i })).toBeInTheDocument();
+  });
+
+  it('marks the Modern Classroom logo for the dark-theme image swap', () => {
+    window.location.hostname = 'tmc.localhost';
+    const { container } = renderLogin();
+    expect(screen.getByRole('img', { name: 'The Modern Classroom' }))
+      .toHaveAttribute('src', '/tmc.png');
+    expect(container.querySelector('.login-logo--tmc-dark'))
+      .toHaveAttribute('src', '/tmc-dark.png');
   });
 
   // Helper: type the canonical demo credentials into the empty form so
@@ -200,6 +210,26 @@ describe('<Login /> — page surface', () => {
     expect(screen.getByText(/Owner \(Yasin\)/i)).toBeInTheDocument();
     expect(screen.getByText(/TMC Operator/i)).toBeInTheDocument();
     expect(screen.getByText(/RFU Advisor/i)).toBeInTheDocument();
+  });
+
+  it.each(['localhost', '127.0.0.1', 'crm.globusdemos.com', 'crm-staging.globusdemos.com'])(
+    'shows demo quick-login buttons on approved host %s', (hostname) => {
+      window.location.hostname = hostname;
+      renderLogin();
+
+      expect(screen.getByText(/Generic CRM — click to log in/i)).toBeInTheDocument();
+      expect(screen.getByText(/^Admin$/i)).toBeInTheDocument();
+    },
+  );
+
+  it('hides demo quick-login buttons on an unclassified customer domain', () => {
+    window.location.hostname = 'app.customer-example.com';
+    renderLogin();
+
+    expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Generic CRM — click to log in/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Enhanced Wellness — Demo — click to log in/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Travel Stall — Demo — click to log in/i)).not.toBeInTheDocument();
   });
 
   // SSO buttons are gated behind `SHOW_SSO = false` in Login.jsx:9 — feature

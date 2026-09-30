@@ -854,7 +854,7 @@ function buildEmbedCode(form, origin) {
   return [
     "<!-- Globussoft CRM web form -->",
 
-    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" allow="geolocation *" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
     '<script>(function(frame){if(!frame)return;function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}}window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>',
   ].join("\n");
 }
@@ -976,6 +976,49 @@ function isTruthyValue(fieldType, raw) {
   }
 
   return textOr(raw) !== "";
+}
+
+function genericFieldTypeError(field, raw) {
+  if (raw == null || raw === "" || (Array.isArray(raw) && raw.length === 0)) return null;
+  const fieldLabel = textOr(field.label, "This field");
+  const options = Array.isArray(field.options) ? field.options : [];
+
+  if (field.fieldType === "email" && !/^[^@\s]+@[^@\s]+\.[^\s]+$/.test(textOr(raw))) {
+    return `${fieldLabel} must be a valid email address`;
+  }
+  if (field.fieldType === "number" && !/^\d+(?:\.\d+)?$/.test(textOr(raw))) {
+    return `${fieldLabel} must be a non-negative number`;
+  }
+  if (field.fieldType === "url") {
+    try {
+      const url = new URL(textOr(raw));
+      if (!["http:", "https:", "mailto:"].includes(url.protocol)) return `${fieldLabel} must be a valid URL`;
+    } catch {
+      return `${fieldLabel} must be a valid URL`;
+    }
+  }
+  if (field.fieldType === "date") {
+    const value = textOr(raw);
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    const date = match ? new Date(`${value}T00:00:00Z`) : null;
+    const isExactCalendarDate = Boolean(
+      match &&
+        date &&
+        !Number.isNaN(date.getTime()) &&
+        date.getUTCFullYear() === Number(match[1]) &&
+        date.getUTCMonth() + 1 === Number(match[2]) &&
+        date.getUTCDate() === Number(match[3]),
+    );
+    if (!isExactCalendarDate) return `${fieldLabel} must be a valid date`;
+  }
+  if (["dropdown", "radio"].includes(field.fieldType) && !options.includes(textOr(raw))) {
+    return `${fieldLabel} must be selected from the available options`;
+  }
+  if (field.fieldType === "multiselect") {
+    const values = Array.isArray(raw) ? raw : [raw];
+    if (values.some((value) => !options.includes(textOr(value)))) return `${fieldLabel} contains an invalid option`;
+  }
+  return null;
 }
 
 function coerceCustomFieldValue(def, raw) {
@@ -1252,6 +1295,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const payload = {};
 
     const customFieldValues = {};
+    const invalidFieldTypes = {};
 
     const fileRecords = [];
 
@@ -1309,6 +1353,11 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         : readBodyValue(body, field.sourceKey);
 
       payload[field.sourceKey] = raw == null ? null : raw;
+
+      if (formScope === "generic" && !field.hidden && field.sourceKey !== "phone") {
+        const typeError = genericFieldTypeError(field, raw);
+        if (typeError) invalidFieldTypes[field.sourceKey] = typeError;
+      }
 
       if (field.required && !isTruthyValue(field.fieldType, raw))
         missing.push(field.label);
@@ -1426,6 +1475,15 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         error: `Missing required fields: ${missing.join(", ")}`,
 
         code: "MISSING_REQUIRED_FIELDS",
+      });
+    }
+
+    if (Object.keys(invalidFieldTypes).length) {
+      const details = Object.values(invalidFieldTypes).join("\n");
+      return res.status(400).json({
+        error: details,
+        code: "INVALID_FIELD_TYPES",
+        fields: invalidFieldTypes,
       });
     }
 

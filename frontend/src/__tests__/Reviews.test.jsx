@@ -183,7 +183,7 @@ describe("<Reviews /> — review redirect settings", () => {
     fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
       "/api/tenant-settings/travel.externalReviewUrl",
-      expect.objectContaining({ method: "DELETE" }),
+      expect.objectContaining({ method: "DELETE", silent: true }),
     ));
   });
 });

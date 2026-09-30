@@ -107,7 +107,7 @@ const {
   decodeEscapedComposeHtml,
 } = communicationsRouter;
 
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', vertical = 'generic' } = {}) {
   const app = express();
   app.use(express.json());
   // Inject a fake req.user — production wires this via verifyToken
@@ -115,7 +115,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   // verifyRole([ADMIN,MANAGER]) to /inbox, /send-email, /calls, /log-call,
   // /tracking/:id — so the test identity must carry an allowed role.
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role };
+    req.user = { userId, tenantId, role, vertical };
     next();
   });
   app.use('/api/communications', communicationsRouter);
@@ -125,6 +125,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 beforeEach(() => {
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
+  prisma.emailMessage.count.mockReset().mockResolvedValue(0);
   prisma.emailMessage.updateMany.mockReset();
   prisma.emailTracking.create.mockReset();
   prisma.activity.create.mockReset();
@@ -371,6 +372,38 @@ describe('POST /send-email — #624 outbound persistence', () => {
 // ─── GET /inbox?folder=… — Sent folder query (#624) ────────────────
 
 describe('GET /inbox — #624 folder filter', () => {
+  test('searches Generic CRM messages before pagination and uses deterministic ordering', async () => {
+    prisma.emailMessage.count.mockResolvedValue(27);
+    const app = makeApp();
+    const res = await request(app).get('/api/communications/inbox?folder=inbox&q=quarterly&page=2&limit=10');
+
+    expect(res.status).toBe(200);
+    const args = prisma.emailMessage.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({
+      tenantId: 1,
+      direction: 'INBOUND',
+      OR: [
+        { from: { contains: 'quarterly' } },
+        { to: { contains: 'quarterly' } },
+        { subject: { contains: 'quarterly' } },
+        { body: { contains: 'quarterly' } },
+      ],
+    });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+    expect(args.skip).toBe(10);
+    expect(args.take).toBe(10);
+    expect(prisma.emailMessage.count).toHaveBeenCalledWith({ where: args.where });
+    expect(res.body.pagination.total).toBe(27);
+  });
+
+  test('does not apply the Generic search contract to Travel CRM', async () => {
+    const app = makeApp({ vertical: 'travel' });
+    const res = await request(app).get('/api/communications/inbox?q=quarterly');
+
+    expect(res.status).toBe(200);
+    expect(prisma.emailMessage.findMany.mock.calls[0][0].where.OR).toBeUndefined();
+  });
+
   test('?folder=sent filters where direction=OUTBOUND', async () => {
     const app = makeApp();
     const res = await request(app).get('/api/communications/inbox?folder=sent');
@@ -397,6 +430,15 @@ describe('GET /inbox — #624 folder filter', () => {
     expect(args.where.tenantId).toBe(1);
     // No direction filter on the where clause.
     expect(args.where.direction).toBeUndefined();
+  });
+
+  test('date range filters createdAt inclusively through the next day', async () => {
+    const app = makeApp();
+    const res = await request(app).get('/api/communications/inbox?dateFrom=2026-09-01&dateTo=2026-09-04');
+    expect(res.status).toBe(200);
+    const args = prisma.emailMessage.findMany.mock.calls[0][0];
+    expect(args.where.createdAt.gte).toEqual(new Date('2026-09-01T00:00:00.000Z'));
+    expect(args.where.createdAt.lt).toEqual(new Date('2026-09-05T00:00:00.000Z'));
   });
 
   test('Sent folder roundtrip — a freshly-sent OUTBOUND row appears in ?folder=sent', async () => {
@@ -436,6 +478,42 @@ describe('GET /inbox — #624 folder filter', () => {
     expect(sentRes.body.length).toBe(1);
     expect(sentRes.body[0].subject).toBe('sent-folder-roundtrip');
     expect(sentRes.body[0].direction).toBe('OUTBOUND');
+  });
+});
+
+describe('POST /inbox/mark-all-* — Generic bulk inbox actions', () => {
+  test('marks only unread inbound messages as read for the current tenant', async () => {
+    prisma.emailMessage.updateMany.mockResolvedValue({ count: 4 });
+
+    const res = await request(makeApp()).post('/api/communications/inbox/mark-all-read');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: 4, read: true });
+    expect(prisma.emailMessage.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, direction: 'INBOUND', read: false },
+      data: { read: true },
+    });
+  });
+
+  test('marks only inbound messages as unread and leaves sent mail unchanged', async () => {
+    prisma.emailMessage.updateMany.mockResolvedValue({ count: 2 });
+
+    const res = await request(makeApp()).post('/api/communications/inbox/mark-all-unread');
+
+    expect(res.status).toBe(200);
+    expect(prisma.emailMessage.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, direction: 'INBOUND' },
+      data: { read: false },
+    });
+  });
+
+  test('rejects bulk inbox actions outside Generic CRM', async () => {
+    const res = await request(makeApp({ vertical: 'travel' }))
+      .post('/api/communications/inbox/mark-all-read');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('VERTICAL_NOT_SUPPORTED');
+    expect(prisma.emailMessage.updateMany).not.toHaveBeenCalled();
   });
 });
 

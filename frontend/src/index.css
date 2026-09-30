@@ -1,5 +1,19 @@
 @import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap");
 
+.login-logo--tmc-dark {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  clip-path: inset(0 0 47% 30%);
+  pointer-events: none;
+}
+
+html[data-theme="dark"] .login-logo--tmc-dark {
+  display: block;
+}
+
 :root {
   --bg-color: #0b0c10;
   --surface-color: rgba(22, 24, 29, 0.4);
@@ -2379,6 +2393,37 @@ body[data-vertical="travel"] .travel-sidebar-logo {
   border-radius: 8px !important;
 }
 
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-header {
+  gap: 0.5rem !important;
+}
+
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-brand-name {
+  font-size: 0.9rem !important;
+  font-weight: 650 !important;
+  line-height: 1.2 !important;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: break-word;
+  text-overflow: clip;
+}
+
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-logo--tmc {
+  width: 46px !important;
+  height: 46px !important;
+  object-fit: contain !important;
+  background: transparent !important;
+  border-radius: 50% !important;
+}
+
+/* Use the square TMC mark in dark mode, including when a wide saved logo
+   would otherwise be cropped into the sidebar's small logo slot. */
+html[data-theme="dark"] body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-logo--tmc {
+  content: url("/tmc-logo.png");
+  object-fit: contain !important;
+  background: transparent !important;
+  border-radius: 50% !important;
+}
+
 body[data-vertical="travel"] .travel-sidebar-collapse {
   display: grid;
   place-items: center;
@@ -2393,6 +2438,11 @@ body[data-vertical="travel"] .travel-sidebar-collapse {
   color: var(--text-primary);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+body[data-vertical="travel"] .app-sidebar.travel-sidebar-tmc .travel-sidebar-collapse {
+  width: 30px;
+  height: 30px;
 }
 
 body[data-vertical="travel"] .travel-sidebar-collapse:hover {
@@ -3119,24 +3169,28 @@ html[data-theme="dark"] .travel-flight-details-box {
 }
 
 .top-scroll-sync__top,
-.top-scroll-sync__bottom {
+.top-scroll-sync__bottom,
+.top-scroll-sync__sticky-bottom {
   scrollbar-width: auto;
   scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar,
-.top-scroll-sync__bottom::-webkit-scrollbar {
+.top-scroll-sync__bottom::-webkit-scrollbar,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar {
   height: 16px;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-track,
-.top-scroll-sync__bottom::-webkit-scrollbar-track {
+.top-scroll-sync__bottom::-webkit-scrollbar-track,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-track {
   background: rgba(128, 128, 128, 0.12);
   border-radius: 8px;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-thumb,
-.top-scroll-sync__bottom::-webkit-scrollbar-thumb {
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb {
   background: rgba(128, 128, 128, 0.72);
   border: 3px solid transparent;
   background-clip: padding-box;
@@ -3146,12 +3200,14 @@ html[data-theme="dark"] .travel-flight-details-box {
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-thumb:active,
-.top-scroll-sync__bottom::-webkit-scrollbar-thumb:active {
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb:active,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb:active {
   cursor: grabbing;
 }
 
 .top-scroll-sync__top::-webkit-scrollbar-thumb:hover,
-.top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover,
+.top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb:hover {
   background: rgba(128, 128, 128, 0.95);
   border: 2px solid transparent;
   background-clip: padding-box;
@@ -3632,21 +3688,59 @@ table.leads-table thead th {
   top: 0;
 }
 
-/* Generic CRM: the top scrollbar is removed, so the sticky header docks
-   flush to the top of the scroll viewport (no 16px gap strip). Scoped to
-   the --no-topbar modifier — all other usages keep top: 16px. */
+/* Generic CRM renders a 16px synchronized scrollbar above the table. Keep
+   both frozen and scrollable headers aligned immediately below that bar. */
 .leads-split-table--no-topbar table.leads-table thead th {
-  top: 0;
+  top: 16px;
+}
+
+.leads-split-table--no-topbar
+  .leads-table-frozen-pane table.leads-table thead,
+.leads-split-table--no-topbar
+  .leads-table-scroll-pane table.leads-table thead {
+  background-color: var(--modal-bg);
+}
+
+.leads-split-table--no-topbar
+  .leads-table-frozen-pane table.leads-table thead tr,
+.leads-split-table--no-topbar
+  .leads-table-scroll-pane table.leads-table thead tr {
+  background-color: var(--modal-bg);
 }
 
 /* Generic CRM Leads: keep the column headings pinned while the rows move,
    and use the compact neutral scrollbars from the table reference layout. */
 .leads-split-table--no-topbar {
-  max-height: none !important;
-  overflow: visible !important;
+  max-height: calc(100vh - 24rem) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   scrollbar-width: auto;
   scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
   scrollbar-gutter: stable;
+}
+
+.leads-page-root--generic {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.leads-page-root--generic .leads-content-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.leads-page-root--generic .leads-toolbar-shell {
+  flex: 0 0 auto;
+}
+
+.leads-page-root--generic .leads-split-table--no-topbar {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none !important;
 }
 
 .leads-split-table--no-topbar::-webkit-scrollbar {
@@ -3693,6 +3787,17 @@ table.leads-table thead th {
 .leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
   background: rgba(128, 128, 128, 0.95);
   border-width: 2px;
+}
+
+.leads-split-table--no-topbar
+  .top-scroll-sync__bottom.top-scroll-sync__bottom--hidden-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.leads-split-table--no-topbar
+  .top-scroll-sync__bottom.top-scroll-sync__bottom--hidden-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 table.leads-table thead tr:first-child th {
@@ -4525,6 +4630,32 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 .reports-page__schedule-table th,
 .reports-page__schedule-table td {
   white-space: nowrap;
+}
+
+/* Keep every Reports table inside its card. The report grids have fixed
+   columns, while a long value (or a numeric cell's minimum width) can force
+   the table wider than the card and leave the page horizontally scrolled at
+   the right-hand columns. On desktop, let the fixed layout distribute the
+   available width and truncate cell content instead of growing the table. */
+@media (min-width: 769px) {
+  .reports-page__table-shell {
+    overflow-x: hidden !important;
+  }
+
+  .reports-page__table-shell > table.stable-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100%;
+    table-layout: fixed !important;
+  }
+
+  .reports-page__table-shell > table.stable-table th,
+  .reports-page__table-shell > table.stable-table td {
+    min-width: 0 !important;
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 [data-theme="light"] .reports-page .card {
@@ -6902,3 +7033,285 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
    backdrops use that role, and painting them with --modal-bg hides the CRM
    page instead of dimming it. Individual modal panels own their surface
    background (for example .generic-import-wizard and .cp-modal). */
+
+/* Generic CRM Call Settings — Ant Design Menu-inspired hierarchy. */
+.call-settings-backdrop {
+  background: rgba(15, 23, 42, 0.52) !important;
+  backdrop-filter: blur(3px);
+}
+
+.call-settings-dialog {
+  width: min(92vw, 540px) !important;
+  max-height: min(88vh, 780px) !important;
+  padding: 0 16px 14px !important;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent) !important;
+  border-radius: 16px !important;
+  background: color-mix(in srgb, var(--bg-color) 94%, #f5f7fa) !important;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28) !important;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 35%, transparent) transparent;
+  scrollbar-gutter: stable;
+}
+
+.call-settings-dialog::-webkit-scrollbar {
+  width: 8px;
+}
+
+.call-settings-dialog::-webkit-scrollbar-track {
+  margin-block: 12px;
+  background: transparent;
+}
+
+.call-settings-dialog::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
+  background-clip: padding-box;
+}
+
+.call-settings-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 -16px 12px !important;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-color) 96%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.call-settings-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 11px;
+}
+
+.call-settings-heading-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--primary-color, var(--accent-color));
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent);
+}
+
+.call-settings-heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.call-settings-heading > span:last-child > span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.call-settings-close {
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px !important;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.call-settings-close:hover {
+  color: var(--text-primary) !important;
+  background: var(--surface-hover) !important;
+}
+
+.call-settings-section {
+  position: relative;
+  margin: 0 0 10px !important;
+  padding: 13px 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-color) 85%, transparent);
+  border-radius: 11px;
+  background: var(--surface, var(--surface-color));
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.call-settings-section:hover {
+  border-color: color-mix(in srgb, var(--primary-color, var(--accent-color)) 28%, var(--border-color));
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+}
+
+.call-settings-section-title {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px !important;
+  color: var(--text-primary) !important;
+  font-size: 0.72rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.045em !important;
+  padding-inline: 2px;
+}
+
+.call-settings-section-title::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 2px;
+  background: var(--primary-color, var(--accent-color));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+}
+
+.call-settings-section > label {
+  display: grid !important;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center !important;
+  min-height: 28px;
+  column-gap: 10px !important;
+  margin-bottom: 0 !important;
+  font-size: 0.84rem !important;
+  line-height: 1.4;
+}
+
+.call-settings-section > label > input[type="checkbox"] {
+  position: relative;
+  width: 34px;
+  height: 19px;
+  flex: 0 0 34px;
+  margin: 0 !important;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  align-self: start;
+  margin-top: 1px !important;
+  background: color-mix(in srgb, var(--text-secondary) 32%, var(--surface, var(--surface-color, #fff)));
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.call-settings-section > label > input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.28);
+  transition: transform 160ms ease;
+}
+
+.call-settings-section > label > input[type="checkbox"]:checked {
+  background: var(--primary-color, var(--accent-color));
+}
+
+.call-settings-section > label > input[type="checkbox"]:checked::before {
+  transform: translateX(15px);
+}
+
+.call-settings-section > label > input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, var(--accent-color)) 22%, transparent);
+}
+
+.call-settings-section > label > input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.call-settings-section-expandable > div:last-child {
+  margin-top: 12px;
+  margin-left: 44px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 76%, transparent);
+}
+
+.call-settings-dialog > .call-settings-section + div[style*="height"] {
+  display: none !important;
+}
+
+.call-settings-schedule {
+  padding: 10px !important;
+  border-color: color-mix(in srgb, var(--border-color) 82%, transparent) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--bg-color) 70%, var(--surface)) !important;
+}
+
+.call-settings-segmented {
+  gap: 2px !important;
+  padding: 3px !important;
+  background: color-mix(in srgb, var(--border-color) 42%, transparent) !important;
+}
+
+.call-settings-segmented button {
+  min-height: 34px;
+  border: 0 !important;
+}
+
+.call-settings-segmented button[aria-pressed="true"] {
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+}
+
+.call-settings-dialog input[type="number"],
+.call-settings-dialog input[type="time"],
+.call-settings-dialog select {
+  min-height: 36px;
+  border-color: var(--border-color) !important;
+  border-radius: 8px !important;
+  background: var(--surface, var(--surface-color)) !important;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.call-settings-dialog input[type="number"]:focus,
+.call-settings-dialog input[type="time"]:focus,
+.call-settings-dialog select:focus {
+  border-color: var(--primary-color, var(--accent-color)) !important;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent);
+}
+
+.call-settings-admin-note,
+.call-settings-save-note {
+  margin: 12px 2px 2px !important;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.call-settings-save-note span {
+  margin-right: 4px;
+  color: #16a34a;
+  font-weight: 700;
+}
+
+@media (max-width: 520px) {
+  .call-settings-dialog {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 28px) !important;
+    padding-inline: 12px !important;
+  }
+
+  .call-settings-header {
+    margin-inline: -12px !important;
+    padding-inline: 14px;
+  }
+
+  .call-settings-section {
+    padding: 12px;
+  }
+
+  .call-settings-section-expandable > div:last-child {
+    margin-left: 0;
+  }
+}
+
+[data-theme="dark"] .call-settings-dialog {
+  background: color-mix(in srgb, var(--bg-color) 95%, #111827) !important;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.5) !important;
+}

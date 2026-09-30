@@ -1,5 +1,5 @@
 // "Customize table" column-visibility picker (Freshsales-style) — generic
-// vertical only, ENFORCED HERE (not just by the frontend never rendering
+// and travel verticals, ENFORCED HERE (not just by the frontend never rendering
 // the button) — see the vertical-check middleware below. Personal
 // PER-USER preference: any authenticated role (USER/MANAGER/ADMIN) can
 // choose which columns show in their OWN view of the Leads/Contacts table
@@ -22,9 +22,9 @@ const { verifyToken } = require("../middleware/auth");
 
 router.use(verifyToken);
 
-// Generic-vertical-only, enforced server-side (not just by the frontend
-// never rendering the "Customize table" button) — a direct API call from a
-// wellness/travel tenant is rejected rather than silently answered. Mirrors
+// Vertical support is enforced server-side (not just by the frontend never
+// rendering the "Customize table" button) — a direct API call from an
+// unsupported tenant is rejected rather than silently answered. Mirrors
 // the tenant.vertical lookup pattern used elsewhere (e.g. routes/contacts.js).
 router.use(async (req, res, next) => {
   try {
@@ -32,12 +32,14 @@ router.use(async (req, res, next) => {
       where: { id: req.user.tenantId },
       select: { vertical: true },
     });
-    if (tenant && (tenant.vertical === "wellness" || tenant.vertical === "travel")) {
+    const vertical = tenant?.vertical || "";
+    if (!tenant || !["generic", "travel"].includes(vertical)) {
       return res.status(403).json({
-        error: "Column customization is only available for the generic CRM vertical",
+        error: "Column customization is only available for the generic and travel CRM verticals",
         code: "GENERIC_VERTICAL_ONLY",
       });
     }
+    res.locals.tenantVertical = vertical;
     next();
   } catch (err) {
     console.error("[table-column-prefs] vertical-check error:", err && err.message);
@@ -134,10 +136,57 @@ const BUILTIN_COLUMNS = {
   ],
 };
 
+// Travel gets its own built-in catalog. Reusing the generic catalog here would
+// expose generic attribution and Callified fields in the Travel table and
+// would let stale preferences bring those keys back into the picker.
+const TRAVEL_BUILTIN_COLUMNS = {
+  leads: [
+    { key: "name", label: "Name", lockedVisible: true },
+    { key: "email", label: "Email" },
+    { key: "phone", label: "Phone" },
+    { key: "company", label: "Category" },
+    { key: "aiScore", label: "Lead Score" },
+    { key: "source", label: "Source" },
+    { key: "tags", label: "Tags" },
+    { key: "assignedTo", label: "Assigned To" },
+    { key: "createdAt", label: "Created" },
+    { key: "actions", label: "Actions", lockedVisible: true },
+  ],
+  contacts: [
+    { key: "name", label: "Name", lockedVisible: true },
+    { key: "email", label: "Email" },
+    { key: "phone", label: "Phone" },
+    { key: "company", label: "Category" },
+    { key: "aiScore", label: "Lead Score" },
+    { key: "status", label: "Status" },
+    { key: "assignedTo", label: "Assigned To" },
+    { key: "createdAt", label: "Created" },
+    { key: "actions", label: "Actions", lockedVisible: true },
+  ],
+};
+
+function getBuiltinColumns(tableKey, vertical) {
+  return (vertical === "travel" ? TRAVEL_BUILTIN_COLUMNS : BUILTIN_COLUMNS)[tableKey] || [];
+}
+
+function getDefaultVisibleColumns(tableKey, vertical) {
+  // Preserve the established Generic Leads first-load layout. The broader
+  // catalog remains available through the picker, but existing Generic users
+  // should not suddenly receive every optional column after this change.
+  if (vertical === "generic" && tableKey === "leads") {
+    return [
+      "name", "email", "company", "phone", "aiScore", "source", "webForm",
+      "medium", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
+      "callStatus", "callifiedAi", "callifiedScore",
+    ];
+  }
+  return getBuiltinColumns(tableKey, vertical).map((c) => c.key);
+}
+
 const CUSTOM_FIELD_KEY_PREFIX = "cf_";
 
-async function getAvailableColumns(tableKey, tenantId) {
-  const builtin = BUILTIN_COLUMNS[tableKey] || [];
+async function getAvailableColumns(tableKey, tenantId, vertical) {
+  const builtin = getBuiltinColumns(tableKey, vertical);
   // Custom fields apply to both Leads and Contacts tables (a Lead is just a
   // Contact row) — same field set surfaces as extra optional columns in both.
   const customDefs = await prisma.leadCustomFieldDefinition.findMany({
@@ -162,7 +211,7 @@ router.get("/:tableKey", async (req, res) => {
       return res.status(400).json({ error: `tableKey must be one of: ${[...VALID_TABLE_KEYS].join(", ")}` });
     }
 
-    const available = await getAvailableColumns(tableKey, req.user.tenantId);
+    const available = await getAvailableColumns(tableKey, req.user.tenantId, res.locals.tenantVertical);
     const availableKeys = new Set(available.map((c) => c.key));
 
     const pref = await prisma.tableColumnPreference.findUnique({
@@ -187,9 +236,7 @@ router.get("/:tableKey", async (req, res) => {
       // First-ever load for this user/table — default to every builtin
       // column visible, no custom-field columns (opt-in, matches the
       // "columns not shown in table" bucket in the Freshsales reference UI).
-      visible = tableKey === "leads"
-        ? ["name", "email", "company", "phone", "aiScore", "source", "webForm", "medium", "subBrand", "tags", "assignedTo", "createdAt", "campaign", "callStatus", "callifiedAi", "callifiedScore"]
-        : (BUILTIN_COLUMNS[tableKey] || []).map((c) => c.key);
+      visible = getDefaultVisibleColumns(tableKey, res.locals.tenantVertical);
     }
 
     res.json({ availableColumns: available, visible });
@@ -213,7 +260,7 @@ router.put("/:tableKey", async (req, res) => {
       return res.status(400).json({ error: "visible must be an array of column keys" });
     }
 
-    const available = await getAvailableColumns(tableKey, req.user.tenantId);
+    const available = await getAvailableColumns(tableKey, req.user.tenantId, res.locals.tenantVertical);
     const availableKeys = new Set(available.map((c) => c.key));
     const cleanVisible = visible
       .map((k) => String(k))
@@ -223,7 +270,9 @@ router.put("/:tableKey", async (req, res) => {
     // silently restore them if the caller's payload dropped them, rather
     // than rejecting the whole save. `name` stays first; any other locked
     // column is appended in catalog order (matches the table layout).
-    const lockedKeys = (BUILTIN_COLUMNS[tableKey] || []).filter((c) => c.lockedVisible).map((c) => c.key);
+    const lockedKeys = getBuiltinColumns(tableKey, res.locals.tenantVertical)
+      .filter((c) => c.lockedVisible)
+      .map((c) => c.key);
     const [firstLocked, ...restLocked] = lockedKeys;
     if (firstLocked && !cleanVisible.includes(firstLocked)) cleanVisible.unshift(firstLocked);
     for (const k of restLocked) {

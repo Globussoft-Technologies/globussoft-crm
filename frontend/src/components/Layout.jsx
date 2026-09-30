@@ -24,6 +24,7 @@ import Avatar from "./Avatar";
 // user cannot dismiss it until they pay (or sign out).
 import SubscriptionGate from "./SubscriptionGate";
 import { AuthContext, ThemeContext } from "../App";
+import { getDomainBranding } from "../utils/domainBranding";
 import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
@@ -158,6 +159,8 @@ const Layout = () => {
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
+  const isGenericLeadsPage =
+    !isWellness && !isTravel && location.pathname === "/leads";
   // The softphone FAB is fixed at bottom-right (2rem/2rem) — on WhatsApp chat,
   // the inbox page, and the Gmail compose page it overlaps the docked composer.
   // Hide it only on those routes; every other page keeps it unchanged.
@@ -280,7 +283,10 @@ const Layout = () => {
   // #704: document.title reflects tenant.name so operators with many open
   // tabs can pick out the CRM tab fast. Falls back to the app-wide brand.
   useEffect(() => {
-    document.title = tenant?.name ? `${tenant.name} — CRM` : "Globussoft CRM";
+    const branding = getDomainBranding();
+    document.title = branding.title !== "Globussoft CRM"
+      ? branding.title
+      : tenant?.name ? `${tenant.name} — CRM` : branding.title;
   }, [tenant?.name]);
 
   const handleLogout = async () => {
@@ -591,7 +597,7 @@ const Layout = () => {
             minWidth: 0,
             minHeight: 0,
             overflowX: "hidden",
-            overflowY: popupScrollLocked ? "hidden" : "auto",
+            overflowY: popupScrollLocked || isGenericLeadsPage ? "hidden" : "auto",
             padding: "0",
             backgroundColor: "transparent",
           }}

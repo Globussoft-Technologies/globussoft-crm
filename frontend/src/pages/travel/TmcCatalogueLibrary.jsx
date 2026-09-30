@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, CheckCircle2, Cloud, ExternalLink, FileText, Folder, Loader2, Search, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchApi, getAuthToken } from "../../utils/api";
@@ -25,6 +25,8 @@ export default function TmcCatalogueLibrary() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
+  const brochureGridRef = useRef(null);
+  const [gridColumns, setGridColumns] = useState(1);
   const [error, setError] = useState(null);
   const [uploading, setUploading] = useState(false);
 
@@ -168,7 +170,24 @@ export default function TmcCatalogueLibrary() {
       || (statusFilter === "crm-itineraries" && inCrmItineraries);
     return matchesSearch && matchesStatus;
   });
-  const pageSize = 25;
+  // Keep each page to five complete rows at the current card-grid width.
+  // The catalogue sits inside the app's resizable sidebar layout, so window
+  // width alone does not tell us how many cards actually fit.
+  useEffect(() => {
+    const grid = brochureGridRef.current;
+    if (!grid || typeof ResizeObserver === "undefined") return;
+    const updateColumns = () => {
+      const cardWidth = 245;
+      const gap = 16;
+      const columns = Math.max(1, Math.floor((grid.clientWidth + gap) / (cardWidth + gap)));
+      setGridColumns((current) => current === columns ? current : columns);
+    };
+    updateColumns();
+    const observer = new ResizeObserver(updateColumns);
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [loading, visibleFiles.length]);
+  const pageSize = gridColumns * 5;
   const totalPages = Math.max(1, Math.ceil(visibleFiles.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageFiles = visibleFiles.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -201,7 +220,7 @@ export default function TmcCatalogueLibrary() {
 
         <section style={{ ...cardStyle({ padding: 18 }) }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 18 }}><div><h2 style={{ margin: 0, fontSize: 22 }}>TMC brochures</h2><span style={{ color: "var(--text-secondary)", fontSize: 13 }}>{lastJob?.status === "running" ? "Knowledge sync is running…" : `${visibleFiles.length} PDF${visibleFiles.length === 1 ? "" : "s"} in this view`}</span></div><div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}><select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }} aria-label="Filter brochure files" style={{ border: "1px solid var(--border-color)", borderRadius: 8, padding: "9px 10px", background: "var(--surface-color, #20242c)", color: "inherit" }}><option value="all">All files</option><option value="indexed">Indexed</option><option value="pending">Waiting for sync</option><option value="crm-itineraries">CRM Itineraries</option></select><div style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid var(--border-color)", borderRadius: 9, padding: "8px 11px", minWidth: 240 }}><Search size={15} color="var(--text-secondary)" /><input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Search brochures…" style={{ border: 0, outline: 0, background: "transparent", color: "inherit", width: "100%" }} /></div></div></div>
-          {loading && files.length === 0 ? <div role="status" aria-live="polite" style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><Loader2 size={30} aria-hidden="true" style={{ display: "block", margin: "0 auto 12px", animation: "spin 0.9s linear infinite" }} /><strong style={{ display: "block", color: "var(--text-primary)", fontSize: 15 }}>Loading your brochure library…</strong><p style={{ margin: "8px 0 0", lineHeight: 1.5 }}>This may take a few seconds while we check Drive and indexing status.</p></div> : visibleFiles.length === 0 ? <div style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><FileText size={30} /><p>No PDFs match this filter.</p></div> : <><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 245px), 1fr))", gap: 16 }}>{pageFiles.map((file) => <PdfCard key={`${file.subBrand}-${file.driveFileId}`} file={file} onDelete={connected && /(^|\/)CRM Itineraries(\/|$)/i.test(String(file.folderPath || "")) ? deleteDriveFile : null} />)}</div>{totalPages > 1 && <Pagination page={safePage} pageSize={pageSize} total={visibleFiles.length} onChange={(p) => setPage(p)} showRangeLabel={false} style={{ margin: 0, marginTop: 20, padding: 0, justifyContent: "flex-end" }} />}</>}
+          {loading && files.length === 0 ? <div role="status" aria-live="polite" style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><Loader2 size={30} aria-hidden="true" style={{ display: "block", margin: "0 auto 12px", animation: "spin 0.9s linear infinite" }} /><strong style={{ display: "block", color: "var(--text-primary)", fontSize: 15 }}>Loading your brochure library…</strong><p style={{ margin: "8px 0 0", lineHeight: 1.5 }}>This may take a few seconds while we check Drive and indexing status.</p></div> : visibleFiles.length === 0 ? <div style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><FileText size={30} /><p>No PDFs match this filter.</p></div> : <><div ref={brochureGridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 245px), 1fr))", gap: 16 }}>{pageFiles.map((file) => <PdfCard key={`${file.subBrand}-${file.driveFileId}`} file={file} onDelete={connected && /(^|\/)CRM Itineraries(\/|$)/i.test(String(file.folderPath || "")) ? deleteDriveFile : null} />)}</div>{totalPages > 1 && <Pagination page={safePage} pageSize={pageSize} total={visibleFiles.length} onChange={(p) => setPage(p)} showRangeLabel={false} style={{ margin: 0, marginTop: 20, padding: 0, justifyContent: "flex-end" }} />}</>}
         </section>
       </div>
     </main>

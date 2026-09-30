@@ -770,7 +770,20 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       setTemplateParams([]);
       setUseTemplate(false);
       await loadList();
-      if (resp?.thread?.id) setSelectedId(resp.thread.id);
+      // Meta's async send endpoint returns the created thread as a top-level
+      // threadId (not resp.thread.id). Keep this scoped to the generic Meta
+      // inbox; WhatsApp Web has its own transport and existing flow.
+      if (isMeta && resp?.threadId) {
+        const threadId = Number(resp.threadId);
+        setSelectedId(threadId);
+        try {
+          const fresh = await fetchApi(`/api/whatsapp/threads/${threadId}`);
+          setDetail(fresh);
+          setHasMoreMessages(!!fresh?.hasMoreMessages);
+        } catch {
+          // The normal selected-thread effect/polling will retry loading it.
+        }
+      }
     } catch (err) {
       const msg = explainWhatsAppSendError(err, isMeta);
       if (msg.includes('CONTACT_OPTED_OUT')) {

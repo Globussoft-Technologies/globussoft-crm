@@ -173,4 +173,69 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.body.visible).toEqual(['name', 'status', 'title', 'website', 'actions']);
     expect(prisma.tableColumnPreference.upsert).toHaveBeenCalled();
   });
+
+  test('travel catalog excludes generic-only columns and includes tenant custom fields', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValueOnce([
+      { fieldKey: 'school', label: 'School', displayOrder: 1, id: 91 },
+    ]);
+    prisma.tableColumnPreference.findUnique.mockResolvedValueOnce({
+      visibleJson: JSON.stringify([
+        'name', 'email', 'lastUpdated', 'firstTouchSource', 'cf_school', 'actions',
+      ]),
+    });
+
+    const res = await request(makeApp()).get('/api/table-column-prefs/leads');
+
+    expect(res.status).toBe(200);
+    const keys = res.body.availableColumns.map((c) => c.key);
+    expect(keys).toContain('cf_school');
+    expect(keys).toContain('email');
+    for (const genericOnlyKey of [
+      'webForm',
+      'medium',
+      'campaign',
+      'callStatus',
+      'callifiedAi',
+      'callifiedScore',
+      'pageUrl',
+      'utm_source',
+      'treatmentOfInterest',
+      'title',
+      'firstName',
+      'lastName',
+      'website',
+      'linkedin',
+      'industry',
+      'companySize',
+      'description',
+      'stateCode',
+      'lastUpdated',
+      'firstTouchSource',
+      'lastTouchSource',
+      'billingStateCode',
+    ]) {
+      expect(keys).not.toContain(genericOnlyKey);
+    }
+    expect(res.body.visible).toContain('name');
+    expect(res.body.visible).toContain('cf_school');
+    expect(res.body.visible).toContain('actions');
+    expect(res.body.visible).not.toContain('lastUpdated');
+    expect(res.body.visible).not.toContain('firstTouchSource');
+    expect(res.body.visible).not.toContain('webForm');
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID },
+      orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
+    });
+  });
+
+  test('wellness tenants remain blocked from column customization', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+
+    const res = await request(makeApp()).get('/api/table-column-prefs/leads');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('GENERIC_VERTICAL_ONLY');
+    expect(prisma.leadCustomFieldDefinition.findMany).not.toHaveBeenCalled();
+  });
 });

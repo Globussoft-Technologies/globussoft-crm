@@ -644,6 +644,7 @@ export default function Settings() {
         try {
           await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
             method: "DELETE",
+            silent: true,
           });
         } catch (settingErr) {
           if (settingErr?.status !== 404) throw settingErr;
@@ -805,12 +806,16 @@ export default function Settings() {
     setCallifiedSaving(true);
     setCallifiedMsg("");
     try {
+      const credentialUpdates = {};
+      if (callifiedEmail.trim()) credentialUpdates.email = callifiedEmail.trim();
+      if (callifiedPassword && callifiedPassword !== MASKED_CALLIFIED_KEY) {
+        credentialUpdates.password = callifiedPassword;
+      }
       await fetchApi("/api/integrations/callified/config", {
         method: "PUT",
         body: JSON.stringify({
           apiKey: callifiedApiKey,
-          email: callifiedEmail,
-          password: callifiedPassword,
+          ...credentialUpdates,
           baseUrl: callifiedBaseUrl,
           webhookSecret: callifiedWebhookSecret,
         }),
@@ -2101,6 +2106,8 @@ export default function Settings() {
 
             <form
               onSubmit={handleSaveCallifiedKey}
+              autoComplete="off"
+              data-form-type="other"
               style={{
                 display: "flex",
                 flexDirection: "column",
@@ -2113,6 +2120,10 @@ export default function Settings() {
               </label>
               <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
                 <input
+                  name="callified-api-key"
+                  autoComplete="new-password"
+                  data-1p-ignore
+                  data-lpignore="true"
                   type={callifiedShowKey && !isCallifiedKeyMasked ? "text" : "password"}
                   className="input-field"
                   placeholder={isCallifiedKeyMasked ? "API key is saved" : "ck_..."}
@@ -2165,11 +2176,17 @@ export default function Settings() {
                 </p>
 
                 {/* Fallback Email */}
-                <label style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+                <label htmlFor="callified-fallback-email" style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
                   Email
                 </label>
                 <input
+                  id="callified-fallback-email"
+                  name="callified-fallback-contact"
                   type="email"
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
+                  data-form-type="other"
                   className="input-field"
                   placeholder=""
                   value={callifiedEmail}
@@ -2179,12 +2196,18 @@ export default function Settings() {
                 />
 
                 {/* Fallback Password */}
-                <label style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+                <label htmlFor="callified-fallback-password" style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
                   Password
                 </label>
                 <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
                   <input
+                    id="callified-fallback-password"
+                    name="callified-fallback-secret"
                     type={callifiedShowPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    data-1p-ignore
+                    data-lpignore="true"
+                    data-form-type="other"
                     className="input-field"
                     placeholder="••••••••"
                     value={callifiedPassword}

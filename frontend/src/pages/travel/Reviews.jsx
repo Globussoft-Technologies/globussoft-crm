@@ -262,7 +262,7 @@ export default function Reviews() {
         });
       } else {
         try {
-          await fetchApi("/api/tenant-settings/travel.externalReviewUrl", { method: "DELETE" });
+          await fetchApi("/api/tenant-settings/travel.externalReviewUrl", { method: "DELETE", silent: true });
         } catch (settingErr) {
           if (settingErr?.status !== 404) throw settingErr;
         }

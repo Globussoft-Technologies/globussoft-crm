@@ -1096,8 +1096,31 @@ async function fetchObjectStorageRecording(recordingUrl, opts = {}) {
 /**
  * Fetch all transcripts for a Callified lead.
  */
+function normalizeTranscriptPayload(payload, callifiedLeadId) {
+  if (Array.isArray(payload) && payload.every((row) => !Array.isArray(row?.leads))) {
+    return payload;
+  }
+
+  // Newer Callified deployments return campaign groups containing leads and
+  // calls. Flatten only the requested lead and retain its conclusion beside
+  // the transcript so classification does not require another AI pass.
+  const campaigns = Array.isArray(payload) ? payload : Array.isArray(payload?.campaigns) ? payload.campaigns : [];
+  return campaigns.flatMap((campaign) =>
+    (Array.isArray(campaign?.leads) ? campaign.leads : [])
+      .filter((lead) => String(lead?.lead_id ?? lead?.id) === String(callifiedLeadId))
+      .flatMap((lead) => (Array.isArray(lead?.calls) ? lead.calls : []).map((call) => ({
+        ...call,
+        campaign_id: campaign.campaign_id,
+        campaign_name: campaign.campaign_name,
+        lead_id: lead.lead_id ?? lead.id,
+        conclusion: call.conclusion || null,
+      }))),
+  );
+}
+
 async function getLeadTranscripts(tenantId, callifiedLeadId) {
-  return await callifiedJson(tenantId, `/api/leads/${callifiedLeadId}/transcripts`);
+  const payload = await callifiedJson(tenantId, `/api/leads/${callifiedLeadId}/transcripts`);
+  return normalizeTranscriptPayload(payload, callifiedLeadId);
 }
 
 /**
@@ -1122,13 +1145,14 @@ async function getCallDetails(tenantId, callifiedLeadId) {
     return { transcripts: [], reviews: [] };
   }
 
-  const reviews = await Promise.all(
-    transcripts.map((t) =>
-      module.exports
-        .getTranscriptReview(tenantId, t.id)
-        .catch((e) => ({ transcriptId: t.id, error: e.message })),
-    ),
-  );
+  const reviews = await Promise.all(transcripts.map((t) => {
+    if (t?.conclusion && typeof t.conclusion === 'object') {
+      return Promise.resolve({ ...t.conclusion, transcript_id: t.id, source: 'transcripts_api' });
+    }
+    return module.exports
+      .getTranscriptReview(tenantId, t.id)
+      .catch((e) => ({ transcriptId: t.id, error: e.message }));
+  }));
 
   return { transcripts, reviews };
 }
@@ -1478,16 +1502,8 @@ async function initiateBrowserCallForContact({
  * so the Call Status drawer doesn't show ancient calls as "Calling…" forever.
  */
 function inferCallStatus(transcripts, latestTranscript, initiatedAt) {
-  if (!Array.isArray(transcripts) || transcripts.length === 0) {
-    const staleThresholdMs = Number(process.env.CALLIFIED_STALE_PENDING_MS) || 30 * 60 * 1000;
-    if (initiatedAt && Date.now() - new Date(initiatedAt).getTime() > staleThresholdMs) {
-      return 'FAILED';
-    }
-    return 'INITIATED';
-  }
-
-  const latest = latestTranscript || transcripts[0];
-  const rawStatus = String(latest.status || '').toLowerCase();
+  const latest = latestTranscript || (Array.isArray(transcripts) ? transcripts[0] : null);
+  const rawStatus = String(latest?.status || '').toLowerCase();
 
   if (rawStatus.includes('complete') || rawStatus.includes('success') || rawStatus.includes('finished')) {
     return 'COMPLETED';
@@ -1497,6 +1513,32 @@ function inferCallStatus(transcripts, latestTranscript, initiatedAt) {
   }
   if (rawStatus.includes('fail') || rawStatus.includes('error') || rawStatus.includes('busy') || rawStatus.includes('cancel') || rawStatus.includes('invalid')) {
     return 'FAILED';
+  }
+
+  // The newer transcripts API returns one call row whose `transcript` may be
+  // empty but whose conclusion is already final. Treat that provider-owned
+  // conclusion as terminal instead of leaving the CRM badge at Connecting.
+  const conclusion = latest?.conclusion;
+  if (
+    conclusion &&
+    typeof conclusion === 'object' &&
+    (
+      conclusion.call_outcome ||
+      conclusion.callOutcome ||
+      conclusion.quality_score != null ||
+      conclusion.appointment_booked === true ||
+      conclusion.summary
+    )
+  ) {
+    return 'COMPLETED';
+  }
+
+  if (!latest) {
+    const staleThresholdMs = Number(process.env.CALLIFIED_STALE_PENDING_MS) || 30 * 60 * 1000;
+    if (initiatedAt && Date.now() - new Date(initiatedAt).getTime() > staleThresholdMs) {
+      return 'FAILED';
+    }
+    return 'INITIATED';
   }
 
   const duration = Math.round(Number(latest.call_duration_s) || 0);
@@ -1628,6 +1670,8 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
           quality_score: r.quality_score,
           summary: r.summary,
           appointment_booked: r.appointment_booked,
+          call_outcome: r.call_outcome || r.callOutcome,
+          failure_reason: r.failure_reason,
         }
       : { error: r?.error },
   );
@@ -1710,7 +1754,7 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
     }
   }
 
-  return { ...details, latestTranscript, latestReview, updatedScore };
+  return { ...details, latestTranscript, latestReview, updatedScore, callStatus: inferredStatus };
 }
 
 /**
@@ -1871,6 +1915,7 @@ module.exports = {
   fetchRecording,
   fetchObjectStorageRecording,
   getLeadTranscripts,
+  normalizeTranscriptPayload,
   getTranscriptReview,
   getCallDetails,
   prepareContactCall,

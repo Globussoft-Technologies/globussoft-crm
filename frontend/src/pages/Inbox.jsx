@@ -2,6 +2,11 @@ import { useState, useEffect, useRef, useCallback, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Mail,
+  Search,
+  RefreshCw,
+  MoreVertical,
+  ChevronLeft,
+  ChevronRight,
   ArrowRight,
   User,
   Send,
@@ -301,6 +306,12 @@ export default function Inbox() {
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
   const [emailFolder, setEmailFolder] = useState("all");
+  const [inboxSearch, setInboxSearch] = useState("");
+  const [debouncedInboxSearch, setDebouncedInboxSearch] = useState("");
+  const [inboxDateFrom, setInboxDateFrom] = useState("");
+  const [inboxDateTo, setInboxDateTo] = useState("");
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [showInboxActions, setShowInboxActions] = useState(false);
   const [emailPagination, setEmailPagination] = useState(() => ({
     page: 0,
     limit: getInboxPageSize(),
@@ -311,8 +322,10 @@ export default function Inbox() {
     loadingMore: false,
   }));
   const inboxScrollRef = useRef(null);
+  const inboxActionsRef = useRef(null);
   const loadMoreLockRef = useRef(false);
   const emailPaginationRef = useRef(emailPagination);
+  const inboxRequestSequenceRef = useRef(0);
 
   const [showMeet, setShowMeet] = useState(false);
   const [meetData, setMeetData] = useState({
@@ -351,6 +364,9 @@ export default function Inbox() {
     setDetail({ ...email, read: true });
     if (email.read) return;
     setEmails((prev) => prev.map((e) => (e.id === email.id ? { ...e, read: true } : e)));
+    if (isGeneric && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("crm:inbox-unread-changed", { detail: { delta: 1 } }));
+    }
     fetchApi(`/api/communications/inbox/${email.id}/read`, {
       method: 'POST',
       silent: true,
@@ -358,12 +374,28 @@ export default function Inbox() {
   };
 
   const inboxPath =
-    emailFolder === "all"
-      ? "/api/communications/inbox"
-      : `/api/communications/inbox?folder=${emailFolder}`;
+    (() => {
+      const params = new URLSearchParams();
+      if (emailFolder !== "all") params.set("folder", emailFolder);
+      if (isGeneric && debouncedInboxSearch.trim()) {
+        params.set("q", debouncedInboxSearch.trim());
+      }
+      if (isGeneric && inboxDateFrom) params.set("dateFrom", inboxDateFrom);
+      if (isGeneric && inboxDateTo) params.set("dateTo", inboxDateTo);
+      const query = params.toString();
+      return `/api/communications/inbox${query ? `?${query}` : ""}`;
+    })();
   const inboxPathRef = useRef(inboxPath);
 
   const didInitialLoadRef = useRef(false);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedInboxSearch(inboxSearch),
+      250,
+    );
+    return () => window.clearTimeout(timer);
+  }, [inboxSearch]);
+
   useEffect(() => {
     emailPaginationRef.current = emailPagination;
   }, [emailPagination]);
@@ -372,17 +404,31 @@ export default function Inbox() {
     inboxPathRef.current = inboxPath;
   }, [inboxPath]);
 
+  useEffect(() => {
+    if (!showInboxActions) return undefined;
+    const handleOutsidePointerDown = (event) => {
+      if (inboxActionsRef.current && !inboxActionsRef.current.contains(event.target)) {
+        setShowInboxActions(false);
+      }
+    };
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointerDown);
+  }, [showInboxActions]);
+
   const loadEmailsPage = useCallback(async ({ page = 1, reset = false } = {}) => {
     const currentPagination = emailPaginationRef.current;
     const currentInboxPath = inboxPathRef.current;
 
     if (
-      (page > 1 && !currentPagination.hasMore) ||
-      currentPagination.loading ||
-      currentPagination.loadingMore
+      !reset &&
+      ((page > 1 && !currentPagination.hasMore) ||
+        currentPagination.loading ||
+        currentPagination.loadingMore)
     ) {
       return [];
     }
+
+    const requestSequence = ++inboxRequestSequenceRef.current;
 
     setEmailPagination((prev) => ({
       ...prev,
@@ -391,15 +437,14 @@ export default function Inbox() {
     }));
 
     const pageSize = currentPagination.limit;
-    const pageUrl =
-      page > 1
-        ? `${currentInboxPath}${currentInboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`
-        : currentInboxPath;
+    const pageUrl = `${currentInboxPath}${currentInboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`;
 
     try {
       const data = await fetchApi(pageUrl);
       const rows = extractPagedRows(data, "emails");
       const pagination = extractPagination(data, page, pageSize, rows);
+
+      if (requestSequence !== inboxRequestSequenceRef.current) return [];
 
       setEmails((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
       setEmailPagination((prev) => ({
@@ -409,14 +454,16 @@ export default function Inbox() {
 
       return rows;
     } catch (err) {
-      console.error(err);
+      if (requestSequence === inboxRequestSequenceRef.current) console.error(err);
       return [];
     } finally {
-      setEmailPagination((prev) => ({
-        ...prev,
-        loading: false,
-        loadingMore: false,
-      }));
+      if (requestSequence === inboxRequestSequenceRef.current) {
+        setEmailPagination((prev) => ({
+          ...prev,
+          loading: false,
+          loadingMore: false,
+        }));
+      }
     }
   }, []);
 
@@ -428,7 +475,7 @@ export default function Inbox() {
       try {
         setLoading(true);
         if (canAssignMeetingStaff) setStaffLoading(true);
-        const [emailRows, contactData, patientData, staffData] = await Promise.all([
+        const [, contactData, patientData, staffData] = await Promise.all([
           loadEmailsPage({ page: 1, reset: true }),
           fetchApi("/api/contacts"),
           fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({ patients: [] })),
@@ -438,7 +485,6 @@ export default function Inbox() {
         ]);
 
         if (cancelled) return;
-        setEmails(Array.isArray(emailRows) ? emailRows : []);
         setContacts(Array.isArray(contactData) ? contactData : []);
         const patientList = patientData?.patients || patientData;
         setPatients(Array.isArray(patientList) ? patientList : []);
@@ -511,6 +557,95 @@ export default function Inbox() {
       label: formatStaffOptionLabel(staff),
     }));
 
+  const visibleInboxEmails = emails;
+
+  const markAllInboxEmailsRead = async () => {
+    if (!isGeneric || markingAllRead) return;
+    setMarkingAllRead(true);
+    try {
+      await fetchApi("/api/communications/inbox/mark-all-read", { method: "POST" });
+      setEmails((prev) => prev.map((email) => ({ ...email, read: true })));
+      if (typeof window !== "undefined") {
+        // The endpoint updates every unread email in the tenant, not just
+        // the current page. Re-fetch the sidebar count instead of applying a
+        // page-local delta, which would leave the badge stale on paginated
+        // inboxes.
+        window.dispatchEvent(new CustomEvent("sidebar:counts-changed"));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setMarkingAllRead(false);
+      setShowInboxActions(false);
+    }
+  };
+
+  const markAllInboxEmailsUnread = async () => {
+    if (!isGeneric || markingAllRead) return;
+    setMarkingAllRead(true);
+    try {
+      await fetchApi("/api/communications/inbox/mark-all-unread", { method: "POST" });
+      setEmails((prev) => prev.map((email) => ({ ...email, read: false })));
+      if (typeof window !== "undefined") {
+        // This bulk action affects all tenant emails, so let Sidebar read the
+        // authoritative unread count from the server.
+        window.dispatchEvent(new CustomEvent("sidebar:counts-changed"));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setMarkingAllRead(false);
+      setShowInboxActions(false);
+    }
+  };
+
+  const renderEmailRow = (email) => (
+    <div
+      key={email.id}
+      className="table-row-hover"
+      onClick={() => openEmail(email)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openEmail(email);
+        }
+      }}
+      style={{
+        padding: "1.5rem",
+        border: "1px solid var(--border-color)",
+        borderRadius: "12px",
+        background: email.read ? "var(--subtle-bg-4)" : "var(--subtle-bg-3)",
+        display: "flex",
+        gap: "1.5rem",
+        minWidth: 0,
+        flexWrap: "wrap",
+        cursor: "pointer",
+        transition: "background 0.18s ease, border-color 0.18s ease",
+      }}
+    >
+      <div style={{ width: "40px", height: "40px", borderRadius: "50%", background: "var(--accent-color)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        <User size={20} color="#fff" />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginBottom: "0.5rem" }}>
+          <p style={{ fontWeight: "bold", fontSize: "1.05rem", overflowWrap: "anywhere" }}>
+            {email.from} <ArrowRight size={14} style={{ margin: "0 0.5rem" }} /> {email.to}
+          </p>
+          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+            {new Date(email.createdAt).toLocaleString()}
+          </span>
+        </div>
+        <h4 style={{ fontWeight: "600", marginBottom: "0.5rem", color: "var(--text-primary)", overflowWrap: "anywhere" }}>{email.subject}</h4>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "anywhere" }}>
+          {isGeneric && isRichTextMarkup(email.body) ? <RichText as="span" value={email.body} /> : email.body}
+        </p>
+      </div>
+      {!email.read && <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: "var(--accent-color)", alignSelf: "center" }} />}
+    </div>
+  );
+
   const composeRecipientOptions = [
     ...contacts.map((contact) => ({
       key: `contact-${contact.id}`,
@@ -578,7 +713,11 @@ export default function Inbox() {
 
   const handleComposeDraft = useCallback(async () => {
     const subject = composeData.subject.trim();
-    const context = composeData.body.trim() || subject || composeData.to.trim() || "follow up";
+    // A subject is the explicit intent for this generation. Once an AI draft
+    // has populated the body, preferring composeData.body here would feed that
+    // previous draft back into the next request even when the user changed
+    // the subject. Use the body only as a fallback for subject-less drafts.
+    const context = subject || composeData.body.trim() || composeData.to.trim() || "follow up";
     const subjectContext = subject || context;
     setDraftingEmail(true);
     try {
@@ -982,19 +1121,52 @@ export default function Inbox() {
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
-            <div
-              role="tablist"
-              aria-label="Email folder"
-              style={{
-                display: "flex",
-                gap: "0.25rem",
-                padding: "0.3rem",
-                background: "var(--subtle-bg-2)",
-                border: "1px solid var(--border-color)",
-                borderRadius: "12px",
-                alignSelf: "flex-start",
-              }}
-            >
+            <div style={{ position: "sticky", top: "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: "-1.25rem 0 0", padding: "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
+              {isGeneric && (
+                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
+                  <Search size={18} color="var(--text-secondary)" />
+                  <input
+                    type="search"
+                    aria-label="Search mail"
+                    placeholder="Search mail"
+                    value={inboxSearch}
+                    onChange={(event) => setInboxSearch(event.target.value)}
+                    style={{ width: "min(100%, 460px)", border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: "0.9rem" }}
+                  />
+                </div>
+              )}
+              {isGeneric && !showMeet && (
+                <div aria-label="Filter mail by date" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flex: "0 1 auto", order: 2, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
+                  <span>From</span>
+                  <input
+                    type="date"
+                    aria-label="From date"
+                    value={inboxDateFrom}
+                    max={inboxDateTo || undefined}
+                    onChange={(event) => setInboxDateFrom(event.target.value)}
+                    style={{ padding: "0.45rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: "6px", background: "var(--modal-bg)", color: "var(--text-primary)", fontSize: "0.8rem" }}
+                  />
+                  <span>To</span>
+                  <input
+                    type="date"
+                    aria-label="To date"
+                    value={inboxDateTo}
+                    min={inboxDateFrom || undefined}
+                    onChange={(event) => setInboxDateTo(event.target.value)}
+                    style={{ padding: "0.45rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: "6px", background: "var(--modal-bg)", color: "var(--text-primary)", fontSize: "0.8rem" }}
+                  />
+                  {(inboxDateFrom || inboxDateTo) && (
+                    <button type="button" aria-label="Clear date filter" onClick={() => { setInboxDateFrom(""); setInboxDateTo(""); }} title="Clear date filter" style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.25rem" }}>
+                      <X size={15} />
+                    </button>
+                  )}
+                </div>
+              )}
+              <div
+                role="tablist"
+                aria-label="Email folder"
+                style={{ display: "flex", gap: "0.25rem", padding: "0.3rem", background: "var(--subtle-bg-2)", border: "1px solid var(--border-color)", borderRadius: "12px", alignSelf: "flex-start", order: 1 }}
+              >
               {[
                 { id: "all", label: "All" },
                 { id: "inbox", label: "Inbox" },
@@ -1019,6 +1191,26 @@ export default function Inbox() {
                   {folder.label}
                 </button>
               ))}
+              </div>
+              {isGeneric && (
+                <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
+                  <button type="button" aria-label="Refresh inbox" onClick={() => loadEmailsPage({ page: 1, reset: true })} title="Refresh" style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><RefreshCw size={17} /></button>
+                  <div ref={inboxActionsRef} style={{ position: "relative" }}>
+                    <button type="button" aria-label="More inbox actions" title="More" onClick={() => setShowInboxActions((visible) => !visible)} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><MoreVertical size={17} /></button>
+                    {showInboxActions && (
+                      <div role="menu" style={{ position: "absolute", right: 0, top: "calc(100% + 0.25rem)", zIndex: 5, minWidth: 190, padding: "0.35rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--modal-bg)", boxShadow: "var(--glass-shadow)" }}>
+                        <button type="button" role="menuitem" onClick={markAllInboxEmailsRead} disabled={markingAllRead} style={{ display: "block", width: "100%", padding: "0.55rem 0.65rem", border: "none", background: "transparent", color: "var(--text-primary)", textAlign: "left", cursor: "pointer" }}>Mark all as read</button>
+                        <button type="button" role="menuitem" onClick={markAllInboxEmailsUnread} disabled={markingAllRead} style={{ display: "block", width: "100%", padding: "0.55rem 0.65rem", border: "none", background: "transparent", color: "var(--text-primary)", textAlign: "left", cursor: "pointer" }}>Mark all as unread</button>
+                      </div>
+                    )}
+                  </div>
+                  {emailPagination.pages > 1 && <>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.95rem", whiteSpace: "nowrap", fontWeight: 500 }}>{emailPagination.total === 0 ? 0 : (emailPagination.page - 1) * emailPagination.limit + 1}-{Math.min(emailPagination.page * emailPagination.limit, emailPagination.total)} of {emailPagination.total}</span>
+                    <button type="button" aria-label="Previous page" disabled={emailPagination.page <= 1} onClick={() => loadEmailsPage({ page: emailPagination.page - 1, reset: true })} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: emailPagination.page <= 1 ? "not-allowed" : "pointer", opacity: emailPagination.page <= 1 ? 0.4 : 1, padding: "0.25rem" }}><ChevronLeft size={21} strokeWidth={2.2} /></button>
+                    <button type="button" aria-label="Next page" disabled={!emailPagination.hasMore} onClick={() => loadEmailsPage({ page: emailPagination.page + 1, reset: true })} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: !emailPagination.hasMore ? "not-allowed" : "pointer", opacity: !emailPagination.hasMore ? 0.4 : 1, padding: "0.25rem" }}><ChevronRight size={21} strokeWidth={2.2} /></button>
+                  </>}
+                </div>
+              )}
             </div>
 
             {emails.length === 0 ? (
@@ -1031,6 +1223,8 @@ export default function Inbox() {
               >
                 No emails yet.
               </p>
+            ) : isGeneric ? (
+              visibleInboxEmails.length > 0 ? visibleInboxEmails.map(renderEmailRow) : <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "2rem" }}>No matching emails.</p>
             ) : (
               emails.map((email) => (
                 <div

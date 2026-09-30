@@ -62,7 +62,7 @@ describe("<App /> — auth-sync on mount", () => {
     window.history.pushState({}, "login", "/login");
     render(<App />);
     await waitFor(() =>
-      expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument(),
     );
   });
 
@@ -74,7 +74,7 @@ describe("<App /> — auth-sync on mount", () => {
     render(<App />);
 
     await waitFor(() =>
-      expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument(),
     );
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     expect(localStorage.getItem("theme")).toBe("light");
@@ -470,7 +470,7 @@ describe("<App /> — auth-sync on mount", () => {
 
     render(<App />);
     await waitFor(() =>
-      expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument(),
     );
     expect(sessionStorage.getItem("token")).toBeNull();
     expect(localStorage.getItem("user")).toBeNull();
@@ -502,7 +502,7 @@ describe("<App /> — auth-sync on mount", () => {
 
     render(<App />);
     await waitFor(() =>
-      expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument(),
     );
     expect(sessionStorage.getItem("token")).toBeNull();
   });

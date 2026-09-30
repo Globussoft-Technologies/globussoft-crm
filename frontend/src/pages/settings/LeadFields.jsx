@@ -2,7 +2,7 @@
  * /settings/lead-fields — Lead Custom Fields admin page.
  *
  * Backend: /api/lead-custom-fields (routes/lead_custom_fields.js).
- * ADMIN-only page (RoleGuard wrap at the App.jsx route). Generic vertical
+ * ADMIN-only page (RoleGuard wrap at the App.jsx route). Generic and Travel
  * only — wellness/travel tenants never see this page's Settings link, and
  * the route itself is additionally guarded here so a direct URL visit from
  * a non-generic tenant is redirected rather than rendering.
@@ -45,6 +45,7 @@ const FIELD_TYPE_OPTIONS = [
 ];
 
 const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);
+const LEAD_FIELDS_PAGE_SIZE = 10;
 
 const FIELD_TYPE_LABELS = Object.fromEntries(FIELD_TYPE_OPTIONS.map((o) => [o.value, o.label]));
 
@@ -67,14 +68,15 @@ const th = {
 const td = { padding: "0.75rem 1rem", fontSize: "0.9rem" };
 const iconBtn = { background: "var(--subtle-bg)", border: "1px solid var(--border-color)", borderRadius: 6, padding: "0.375rem 0.5rem", cursor: "pointer", display: "inline-flex", alignItems: "center" };
 
-function normalizeFieldOrder(list) {
-  return list.map((field, displayOrder) => ({ ...field, displayOrder }));
+function normalizeFieldOrder(list, displayOrderOffset = 0) {
+  return list.map((field, index) => ({ ...field, displayOrder: displayOrderOffset + index }));
 }
 
 function SortableLeadFieldRow({
   field,
   index,
   total,
+  indexOffset = 0,
   reordering,
   onMove,
   onEdit,
@@ -82,6 +84,7 @@ function SortableLeadFieldRow({
   onToggleRequired,
   deletingId,
 }) {
+  const absoluteIndex = indexOffset + index;
   const {
     attributes,
     listeners,
@@ -131,15 +134,15 @@ function SortableLeadFieldRow({
         <button
           type="button"
           onClick={() => onMove(index, -1)}
-          disabled={index === 0 || reordering}
+          disabled={absoluteIndex === 0 || reordering}
           aria-label={`Move ${field.label} up`}
           title="Move up"
           style={{
             background: "none",
             border: "none",
             padding: "0.2rem",
-            color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
-            cursor: index === 0 ? "default" : "pointer",
+            color: absoluteIndex === 0 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: absoluteIndex === 0 ? "default" : "pointer",
           }}
         >
           <ArrowUp size={14} />
@@ -147,15 +150,15 @@ function SortableLeadFieldRow({
         <button
           type="button"
           onClick={() => onMove(index, 1)}
-          disabled={index === total - 1 || reordering}
+          disabled={absoluteIndex === total - 1 || reordering}
           aria-label={`Move ${field.label} down`}
           title="Move down"
           style={{
             background: "none",
             border: "none",
             padding: "0.2rem",
-            color: index === total - 1 ? "var(--border-color)" : "var(--text-secondary)",
-            cursor: index === total - 1 ? "default" : "pointer",
+            color: absoluteIndex === total - 1 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: absoluteIndex === total - 1 ? "default" : "pointer",
           }}
         >
           <ArrowDown size={14} />
@@ -284,10 +287,12 @@ function renderFieldPreview(field, optionsText) {
 export default function LeadFields() {
   const { tenant } = useContext(AuthContext) || {};
   const isWellness = tenant?.vertical === "wellness";
-  const isTravel = tenant?.vertical === "travel";
 
   const notify = useNotify();
   const [fields, setFields] = useState([]);
+  const [page, setPage] = useState(1);
+  const [totalFields, setTotalFields] = useState(0);
+  const [pageOffset, setPageOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [newLabel, setNewLabel] = useState("");
@@ -313,11 +318,21 @@ export default function LeadFields() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const load = async ({ silent = false } = {}) => {
+  const load = async ({ silent = false, pageToLoad = page } = {}) => {
     if (!silent) setLoading(true);
     try {
-      const data = await fetchApi("/api/lead-custom-fields");
-      setFields(Array.isArray(data) ? data : []);
+      const offset = Math.max(pageToLoad - 1, 0) * LEAD_FIELDS_PAGE_SIZE;
+      const response = await fetchApi(`/api/lead-custom-fields?page=${pageToLoad}&offset=${offset}&limit=${LEAD_FIELDS_PAGE_SIZE}`);
+      const data = Array.isArray(response) ? response : (Array.isArray(response?.data) ? response.data : []);
+      const total = Number.isFinite(Number(response?.total)) ? Number(response.total) : data.length;
+      if (!data.length && pageToLoad > 1 && total > 0) {
+        setPage((current) => Math.max(1, current - 1));
+        return;
+      }
+      setFields(data);
+      setTotalFields(total);
+      setPageOffset(Number.isFinite(Number(response?.offset)) ? Number(response.offset) : offset);
+      setPage(pageToLoad);
     } catch (err) {
       notify.error(err?.message || "Failed to load lead fields");
     } finally {
@@ -326,16 +341,14 @@ export default function LeadFields() {
   };
 
   useEffect(() => {
-    if (isWellness || isTravel) return; // gated below anyway; skip the fetch
-    load();
+    if (isWellness) return; // gated below anyway; skip the fetch
+    load({ pageToLoad: page });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [page, isWellness]);
 
-  // Generic-vertical-only feature — redirect wellness/travel tenants away
-  // rather than rendering an inapplicable admin page for them.
-  if (isWellness || isTravel) {
-    return <Navigate to="/settings" replace />;
-  }
+  // Lead fields are supported by Generic and Travel CRM. Wellness uses its
+  // own patient-field model and must stay outside this shared definition UI.
+  if (isWellness) return <Navigate to="/settings" replace />;
 
   const resetCreateForm = () => {
     setCreating(false);
@@ -420,12 +433,12 @@ export default function LeadFields() {
     }
   };
 
-  // No bulk /reorder endpoint exists for this resource, so we sync the full
-  // ordering through the existing per-field PUT. The field set is small enough
-  // that the extra calls are an acceptable tradeoff for a much smoother UX.
+  // Reorder rows already loaded on the current page through the existing
+  // per-field PUT contract. Page-boundary moves use the atomic server endpoint
+  // below because the adjacent definition is not present in this page slice.
   const syncFieldOrder = async (nextFields) => {
     if (!Array.isArray(nextFields) || !nextFields.length || reordering) return;
-    const orderedFields = normalizeFieldOrder(nextFields);
+    const orderedFields = normalizeFieldOrder(nextFields, pageOffset);
     setFields(orderedFields);
     setReordering(true);
     try {
@@ -448,8 +461,29 @@ export default function LeadFields() {
 
   const handleMoveField = async (index, direction) => {
     const swapIndex = index + direction;
-    if (swapIndex < 0 || swapIndex >= fields.length || reordering) return;
-    await syncFieldOrder(arrayMove(fields, index, swapIndex));
+    if (reordering) return;
+    if (swapIndex >= 0 && swapIndex < fields.length) {
+      await syncFieldOrder(arrayMove(fields, index, swapIndex));
+      return;
+    }
+
+    const absoluteIndex = pageOffset + index;
+    const targetAbsoluteIndex = absoluteIndex + direction;
+    if (targetAbsoluteIndex < 0 || targetAbsoluteIndex >= totalFields) return;
+
+    setReordering(true);
+    try {
+      await fetchApi(`/api/lead-custom-fields/${fields[index].id}/move`, {
+        method: "POST",
+        body: JSON.stringify({ direction: direction < 0 ? "up" : "down" }),
+      });
+      await load({ silent: true });
+    } catch (err) {
+      notify.error(err?.message || "Failed to reorder fields");
+      await load({ silent: true });
+    } finally {
+      setReordering(false);
+    }
   };
 
   const handleDragEnd = async ({ active, over }) => {
@@ -564,7 +598,8 @@ export default function LeadFields() {
                             key={field.id}
                             field={field}
                             index={index}
-                            total={fields.length}
+                            total={totalFields}
+                            indexOffset={pageOffset}
                             reordering={reordering}
                             onMove={handleMoveField}
                             onEdit={openEditModal}
@@ -579,6 +614,15 @@ export default function LeadFields() {
                 </DndContext>
               </div>
             </TopScrollSync>
+            {totalFields > 0 ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", padding: "0.75rem 1rem 0", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                <span>{pageOffset + 1}-{Math.min(pageOffset + fields.length, totalFields)} of {totalFields}</span>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button type="button" className="btn-secondary" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))}>Previous</button>
+                  <button type="button" className="btn-secondary" disabled={page >= Math.ceil(totalFields / LEAD_FIELDS_PAGE_SIZE) || loading} onClick={() => setPage((current) => current + 1)}>Next</button>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -674,8 +718,6 @@ export default function LeadFields() {
     </div>
   );
 }
-
-
 
 
 

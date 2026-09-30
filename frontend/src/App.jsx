@@ -30,6 +30,7 @@ import { NotifyProvider } from "./utils/notify";
 import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import { SearchQueryProvider } from "./components/search/SearchQueryContext";
+import { applyDomainBranding } from "./utils/domainBranding";
 import {
   setAuthToken,
   getAuthToken,
@@ -857,6 +858,14 @@ function hasMarketingHandoff() {
   }
 }
 
+// The Modern Classroom is a login-only entry point. Keep this host check in
+// sync with the branded host list in frontend/index.html.
+function isTmcHost() {
+  return ["app.themodernclassroom.in", "tmc.localhost"].includes(
+    window.location.hostname.toLowerCase(),
+  );
+}
+
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
 // The generic Enterprise Overview, deal pipeline, forecasting, etc. don't apply
 // to a clinic  wellness has its own /wellness Owner Dashboard. Without this
@@ -1027,6 +1036,9 @@ function CalendarRedirect() {
 }
 
 export default function App() {
+  useEffect(() => {
+    applyDomainBranding();
+  }, []);
   // #116: persist user across reloads. Pre-fix, user started as null on every
   // page load (token + tenant were restored, but not user), so the header showed
   // "User" / "?" even though login had succeeded.
@@ -1511,7 +1523,7 @@ export default function App() {
                         // sign in as whoever they actually came in to be (the
                         // pre-filled customer email is rarely the same as the
                         // stale admin/staff session their browser holds).
-                        !token || hasMarketingHandoff() ? (
+                        isTmcHost() || !token || hasMarketingHandoff() ? (
                           <Login />
                         ) : (
                           <Navigate
@@ -1779,7 +1791,9 @@ export default function App() {
                     <Route
                       path="/"
                       element={
-                        !token ? (
+                        isTmcHost() ? (
+                          <Navigate to="/login" replace />
+                        ) : !token ? (
                           <Landing />
                         ) : (
                           <Navigate to={landingFor(user, tenant)} replace />
@@ -2806,8 +2820,8 @@ export default function App() {
                           </RoleGuard>
                         }
                       />
-                      {/* Lead custom fields  generic vertical only; LeadFields.jsx
-                        itself redirects away for wellness/travel tenants. */}
+                      {/* Lead custom fields are tenant-scoped for Generic + Travel;
+                        LeadFields itself redirects Wellness tenants away. */}
                       <Route
                         path="settings/lead-fields"
                         element={

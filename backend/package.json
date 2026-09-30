@@ -52,7 +52,7 @@
     "multer": "^2.3.0",
     "mysql2": "^3.22.3",
     "node-cron": "^4.2.1",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.0.13",
     "openai": "^7.4.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^3.11.174",

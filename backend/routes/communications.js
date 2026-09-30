@@ -246,6 +246,20 @@ router.get("/inbox", async (req, res) => {
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
     else if (req.query.folder === 'inbox') where.direction = 'INBOUND';
 
+    // Generic CRM's date-range filter. Keep the query additive so existing
+    // callers (including wellness/travel inboxes) retain their behaviour.
+    const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+    const dateFrom = isDateOnly(req.query.dateFrom) ? new Date(`${req.query.dateFrom}T00:00:00.000Z`) : null;
+    const dateTo = isDateOnly(req.query.dateTo) ? new Date(`${req.query.dateTo}T00:00:00.000Z`) : null;
+    if (dateFrom && Number.isFinite(dateFrom.getTime())) {
+      where.createdAt = { gte: dateFrom };
+    }
+    if (dateTo && Number.isFinite(dateTo.getTime())) {
+      const exclusiveEnd = new Date(dateTo);
+      exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
+      where.createdAt = { ...(where.createdAt || {}), lt: exclusiveEnd };
+    }
+
     const page = Number.parseInt(req.query.page, 10);
     const limit = Number.parseInt(req.query.limit, 10);
     const wantsPagination = Number.isFinite(page) && page > 0 && Number.isFinite(limit) && limit > 0;
@@ -289,6 +303,38 @@ router.get("/inbox", async (req, res) => {
 // mail) can't use POST /api/email-threading/threads/:threadId/mark-read,
 // hence this single-id endpoint. Tenant-scoped via updateMany; 404 when
 // the id isn't in this tenant.
+router.post("/inbox/mark-all-read", async (req, res) => {
+  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
+  if (!canAccess) {
+    return res.status(403).json({ error: "You don't have permission to access Communications" });
+  }
+  try {
+    const result = await prisma.emailMessage.updateMany({
+      where: { tenantId: req.user.tenantId, read: false },
+      data: { read: true },
+    });
+    res.json({ updated: result.count, read: true });
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to mark inbox emails as read" });
+  }
+});
+
+router.post("/inbox/mark-all-unread", async (req, res) => {
+  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
+  if (!canAccess) {
+    return res.status(403).json({ error: "You don't have permission to access Communications" });
+  }
+  try {
+    const result = await prisma.emailMessage.updateMany({
+      where: { tenantId: req.user.tenantId },
+      data: { read: false },
+    });
+    res.json({ updated: result.count, read: false });
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to mark inbox emails as unread" });
+  }
+});
+
 router.post("/inbox/:id/read", async (req, res) => {
   const canAccess = await hasModuleAction(req.user, "Communications", "READ");
   if (!canAccess) {

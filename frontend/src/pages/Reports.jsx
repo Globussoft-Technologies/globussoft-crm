@@ -442,7 +442,7 @@ export default function Reports() {
             ) : detailData.length === 0 ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No records found for the selected period.</div>
             ) : (
-              <table className="stable-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+              <table className="stable-table" style={{ width: '100%', minWidth: 0, borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                     {detailType === 'deals' && <>
@@ -941,17 +941,17 @@ export default function Reports() {
               tableLayout: 'fixed',
               fontSize: '0.85rem',
               width: '100%',
-              minWidth: '1100px',
+              minWidth: 0,
             }}>
               <colgroup>
-                <col style={{ width: '180px' }} />
-                <col style={{ width: '150px' }} />
-                <col style={{ width: '130px' }} />
-                <col style={{ width: '100px' }} />
-                <col style={{ width: '240px' }} />
-                <col style={{ width: '140px' }} />
-                <col style={{ width: '110px' }} />
-                <col style={{ width: '130px' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} />
               </colgroup>
 
               <thead style={{
@@ -1061,6 +1061,7 @@ export default function Reports() {
                   <th
                     style={{
                       ...thStyle,
+                      textAlign: 'center',
                       position: 'sticky',
                       top: 0,
                       zIndex: 21,
@@ -1100,12 +1101,12 @@ export default function Reports() {
                     {/* #127 polish: was `display: flex` directly on the <td>, which
                         breaks the table layout (the row collapses). Move flex onto a
                         wrapping div so the cell still behaves as a table cell. */}
-                    <td style={{ ...tdStyle, textAlign: 'right' }}>
-                      <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-                        <button onClick={() => handleToggleSchedule(s.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem' }}>
+                    <td style={{ ...tdStyle, paddingLeft: '0.5rem', paddingRight: '0.5rem', textAlign: 'center', verticalAlign: 'middle' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: '0.65rem', justifyContent: 'center', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => handleToggleSchedule(s.id)} style={{ display: 'inline-flex', alignItems: 'center', padding: 0, lineHeight: 1.2, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                           {s.enabled ? 'Pause' : 'Enable'}
                         </button>
-                        <button onClick={() => handleDeleteSchedule(s.id)} className="report-error-text" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}>
+                        <button onClick={() => handleDeleteSchedule(s.id)} className="report-error-text" style={{ display: 'inline-flex', alignItems: 'center', padding: 0, lineHeight: 1.2, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                           Delete
                         </button>
                       </div>

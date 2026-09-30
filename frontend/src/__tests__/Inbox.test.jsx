@@ -404,7 +404,7 @@ describe("<Inbox />", () => {
     await user.click(screen.getByRole("tab", { name: "Sent" }));
     await waitFor(() => {
       const sentFetch = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === "string" && url === "/api/communications/inbox?folder=sent",
+        ([url]) => typeof url === "string" && url.startsWith("/api/communications/inbox?folder=sent&page=1&limit="),
       );
       expect(sentFetch).toBeTruthy();
     });
@@ -412,10 +412,38 @@ describe("<Inbox />", () => {
     await user.click(screen.getByRole("tab", { name: "Inbox" }));
     await waitFor(() => {
       const inboxFetch = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === "string" && url === "/api/communications/inbox?folder=inbox",
+        ([url]) => typeof url === "string" && url.startsWith("/api/communications/inbox?folder=inbox&page=1&limit="),
       );
       expect(inboxFetch).toBeTruthy();
     });
+  });
+
+  it('adds a generic-only custom date range to inbox requests', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByLabelText('From date')).toBeInTheDocument());
+    await user.type(screen.getByLabelText('From date'), '2026-09-01');
+    await user.type(screen.getByLabelText('To date'), '2026-09-04');
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/communications/inbox?dateFrom=2026-09-01&dateTo=2026-09-04&page=1&limit=12')).toBe(true);
+    });
+  });
+
+  it('refreshes the global sidebar count after bulk read state changes', async () => {
+    const user = userEvent.setup();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /more inbox actions/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /more inbox actions/i }));
+    await user.click(screen.getByRole('menuitem', { name: /mark all as read/i }));
+
+    await waitFor(() => {
+      expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'sidebar:counts-changed' }));
+    });
+    dispatchSpy.mockRestore();
   });
 
   it("shows theme-aware surfaces for the email list", async () => {

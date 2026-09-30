@@ -198,6 +198,9 @@ describe('LeadReports — productivity tab', () => {
   it('renders the window totals and the per-user table', async () => {
     renderPage();
     expect(await screen.findByText('Leads created')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Owner filter' })).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'All staff' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'All owners' })).not.toBeInTheDocument();
     // "Asha Rao" lands twice — once in the owner filter <option> (populated
     // from the productivity payload's `users`) and once in the table row.
     expect((await screen.findAllByText('Asha Rao')).length).toBeGreaterThanOrEqual(2);

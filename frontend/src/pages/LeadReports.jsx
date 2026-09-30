@@ -387,7 +387,7 @@ export default function LeadReports() {
           )}
           {owners.length > 0 && (
             <select className="input-field" aria-label="Owner filter" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
-              <option value="">All owners</option>
+              <option value="">All staff</option>
               {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
           )}

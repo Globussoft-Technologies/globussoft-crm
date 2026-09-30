@@ -543,8 +543,14 @@ describe('<Reports /> — broad page surface', () => {
     // Status badge text (Active vs Paused) — sample is enabled.
     expect(screen.getByText(/^Active$/i)).toBeInTheDocument();
     // Action buttons.
-    expect(screen.getByRole('button', { name: /Pause/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Delete/i })).toBeInTheDocument();
+    const pauseButton = screen.getByRole('button', { name: /Pause/i });
+    const deleteButton = screen.getByRole('button', { name: /Delete/i });
+    expect(pauseButton).toBeInTheDocument();
+    expect(deleteButton).toBeInTheDocument();
+    expect(pauseButton.parentElement).toHaveStyle({ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', justifyContent: 'center' });
+    expect(deleteButton.parentElement).toBe(pauseButton.parentElement);
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveStyle({ textAlign: 'center' });
+    expect(screen.getByRole('table')).toHaveStyle({ width: '100%', minWidth: '0px' });
   });
 
   it('CSV export button triggers a /api/reports/export-csv fetch with Bearer token', async () => {

@@ -97,13 +97,18 @@ beforeEach(() => {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || "GET";
 
-    if (url === "/api/lead-custom-fields" && method === "GET") {
-      return Promise.resolve(
-        sortedServerFields().map((field) => ({
+    if (url.startsWith("/api/lead-custom-fields?") && method === "GET") {
+      const params = new URLSearchParams(url.split("?")[1]);
+      return Promise.resolve({
+        data: sortedServerFields().slice(Number(params.get("offset") || 0), Number(params.get("offset") || 0) + Number(params.get("limit") || 10)).map((field) => ({
           ...field,
           options: Array.isArray(field.options) ? [...field.options] : field.options,
         })),
-      );
+        total: serverFields.length,
+        page: Number(params.get("page") || 1),
+        offset: Number(params.get("offset") || 0),
+        limit: Number(params.get("limit") || 10),
+      });
     }
 
     if (/^\/api\/lead-custom-fields\/\d+$/.test(url) && method === "PUT") {
@@ -141,6 +146,9 @@ describe("<LeadFields />", () => {
     expect(
       screen.getByRole("button", { name: /Drag Alpha to reorder/i }),
     ).toBeInTheDocument();
+    expect(screen.getByText("1-2 of 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: /Move Alpha down/i }));
 

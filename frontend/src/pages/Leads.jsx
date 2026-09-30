@@ -922,6 +922,68 @@ const COUNTRY_CODES = [
   { code: "+60", country: "Malaysia" },
 ];
 
+const GENERIC_PHONE_COUNTRY_BY_ISO = {
+  US: "+1",
+  CA: "+1",
+  GB: "+44",
+  IN: "+91",
+  AU: "+61",
+  FR: "+33",
+  DE: "+49",
+  IT: "+39",
+  ES: "+34",
+  JP: "+81",
+  CN: "+86",
+  BR: "+55",
+  ZA: "+27",
+  AE: "+971",
+  SG: "+65",
+  MY: "+60",
+};
+
+function fetchJsonWithTimeout(url, timeoutMs) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+  return fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: controller?.signal,
+  }).then((response) => {
+    if (!response.ok) throw new Error("country lookup failed");
+    return response.json();
+  }).finally(() => {
+    if (timer) window.clearTimeout(timer);
+  });
+}
+
+function detectGenericPhoneCountryCode() {
+  // Browser geolocation is meaningful only in a secure browser context. This
+  // also keeps non-browser/test environments from making external lookups.
+  if (typeof window === "undefined" || window.isSecureContext !== true) {
+    return Promise.resolve(null);
+  }
+  const lookupIpCountry = () => fetchJsonWithTimeout("https://ipapi.co/json/", 2500)
+    .then((result) => result?.country_code);
+
+  const lookupLocationCountry = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
+      reject(new Error("location unavailable"));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition((position) => {
+      const { latitude, longitude } = position.coords || {};
+      fetchJsonWithTimeout(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=3&lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}`,
+        3000,
+      ).then((result) => resolve(result?.address?.country_code), reject);
+    }, reject, { enableHighAccuracy: false, timeout: 3000, maximumAge: 86_400_000 });
+  });
+
+  return lookupLocationCountry()
+    .catch(() => lookupIpCountry())
+    .then((iso) => GENERIC_PHONE_COUNTRY_BY_ISO[String(iso || "").toUpperCase()] || null)
+    .catch(() => null);
+}
+
 function buildLeadStatusTooltip(lead, { maxRetries = 3 } = {}) {
   const source = lead.callifiedLeadStatusSource;
   const reason = lead.callifiedLeadStatusReason;
@@ -1242,6 +1304,8 @@ const Leads = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const leadRequestSequenceRef = useRef(0);
+  const genericPhoneCountryUserChangedRef = useRef(false);
+  const genericPhoneCountryDetectionRunRef = useRef(false);
   const [leadsPage, setLeadsPage] = useState(0);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
   // Generic CRM uses API pagination; other verticals keep their existing
@@ -2560,6 +2624,19 @@ const Leads = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [creating]);
   useEffect(() => {
+    if (!creating || !isGeneric || genericPhoneCountryDetectionRunRef.current) return undefined;
+    genericPhoneCountryDetectionRunRef.current = true;
+    let cancelled = false;
+    detectGenericPhoneCountryCode().then((countryCode) => {
+      if (cancelled || !countryCode || genericPhoneCountryUserChangedRef.current) return;
+      setNewLead((prev) => {
+        if (prev.phone || genericPhoneCountryUserChangedRef.current) return prev;
+        return { ...prev, countryCode };
+      });
+    });
+    return () => { cancelled = true; };
+  }, [creating, isGeneric]);
+  useEffect(() => {
     if (!aiSettingsOpen) return undefined;
     const onKey = (e) => {
       if (e.key === "Escape") setAiSettingsOpen(false);
@@ -2568,10 +2645,15 @@ const Leads = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [aiSettingsOpen]);
 
-  const openCreate = () => setCreating(true);
+  const openCreate = () => {
+    genericPhoneCountryUserChangedRef.current = false;
+    genericPhoneCountryDetectionRunRef.current = false;
+    setCreating(true);
+  };
   const closeCreate = () => {
     setCreating(false);
     setLeadDuplicate(null);
+    genericPhoneCountryDetectionRunRef.current = false;
   };
 
   const createSeparateProductLead = async () => {
@@ -9487,7 +9569,10 @@ const Leads = () => {
                 <select
                   className="input-field"
                   value={newLead.countryCode}
-                  onChange={(e) => handleChange("countryCode", e.target.value)}
+                  onChange={(e) => {
+                    genericPhoneCountryUserChangedRef.current = true;
+                    handleChange("countryCode", e.target.value);
+                  }}
                   style={{ width: "100px" }}
                 >
                   {COUNTRY_CODES.map((cc) => (

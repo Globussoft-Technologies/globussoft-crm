@@ -399,6 +399,15 @@ describe('GET /inbox — #624 folder filter', () => {
     expect(args.where.direction).toBeUndefined();
   });
 
+  test('date range filters createdAt inclusively through the next day', async () => {
+    const app = makeApp();
+    const res = await request(app).get('/api/communications/inbox?dateFrom=2026-09-01&dateTo=2026-09-04');
+    expect(res.status).toBe(200);
+    const args = prisma.emailMessage.findMany.mock.calls[0][0];
+    expect(args.where.createdAt.gte).toEqual(new Date('2026-09-01T00:00:00.000Z'));
+    expect(args.where.createdAt.lt).toEqual(new Date('2026-09-05T00:00:00.000Z'));
+  });
+
   test('Sent folder roundtrip — a freshly-sent OUTBOUND row appears in ?folder=sent', async () => {
     const app = makeApp();
     // 1. Send.

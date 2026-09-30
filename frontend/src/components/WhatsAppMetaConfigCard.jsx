@@ -207,7 +207,10 @@ export default function WhatsAppMetaConfigCard() {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetchApi("/api/whatsapp/config/status");
+      // This card renders its own inline error state.  Keep a transient load
+      // failure from also triggering the global "Something went wrong" toast
+      // while the Settings page is mounting or being refreshed.
+      const res = await fetchApi("/api/whatsapp/config/status", { silent: true });
       setState(res);
       setForm({
         phoneNumberId: res?.config?.phoneNumberId || "",

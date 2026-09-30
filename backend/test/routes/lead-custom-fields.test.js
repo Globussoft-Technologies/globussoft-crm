@@ -29,6 +29,7 @@ authMw.verifyRole = () => (_req, _res, next) => next();
 // ── Prisma singleton patching ──────────────────────────────────────────
 prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
 prisma.leadCustomFieldDefinition.findMany = vi.fn();
+prisma.leadCustomFieldDefinition.count = vi.fn();
 prisma.leadCustomFieldDefinition.findUnique = vi.fn();
 prisma.leadCustomFieldDefinition.findFirst = vi.fn();
 prisma.leadCustomFieldDefinition.create = vi.fn();
@@ -54,6 +55,7 @@ function makeApp({ role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
+  prisma.leadCustomFieldDefinition.count.mockReset().mockResolvedValue(0);
   prisma.leadCustomFieldDefinition.findUnique.mockReset().mockResolvedValue(null);
   prisma.leadCustomFieldDefinition.findFirst.mockReset().mockResolvedValue(null);
   prisma.leadCustomFieldDefinition.create.mockReset();
@@ -81,6 +83,29 @@ describe('GET /api/lead-custom-fields', () => {
       where: { tenantId: TENANT_ID },
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
     });
+  });
+
+  test('supports page, offset, and limit without changing the legacy array response', async () => {
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { id: 3, tenantId: TENANT_ID, fieldKey: 'third', label: 'Third', fieldType: 'text', options: null, isRequired: false, displayOrder: 3 },
+    ]);
+    prisma.leadCustomFieldDefinition.count.mockResolvedValue(3);
+
+    const res = await request(makeApp()).get('/api/lead-custom-fields?page=2&offset=1&limit=1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.total).toBe(3);
+    expect(res.body.page).toBe(2);
+    expect(res.body.offset).toBe(1);
+    expect(res.body.limit).toBe(1);
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID },
+      orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
+      skip: 1,
+      take: 1,
+    });
+    expect(prisma.leadCustomFieldDefinition.count).toHaveBeenCalledWith({ where: { tenantId: TENANT_ID } });
   });
 });
 

@@ -34,6 +34,7 @@ describe('buildWebFormEmbedCode', () => {
     expect(code.match(/https:\/\/crm\.example\.com\/embed\/web-form\.html\?slug=contact-us/g)).toHaveLength(2);
     expect(code).toContain('title="Contact Us"');
     expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
+    expect(code).toContain('allow="geolocation *"');
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
   });
@@ -70,8 +71,31 @@ describe('public web form embed footer', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain("scope === 'generic' && field.sourceKey === 'phone'");
+    expect(html).toContain("type=\"' + (field.fieldType === 'number' ? 'number' : 'tel') + '\"");
     expect(html).toContain('name="phoneCountry"');
+    expect(html).toContain('.phone-country-picker.open{z-index:40}');
+    expect(html).toContain("options.style.display = 'block'");
+    expect(html).toContain('trigger.addEventListener(\'keydown\', openCountryPicker)');
+    expect(html).toContain("trigger.inputMode = 'numeric'");
+    expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
     expect(html).toContain("fd.set('phone', internationalPhone)");
+  });
+
+  test('renders the numeric phone control for the default phone field', () => {
+    const builder = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(builder).toContain('{ value: "phone", label: "Phone", fieldType: "number"');
+    expect(html).toContain("input[name=\"phone\"]");
+  });
+
+  test('uses field-specific Enter placeholders instead of one email example for every field', () => {
+    const builder = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+
+    expect(builder).toContain('placeholder={fieldPlaceholderHint(field)}');
+    expect(builder).toContain('placeholder: "Enter email"');
+    expect(builder).toContain('placeholder: "Enter phone"');
+    expect(builder).toContain('function fieldPlaceholderHint(field)');
   });
 
   test('prefers browser location and falls back to IP for Generic phone country detection', () => {
@@ -83,6 +107,8 @@ describe('public web form embed footer', () => {
     expect(html).toContain('navigator.geolocation.getCurrentPosition');
     expect(html).toContain('https://ipapi.co/json/');
     expect(html).toContain('new Intl.Locale(locale).region');
+    expect(html).toContain("detectGenericCountryFromLocationOrIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
+    expect(html).not.toContain("detectGenericCountryFromTimeZone(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
   });
 
   test('preserves Generic phone country choices made by the visitor', () => {
@@ -150,7 +176,7 @@ describe('public web form embed footer', () => {
     expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
     expect(html).toContain('slice(0, nationalPhoneMaxLength())');
     expect(html).toContain("rawPhoneInput.trim().charAt(0) === '+'");
-    expect(html).toContain("var numericQuery = query.replace(/^\\+/, '')");
+    expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
     expect(html).toContain("option.value.replace(/^\\+/, '') === numericQuery");
     expect(html).toContain('/^\\+[1-9]\\d{7,14}$/.test(internationalPhone)');
     expect(html).toContain('Enter a valid international phone number.');

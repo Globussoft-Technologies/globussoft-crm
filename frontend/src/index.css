@@ -4632,6 +4632,32 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   white-space: nowrap;
 }
 
+/* Keep every Reports table inside its card. The report grids have fixed
+   columns, while a long value (or a numeric cell's minimum width) can force
+   the table wider than the card and leave the page horizontally scrolled at
+   the right-hand columns. On desktop, let the fixed layout distribute the
+   available width and truncate cell content instead of growing the table. */
+@media (min-width: 769px) {
+  .reports-page__table-shell {
+    overflow-x: hidden !important;
+  }
+
+  .reports-page__table-shell > table.stable-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100%;
+    table-layout: fixed !important;
+  }
+
+  .reports-page__table-shell > table.stable-table th,
+  .reports-page__table-shell > table.stable-table td {
+    min-width: 0 !important;
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 [data-theme="light"] .reports-page .card {
   background: rgba(255, 255, 255, 0.94);
   border-color: rgba(15, 23, 42, 0.08);

@@ -3291,6 +3291,7 @@ function GenericFormStyleControls({ group, form, style, updateStyle, applyDraft,
       <button type="button" className="btn-secondary" disabled={uploadingLogo} onClick={() => logoUploadRef.current?.click()}>{uploadingLogo ? "Uploading..." : "Upload"}</button>
       {style.logoUrl ? <button type="button" className="btn-secondary" onClick={() => updateStyle({ logoUrl: "" })}>Remove</button> : null}
     </div>
+    {style.logoUrl ? <div className="wf-logo-preview"><img src={style.logoUrl} alt="Form logo preview" /><span>Logo uploaded</span></div> : null}
     <label style={{ display: "grid", gap: 6 }}><span>Title of the form</span><input className="input-field" value={form.settings.formTitle} onChange={(e) => applyDraft({ settings: { ...form.settings, formTitle: e.target.value } })} /></label>
     <label style={{ display: "grid", gap: 6 }}><span>Description</span><input className="input-field" value={form.description || ""} onChange={(e) => applyDraft({ description: e.target.value })} /></label>
     <label style={{ display: "grid", gap: 6 }}><span>Submit button label</span><input className="input-field" value={form.settings.submitButtonLabel} onChange={(e) => applyDraft({ settings: { ...form.settings, submitButtonLabel: e.target.value } })} /></label>

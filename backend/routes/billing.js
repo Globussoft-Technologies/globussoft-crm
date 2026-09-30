@@ -27,6 +27,10 @@ const {
 // route handler does the Prisma fetch + shape mapping then delegates.
 const { buildTallyXml } = require("../lib/tallyXmlExport");
 const { buildCaCsv } = require("../lib/caCsvExport");
+const {
+  buildVisitInvoiceLineItems,
+  resolveServiceAmount,
+} = require("../lib/inventoryConsumption");
 
 const WELLNESS_PAYMENT_MODES = new Set([
   "cash",
@@ -137,6 +141,160 @@ function optionalInvoiceText(value, maxLength = 5000) {
   if (value == null || value === "") return null;
   const cleaned = sanitizeText(String(value)).slice(0, maxLength);
   return cleaned || null;
+}
+
+function parseInvoiceJson(value, fallback = null) {
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string") return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function wellnessPaymentModeFromPayment(payment) {
+  const metadata = parseInvoiceJson(payment?.metadata, {}) || {};
+  const method = String(
+    metadata.paymentMode || metadata.method || payment?.paymentMode || "",
+  ).toLowerCase();
+  if (method) return method;
+  const gateway = String(payment?.gateway || "").toLowerCase();
+  if (gateway === "razorpay") return "razorpay";
+  if (gateway === "stripe") return "card";
+  return gateway || null;
+}
+
+/**
+ * Hydrate wellness visit invoices from the clinical source rows. This is
+ * intentionally read-time compatible with legacy invoices whose snapshot was
+ * created before ServiceConsumption was added: no migration or backfill is
+ * required for the ledger to show the current service/product/drug details.
+ */
+async function hydrateWellnessInvoiceRows(invoices, tenantId) {
+  if (!Array.isArray(invoices) || invoices.length === 0) return invoices;
+  if (!prisma.visit?.findMany || !prisma.serviceConsumption?.findMany) {
+    return invoices;
+  }
+
+  const visitIds = [
+    ...new Set(
+      invoices
+        .map((invoice) => Number(invoice.visitId))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+  if (visitIds.length === 0) return invoices;
+
+  const [visits, consumptions] = await Promise.all([
+    prisma.visit.findMany({
+      where: { tenantId, id: { in: visitIds } },
+      select: {
+        id: true,
+        serviceId: true,
+        amountCharged: true,
+        couponBreakdown: true,
+        service: { select: { id: true, name: true, basePrice: true } },
+      },
+    }),
+    prisma.serviceConsumption.findMany({
+      where: { tenantId, visitId: { in: visitIds } },
+      select: {
+        id: true,
+        visitId: true,
+        productName: true,
+        qty: true,
+        unitCost: true,
+        usageValue: true,
+        salePrice: true,
+        productId: true,
+        drugId: true,
+        unit: true,
+        productCode: true,
+        transactionType: true,
+        sourceType: true,
+        prescriptionId: true,
+        prescriptionLine: true,
+      },
+      orderBy: { id: "asc" },
+    }),
+  ]);
+
+  const visitById = new Map(visits.map((visit) => [visit.id, visit]));
+  const consumptionsByVisitId = new Map();
+  for (const row of consumptions) {
+    const rows = consumptionsByVisitId.get(row.visitId) || [];
+    rows.push(row);
+    consumptionsByVisitId.set(row.visitId, rows);
+  }
+
+  const hydrated = invoices.map((invoice) => {
+    const visit = visitById.get(invoice.visitId);
+    if (!visit) return invoice;
+    const rows = consumptionsByVisitId.get(visit.id) || [];
+    const inventoryTotal = rows.reduce((sum, row) => {
+      const qty = Number(row.qty) || 0;
+      const value = Number(row.usageValue);
+      return sum + (value > 0 ? value : qty * (Number(row.unitCost) || Number(row.salePrice) || 0));
+    }, 0);
+    const serviceAmount = resolveServiceAmount({
+      visit,
+      servicePrice: Number(visit.service?.basePrice) || 0,
+      inventoryTotal,
+      storedAmount: Number(visit.amountCharged) || Number(invoice.amount) || 0,
+    });
+    const lineItems = buildVisitInvoiceLineItems({
+      visit,
+      service: visit.service,
+      consumptions: rows,
+      serviceAmount,
+    });
+    return lineItems.length > 0
+      ? { ...invoice, lineItemsJson: JSON.stringify(lineItems) }
+      : invoice;
+  });
+
+  if (!prisma.payment?.findMany) return hydrated;
+  const invoiceIds = hydrated.map((invoice) => invoice.id).filter(Boolean);
+  if (invoiceIds.length === 0) return hydrated;
+  const payments = await prisma.payment.findMany({
+    where: { tenantId, invoiceId: { in: invoiceIds } },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      invoiceId: true,
+      amount: true,
+      currency: true,
+      gateway: true,
+      gatewayId: true,
+      status: true,
+      paidAt: true,
+      createdAt: true,
+      metadata: true,
+    },
+  });
+  const paymentsByInvoiceId = new Map();
+  for (const payment of payments) {
+    const rows = paymentsByInvoiceId.get(payment.invoiceId) || [];
+    const { metadata: _metadata, ...safePayment } = payment;
+    rows.push({
+      ...safePayment,
+      paymentMode: wellnessPaymentModeFromPayment(payment),
+    });
+    paymentsByInvoiceId.set(payment.invoiceId, rows);
+  }
+  return hydrated.map((invoice) => {
+    const paymentDetails = paymentsByInvoiceId.get(invoice.id) || [];
+    const successfulPayment = paymentDetails.find(
+      (payment) => String(payment.status || "").toUpperCase() === "SUCCESS",
+    );
+    return {
+      ...invoice,
+      paymentDetails,
+      paymentMode:
+        successfulPayment?.paymentMode || invoice.paymentMode || null,
+    };
+  });
 }
 
 // A wellness visit stores the final amount charged separately from the active
@@ -616,6 +774,9 @@ router.get("/", verifyToken, async (req, res) => {
         throw e;
       }
     }
+    if (isWellnessRequest(req) && !isSummary) {
+      invoices = await hydrateWellnessInvoiceRows(invoices, req.user.tenantId);
+    }
     // #577: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(
       invoices,
@@ -775,11 +936,17 @@ router.get("/:id", verifyToken, async (req, res) => {
         .status(400)
         .json({ error: "invalid invoice id", code: "INVALID_ID" });
     }
-    const invoice = await prisma.invoice.findFirst({
+    let invoice = await prisma.invoice.findFirst({
       where: { id, tenantId: req.user.tenantId },
       include: { contact: true, deal: true },
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    if (isWellnessRequest(req)) {
+      [invoice] = await hydrateWellnessInvoiceRows(
+        [invoice],
+        req.user.tenantId,
+      );
+    }
     // #577: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(
       invoice,
@@ -1469,9 +1636,11 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
         ? req.body.transactionRef.slice(0, 128)
         : null;
 
+    const invoiceData = { status: "PAID", paidAt };
+    if (paymentMethod) invoiceData.paymentMode = paymentMethod;
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
-      data: { status: "PAID", paidAt },
+      data: invoiceData,
       include: { contact: true, deal: true },
     });
 
@@ -1591,6 +1760,9 @@ router.post("/:id/pay", verifyToken, async (req, res) => {
     const wasPaid = existing.status === "PAID";
     const data = { status: "PAID" };
     if (!wasPaid) data.paidAt = new Date();
+    if (typeof req.body?.paymentMethod === "string" && req.body.paymentMethod.trim()) {
+      data.paymentMode = req.body.paymentMethod.slice(0, 64);
+    }
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
       data,
@@ -1675,6 +1847,9 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
     const wasPaid = existing.status === "PAID";
     const data = { status: "PAID" };
     if (!wasPaid) data.paidAt = new Date();
+    if (typeof req.body?.paymentMethod === "string" && req.body.paymentMethod.trim()) {
+      data.paymentMode = req.body.paymentMethod.slice(0, 64);
+    }
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
       data,
@@ -2713,7 +2888,7 @@ router.get("/public/receipt", async (req, res) => {
 router.get("/:id/pdf", verifyToken, async (req, res) => {
   try {
     const isWellnessInvoice = req.user?.vertical === "wellness";
-    const invoice = await prisma.invoice.findFirst({
+    let invoice = await prisma.invoice.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
       include: {
         contact: true,
@@ -2730,6 +2905,12 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
       },
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    if (isWellnessInvoice) {
+      [invoice] = await hydrateWellnessInvoiceRows(
+        [invoice],
+        req.user.tenantId,
+      );
+    }
 
     // #286/#330: render currency through formatMoney(tenant.defaultCurrency)
     // so wellness/INR invoices show ₹ not $.

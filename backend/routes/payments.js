@@ -61,6 +61,13 @@ function serialize(payment) {
   return { ...payment, metadata: safeJsonParse(payment.metadata, {}) };
 }
 
+function normalizePaymentMode(method, gateway = "") {
+  const value = String(method || "").trim().toLowerCase();
+  if (value) return value;
+  const normalizedGateway = String(gateway || "").trim().toLowerCase();
+  return normalizedGateway || null;
+}
+
 async function recomputeTravelInvoiceStatus(prisma, tenantId, invoiceId) {
   if (!Number.isFinite(invoiceId)) return;
   const paidAgg = await prisma.payment.aggregate({
@@ -231,17 +238,27 @@ function parseGatewayError(err, gateway) {
   };
 }
 
-async function markInvoicePaid(invoiceId, tenantId) {
+async function markInvoicePaid(invoiceId, tenantId, options = {}) {
   if (!invoiceId) return null;
   try {
     const where = tenantId
       ? { id: parseInt(invoiceId), tenantId }
       : { id: parseInt(invoiceId) };
     const inv = await prisma.invoice.findFirst({ where });
-    if (inv && inv.status !== "PAID") {
+    const paymentMode = normalizePaymentMode(
+      options.paymentMode,
+      options.gateway,
+    );
+    const paidAt = options.paidAt || new Date();
+    if (inv && (inv.status !== "PAID" || (paymentMode && !inv.paymentMode))) {
+      const data = {
+        status: "PAID",
+      };
+      if (inv.status !== "PAID") data.paidAt = paidAt;
+      if (paymentMode && !inv.paymentMode) data.paymentMode = paymentMode;
       await prisma.invoice.update({
         where: { id: inv.id },
-        data: { status: "PAID" },
+        data,
       });
     }
     // If this invoice is linked to a wellness visit, mirror the payment onto
@@ -449,11 +466,23 @@ router.post(
           where: { gateway: "stripe", gatewayId: intent.id },
         });
         if (payment) {
+          const paidAt = new Date();
           const updated = await prisma.payment.update({
             where: { id: payment.id },
-            data: { status: "SUCCESS", paidAt: new Date() },
+            data: {
+              status: "SUCCESS",
+              paidAt,
+              metadata: JSON.stringify({
+                ...safeJsonParse(payment.metadata, {}),
+                paymentMode: "card",
+              }),
+            },
           });
-          await markInvoicePaid(payment.invoiceId, payment.tenantId);
+          await markInvoicePaid(payment.invoiceId, payment.tenantId, {
+            paymentMode: "card",
+            gateway: "stripe",
+            paidAt,
+          });
           emitPaymentCollected(updated);
         }
       } else if (event.type === "payment_intent.payment_failed") {
@@ -476,11 +505,23 @@ router.post(
             where: { gateway: "stripe", gatewayId: session.id },
           });
           if (payment) {
+            const paidAt = new Date();
             const updated = payment.status === "SUCCESS" ? payment : await prisma.payment.update({
               where: { id: payment.id },
-              data: { status: "SUCCESS", paidAt: new Date() },
+              data: {
+                status: "SUCCESS",
+                paidAt,
+                metadata: JSON.stringify({
+                  ...safeJsonParse(payment.metadata, {}),
+                  paymentMode: "card",
+                }),
+              },
             });
-            await markInvoicePaid(payment.invoiceId, payment.tenantId);
+            await markInvoicePaid(payment.invoiceId, payment.tenantId, {
+              paymentMode: "card",
+              gateway: "stripe",
+              paidAt,
+            });
             emitPaymentCollected(updated);
 
             // Dynamic TMC checkout payments arrive as payment.captured. The
@@ -606,15 +647,29 @@ router.post(
             });
           }
           if (payment) {
+            const capturedAt = ent && ent.captured_at
+              ? new Date(ent.captured_at * 1000)
+              : new Date();
+            const paymentMode = normalizePaymentMode(ent && ent.method, "razorpay");
+            const paymentMetadata = {
+              ...safeJsonParse(payment.metadata, {}),
+              paymentMode,
+              razorpayPaymentMethod: ent && ent.method ? ent.method : null,
+            };
             const updated = await prisma.payment.update({
               where: { id: payment.id },
               data: {
                 status: "SUCCESS",
-                paidAt: new Date(),
+                paidAt: capturedAt,
                 gatewayId: paymentId || orderId,
+                metadata: JSON.stringify(paymentMetadata),
               },
             });
-            await markInvoicePaid(payment.invoiceId, payment.tenantId);
+            await markInvoicePaid(payment.invoiceId, payment.tenantId, {
+              paymentMode,
+              gateway: "razorpay",
+              paidAt: capturedAt,
+            });
             emitPaymentCollected(updated);
 
             // Razorpay order payments used by the customer portal are not
@@ -942,15 +997,34 @@ router.post(
           if (payment) {
             let updated = payment;
             if (payment.status !== "SUCCESS") {
+              const capturedAt = paymentEnt && paymentEnt.captured_at
+                ? new Date(paymentEnt.captured_at * 1000)
+                : new Date();
+              const paymentMode = normalizePaymentMode(
+                paymentEnt && paymentEnt.method,
+                "razorpay",
+              );
               updated = await prisma.payment.update({
                 where: { id: payment.id },
                 data: {
                   status: "SUCCESS",
-                  paidAt: new Date(),
+                  paidAt: capturedAt,
                   gatewayId: paymentId || plinkId,
+                  metadata: JSON.stringify({
+                    ...safeJsonParse(payment.metadata, {}),
+                    paymentMode,
+                    razorpayPaymentMethod: paymentEnt && paymentEnt.method
+                      ? paymentEnt.method
+                      : null,
+                    razorpayPaymentId: paymentId || null,
+                  }),
                 },
               });
-              await markInvoicePaid(payment.invoiceId, payment.tenantId);
+              await markInvoicePaid(payment.invoiceId, payment.tenantId, {
+                paymentMode,
+                gateway: "razorpay",
+                paidAt: capturedAt,
+              });
               emitPaymentCollected(updated);
             }
 

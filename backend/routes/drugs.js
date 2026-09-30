@@ -98,6 +98,9 @@ router.get("/", readGate, async (req, res) => {
           dosageForm: true,
           strengthValue: true,
           strengthUnit: true,
+          productCode: true,
+          salePrice: true,
+          unit: true,
           isActive: true,
           // Stock is part of the typeahead's job now — the prescriber needs to
           // see what's on the shelf BEFORE writing the drug, not after the
@@ -227,6 +230,7 @@ router.post("/", writeGate, async (req, res) => {
     const {
       name, genericName, dosageForm,
       strengthValue, strengthUnit,
+      productCode, salePrice, unit,
       defaultDosage, defaultFrequency, defaultDuration,
       notes, isActive,
     } = req.body;
@@ -243,6 +247,10 @@ router.post("/", writeGate, async (req, res) => {
     if (!strength.ok) {
       return res.status(400).json({ error: strength.error, code: strength.code });
     }
+    const parsedSalePrice = salePrice === "" || salePrice == null ? null : Number(salePrice);
+    if (parsedSalePrice !== null && (!Number.isFinite(parsedSalePrice) || parsedSalePrice < 0)) {
+      return res.status(400).json({ error: "salePrice must be 0 or greater", code: "INVALID_SALE_PRICE" });
+    }
     const drug = await prisma.drug.create({
       data: {
         name: name.trim(),
@@ -250,6 +258,9 @@ router.post("/", writeGate, async (req, res) => {
         dosageForm: dosageForm || "tablet",
         strengthValue: strength.value,
         strengthUnit: strength.unit,
+        productCode: productCode ? String(productCode).trim() : null,
+        salePrice: parsedSalePrice,
+        unit: unit ? String(unit).trim() : null,
         defaultDosage: defaultDosage ? String(defaultDosage).trim() : null,
         defaultFrequency: defaultFrequency ? String(defaultFrequency).trim() : null,
         defaultDuration: defaultDuration ? String(defaultDuration).trim() : null,
@@ -363,6 +374,7 @@ router.put("/:id", writeGate, async (req, res) => {
     const allowed = [
       "name", "genericName", "dosageForm",
       "strengthValue", "strengthUnit",
+      "productCode", "salePrice", "unit",
       "defaultDosage", "defaultFrequency", "defaultDuration",
       "notes", "isActive",
     ];
@@ -391,6 +403,13 @@ router.put("/:id", writeGate, async (req, res) => {
         error: `dosageForm must be one of: ${[...ALLOWED_DOSAGE_FORMS].join(", ")}`,
         code: "INVALID_DOSAGE_FORM",
       });
+    }
+    if (data.salePrice !== undefined) {
+      const parsedSalePrice = data.salePrice === "" || data.salePrice === null ? null : Number(data.salePrice);
+      if (parsedSalePrice !== null && (!Number.isFinite(parsedSalePrice) || parsedSalePrice < 0)) {
+        return res.status(400).json({ error: "salePrice must be 0 or greater", code: "INVALID_SALE_PRICE" });
+      }
+      data.salePrice = parsedSalePrice;
     }
     if (typeof data.name === "string") data.name = data.name.trim();
     if (typeof data.genericName === "string") data.genericName = data.genericName.trim() || null;

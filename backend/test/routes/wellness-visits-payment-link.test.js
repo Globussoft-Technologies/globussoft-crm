@@ -112,6 +112,18 @@ prisma.payment.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 
+prisma.service = prisma.service || {};
+prisma.service.findFirst = vi.fn();
+
+prisma.serviceConsumption = prisma.serviceConsumption || {};
+prisma.serviceConsumption.findMany = vi.fn();
+
+prisma.product = prisma.product || {};
+prisma.product.findMany = vi.fn();
+
+prisma.drug = prisma.drug || {};
+prisma.drug.findMany = vi.fn();
+
 prisma.coupon = prisma.coupon || {};
 prisma.coupon.update = vi.fn();
 
@@ -125,6 +137,7 @@ prisma.loyaltyTransaction.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog = { create: vi.fn().mockResolvedValue({ id: 1 }), findFirst: vi.fn().mockResolvedValue(null) };
 prisma.automationRule = { findMany: vi.fn().mockResolvedValue([]) };
 prisma.webhook = { findMany: vi.fn().mockResolvedValue([]) };
+prisma.autoConsumptionRule = { findMany: vi.fn() };
 
 const wellnessRouter = requireCJS('../../routes/wellness');
 
@@ -177,7 +190,17 @@ beforeEach(() => {
   prisma.payment.findFirst.mockReset();
   prisma.payment.update.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.autoConsumptionRule.findMany.mockReset();
+  prisma.service.findFirst.mockReset();
+  prisma.serviceConsumption.findMany.mockReset();
+  prisma.product.findMany.mockReset();
+  prisma.drug.findMany.mockReset();
   prisma.coupon.update.mockReset();
+
+  prisma.service.findFirst.mockResolvedValue(null);
+  prisma.serviceConsumption.findMany.mockResolvedValue([]);
+  prisma.product.findMany.mockResolvedValue([]);
+  prisma.drug.findMany.mockResolvedValue([]);
 
   prisma.visit.update.mockResolvedValue({
     id: 1,
@@ -235,6 +258,7 @@ beforeEach(() => {
   prisma.payment.update.mockResolvedValue({ id: 1 });
 
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Enhanced Wellness' });
+  prisma.autoConsumptionRule.findMany.mockResolvedValue([]);
 });
 
 describe('PUT /api/wellness/visits/:id payment link hook', () => {
@@ -246,6 +270,13 @@ describe('PUT /api/wellness/visits/:id payment link hook', () => {
     expect(res.status).toBe(200);
     expect(res.body.paymentLinkUrl).toBe('https://rzp.io/l/test-visit-link');
     expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
+    expect(prisma.invoice.create.mock.calls[0][0].data).toMatchObject({
+      patientId: 42,
+      customerName: 'Anita Sharma',
+      customerEmail: 'anita@example.com',
+      customerPhone: '+919876543210',
+      lineItemsJson: '[]',
+    });
     expect(mockCreateInvoicePaymentLink).toHaveBeenCalledTimes(1);
     expect(prisma.visit.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -444,8 +475,10 @@ describe('PUT /api/wellness/visits/:id payment link hook', () => {
             discount: 2500,
             excess: 0,
             lockingFee: 0,
-            balance: 5000,
-            couponCode: 'FLAT2500',
+          balance: 5000,
+          couponCode: 'FLAT2500',
+          serviceAmount: 7500,
+          inventoryTotal: 0,
           }),
         }),
       }),
@@ -522,8 +555,10 @@ describe('PUT /api/wellness/visits/:id payment link hook', () => {
             discount: 5500,
             excess: 4500,
             lockingFee: 0,
-            balance: 0,
-            couponCode: 'TATA',
+          balance: 0,
+          couponCode: 'TATA',
+          serviceAmount: 5500,
+          inventoryTotal: 0,
           }),
         }),
       }),
@@ -671,6 +706,130 @@ describe('POST /api/wellness/visits/:id/payment-link regeneration', () => {
     expect(mockCreateInvoicePaymentLink).toHaveBeenCalledWith(
       expect.objectContaining({
         invoice: expect.objectContaining({ amount: 5000 }),
+      }),
+    );
+  });
+
+  test('includes inventory usage in the payment-link amount', async () => {
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      serviceId: 10,
+      status: 'completed',
+      amountCharged: 5000,
+    });
+    prisma.service.findFirst.mockResolvedValue({
+      id: 10,
+      name: 'Shila Massage Hot Stone Therapy',
+      basePrice: 5000,
+    });
+    prisma.serviceConsumption.findMany.mockResolvedValue([
+      {
+        id: 7,
+        productName: 'Derma Facial Cream',
+        qty: 1,
+        unitCost: 499,
+        usageValue: 499,
+        salePrice: 499,
+        productId: null,
+        drugId: null,
+        unit: 'piece',
+        productCode: null,
+        transactionType: 'Sale',
+        sourceType: 'MANUAL',
+        createdAt: new Date('2026-09-11T00:00:00.000Z'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/wellness/visits/1/payment-link')
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(prisma.visit.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 1 },
+        data: expect.objectContaining({ amountCharged: 5499 }),
+      }),
+    );
+    expect(mockCreateInvoicePaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoice: expect.objectContaining({ amount: 5499 }),
+      }),
+    );
+    const lineItems = JSON.parse(
+      prisma.invoice.create.mock.calls[0][0].data.lineItemsJson,
+    );
+    expect(lineItems).toEqual([
+      expect.objectContaining({
+        type: 'service',
+        name: 'Shila Massage Hot Stone Therapy',
+        quantity: 1,
+        amount: 5000,
+      }),
+      expect.objectContaining({
+        type: 'product',
+        name: 'Derma Facial Cream',
+        quantity: 1,
+        amount: 499,
+      }),
+    ]);
+  });
+
+  test('replaces a stale no-coupon breakdown when inventory is added later', async () => {
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      serviceId: 10,
+      status: 'completed',
+      amountCharged: 5000,
+      couponBreakdown: JSON.stringify({
+        baseAmount: 5000,
+        discount: 0,
+        excess: 0,
+        lockingFee: 0,
+        balance: 5000,
+        couponCode: null,
+      }),
+    });
+    prisma.service.findFirst.mockResolvedValue({ basePrice: 4500 });
+    prisma.serviceConsumption.findMany.mockResolvedValue([
+      {
+        id: 7,
+        productName: 'Derma Facial Cream',
+        qty: 1,
+        unitCost: 499,
+        usageValue: 499,
+        salePrice: 499,
+        productId: null,
+        drugId: null,
+        unit: 'piece',
+        productCode: null,
+        transactionType: 'Sale',
+        sourceType: 'PRESCRIPTION',
+        createdAt: new Date('2026-09-11T00:00:00.000Z'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/wellness/visits/1/payment-link')
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(prisma.visit.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 1 },
+        data: expect.objectContaining({
+          amountCharged: 5499,
+          couponBreakdown: expect.stringContaining('"inventoryTotal":499'),
+        }),
+      }),
+    );
+    expect(mockCreateInvoicePaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoice: expect.objectContaining({ amount: 5499 }),
       }),
     );
   });

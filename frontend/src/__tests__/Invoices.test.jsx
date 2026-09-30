@@ -168,7 +168,7 @@ const sampleWellnessInvoices = [
     paymentMode: 'upi',
     lineItemsJson: JSON.stringify([
       { type: 'service', itemId: 21, name: 'Skin consultation', quantity: 2, unitPrice: 1500, amount: 3000 },
-      { type: 'product', itemId: 31, name: 'Aftercare kit', quantity: 1, unitPrice: 500, amount: 500 },
+      { type: 'product', itemId: 31, name: 'Aftercare kit', quantity: 1, unit: '100', unitPrice: 500, amount: 500 },
     ]),
   },
 ];
@@ -743,7 +743,7 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.queryByRole('button', { name: /Activate monthly/i })).toBeNull();
   });
 
-  it('row with null contact falls back to "Unknown" in the Contact column', async () => {
+  it('row with null contact shows a clear no-customer message', async () => {
     const noContact = [
       { ...sampleInvoices[0], id: 70, invoiceNum: 'INV-070', contact: null },
     ];
@@ -756,7 +756,7 @@ describe('<Invoices /> — page surface', () => {
     });
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-070')).toBeInTheDocument());
-    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(screen.getByText('No customer data')).toBeInTheDocument();
   });
 
   it('nextInvoiceNum defaults to INV-001 when the invoice list is empty', async () => {
@@ -1164,7 +1164,8 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
     expect(screen.getByText('Skin consultation')).toBeInTheDocument();
     expect(screen.getByText('Aftercare kit')).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: '3' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '2 1' })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /1 100/ })).toBeNull();
     expect(screen.getByText('UPI')).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '2026-06-01' }).querySelector('svg')).toBeNull();
     const wellnessUnpaidBadge = screen.getAllByText('Unpaid').find((node) => node.closest('tr'));

@@ -72,8 +72,29 @@ function getInvoiceLineItems(invoice) {
   }
 }
 
+function formatInvoiceQuantity(item) {
+  const quantity = Number(item?.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) return "No quantity recorded";
+  const unit = String(item?.unit || "").trim();
+  // Older snapshots could contain a numeric package size in `unit` (for
+  // example "100"). It is not a measurement unit and must not turn qty 1
+  // into the misleading display "1 100".
+  const displayUnit = unit && !/^\d+(?:\.\d+)?$/.test(unit) ? unit : "";
+  return displayUnit ? `${quantity} ${displayUnit}` : String(quantity);
+}
+
 function formatPaymentMode(mode) {
-  return WELLNESS_PAYMENT_MODES.find((option) => option.value === mode)?.label || mode || "—";
+  const labels = {
+    manual: "Manual",
+    razorpay: "Razorpay",
+    netbanking: "Net banking",
+    wallet: "Wallet",
+    emi: "EMI",
+  };
+  return WELLNESS_PAYMENT_MODES.find((option) => option.value === mode)?.label
+    || labels[String(mode || "").toLowerCase()]
+    || mode
+    || "Payment not received";
 }
 
 const WELLNESS_PAYMENT_MODES = [
@@ -2266,11 +2287,7 @@ export default function Invoices() {
                 <tbody>
                   {visibleInvoices.map((inv) => {
                     const wellnessLineItems = getInvoiceLineItems(inv);
-                    const wellnessQuantity = wellnessLineItems.reduce(
-                      (total, item) => total + (Number(item.quantity) || 0),
-                      0,
-                    );
-                    const customerName = inv.customerName || inv.contact?.name || "Unknown";
+                    const customerName = inv.customerName || inv.contact?.name || "No customer data";
                     const customerContact = inv.customerPhone || inv.customerEmail || "";
                     return (
                     <tr
@@ -2329,17 +2346,28 @@ export default function Invoices() {
                           {wellnessLineItems.length > 0 ? (
                             wellnessLineItems.map((item, index) => (
                               <div key={`${item.type || "item"}-${item.itemId || index}`} style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                                {item.name || "Unnamed item"}
+                                {item.name || "Unnamed inventory item"}
+                                <span style={{ fontSize: "0.7rem", marginLeft: "0.35rem" }}>
+                                  ({item.type || "item"})
+                                </span>
                               </div>
                             ))
                           ) : (
-                            "—"
+                            "No products or services"
                           )}
                         </td>
                       )}
                       {isWellness && (
                         <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
-                          {wellnessQuantity || "—"}
+                          {wellnessLineItems.length > 0 ? (
+                            wellnessLineItems.map((item, index) => (
+                              <div key={`${item.type || "item"}-qty-${item.itemId || index}`}>
+                                {formatInvoiceQuantity(item)}
+                              </div>
+                            ))
+                          ) : (
+                            "No quantity recorded"
+                          )}
                         </td>
                       )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
@@ -2370,7 +2398,7 @@ export default function Invoices() {
                         }}
                       >
                         {isWellness ? (
-                          formatDate(inv.dueDate)
+                          inv.dueDate ? formatDate(inv.dueDate) : "No due date"
                         ) : (
                           <span
                             style={{
@@ -2391,7 +2419,7 @@ export default function Invoices() {
                         }}
                       >
                         {/* #111: Invoice schema uses issuedDate, not createdAt. */}
-                        {inv.issuedDate ? formatDate(inv.issuedDate) : "—"}
+                        {inv.issuedDate ? formatDate(inv.issuedDate) : "No issue date"}
                       </td>
                       {!isWellness && <td
                         style={{

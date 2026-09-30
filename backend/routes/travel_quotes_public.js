@@ -293,7 +293,7 @@ async function sendAdvanceLinkToCustomer({ quote, contact, displayName, payUrl, 
         `or pay the full amount of ${cur} ${fullAmt} &mdash; any amount in between works too.</p>` +
         `<p>This link stays active until your trip, so you can pay the remaining balance any time.</p>` +
         `<p>&mdash; ${brand}</p>`;
-      await sendEmail({ to: contact.email, subject: `Confirm your booking — pay from ${cur} ${minAmt}`, text, html });
+      await sendEmail({ tenantId: quote.tenantId, to: contact.email, subject: `Confirm your booking — pay from ${cur} ${minAmt}`, text, html });
       channels.push('email');
     } catch (e) { console.error('[travel-quotes-public] advance email failed (non-fatal):', e.message); }
   }

@@ -180,6 +180,8 @@ function buildDefaultFetch(overrides = {}) {
     if (url === "/api/notifications/preferences" && method === "GET")
       return Promise.resolve(prefs);
     if (url === "/api/wellness/consent-templates") return Promise.resolve([]);
+    if (url === "/api/travel/email-provider" && method === "GET")
+      return Promise.resolve({ configured: false, source: "backend", fallback: { configured: true, fromEmail: "noreply@crm.test", fromName: "" } });
     return Promise.resolve([]);
   };
 }
@@ -350,6 +352,48 @@ describe("<Settings /> — page shell + representative card pin", () => {
          remotePath: "/",
       });
     });
+  });
+
+  it("configures tenant SendGrid BYOK without restoring the saved API key", async () => {
+    const user = userEvent.setup();
+    const travelTenant = { ...baseTenant, vertical: "travel" };
+    const defaultFetch = buildDefaultFetch({ tenant: travelTenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/travel/email-provider" && (!opts || !opts.method || opts.method === "GET")) {
+        return Promise.resolve({
+          configured: true,
+          source: "tenant",
+          fromEmail: "bookings@travel.test",
+          fromName: "Acme Travel",
+          apiKeyLast4: "****1234",
+          fallback: { configured: true, fromEmail: "noreply@crm.test" },
+        });
+      }
+      if (url === "/api/travel/email-provider" && opts?.method === "PUT") {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({ configured: true, source: "tenant", ...body, apiKeyLast4: "****5678" });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderSettings({ authValue: { tenant: travelTenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+
+    await waitFor(() => expect(screen.getByTestId("travel-email-provider-card")).toBeInTheDocument());
+    expect(screen.getByLabelText("SendGrid API key")).toHaveValue("");
+    expect(screen.getByLabelText("SendGrid API key")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("Verified sender email")).toHaveValue("bookings@travel.test");
+    expect(screen.getByLabelText("Sender name")).toHaveValue("Acme Travel");
+
+    await user.type(screen.getByLabelText("SendGrid API key"), "SG.updated.key5678");
+    await user.clear(screen.getByLabelText("Verified sender email"));
+    await user.type(screen.getByLabelText("Verified sender email"), "hello@acmetrips.test");
+    await user.click(screen.getByRole("button", { name: "Update SendGrid" }));
+
+    await waitFor(() => {
+      const save = fetchApiMock.mock.calls.find(([url, opts]) => url === "/api/travel/email-provider" && opts?.method === "PUT");
+      expect(JSON.parse(save[1].body)).toEqual({ apiKey: "SG.updated.key5678", fromEmail: "hello@acmetrips.test", fromName: "Acme Travel" });
+    });
+    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/Travel SendGrid settings saved/i));
   });
 
   it("switches the transfer form to FTP and uses port 21", async () => {

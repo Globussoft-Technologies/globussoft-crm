@@ -102,6 +102,11 @@ describe('GET /api/tenant-settings/', () => {
         value: '{"password":"ftp-secret","privateKey":"private-key"}',
         category: 'travel-hosting',
       },
+      {
+        key: 'travel.email.sendgrid',
+        value: 'encrypted-sendgrid-secret',
+        category: 'travel-email',
+      },
     ]);
     const res = await request(makeApp())
       .get('/api/tenant-settings/')
@@ -111,6 +116,7 @@ describe('GET /api/tenant-settings/', () => {
       { key: KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS, value: '7500', category: 'budget' },
       { key: KEYS.GENERIC_RECAPTCHA_SECRET_KEY, value: '', category: 'general', hasValue: true },
       { key: 'travel.promotionalWebsite.sftp', value: '', category: 'travel-hosting', hasValue: true },
+      { key: 'travel.email.sendgrid', value: '', category: 'travel-email', hasValue: true },
     ]);
     // defaults map MUST include every canonical key so the UI can render
     // the "currently overridden" badge without a second round trip.
@@ -121,10 +127,12 @@ describe('GET /api/tenant-settings/', () => {
     expect(res.body.sensitiveDefaults).toEqual({
       [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: Boolean(DEFAULTS[KEYS.GENERIC_RECAPTCHA_SECRET_KEY]),
       'travel.promotionalWebsite.sftp': false,
+      'travel.email.sendgrid': false,
     });
     expect(JSON.stringify(res.body)).not.toContain('stored-secret');
     expect(JSON.stringify(res.body)).not.toContain('ftp-secret');
     expect(JSON.stringify(res.body)).not.toContain('private-key');
+    expect(JSON.stringify(res.body)).not.toContain('encrypted-sendgrid-secret');
     expect(res.body.allowedKeys).toEqual(expect.arrayContaining(Object.values(KEYS)));
     // tenant scope MUST come from req.user.tenantId, not body.
     expect(prisma.tenantSetting.findMany).toHaveBeenCalledWith(

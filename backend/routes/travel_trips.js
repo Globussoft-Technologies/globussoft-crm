@@ -138,6 +138,7 @@ function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
         <p>This portal link is unique to the transaction and should not be shared publicly.</p>
       `;
       await sendEmail({
+        tenantId,
         to: parentEmail,
         subject,
         text,

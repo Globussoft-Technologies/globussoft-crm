@@ -46,9 +46,76 @@ describe("Travel Meeting Form field validation", () => {
     expect(config.bookingHorizonDays).toBe(60);
   });
 
+  test("publishes date-only booking boundaries for the hosted calendar", () => {
+    const config = _internal.publicConfig({
+      publicKey: "tmcmf_test",
+      name: "Conversation",
+      subBrand: "tmc",
+      durationMins: 30,
+      bookingHorizonDays: 60,
+      allowedStartDate: new Date("2026-10-01T00:00:00.000Z"),
+      allowedEndDate: new Date("2026-10-01T23:59:59.999Z"),
+      timezone: "Asia/Kolkata",
+      embedFontFamily: "Inter",
+      fieldsJson: "[]",
+      confirmationMessage: "Confirmed",
+    });
+    expect(config).toMatchObject({ allowedStartDate: "2026-10-01", allowedEndDate: "2026-10-01" });
+  });
+
   test("forces Travel Meeting Forms to use Google Calendar", () => {
     const data = _internal.dataFromBody({ name: "Conversation", calendarProvider: "outlook" });
     expect(data.calendarProvider).toBe("google");
+  });
+
+  test("rejects an end date earlier than the configured start date", () => {
+    let thrown;
+    try {
+      _internal.dataFromBody({
+        name: "Conversation",
+        timezone: "Asia/Kolkata",
+        allowedStartDate: "2099-02-10",
+        allowedEndDate: "2099-02-09",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      message: "End date cannot be earlier than start date",
+      code: "INVALID_DATE_RANGE",
+      status: 400,
+    });
+  });
+
+  test("rejects an end date that is already in the past", () => {
+    let thrown;
+    try {
+      _internal.dataFromBody({
+        name: "Conversation",
+        timezone: "Asia/Kolkata",
+        allowedEndDate: "2000-01-01",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      message: "End date cannot be earlier than today",
+      code: "END_DATE_IN_PAST",
+      status: 400,
+    });
+  });
+
+  test("keeps valid past blackout dates and removes duplicates when a form is saved", () => {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+    const tomorrow = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+    const data = _internal.dataFromBody({
+      name: "Conversation",
+      timezone: "UTC",
+      blackoutDates: [yesterday, tomorrow, today, tomorrow, "not-a-date"],
+    });
+    expect(JSON.parse(data.blackoutDatesJson)).toEqual([yesterday, today, tomorrow]);
   });
 
   test("reports only the branded confirmation as delivered email", () => {
@@ -158,10 +225,72 @@ describe("Travel Meeting Form field validation", () => {
     ["select", "Not configured"],
   ])("rejects invalid %s submission values", (type, value) => {
     const field = { key: "custom_value", label: "Value", type, required: true, options: type === "select" ? ["Allowed"] : [] };
-    expect(_internal.validateConfiguredFieldValues([field], { custom_value: value })).toEqual({
-      error: "One or more form fields contain an invalid value",
+    expect(_internal.validateConfiguredFieldValues([field], { custom_value: value })).toMatchObject({
+      error: "Correct the highlighted form fields",
       code: "INVALID_FIELD_VALUE",
       fields: ["custom_value"],
     });
+  });
+
+  test("rejects URLs, malformed roles, and oversized phone numbers in canonical fields", () => {
+    const fields = [
+      { key: "designation", label: "Designation", type: "text", required: true },
+      { key: "institution", label: "School / Institution", type: "text", required: true },
+      { key: "contactPhone", label: "Phone / WhatsApp", type: "tel", required: true },
+    ];
+    expect(_internal.validateConfiguredFieldValues(fields, {
+      designation: "feafgnrf4w4rt",
+      institution: "https://crm.example.com/embed/meeting-form.html",
+      contactPhone: "4123445676778876878787",
+    })).toMatchObject({
+      error: "Correct the highlighted form fields",
+      code: "INVALID_FIELD_VALUE",
+      fields: ["designation", "institution", "contactPhone"],
+      fieldErrors: {
+        designation: expect.stringMatching(/valid role or title/i),
+        institution: expect.stringMatching(/cannot be a URL/i),
+        contactPhone: expect.stringMatching(/7 to 15 digits/i),
+      },
+    });
+  });
+
+  test("accepts international identity values and properly formatted contact details", () => {
+    const fields = [
+      { key: "contactName", label: "Full Name", type: "text", required: true },
+      { key: "designation", label: "Designation", type: "text", required: true },
+      { key: "institution", label: "School / Institution", type: "text", required: true },
+      { key: "city", label: "City", type: "text", required: true },
+      { key: "contactEmail", label: "Work Email", type: "email", required: true },
+      { key: "contactPhone", label: "Phone / WhatsApp", type: "tel", required: true },
+    ];
+    expect(_internal.validateConfiguredFieldValues(fields, {
+      contactName: "ನಿಲೇಶ್ ನಾಯಕ್",
+      designation: "K-12 Coordinator",
+      institution: "St. Joseph's School",
+      city: "ಬೆಂಗಳೂರು",
+      contactEmail: "teacher@example.edu",
+      contactPhone: "919876543210",
+    })).toBeNull();
+  });
+
+  test("accepts a normal school name and rejects formatted or alphabetic phone input", () => {
+    const fields = [
+      { key: "institution", label: "School / Institution", type: "text", required: true },
+      { key: "contactPhone", label: "Phone / WhatsApp", type: "tel", required: true },
+    ];
+    expect(_internal.validateConfiguredFieldValues(fields, {
+      institution: "Chennai Public School",
+      contactPhone: "9876543210",
+    })).toBeNull();
+    for (const contactPhone of ["98765abc10", "+91 98765 43210", "98765-43210"]) {
+      expect(_internal.validateConfiguredFieldValues(fields, {
+        institution: "Chennai Public School",
+        contactPhone,
+      })).toMatchObject({
+        code: "INVALID_FIELD_VALUE",
+        fields: ["contactPhone"],
+        fieldErrors: { contactPhone: expect.stringMatching(/only 7 to 15 digits/i) },
+      });
+    }
   });
 });

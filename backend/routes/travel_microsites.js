@@ -38,6 +38,7 @@ const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const digilockerClient = require("../services/digilockerClient");
 const visaDocStore = require("../lib/visaDocStore");
 const { tripRequiresPassport } = require("../lib/travelDocumentPolicy");
+const { sendEmail } = require("../lib/emailSender");
 // const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
 const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
@@ -155,6 +156,28 @@ async function sendOtpEmailStub(email, code, purpose, tenantId) {
 }
 
 const VALID_OTP_CHANNELS = ["phone", "email"];
+
+// Tenant-aware email delivery. A saved Travel SendGrid account is selected
+// by the shared sender; otherwise it uses the backend account. Development
+// keeps the historical logged-code stub when neither account is configured.
+async function sendTenantOtpEmail(email, code, purpose, tenantId) {
+  const subject = "Your Travel Stall verification code";
+  const body =
+    `Your Travel Stall verification code is ${code}.\n\n` +
+    `Enter it on the trip page to confirm your registration. The code is valid for 10 minutes.\n\n` +
+    `If you didn't request this, you can safely ignore this email.`;
+  const result = await sendEmail({
+    tenantId,
+    to: email,
+    subject,
+    text: body,
+    html: body.replace(/\n/g, "<br>"),
+  });
+  if (result.reason === "no_api_key") {
+    return sendOtpEmailStub(email, code, purpose, tenantId);
+  }
+  return { ...result, stub: false };
+}
 
 // Image upload for the microsite editor. Mirrors routes/booking_pages.js's
 // multer pattern (disk storage under backend/uploads/, PNG/JPEG/WebP only,
@@ -1505,7 +1528,7 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
       },
     });
     if (channel === "email") {
-      const emailResult = await sendOtpEmailStub(destination, code, purpose, ms.tenantId);
+      const emailResult = await sendTenantOtpEmail(destination, code, purpose, ms.tenantId);
       // Surface a genuine provider failure so the parent isn't left staring
       // at a "code sent" screen for an email that never left. stub mode
       // (no SENDGRID_API_KEY) still reports success — the code is dev-logged.

@@ -7419,6 +7419,7 @@ router.post(
       if (contact.email) {
         try {
           const r = await sendEmail({
+            tenantId: req.travelTenant.id,
             to: contact.email,
             subject: `Payment reminder — ${schedule.invoice.invoiceNum} (${cur} ${amt})`,
             text,

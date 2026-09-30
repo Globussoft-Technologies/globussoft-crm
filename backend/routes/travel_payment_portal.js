@@ -250,6 +250,7 @@ async function sendOtpEmail({ to, code, trip, participant }) {
     "If you did not request this code, please ignore this email.",
   ].join("\n");
   await sendEmail({
+    tenantId: trip.tenantId,
     to,
     subject,
     text,

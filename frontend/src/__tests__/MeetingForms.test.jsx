@@ -43,6 +43,7 @@ beforeEach(() => {
     if (url === "/api/travel/meeting-forms") return Promise.resolve([FORM]);
     if (url === "/api/travel/meeting-forms/hosts") return Promise.resolve([{ id: 3, name: "TMC Host", email: "host@tmc.test", calendarIntegrations: [{ provider: "google" }] }]);
     if (url === "/api/travel/meeting-forms/zoom-config") return Promise.resolve({ configured: true, status: "CONNECTED", accountId: "****1234", clientId: "****abcd", clientSecretConfigured: true, zoomHostUserId: "me", verifiedAt: "2026-09-24T10:00:00Z" });
+    if (url === "/api/travel/email-provider") return Promise.resolve({ configured: false, source: "backend" });
     if (url === "/api/travel/meeting-forms/7/bookings") return Promise.resolve([{ id: 11, contactName: "Teacher", contactEmail: "teacher@school.test", scheduledAt: "2099-01-01T10:00:00Z", status: "CONFIRMED", emailStatus: "SENT", meetingUrl: "https://zoom.us/j/teacher" }]);
     return Promise.resolve({});
   });
@@ -59,6 +60,54 @@ describe("MeetingForms", () => {
     expect(screen.getByText(/\/availability\?start=YYYY-MM-DD/)).toBeInTheDocument();
     expect(screen.getByText(/No API key is required/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Rotate API key/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps a new form open, suggests a unique slug, and creates a second Meeting Form", async () => {
+    const secondForm = {
+      ...FORM,
+      id: 8,
+      name: "Talk to a TMC Experiential Learning Expert 2",
+      slug: "talk-to-an-expert-2",
+      publicKey: "tmcmf_second_form",
+      isActive: false,
+      _count: { bookings: 0 },
+    };
+    const regularImplementation = fetchApi.getMockImplementation();
+    let created = false;
+    fetchApi.mockImplementation((url, options) => {
+      if (url === "/api/travel/meeting-forms" && options?.method === "POST") {
+        created = true;
+        return Promise.resolve(secondForm);
+      }
+      if (url === "/api/travel/meeting-forms" && created) return Promise.resolve([FORM, secondForm]);
+      return regularImplementation(url, options);
+    });
+
+    render(<MeetingForms />);
+    await screen.findByText("Talk to an Expert");
+    fireEvent.click(screen.getByRole("button", { name: "New Meeting Form" }));
+
+    expect(await screen.findByRole("heading", { name: "New Meeting Form settings" })).toBeInTheDocument();
+    expect(screen.getByText(/Unsaved.*complete the settings and create/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("talk-to-an-expert-2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Embed & API" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Bookings" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Meeting Form" }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      "/api/travel/meeting-forms",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    const createCall = fetchApi.mock.calls.find(([url, options]) => url === "/api/travel/meeting-forms" && options?.method === "POST");
+    expect(JSON.parse(createCall[1].body)).toMatchObject({
+      name: "Talk to a TMC Experiential Learning Expert 2",
+      slug: "talk-to-an-expert-2",
+      hostUserId: 3,
+    });
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "New Meeting Form settings" })).not.toBeInTheDocument());
+    expect(notify.success).toHaveBeenCalledWith("Meeting form created");
+    expect(screen.getByDisplayValue("talk-to-an-expert-2")).toBeInTheDocument();
   });
 
   it("shows confirmed bookings with Unified Inbox email status", async () => {
@@ -140,6 +189,7 @@ describe("MeetingForms", () => {
     await screen.findByText("Talk to an Expert");
     expect(screen.queryByText("Allowed website origins")).not.toBeInTheDocument();
     expect(screen.getByText(/CRM Settings.*Embed Allowlist/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous blackout month" })).toBeEnabled();
 
     const addDate = screen.getAllByRole("button", { name: /Add blackout date/i })[0];
     fireEvent.click(addDate);
@@ -148,6 +198,13 @@ describe("MeetingForms", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next blackout month" }));
     fireEvent.click(screen.getAllByRole("button", { name: /Add blackout date/i })[0]);
     expect(container.querySelectorAll(".meeting-date-chip")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous blackout month" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous blackout month" }));
+    const previousMonthDate = screen.getAllByRole("button", { name: /Add blackout date/i })[0];
+    expect(previousMonthDate).toBeEnabled();
+    fireEvent.click(previousMonthDate);
+    expect(container.querySelectorAll(".meeting-date-chip")).toHaveLength(3);
   });
 
   it("keeps Travel Meeting Forms Google Calendar-only", async () => {
@@ -190,10 +247,80 @@ describe("MeetingForms", () => {
   it("places Save Changes in the top Meeting Form toolbar", async () => {
     render(<MeetingForms />);
     await screen.findByText("Talk to an Expert");
+    expect(document.querySelector(".meeting-forms-page")).toHaveStyle({ "--card-bg": "var(--surface-color)" });
+    expect(document.querySelector(".meeting-form-surface")).toHaveStyle({ background: "var(--surface-color, #fff)", color: "var(--text-primary, inherit)" });
     const saveButton = screen.getByRole("button", { name: /Save Changes/i });
     expect(saveButton.closest(".meeting-form-toolbar")).toBeInTheDocument();
+    expect(saveButton).toHaveStyle({ marginLeft: "auto" });
+    expect(screen.getByRole("button", { name: "Delete Talk to an Expert" }).closest("aside")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Create Zoom meeting" }).closest(".meeting-form-actions")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Active/published" }).closest(".meeting-form-actions")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Save Changes/i })).toHaveLength(1);
+    for (const tab of ["Schedule", "Fields", "Embed & API", "Bookings", "Zoom Setup"]) {
+      fireEvent.click(screen.getByRole("button", { name: tab }));
+      expect(screen.getAllByRole("button", { name: /Save Changes/i })).toHaveLength(1);
+    }
+  });
+
+  it("offers draggable email fields and inserts them at the body cursor without typing template syntax", async () => {
+    render(<MeetingForms />);
+    await screen.findByText("Talk to an Expert");
+    const body = screen.getByRole("textbox", { name: "Confirmation email body" });
+    fireEvent.change(body, { target: { value: "Hello " } });
+    body.setSelectionRange(6, 6);
+
+    const meetingLink = screen.getByRole("button", { name: "Insert Meeting link" });
+    expect(meetingLink).toHaveAttribute("draggable", "true");
+    expect(meetingLink).toHaveAttribute("title", expect.stringContaining("clickable link"));
+    expect(screen.getByRole("button", { name: "Insert Meeting button" })).toHaveAttribute("title", expect.stringContaining("opens the meeting URL"));
+    expect(screen.getByText((_content, element) => element.tagName === "SMALL" && element.textContent.includes("School / Institution is the value entered by the visitor"))).toBeInTheDocument();
+    expect(document.querySelector(".meeting-email-settings")).toHaveStyle({ alignItems: "start" });
+    expect(screen.getByRole("status", { name: "Email delivery provider" })).toHaveTextContent("Using CRM-managed SendGrid email");
+    fireEvent.click(meetingLink);
+
+    await waitFor(() => expect(body).toHaveValue("Hello {{meeting_url}}"));
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      "/api/travel/meeting-forms/7",
+      expect.objectContaining({ method: "PUT", body: expect.stringContaining('"emailBody":"Hello {{meeting_url}}"') }),
+    ));
+  });
+
+  it("shows customer-managed delivery when tenant SendGrid BYOK is active", async () => {
+    const regularImplementation = fetchApi.getMockImplementation();
+    fetchApi.mockImplementation((url, options) => {
+      if (url === "/api/travel/email-provider") return Promise.resolve({ configured: true, source: "tenant" });
+      return regularImplementation(url, options);
+    });
+
+    render(<MeetingForms />);
+    expect(await screen.findByRole("status", { name: "Email delivery provider" })).toHaveTextContent("Using customer-managed SendGrid email");
+  });
+
+  it("shows an inline error and blocks saving an invalid date range", async () => {
+    render(<MeetingForms />);
+    await screen.findByText("Talk to an Expert");
+
+    fireEvent.change(screen.getByLabelText("Start date (optional)"), { target: { value: "2099-02-10" } });
+    fireEvent.change(screen.getByLabelText("End date (optional)"), { target: { value: "2099-02-09" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("End date cannot be earlier than start date.");
+    expect(screen.getByLabelText("End date (optional)")).toHaveAttribute("aria-invalid", "true");
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    expect(notify.error).toHaveBeenCalledWith("End date cannot be earlier than start date.");
+    expect(fetchApi).not.toHaveBeenCalledWith("/api/travel/meeting-forms/7", expect.anything());
+  });
+
+  it("blocks an end date that is already in the past", async () => {
+    render(<MeetingForms />);
+    await screen.findByText("Talk to an Expert");
+
+    fireEvent.change(screen.getByLabelText("End date (optional)"), { target: { value: "2000-01-01" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("End date cannot be earlier than today.");
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+    expect(notify.error).toHaveBeenCalledWith("End date cannot be earlier than today.");
   });
 
   it("places Zoom Setup after Bookings as the final tab", async () => {
@@ -202,6 +329,40 @@ describe("MeetingForms", () => {
     const toolbar = document.querySelector(".meeting-form-toolbar");
     const tabs = [...toolbar.querySelectorAll("button")].map((button) => button.textContent.trim());
     expect(tabs.indexOf("Zoom Setup")).toBeGreaterThan(tabs.indexOf("Bookings"));
+  });
+
+  it("deletes a saved Meeting Form with no booking history after confirmation", async () => {
+    const unusedForm = { ...FORM, id: 12, name: "Unused Form", publicKey: "tmcmf_unused", _count: { bookings: 0 } };
+    const regularImplementation = fetchApi.getMockImplementation();
+    fetchApi.mockImplementation((url, options) => {
+      if (url === "/api/travel/meeting-forms" && !options) return Promise.resolve([unusedForm]);
+      if (url === "/api/travel/meeting-forms/12/bookings") return Promise.resolve([]);
+      if (url === "/api/travel/meeting-forms/12" && options?.method === "DELETE") return Promise.resolve({ success: true, id: 12 });
+      return regularImplementation(url, options);
+    });
+
+    render(<MeetingForms />);
+    await screen.findByText("Unused Form");
+    fireEvent.click(screen.getByRole("button", { name: "Delete Unused Form" }));
+
+    expect(await screen.findByRole("dialog", { name: "Delete Meeting Form?" })).toBeInTheDocument();
+    expect(screen.getByText(/public embed and API URLs will stop working/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete Meeting Form" }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith("/api/travel/meeting-forms/12", { method: "DELETE" }));
+    expect(notify.success).toHaveBeenCalledWith("Meeting Form deleted");
+    expect(await screen.findByRole("heading", { name: "New Meeting Form settings" })).toBeInTheDocument();
+  });
+
+  it("protects Meeting Forms that have booking history from deletion", async () => {
+    render(<MeetingForms />);
+    await screen.findByText("Talk to an Expert");
+    fireEvent.click(screen.getByRole("button", { name: "Delete Talk to an Expert" }));
+
+    expect(await screen.findByRole("dialog", { name: "Meeting Form cannot be deleted" })).toBeInTheDocument();
+    expect(screen.getByText(/booking history is protected/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirm delete Meeting Form" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 
   it("provides a row-based option builder and blocks an enabled Select with no options", async () => {

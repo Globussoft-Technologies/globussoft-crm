@@ -7,15 +7,18 @@ const mocks = vi.hoisted(() => {
   const fromBackend = Module.createRequire(process.cwd() + "/");
   const prismaPath = fromBackend.resolve("./lib/prisma");
   const emailPath = fromBackend.resolve("./lib/emailSender");
+  const travelSendGridPath = fromBackend.resolve("./services/travelSendGrid");
   const prisma = {
     tenant: { findUnique: vi.fn() },
     emailMessage: { create: vi.fn() },
     gmailIntegration: { findUnique: vi.fn(), update: vi.fn() },
   };
   const sendEmail = vi.fn();
+  const readTenantConfig = vi.fn().mockResolvedValue(null);
   Module._cache[prismaPath] = { id: prismaPath, filename: prismaPath, loaded: true, exports: prisma, children: [], paths: [] };
   Module._cache[emailPath] = { id: emailPath, filename: emailPath, loaded: true, exports: { sendEmail }, children: [], paths: [] };
-  return { prisma, sendEmail };
+  Module._cache[travelSendGridPath] = { id: travelSendGridPath, filename: travelSendGridPath, loaded: true, exports: { readTenantConfig }, children: [], paths: [] };
+  return { prisma, sendEmail, readTenantConfig };
 });
 
 const service = requireCJS("../../services/unifiedInboxMeetingEmail");
@@ -43,21 +46,44 @@ describe("unifiedInboxMeetingEmail", () => {
       text: "Hello Asha\nhttps://zoom.us/j/1",
       meetingUrl: "https://zoom.us/j/1",
     });
-    expect(html).toContain("Join Zoom Meeting");
+    expect(html).toContain('<a href="https://zoom.us/j/1" style="color:#2563eb;text-decoration:underline">https://zoom.us/j/1</a>');
     expect(html).toContain('alt="The Modern Classroom logo"');
     expect(html).toContain("/api/uploads/travel-meeting-email-logos/tenant-2/form-7/logo.png");
     expect(html).toContain('style="margin:0 0 14px"');
     expect(html.indexOf("Hello Asha")).toBeLessThan(html.indexOf("<img"));
   });
 
+  it("renders meeting links as URLs and meeting buttons as redirecting CTAs", () => {
+    const rendered = service.renderMeetingTemplate({
+      form: { durationMins: 30, emailSubject: "Confirmed", emailBody: "Link: {{meeting_url}}\n\n{{meeting_button}}" },
+      booking: { contactName: "Asha", institution: "Chennai Public School", scheduledAt: new Date("2026-10-15T04:30:00Z"), timezone: "Asia/Kolkata", meetingUrl: "https://zoom.us/j/1?pwd=abc" },
+    });
+    const html = service.buildMeetingHtml({ form: {}, text: rendered.text, meetingUrl: rendered.values.meeting_url });
+
+    expect(html).toContain('>https://zoom.us/j/1?pwd=abc</a>');
+    expect(html).toContain('>Join Meeting</a>');
+    expect(html.match(/href="https:\/\/zoom\.us\/j\/1\?pwd=abc"/g)).toHaveLength(2);
+    expect(rendered.plainText).toContain("Join Meeting: https://zoom.us/j/1?pwd=abc");
+    expect(rendered.plainText).not.toContain("TMC_MEETING_BUTTON");
+    expect(rendered.values.institution).toBe("Chennai Public School");
+  });
+
   it("ignores Vite's path-only BASE_URL when resolving stored logo paths", () => {
-    const previous = process.env.BASE_URL;
+    const previous = {
+      BASE_URL: process.env.BASE_URL,
+      FRONTEND_URL: process.env.FRONTEND_URL,
+      PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL,
+    };
     process.env.BASE_URL = "/";
+    delete process.env.FRONTEND_URL;
+    delete process.env.PUBLIC_BASE_URL;
     try {
       expect(service.publicAssetUrl("/api/uploads/logo.png")).toBe("https://crm.globusdemos.com/api/uploads/logo.png");
     } finally {
-      if (previous === undefined) delete process.env.BASE_URL;
-      else process.env.BASE_URL = previous;
+      Object.entries(previous).forEach(([key, value]) => {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      });
     }
   });
 
@@ -115,6 +141,25 @@ describe("unifiedInboxMeetingEmail", () => {
     expect(gmailSend).toHaveBeenCalledOnce();
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(mocks.prisma.emailMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ from: "host@tmc.test", threadId: "thread-1" }) });
+  });
+
+  it("uses tenant SendGrid before the connected host mailbox when BYOK is configured", async () => {
+    const { google } = requireCJS("googleapis");
+    const gmailSend = vi.fn();
+    vi.spyOn(google, "gmail").mockReturnValue({ users: { messages: { send: gmailSend } } });
+    mocks.readTenantConfig.mockResolvedValueOnce({ config: { fromEmail: "bookings@tmc.test" } });
+    mocks.sendEmail.mockResolvedValue({ sent: true, from: "bookings@tmc.test", source: "tenant" });
+    mocks.prisma.tenant.findUnique.mockResolvedValue({ emailRetention: true });
+    mocks.prisma.emailMessage.create.mockResolvedValue({ id: 84 });
+
+    const result = await service.sendMeetingConfirmation({
+      form: { hostUserId: 5, durationMins: 30, emailSubject: "Confirmed", emailBody: "Join {{meeting_url}}" },
+      booking: { id: 13, tenantId: 2, contactId: 7, contactName: "Asha", contactEmail: "asha@example.edu", scheduledAt: new Date("2026-10-15T04:30:00Z"), timezone: "Asia/Kolkata", meetingUrl: "https://zoom.us/j/1" },
+    });
+
+    expect(result).toEqual({ sent: true, reason: null, emailMessageId: 84 });
+    expect(mocks.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 2, to: "asha@example.edu" }));
+    expect(gmailSend).not.toHaveBeenCalled();
   });
 
   it("falls back to SendGrid when the connected host mailbox rejects the send", async () => {

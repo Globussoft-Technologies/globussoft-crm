@@ -5,6 +5,7 @@ const { verifyToken, verifyRole } = require('../middleware/auth');
 const razorpayService = require('../services/razorpayService');
 const { reconcileSubscriptions, fulfillSubscriptionOrder } = require('../lib/subscriptionFulfillment');
 const { formatMoney } = require('../utils/formatMoney');
+const { filterDuplicatePlans } = require('../lib/subscriptionPlanCatalog');
 // Shared rupee-glyph fix: registers the embedded Poppins family under the Helvetica
 // names so the rupee sign renders as rupee instead of "AA1" (built-in WinAnsi gap).
 const { applyRupeeCapableFonts } = require('../services/pdfRenderer');
@@ -178,7 +179,7 @@ router.get('/plans', async (req, res) => {
       orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }],
       take: 200,
     });
-    res.json(plans.map(formatPlan));
+    res.json(filterDuplicatePlans(plans).map(formatPlan));
   } catch (err) {
     console.error('[subscriptions.get/plans]', err);
     res.status(500).json({ error: 'Failed to fetch plans' });

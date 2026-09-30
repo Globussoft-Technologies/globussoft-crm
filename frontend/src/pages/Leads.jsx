@@ -151,6 +151,22 @@ const FIELD_LIMITS = {
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const GENERIC_LEADS_PAGE_SIZE = 25;
+const LEAD_CUSTOM_FIELD_TYPE_OPTIONS = [
+  { value: "text", label: "Text field" },
+  { value: "textarea", label: "Text area" },
+  { value: "number", label: "Number" },
+  { value: "dropdown", label: "Dropdown" },
+  { value: "radio", label: "Radio button" },
+  { value: "date", label: "Date picker" },
+  { value: "url", label: "URL" },
+  { value: "checkbox", label: "Checkbox (Yes/No)" },
+  { value: "multiselect", label: "Multiselect" },
+];
+const LEAD_CUSTOM_FIELD_TYPES_WITH_OPTIONS = new Set([
+  "dropdown",
+  "radio",
+  "multiselect",
+]);
 const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
   "name",
   "email",
@@ -198,6 +214,20 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "callifiedAi",
   "callifiedScore",
 ];
+// Travel Leads intentionally exposes only the vertical's core lead columns.
+// Generic's extended Contact fields (for example touch attribution, billing
+// state, Job Title, Website, and LinkedIn) must not appear even if a stale
+// preference or a failed catalog request supplies those keys.
+const TRAVEL_LEAD_COLUMN_KEYS = new Set([
+  "email",
+  "company",
+  "phone",
+  "aiScore",
+  "source",
+  "tags",
+  "assignedTo",
+  "createdAt",
+]);
 // These columns are system-populated and must not be offered as CSV import
 // destinations. The remaining Customize Table catalog entries are valid CRM
 // field choices for generic lead imports.
@@ -1216,6 +1246,351 @@ function BuiltInInlineCellEditor({
   );
 }
 
+function LeadFieldCreateModal({ onClose, onCreated, notify }) {
+  const [label, setLabel] = useState("");
+  const [fieldType, setFieldType] = useState("text");
+  const [optionsText, setOptionsText] = useState("");
+  const [tooltip, setTooltip] = useState("");
+  const [placeholder, setPlaceholder] = useState("");
+  const [isRequired, setIsRequired] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !saving) onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, saving]);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) {
+      notify.error("Label is required");
+      return;
+    }
+
+    const options = optionsText
+      .split(",")
+      .map((option) => option.trim())
+      .filter(Boolean);
+    if (
+      LEAD_CUSTOM_FIELD_TYPES_WITH_OPTIONS.has(fieldType) &&
+      !options.length
+    ) {
+      notify.error("Enter at least one option, separated by commas");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const body = {
+        label: trimmedLabel,
+        fieldType,
+        isRequired,
+      };
+      if (LEAD_CUSTOM_FIELD_TYPES_WITH_OPTIONS.has(fieldType)) {
+        body.options = options;
+      }
+      if (tooltip.trim()) body.tooltip = tooltip.trim();
+      if (placeholder.trim()) body.placeholder = placeholder.trim();
+
+      const created = await fetchApi("/api/lead-custom-fields", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      notify.success("Field created");
+      onCreated(created);
+    } catch (err) {
+      notify.error(err?.message || "Failed to create field");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return createPortal(
+    <div
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1200,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+        overflow: "hidden",
+        background: "rgba(15, 23, 42, 0.48)",
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lead-field-modal-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: "min(560px, calc(100vw - 2rem))",
+          minWidth: 0,
+          boxSizing: "border-box",
+          maxHeight: "min(720px, calc(100vh - 2rem))",
+          overflowY: "auto",
+          overflowX: "hidden",
+          padding: "1.5rem",
+          borderRadius: 14,
+          background: "var(--modal-bg, var(--surface-color, #ffffff))",
+          color: "var(--text-primary)",
+          boxShadow: "0 24px 64px rgba(15, 23, 42, 0.28)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "1rem",
+            minWidth: 0,
+            marginBottom: "1.25rem",
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <h2
+              id="lead-field-modal-title"
+              style={{ margin: 0, fontSize: "1.15rem" }}
+            >
+              Add Lead Field
+            </h2>
+            <p
+              style={{
+                margin: "0.35rem 0 0",
+                color: "var(--text-secondary)",
+                fontSize: "0.85rem",
+              }}
+            >
+              Add a field for this organization&rsquo;s leads.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            aria-label="Close Add Lead Field"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 6,
+              border: "1px solid var(--border-color)",
+              borderRadius: 7,
+              background: "var(--surface-color)",
+              color: "var(--text-secondary)",
+              cursor: saving ? "not-allowed" : "pointer",
+            }}
+          >
+            <X size={17} />
+          </button>
+        </div>
+
+        <form
+          onSubmit={handleSubmit}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+            minWidth: 0,
+          }}
+        >
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+              minWidth: 0,
+              fontSize: "0.85rem",
+              fontWeight: 600,
+            }}
+          >
+            Label
+            <input
+              id="lead-field-modal-label"
+              type="text"
+              className="input-field"
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="e.g. Referral Source"
+              maxLength={80}
+              autoFocus
+              style={{ width: "100%", maxWidth: "100%", minWidth: 0 }}
+            />
+          </label>
+
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+              minWidth: 0,
+              fontSize: "0.85rem",
+              fontWeight: 600,
+            }}
+          >
+            Field Type
+            <select
+              className="input-field"
+              value={fieldType}
+              onChange={(event) => setFieldType(event.target.value)}
+              style={{ width: "100%", maxWidth: "100%", minWidth: 0 }}
+            >
+              {LEAD_CUSTOM_FIELD_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {LEAD_CUSTOM_FIELD_TYPES_WITH_OPTIONS.has(fieldType) && (
+            <label
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.4rem",
+                minWidth: 0,
+                fontSize: "0.85rem",
+                fontWeight: 600,
+              }}
+            >
+              Options
+              <span
+                style={{
+                  color: "var(--text-secondary)",
+                  fontSize: "0.78rem",
+                  fontWeight: 400,
+                }}
+              >
+                Comma-separated, for example: Google, Referral, Event
+              </span>
+              <input
+                type="text"
+                className="input-field"
+                value={optionsText}
+                onChange={(event) => setOptionsText(event.target.value)}
+                placeholder="Google, Referral, Event"
+                style={{ width: "100%", maxWidth: "100%", minWidth: 0 }}
+              />
+            </label>
+          )}
+
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+              minWidth: 0,
+              fontSize: "0.85rem",
+              fontWeight: 600,
+            }}
+          >
+            Tooltip
+            <span
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: "0.78rem",
+                fontWeight: 400,
+              }}
+            >
+              Optional explanation shown near the field.
+            </span>
+            <input
+              type="text"
+              className="input-field"
+              value={tooltip}
+              onChange={(event) => setTooltip(event.target.value)}
+              placeholder="e.g. Where did this lead hear about us?"
+              maxLength={255}
+              style={{ width: "100%", maxWidth: "100%", minWidth: 0 }}
+            />
+          </label>
+
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.4rem",
+              minWidth: 0,
+              fontSize: "0.85rem",
+              fontWeight: 600,
+            }}
+          >
+            Placeholder
+            <span
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: "0.78rem",
+                fontWeight: 400,
+              }}
+            >
+              Optional hint shown inside the field.
+            </span>
+            <input
+              type="text"
+              className="input-field"
+              value={placeholder}
+              onChange={(event) => setPlaceholder(event.target.value)}
+              placeholder="e.g. Enter referral source"
+              maxLength={255}
+              style={{ width: "100%", maxWidth: "100%", minWidth: 0 }}
+            />
+          </label>
+
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              fontSize: "0.85rem",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={isRequired}
+              onChange={(event) => setIsRequired(event.target.checked)}
+            />
+            Required
+          </label>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "0.6rem",
+              flexWrap: "wrap",
+              minWidth: 0,
+              marginTop: "0.25rem",
+            }}
+          >
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={onClose}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary" disabled={saving}>
+              {saving ? "Saving..." : "Save Field"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 const Leads = () => {
   const navigate = useNavigate();
   const notify = useNotify();
@@ -1228,6 +1603,10 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  // Generic and Travel share tenant-scoped lead custom fields and column
+  // preferences. Wellness keeps its separate patient field surfaces.
+  const supportsLeadCustomFields = isGeneric || isTravel;
+  const supportsColumnCustomization = isGeneric || isTravel;
   // Generic CRM keeps synchronized top and sticky-bottom scrollbars available;
   // other verticals retain their existing top-only presentation.
   const showLeadsTopScrollbar = true;
@@ -1246,7 +1625,9 @@ const Leads = () => {
   const [leadsPageSize, setLeadsPageSize] = useState(10);
   // Generic CRM uses API pagination; other verticals keep their existing
   // client-side pagination behavior.
-  const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(GENERIC_LEADS_PAGE_SIZE);
+  const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(
+    GENERIC_LEADS_PAGE_SIZE,
+  );
   const [leadPagination, setLeadPagination] = useState({
     total: 0,
     totalPages: 1,
@@ -1315,6 +1696,7 @@ const Leads = () => {
   // #892  Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
+  const [leadFieldModalOpen, setLeadFieldModalOpen] = useState(false);
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
   const [sourceFilter, setSourceFilter] = useState("");
@@ -1387,11 +1769,10 @@ const Leads = () => {
     customFields: {},
   });
   const [editSaving, setEditSaving] = useState(false);
-  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
-  // Fetched once; empty array for wellness/travel (no fetch attempted) or
-  // for a generic tenant that hasn't defined any fields yet.
+  // Generic and Travel tenant-scoped Lead custom fields (Settings > Lead
+  // Fields). Wellness uses its separate patient field surfaces.
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
-  // Generic-vertical-only "Customize table" column-visibility picker
+  // Generic + Travel "Customize table" column-visibility picker
   // (personal per-user preference  see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column" so the table never
   // flashes empty while the preference GET is in flight.
@@ -1444,7 +1825,7 @@ const Leads = () => {
     }
   }, [columnLayout]);
   useEffect(() => {
-    if (!isGeneric) {
+    if (!supportsColumnCustomization) {
       setLeadColumnCatalog([]);
       return undefined;
     }
@@ -1466,7 +1847,7 @@ const Leads = () => {
     return () => {
       cancelled = true;
     };
-  }, [isGeneric]);
+  }, [supportsColumnCustomization]);
   useEffect(
     () => () => {
       if (!resizeStateRef.current) return;
@@ -1478,31 +1859,39 @@ const Leads = () => {
   const getColumnDefaultWidth = (key) =>
     LEADS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith("cf_") ? 150 : 140);
   const autoFitLeadColumnWidths = useMemo(() => {
-    const canvas = typeof document !== "undefined"
-      ? document.createElement("canvas")
-      : null;
+    const canvas =
+      typeof document !== "undefined" ? document.createElement("canvas") : null;
     const context = canvas?.getContext("2d");
-    const sampleText = typeof document !== "undefined"
-      ? document.querySelector(".leads-table--scrollable .inline-cell-editor-display > span")
-      : null;
+    const sampleText =
+      typeof document !== "undefined"
+        ? document.querySelector(
+            ".leads-table--scrollable .inline-cell-editor-display > span",
+          )
+        : null;
     const sampleStyle = sampleText ? window.getComputedStyle(sampleText) : null;
     const fontSize = sampleStyle?.fontSize || "13px";
     const fontFamily = sampleStyle?.fontFamily || "sans-serif";
     const letterSpacing = Number.parseFloat(sampleStyle?.letterSpacing) || 0;
     const textWidth = (value, weight = 400) => {
       const text = String(value);
-      if (!context) return text.length * (Number.parseFloat(fontSize) || 13) * 0.5;
+      if (!context)
+        return text.length * (Number.parseFloat(fontSize) || 13) * 0.5;
       context.font = `${weight} ${fontSize} ${fontFamily}`;
-      return context.measureText(text).width + Math.max(0, text.length - 1) * letterSpacing;
+      return (
+        context.measureText(text).width +
+        Math.max(0, text.length - 1) * letterSpacing
+      );
     };
     const longest = { name: "Name", phone: "Phone" };
     for (const lead of leads) {
       const name = String(lead?.name || "Unnamed lead");
       const phone = String(lead?.phone || "+ Add Phone");
-      if (textWidth(name, 700) > textWidth(longest.name, 700)) longest.name = name;
+      if (textWidth(name, 700) > textWidth(longest.name, 700))
+        longest.name = name;
       if (textWidth(phone) > textWidth(longest.phone)) longest.phone = phone;
     }
-    const nameValueWidth = textWidth(longest.name, 700) + 16 + 10 + 6 + 18 + 16 + 10;
+    const nameValueWidth =
+      textWidth(longest.name, 700) + 16 + 10 + 6 + 18 + 16 + 10;
     const nameHeaderWidth = textWidth("Name", 500) + 16 + 16 + 13 + 8 + 28;
     const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
@@ -1510,10 +1899,16 @@ const Leads = () => {
       name: Math.ceil(
         Math.min(
           LEADS_NAME_COLUMN_MAX_WIDTH,
-          Math.max(LEADS_NAME_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth),
+          Math.max(
+            LEADS_NAME_COLUMN_MIN_WIDTH,
+            nameValueWidth,
+            nameHeaderWidth,
+          ),
         ),
       ),
-      phone: Math.ceil(Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth)),
+      phone: Math.ceil(
+        Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth),
+      ),
     };
   }, [leads]);
   useEffect(() => {
@@ -1572,11 +1967,11 @@ const Leads = () => {
           ? LEADS_NAME_COLUMN_MIN_WIDTH
           : key === "phone"
             ? autoFitLeadColumnWidths[key]
-          : key === "source"
-            ? LEADS_SOURCE_COLUMN_MIN_WIDTH
-            : key === "assignedTo"
-              ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
-              : LEADS_COLUMN_MIN_WIDTH;
+            : key === "source"
+              ? LEADS_SOURCE_COLUMN_MIN_WIDTH
+              : key === "assignedTo"
+                ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
+                : LEADS_COLUMN_MIN_WIDTH;
     const maxWidth =
       key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
     const genericLabelMinWidth = isGeneric
@@ -1652,16 +2047,24 @@ const Leads = () => {
         advancedFilters.length > 0
           ? `&filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
           : "";
-      const genericSearchQs = isGeneric && searchTerm.trim()
-        ? `&q=${encodeURIComponent(searchTerm.trim())}`
-        : "";
-      const matchingCampaignIds = isGeneric && searchTerm.trim()
-        ? callifiedCampaigns
-          .filter((campaign) => String(campaign?.name || "").toLowerCase().includes(searchTerm.trim().toLowerCase()))
-          .map((campaign) => Number(campaign.id))
-          .filter((campaignId) => Number.isInteger(campaignId) && campaignId > 0)
-          .slice(0, 100)
-        : [];
+      const genericSearchQs =
+        isGeneric && searchTerm.trim()
+          ? `&q=${encodeURIComponent(searchTerm.trim())}`
+          : "";
+      const matchingCampaignIds =
+        isGeneric && searchTerm.trim()
+          ? callifiedCampaigns
+              .filter((campaign) =>
+                String(campaign?.name || "")
+                  .toLowerCase()
+                  .includes(searchTerm.trim().toLowerCase()),
+              )
+              .map((campaign) => Number(campaign.id))
+              .filter(
+                (campaignId) => Number.isInteger(campaignId) && campaignId > 0,
+              )
+              .slice(0, 100)
+          : [];
       const campaignSearchQs = matchingCampaignIds.length
         ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
         : "";
@@ -1699,7 +2102,7 @@ const Leads = () => {
           ),
           page: Number.isFinite(Number(data?.page))
             ? Number(data.page)
-            : pageOverride ?? leadsPage + 1,
+            : (pageOverride ?? leadsPage + 1),
           limit: genericLeadsPageSize,
         });
       }
@@ -1875,11 +2278,11 @@ const Leads = () => {
       fetchStaff(),
       loadCallifiedCampaigns(),
       loadAutoCampaignRules(),
-      isGeneric
+      supportsLeadCustomFields
         ? fetchApi("/api/lead-custom-fields", { silent: true }).catch(() => [])
         : Promise.resolve([]),
     ]);
-    if (isGeneric && Array.isArray(freshCustomFields)) {
+    if (supportsLeadCustomFields && Array.isArray(freshCustomFields)) {
       setCustomFieldDefs(freshCustomFields);
       setVisibleColumns((current) => {
         if (!Array.isArray(current)) return current;
@@ -2176,14 +2579,14 @@ const Leads = () => {
       .catch(() => setLocations([]));
   }, [isWellness]);
 
-  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
-  // Skipped entirely for wellness/travel tenants.
+  // Generic + Travel tenant-scoped Lead custom fields (Settings > Lead Fields).
+  // Skipped for Wellness tenants.
   useEffect(() => {
-    if (isWellness || isTravel) return;
+    if (!supportsLeadCustomFields) return;
     fetchApi("/api/lead-custom-fields")
       .then((d) => setCustomFieldDefs(Array.isArray(d) ? d : []))
       .catch(() => setCustomFieldDefs([]));
-  }, [isWellness, isTravel]);
+  }, [supportsLeadCustomFields]);
 
   // Check whether Callified AI calling is configured for this tenant (generic only).
   useEffect(() => {
@@ -3370,6 +3773,12 @@ const Leads = () => {
     .filter((key) => key !== "name")
     .filter(
       (key) =>
+        !isTravel ||
+        TRAVEL_LEAD_COLUMN_KEYS.has(key) ||
+        customFieldByKey.has(key),
+    )
+    .filter(
+      (key) =>
         key === "email" ||
         key === "company" ||
         key === "phone" ||
@@ -3402,7 +3811,29 @@ const Leads = () => {
         // Web-form parity set (same Contact data as the web-form Add-field list).
         key === "firstTouchSource" ||
         key === "lastTouchSource" ||
-        (isGeneric && ["pageUrl", "pageTitle", "pageSource", "referrerUrl", "landingPageUrl", "currentDomain", "formName", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "fbc", "fbp", "submittedAt", "browser", "operatingSystem", "deviceType"].includes(key)) ||
+        (isGeneric &&
+          [
+            "pageUrl",
+            "pageTitle",
+            "pageSource",
+            "referrerUrl",
+            "landingPageUrl",
+            "currentDomain",
+            "formName",
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+            "gclid",
+            "fbclid",
+            "fbc",
+            "fbp",
+            "submittedAt",
+            "browser",
+            "operatingSystem",
+            "deviceType",
+          ].includes(key)) ||
         key === "treatmentOfInterest" ||
         key === "birthDate" ||
         key === "anniversary" ||
@@ -3437,8 +3868,30 @@ const Leads = () => {
       if (key === "firstTouchSource")
         return { key, label: "First Touch Source" };
       if (key === "lastTouchSource") return { key, label: "Last Touch Source" };
-      const trackingLabels = { pageUrl: "Page URL", pageTitle: "Page Title", pageSource: "Page Source", referrerUrl: "Referrer URL", landingPageUrl: "Landing Page", currentDomain: "Current Domain", formName: "Form Name", utm_source: "UTM Source", utm_medium: "UTM Medium", utm_campaign: "UTM Campaign", utm_term: "UTM Term", utm_content: "UTM Content", gclid: "Google Click ID", fbclid: "Meta Click ID", fbc: "Meta Click Cookie", fbp: "Meta Browser ID", submittedAt: "Submission Timestamp", browser: "Browser", operatingSystem: "Operating System", deviceType: "Device Type" };
-      if (isGeneric && trackingLabels[key]) return { key, label: trackingLabels[key] };
+      const trackingLabels = {
+        pageUrl: "Page URL",
+        pageTitle: "Page Title",
+        pageSource: "Page Source",
+        referrerUrl: "Referrer URL",
+        landingPageUrl: "Landing Page",
+        currentDomain: "Current Domain",
+        formName: "Form Name",
+        utm_source: "UTM Source",
+        utm_medium: "UTM Medium",
+        utm_campaign: "UTM Campaign",
+        utm_term: "UTM Term",
+        utm_content: "UTM Content",
+        gclid: "Google Click ID",
+        fbclid: "Meta Click ID",
+        fbc: "Meta Click Cookie",
+        fbp: "Meta Browser ID",
+        submittedAt: "Submission Timestamp",
+        browser: "Browser",
+        operatingSystem: "Operating System",
+        deviceType: "Device Type",
+      };
+      if (isGeneric && trackingLabels[key])
+        return { key, label: trackingLabels[key] };
       if (key === "treatmentOfInterest")
         return { key, label: "Treatment Of Interest" };
       if (key === "birthDate") return { key, label: "Birth Date" };
@@ -3652,7 +4105,7 @@ const Leads = () => {
   );
   const persistVisibleColumns = useCallback(
     async (nextVisible) => {
-      if (!isGeneric) return nextVisible;
+      if (!supportsColumnCustomization) return nextVisible;
       const cleanVisible = resolveAllowedVisibleColumns(nextVisible);
       const data = await fetchApi("/api/table-column-prefs/leads", {
         method: "PUT",
@@ -3662,7 +4115,7 @@ const Leads = () => {
       setVisibleColumns(saved);
       return saved;
     },
-    [isGeneric, resolveAllowedVisibleColumns],
+    [supportsColumnCustomization, resolveAllowedVisibleColumns],
   );
   const collapseColumn = (columnKey) => {
     setColumnLayout((prev) => ({
@@ -3674,7 +4127,12 @@ const Leads = () => {
     }));
   };
   const addColumnAdjacent = async (targetKey, side, selectedKey) => {
-    if (!isGeneric || !targetKey || !selectedKey || selectedKey === "name")
+    if (
+      !supportsColumnCustomization ||
+      !targetKey ||
+      !selectedKey ||
+      selectedKey === "name"
+    )
       return;
     const base =
       targetKey === "name"
@@ -3694,7 +4152,7 @@ const Leads = () => {
     }
   };
   const removeColumnFromTable = async (columnKey) => {
-    if (!isGeneric || columnKey === "name") return;
+    if (!supportsColumnCustomization || columnKey === "name") return;
     const next = currentVisibleLeadColumns.filter((key) => key !== columnKey);
     try {
       await persistVisibleColumns(next);
@@ -3912,15 +4370,14 @@ const Leads = () => {
     if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
     let overflowWidth = 0;
     const rowsById = new Map(
-      Array.from(table.querySelectorAll("tbody tr[data-lead-row-id]"))
-        .map((row) => [row.dataset.leadRowId, row]),
+      Array.from(table.querySelectorAll("tbody tr[data-lead-row-id]")).map(
+        (row) => [row.dataset.leadRowId, row],
+      ),
     );
     for (const lead of leads) {
       const row = rowsById.get(String(lead.id));
       const cell = row?.cells[phoneColumnIndex];
-      const value = cell?.querySelector(
-        ".inline-cell-editor-display > span",
-      );
+      const value = cell?.querySelector(".inline-cell-editor-display > span");
       if (value) {
         overflowWidth = Math.max(
           overflowWidth,
@@ -4163,58 +4620,60 @@ const Leads = () => {
     }
   };
 
-  const filteredLeads = isGeneric ? leads : leads.filter((lead) => {
-    if (
-      !matchesSource(
-        isGeneric ? leadSourceLabel(lead, true) : lead.source,
-        sourceFilter,
-      )
-    )
-      return false;
-    if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter)
-      return false;
-    if (isTravel && !leadMatchesStage(lead)) return false;
-    if (
-      isGeneric &&
-      campaignFilter &&
-      String(lead.callifiedCampaignId) !== String(campaignFilter)
-    )
-      return false;
-    if (
-      isGeneric &&
-      leadStatusFilter &&
-      normalizeCallStatus(lead.callifiedLeadStatus) !== leadStatusFilter
-    )
-      return false;
-    if (assigneeFilter) {
-      if (assigneeFilter === "unassigned") {
-        if (lead.assignedToId) return false;
-      } else if (String(lead.assignedToId) !== String(assigneeFilter)) {
-        return false;
-      }
-    }
-    const term = searchTerm.trim().toLowerCase();
-    if (!term) return true;
-    const campaign = callifiedCampaigns.find(
-      (c) => String(c.id) === String(lead.callifiedCampaignId),
-    );
-    return [
-      lead.name,
-      lead.email,
-      lead.company,
-      lead.phone,
-      isGeneric ? leadSourceLabel(lead, true) : lead.source,
-      normalizeLeadTags(lead.tags).join(" "),
-      lead.assignedTo?.name,
-      lead.assignedTo?.email,
-      campaign?.name,
-      lead.callifiedLeadStatus,
-    ].some((value) =>
-      String(value || "")
-        .toLowerCase()
-        .includes(term),
-    );
-  });
+  const filteredLeads = isGeneric
+    ? leads
+    : leads.filter((lead) => {
+        if (
+          !matchesSource(
+            isGeneric ? leadSourceLabel(lead, true) : lead.source,
+            sourceFilter,
+          )
+        )
+          return false;
+        if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter)
+          return false;
+        if (isTravel && !leadMatchesStage(lead)) return false;
+        if (
+          isGeneric &&
+          campaignFilter &&
+          String(lead.callifiedCampaignId) !== String(campaignFilter)
+        )
+          return false;
+        if (
+          isGeneric &&
+          leadStatusFilter &&
+          normalizeCallStatus(lead.callifiedLeadStatus) !== leadStatusFilter
+        )
+          return false;
+        if (assigneeFilter) {
+          if (assigneeFilter === "unassigned") {
+            if (lead.assignedToId) return false;
+          } else if (String(lead.assignedToId) !== String(assigneeFilter)) {
+            return false;
+          }
+        }
+        const term = searchTerm.trim().toLowerCase();
+        if (!term) return true;
+        const campaign = callifiedCampaigns.find(
+          (c) => String(c.id) === String(lead.callifiedCampaignId),
+        );
+        return [
+          lead.name,
+          lead.email,
+          lead.company,
+          lead.phone,
+          isGeneric ? leadSourceLabel(lead, true) : lead.source,
+          normalizeLeadTags(lead.tags).join(" "),
+          lead.assignedTo?.name,
+          lead.assignedTo?.email,
+          campaign?.name,
+          lead.callifiedLeadStatus,
+        ].some((value) =>
+          String(value || "")
+            .toLowerCase()
+            .includes(term),
+        );
+      });
   const sortedLeads = useMemo(() => {
     // Generic CRM sorting is global and therefore performed by the API.
     // Re-sorting a single 25-row page locally would make cross-page ordering
@@ -4239,7 +4698,13 @@ const Leads = () => {
       }
       return collator.compare(String(aValue), String(bValue)) * direction;
     });
-  }, [filteredLeads, getLeadSortValue, isGeneric, sortConfig.direction, sortConfig.key]);
+  }, [
+    filteredLeads,
+    getLeadSortValue,
+    isGeneric,
+    sortConfig.direction,
+    sortConfig.key,
+  ]);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   // Batch-load Callified call summaries for visible leads (counts + last score).
@@ -4472,13 +4937,13 @@ const Leads = () => {
   useEffect(() => {
     setPageInput(String(currentLeadsPage + 1));
   }, [currentLeadsPage]);
-  // Generic-vertical-only Lead custom fields  renders the right input
+  // Generic + Travel Lead custom fields render the right input
   // widget per admin-defined field type (Settings > Lead Fields). Shared
   // between the Create and Edit forms; each caller passes its own
   // `values`/`onChange` so this stays a pure render helper with no state
   // of its own.
   const renderCustomFieldInputs = (values, onChange) => {
-    if (isWellness || isTravel || customFieldDefs.length === 0) return null;
+    if (!supportsLeadCustomFields || customFieldDefs.length === 0) return null;
     return customFieldDefs.map((f) => {
       const value = values?.[f.fieldKey] ?? "";
       const handle = (v) => onChange(f.fieldKey, v);
@@ -4785,12 +5250,43 @@ const Leads = () => {
         </td>
       );
     }
-    const trackingKeys = ["pageUrl", "pageTitle", "pageSource", "referrerUrl", "landingPageUrl", "currentDomain", "formName", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "fbc", "fbp", "submittedAt", "browser", "operatingSystem", "deviceType"];
+    const trackingKeys = [
+      "pageUrl",
+      "pageTitle",
+      "pageSource",
+      "referrerUrl",
+      "landingPageUrl",
+      "currentDomain",
+      "formName",
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "gclid",
+      "fbclid",
+      "fbc",
+      "fbp",
+      "submittedAt",
+      "browser",
+      "operatingSystem",
+      "deviceType",
+    ];
     if (isGeneric && trackingKeys.includes(column.key)) {
       const metadata = leadTrackingMetadata(lead);
-      const value = metadata[column.key] || (column.key === "submittedAt" ? lead?.webFormSubmissions?.[0]?.submittedAt : "");
+      const value =
+        metadata[column.key] ||
+        (column.key === "submittedAt"
+          ? lead?.webFormSubmissions?.[0]?.submittedAt
+          : "");
       return (
-        <td style={getBodyCellStyle(column.key, { color: "var(--text-secondary)", fontSize: "0.875rem" })} title={value || undefined}>
+        <td
+          style={getBodyCellStyle(column.key, {
+            color: "var(--text-secondary)",
+            fontSize: "0.875rem",
+          })}
+          title={value || undefined}
+        >
           {value ? String(value) : "—"}
         </td>
       );
@@ -5364,6 +5860,33 @@ const Leads = () => {
     : headerSubmenuLeft;
   const headerSubmenuMaxHeight = headerMenuRect ? headerMenuMaxHeight : 0;
 
+  const handleLeadFieldCreated = (createdField) => {
+    const fieldKey = createdField?.fieldKey;
+    if (fieldKey) {
+      const columnKey = `cf_${fieldKey}`;
+      setCustomFieldDefs((current) => {
+        const withoutDuplicate = current.filter(
+          (field) => field.id !== createdField.id,
+        );
+        return [...withoutDuplicate, createdField].sort(
+          (a, b) =>
+            (a.displayOrder ?? 0) - (b.displayOrder ?? 0) || a.id - b.id,
+        );
+      });
+      setLeadColumnCatalog((current) =>
+        current.some((column) => column.key === columnKey)
+          ? current
+          : [...current, { key: columnKey, label: createdField.label }],
+      );
+      setVisibleColumns((current) =>
+        Array.isArray(current) && !current.includes(columnKey)
+          ? [...current, columnKey]
+          : current,
+      );
+    }
+    setLeadFieldModalOpen(false);
+  };
+
   return (
     <div
       className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}`}
@@ -5403,36 +5926,62 @@ const Leads = () => {
             flex: "1 1 240px",
           }}
         >
-          {isGeneric && <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid var(--border-color)", borderRadius: 7, background: "var(--surface-color)", color: "var(--text-primary)", fontWeight: 600, fontSize: 12, cursor: "pointer" }}><ArrowLeft size={16} /> Back</button>}
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0 }}>
+          {isGeneric && (
+            <button
+              type="button"
+              onClick={() => window.history.back()}
+              aria-label="Go back"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "7px 12px",
+                border: "1px solid var(--border-color)",
+                borderRadius: 7,
+                background: "var(--surface-color)",
+                color: "var(--text-primary)",
+                fontWeight: 600,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              <ArrowLeft size={16} /> Back
+            </button>
+          )}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.75rem",
+              minWidth: 0,
+            }}
+          >
             <UserPlus size={24} color="var(--text-primary)" />
             <div style={{ minWidth: 0 }}>
-            <h1
-              style={{
-                margin: 0,
-                fontSize: "1.5rem",
-                color: "var(--text-primary)",
-              }}
-            >
-              Leads
-            </h1>
-            <p
-              style={{
-                margin: "0.2rem 0 0",
-                color: "var(--text-secondary)",
-                fontSize: "0.875rem",
-              }}
-            >
-              {leadsSummary}
-            </p>
+              <h1
+                style={{
+                  margin: 0,
+                  fontSize: "1.5rem",
+                  color: "var(--text-primary)",
+                }}
+              >
+                Leads
+              </h1>
+              <p
+                style={{
+                  margin: "0.2rem 0 0",
+                  color: "var(--text-secondary)",
+                  fontSize: "0.875rem",
+                }}
+              >
+                {leadsSummary}
+              </p>
             </div>
           </div>
         </div>
-        {/* Generic CRM only: Lead Fields + Create Lead live in the header's
-            right corner (moved up from the lower action row so the header
-            carries the primary CTAs). Other verticals keep the header
-            title-only exactly as before. */}
-        {isGeneric && (
+        {/* Generic + Travel: Lead Fields opens in-place so admins can add a
+            tenant-scoped field without leaving the Leads table. */}
+        {supportsLeadCustomFields && (
           <div
             style={{
               display: "flex",
@@ -5444,7 +5993,13 @@ const Leads = () => {
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => navigate("/settings/lead-fields")}
+              onClick={() => {
+                if (!isAdmin) {
+                  notify.error("Lead field management requires admin access.");
+                  return;
+                }
+                setLeadFieldModalOpen(true);
+              }}
               title="Manage lead custom fields"
               style={{
                 display: "inline-flex",
@@ -5504,18 +6059,32 @@ const Leads = () => {
             formats={["csv", "xlsx"]}
             genericLeadWizard={isGeneric}
             onImported={isGeneric ? refreshAll : undefined}
-            mappingFields={isGeneric ? leadColumnCatalog
-              .filter((field) => !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key))
-              .map((catalogField) => {
-                const key = catalogField.key;
-                const customField = customFieldByKey.get(key);
-                return {
-                  key,
-                  fieldKey: key,
-                  label: catalogField.label || customField?.label || customField?.name || key.replace(/^cf_/, ""),
-                  fieldType: customField?.fieldType || CSV_IMPORT_FIELD_TYPES[key] || "text",
-                };
-              }) : []}
+            mappingFields={
+              isGeneric
+                ? leadColumnCatalog
+                    .filter(
+                      (field) =>
+                        !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key),
+                    )
+                    .map((catalogField) => {
+                      const key = catalogField.key;
+                      const customField = customFieldByKey.get(key);
+                      return {
+                        key,
+                        fieldKey: key,
+                        label:
+                          catalogField.label ||
+                          customField?.label ||
+                          customField?.name ||
+                          key.replace(/^cf_/, ""),
+                        fieldType:
+                          customField?.fieldType ||
+                          CSV_IMPORT_FIELD_TYPES[key] ||
+                          "text",
+                      };
+                    })
+                : []
+            }
             compact
             endpoints={{
               export: "/api/csv/contacts/export.csv",
@@ -7396,7 +7965,7 @@ const Leads = () => {
                   )}
               </>
             )}
-            {!isWellness && !isTravel && (
+            {supportsColumnCustomization && (
               <ColumnPicker
                 tableKey="leads"
                 onColumnsChange={setVisibleColumns}
@@ -7584,7 +8153,11 @@ const Leads = () => {
                               editOnDisplayClick={false}
                               renderValue={(name) => (
                                 <a
-                                  href={isTravel ? "#lead-preview" : leadDetailPath(lead)}
+                                  href={
+                                    isTravel
+                                      ? "#lead-preview"
+                                      : leadDetailPath(lead)
+                                  }
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
@@ -7593,7 +8166,11 @@ const Leads = () => {
                                     if (isTravel) setPreviewLead(lead);
                                     else navigate(leadDetailPath(lead));
                                   }}
-                                  title={isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`}
+                                  title={
+                                    isTravel
+                                      ? `Preview ${lead.name || "lead"}`
+                                      : `Open profile for ${lead.name || "lead"}`
+                                  }
                                   style={{
                                     minWidth: 0,
                                     overflow: "hidden",
@@ -7956,7 +8533,9 @@ const Leads = () => {
                             <button
                               onClick={() => {
                                 if (!lead.phone) {
-                                  notify.error("Phone number is required to make a call.");
+                                  notify.error(
+                                    "Phone number is required to make a call.",
+                                  );
                                   return;
                                 }
                                 if (!callifiedConfigured) {
@@ -8316,64 +8895,67 @@ const Leads = () => {
                     <X size={14} />
                   </button>
                 </div>
-                {(!isGeneric || GENERIC_LEAD_SERVER_SORT_KEYS.has(headerMenuState.key)) && <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSortConfig({
-                      key: headerMenuState.key,
-                      direction: "asc",
-                    });
-                    closeHeaderMenu();
-                  }}
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.55rem",
-                    padding: "0.55rem 0.45rem",
-                    border: "none",
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    cursor: "pointer",
-                    borderRadius: 8,
-                    fontSize: "0.88rem",
-                    textAlign: "left",
-                  }}
-                  className="table-row-hover"
-                >
-                  <ChevronUp size={15} />
-                  <span>Sort ascending A to Z</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSortConfig({
-                      key: headerMenuState.key,
-                      direction: "desc",
-                    });
-                    closeHeaderMenu();
-                  }}
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.55rem",
-                    padding: "0.55rem 0.45rem",
-                    border: "none",
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    cursor: "pointer",
-                    borderRadius: 8,
-                    fontSize: "0.88rem",
-                    textAlign: "left",
-                  }}
-                  className="table-row-hover"
-                >
-                  <ChevronDown size={15} />
-                  <span>Sort descending Z to A</span>
-                </button>
-                </>}
+                {(!isGeneric ||
+                  GENERIC_LEAD_SERVER_SORT_KEYS.has(headerMenuState.key)) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSortConfig({
+                          key: headerMenuState.key,
+                          direction: "asc",
+                        });
+                        closeHeaderMenu();
+                      }}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.55rem",
+                        padding: "0.55rem 0.45rem",
+                        border: "none",
+                        background: "transparent",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        borderRadius: 8,
+                        fontSize: "0.88rem",
+                        textAlign: "left",
+                      }}
+                      className="table-row-hover"
+                    >
+                      <ChevronUp size={15} />
+                      <span>Sort ascending A to Z</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSortConfig({
+                          key: headerMenuState.key,
+                          direction: "desc",
+                        });
+                        closeHeaderMenu();
+                      }}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.55rem",
+                        padding: "0.55rem 0.45rem",
+                        border: "none",
+                        background: "transparent",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        borderRadius: 8,
+                        fontSize: "0.88rem",
+                        textAlign: "left",
+                      }}
+                      className="table-row-hover"
+                    >
+                      <ChevronDown size={15} />
+                      <span>Sort descending Z to A</span>
+                    </button>
+                  </>
+                )}
                 {isGeneric && !headerMenuState.fixedExtra && (
                   <>
                     <button
@@ -8944,7 +9526,8 @@ const Leads = () => {
                 whiteSpace: "nowrap",
               }}
             >
-              Showing {pageStart}-{pageEnd} of {isGeneric ? leadPagination.total : filteredLeads.length}
+              Showing {pageStart}-{pageEnd} of{" "}
+              {isGeneric ? leadPagination.total : filteredLeads.length}
             </span>
             <div
               style={{
@@ -8983,7 +9566,10 @@ const Leads = () => {
                 }}
                 aria-label="Rows per page"
               >
-                {(isGeneric ? [10, 15, 25, 50, 100] : LEADS_PAGE_SIZE_OPTIONS).map((size) => (
+                {(isGeneric
+                  ? [10, 15, 25, 50, 100]
+                  : LEADS_PAGE_SIZE_OPTIONS
+                ).map((size) => (
                   <option key={size} value={size}>
                     {size}
                   </option>
@@ -9663,7 +10249,9 @@ const Leads = () => {
           existingContactId={leadDuplicate.existingContactId}
           matchedBy={leadDuplicate.matchedBy}
           contact={leadDuplicate.contact}
-          allowCreateAnyway={!(isGeneric && leadDuplicate.matchedBy === 'email')}
+          allowCreateAnyway={
+            !(isGeneric && leadDuplicate.matchedBy === "email")
+          }
           creating={creatingDuplicateLead}
           createAnywayLabel="Create separate product lead"
           creatingLabel="Creating separate lead…"
@@ -9851,6 +10439,14 @@ const Leads = () => {
           }
           onClose={() => setCallifiedCallLead(null)}
           onCalled={fetchLeads}
+        />
+      )}
+
+      {leadFieldModalOpen && supportsLeadCustomFields && isAdmin && (
+        <LeadFieldCreateModal
+          notify={notify}
+          onClose={() => setLeadFieldModalOpen(false)}
+          onCreated={handleLeadFieldCreated}
         />
       )}
 

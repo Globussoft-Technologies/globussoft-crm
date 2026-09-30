@@ -326,7 +326,7 @@ describe("<Inbox />", () => {
       expect(draftCall).toBeTruthy();
       const draftRequest = JSON.parse(draftCall[1].body);
       expect(draftRequest.subject).toBe("Travel itinerary ready");
-      expect(draftRequest.context).toBe("Draft me");
+      expect(draftRequest.context).toBe("Travel itinerary ready");
       expect(draftRequest.recipientEmail).toBe("primary@x.com");
     });
 
@@ -349,6 +349,36 @@ describe("<Inbox />", () => {
       expect(sentBody.bcc).toBe("bcc@x.com");
       expect(sentBody.subject).toBe("Travel itinerary ready");
       expect(sentBody.body).toMatch(/revised itinerary/);
+    });
+  }, 15_000);
+
+  it("uses the updated subject instead of the previous AI body when drafting again", async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByText("Compose Email")).toBeInTheDocument());
+    await user.click(screen.getByText("Compose Email"));
+
+    const subjectInput = screen.getByLabelText(/^Subject:$/);
+    const bodyInput = screen.getByPlaceholderText(/write your email here/i);
+    await user.type(subjectInput, "Original subject");
+    await user.click(screen.getByRole("button", { name: /ai draft/i }));
+    await waitFor(() => expect(bodyInput).toHaveDisplayValue(/revised itinerary/i));
+
+    await user.clear(subjectInput);
+    await user.type(subjectInput, "Updated subject");
+    await user.click(screen.getByRole("button", { name: /ai draft/i }));
+
+    await waitFor(() => {
+      const draftCalls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === "/api/ai/draft" && opts?.method === "POST",
+      );
+      expect(draftCalls).toHaveLength(2);
+
+      const secondDraftRequest = JSON.parse(draftCalls[1][1].body);
+      expect(secondDraftRequest.subject).toBe("Updated subject");
+      expect(secondDraftRequest.context).toBe("Updated subject");
+      expect(secondDraftRequest.context).not.toContain("revised itinerary");
     });
   }, 15_000);
 

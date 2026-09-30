@@ -599,6 +599,22 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(sidebar).not.toHaveClass('travel-sidebar-collapsed');
     });
 
+    it('re-opens the rail and exposes a section when its collapsed icon is clicked', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', expandTravelGroups: false });
+      const sidebar = document.querySelector('#app-sidebar');
+      fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+
+      const salesToggle = screen.getByRole('button', { name: 'Sales' });
+      expect(sidebar).toHaveClass('travel-sidebar-collapsed');
+      expect(document.querySelector('a[href="/leads"]')).toBeNull();
+
+      fireEvent.click(salesToggle);
+
+      expect(sidebar).not.toHaveClass('travel-sidebar-collapsed');
+      expect(salesToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(document.querySelector('a[href="/leads"]')).toBeTruthy();
+    });
+
     it('highlights only the current travel page, not Dashboard on child routes', () => {
       renderSidebar({
         vertical: 'travel',

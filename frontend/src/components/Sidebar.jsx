@@ -413,6 +413,12 @@ const Sidebar = ({
   useEffect(() => {
     if (!user) return;
     refreshCounts();
+    const handleInboxUnreadChange = (event) => {
+      const delta = Number(event.detail?.delta);
+      if (!Number.isFinite(delta) || delta === 0) return;
+      setCounts((current) => ({ ...current, inbox: Math.max(0, current.inbox - delta) }));
+    };
+    window.addEventListener("crm:inbox-unread-changed", handleInboxUnreadChange);
     // 60s safety-net polling  covers cases where the socket can't connect
     // (nginx without /socket.io proxy) or events are missed during reconnects.
     const intervalId = setInterval(refreshCounts, 60000);
@@ -467,6 +473,7 @@ const Sidebar = ({
     window.addEventListener("sidebar:counts-changed", onLocalInvalidate);
 
     return () => {
+      window.removeEventListener("crm:inbox-unread-changed", handleInboxUnreadChange);
       clearInterval(intervalId);
       socket.disconnect();
       window.removeEventListener("sidebar:counts-changed", onLocalInvalidate);

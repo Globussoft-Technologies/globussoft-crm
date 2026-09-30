@@ -35,7 +35,7 @@
  *   9. (#892) "Create Lead" header CTA is rendered; clicking it reveals
  *      the form fields in a drawer.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Leads from '../pages/Leads';
@@ -67,6 +67,11 @@ vi.mock('react-router-dom', async () => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('external lookup disabled in unit tests')));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 function renderLeads(authValue = null, initialEntries = ['/']) {

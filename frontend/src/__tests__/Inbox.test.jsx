@@ -434,7 +434,7 @@ describe("<Inbox />", () => {
     await user.click(screen.getByRole("tab", { name: "Sent" }));
     await waitFor(() => {
       const sentFetch = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === "string" && url === "/api/communications/inbox?folder=sent",
+        ([url]) => typeof url === "string" && url.startsWith("/api/communications/inbox?folder=sent&page=1&limit="),
       );
       expect(sentFetch).toBeTruthy();
     });
@@ -442,10 +442,88 @@ describe("<Inbox />", () => {
     await user.click(screen.getByRole("tab", { name: "Inbox" }));
     await waitFor(() => {
       const inboxFetch = fetchApiMock.mock.calls.find(
-        ([url]) => typeof url === "string" && url === "/api/communications/inbox?folder=inbox",
+        ([url]) => typeof url === "string" && url.startsWith("/api/communications/inbox?folder=inbox&page=1&limit="),
       );
       expect(inboxFetch).toBeTruthy();
     });
+  });
+
+  it('adds a generic-only custom date range to inbox requests', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByLabelText('From date')).toBeInTheDocument());
+    await user.type(screen.getByLabelText('From date'), '2026-09-01');
+    await user.type(screen.getByLabelText('To date'), '2026-09-04');
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/communications/inbox?dateFrom=2026-09-01&dateTo=2026-09-04&page=1&limit=12')).toBe(true);
+    });
+  });
+
+  it('searches the complete Generic inbox on the server and ignores stale responses', async () => {
+    const user = userEvent.setup();
+    let resolveOlderSearch;
+    const olderSearch = new Promise((resolve) => {
+      resolveOlderSearch = resolve;
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.includes('/api/communications/inbox?')) {
+        if (url.includes('q=older')) return olderSearch;
+        if (url.includes('q=newer')) {
+          return Promise.resolve({
+            emails: [{ ...sampleInboxEmail, id: 202, subject: 'newer server result' }],
+            pagination: { total: 1, page: 1, limit: 12, pages: 1, hasMore: false },
+          });
+        }
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderInbox();
+    const search = await screen.findByRole('searchbox', { name: 'Search mail' });
+    await user.type(search, 'older');
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) => typeof url === 'string' && url.includes('q=older'))).toBe(true);
+    });
+
+    await user.clear(search);
+    await user.type(search, 'newer');
+    expect(await screen.findByText('newer server result')).toBeInTheDocument();
+
+    resolveOlderSearch({
+      emails: [{ ...sampleInboxEmail, id: 201, subject: 'older stale result' }],
+      pagination: { total: 1, page: 1, limit: 12, pages: 1, hasMore: false },
+    });
+    await waitFor(() => expect(screen.queryByText('older stale result')).not.toBeInTheDocument());
+    expect(screen.getByText('newer server result')).toBeInTheDocument();
+  });
+
+  it('refreshes the global sidebar count after bulk read state changes', async () => {
+    const user = userEvent.setup();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /more inbox actions/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /more inbox actions/i }));
+    await user.click(screen.getByRole('menuitem', { name: /mark all as read/i }));
+
+    await waitFor(() => {
+      expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'sidebar:counts-changed' }));
+    });
+    dispatchSpy.mockRestore();
+  });
+
+  it('closes the inbox actions menu when clicking outside it', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /more inbox actions/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /more inbox actions/i }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('heading', { name: 'Unified Inbox' }));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
   it("shows theme-aware surfaces for the email list", async () => {

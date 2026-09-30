@@ -2538,6 +2538,8 @@ model WhatsAppMessage {
   direction     String    @default("OUTBOUND")
   status        String    @default("QUEUED") // QUEUED, SENT, DELIVERED, READ, FAILED
   providerMsgId String?
+  // Meta template identifier for outbound template messages.
+  templateName  String?
   errorMessage  String?
   read          Boolean   @default(false)
   // Soft-delete for "Delete for me" — hides the message from the

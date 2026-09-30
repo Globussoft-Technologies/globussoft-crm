@@ -287,6 +287,7 @@ function renderFieldPreview(field, optionsText) {
 export default function LeadFields() {
   const { tenant } = useContext(AuthContext) || {};
   const isWellness = tenant?.vertical === "wellness";
+  const isTravel = tenant?.vertical === "travel";
 
   const notify = useNotify();
   const [fields, setFields] = useState([]);
@@ -348,7 +349,7 @@ export default function LeadFields() {
 
   // Generic-vertical-only feature — redirect wellness/travel tenants away
   // rather than rendering an inapplicable admin page for them.
-  if (isWellness) return <Navigate to="/settings" replace />;
+  if (isWellness || isTravel) return <Navigate to="/settings" replace />;
 
   const resetCreateForm = () => {
     setCreating(false);

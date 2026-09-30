@@ -109,6 +109,8 @@ describe('GET /api/lead-custom-fields', () => {
       take: 1,
     });
     expect(prisma.leadCustomFieldDefinition.count).toHaveBeenCalledWith({ where: { tenantId: TENANT_ID } });
+  });
+
   test('allows travel tenants and keeps the definition query tenant-scoped', async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
 

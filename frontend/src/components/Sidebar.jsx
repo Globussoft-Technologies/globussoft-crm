@@ -821,17 +821,33 @@ const Sidebar = ({
     const isOpen = openTravelSections[label] ?? isActive;
     const SectionIcon = TRAVEL_SECTION_ICONS[label] || LayoutDashboard;
     const sectionId = `travel-nav-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const handleSectionToggle = () => {
+      // In the compact rail the section items are intentionally hidden to
+      // preserve the icon-only layout. Re-open the rail before toggling so a
+      // click on a section icon still exposes the destinations it represents.
+      if (isTravelCollapsed) {
+        setIsTravelCollapsed(false);
+        setOpenTravelSections((current) => ({
+          ...current,
+          [label]: true,
+        }));
+        return;
+      }
+      setOpenTravelSections((current) => ({
+        ...current,
+        [label]: !(current[label] ?? isActive),
+      }));
+    };
     return (
       <div className={`travel-nav-section travel-nav-section--${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>
         <button
           type="button"
           className={`travel-nav-section-trigger${isActive ? ' is-active' : ''}`}
+          aria-label={label}
           aria-expanded={isOpen}
           aria-controls={sectionId}
-          onClick={() => setOpenTravelSections((current) => ({
-            ...current,
-            [label]: !(current[label] ?? isActive),
-          }))}
+          title={isTravelCollapsed ? label : undefined}
+          onClick={handleSectionToggle}
         >
           <span className="travel-nav-section-icon"><SectionIcon size={20} aria-hidden="true" /></span>
           <span className="travel-nav-section-label">{label}</span>

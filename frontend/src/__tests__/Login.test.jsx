@@ -146,7 +146,7 @@ describe('<Login /> — page surface', () => {
     // observable + reversible.
     originalLocation = window.location;
     delete window.location;
-    window.location = { href: '', pathname: '/login', search: '' };
+    window.location = { href: '', hostname: 'localhost', pathname: '/login', search: '' };
   });
 
   afterEach(() => {
@@ -210,6 +210,26 @@ describe('<Login /> — page surface', () => {
     expect(screen.getByText(/Owner \(Yasin\)/i)).toBeInTheDocument();
     expect(screen.getByText(/TMC Operator/i)).toBeInTheDocument();
     expect(screen.getByText(/RFU Advisor/i)).toBeInTheDocument();
+  });
+
+  it.each(['localhost', '127.0.0.1', 'crm.globusdemos.com', 'crm-staging.globusdemos.com'])(
+    'shows demo quick-login buttons on approved host %s', (hostname) => {
+      window.location.hostname = hostname;
+      renderLogin();
+
+      expect(screen.getByText(/Generic CRM — click to log in/i)).toBeInTheDocument();
+      expect(screen.getByText(/^Admin$/i)).toBeInTheDocument();
+    },
+  );
+
+  it('hides demo quick-login buttons on an unclassified customer domain', () => {
+    window.location.hostname = 'app.customer-example.com';
+    renderLogin();
+
+    expect(screen.getByText(/Sign into your account/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Generic CRM — click to log in/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Enhanced Wellness — Demo — click to log in/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Travel Stall — Demo — click to log in/i)).not.toBeInTheDocument();
   });
 
   // SSO buttons are gated behind `SHOW_SSO = false` in Login.jsx:9 — feature

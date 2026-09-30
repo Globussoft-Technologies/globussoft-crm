@@ -28,6 +28,8 @@ authMw.verifyRole = () => (_req, _res, next) => next();
 
 // ── Prisma singleton patching ──────────────────────────────────────────
 prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 prisma.leadCustomFieldDefinition.findMany = vi.fn();
 prisma.leadCustomFieldDefinition.findUnique = vi.fn();
 prisma.leadCustomFieldDefinition.findFirst = vi.fn();
@@ -53,6 +55,7 @@ function makeApp({ role = 'ADMIN' } = {}) {
 }
 
 beforeEach(() => {
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldDefinition.findUnique.mockReset().mockResolvedValue(null);
   prisma.leadCustomFieldDefinition.findFirst.mockReset().mockResolvedValue(null);
@@ -81,6 +84,28 @@ describe('GET /api/lead-custom-fields', () => {
       where: { tenantId: TENANT_ID },
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
     });
+  });
+
+  test('allows travel tenants and keeps the definition query tenant-scoped', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+
+    const res = await request(makeApp()).get('/api/lead-custom-fields');
+
+    expect(res.status).toBe(200);
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID },
+      orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
+    });
+  });
+
+  test('rejects unsupported verticals before reading definitions', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+
+    const res = await request(makeApp()).get('/api/lead-custom-fields');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('VERTICAL_NOT_SUPPORTED');
+    expect(prisma.leadCustomFieldDefinition.findMany).not.toHaveBeenCalled();
   });
 });
 

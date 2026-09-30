@@ -2491,6 +2491,10 @@ describe('Leads Web Form column (generic CRM only)', () => {
     ...genericAuth,
     tenant: { id: 1, vertical: 'wellness', name: 'Wellness Clinic' },
   };
+  const travelAuth = {
+    ...genericAuth,
+    tenant: { id: 1, vertical: 'travel', name: 'Travel CRM' },
+  };
 
   const webFormRows = [
     {
@@ -2568,6 +2572,47 @@ describe('Leads Web Form column (generic CRM only)', () => {
     expect(screen.queryByText('Contact Us')).toBeNull();
   });
 
+  it('does not render stale Generic extended columns in Travel', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: [
+            'name', 'email', 'lastUpdated', 'firstTouchSource',
+            'lastTouchSource', 'billingStateCode', 'title',
+          ],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'email', label: 'Email' },
+            { key: 'lastUpdated', label: 'Last Updated' },
+            { key: 'firstTouchSource', label: 'First Touch Source' },
+            { key: 'lastTouchSource', label: 'Last Touch Source' },
+            { key: 'billingStateCode', label: 'Billing State Code' },
+            { key: 'title', label: 'Job Title' },
+          ],
+        });
+      }
+      if (url === '/api/lead-custom-fields' && !opts) return Promise.resolve([]);
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve(webFormRows);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderLeads(travelAuth);
+    await screen.findByText('Form Lead');
+
+    expect(screen.getByText('Email')).toBeInTheDocument();
+    for (const genericOnlyHeader of [
+      'Last Updated',
+      'First Touch Source',
+      'Last Touch Source',
+      'Billing State Code',
+      'Job Title',
+    ]) {
+      expect(screen.queryByText(genericOnlyHeader)).toBeNull();
+    }
+  });
+
   it('opens the Web Form column menu and applies a web-form-only filter query', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (opts?.method === 'PUT') return Promise.resolve({ ok: true });
@@ -2626,14 +2671,78 @@ describe('Leads Web Form column (generic CRM only)', () => {
     });
   });
 
-  it('shows a Lead Fields button on generic that navigates to settings/lead-fields', async () => {
+  it('shows a Lead Fields button on generic that opens an in-place modal', async () => {
     renderLeads(genericAuth);
     await screen.findByText('Form Lead');
 
     const btn = screen.getByRole('button', { name: /Lead Fields/i });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
-    expect(navigateMock).toHaveBeenCalledWith('/settings/lead-fields');
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveStyle({ overflowX: 'hidden', minWidth: '0px' });
+    expect(screen.getByPlaceholderText('e.g. Referral Source')).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('opens the same in-place Lead Fields modal for travel admins', async () => {
+    renderLeads(travelAuth);
+    await screen.findByText('Form Lead');
+
+    fireEvent.click(screen.getByRole('button', { name: /Lead Fields/i }));
+    expect(await screen.findByRole('dialog', { name: /Add Lead Field/i })).toBeInTheDocument();
+  });
+
+  it('creates a tenant-scoped field from the in-place modal', async () => {
+    const createdField = {
+      id: 91,
+      fieldKey: 'referral_source',
+      label: 'Referral Source',
+      fieldType: 'dropdown',
+      options: ['Google', 'Referral'],
+      isRequired: true,
+      displayOrder: 0,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/lead-custom-fields' && opts?.method === 'POST') {
+        return Promise.resolve(createdField);
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve(webFormRows);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderLeads(travelAuth);
+    await screen.findByText('Form Lead');
+    fireEvent.click(screen.getByRole('button', { name: /Lead Fields/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Referral Source'), {
+      target: { value: 'Referral Source' },
+    });
+    fireEvent.change(within(dialog).getByRole('combobox'), {
+      target: { value: 'dropdown' },
+    });
+    fireEvent.change(within(dialog).getByPlaceholderText('Google, Referral, Event'), {
+      target: { value: 'Google, Referral' },
+    });
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/lead-custom-fields' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall[1].body)).toEqual({
+        label: 'Referral Source',
+        fieldType: 'dropdown',
+        isRequired: true,
+        options: ['Google', 'Referral'],
+      });
+      expect(screen.queryByRole('dialog', { name: /Add Lead Field/i })).toBeNull();
+    });
   });
 
   it('hides the Lead Fields button on non-generic verticals (wellness)', async () => {

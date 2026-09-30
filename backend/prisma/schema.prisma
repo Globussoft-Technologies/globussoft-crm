@@ -1043,7 +1043,7 @@ model Contact {
   travelPortalNotifications TravelPortalNotification[]
   // Travel itineraries (PRD Phase 1).
   itineraries               Itinerary[]
-  // Generic-vertical admin-configurable Lead custom fields.
+  // Generic + Travel tenant-scoped admin-configurable Lead custom fields.
   leadCustomFieldValues     LeadCustomFieldValue[]
   webFormSubmissions        WebFormSubmission[]
   // Generic-vertical-only Contacts "Saved Views" membership rows this
@@ -1084,7 +1084,7 @@ model Contact {
   @@index([portalRole])
 }
 
-// ── Lead Custom Fields (generic vertical only, admin-configurable) ──
+// ── Lead Custom Fields (generic + travel, admin-configurable) ──
 //
 // Purpose-built for Contact/Lead, deliberately NOT built on the existing
 // generic CustomEntity/CustomField/CustomValue EAV system (schema above
@@ -1096,7 +1096,7 @@ model Contact {
 // definition time, not per-value) — ADMIN never has to duplicate that
 // choice; the CRM renders the right input widget and validates/stores the
 // value in the matching typed column automatically. Scoped to tenants using
-// the generic vertical only; wellness/travel are untouched by this feature.
+// Generic and Travel tenants use this feature; Wellness remains isolated from it.
 
 model LeadCustomFieldDefinition {
   id           Int      @id @default(autoincrement())

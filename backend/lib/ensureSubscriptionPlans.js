@@ -16,6 +16,7 @@
 // match. Still no overwrite of pricing/features.
 
 const prisma = require('./prisma');
+const { getSuffixedDuplicatePlanIds } = require('./subscriptionPlanCatalog');
 
 const CANONICAL_PLANS = [
   {
@@ -112,6 +113,7 @@ const CANONICAL_PLANS = [
 async function ensureSubscriptionPlans() {
   let created = 0;
   let backfilled = 0;
+  let deactivated = 0;
   let skipped = 0;
 
   for (const plan of CANONICAL_PLANS) {
@@ -154,10 +156,32 @@ async function ensureSubscriptionPlans() {
     created++;
   }
 
-  if (created || backfilled) {
-    console.log(`[ensureSubscriptionPlans] created=${created} backfilled=${backfilled} skipped=${skipped}`);
+  // Keep historical rows intact for Subscription foreign keys, but remove
+  // legacy suffixed copies from the active public catalog. This is safe to run
+  // on every restart and is deliberately soft-delete only.
+  try {
+    const activePlans = await prisma.subscriptionPlan.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, planKey: true, billingIntervalDays: true },
+    });
+    const duplicateIds = getSuffixedDuplicatePlanIds(activePlans);
+    if (duplicateIds.length > 0) {
+      const result = await prisma.subscriptionPlan.updateMany({
+        where: { id: { in: duplicateIds }, isActive: true },
+        data: { isActive: false },
+      });
+      deactivated = result.count || 0;
+    }
+  } catch (err) {
+    // Catalog cleanup must never prevent the API from starting. The public
+    // route has the same defensive filter and will still hide these rows.
+    console.error('[ensureSubscriptionPlans] duplicate cleanup failed:', err && err.message ? err.message : err);
   }
-  return { created, backfilled, skipped };
+
+  if (created || backfilled || deactivated) {
+    console.log(`[ensureSubscriptionPlans] created=${created} backfilled=${backfilled} deactivated=${deactivated} skipped=${skipped}`);
+  }
+  return { created, backfilled, deactivated, skipped };
 }
 
 module.exports = ensureSubscriptionPlans;

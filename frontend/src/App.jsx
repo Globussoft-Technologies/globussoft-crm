@@ -2820,8 +2820,8 @@ export default function App() {
                           </RoleGuard>
                         }
                       />
-                      {/* Lead custom fields  generic vertical only; LeadFields.jsx
-                        itself redirects away for wellness/travel tenants. */}
+                      {/* Lead custom fields are tenant-scoped for Generic + Travel;
+                        LeadFields itself redirects Wellness tenants away. */}
                       <Route
                         path="settings/lead-fields"
                         element={

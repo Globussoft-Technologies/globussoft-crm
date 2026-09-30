@@ -11,21 +11,34 @@ import PasswordInput from "../components/PasswordInput";
 // SSO config + provider credentials. Flip to true to re-enable.
 const SHOW_SSO = false;
 
-// Hosts where the demo quick-login buttons (Generic / Wellness / Travel Stall)
-// MUST NOT render — production customer-facing deployments. The JSX is skipped
-// entirely so the buttons leave no DOM nodes, no React tree, and nothing that
-// surfaces via DevTools inspect. Add new production hostnames to the set.
-const HIDE_QUICK_LOGIN_HOSTS = new Set(["globuscrm.globussoft.com"]);
-const SHOW_QUICK_LOGIN =
-  typeof window === "undefined" ||
-  !HIDE_QUICK_LOGIN_HOSTS.has(window.location.hostname);
+// Demo quick-login buttons are intentionally opt-in by hostname. This keeps
+// seeded demo credentials available for local development and the shared CRM
+// demo/staging hosts, while a new customer or production vanity domain gets
+// the clean production login automatically until it is explicitly classified
+// as a demo host.
+const DEMO_LOGIN_HOSTS = new Set([
+  "crm.globusdemos.com",
+  "crm-staging.globusdemos.com",
+]);
+const LOCAL_LOGIN_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function shouldShowQuickLogin() {
+  if (typeof window === "undefined") return false;
+  const hostname = String(window.location.hostname || "").toLowerCase();
+  return LOCAL_LOGIN_HOSTS.has(hostname) || DEMO_LOGIN_HOSTS.has(hostname);
+}
 
 const Login = () => {
   const branding = getDomainBranding();
+  const showQuickLogin = shouldShowQuickLogin();
   // Read URL params up-front so the email field can be pre-filled from the
   // marketing-site handoff (?email=...) instead of the demo default.
-  const _initialSearchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-  const _emailFromUrl = (_initialSearchParams.get("email") || "").trim().toLowerCase();
+  const _initialSearchParams = new URLSearchParams(
+    typeof window !== "undefined" ? window.location.search : "",
+  );
+  const _emailFromUrl = (_initialSearchParams.get("email") || "")
+    .trim()
+    .toLowerCase();
 
   const [email, setEmail] = useState(_emailFromUrl || "");
   const [password, setPassword] = useState("");
@@ -139,8 +152,8 @@ const Login = () => {
             parsedTenant?.vertical === "wellness"
               ? "/wellness"
               : parsedTenant?.vertical === "travel"
-              ? "/travel"
-              : "/dashboard";
+                ? "/travel"
+                : "/dashboard";
           // Honour the ?next= handoff from the external marketing site if it
           // came along on the SSO callback URL. safeNext() rejects external
           // hosts so a hostile ?next= can't redirect off-app.
@@ -214,8 +227,8 @@ const Login = () => {
     // dashboard. Route them to /home (the role-aware widget dashboard)
     // which is always accessible and shows their permitted widgets +
     // quick actions instead.
-    if (data.user?.role === 'CUSTOMER') {
-      return '/home';
+    if (data.user?.role === "CUSTOMER") {
+      return "/home";
     }
     const configuredLanding =
       data.user?.landingPath || data.user?.primaryRole?.landingPath || null;
@@ -304,8 +317,11 @@ const Login = () => {
       // this hasn't fired yet).
       try {
         if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
-        if (data.tenant) localStorage.setItem("tenant", JSON.stringify(data.tenant));
-      } catch { /* ignore */ }
+        if (data.tenant)
+          localStorage.setItem("tenant", JSON.stringify(data.tenant));
+      } catch {
+        /* ignore */
+      }
       window.location.assign(target);
     } else {
       navigate(target);
@@ -328,14 +344,19 @@ const Login = () => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.token) return false;
       const contact = data.contact || {};
-      const isTmcTeacher = contact.subBrand === "tmc" && contact.portalRole === "TEACHER";
-      const isTmcParent = contact.subBrand === "tmc" && contact.portalRole === "PARENT";
+      const isTmcTeacher =
+        contact.subBrand === "tmc" && contact.portalRole === "TEACHER";
+      const isTmcParent =
+        contact.subBrand === "tmc" && contact.portalRole === "PARENT";
       if (isTmcTeacher || isTmcParent) {
         // TMC personas have dedicated portals. Do not persist this session
         // under the shared customer-portal keys or it will open the wrong UI.
         localStorage.removeItem("portalToken");
         localStorage.removeItem("portalContact");
-        localStorage.setItem(isTmcTeacher ? "tmcTeacherPortalToken" : "tmcParentPortalToken", data.token);
+        localStorage.setItem(
+          isTmcTeacher ? "tmcTeacherPortalToken" : "tmcParentPortalToken",
+          data.token,
+        );
         navigate(isTmcTeacher ? "/tmc/teacher-portal" : "/tmc/parent-portal");
       } else {
         localStorage.setItem("portalToken", data.token);
@@ -348,7 +369,11 @@ const Login = () => {
     }
   };
 
-  const performLogin = async (loginEmail, loginPassword, requestedTenantId = loginTenantId) => {
+  const performLogin = async (
+    loginEmail,
+    loginPassword,
+    requestedTenantId = loginTenantId,
+  ) => {
     if (loginPendingRef.current) return;
     loginPendingRef.current = true;
     setLoginPending(true);
@@ -368,7 +393,9 @@ const Login = () => {
         body: JSON.stringify({
           email: normalizedEmail,
           password: loginPassword,
-          ...(requestedTenantId ? { loginTenantId: Number(requestedTenantId) } : {}),
+          ...(requestedTenantId
+            ? { loginTenantId: Number(requestedTenantId) }
+            : {}),
         }),
       });
 
@@ -383,13 +410,19 @@ const Login = () => {
           return;
         }
         finalizeLogin(data);
-      } else if (response.status === 409 && data.code === "TENANT_SELECTION_REQUIRED") {
+      } else if (
+        response.status === 409 &&
+        data.code === "TENANT_SELECTION_REQUIRED"
+      ) {
         const choices = Array.isArray(data.tenants) ? data.tenants : [];
         setTenantChoices(choices);
         setLoginTenantId(choices.length === 1 ? String(choices[0].id) : "");
         setError(data.error || "Select the organization you want to access");
       } else if (response.status === 401) {
-        const wentToPortal = await tryPortalLogin(normalizedEmail, loginPassword);
+        const wentToPortal = await tryPortalLogin(
+          normalizedEmail,
+          loginPassword,
+        );
         if (requestId === loginRequestRef.current && !wentToPortal) {
           setError(data.error || "Login failed");
         }
@@ -472,9 +505,26 @@ const Login = () => {
       >
         <div style={{ textAlign: "center", marginBottom: "2rem" }}>
           {branding.logoUrl === "/tmc.png" ? (
-            <span className="login-logo--tmc" style={{ display: "block", maxWidth: "280px", margin: "0 auto 1rem auto", position: "relative" }}>
-              <img src={branding.logoUrl} alt={branding.name} style={{ display: "block", width: "100%", height: "auto" }} />
-              <img className="login-logo--tmc-dark" src="/tmc-dark.png" alt="" aria-hidden="true" />
+            <span
+              className="login-logo--tmc"
+              style={{
+                display: "block",
+                maxWidth: "280px",
+                margin: "0 auto 1rem auto",
+                position: "relative",
+              }}
+            >
+              <img
+                src={branding.logoUrl}
+                alt={branding.name}
+                style={{ display: "block", width: "100%", height: "auto" }}
+              />
+              <img
+                className="login-logo--tmc-dark"
+                src="/tmc-dark.png"
+                alt=""
+                aria-hidden="true"
+              />
             </span>
           ) : (
             <img
@@ -687,98 +737,98 @@ const Login = () => {
             </form>
 
             {SHOW_SSO && (
-            <>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                margin: "1.25rem 0 1rem",
-              }}
-            >
-              <div
-                style={{
-                  flex: 1,
-                  height: "1px",
-                  background: "var(--border-color)",
-                }}
-              />
-              <span
-                style={{
-                  color: "var(--text-secondary)",
-                  fontSize: "0.75rem",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                or continue with
-              </span>
-              <div
-                style={{
-                  flex: 1,
-                  height: "1px",
-                  background: "var(--border-color)",
-                }}
-              />
-            </div>
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    margin: "1.25rem 0 1rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      flex: 1,
+                      height: "1px",
+                      background: "var(--border-color)",
+                    }}
+                  />
+                  <span
+                    style={{
+                      color: "var(--text-secondary)",
+                      fontSize: "0.75rem",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.05em",
+                    }}
+                  >
+                    or continue with
+                  </span>
+                  <div
+                    style={{
+                      flex: 1,
+                      height: "1px",
+                      background: "var(--border-color)",
+                    }}
+                  />
+                </div>
 
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.5rem",
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => handleSsoLogin("google")}
-                className="glass"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "0.5rem",
-                  width: "100%",
-                  padding: "0.65rem 1rem",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border-color)",
-                  background: "rgba(255,255,255,0.06)",
-                  backdropFilter: "blur(8px)",
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                  fontWeight: 500,
-                }}
-              >
-                <Mail size={16} />
-                <span>Sign in with Google</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSsoLogin("microsoft")}
-                className="glass"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "0.5rem",
-                  width: "100%",
-                  padding: "0.65rem 1rem",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border-color)",
-                  background: "rgba(255,255,255,0.06)",
-                  backdropFilter: "blur(8px)",
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                  fontWeight: 500,
-                }}
-              >
-                <Square size={16} />
-                <span>Sign in with Microsoft</span>
-              </button>
-            </div>
-            </>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.5rem",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleSsoLogin("google")}
+                    className="glass"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "0.5rem",
+                      width: "100%",
+                      padding: "0.65rem 1rem",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "rgba(255,255,255,0.06)",
+                      backdropFilter: "blur(8px)",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      fontSize: "0.875rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    <Mail size={16} />
+                    <span>Sign in with Google</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSsoLogin("microsoft")}
+                    className="glass"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "0.5rem",
+                      width: "100%",
+                      padding: "0.65rem 1rem",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      background: "rgba(255,255,255,0.06)",
+                      backdropFilter: "blur(8px)",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      fontSize: "0.875rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    <Square size={16} />
+                    <span>Sign in with Microsoft</span>
+                  </button>
+                </div>
+              </>
             )}
 
             <div style={{ marginTop: "1rem", textAlign: "center" }}>
@@ -880,147 +930,156 @@ const Login = () => {
               </div>
             )}
 
-            {SHOW_QUICK_LOGIN && (
+            {showQuickLogin && (
               <>
-            <QuickLoginSection
-              title="Generic CRM"
-              accounts={[
-                {
-                  label: "Admin",
-                  email: "admin@globussoft.com",
-                  password: "password123",
-                  color: "#10b981",
-                },
-                {
-                  label: "Manager",
-                  email: "manager@crm.com",
-                  password: "password123",
-                  color: "#f59e0b",
-                },
-                { label: "User", email: "user@crm.com", password: "password123", color: "#3b82f6" }
-              ]}
-              onLogin={quickLogin}
-            />
+                <QuickLoginSection
+                  title="Generic CRM"
+                  accounts={[
+                    {
+                      label: "Admin",
+                      email: "admin@globussoft.com",
+                      password: "password123",
+                      color: "#10b981",
+                    },
+                    {
+                      label: "Manager",
+                      email: "manager@crm.com",
+                      password: "password123",
+                      color: "#f59e0b",
+                    },
+                    {
+                      label: "User",
+                      email: "user@crm.com",
+                      password: "password123",
+                      color: "#3b82f6",
+                    },
+                  ]}
+                  onLogin={quickLogin}
+                />
 
-            <QuickLoginSection
-              title="Enhanced Wellness — Demo"
-              accounts={[
-                {
-                  label: "Owner (Rishu)",
-                  email: "rishu@enhancedwellness.in",
-                  password: "password123",
-                  color: "#a855f7",
-                },
-                {
-                  label: "Demo Admin",
-                  email: "admin@wellness.demo",
-                  password: "password123",
-                  color: "#a855f7",
-                },
-                {
-                  label: "Demo User",
-                  email: "user@wellness.demo",
-                  password: "password123",
-                  color: "#ec4899",
-                }
-              ]}
-              onLogin={quickLogin}
-            />
+                <QuickLoginSection
+                  title="Enhanced Wellness — Demo"
+                  accounts={[
+                    {
+                      label: "Owner (Rishu)",
+                      email: "rishu@enhancedwellness.in",
+                      password: "password123",
+                      color: "#a855f7",
+                    },
+                    {
+                      label: "Demo Admin",
+                      email: "admin@wellness.demo",
+                      password: "password123",
+                      color: "#a855f7",
+                    },
+                    {
+                      label: "Demo User",
+                      email: "user@wellness.demo",
+                      password: "password123",
+                      color: "#ec4899",
+                    },
+                  ]}
+                  onLogin={quickLogin}
+                />
 
-            <QuickLoginSection
-              title="Travel Stall — Demo"
-              columns={3}
-              accounts={[
-                {
-                  label: "Owner (Yasin)",
-                  email: "yasin@travelstall.in",
-                  password: "yR9Q6&$vUFXKce-)W57",
-                  color: "#a855f7",
-                },
-                {
-                  label: "Demo Admin",
-                  email: "admin@travelstall.demo",
-                  password: "password123",
-                  color: "#a855f7",
-                },
-                {
-                  label: "TMC Operator",
-                  email: "tmc-ops@travelstall.demo",
-                  password: "password123",
-                  color: "#f59e0b",
-                },
-                {
-                  label: "RFU Advisor",
-                  email: "rfu-advisor@travelstall.demo",
-                  password: "password123",
-                  color: "#10b981",
-                },
-                {
-                  label: "Telecaller",
-                  email: "telecaller@travelstall.demo",
-                  password: "password123",
-                  color: "#3b82f6",
-                }
-              ]}
-              onLogin={quickLogin}
-              extraCell={
-                /* Travel Customer Portal quick-login. The end-user (Contact)
+                <QuickLoginSection
+                  title="Travel Stall — Demo"
+                  columns={3}
+                  accounts={[
+                    {
+                      label: "Owner (Yasin)",
+                      email: "yasin@travelstall.in",
+                      password: "yR9Q6&$vUFXKce-)W57",
+                      color: "#a855f7",
+                    },
+                    {
+                      label: "Demo Admin",
+                      email: "admin@travelstall.demo",
+                      password: "password123",
+                      color: "#a855f7",
+                    },
+                    {
+                      label: "TMC Operator",
+                      email: "tmc-ops@travelstall.demo",
+                      password: "password123",
+                      color: "#f59e0b",
+                    },
+                    {
+                      label: "RFU Advisor",
+                      email: "rfu-advisor@travelstall.demo",
+                      password: "password123",
+                      color: "#10b981",
+                    },
+                    {
+                      label: "Telecaller",
+                      email: "telecaller@travelstall.demo",
+                      password: "password123",
+                      color: "#3b82f6",
+                    },
+                  ]}
+                  onLogin={quickLogin}
+                  extraCell={
+                    /* Travel Customer Portal quick-login. The end-user (Contact)
                    auth uses /api/portal/login, but it shares THIS page now —
                    quickLogin() tries staff auth, falls back to the portal, and
                    hands the customer off to /travel/portal. Styled to match the
                    staff quick-login buttons (6th cell of the 3-column grid). */
-                <button
-                  type="button"
-                  onClick={() => quickLogin("ahmed.pilgrim@demo.test", "password123")}
-                  title="Sign in to the Travel Customer Portal — ahmed.pilgrim@demo.test / password123"
-                  style={{
-                    padding: "0.55rem 0.45rem",
-                    borderRadius: "8px",
-                    border: "1px solid rgba(200, 154, 78, 0.45)",
-                    background: "rgba(200, 154, 78, 0.10)",
-                    cursor: "pointer",
-                    transition: "all 0.15s",
-                    minWidth: 0,
-                    width: "100%",
-                    textAlign: "left",
-                    display: "block",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(200, 154, 78, 0.22)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(200, 154, 78, 0.10)";
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "0.65rem",
-                      fontWeight: 700,
-                      color: "#C89A4E",
-                      textTransform: "uppercase",
-                      marginBottom: "0.15rem",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    Customer Portal
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.62rem",
-                      color: "var(--text-secondary)",
-                      fontFamily: "monospace",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    ahmed.pilgrim@demo.test
-                  </div>
-                </button>
-              }
-            />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        quickLogin("ahmed.pilgrim@demo.test", "password123")
+                      }
+                      title="Sign in to the Travel Customer Portal — ahmed.pilgrim@demo.test / password123"
+                      style={{
+                        padding: "0.55rem 0.45rem",
+                        borderRadius: "8px",
+                        border: "1px solid rgba(200, 154, 78, 0.45)",
+                        background: "rgba(200, 154, 78, 0.10)",
+                        cursor: "pointer",
+                        transition: "all 0.15s",
+                        minWidth: 0,
+                        width: "100%",
+                        textAlign: "left",
+                        display: "block",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "rgba(200, 154, 78, 0.22)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background =
+                          "rgba(200, 154, 78, 0.10)";
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "0.65rem",
+                          fontWeight: 700,
+                          color: "#C89A4E",
+                          textTransform: "uppercase",
+                          marginBottom: "0.15rem",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        Customer Portal
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "0.62rem",
+                          color: "var(--text-secondary)",
+                          fontFamily: "monospace",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        ahmed.pilgrim@demo.test
+                      </div>
+                    </button>
+                  }
+                />
               </>
             )}
 

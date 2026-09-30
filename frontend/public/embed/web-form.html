@@ -839,7 +839,9 @@
             updatePickerTrigger();
             trigger.placeholder = '+91';
             trigger.inputMode = 'numeric';
-            trigger.pattern = '[0-9]*';
+            // The displayed country code includes the international '+'
+            // prefix (for example, +91), so the picker must allow it.
+            trigger.pattern = '\\+?[0-9]*';
             trigger.setAttribute('aria-label', 'Phone country code');
             var options = document.createElement('div');
             options.className = 'phone-country-options';

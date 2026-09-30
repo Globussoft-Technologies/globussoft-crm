@@ -65,7 +65,7 @@ for (const key of ['findMany', 'findFirst', 'create', 'update', 'delete', 'group
 
 }
 
-for (const key of ['findFirst', 'create', 'update']) {
+for (const key of ['findMany', 'findFirst', 'create', 'update']) {
 
   prisma.contact[key] = vi.fn();
 
@@ -145,6 +145,8 @@ beforeEach(() => {
   prisma.webForm.create.mockResolvedValue({ id: 1, tenantId: TENANT_ID, createdByUserId: USER_ID, name: 'Contact Us', slug: 'contact-us', description: '', isActive: true, fieldsJson: JSON.stringify([]), styleJson: JSON.stringify({}), settingsJson: JSON.stringify({}) });
 
   prisma.contact.findFirst.mockResolvedValue(null);
+
+  prisma.contact.findMany.mockResolvedValue([]);
 
   prisma.contact.create.mockResolvedValue({ id: 2001, name: 'Jane Doe', email: 'jane@example.com', phone: '9876543210' });
 
@@ -262,7 +264,7 @@ describe('Generic conditional fields', () => {
     expect(fields[1].showWhen).toBeNull();
   });
 
-  test('clears self, deleted, invalid-choice, and non-Generic rules safely', () => {
+  test('clears self, deleted, and invalid-choice rules while preserving Travel rules', () => {
     const fields = normalizeFields(JSON.stringify([
       { id: 'parent', sourceKind: 'custom', sourceKey: 'parent', fieldType: 'dropdown', options: ['Yes', 'No'] },
       { id: 'self', sourceKind: 'custom', sourceKey: 'self', fieldType: 'text', showWhen: { fieldId: 'self', value: 'x' } },
@@ -272,7 +274,12 @@ describe('Generic conditional fields', () => {
     const travelFields = normalizeFields(JSON.stringify(configuredFields), 'travel');
 
     expect(fields.slice(1).every((field) => field.showWhen === null)).toBe(true);
-    expect(travelFields[1].showWhen).toBeNull();
+    expect(travelFields[1].showWhen).toEqual({
+      fieldId: 'interest',
+      fieldKey: 'interest',
+      parentQuestion: 'Are you interested in?',
+      value: 'Shopify',
+    });
   });
 
   test('clears cyclic nested rules while preserving valid chains', () => {
@@ -1162,7 +1169,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
   });
 
-  test('reuses an existing contact when the submitted email already exists', async () => {
+  test('rejects a duplicate email before creating a contact or submission', async () => {
 
     prisma.webForm.findFirst.mockResolvedValue({
 
@@ -1194,7 +1201,9 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
     });
 
-    prisma.contact.findFirst.mockResolvedValueOnce({ id: 2002, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com' });
+    prisma.contact.findMany.mockResolvedValueOnce([
+      { id: 2002, email: 'Monica999@Gmail.com' },
+    ]);
 
 
     const res = await request(makeApp())
@@ -1203,28 +1212,21 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
       .field('name', 'Monica')
 
-      .field('email', 'monica999@gmail.com');
+      .field('email', '  MONICA999@gmail.com  ');
 
 
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(409);
 
-    expect(res.body.contactId).toBe(2002);
+    expect(res.body).toEqual({
+      error: 'This email already exists. Please use a different email address.',
+      code: 'DUPLICATE_EMAIL',
+    });
 
     expect(prisma.contact.create).not.toHaveBeenCalled();
 
     expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
 
-    expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
-
-      data: expect.objectContaining({
-
-        contactId: 2002,
-
-        tenantId: TENANT_ID,
-
-      }),
-
-    }));
+    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
 
 });
 
@@ -1316,7 +1318,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
   });
 
-  test('backfills Callified campaign on existing contact when rule matches', async () => {
+  test('rejects a duplicate before Callified campaign backfill', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 1,
       tenantId: TENANT_ID,
@@ -1355,15 +1357,13 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .field('name', 'Monica')
       .field('email', 'monica999@gmail.com');
 
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(409);
     expect(prisma.contact.create).not.toHaveBeenCalled();
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 2003 },
-      data: { callifiedCampaignId: 77 },
-    });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
   });
 
-  test('does not backfill a Callified campaign onto an existing non-Lead contact', async () => {
+  test('rejects a duplicate existing non-Lead contact', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 1,
       tenantId: TENANT_ID,
@@ -1406,9 +1406,10 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .field('name', 'Existing Customer')
       .field('email', 'customer@example.com');
 
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(409);
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
   });
 
   test('maps picker fallback customs to Contact columns instead of dropping them', async () => {

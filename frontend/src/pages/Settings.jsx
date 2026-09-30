@@ -2531,8 +2531,8 @@ export default function Settings() {
             <WhatsAppMetaConfigCard />
           )}
 
-          {hasPermission("settings", "manage") && isGenericVertical && (
-            <GenericRecaptchaSettingsCard notify={notify} />
+          {hasPermission("settings", "manage") && (isGenericVertical || ctxTenant?.vertical === "travel") && (
+            <GenericRecaptchaSettingsCard notify={notify} isTravel={ctxTenant?.vertical === "travel"} />
           )}
 
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
@@ -3489,9 +3489,10 @@ export default function Settings() {
   );
 }
 
-function GenericRecaptchaSettingsCard({ notify }) {
-  const siteKeySetting = "generic.webForm.recaptcha.siteKey";
-  const secretKeySetting = "generic.webForm.recaptcha.secretKey";
+function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
+  const siteKeySetting = isTravel ? "travel.webForm.recaptcha.siteKey" : "generic.webForm.recaptcha.siteKey";
+  const secretKeySetting = isTravel ? "travel.webForm.recaptcha.secretKey" : "generic.webForm.recaptcha.secretKey";
+  const verticalLabel = isTravel ? "Travel" : "Generic CRM";
   const [siteKey, setSiteKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [hasSecretKey, setHasSecretKey] = useState(false);
@@ -3518,7 +3519,7 @@ function GenericRecaptchaSettingsCard({ notify }) {
     return () => {
       active = false;
     };
-  }, [notify]);
+  }, [notify, siteKeySetting, secretKeySetting]);
 
   const save = async (event) => {
     event.preventDefault();
@@ -3558,7 +3559,18 @@ function GenericRecaptchaSettingsCard({ notify }) {
         Web Form reCAPTCHA
       </h3>
       <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
-        Configure Google reCAPTCHA v2 for Generic CRM web forms. The secret key is never displayed.
+        Configure Google reCAPTCHA v2 for {verticalLabel} web forms. The secret key is never displayed.
+      </p>
+      <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
+        Register your website with Google reCAPTCHA to get the Site Key and Secret Key.{' '}
+        <a
+          href="https://www.google.com/recaptcha/admin/create"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "var(--primary-color, var(--accent-color, #6366f1))", textDecoration: "underline", fontWeight: "600" }}
+        >
+          Register with Google reCAPTCHA
+        </a>
       </p>
       <form onSubmit={save}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
@@ -3566,6 +3578,7 @@ function GenericRecaptchaSettingsCard({ notify }) {
             <span style={{ display: "block", marginBottom: "0.35rem", fontWeight: "600" }}>Site Key</span>
             <input
               type="text"
+              className="input-field"
               value={siteKey}
               onChange={(event) => setSiteKey(event.target.value)}
               placeholder="Google reCAPTCHA site key"
@@ -3576,6 +3589,7 @@ function GenericRecaptchaSettingsCard({ notify }) {
             <span style={{ display: "block", marginBottom: "0.35rem", fontWeight: "600" }}>Secret Key</span>
             <input
               type="password"
+              className="input-field"
               value={secretKey}
               onChange={(event) => setSecretKey(event.target.value)}
               placeholder={hasSecretKey ? "Secret key is configured" : "Google reCAPTCHA secret key"}

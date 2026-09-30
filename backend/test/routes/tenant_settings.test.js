@@ -117,9 +117,11 @@ describe('GET /api/tenant-settings/', () => {
     expect(res.body.defaults).toEqual({
       ...DEFAULTS,
       [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: null,
+      [KEYS.TRAVEL_RECAPTCHA_SECRET_KEY]: null,
     });
     expect(res.body.sensitiveDefaults).toEqual({
       [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: Boolean(DEFAULTS[KEYS.GENERIC_RECAPTCHA_SECRET_KEY]),
+      [KEYS.TRAVEL_RECAPTCHA_SECRET_KEY]: Boolean(DEFAULTS[KEYS.TRAVEL_RECAPTCHA_SECRET_KEY]),
       'travel.promotionalWebsite.sftp': false,
     });
     expect(JSON.stringify(res.body)).not.toContain('stored-secret');

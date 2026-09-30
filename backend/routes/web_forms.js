@@ -136,6 +136,56 @@ function uploadLogoOrReject(req, res, next) {
   });
 }
 
+function normalizeGenericDuplicateEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+const genericEmailSubmissionLocks = new Map();
+
+async function acquireGenericEmailSubmissionLock(tenantId, email) {
+  const key = `${tenantId}:${normalizeGenericDuplicateEmail(email)}`;
+  const previous = genericEmailSubmissionLocks.get(key) || Promise.resolve();
+  let releaseCurrent;
+  const current = new Promise((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queued = previous.then(() => current);
+  genericEmailSubmissionLocks.set(key, queued);
+  await previous;
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseCurrent();
+    if (genericEmailSubmissionLocks.get(key) === queued) genericEmailSubmissionLocks.delete(key);
+  };
+}
+
+async function findGenericDuplicateContact(tenantId, email) {
+  const normalizedEmail = normalizeGenericDuplicateEmail(email);
+  if (!normalizedEmail) return null;
+
+  const exact = await prisma.contact.findFirst({
+    where: { tenantId, email: normalizedEmail },
+  });
+  if (exact) return exact;
+
+  const contacts = await prisma.contact.findMany({
+    where: { tenantId },
+    select: { id: true, email: true },
+  });
+
+  return contacts.find((contact) => normalizeGenericDuplicateEmail(contact.email) === normalizedEmail) || null;
+}
+
+function duplicateGenericEmailResponse(res) {
+  return res.status(409).json({
+    error: "This email already exists. Please use a different email address.",
+    code: "DUPLICATE_EMAIL",
+  });
+}
+
 const FIELD_TYPES = new Set([
   "text",
   "email",
@@ -220,6 +270,10 @@ const LEAD_CUSTOM_TO_CONTACT = {
   medium: "medium",
 };
 const FORM_SCOPES = new Set(["generic", "travel"]);
+
+function supportsAdvancedWebFormFeatures(scope) {
+  return scope === "generic" || scope === "travel";
+}
 
 function notificationValue(value) {
   if (Array.isArray(value)) return value.map((item) => textOr(item)).filter(Boolean).join(", ");
@@ -429,6 +483,8 @@ function defaultStyle() {
     accentColor: "#12344D",
 
     logoUrl: "",
+    logoSize: 48,
+    logoPosition: "left",
     fontSize: 16,
     fontWeight: 400,
     labelFontSize: 13,
@@ -588,7 +644,7 @@ function normalizeFields(raw, scope = "generic") {
 
   const fields = parsed.map((field, index) => normalizeField(field, index));
 
-  if (scope !== "generic") return fields.map((field) => ({ ...field, showWhen: null }));
+  if (!supportsAdvancedWebFormFeatures(scope)) return fields.map((field) => ({ ...field, showWhen: null }));
 
   const byId = new Map(fields.map((field) => [String(field.id), field]));
   const bySourceKey = new Map();
@@ -698,6 +754,8 @@ function normalizeStyle(raw) {
     accentColor: textOr(style.accentColor, defaultStyle().accentColor),
 
     logoUrl: textOr(style.logoUrl),
+    logoSize: safeNumber(style.logoSize, 48, 20, 200),
+    logoPosition: safeEnum(style.logoPosition, ["left", "center", "right"], "left"),
     fontSize: safeNumber(style.fontSize, 16, 10, 32),
     fontWeight: safeEnum(Number(style.fontWeight), [400, 500, 600, 700], 400),
     labelFontSize: safeNumber(style.labelFontSize, 13, 9, 24),
@@ -903,7 +961,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
       settings,
       submissionCount,
     };
-    if (row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+    if (supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
       payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
     }
     if (origin) payload.embedCode = buildEmbedCode(row, origin);
@@ -922,7 +980,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
     submissionCount,
   };
 
-  if (isPublic && row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+  if (isPublic && supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
     payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
   }
 
@@ -1191,8 +1249,14 @@ router.get("/public/:slug", async (req, res) => {
     // browser reuse an older public configuration after a successful save.
     res.set("Cache-Control", "no-store");
     const publicPayload = shapeForm(form, 0, origin, true);
-    if (form.scope === "generic" && publicPayload.settings?.recaptchaEnabled) {
-      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SITE_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SITE_KEY || "" }));
+    if (supportsAdvancedWebFormFeatures(form.scope || "generic") && publicPayload.settings?.recaptchaEnabled) {
+      const recaptchaSiteKey = form.scope === "travel"
+        ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
+        : KEYS.GENERIC_RECAPTCHA_SITE_KEY;
+      const recaptchaSiteFallback = form.scope === "travel"
+        ? process.env.TRAVEL_RECAPTCHA_SITE_KEY || ""
+        : process.env.RECAPTCHA_SITE_KEY || "";
+      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, { coerce: String, fallback: recaptchaSiteFallback }));
     }
     res.json(publicPayload);
   } catch (err) {
@@ -1265,9 +1329,15 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       });
     }
 
-    if (formScope === "generic" && settings.recaptchaEnabled) {
+    if (supportsAdvancedWebFormFeatures(formScope) && settings.recaptchaEnabled) {
       const token = textOr(body.recaptchaToken);
-      const secret = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SECRET_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SECRET_KEY || "" }));
+      const recaptchaSecretKey = formScope === "travel"
+        ? KEYS.TRAVEL_RECAPTCHA_SECRET_KEY
+        : KEYS.GENERIC_RECAPTCHA_SECRET_KEY;
+      const recaptchaSecretFallback = formScope === "travel"
+        ? process.env.TRAVEL_RECAPTCHA_SECRET_KEY || ""
+        : process.env.RECAPTCHA_SECRET_KEY || "";
+      const secret = textOr(await getSetting(form.tenantId, recaptchaSecretKey, { coerce: String, fallback: recaptchaSecretFallback }));
       let verified = false;
       if (token && secret) {
         try {
@@ -1311,7 +1381,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     }
 
     for (const field of fields) {
-      if (formScope === "generic" && !isConditionalFieldVisible(field, fields, body)) {
+      if (supportsAdvancedWebFormFeatures(formScope) && !isConditionalFieldVisible(field, fields, body)) {
         payload[field.sourceKey] = null;
         continue;
       }
@@ -1500,17 +1570,18 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const phoneValue = String(contactData.phone || "").trim();
     const companyValue = String(contactData.company || "").trim();
     const isGenericForm = formScope === "generic";
+    const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(formScope);
     const fieldErrors = {};
     if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
       fieldErrors.name = "Enter a valid name using letters, spaces, hyphens, or apostrophes";
     }
-    if (emailValue && isGenericForm) {
+    if (emailValue && supportsAdvancedFeatures) {
       const emailResult = await validateEmail(emailValue, settings);
       if (!emailResult.valid) fieldErrors.email = emailResult.message;
     } else if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^\s]+$/.test(emailValue))) {
       fieldErrors.email = "Enter a valid email address";
     }
-    if (phoneValue && isGenericForm) {
+    if (phoneValue && supportsAdvancedFeatures) {
       const submittedPhoneCountry = `+${String(req.body.phoneCountry || "").replace(/\D/g, "")}`;
       if (!settings.phoneAllowAllCountries && settings.phoneAllowedCountries.length && !settings.phoneAllowedCountries.includes(submittedPhoneCountry)) {
         fieldErrors.phone = "Please select an allowed country code";
@@ -1542,6 +1613,17 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     if (contactData.company === "") contactData.company = null;
 
     if (contactData.title === "") contactData.title = null;
+
+    // Generic web forms must reject an existing email before any Contact,
+    // Deal, attachment, or submission record is created. Travel forms keep
+    // their existing contact-reuse behavior below.
+    if (isGenericForm && contactData.email) {
+      const releaseGenericEmailLock = await acquireGenericEmailSubmissionLock(form.tenantId, contactData.email);
+      res.once("finish", releaseGenericEmailLock);
+      res.once("close", releaseGenericEmailLock);
+      const duplicateContact = await findGenericDuplicateContact(form.tenantId, contactData.email);
+      if (duplicateContact) return duplicateGenericEmailResponse(res);
+    }
 
     // Keep the canonical Contact status even when a legacy embedded form
     // posts `lead`/`LEAD`; downstream auto-dial and list filters use the
@@ -1606,9 +1688,16 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     submitStage = "find_existing_contact";
 
     if (contactData.email) {
-      contact = await prisma.contact.findFirst({
-        where: { tenantId: form.tenantId, email: contactData.email },
-      });
+      if (isGenericForm) {
+        // Re-check immediately before creation so a contact inserted after
+        // the initial validation is rejected instead of being reused.
+        contact = await findGenericDuplicateContact(form.tenantId, contactData.email);
+        if (contact) return duplicateGenericEmailResponse(res);
+      } else {
+        contact = await prisma.contact.findFirst({
+          where: { tenantId: form.tenantId, email: contactData.email },
+        });
+      }
     }
 
     // Backfill Callified campaign on existing leads when a form re-submission
@@ -2001,6 +2090,38 @@ router.post("/logo-upload", verifyToken, uploadLogoOrReject, async (req, res) =>
     });
   } catch (err) {
     console.error("[web-forms] logo upload error:", err && err.message);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to upload form logo",
+      code: err.code || "FORM_LOGO_UPLOAD_FAILED",
+    });
+  }
+});
+
+// Generic CRM web-form logo upload. This keeps the existing Generic editor
+// behavior scoped to cloud/local object storage without changing Travel's
+// upload route or Wellness's data-URL behavior.
+router.post("/generic-logo-upload", verifyToken, uploadLogoOrReject, async (req, res) => {
+  try {
+    requestedScope(req);
+    if (!req.file) {
+      return res.status(400).json({ error: "No logo image provided", code: "LOGO_REQUIRED" });
+    }
+
+    const url = await s3Service.uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      `generic/web-forms/${req.user.tenantId}/logos`,
+    );
+    return res.status(201).json({
+      url,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      storage: s3Service.isOciUrl(url) ? "ocs" : (s3Service.isLocalUrl(url) ? "local" : "s3"),
+    });
+  } catch (err) {
+    console.error("[web-forms] generic logo upload error:", err && err.message);
     return res.status(err.statusCode || 500).json({
       error: err.statusCode ? err.message : "Failed to upload form logo",
       code: err.code || "FORM_LOGO_UPLOAD_FAILED",

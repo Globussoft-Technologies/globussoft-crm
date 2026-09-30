@@ -23,12 +23,12 @@ export function slugifyWebFormName(value, fallback = "web-form") {
 }
 
 
-export function buildWebFormPreviewUrl(form, origin) {
+export function buildWebFormPreviewUrl(form, origin, options = {}) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
   const preview = encodeURIComponent(JSON.stringify(form || {}));
-  // Preview forms are local development surfaces and must not retain a stale
-  // cached copy of the embedded runtime after it changes.
-  return base + '/embed/web-form.html?previewVersion=' + Date.now() + '#preview=' + preview;
+  const query = new URLSearchParams({ previewVersion: String(Date.now()) });
+  if (options.previewDevice) query.set('device', String(options.previewDevice));
+  return base + '/embed/web-form.html?' + query.toString() + '#preview=' + preview;
 }
 
 export function buildPublicUrl(form, origin) {

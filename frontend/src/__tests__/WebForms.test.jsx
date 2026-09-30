@@ -64,13 +64,13 @@ describe('public web form embed footer', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain('formData.settings.showPoweredBy === false');
-    expect(html).toContain("(footerLink ? '<div class=\"note\">' + footerLink + '</div>' : '')");
+    expect(html).toContain("(footerLink ? '<div class=\"note powered-by\">' + footerLink + '</div>' : '')");
   });
 
   test('combines a searchable country code with phone submissions for every web-form scope', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain("if (field.sourceKey === 'phone')");
+    expect(html).toContain("if (advanced && field.sourceKey === 'phone')");
     expect(html).toContain("type=\"' + (field.fieldType === 'number' ? 'number' : 'tel') + '\"");
     expect(html).toContain('name="phoneCountry"');
     expect(html).toContain('.phone-country-picker.open{z-index:40}');
@@ -83,7 +83,7 @@ describe('public web form embed footer', () => {
     expect(html).toContain("trigger.inputMode = 'numeric'");
     expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
     expect(html).toContain("fd.set('phone', internationalPhone)");
-    expect(html).toContain("if (fd.get('phone') && fd.get('phoneCountry'))");
+    expect(html).toContain("if (advanced && fd.get('phone') && fd.get('phoneCountry'))");
   });
 
   test('renders the numeric phone control for the default phone field', () => {
@@ -139,11 +139,11 @@ describe('public web form embed footer', () => {
     expect(html).toContain('--wf-popover-bg: #1a1d24');
   });
 
-  test('limits locale country detection to the Generic CRM runtime', () => {
+  test('limits country detection to the Generic and Travel runtimes', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain("if (scope !== 'generic' || localeCountryDetectionStarted) return;");
-    expect(html).toContain("if (scope !== 'generic') return;");
+    expect(html).toContain("if (!advanced || localeCountryDetectionStarted) return;");
+    expect(html).toContain("if (!advanced) return;");
   });
 
   test('contains the Generic multi-step navigation and validation runtime', () => {
@@ -154,6 +154,23 @@ describe('public web form embed footer', () => {
     expect(html).toContain("document.getElementById('step-next').addEventListener");
     expect(html).toContain('showStep(currentStepIndex + 1)');
     expect(html).toContain('showStep(currentStepIndex - 1)');
+  });
+
+  test('keeps the Generic form visible when reCAPTCHA is incomplete', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('function showInlineError(text)');
+    expect(html).toContain('showInlineError(\'Please complete the "I\\\'m not a robot" verification.\')');
+    expect(html).not.toContain("if (!captchaToken) { setMessage('error'");
+  });
+
+  test('disables the Generic and Travel submit buttons until required fields are complete', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('function updateGenericSubmitState(fields)');
+    expect(html).toContain('button.disabled = !complete;');
+    expect(html).toContain('updateGenericSubmitState(fields);');
+    expect(html).toContain("if (!flag && advanced) updateGenericSubmitState(formData.fields || []);");
   });
 
   test('does not cap long forms in an internal scroll container', () => {

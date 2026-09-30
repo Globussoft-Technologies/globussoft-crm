@@ -345,11 +345,60 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('renders 40+ links for ADMIN under generic vertical (full enterprise nav)', () => {
-      const { container } = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
-      // Generic nav has 50+ items across core + manager + admin sections.
-      // Pin lower bound at 40 (allow for future trimming).
-      const navLinks = container.querySelectorAll('a.nav-link');
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      // Submenu links render through a body portal, just like Wellness. Count
+      // the complete document rather than RTL's root container.
+      const navLinks = document.querySelectorAll('a.nav-link');
       expect(navLinks.length).toBeGreaterThanOrEqual(40);
+    });
+
+    it('renders the cleaner generic submenu groups in product order', () => {
+      const { container } = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const nav = container.querySelector('#app-sidebar nav');
+      const groups = Array.from(
+        nav.querySelectorAll('button[aria-controls^="wellness-nav-"]'),
+        (button) => button.textContent.trim(),
+      );
+      expect(groups).toEqual([
+        'Sales',
+        'Leads',
+        'Communication',
+        'Work Management',
+        'Customer Support',
+        'Marketing & Automation',
+        'Documents & Delivery',
+        'Finance',
+        'Analytics & Reports',
+        'Team & Access',
+        'Administration',
+        'Platform',
+      ]);
+    });
+
+    it('keeps only one generic submenu open at a time', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const sales = screen.getByRole('button', { name: 'Sales' });
+      const communication = screen.getByRole('button', { name: 'Communication' });
+
+      fireEvent.click(sales);
+      expect(sales).toHaveAttribute('aria-expanded', 'true');
+      expect(communication).toHaveAttribute('aria-expanded', 'false');
+
+      fireEvent.click(communication);
+      expect(sales).toHaveAttribute('aria-expanded', 'false');
+      expect(communication).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('hides generic groups when the user has no accessible child', () => {
+      renderSidebar({
+        vertical: 'generic',
+        role: 'USER',
+        permissions: ['tasks.read'],
+      });
+      expect(screen.getByRole('button', { name: 'Work Management' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Team & Access' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Administration' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Platform' })).toBeNull();
     });
 
     it('hides Sightseeing Master for TMC', () => {

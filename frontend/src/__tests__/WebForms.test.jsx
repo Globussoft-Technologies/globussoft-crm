@@ -67,18 +67,23 @@ describe('public web form embed footer', () => {
     expect(html).toContain("(footerLink ? '<div class=\"note\">' + footerLink + '</div>' : '')");
   });
 
-  test('combines a searchable country code with Generic phone submissions only', () => {
+  test('combines a searchable country code with phone submissions for every web-form scope', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain("scope === 'generic' && field.sourceKey === 'phone'");
+    expect(html).toContain("if (field.sourceKey === 'phone')");
     expect(html).toContain("type=\"' + (field.fieldType === 'number' ? 'number' : 'tel') + '\"");
     expect(html).toContain('name="phoneCountry"');
     expect(html).toContain('.phone-country-picker.open{z-index:40}');
+    expect(html).toContain('.phone-country-picker>input:focus + .phone-country-options{display:block}');
     expect(html).toContain("options.style.display = 'block'");
     expect(html).toContain('trigger.addEventListener(\'keydown\', openCountryPicker)');
+    expect(html).toContain("trigger.addEventListener('pointerdown'");
+    expect(html).toContain("&& allowedCountries.length > 0");
+    expect(html).toContain("&& pickerAllowedCountries.length > 0");
     expect(html).toContain("trigger.inputMode = 'numeric'");
     expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
     expect(html).toContain("fd.set('phone', internationalPhone)");
+    expect(html).toContain("if (fd.get('phone') && fd.get('phoneCountry'))");
   });
 
   test('renders the numeric phone control for the default phone field', () => {

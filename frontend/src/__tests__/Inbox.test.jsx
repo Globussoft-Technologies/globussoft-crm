@@ -446,6 +446,18 @@ describe("<Inbox />", () => {
     dispatchSpy.mockRestore();
   });
 
+  it('closes the inbox actions menu when clicking outside it', async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /more inbox actions/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /more inbox actions/i }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('heading', { name: 'Unified Inbox' }));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
   it("shows theme-aware surfaces for the email list", async () => {
     document.documentElement.setAttribute("data-theme", "dark");
 

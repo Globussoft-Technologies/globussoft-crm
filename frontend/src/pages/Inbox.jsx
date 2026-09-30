@@ -321,6 +321,7 @@ export default function Inbox() {
     loadingMore: false,
   }));
   const inboxScrollRef = useRef(null);
+  const inboxActionsRef = useRef(null);
   const loadMoreLockRef = useRef(false);
   const emailPaginationRef = useRef(emailPagination);
 
@@ -389,6 +390,17 @@ export default function Inbox() {
   useEffect(() => {
     inboxPathRef.current = inboxPath;
   }, [inboxPath]);
+
+  useEffect(() => {
+    if (!showInboxActions) return undefined;
+    const handleOutsidePointerDown = (event) => {
+      if (inboxActionsRef.current && !inboxActionsRef.current.contains(event.target)) {
+        setShowInboxActions(false);
+      }
+    };
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointerDown);
+  }, [showInboxActions]);
 
   const loadEmailsPage = useCallback(async ({ page = 1, reset = false } = {}) => {
     const currentPagination = emailPaginationRef.current;
@@ -1162,7 +1174,7 @@ export default function Inbox() {
               {isGeneric && (
                 <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
                   <button type="button" aria-label="Refresh inbox" onClick={() => loadEmailsPage({ page: 1, reset: true })} title="Refresh" style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><RefreshCw size={17} /></button>
-                  <div style={{ position: "relative" }}>
+                  <div ref={inboxActionsRef} style={{ position: "relative" }}>
                     <button type="button" aria-label="More inbox actions" title="More" onClick={() => setShowInboxActions((visible) => !visible)} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><MoreVertical size={17} /></button>
                     {showInboxActions && (
                       <div role="menu" style={{ position: "absolute", right: 0, top: "calc(100% + 0.25rem)", zIndex: 5, minWidth: 190, padding: "0.35rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--modal-bg)", boxShadow: "var(--glass-shadow)" }}>

@@ -132,6 +132,8 @@ Content-Type: application/json
 
 **Custom fields:** any extra root-level keys are accepted and echoed back under `_customFields` so partner sites can attach their own metadata without a schema change.
 
+**Origin behavior:** `Origin`/`Referer` is optional for this API. Server-to-server callers authenticate with `X-API-Key` and may omit browser-origin headers. If a browser request supplies an origin, the CRM checks it against the tenant's External Lead Domains allowlist; a non-allowlisted origin is rejected.
+
 #### GET `/leads?since=…` — poll for new leads
 
 Callified polls this every 60 seconds. `since` is an ISO datetime; only leads created at or after `since` are returned.

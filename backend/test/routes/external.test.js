@@ -728,28 +728,51 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledTimes(1);
   });
 
-  test("configured allowlist with no origin evidence returns ORIGIN_REQUIRED", async () => {
+  test("configured allowlist still permits authenticated server-to-server calls without origin", async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({
       vertical: "wellness",
       callifiedAutoCampaignId: null,
       embedAllowlistJson: JSON.stringify(["https://allowed.example.com"]),
     });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 61,
+      reasons: [],
+    });
+    pickAssigneeMock.mockResolvedValueOnce({
+      userId: 11,
+      reason: "matched cat=website",
+    });
+    computeFirstResponseDueAtMock.mockResolvedValueOnce({
+      dueAt: new Date("2026-06-01T10:05:00Z"),
+      tier: "medium",
+      minutes: 30,
+    });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 778,
+      name: "Server-to-Server Lead",
+      email: "server-to-server@example.com",
+      phone: "+919900112300",
+      status: "Lead",
+      source: "website-form",
+      aiScore: 61,
+      assignedToId: 11,
+      tenantId: 7,
+      createdAt: new Date(),
+    });
 
     const app = makeApp();
     const res = await request(app).post("/api/v1/external/leads").send({
-      name: "Missing Origin Lead",
-      phone: "+919900112233",
-      email: "missing-origin@example.com",
+      name: "Server-to-Server Lead",
+      phone: "+919900112300",
+      email: "server-to-server@example.com",
       source: "website-form",
     });
 
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({
-      error: "Partner origin is required",
-      code: "ORIGIN_REQUIRED",
-    });
-    expect(classifyLeadMock).not.toHaveBeenCalled();
-    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(classifyLeadMock).toHaveBeenCalledOnce();
+    expect(prisma.contact.create).toHaveBeenCalledOnce();
     expect(notifyAdminsOfBlockedLeadOriginMock).not.toHaveBeenCalled();
   });
 

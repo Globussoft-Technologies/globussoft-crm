@@ -257,7 +257,11 @@ describe('G-22 / scenario 1: valid signature, payment_intent.succeeded', () => {
     });
     expect(prisma.invoice.update).toHaveBeenCalledWith({
       where: { id: 7 },
-      data: { status: 'PAID' },
+      data: expect.objectContaining({
+        status: 'PAID',
+        paymentMode: 'card',
+        paidAt: expect.any(Date),
+      }),
     });
   });
 
@@ -445,7 +449,10 @@ describe('G-22 / scenario 6: idempotency on duplicate delivery', () => {
       invoiceId: 9, tenantId: 1, status: 'SUCCESS',
     });
     prisma.invoice.findFirst.mockResolvedValueOnce({
-      id: 9, tenantId: 1, status: 'PAID',  // ← already PAID
+      id: 9,
+      tenantId: 1,
+      status: 'PAID',
+      paymentMode: 'card', // persisted by the first delivery
     });
 
     const res2 = await postValidWebhook(event);

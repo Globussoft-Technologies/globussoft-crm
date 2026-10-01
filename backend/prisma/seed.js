@@ -941,6 +941,9 @@ async function main() {
         userType: 'OWNER',
         role: 'ADMIN',
         tenantId: wellnessTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
     prisma.user.create({
@@ -951,6 +954,9 @@ async function main() {
         userType: 'STAFF',
         role: 'ADMIN',
         tenantId: wellnessTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
     prisma.user.create({
@@ -961,6 +967,9 @@ async function main() {
         userType: 'STAFF',
         role: 'USER',
         tenantId: wellnessTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
   ]);

@@ -1517,6 +1517,16 @@ const VERTICAL_LABEL_OVERRIDES = {
   travel: {
     '/leads': 'Travel Leads',
     '/travel/leads': 'All Leads',
+    '/calendar-sync': 'Calendar',
+  },
+};
+
+// Cross-vertical pages occasionally use a different permission module in a
+// vertical sidebar. Keep /api/pages/me aligned with the actual Travel sidebar
+// so a visible destination can never disappear from search.
+const VERTICAL_PERMISSION_OVERRIDES = {
+  travel: {
+    '/calendar-sync': [{ module: 'integrations', action: 'read' }],
   },
 };
 
@@ -1525,6 +1535,10 @@ function applyVerticalLabel(page, vertical) {
   const label = overrides && overrides[page.path];
   if (!label) return page;
   return { ...page, label };
+}
+
+function requiredPermissionsFor(page, vertical) {
+  return VERTICAL_PERMISSION_OVERRIDES[vertical]?.[page.path] || page.requiredPermissions;
 }
 
 function getCatalog() {
@@ -1573,7 +1587,7 @@ function getCatalogForVertical(vertical) {
     return true;
   }).map((p) => ({
     ...applyVerticalLabel(p, vertical),
-    requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
+    requiredPermissions: requiredPermissionsFor(p, vertical).map((perm) => ({ ...perm })),
   }));
 }
 
@@ -1630,18 +1644,19 @@ function getAccessiblePages(permissionSet, opts = {}) {
   if (opts.isOwner) {
     return basePool.map((p) => ({
       ...applyVerticalLabel(p, opts.vertical),
-      requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
+      requiredPermissions: requiredPermissionsFor(p, opts.vertical).map((perm) => ({ ...perm })),
     }));
   }
   if (!(permissionSet instanceof Set)) return [];
   return basePool.filter((p) => {
-    if (p.requiredPermissions.length === 0) return true;
-    return p.requiredPermissions.every(
+    const requiredPermissions = requiredPermissionsFor(p, opts.vertical);
+    if (requiredPermissions.length === 0) return true;
+    return requiredPermissions.every(
       ({ module, action }) => permissionSet.has(`${module}.${action}`),
     );
   }).map((p) => ({
     ...applyVerticalLabel(p, opts.vertical),
-    requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
+    requiredPermissions: requiredPermissionsFor(p, opts.vertical).map((perm) => ({ ...perm })),
   }));
 }
 
@@ -1654,9 +1669,10 @@ function canAccessPath(path, permissionSet, opts = {}) {
   if (!isKnownPage(path)) return false;
   const page = getPage(path);
   if (opts.isOwner) return true;
-  if (page.requiredPermissions.length === 0) return true;
+  const requiredPermissions = requiredPermissionsFor(page, opts.vertical);
+  if (requiredPermissions.length === 0) return true;
   if (!(permissionSet instanceof Set)) return false;
-  return page.requiredPermissions.every(
+  return requiredPermissions.every(
     ({ module, action }) => permissionSet.has(`${module}.${action}`),
   );
 }

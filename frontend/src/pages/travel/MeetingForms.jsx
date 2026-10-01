@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Copy, GripVertical, ImagePlus, KeyRound, Plus, RefreshCw, Save, Search, Settings2, Trash2, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -19,9 +20,10 @@ const FALLBACK_TIMEZONES = [
 const TIMEZONES = ["Asia/Kolkata", ...new Set(typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : FALLBACK_TIMEZONES)]
   .filter((timezone, index, values) => values.indexOf(timezone) === index);
 const DEFAULT_WEEKLY = Object.fromEntries(DAYS.map((day) => [day, ["saturday", "sunday"].includes(day) ? [] : [{ start: "10:00", end: "17:00" }]]));
+const DESIGNATION_OPTIONS = ["Principal", "Vice Principal", "Head of School", "Academic Coordinator", "Teacher / Faculty", "School Management", "Other"];
 const DEFAULT_FIELDS = [
   { key: "contactName", label: "Full Name", type: "text", required: true, enabled: true, order: 1 },
-  { key: "designation", label: "Designation", type: "text", required: true, enabled: true, order: 2 },
+  { key: "designation", label: "Designation", type: "select", required: true, enabled: true, order: 2, options: DESIGNATION_OPTIONS },
   { key: "institution", label: "School / Institution", type: "text", required: true, enabled: true, order: 3 },
   { key: "city", label: "City", type: "text", required: true, enabled: true, order: 4 },
   { key: "contactEmail", label: "Work Email", type: "email", required: true, enabled: true, order: 5 },
@@ -96,11 +98,23 @@ function newFormDraft(forms, hostId = "") {
   return sequence === 1 ? draft : { ...draft, name: `${draft.name} ${sequence}`, slug };
 }
 
+function normalizeDraftFields(fields) {
+  return (Array.isArray(fields) ? fields : DEFAULT_FIELDS).map((field) => field.key === "designation"
+    ? {
+        ...field,
+        type: "select",
+        placeholder: "",
+        options: Array.isArray(field.options) && field.options.length ? field.options : DESIGNATION_OPTIONS,
+      }
+    : field);
+}
+
 function toDraft(form) {
   return {
     ...emptyDraft(),
     ...form,
     calendarProvider: "google",
+    fields: normalizeDraftFields(form.fields),
     hostUserId: String(form.hostUserId || ""),
     allowedStartDate: form.allowedStartDate ? String(form.allowedStartDate).slice(0, 10) : "",
     allowedEndDate: form.allowedEndDate ? String(form.allowedEndDate).slice(0, 10) : "",
@@ -245,9 +259,12 @@ export default function MeetingForms() {
   const [saving, setSaving] = useState(false);
   const [zoomConfig, setZoomConfig] = useState({ configured: false, status: "NOT_CONFIGURED", zoomHostUserId: "me" });
   const [emailProviderStatus, setEmailProviderStatus] = useState(null);
-  const [zoomDraft, setZoomDraft] = useState({ accountId: "", clientId: "", clientSecret: "", zoomHostUserId: "me" });
+  const [zoomDraft, setZoomDraft] = useState({ accountId: "", clientId: "", clientSecret: "", zoomHostUserId: "" });
   const [savingZoom, setSavingZoom] = useState(false);
-  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  const [disconnectDialogOpen, setShowDisconnectConfirm] = useState(false);
+  // Keep the old inline popover disabled; the active confirmation renders in
+  // a body portal below so page overflow/scroll containers cannot clip it.
+  const showDisconnectConfirm = false;
   const [disconnectingZoom, setDisconnectingZoom] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -273,7 +290,7 @@ export default function MeetingForms() {
       setHosts(Array.isArray(hostRows) ? hostRows : []);
       setZoomConfig(zoomStatus || { configured: false, status: "NOT_CONFIGURED", zoomHostUserId: "me" });
       setEmailProviderStatus(emailStatus);
-      setZoomDraft((current) => ({ ...current, zoomHostUserId: zoomStatus?.zoomHostUserId || "me" }));
+      setZoomDraft((current) => ({ ...current, zoomHostUserId: zoomStatus?.zoomHostUserId === "me" ? "" : (zoomStatus?.zoomHostUserId || "") }));
       if (formRows?.[0]) {
         setSelectedId(formRows[0].id);
         setDraft(toDraft(formRows[0]));
@@ -314,7 +331,7 @@ export default function MeetingForms() {
       setHosts(hostRows);
       setZoomConfig(zoomStatus || { configured: false, status: "NOT_CONFIGURED", zoomHostUserId: "me" });
       setEmailProviderStatus(emailStatus);
-      setZoomDraft((current) => ({ ...current, zoomHostUserId: zoomStatus?.zoomHostUserId || "me" }));
+      setZoomDraft((current) => ({ ...current, zoomHostUserId: zoomStatus?.zoomHostUserId === "me" ? "" : (zoomStatus?.zoomHostUserId || "") }));
       if (isCreating) {
         setDraft((current) => ({ ...current, hostUserId: current.hostUserId || (hostRows[0]?.id ? String(hostRows[0].id) : "") }));
         setBookings([]);
@@ -561,11 +578,15 @@ export default function MeetingForms() {
   }
 
   async function connectZoom() {
+    if (!zoomDraft.zoomHostUserId.trim() || zoomDraft.zoomHostUserId.trim().toLowerCase() === "me") {
+      notify.error("Enter the licensed Zoom host's email address or Zoom user ID instead of me");
+      return;
+    }
     setSavingZoom(true);
     try {
       const status = await fetchApi("/api/travel/meeting-forms/zoom-config", { method: "PUT", body: JSON.stringify(zoomDraft) });
       setZoomConfig(status);
-      setZoomDraft({ accountId: "", clientId: "", clientSecret: "", zoomHostUserId: status.zoomHostUserId || "me" });
+      setZoomDraft({ accountId: "", clientId: "", clientSecret: "", zoomHostUserId: status.zoomHostUserId === "me" ? "" : (status.zoomHostUserId || "") });
       notify.success("Zoom credentials verified and connected for this Travel CRM tenant");
     } catch (error) {
       notify.error(error?.body?.error || error.message || "Zoom connection failed");
@@ -721,7 +742,7 @@ export default function MeetingForms() {
             {(draft.fields || []).map((field, index) => <div key={field.key} className="meeting-field-card" style={{ padding: "14px 0", borderBottom: "1px solid var(--border-color, #e5e7eb)" }}>
               <div className="meeting-field-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px,1fr) 130px minmax(180px,1fr) auto auto auto", gap: 10, alignItems: "center" }}>
                 <label style={label}><FieldTitle help="The question or label visitors see in the booking form.">Field label</FieldTitle><input aria-label={`${field.key} label`} style={input} value={field.label} maxLength={100} onChange={(e) => updateField(index, { label: e.target.value })} /></label>
-                <label style={label}><FieldTitle help="Controls the input UI and server-side validation applied to this answer.">Field type</FieldTitle><select aria-label={`${field.key} type`} style={input} value={field.type} onChange={(e) => changeFieldType(index, e.target.value)}><option value="text">Text</option><option value="email">Email</option><option value="tel">Phone</option><option value="textarea">Long text</option><option value="select">Select</option></select></label>
+                <label style={label}><FieldTitle help={field.key === "designation" ? "Designation is a dropdown in the hosted form and public API contract." : "Controls the input UI and server-side validation applied to this answer."}>Field type</FieldTitle><select aria-label={`${field.key} type`} style={input} value={field.type} disabled={field.key === "designation"} onChange={(e) => changeFieldType(index, e.target.value)}><option value="text">Text</option><option value="email">Email</option><option value="tel">Phone</option><option value="textarea">Long text</option><option value="select">Select</option></select></label>
                 {field.type === "select" ? <span style={{ color: "var(--text-secondary)", fontSize: 12, alignSelf: "end", paddingBottom: 10 }}>Manage choices below</span> : <label style={label}><FieldTitle help="Optional example text shown before the visitor enters a value.">Placeholder</FieldTitle><input aria-label={`${field.key} placeholder`} style={input} value={field.placeholder || ""} maxLength={150} onChange={(e) => updateField(index, { placeholder: e.target.value })} /></label>}
                 <label style={{ alignSelf: "end", paddingBottom: 9 }}><input type="checkbox" checked={field.enabled !== false} onChange={(e) => updateField(index, { enabled: e.target.checked })} /> Enabled</label>
                 <label style={{ alignSelf: "end", paddingBottom: 9 }}><input type="checkbox" checked={field.required === true} disabled={field.enabled === false} onChange={(e) => updateField(index, { required: e.target.checked })} /> Required</label>
@@ -748,9 +769,9 @@ export default function MeetingForms() {
               <label style={label}><FieldTitle help="The Account ID from the client's Zoom Server-to-Server OAuth app.">Zoom Account ID</FieldTitle><input style={input} value={zoomDraft.accountId} onChange={(e) => setZoomDraft((current) => ({ ...current, accountId: e.target.value }))} autoComplete="off" placeholder={zoomConfig.accountId || "Account ID"} /></label>
               <label style={label}><FieldTitle help="The Client ID from the client's Zoom Server-to-Server OAuth app.">Zoom Client ID</FieldTitle><input style={input} value={zoomDraft.clientId} onChange={(e) => setZoomDraft((current) => ({ ...current, clientId: e.target.value }))} autoComplete="off" placeholder={zoomConfig.clientId || "Client ID"} /></label>
               <label style={label}><FieldTitle help="The private Client Secret. It is never returned to the browser after saving.">Zoom Client Secret</FieldTitle><input style={input} type="password" value={zoomDraft.clientSecret} onChange={(e) => setZoomDraft((current) => ({ ...current, clientSecret: e.target.value }))} autoComplete="new-password" placeholder={zoomConfig.clientSecretConfigured ? "Enter a new secret to reconnect" : "Client Secret"} /></label>
-              <label style={label}><FieldTitle help="Use me for the Zoom app owner or enter another licensed Zoom user email.">Zoom host user</FieldTitle><input style={input} value={zoomDraft.zoomHostUserId} onChange={(e) => setZoomDraft((current) => ({ ...current, zoomHostUserId: e.target.value }))} placeholder="me or host@email.com" /></label>
+              <label style={label}><FieldTitle help="Enter the licensed Zoom user's email address or Zoom user ID. Server-to-Server tokens may not resolve me to a user.">Zoom host user</FieldTitle><input style={input} value={zoomDraft.zoomHostUserId} onChange={(e) => setZoomDraft((current) => ({ ...current, zoomHostUserId: e.target.value }))} placeholder="host@email.com or Zoom user ID" /></label>
             </div>
-            <p style={{ color: "var(--text-secondary)", fontSize: 12 }}>Required Zoom granular scopes: <code>meeting:write:meeting:admin</code> and <code>meeting:delete:meeting:admin</code>. Use <code>me</code> to create meetings under the Server-to-Server app owner, or enter a Zoom account user email.</p>
+            <p style={{ color: "var(--text-secondary)", fontSize: 12 }}>Required Zoom granular scopes: <code>meeting:write:meeting:admin</code> and <code>meeting:delete:meeting:admin</code>. Enter the licensed Zoom host&apos;s email address or Zoom user ID. If an existing connection uses <code>me</code> and booking fails, replace it with that host identifier.</p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", position: "relative" }}><button type="button" disabled={savingZoom} style={primary} onClick={connectZoom}>{savingZoom ? "Verifying…" : zoomConfig.configured ? "Verify & Replace Connection" : "Verify & Connect Zoom"}</button>{zoomConfig.configured && <button type="button" style={{ ...primary, background: "#b91c1c" }} onClick={() => setShowDisconnectConfirm(true)}>Disconnect</button>}{showDisconnectConfirm && <div role="dialog" aria-modal="false" aria-labelledby="zoom-disconnect-title" style={{ position: "absolute", zIndex: 30, top: "calc(100% + 10px)", right: 0, width: "min(390px, calc(100vw - 3rem))", padding: 16, borderRadius: 10, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color, #d8e1e8)", boxShadow: "0 12px 35px rgba(15,23,42,.22)", color: "var(--text-primary)" }}><strong id="zoom-disconnect-title" style={{ display: "block", marginBottom: 7 }}>Disconnect Zoom?</strong><p style={{ margin: "0 0 14px", color: "var(--text-secondary)", lineHeight: 1.5 }}>This permanently removes this tenant’s saved Zoom credentials. Published Meeting Forms must be disabled first.</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" disabled={disconnectingZoom} style={{ ...primary, background: "var(--card-bg, #fff)", color: "inherit", border: "1px solid var(--border-color, #d8e1e8)" }} onClick={() => setShowDisconnectConfirm(false)}>Keep Connected</button><button type="button" disabled={disconnectingZoom} style={{ ...primary, background: "#b91c1c" }} onClick={disconnectZoom}>{disconnectingZoom ? "Disconnecting…" : "Disconnect Zoom"}</button></div></div>}</div>
           </section>}
 
@@ -760,7 +781,7 @@ export default function MeetingForms() {
               <label style={label}><FieldTitle help="Open this hosted booking form directly or use it as the iframe source.">Embed URL</FieldTitle><div style={{ display: "flex", gap: 8 }}><input readOnly style={input} value={embedUrl} /><button title="Copy the hosted Meeting Form URL" style={primary} onClick={() => copy(embedUrl, "Embed URL copied")}><Copy size={16} /></button></div></label>
               <label style={{ ...label, marginTop: 14 }}><FieldTitle help="Paste this complete iframe tag into the client's website.">Iframe code</FieldTitle><textarea readOnly style={{ ...input, minHeight: 90, fontFamily: "monospace" }} value={embedCode} /><button title="Copy the complete iframe HTML" style={{ ...primary, width: "max-content" }} onClick={() => copy(embedCode, "Iframe code copied")}><Copy size={16} /> Copy embed</button></label>
               <h3>API endpoints</h3><pre style={{ whiteSpace: "pre-wrap", padding: 14, borderRadius: 8, background: "var(--hover-bg, #f5f7fa)" }}>{`GET  ${apiBase}\nGET  ${apiBase}/availability?start=YYYY-MM-DD&days=31\nPOST ${apiBase}/validate-slot\nPOST ${apiBase}/book\nGET  ${apiBase}/bookings/{confirmationToken}`}</pre>
-              <p style={{ color: "var(--text-secondary)" }}>No API key is required. Use these generated URLs directly. Browser access follows the tenant-wide CRM Embed Allowlist; duplicate booking protection is handled automatically.</p>
+              <p style={{ color: "var(--text-secondary)" }}>No API key is required. Use these generated URLs directly. The configuration response includes <code>apiFields</code> and <code>bookingFlow.steps</code> for the three-step website UI, including the configured Designation dropdown choices. Browser access follows the tenant-wide CRM Embed Allowlist; duplicate booking protection is handled automatically.</p>
               <div style={{ marginTop: 18 }}><iframe key={`${embedUrl}-${refreshVersion}`} title="Meeting form preview" src={embedUrl} style={{ width: "100%", minHeight: 760, border: "1px solid var(--border-color, #ddd)", borderRadius: 10 }} /></div>
             </>}
           </section>}
@@ -800,6 +821,15 @@ export default function MeetingForms() {
           </div>
         </div>
       </div>}
+      {disconnectDialogOpen && typeof document !== "undefined" && createPortal(<div className="meeting-disconnect-overlay" role="presentation" style={{ position: "fixed", zIndex: 1100, inset: 0, display: "grid", placeItems: "center", padding: 20, background: "rgba(15,23,42,.28)" }} onMouseDown={(event) => { if (event.target === event.currentTarget && !disconnectingZoom) setShowDisconnectConfirm(false); }}>
+        <div role="dialog" aria-modal="true" aria-labelledby="zoom-disconnect-title" style={{ ...box, width: "min(92vw, 470px)", padding: 22, background: "var(--modal-bg, #fff)", opacity: 1, boxShadow: "0 24px 70px rgba(15,23,42,.32)" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
+            <div><h2 id="zoom-disconnect-title" style={{ margin: 0 }}>Disconnect Zoom?</h2><p style={{ margin: "12px 0 0", color: "var(--text-secondary)", lineHeight: 1.55 }}>This permanently removes this tenant&apos;s saved Zoom credentials. Published Meeting Forms must be disabled first.</p></div>
+            <button type="button" aria-label="Close disconnect Zoom dialog" disabled={disconnectingZoom} onClick={() => setShowDisconnectConfirm(false)} style={{ border: 0, background: "transparent", color: "inherit", cursor: "pointer", padding: 2 }}><X size={20} /></button>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 20, flexWrap: "wrap" }}><button type="button" disabled={disconnectingZoom} style={{ ...primary, background: "var(--card-bg, #fff)", color: "inherit", border: "1px solid var(--border-color, #d8e1e8)" }} onClick={() => setShowDisconnectConfirm(false)}>Keep Connected</button><button type="button" disabled={disconnectingZoom} style={{ ...primary, background: "#b91c1c" }} onClick={disconnectZoom}>{disconnectingZoom ? "Disconnecting..." : "Disconnect Zoom"}</button></div>
+        </div>
+      </div>, document.body)}
       <style>{`@keyframes meeting-refresh-spin{to{transform:rotate(360deg)}}.meeting-refresh-spin{animation:meeting-refresh-spin .75s linear infinite}.meeting-toolbar-toggle{display:inline-flex;align-items:center;gap:8px;padding:8px 11px;border:1px solid var(--border-color,#d8e1e8);border-radius:8px;background:var(--card-bg,#fff);font-size:13px;font-weight:800;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,.05)}.meeting-toolbar-toggle:hover{background:var(--hover-bg,#eef2f7);border-color:var(--primary-color,var(--accent-color))}.meeting-toolbar-toggle input{width:17px;height:17px;margin:0;accent-color:var(--primary-color,var(--accent-color));cursor:pointer}.meeting-help-tip{position:relative;display:inline-flex;align-items:center;color:var(--text-secondary);cursor:help;outline:none}.meeting-help-tip:after{content:attr(data-tooltip);position:absolute;z-index:100;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%) translateY(3px);width:max-content;max-width:260px;padding:8px 10px;border-radius:7px;background:#111827;color:#fff;font-size:11px;font-weight:500;line-height:1.4;white-space:normal;box-shadow:0 8px 24px rgba(15,23,42,.2);opacity:0;visibility:hidden;pointer-events:none;transition:.15s}.meeting-help-tip:hover:after,.meeting-help-tip:focus:after{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0)}.meeting-calendar-nav{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid var(--border-color,#d8e1e8);border-radius:7px;background:transparent;color:inherit;cursor:pointer}.meeting-calendar-day:hover,.meeting-calendar-nav:hover{background:var(--hover-bg,#eef2f7)!important;color:inherit!important}.meeting-calendar-day[aria-pressed=true]:hover{background:var(--primary-color,var(--accent-color))!important;color:#fff!important}.meeting-date-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 7px 5px 9px;border-radius:999px;background:var(--hover-bg,#eef2f7);font-size:11px}.meeting-date-chip button{display:inline-flex;border:0;background:transparent;color:inherit;padding:1px;cursor:pointer}.meeting-bookings-table tbody tr:not(:last-child){border-bottom:1px solid var(--border-color,#e5e7eb)}@media(max-width:1050px){.meeting-bookings-table,.meeting-bookings-table tbody{display:block}.meeting-bookings-table colgroup,.meeting-bookings-table thead{display:none}.meeting-bookings-table tbody{display:grid;gap:12px}.meeting-bookings-table tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px;padding:10px;border:1px solid var(--border-color,#d8e1e8)!important;border-radius:9px;background:var(--card-bg,#fff)}.meeting-bookings-table tbody td{display:grid;grid-template-columns:115px minmax(0,1fr);align-items:center;gap:8px;padding:7px 5px!important;min-width:0}.meeting-bookings-table tbody td:before{content:attr(data-label);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:var(--text-secondary)}.meeting-email-status{justify-content:flex-start!important}}@media(max-width:800px){.meeting-forms-layout,.meeting-field-row,.meeting-font-setting,.meeting-email-settings{grid-template-columns:1fr!important}.meeting-schedule-day{grid-template-columns:1fr!important}.meeting-schedule-day>strong{padding-top:0!important}.meeting-time-window{grid-template-columns:1fr 1fr!important}.meeting-time-window>button{grid-column:1/-1;justify-self:start}.meeting-help-tip:after{left:0;transform:translateY(3px)}.meeting-help-tip:hover:after,.meeting-help-tip:focus:after{transform:translateY(0)}}@media(max-width:620px){.meeting-bookings-table tbody tr{grid-template-columns:1fr}.meeting-bookings-table tbody td{grid-template-columns:105px minmax(0,1fr)}}`}</style>
     </div>
   );

@@ -96,9 +96,18 @@ const DEFAULT_WEEKLY_HOURS = {
   saturday: [],
   sunday: [],
 };
+const DESIGNATION_OPTIONS = [
+  "Principal",
+  "Vice Principal",
+  "Head of School",
+  "Academic Coordinator",
+  "Teacher / Faculty",
+  "School Management",
+  "Other",
+];
 const DEFAULT_FIELDS = [
   { key: "contactName", label: "Full Name", type: "text", required: true, enabled: true, order: 1 },
-  { key: "designation", label: "Designation", type: "text", required: true, enabled: true, order: 2 },
+  { key: "designation", label: "Designation", type: "select", required: true, enabled: true, order: 2, options: DESIGNATION_OPTIONS },
   { key: "institution", label: "School / Institution", type: "text", required: true, enabled: true, order: 3 },
   { key: "city", label: "City", type: "text", required: true, enabled: true, order: 4 },
   { key: "contactEmail", label: "Work Email", type: "email", required: true, enabled: true, order: 5 },
@@ -144,6 +153,15 @@ function boundedInt(value, fallback, min, max) {
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
+function publicBookingErrorStatus(error) {
+  const status = Number(error?.status) || 500;
+  // Cloudflare/Nginx can replace origin 502/503 JSON with a generic HTML
+  // gateway page. Provider failures are failed dependencies, so return 424
+  // and preserve the actionable Zoom/Calendar error envelope for callers.
+  if (status === 502 || status === 503) return 424;
+  return status;
+}
+
 function normalizeEmbedFont(value, fallback = "Inter") {
   const font = sanitizeText(String(value || fallback)).trim();
   if (!GOOGLE_FONTS.has(font)) {
@@ -186,7 +204,10 @@ function normalizeFields(raw) {
   return values.slice(0, 30).map((field, index) => {
     const key = String(field?.key || "").replace(/[^a-zA-Z0-9_]/g, "").slice(0, 50);
     const label = sanitizeText(String(field?.label || "")).trim().slice(0, 100);
-    const type = String(field?.type || "text");
+    const requestedType = String(field?.type || "text");
+    // Designation is a controlled choice in the TMC booking contract. This
+    // also upgrades forms saved before the field became a dropdown.
+    const type = key === "designation" ? "select" : requestedType;
     if (!key || !label || seen.has(key) || !allowedTypes.has(type)) {
       const error = new Error("Every field needs a unique key, a label, and a supported field type.");
       error.status = 400;
@@ -194,9 +215,10 @@ function normalizeFields(raw) {
       throw error;
     }
     seen.add(key);
-    const options = type === "select" && Array.isArray(field.options)
+    let options = type === "select" && Array.isArray(field.options)
       ? [...new Set(field.options.map((option) => sanitizeText(String(option)).trim().slice(0, 100)).filter(Boolean))].slice(0, 50)
       : [];
+    if (key === "designation" && options.length === 0) options = [...DESIGNATION_OPTIONS];
     if (field.enabled !== false && type === "select" && options.length === 0) {
       const error = new Error(`Add at least one option to the Select field "${label}".`);
       error.status = 400;
@@ -266,6 +288,24 @@ function validateConfiguredFieldValues(configuredFields, values) {
   return null;
 }
 
+function validateSplitNameSubmission(body, normalized) {
+  const usesSplitName = Object.prototype.hasOwnProperty.call(body, "firstName")
+    || Object.prototype.hasOwnProperty.call(body, "lastName");
+  if (!usesSplitName) return null;
+  const fieldErrors = {};
+  for (const key of ["firstName", "lastName"]) {
+    const value = normalized.aliases[key];
+    if (!value) fieldErrors[key] = `${key === "firstName" ? "First" : "Last"} Name is required`;
+    else if (value.length < 2 || value.length > 80 || URL_LIKE_RE.test(value) || !NAME_RE.test(value)) {
+      fieldErrors[key] = `${key === "firstName" ? "First" : "Last"} Name must contain a valid name`;
+    }
+  }
+  const fields = Object.keys(fieldErrors);
+  return fields.length
+    ? { error: "Correct the highlighted form fields", code: "INVALID_FIELD_VALUE", fields, fieldErrors }
+    : null;
+}
+
 function normalizeWeeklyHours(raw) {
   const input = raw && typeof raw === "object" ? raw : parseJson(raw, DEFAULT_WEEKLY_HOURS);
   const output = {};
@@ -281,7 +321,7 @@ function serializeForm(form, { includeSecrets = false } = {}) {
     weeklyHours: parseJson(form.weeklyHoursJson, DEFAULT_WEEKLY_HOURS),
     dateOverrides: parseJson(form.dateOverridesJson, {}),
     blackoutDates: parseJson(form.blackoutDatesJson, []),
-    fields: parseJson(form.fieldsJson, DEFAULT_FIELDS),
+    fields: normalizeFields(parseJson(form.fieldsJson, DEFAULT_FIELDS)),
     allowedOrigins: parseJson(form.allowedOriginsJson, []),
   };
   delete data.weeklyHoursJson;
@@ -295,6 +335,7 @@ function serializeForm(form, { includeSecrets = false } = {}) {
 }
 
 function publicConfig(form) {
+  const fields = normalizeFields(parseJson(form.fieldsJson, DEFAULT_FIELDS)).filter((field) => field.enabled !== false);
   return {
     publicKey: form.publicKey,
     name: form.name,
@@ -305,10 +346,35 @@ function publicConfig(form) {
     allowedEndDate: storedDateKey(form.allowedEndDate),
     timezone: form.timezone,
     embedFontFamily: form.embedFontFamily || "Inter",
-    fields: parseJson(form.fieldsJson, DEFAULT_FIELDS).filter((field) => field.enabled !== false),
+    fields,
+    apiFields: [
+      { key: "firstName", label: "First Name", type: "text", required: true, maxLength: 80 },
+      { key: "lastName", label: "Last Name", type: "text", required: true, maxLength: 80 },
+      { key: "designation", label: "Designation", type: "select", required: true, options: fields.find((field) => field.key === "designation")?.options || DESIGNATION_OPTIONS },
+      { key: "school", label: "School / Institution", type: "text", required: true, maxLength: 200 },
+      { key: "city", label: "City", type: "text", required: true, maxLength: 120 },
+      { key: "email", label: "Work Email", type: "email", required: true, maxLength: 191 },
+      { key: "phone", label: "Phone / WhatsApp", type: "tel", required: true, minLength: 7, maxLength: 15, inputMode: "numeric", pattern: "[0-9]{7,15}" },
+    ],
+    bookingFlow: {
+      version: 1,
+      steps: [
+        { id: "details", number: 1, label: "Your Details", fields: ["firstName", "lastName", "designation", "school", "city"] },
+        { id: "time", number: 2, label: "Choose a Time", fields: ["selectedStartTime"] },
+        { id: "contact", number: 3, label: "Contact Details", fields: ["email", "phone"] },
+      ],
+    },
+    bookingSubmission: {
+      method: "POST",
+      endpointSuffix: "/book",
+      slotField: "selectedStartTime",
+      idempotencyKeyHeader: "Idempotency-Key",
+      idempotencyKeyRequired: true,
+      confirmationTokenPath: "booking.confirmationToken",
+    },
     confirmationMessage: form.confirmationMessage,
     meetingType: "Zoom",
-    apiVersion: "2026-09-24",
+    apiVersion: "2026-10-01",
     acceptedBookingFields: ["firstName", "lastName", "designation", "school", "city", "email", "phone", "selectedStartTime", "duration", "timezone"],
   };
 }
@@ -904,8 +970,10 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
     const body = req.body || {};
     const normalized = normalizeBookingPayload(body);
     assertSchedulingMetadata(form, normalized);
+    const splitNameValidation = validateSplitNameSubmission(body, normalized);
+    if (splitNameValidation) return res.status(400).json(splitNameValidation);
     const values = normalized.values;
-    const configuredFields = parseJson(form.fieldsJson, DEFAULT_FIELDS).filter((field) => field.enabled !== false);
+    const configuredFields = normalizeFields(parseJson(form.fieldsJson, DEFAULT_FIELDS)).filter((field) => field.enabled !== false);
     const customFields = normalized.customFields;
     const combined = {
       ...customFields,
@@ -1027,6 +1095,13 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
       : null;
     res.status(201).json({ success: true, booking: publicBooking(booking, form), warning });
   } catch (error) {
+    console.error("[travel-meeting-forms] public booking failed", {
+      code: error.code || "BOOKING_FAILED",
+      status: error.status || 500,
+      tenantId: form?.tenantId || null,
+      meetingFormId: form?.id || null,
+      message: String(error.message || "Booking failed").slice(0, 500),
+    });
     if (booking?.id && booking.status !== "CONFIRMED") {
       await Promise.all([
         prisma.travelMeetingSlot.deleteMany({ where: { bookingId: booking.id } }).catch(() => {}),
@@ -1035,7 +1110,7 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
     }
     if (!bookingCommitted && calendarEvent?.externalId && form) await calendar.deleteEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, externalId: calendarEvent.externalId });
     if (!bookingCommitted && zoom?.meetingId && form) await travelMeetingZoom.deleteMeeting(form.tenantId, zoom.meetingId).catch(() => {});
-    res.status(error.status || 500).json({ error: error.message || "Booking could not be confirmed", code: error.code || "BOOKING_FAILED", expectedDuration: error.expectedDuration, expectedTimezone: error.expectedTimezone });
+    res.status(publicBookingErrorStatus(error)).json({ error: error.message || "Booking could not be confirmed", code: error.code || "BOOKING_FAILED", expectedDuration: error.expectedDuration, expectedTimezone: error.expectedTimezone });
   }
 });
 
@@ -1061,4 +1136,4 @@ router.get("/meeting-forms/public/:publicKey/bookings/:confirmationToken/calenda
 });
 
 module.exports = router;
-module.exports._internal = { normalizeOrigins, normalizeFields, normalizeWeeklyHours, normalizeEmbedFont, validateConfiguredFieldValues, authorizeConsumer, hashKey, safeEqualHash, dataFromBody, publicConfig, publicBooking, bookingDeliveryStatus, assertSlotClaimAvailable, chooseBookingContact, resolveBookingContact, emitTravelMeetingBooked, persistBookingConfirmationDelivery };
+module.exports._internal = { normalizeOrigins, normalizeFields, normalizeWeeklyHours, normalizeEmbedFont, validateConfiguredFieldValues, validateSplitNameSubmission, authorizeConsumer, hashKey, safeEqualHash, dataFromBody, publicConfig, publicBooking, bookingDeliveryStatus, assertSlotClaimAvailable, chooseBookingContact, resolveBookingContact, emitTravelMeetingBooked, persistBookingConfirmationDelivery, publicBookingErrorStatus };

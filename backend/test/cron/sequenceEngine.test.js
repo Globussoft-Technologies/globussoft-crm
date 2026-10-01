@@ -119,6 +119,22 @@
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+const travelProviderMocks = vi.hoisted(() => {
+  const Module = require('node:module');
+  const fromBackend = Module.createRequire(process.cwd() + '/');
+  const servicePath = fromBackend.resolve('./services/travelSendGrid');
+  const resolveSendGridConfig = vi.fn();
+  Module._cache[servicePath] = {
+    id: servicePath,
+    filename: servicePath,
+    loaded: true,
+    exports: { resolveSendGridConfig },
+    children: [],
+    paths: [],
+  };
+  return { resolveSendGridConfig };
+});
+const { resolveSendGridConfig } = travelProviderMocks;
 import prisma from '../../lib/prisma.js';
 
 import {
@@ -159,6 +175,9 @@ beforeAll(() => {
   prisma.tenantSetting = {
     findUnique: vi.fn(),
   };
+  prisma.tenant = {
+    findUnique: vi.fn(),
+  };
 });
 
 let originalSendgridKey;
@@ -185,6 +204,8 @@ beforeEach(() => {
   prisma.sequenceEnrollment.updateMany.mockResolvedValue({ count: 0 });
   prisma.sequenceStep.findFirst.mockResolvedValue(null);
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  resolveSendGridConfig.mockReset();
 
   // The engine reads SENDGRID_API_KEY at module top and triggers a
   // best-effort fire-and-forget fetch when an email step fires. We
@@ -248,6 +269,30 @@ function stepWith(overrides = {}) {
 // ─── processStep — email branch ────────────────────────────────────────────
 
 describe('cron/sequenceEngine — processStep email', () => {
+  test('Travel uses its tenant sender while Generic and Wellness keep the platform sender', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: '',
+      fromEmail: 'sequences@travel.test',
+      fromName: 'Acme Travel',
+      source: 'tenant',
+    });
+
+    await processStep(stepWith(), enrollmentWith({ tenantId: 73 }));
+
+    expect(resolveSendGridConfig).toHaveBeenCalledWith(73);
+    expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toBe('Acme Travel <sequences@travel.test>');
+
+    for (const vertical of ['generic', 'wellness']) {
+      prisma.emailMessage.create.mockClear();
+      resolveSendGridConfig.mockClear();
+      prisma.tenant.findUnique.mockResolvedValue({ vertical });
+      await processStep(stepWith(), enrollmentWith({ tenantId: 81 }));
+      expect(resolveSendGridConfig).not.toHaveBeenCalled();
+      expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toMatch(/@/);
+      expect(prisma.emailMessage.create.mock.calls[0][0].data.from).not.toContain('travel.test');
+    }
+  });
   test('happy path: renders template + writes EmailMessage + advances', async () => {
     const enrollment = enrollmentWith();
     const step = stepWith({

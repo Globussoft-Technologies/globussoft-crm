@@ -51,7 +51,15 @@ For a custom UI, call:
 | `GET` | `/api/travel/meeting-forms/public/:publicKey/bookings/:token` | Confirmed booking details |
 | `GET` | `/api/travel/meeting-forms/public/:publicKey/bookings/:token/calendar.ics` | Add-to-calendar file |
 
-Browser integrations must use an origin configured on the form. Server-to-server calls use the same generated public URLs without an API-key header. Booking requests use a stable `Idempotency-Key` generated automatically by the calling application so retries cannot create duplicates.
+Browser integrations must use an origin configured for the tenant under **CRM Settings → Embed Allowlist**. Server-to-server calls use the same generated public URLs without an API-key header. Booking requests use a stable `Idempotency-Key` generated automatically by the calling application so retries cannot create duplicates.
+
+The public configuration response is the UI contract. Customer websites should render `apiFields`, arrange them using `bookingFlow.steps`, and follow `bookingSubmission` rather than maintaining a separate field list. The current three-step flow is:
+
+1. **Your Details:** `firstName`, `lastName`, `designation`, `school`, `city`
+2. **Choose a Time:** `selectedStartTime`
+3. **Contact Details:** `email`, `phone`
+
+`designation` is a Select field. Its choices are returned by the configuration API and default to Principal, Vice Principal, Head of School, Academic Coordinator, Teacher / Faculty, School Management, and Other. Existing forms saved with a text Designation field are upgraded in the public contract automatically.
 
 TMC's existing UI can submit its native contract unchanged:
 
@@ -70,6 +78,8 @@ TMC's existing UI can submit its native contract unchanged:
 }
 ```
 
+Both `firstName` and `lastName` are required when the split-name contract is used. `phone` must contain only 7 to 15 digits; format it as digits before submission. Designation must exactly match one of the `apiFields` options returned by the current configuration response.
+
 The supplied `duration` and `timezone` must match the latest Meeting Form configuration; stale UI metadata receives `409 DURATION_MISMATCH` or `409 TIMEZONE_MISMATCH`. The older embed names (`contactName`, `institution`, `contactEmail`, `contactPhone`, and `scheduledAt`) remain supported.
 
 `zoomEventId` is deliberately not accepted as authority from a public client. If included for compatibility it is ignored. After Zoom creates the real meeting, the confirmed response includes `zoomEventId`, `zoomJoinUrl`, `calendarEventId`, `selectedStartTime`, `duration`, `timezone`, and the submitted TMC contact fields.
@@ -83,6 +93,8 @@ Optional attribution values can accompany either contract:
 }
 ```
 
-`201` means the slot, Zoom meeting, calendar appointment, and CRM record are confirmed. A `409 SLOT_UNAVAILABLE` response includes refreshed slots and must return the visitor to time selection. Confirmation-email failure is returned as a warning because the appointment itself remains confirmed; admins can resend it from Meeting Forms. Email is sent through the existing provider pipeline and stored as an outbound Unified Inbox message.
+`201` means the slot, Zoom meeting, calendar appointment, and CRM record are confirmed. A `409 SLOT_UNAVAILABLE` response includes refreshed slots and must return the visitor to time selection. Confirmation-email failure is returned as a warning because the appointment itself remains confirmed; admins can resend it from Meeting Forms. Travel CRM sends through the tenant's customer-managed SendGrid configuration when BYOK is configured; otherwise it uses the CRM-managed backend SendGrid account. Connected Gmail accounts are not used for Meeting Form confirmations. Successful sends are stored as outbound Unified Inbox messages.
+
+The successful response contains `booking.confirmationToken`. The website must read that value and substitute it into the generated booking-details URL when a later lookup is needed. No confirmation token is entered manually or hardcoded before booking.
 
 Diagnostic attribution is accepted only through a valid report slug belonging to the same TMC tenant. When valid, the contact journey records `Diagnostic Completed → Talk to an Expert → Meeting Booked`.

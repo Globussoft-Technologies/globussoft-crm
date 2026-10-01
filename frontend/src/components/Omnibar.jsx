@@ -21,6 +21,43 @@ import {
   BookOpen,
   CornerDownLeft,
   HeartPulse,
+  Map,
+  Plane,
+  Receipt,
+  Building2,
+  Compass,
+  UserPlus,
+  Users,
+  ClipboardCheck,
+  Brain,
+  GraduationCap,
+  Package,
+  LayoutTemplate,
+  Luggage,
+  Camera,
+  Calculator,
+  FileStack,
+  BadgeCheck,
+  Key,
+  Award,
+  Ban,
+  Sparkles,
+  Code,
+  CalendarClock,
+  PanelTop,
+  Palette,
+  Inbox,
+  CalendarDays,
+  MessageSquare,
+  IndianRupee,
+  CreditCard,
+  Wallet,
+  BadgePercent,
+  UsersRound,
+  ShieldCheck,
+  ScrollText,
+  Shield,
+  Settings,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { AuthContext } from "../App";
@@ -37,6 +74,61 @@ import { SEARCH_DEBOUNCE_MS } from "../utils/timing";
 import { formatMoney } from "../utils/money";
 import { usePermissions } from "../hooks/usePermissions";
 import { useSearchQuery } from "./search/SearchQueryContext";
+
+const TRAVEL_PAGE_ICONS = {
+  "/travel": Compass,
+  "/leads": UserPlus,
+  "/travel/pipeline": Plane,
+  "/contacts": Users,
+  "/travel/diagnostics": ClipboardCheck,
+  "/travel/trip-knowledge": Brain,
+  "/travel/curriculum-mappings": GraduationCap,
+  "/travel/tmc/catalogue": Package,
+  "/travel/itinerary-templates": LayoutTemplate,
+  "/travel/itineraries": Map,
+  "/travel/trips": Luggage,
+  "/travel/sightseeing": Camera,
+  "/travel/religious-packets": BookOpen,
+  "/travel/quotes-admin": FileText,
+  "/travel/flights/quote": Plane,
+  "/travel/quotes/builder": Calculator,
+  "/travel/quote-templates": FileStack,
+  "/travel/passport-verification": BadgeCheck,
+  "/travel/suppliers-admin": Building2,
+  "/travel/suppliers": Key,
+  "/travel/commission-profiles": Award,
+  "/travel/cancellation-policies": Ban,
+  "/travel/web-checkins": Ticket,
+  "/travel/visa/applications": BadgeCheck,
+  "/travel/visa/checklists": CheckSquare,
+  "/travel/visa/embassy-rules": Shield,
+  "/travel/brochures": Sparkles,
+  "/travel/forms": Code,
+  "/travel/meeting-forms": CalendarClock,
+  "/landing-pages": PanelTop,
+  "/admin/brand-kits": Palette,
+  "/inbox": Inbox,
+  "/tasks": CheckSquare,
+  "/calendar-sync": CalendarDays,
+  "/gmail": Mail,
+  "/travel/reviews": MessageSquare,
+  "/travel/school-terms": CalendarDays,
+  "/travel/invoices-admin": Receipt,
+  "/travel/tally": Calculator,
+  "/travel/milestones": CalendarClock,
+  "/travel/payables": CreditCard,
+  "/payments": IndianRupee,
+  "/expenses": Wallet,
+  "/travel/cost-master": IndianRupee,
+  "/travel/pricing-rules": BadgePercent,
+  "/travel/reports": FileSpreadsheet,
+  "/staff": UsersRound,
+  "/settings/roles": ShieldCheck,
+  "/audit-log": ScrollText,
+  "/developer": Code,
+  "/privacy": Shield,
+  "/settings": Settings,
+};
 
 // Inline top-bar global search.
 //
@@ -83,6 +175,7 @@ const ENTITY_SECTIONS = [
       secondary: p.description || (p.parent ? `${p.parent} · ${p.path}` : p.category || p.path),
       to: p.path || p.route,
       actionTarget: p.actionTarget,
+      icon: TRAVEL_PAGE_ICONS[p.path] || LayoutDashboard,
     }),
   },
   {
@@ -96,6 +189,71 @@ const ENTITY_SECTIONS = [
       primary: c.company ? `${c.name} • ${c.company}` : c.name,
       secondary: c.email,
       to: `/contacts/${c.id}`,
+    }),
+  },
+  {
+    key: "itineraries",
+    label: "Itineraries",
+    icon: Map,
+    color: "#0ea5e9",
+    bg: "rgba(14, 165, 233, 0.12)",
+    border: "rgba(14, 165, 233, 0.25)",
+    render: (itinerary) => ({
+      primary: itinerary.title || itinerary.destination,
+      secondary: [itinerary.contact?.name, itinerary.subBrand, itinerary.status].filter(Boolean).join(" • "),
+      to: `/travel/itineraries/${itinerary.id}`,
+    }),
+  },
+  {
+    key: "tmcTrips",
+    label: "TMC Trips",
+    icon: Plane,
+    color: "#2563eb",
+    bg: "rgba(37, 99, 235, 0.12)",
+    border: "rgba(37, 99, 235, 0.25)",
+    render: (trip) => ({
+      primary: trip.tripCode ? `${trip.tripCode} • ${trip.destination}` : trip.destination,
+      secondary: trip.status || "",
+      to: `/travel/trips/${trip.id}`,
+    }),
+  },
+  {
+    key: "travelQuotes",
+    label: "Travel Quotes",
+    icon: FileText,
+    color: "#8b5cf6",
+    bg: "rgba(139, 92, 246, 0.12)",
+    border: "rgba(139, 92, 246, 0.25)",
+    render: (quote) => ({
+      primary: `QT-${String(quote.id).padStart(4, "0")}${quote.contact?.name ? ` • ${quote.contact.name}` : ""}`,
+      secondary: [quote.itinerary?.title || quote.itinerary?.destination, quote.subBrand, quote.status].filter(Boolean).join(" • "),
+      to: `/travel/quotes/builder/${quote.id}`,
+    }),
+  },
+  {
+    key: "travelInvoices",
+    label: "Travel Invoices",
+    icon: Receipt,
+    color: "#f59e0b",
+    bg: "rgba(245, 158, 11, 0.12)",
+    border: "rgba(245, 158, 11, 0.25)",
+    render: (invoice) => ({
+      primary: invoice.invoiceNum,
+      secondary: [invoice.subBrand, invoice.status, formatMoney(invoice.totalAmount, { currency: invoice.currency, maximumFractionDigits: 2 })].filter(Boolean).join(" • "),
+      to: "/travel/invoices-admin",
+    }),
+  },
+  {
+    key: "travelSuppliers",
+    label: "Suppliers",
+    icon: Building2,
+    color: "#14b8a6",
+    bg: "rgba(20, 184, 166, 0.12)",
+    border: "rgba(20, 184, 166, 0.25)",
+    render: (supplier) => ({
+      primary: supplier.name,
+      secondary: [supplier.supplierCategory, supplier.subBrand, supplier.contactPerson || supplier.email].filter(Boolean).join(" • "),
+      to: "/travel/suppliers-admin",
     }),
   },
   {
@@ -291,36 +449,115 @@ const ENTITY_SECTIONS = [
   },
 ];
 
-// Case-insensitive substring scorer for the client-side page filter.
-// Returns -1 when there's no match so callers can drop the row.
-function scorePageMatch(page, q) {
-  if (!page || !q) return -1;
-  const needle = q.toLowerCase();
+function isWithinOneEdit(left, right) {
+  if (Math.abs(left.length - right.length) > 1) return false;
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row += 1) {
+    const current = [row];
+    let rowMinimum = row;
+    for (let column = 1; column <= right.length; column += 1) {
+      const substitutionCost = left[row - 1] === right[column - 1] ? 0 : 1;
+      current[column] = Math.min(
+        current[column - 1] + 1,
+        previous[column] + 1,
+        previous[column - 1] + substitutionCost,
+      );
+      rowMinimum = Math.min(rowMinimum, current[column]);
+    }
+    if (rowMinimum > 1) return false;
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length] <= 1;
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function hasCloseWordMatch(fieldWords, queryWords) {
+  if (queryWords.length === 0 || queryWords.some((word) => word.length < 4)) return false;
+  return queryWords.every((queryWord) =>
+    fieldWords.some((fieldWord) => isWithinOneEdit(queryWord, fieldWord)),
+  );
+}
+
+// Relevance scorer for the client-side page filter. It is case/diacritic
+// insensitive, supports separated query words ("school calendar" matches
+// "School Term Calendar"), and prioritizes visible labels over descriptions
+// and task aliases. Travel also accepts one spelling error per query word.
+function scorePageMatch(page, q, allowFuzzy = false) {
+  if (!page || !q) return null;
+  if (!allowFuzzy) {
+    // Preserve the established Generic/Wellness substring behavior. The
+    // relevance and typo-tolerance upgrade in this change is Travel-only.
+    const needle = String(q).toLowerCase();
+    const fields = [
+      page.label,
+      page.title,
+      page.name,
+      page.description,
+      page.parent,
+      page.category,
+      page.path,
+      page.route,
+      ...(Array.isArray(page.aliases) ? page.aliases : [page.aliases]),
+    ];
+    let best = null;
+    for (const field of fields) {
+      if (!field) continue;
+      const index = String(field).toLowerCase().indexOf(needle);
+      if (index === -1) continue;
+      const weight = field === page.label || field === page.title || field === page.name
+        ? 0
+        : field === page.description
+          ? 100
+          : field === page.parent
+            ? 150
+            : 200;
+      const candidate = { score: weight + index, fuzzy: false, fieldRank: 0 };
+      if (!best || candidate.score < best.score) best = candidate;
+    }
+    return best;
+  }
+  const needle = normalizeSearchText(q);
+  const queryWords = needle.split(" ").filter(Boolean);
+  if (!needle || queryWords.length === 0) return null;
   const fields = [
-    page.label,
-    page.title,
-    page.name,
-    page.description,
-    page.parent,
-    page.category,
-    page.path,
-    page.route,
+    { value: page.label, weight: 0, fieldRank: 0 },
+    { value: page.title, weight: 0, fieldRank: 0 },
+    { value: page.name, weight: 0, fieldRank: 0 },
+    { value: page.description, weight: 200, fieldRank: 1 },
+    { value: page.parent, weight: 300, fieldRank: 2 },
+    ...((Array.isArray(page.aliases) ? page.aliases : [page.aliases])
+      .map((value) => ({ value, weight: 400, fieldRank: 3 }))),
+    { value: page.category, weight: 500, fieldRank: 4 },
+    { value: page.path, weight: 550, fieldRank: 5 },
+    { value: page.route, weight: 550, fieldRank: 5 },
   ];
-  let best = -1;
-  for (const f of fields) {
-    if (!f) continue;
-    const idx = f.toLowerCase().indexOf(needle);
-    if (idx === -1) continue;
-    // Earlier match in label > later match in description.
-    const fieldWeight = f === page.label || f === page.title || f === page.name
-      ? 0
-      : f === page.description
-        ? 100
-        : f === page.parent
-          ? 150
-          : 200;
-    const candidate = fieldWeight + idx;
-    if (best === -1 || candidate < best) best = candidate;
+  let best = null;
+  for (const { value, weight, fieldRank } of fields) {
+    if (!value) continue;
+    const field = normalizeSearchText(value);
+    const fieldWords = field.split(" ").filter(Boolean);
+    const phraseIndex = field.indexOf(needle);
+    const allWordsMatch = queryWords.every((word) => fieldWords.includes(word));
+    const fuzzy = phraseIndex === -1 && !allWordsMatch && allowFuzzy && hasCloseWordMatch(fieldWords, queryWords);
+    if (phraseIndex === -1 && !allWordsMatch && !fuzzy) continue;
+
+    let matchScore;
+    if (field === needle) matchScore = 0;
+    else if (field.startsWith(`${needle} `)) matchScore = 10;
+    else if (phraseIndex >= 0) matchScore = 20 + phraseIndex;
+    else if (allWordsMatch) matchScore = 60;
+    else matchScore = 100;
+
+    const candidate = { score: weight + matchScore, fuzzy, fieldRank };
+    if (!best || candidate.score < best.score) best = candidate;
   }
   return best;
 }
@@ -332,6 +569,7 @@ function resultKey(sectionKey, row, idx) {
 export default function Omnibar() {
   const [results, setResults] = useState({});
   const [isLoading, setIsLoading] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [pagesIndex, setPagesIndex] = useState([]);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -340,6 +578,7 @@ export default function Omnibar() {
   const inputRef = useRef(null);
   const containerRef = useRef(null);
   const optionRefs = useRef([]);
+  const searchRequestIdRef = useRef(0);
   const navigate = useNavigate();
   const { user, tenant } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
@@ -444,25 +683,47 @@ export default function Omnibar() {
   // are client-side and update synchronously on every keystroke (so the
   // user sees their sidebar results without waiting on the network).
   useEffect(() => {
+    const requestId = ++searchRequestIdRef.current;
+    const normalizedQuery = query.trim();
+    if (tenant?.vertical === "travel" && normalizedQuery.length >= 2) {
+      // Do not display record matches from the previous query while the new
+      // request is waiting for the debounce/network.
+      setResults({});
+      setSearchError(false);
+      setIsLoading(true);
+    }
     const fetchOmni = async () => {
-      if (query.length < 2) {
+      if (normalizedQuery.length < 2) {
         setResults({});
+        setSearchError(false);
+        setIsLoading(false);
         return;
       }
       setIsLoading(true);
       try {
-        const data = await fetchApi(
-          `/api/search?q=${encodeURIComponent(query)}`,
-        );
-        setResults(data || {});
+        let searchUrl = `/api/search?q=${encodeURIComponent(normalizedQuery)}`;
+        if (tenant?.vertical === "travel" && activeSubBrand) {
+          searchUrl += `&subBrand=${encodeURIComponent(activeSubBrand)}`;
+        }
+        const data = tenant?.vertical === "travel"
+          ? await fetchApi(searchUrl, { silent: true })
+          : await fetchApi(searchUrl);
+        if (requestId === searchRequestIdRef.current) {
+          setResults(data || {});
+          setSearchError(false);
+        }
       } catch (err) {
-        console.error(err);
+        if (requestId === searchRequestIdRef.current) {
+          console.error(err);
+          setResults({});
+          setSearchError(true);
+        }
       }
-      setIsLoading(false);
+      if (requestId === searchRequestIdRef.current) setIsLoading(false);
     };
     const debounce = setTimeout(fetchOmni, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(debounce);
-  }, [query]);
+  }, [query, tenant?.vertical, activeSubBrand]);
 
   // Client-side page match. The catalog is small (~70 entries) so a linear
   // scan + sort per keystroke is cheap. Keep every matching sidebar page in
@@ -514,15 +775,24 @@ export default function Omnibar() {
   );
 
   const pageMatches = useMemo(() => {
-    if (query.length < 2 || !Array.isArray(visiblePagesIndex)) return [];
+    const queryLength = tenant?.vertical === "travel" ? query.trim().length : query.length;
+    if (queryLength < 2 || !Array.isArray(visiblePagesIndex)) return [];
     const scored = [];
     for (const p of visiblePagesIndex) {
-      const score = scorePageMatch(p, query);
-      if (score >= 0) scored.push({ page: p, score });
+      const match = scorePageMatch(p, query, tenant?.vertical === "travel");
+      if (match) scored.push({ page: p, ...match });
     }
     scored.sort((a, b) => a.score - b.score);
-    return scored.map((s) => s.page);
-  }, [query, visiblePagesIndex]);
+    // When at least one Travel page title matches, suppress alias/category/
+    // path-only matches. Description matches remain useful for broad searches,
+    // while Meeting Forms' "calendar booking" alias no longer pollutes an
+    // actual Calendar title search.
+    const hasTravelLabelMatch = tenant?.vertical === "travel"
+      && scored.some((item) => item.fieldRank === 0);
+    return scored
+      .filter((item) => !hasTravelLabelMatch || item.fieldRank <= 2)
+      .map((item) => item.page);
+  }, [query, visiblePagesIndex, tenant?.vertical]);
 
   // Merge pages (client) + backend results into a single resultSet that the
   // section table iterates over.
@@ -564,7 +834,7 @@ export default function Omnibar() {
     [navigate],
   );
 
-  const showDropdown = isFocused && query.length >= 2;
+  const showDropdown = isFocused && (tenant?.vertical === "travel" ? query.trim().length : query.length) >= 2;
   const activeOptionId = activeIndex >= 0 ? `omnibar-option-${flatResults[activeIndex]?.key}` : undefined;
 
   useEffect(() => {
@@ -665,7 +935,9 @@ export default function Omnibar() {
           // theme/wellness.css:213) for icon-prefixed inputs where the
           // wrapper already owns the focus chrome.
           className="naked-input"
-          placeholder="Search pages, contacts, deals, invoices, campaigns, sequences, surveys…"
+          placeholder={tenant?.vertical === "travel"
+            ? "Search Travel CRM…"
+            : "Search pages, contacts, deals, invoices, campaigns, sequences, surveys…"}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -673,7 +945,7 @@ export default function Omnibar() {
           }}
           onFocus={() => setIsFocused(true)}
           onKeyDown={handleInputKeyDown}
-          aria-label="Global search"
+          aria-label={tenant?.vertical === "travel" ? "Search Travel CRM" : "Global search"}
           aria-autocomplete="list"
           aria-controls="omnibar-results"
           aria-expanded={showDropdown}
@@ -745,7 +1017,21 @@ export default function Omnibar() {
             </div>
           )}
 
-          {!isLoading && totalResultCount === 0 && (
+          {tenant?.vertical === "travel" && searchError && totalResultCount === 0 && (
+            <div
+              role="status"
+              style={{
+                padding: "2rem 1.25rem",
+                textAlign: "center",
+                color: "var(--text-secondary)",
+                fontSize: "0.875rem",
+              }}
+            >
+              Search is temporarily unavailable. Please try again.
+            </div>
+          )}
+
+          {!isLoading && (tenant?.vertical !== "travel" || !searchError) && totalResultCount === 0 && (
             <div
               style={{
                 padding: "2rem 1.25rem",
@@ -754,11 +1040,13 @@ export default function Omnibar() {
                 fontSize: "0.875rem",
               }}
             >
-              No algorithmic matches located for "
+              {tenant?.vertical === "travel" ? "No results for “" : "No algorithmic matches located for “"}
               <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
-                {query}
+                {tenant?.vertical === "travel" ? query.trim() : query}
               </span>
-              " within the enterprise dataset.
+              {tenant?.vertical === "travel"
+                ? "”. Try a customer, destination, trip code, quote, invoice, supplier, or page."
+                : "” within the enterprise dataset."}
             </div>
           )}
 
@@ -788,6 +1076,7 @@ export default function Omnibar() {
                       const optionIndex = flatResults.findIndex((item) => item.key === optionKey);
                       const isActive = optionIndex === activeIndex;
                       const r = flatResults[optionIndex]?.rendered || section.render(row);
+                      const RowIcon = r.icon || Icon;
                       return (
                         <button
                           key={optionKey}
@@ -838,7 +1127,7 @@ export default function Omnibar() {
                               flexShrink: 0,
                             }}
                           >
-                            <Icon size={16} color={section.color} />
+                            <RowIcon size={16} color={section.color} />
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div
@@ -926,7 +1215,9 @@ export default function Omnibar() {
               to close
             </span>
             <span style={{ opacity: 0.6 }}>
-              Federated Multi-Index Search Matrix
+              {tenant?.vertical === "travel"
+                ? "Use ↑↓ to navigate · Enter to open"
+                : "Federated Multi-Index Search Matrix"}
             </span>
           </div>
         </div>

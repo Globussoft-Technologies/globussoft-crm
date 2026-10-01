@@ -18,6 +18,7 @@ const {
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { sendEmail: sendTenantEmail } = require("../lib/emailSender");
 // Wellness-role catalog lookup. Wellness tenants validate wellnessRole
 // against their per-tenant WellnessRoleType catalog (admins can add
 // custom roles like "nurse" from Settings). Generic tenants fall back
@@ -260,7 +261,16 @@ function resolveFrontendBase(req) {
 // routes/auth.js sendPasswordResetEmail (kept local instead of importing so
 // the two modules stay independently testable; promoting both into a shared
 // lib/sendgrid.js is a separate cleanup tracked in TODOS).
-async function sendEmail(toEmail, subject, plainText, html) {
+async function sendEmail(toEmail, subject, plainText, html, options = {}) {
+  if (String(options.vertical || "").toLowerCase() === "travel") {
+    return sendTenantEmail({
+      tenantId: options.tenantId,
+      to: toEmail,
+      subject,
+      text: plainText,
+      html: html || `<p>${plainText.replace(/\n/g, "<br>")}</p>`,
+    });
+  }
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
   const FROM_EMAIL =
     process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
@@ -701,6 +711,7 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
         "You're invited to Globussoft CRM",
         `You've been invited to access Globussoft CRM. Set your password within 24 hours:\n\n${inviteUrl}`,
         `<p>You've been invited to access Globussoft CRM.</p><p><a href="${inviteUrl}">Set your password</a> within 24 hours.</p>`,
+        { tenantId: req.user.tenantId, vertical: req.user.vertical },
       );
       inviteSent = true;
     }
@@ -1243,6 +1254,7 @@ router.post("/:id/reset-password", verifyRole(["ADMIN"]), async (req, res) => {
       "Your Globussoft CRM password has been reset",
       `An admin has triggered a password reset for your account. Click this link (valid 1 hour) to choose a new password:\n\n${resetUrl}\n\nIf you weren't expecting this, contact your administrator.`,
       `<p>An admin has triggered a password reset for your account.</p><p><a href="${resetUrl}">Choose a new password</a> (valid 1 hour).</p>`,
+      { tenantId: req.user.tenantId, vertical: req.user.vertical },
     ).catch(() => {});
 
     await writeAudit(
@@ -1295,6 +1307,7 @@ router.post("/:id/resend-invite", verifyRole(["ADMIN"]), async (req, res) => {
       "You're invited to Globussoft CRM",
       `You've been invited to access Globussoft CRM. Click this link to set your password and sign in (valid 24 hours):\n\n${inviteUrl}\n\nIf you weren't expecting this, you can safely ignore this email.`,
       `<p>You've been invited to access Globussoft CRM.</p><p><a href="${inviteUrl}">Set your password</a> to get started (valid 24 hours).</p>`,
+      { tenantId: req.user.tenantId, vertical: req.user.vertical },
     ).catch(() => {});
 
     await writeAudit(

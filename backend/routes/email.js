@@ -7,19 +7,43 @@ const prisma = require('../lib/prisma');
 // interpolates {{brand_logo_url}} / {{brand_primary_color}} / {{brand_tagline}}
 // / {{brand_signature_template}} / {{brand_footer_text}} into body + subject.
 const { renderEmailWithBrand } = require('../lib/emailRender');
+const { resolveSendGridConfig } = require('../services/travelSendGrid');
 
 const router = express.Router();
 
 // SendGrid config (mirrors email_scheduling.js + cron/scheduledEmailEngine.js).
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@crm.globusdemos.com';
 
-async function sendSendGrid(to, subject, body) {
-  const key = process.env.SENDGRID_API_KEY;
+async function resolveTravelProvider(tenantId) {
+  let tenant = null;
+  try {
+    tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+  } catch (_error) {
+    return null;
+  }
+  return String(tenant?.vertical || '').toLowerCase() === 'travel'
+    ? resolveSendGridConfig(tenantId)
+    : null;
+}
+
+function senderIdentity(provider) {
+  if (!provider) return FROM_EMAIL;
+  return provider.fromName ? `${provider.fromName} <${provider.fromEmail}>` : provider.fromEmail;
+}
+
+async function sendSendGrid(to, subject, body, provider = null) {
+  const key = provider?.apiKey || process.env.SENDGRID_API_KEY;
   if (!key) return { sent: false, reason: 'no_api_key' };
   const htmlBody = body.replace(/\n/g, '<br>');
   const payload = {
     personalizations: [{ to: [{ email: to }] }],
-    from: { email: FROM_EMAIL },
+    from: {
+      email: provider?.fromEmail || FROM_EMAIL,
+      ...(provider?.fromName ? { name: provider.fromName } : {}),
+    },
     subject: subject,
     content: [
       { type: 'text/plain', value: body },
@@ -184,6 +208,7 @@ router.post('/scheduled/run', verifyToken, verifyRole(['ADMIN']), async (req, re
     const errors = [];
     for (const item of due) {
       try {
+        const travelProvider = await resolveTravelProvider(item.tenantId);
         // G097: resolve anchor sub-brand BEFORE persistence so the body
         // we store in EmailMessage already carries the rendered brand
         // tokens (inbox-visible copy mirrors what the recipient receives).
@@ -203,7 +228,7 @@ router.post('/scheduled/run', verifyToken, verifyRole(['ADMIN']), async (req, re
           data: {
             subject: renderedSubject,
             body: renderedBody,
-            from: FROM_EMAIL,
+            from: senderIdentity(travelProvider),
             to: item.to,
             direction: 'OUTBOUND',
             read: true,
@@ -229,7 +254,7 @@ router.post('/scheduled/run', verifyToken, verifyRole(['ADMIN']), async (req, re
         // When SENDGRID_API_KEY is unset (CI default), sendSendGrid returns
         // { sent:false, reason:'no_api_key' } → row flips to FAILED.
         // That's the exact path the spec verifies under "failed transitions".
-        const result = await sendSendGrid(item.to, renderedSubject, trackedBody);
+        const result = await sendSendGrid(item.to, renderedSubject, trackedBody, travelProvider);
 
         if (result.sent) {
           await prisma.scheduledEmail.update({

@@ -104,6 +104,13 @@ describe("MeetingForms", () => {
       name: "Talk to a TMC Experiential Learning Expert 2",
       slug: "talk-to-an-expert-2",
       hostUserId: 3,
+      fields: expect.arrayContaining([
+        expect.objectContaining({
+          key: "designation",
+          type: "select",
+          options: ["Principal", "Vice Principal", "Head of School", "Academic Coordinator", "Teacher / Faculty", "School Management", "Other"],
+        }),
+      ]),
     });
     await waitFor(() => expect(screen.queryByRole("heading", { name: "New Meeting Form settings" })).not.toBeInTheDocument());
     expect(notify.success).toHaveBeenCalledWith("Meeting form created");
@@ -387,6 +394,26 @@ describe("MeetingForms", () => {
     expect(fetchApi).not.toHaveBeenCalledWith("/api/travel/meeting-forms/7", expect.anything());
   });
 
+  it("upgrades a legacy Designation text field to the required dropdown", async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === "/api/travel/meeting-forms") return Promise.resolve([{ ...FORM, fields: [{ key: "designation", label: "Designation", type: "text", required: true, enabled: true, order: 2 }] }]);
+      if (url === "/api/travel/meeting-forms/7/bookings") return Promise.resolve([]);
+      if (url === "/api/travel/meeting-forms/hosts") return Promise.resolve([{ id: 3, name: "TMC Host", email: "host@tmc.test", calendarIntegrations: [{ provider: "google" }] }]);
+      if (url === "/api/travel/meeting-forms/zoom-config") return Promise.resolve({ configured: true });
+      if (url === "/api/travel/email-provider") return Promise.resolve({ configured: false, source: "backend" });
+      return Promise.resolve({});
+    });
+
+    render(<MeetingForms />);
+    await screen.findByText("Talk to an Expert");
+    fireEvent.click(screen.getByRole("button", { name: "Fields" }));
+
+    expect(screen.getByLabelText("designation type")).toHaveValue("select");
+    expect(screen.getByLabelText("designation type")).toBeDisabled();
+    expect(screen.getByLabelText("Designation option 1")).toHaveValue("Principal");
+    expect(screen.getByLabelText("Designation option 7")).toHaveValue("Other");
+  });
+
   it("shows only masked tenant Zoom credentials inside Meeting Forms", async () => {
     render(<MeetingForms />);
     await screen.findByText("Talk to an Expert");
@@ -403,7 +430,8 @@ describe("MeetingForms", () => {
     fireEvent.click(screen.getByRole("button", { name: "Zoom Setup" }));
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
     const popup = await screen.findByRole("dialog", { name: "Disconnect Zoom?" });
-    expect(popup).toHaveAttribute("aria-modal", "false");
+    expect(popup).toHaveAttribute("aria-modal", "true");
+    expect(popup.closest(".meeting-disconnect-overlay")).toBe(document.body.lastElementChild);
     fireEvent.click(screen.getByRole("button", { name: "Disconnect Zoom" }));
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith("/api/travel/meeting-forms/zoom-config/disconnect", { method: "POST" }));
   });

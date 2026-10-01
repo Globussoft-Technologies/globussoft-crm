@@ -1,6 +1,11 @@
 const { _internal } = require("../../routes/travel_meeting_forms");
 
 describe("Travel Meeting Form field validation", () => {
+  test("maps provider failures away from proxy-intercepted gateway responses", () => {
+    expect(_internal.publicBookingErrorStatus({ status: 502, code: "ZOOM_CREATE_FAILED" })).toBe(424);
+    expect(_internal.publicBookingErrorStatus({ status: 503, code: "ZOOM_NOT_CONFIGURED" })).toBe(424);
+    expect(_internal.publicBookingErrorStatus({ status: 409, code: "SLOT_UNAVAILABLE" })).toBe(409);
+  });
   test("server callers need no API credential while browser origins use the tenant-wide embed allowlist", () => {
     const form = { tenant: { embedAllowlistJson: JSON.stringify(["https://www.themodernclassroom.in", "https://*.partner.test"]) } };
     expect(_internal.authorizeConsumer(form, { headers: {} })).toBe(true);
@@ -26,6 +31,45 @@ describe("Travel Meeting Form field validation", () => {
     expect(fields[0].options).toEqual(["First", "Second"]);
   });
 
+  test("upgrades the canonical Designation field to the TMC dropdown contract", () => {
+    const fields = _internal.normalizeFields([
+      { key: "designation", label: "Designation", type: "text", required: true, enabled: true },
+    ]);
+    expect(fields[0]).toMatchObject({
+      key: "designation",
+      type: "select",
+      required: true,
+      options: [
+        "Principal",
+        "Vice Principal",
+        "Head of School",
+        "Academic Coordinator",
+        "Teacher / Faculty",
+        "School Management",
+        "Other",
+      ],
+    });
+  });
+
+  test("validates both names when a customer website uses the split-name API contract", () => {
+    expect(_internal.validateSplitNameSubmission(
+      { firstName: "Priya", lastName: "Sharma" },
+      { aliases: { firstName: "Priya", lastName: "Sharma" } },
+    )).toBeNull();
+    expect(_internal.validateSplitNameSubmission(
+      { firstName: "Priya", lastName: "" },
+      { aliases: { firstName: "Priya", lastName: "" } },
+    )).toMatchObject({
+      code: "INVALID_FIELD_VALUE",
+      fields: ["lastName"],
+      fieldErrors: { lastName: expect.stringMatching(/required/i) },
+    });
+    expect(_internal.validateSplitNameSubmission(
+      { contactName: "Legacy Visitor" },
+      { aliases: { firstName: "", lastName: "" } },
+    )).toBeNull();
+  });
+
   test("accepts only supported iframe Google Fonts", () => {
     expect(_internal.normalizeEmbedFont("Poppins")).toBe("Poppins");
     expect(() => _internal.normalizeEmbedFont("url(javascript:alert(1))")).toThrowError(/supported Google Font/i);
@@ -44,6 +88,43 @@ describe("Travel Meeting Form field validation", () => {
       confirmationMessage: "Confirmed",
     });
     expect(config.bookingHorizonDays).toBe(60);
+  });
+
+  test("publishes an API field schema and the three-step customer website flow", () => {
+    const config = _internal.publicConfig({
+      publicKey: "tmcmf_test",
+      name: "Conversation",
+      subBrand: "tmc",
+      durationMins: 30,
+      bookingHorizonDays: 60,
+      timezone: "Asia/Kolkata",
+      embedFontFamily: "Inter",
+      fieldsJson: JSON.stringify([
+        { key: "designation", label: "Designation", type: "text", required: true, enabled: true, order: 2 },
+      ]),
+      confirmationMessage: "Confirmed",
+    });
+    expect(config.fields[0]).toMatchObject({ type: "select", options: expect.arrayContaining(["Principal", "Other"]) });
+    expect(config.apiFields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "firstName", required: true }),
+      expect.objectContaining({ key: "lastName", required: true }),
+      expect.objectContaining({ key: "designation", type: "select", options: expect.arrayContaining(["Principal", "Other"]) }),
+      expect.objectContaining({ key: "school", required: true }),
+      expect.objectContaining({ key: "email", type: "email" }),
+      expect.objectContaining({ key: "phone", type: "tel", pattern: "[0-9]{7,15}" }),
+    ]));
+    expect(config.bookingFlow.steps).toEqual([
+      expect.objectContaining({ id: "details", fields: ["firstName", "lastName", "designation", "school", "city"] }),
+      expect.objectContaining({ id: "time", fields: ["selectedStartTime"] }),
+      expect.objectContaining({ id: "contact", fields: ["email", "phone"] }),
+    ]);
+    expect(config.bookingSubmission).toMatchObject({
+      method: "POST",
+      endpointSuffix: "/book",
+      slotField: "selectedStartTime",
+      idempotencyKeyHeader: "Idempotency-Key",
+      confirmationTokenPath: "booking.confirmationToken",
+    });
   });
 
   test("publishes date-only booking boundaries for the hosted calendar", () => {

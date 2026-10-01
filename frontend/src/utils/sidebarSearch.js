@@ -30,6 +30,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/school-terms', label: 'School Term Calendar', brand: 'tmc' },
   { path: '/travel/brochures', label: 'Brochure Engine' },
   { path: '/travel/forms', label: 'Web Forms', description: 'Embedded travel lead capture forms' },
+  { path: '/travel/meeting-forms', label: 'Meeting Forms', description: 'Appointment forms, Zoom meetings, embeds, and booking APIs' },
   { path: '/landing-pages', label: 'Landing Pages' },
   { path: '/inbox', label: 'Inbox' },
   { path: '/tasks', label: 'Tasks' },
@@ -52,6 +53,64 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/visa/checklists', label: 'Checklists', brand: 'visasure' },
   { path: '/travel/visa/embassy-rules', label: 'Embassy Rules', brand: 'visasure' },
 ];
+
+// People often search by what they want to do rather than by the exact menu
+// label. Keep those terms scoped to Travel CRM so the generic and wellness
+// search experiences are not changed.
+const TRAVEL_PAGE_ALIASES = {
+  '/travel': ['home', 'overview', 'travel dashboard'],
+  '/leads': ['enquiries', 'prospects', 'customers'],
+  '/travel/pipeline': ['sales pipeline', 'deals', 'stages'],
+  '/contacts': ['travellers', 'customers', 'people'],
+  '/travel/diagnostics': ['assessment', 'readiness'],
+  '/travel/trip-knowledge': ['knowledge base', 'travel documents', 'drive'],
+  '/travel/itineraries': ['trip planner', 'day by day', 'tour plan'],
+  '/travel/trips': ['school trips', 'educational tours'],
+  '/travel/tmc/catalogue': ['packages', 'school tour catalogue'],
+  '/travel/web-checkins': ['airline check in', 'boarding pass'],
+  '/travel/passport-verification': ['passport ocr', 'passport validation'],
+  '/travel/cost-master': ['costing', 'rates', 'prices'],
+  '/travel/sightseeing': ['attractions', 'points of interest', 'poi'],
+  '/travel/itinerary-templates': ['trip templates', 'tour templates'],
+  '/travel/pricing-rules': ['markup', 'margin', 'seasonal pricing'],
+  '/travel/reports': ['analytics', 'insights'],
+  '/travel/reviews': ['feedback', 'testimonials', 'ratings'],
+  '/travel/suppliers-admin': ['vendors', 'supplier directory'],
+  '/travel/commission-profiles': ['commissions', 'agent commission'],
+  '/travel/quotes-admin': ['proposals', 'estimates', 'quotations'],
+  '/travel/flights/quote': ['airfare', 'flight pricing'],
+  '/travel/quotes/builder': ['create quote', 'quotation builder'],
+  '/travel/quote-templates': ['proposal templates', 'quotation templates'],
+  '/travel/cancellation-policies': ['refund policy', 'cancellation rules'],
+  '/travel/suppliers': ['vendor credentials', 'supplier api keys'],
+  '/travel/religious-packets': ['rfu', 'umrah', 'pilgrims'],
+  '/travel/curriculum-mappings': ['learning outcomes', 'education mapping'],
+  '/travel/school-terms': ['school holidays', 'academic calendar'],
+  '/travel/brochures': ['brochure pdf', 'ai brochure'],
+  '/travel/forms': ['lead capture', 'embed form', 'website form'],
+  '/travel/meeting-forms': ['appointment', 'booking form', 'schedule meeting', 'zoom meeting', 'calendar booking'],
+  '/landing-pages': ['campaign page', 'lead page'],
+  '/inbox': ['email', 'messages', 'unified inbox'],
+  '/tasks': ['follow ups', 'todo', 'reminders'],
+  '/calendar-sync': ['appointments', 'google calendar', 'outlook calendar'],
+  '/gmail': ['mail', 'google email'],
+  '/travel/invoices-admin': ['billing', 'customer invoices'],
+  '/travel/tally': ['accounting', 'xml export', 'ca export'],
+  '/travel/milestones': ['payment schedule', 'instalments', 'installments'],
+  '/travel/payables': ['supplier payments', 'accounts payable'],
+  '/payments': ['receipts', 'transactions', 'collections'],
+  '/expenses': ['spending', 'cost claims'],
+  '/staff': ['users', 'team', 'employees'],
+  '/settings': ['integrations', 'sendgrid', 'zoom setup', 'crm settings'],
+  '/settings/roles': ['permissions', 'rbac', 'access control'],
+  '/audit-log': ['activity history', 'compliance log'],
+  '/developer': ['api', 'webhooks', 'developer console'],
+  '/privacy': ['gdpr', 'dsar', 'data retention'],
+  '/admin/brand-kits': ['logos', 'colours', 'colors', 'branding'],
+  '/travel/visa/applications': ['visa applicants', 'visa cases'],
+  '/travel/visa/checklists': ['visa documents', 'document checklist'],
+  '/travel/visa/embassy-rules': ['visa requirements', 'country rules'],
+};
 
 export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/home', label: 'Home', description: 'Role-aware widget dashboard', hideForAdmin: true },
@@ -337,6 +396,8 @@ export function filterSidebarPages(
     filtered.push({
       ...page,
       label: spec.label,
+      description: spec.description || page.description,
+      aliases: TRAVEL_PAGE_ALIASES[page.path] || [],
     });
   }
   return filtered;

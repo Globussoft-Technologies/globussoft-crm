@@ -122,6 +122,7 @@ describe("GET /api/contacts/filter-fields", () => {
       "name",
       "email",
       "phone",
+      "whatsappPhone",
       "company",
       "status",
       "source",
@@ -141,6 +142,8 @@ describe("GET /api/contacts/filter-fields", () => {
 
     const byKey = Object.fromEntries(res.body.fields.map((f) => [f.field, f]));
     expect(byKey.name.kind).toBe("text");
+    expect(byKey.whatsappPhone.kind).toBe("text");
+    expect(byKey.whatsappPhone.label).toBe("WhatsApp Number");
     expect(byKey.status.kind).toBe("text");
     expect(byKey.callifiedCampaignId.kind).toBe("id");
     expect(byKey.callifiedCampaignId.label).toBe("Callified Campaign");

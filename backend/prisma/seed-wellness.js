@@ -356,6 +356,9 @@ async function main() {
         role: s.role,
         wellnessRole: s.wellnessRole,
         tenantId: tenant.id,
+        subscriptionStatus: "TRIAL",
+        trialStartDate: new Date(),
+        trialEndsAt: new Date(Date.now() + 15 * 86400000),
       },
     });
     userMap[s.email] = u;

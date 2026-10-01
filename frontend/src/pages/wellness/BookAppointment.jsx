@@ -137,6 +137,7 @@ export default function BookAppointment() {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [doctorsLoading, setDoctorsLoading] = useState(false);
   const doctorFetchId = useRef(0);
+  const slotFetchId = useRef(0);
   const pageRef = useRef(null);
 
   // Payment choice — 'later' (default, no payment now) or 'now' (Razorpay
@@ -230,7 +231,7 @@ export default function BookAppointment() {
       if (requestId === doctorFetchId.current) {
         setDoctors(Array.isArray(data) ? data : []);
       }
-    } catch (err) {
+    } catch (_err) {
       if (requestId === doctorFetchId.current) {
         setDoctors([]);
         notify.error("Failed to load doctors for this date");
@@ -243,6 +244,14 @@ export default function BookAppointment() {
   useEffect(() => {
     refreshDoctors(formData.appointmentDate, formData.serviceId);
   }, [formData.appointmentDate, formData.serviceId, refreshDoctors]);
+
+  // Invalidate in-flight availability requests when this page unmounts. The
+  // request ids also ensure a response for an older doctor/date/service can
+  // never replace slots for the patient's current selection.
+  useEffect(() => () => {
+    doctorFetchId.current += 1;
+    slotFetchId.current += 1;
+  }, []);
 
   // Diagnostic: log when services arrive so we can confirm whether the URL
   // serviceId is actually in this tenant's catalog.
@@ -305,16 +314,20 @@ export default function BookAppointment() {
     if (formData.doctorId) {
       loadTimeSlots(formData.doctorId, date, formData.serviceId);
     } else {
+      slotFetchId.current += 1;
+      setSlotsLoading(false);
       setAvailableSlots(filterPastSlots(GENERIC_SLOTS, date));
     }
   };
 
   const loadTimeSlots = async (doctorId, date, serviceId = formData.serviceId) => {
+    const requestId = ++slotFetchId.current;
     try {
       setSlotsLoading(true);
       const params = new URLSearchParams({ date });
       if (serviceId) params.set("serviceId", serviceId);
       const slotsData = await fetchApi(`/api/wellness/doctors/${doctorId}/time-slots?${params.toString()}`);
+      if (requestId !== slotFetchId.current) return;
       if (slotsData.available && Array.isArray(slotsData.slots)) {
         setAvailableSlots(filterPastSlots(slotsData.slots, date));
       } else {
@@ -324,11 +337,12 @@ export default function BookAppointment() {
         }
       }
     } catch (err) {
+      if (requestId !== slotFetchId.current) return;
       console.error("Failed to load time slots:", err);
       setAvailableSlots([]);
       notify.error("Failed to load available time slots");
     } finally {
-      setSlotsLoading(false);
+      if (requestId === slotFetchId.current) setSlotsLoading(false);
     }
   };
 
@@ -339,6 +353,8 @@ export default function BookAppointment() {
     } else {
       // Patient cleared the doctor → revert to generic slots so they can still
       // pick a preferred time. Admin will reconcile against an actual doctor.
+      slotFetchId.current += 1;
+      setSlotsLoading(false);
       setAvailableSlots(
         filterPastSlots(GENERIC_SLOTS, formData.appointmentDate),
       );

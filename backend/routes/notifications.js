@@ -35,7 +35,10 @@ router.get("/", async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where,
-      orderBy: { createdAt: "desc" },
+      // Offset pagination must be deterministic when multiple notifications
+      // are created in the same timestamp tick. Without the unique id
+      // tie-breaker a row can move between pages and be repeated or skipped.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip,
       take: limit,
     };

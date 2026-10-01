@@ -540,6 +540,55 @@ describe('<BookAppointment /> — searchable doctor + service comboboxes', () =>
     );
   });
 
+  it('ignores stale slot responses after the selected service changes', async () => {
+    primeToday();
+    let resolveUnscopedSlots;
+    let resolveServiceSlots;
+    const unscopedSlots = new Promise((resolve) => { resolveUnscopedSlots = resolve; });
+    const serviceSlots = new Promise((resolve) => { resolveServiceSlots = resolve; });
+    fetchApiMock.mockImplementation((url) => {
+      const value = String(url);
+      if (value.includes('/api/wellness/doctors/availability')) return Promise.resolve(DOCTORS);
+      if (value === '/api/wellness/services') return Promise.resolve(SERVICES);
+      if (value.includes('/api/wellness/appointments/my-memberships')) return Promise.resolve([]);
+      if (value.includes('/api/wellness/appointments/my')) return Promise.resolve([]);
+      if (value.includes('/api/wellness/doctors/11/time-slots')) {
+        return value.includes('serviceId=21') ? serviceSlots : unscopedSlots;
+      }
+      return Promise.resolve({});
+    });
+
+    const { getTimeSelect } = renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    openCombobox(/Preferred doctor/i);
+    fireEvent.click(options(/Preferred doctor/i).find((option) => option.textContent.includes('Anjali')));
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) =>
+      String(url).includes('/api/wellness/doctors/11/time-slots') &&
+      !String(url).includes('serviceId='),
+    )).toBe(true));
+
+    openCombobox(/^Service$/i);
+    fireEvent.click(options(/^Service$/i).find((option) => option.textContent.includes('Stretch Marks')));
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) =>
+      String(url).includes('/api/wellness/doctors/11/time-slots') &&
+      String(url).includes('serviceId=21'),
+    )).toBe(true));
+
+    resolveServiceSlots({ available: true, slots: ['15:00'] });
+    await waitFor(() => {
+      const values = Array.from(getTimeSelect().options).map((option) => option.value);
+      expect(values).toContain('15:00');
+    });
+
+    resolveUnscopedSlots({ available: true, slots: ['11:00'] });
+    await waitFor(() => {
+      const values = Array.from(getTimeSelect().options).map((option) => option.value);
+      expect(values).toContain('15:00');
+      expect(values).not.toContain('11:00');
+    });
+  });
+
   it('shows an empty-state row rather than a blank list when nothing matches', async () => {
     primeToday();
     installDefaultMock({ services: SERVICES });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthContext } from '../App';
@@ -12,7 +12,7 @@ import { AuthContext } from '../App';
  *     QA selectors, screen-readers) rely on.
  *   - Badge renders with unread count when > 0; absent when 0.
  *   - Clicking the bell opens the dropdown (aria-expanded flips true) and
- *     fetches notifications from /api/notifications.
+ *     fetches the first 25 notifications; scrolling loads later pages.
  *   - Empty state copy renders when the notification list is empty.
  *   - mark-all-read clears the badge AND sends PUT to /api/notifications/read-all.
  *   - Socket push events (#345): `notification_new` bumps the badge for the
@@ -20,8 +20,7 @@ import { AuthContext } from '../App';
  *     resets the badge for the current user and is a no-op otherwise.
  *   - Row-link navigation: clicking a notification with a `link` navigates
  *     and closes the panel.
- *   - Footer "View all" (#853) deep-links to /notifications and is hidden
- *     when the panel is empty.
+ *   - Footer "View all" (#853) is currently hidden.
  *   - Outside-click dismissal closes the dropdown.
  *   - Badge text boundary: "99" at exactly 99, "99+" at 100+.
  *   - Fetch failures fail silently — no crash, no badge.
@@ -34,11 +33,10 @@ import { AuthContext } from '../App';
  *
  * Contract pinned
  *   - aria-label includes "(N unread)" when N > 0
- *   - dropdown-open click fires GET /api/notifications
+ *   - dropdown-open click fires GET /api/notifications?page=1&limit=25
  *   - "Mark all as read" click fires PUT /api/notifications/read-all
  *   - per-row Mark-as-read fires PUT /api/notifications/:id/read
  *   - per-row Resolve fires DELETE /api/notifications/:id
- *   - "View all" fires navigate('/notifications')
  *   - Row click with `link` fires navigate(link) and closes the panel
  *   - Socket events `notification_new` and `notifications_cleared` honour
  *     userId scoping so cross-user broadcast events don't pollute our badge
@@ -148,7 +146,7 @@ describe('<NotificationBell />', () => {
 
     expect(btn).toHaveAttribute('aria-expanded', 'true');
     await waitFor(() => {
-      expect(fetchApi).toHaveBeenCalledWith('/api/notifications');
+      expect(fetchApi).toHaveBeenCalledWith('/api/notifications?page=1&limit=25');
     });
     expect(screen.getByText('No notifications')).toBeInTheDocument();
   });
@@ -235,6 +233,59 @@ describe('<NotificationBell />', () => {
     const refreshed = await screen.findByRole('button', { name: /Notifications \(2 unread\)/ });
     expect(refreshed).toBeInTheDocument();
     expect(refreshed.textContent).toContain('2');
+  });
+
+  it('keeps the full unread count when the dropdown shows only the first page', async () => {
+    const user = userEvent.setup();
+    fetchApi
+      .mockResolvedValueOnce({ count: 137 })
+      .mockResolvedValueOnce({
+        notifications: [{ id: 1, title: 'Latest', message: 'x', type: 'info', isRead: false, createdAt: new Date().toISOString() }],
+        total: 180,
+        unreadTotal: 137,
+        limit: 25,
+      });
+
+    renderWithAuth(<NotificationBell />);
+    const bell = await screen.findByRole('button', { name: /Notifications \(137 unread\)/ });
+    await user.click(bell);
+
+    expect(await screen.findByText('Latest')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Notifications \(137 unread\)/ })).toHaveTextContent('99+');
+  });
+
+  it('loads 25 notifications per page on scroll, without duplicates or requests after the last page', async () => {
+    const user = userEvent.setup();
+    const makeItem = (id) => ({
+      id, title: `Notice ${id}`, message: `Message ${id}`, type: 'info',
+      isRead: false, createdAt: new Date(2026, 0, id).toISOString(),
+    });
+    fetchApi
+      .mockResolvedValueOnce({ count: 51 })
+      .mockResolvedValueOnce({ notifications: Array.from({ length: 25 }, (_, i) => makeItem(i + 1)), total: 51, unreadTotal: 51 })
+      .mockResolvedValueOnce({ notifications: [makeItem(25), ...Array.from({ length: 24 }, (_, i) => makeItem(i + 26))], total: 51, unreadTotal: 51 })
+      .mockResolvedValueOnce({ notifications: [makeItem(51)], total: 51, unreadTotal: 51 });
+
+    renderWithAuth(<NotificationBell />);
+    await user.click(await screen.findByRole('button', { name: /Notifications \(51 unread\)/ }));
+    await screen.findByText('Notice 25');
+
+    const panel = screen.getByLabelText('Notification list');
+    Object.defineProperties(panel, {
+      scrollTop: { configurable: true, value: 400 },
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 800 },
+    });
+    fireEvent.scroll(panel);
+    await screen.findByText('Notice 49');
+    expect(screen.getAllByText('Notice 25')).toHaveLength(1);
+    fireEvent.scroll(panel);
+    await screen.findByText('Notice 51');
+    fireEvent.scroll(panel);
+    expect(fetchApi).toHaveBeenCalledTimes(4); // unread count + three pages
+    expect(fetchApi).toHaveBeenCalledWith('/api/notifications?page=2&limit=25');
+    expect(fetchApi).toHaveBeenCalledWith('/api/notifications?page=3&limit=25');
+    expect(screen.getByRole('button', { name: /Notifications \(51 unread\)/ })).toBeInTheDocument();
   });
 
   it('#622: invalidates panel + badge when user identity changes (role switch)', async () => {
@@ -570,19 +621,22 @@ describe('<NotificationBell />', () => {
     expect(btn).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('opening the panel after a fetch error renders the empty state', async () => {
+  it('opening the panel after a fetch error offers a retry', async () => {
     const user = userEvent.setup();
     fetchApi
       .mockResolvedValueOnce({ count: 0 })
-      .mockRejectedValueOnce(new Error('boom')); // /api/notifications fails
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ notifications: [{ id: 9, title: 'Recovered', message: 'Loaded', isRead: true, createdAt: new Date().toISOString() }], total: 1, unreadTotal: 0 });
 
     renderWithAuth(<NotificationBell />);
 
     const btn = await screen.findByRole('button', { name: /notifications/i });
     await user.click(btn);
 
-    // After the failed fetch, notifications stays [] → empty-state copy.
-    expect(await screen.findByText('No notifications')).toBeInTheDocument();
+    // A failed page can be retried without closing the panel.
+    await user.click(await screen.findByRole('button', { name: /Could not load notifications. Retry/i }));
+    expect(await screen.findByText('Recovered')).toBeInTheDocument();
+    expect(fetchApi).toHaveBeenCalledWith('/api/notifications?page=1&limit=25');
   });
 
   it('socket cleanup disconnects on unmount', async () => {

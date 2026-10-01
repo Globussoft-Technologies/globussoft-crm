@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useContext } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useContext, useCallback, useRef } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Calendar, Clock, Stethoscope, Info, Sparkles } from "lucide-react";
 import { fetchApi } from "../../utils/api";
@@ -135,6 +135,10 @@ export default function BookAppointment() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [doctorsLoading, setDoctorsLoading] = useState(false);
+  const doctorFetchId = useRef(0);
+  const slotFetchId = useRef(0);
+  const pageRef = useRef(null);
 
   // Payment choice — 'later' (default, no payment now) or 'now' (Razorpay
   // before slot reservation). Reuses the existing payments infrastructure
@@ -190,6 +194,65 @@ export default function BookAppointment() {
     loadData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The shared <main> can retain a scroll position from a taller page. In
+  // Chrome that position can keep its scrollHeight larger than this page's
+  // actual content, leaving an empty area below the booking cards. Bound only
+  // this route's main scroll to the rendered page bottom; the appointments
+  // list keeps its own 60vh scroll container.
+  useLayoutEffect(() => {
+    if (loading) return undefined;
+    const page = pageRef.current;
+    const main = page?.closest("main");
+    if (!main) return undefined;
+
+    const clampMainScroll = () => {
+      const contentBottom = page.getBoundingClientRect().bottom
+        - main.getBoundingClientRect().top + main.scrollTop;
+      const maxScroll = Math.max(0, Math.ceil(contentBottom - main.clientHeight));
+      if (main.scrollTop > maxScroll) main.scrollTop = maxScroll;
+    };
+
+    clampMainScroll();
+    main.addEventListener("scroll", clampMainScroll);
+    window.addEventListener("resize", clampMainScroll);
+    return () => {
+      main.removeEventListener("scroll", clampMainScroll);
+      window.removeEventListener("resize", clampMainScroll);
+    };
+  }, [loading, myAppointments.length]);
+
+  const refreshDoctors = useCallback(async (date, serviceId) => {
+    const requestId = ++doctorFetchId.current;
+    setDoctorsLoading(true);
+    try {
+      const params = new URLSearchParams({ date, withSlots: "true" });
+      if (serviceId) params.set("serviceId", serviceId);
+      const data = await fetchApi(`/api/wellness/doctors/availability?${params.toString()}`);
+      if (requestId === doctorFetchId.current) {
+        setDoctors(Array.isArray(data) ? data : []);
+      }
+    } catch (_err) {
+      if (requestId === doctorFetchId.current) {
+        setDoctors([]);
+        notify.error("Failed to load doctors for this date");
+      }
+    } finally {
+      if (requestId === doctorFetchId.current) setDoctorsLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    refreshDoctors(formData.appointmentDate, formData.serviceId);
+  }, [formData.appointmentDate, formData.serviceId, refreshDoctors]);
+
+  // Invalidate in-flight availability requests when this page unmounts. The
+  // request ids also ensure a response for an older doctor/date/service can
+  // never replace slots for the patient's current selection.
+  useEffect(() => () => {
+    doctorFetchId.current += 1;
+    slotFetchId.current += 1;
+  }, []);
+
   // Diagnostic: log when services arrive so we can confirm whether the URL
   // serviceId is actually in this tenant's catalog.
   useEffect(() => {
@@ -208,18 +271,13 @@ export default function BookAppointment() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [doctorsData, servicesData, appointmentsData, membershipsData] =
+      const [servicesData, appointmentsData, membershipsData] =
         await Promise.all([
-          fetchApi(
-            "/api/wellness/doctors/availability?date=" +
-            formData.appointmentDate,
-          ).catch(() => []),
           fetchApi("/api/wellness/services").catch(() => []),
           fetchApi("/api/wellness/appointments/my").catch(() => []),
           fetchApi("/api/wellness/appointments/my-memberships").catch(() => []),
         ]);
 
-      setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
       setServices(
         Array.isArray(servicesData)
           ? servicesData.filter((s) => s.isActive !== false)
@@ -251,29 +309,25 @@ export default function BookAppointment() {
       return;
     }
     setFormData({ ...formData, appointmentDate: date, appointmentTime: "" });
-    try {
-      const doctorsData = await fetchApi(
-        `/api/wellness/doctors/availability?date=${date}`,
-      );
-      setDoctors(Array.isArray(doctorsData) ? doctorsData : []);
-    } catch (err) {
-      console.error("Failed to load doctors:", err);
-    }
     // Reload slots if doctor is already selected; otherwise fall back to the
     // generic preset (admin assigns the doctor at triage time).
     if (formData.doctorId) {
-      loadTimeSlots(formData.doctorId, date);
+      loadTimeSlots(formData.doctorId, date, formData.serviceId);
     } else {
+      slotFetchId.current += 1;
+      setSlotsLoading(false);
       setAvailableSlots(filterPastSlots(GENERIC_SLOTS, date));
     }
   };
 
-  const loadTimeSlots = async (doctorId, date) => {
+  const loadTimeSlots = async (doctorId, date, serviceId = formData.serviceId) => {
+    const requestId = ++slotFetchId.current;
     try {
       setSlotsLoading(true);
-      const slotsData = await fetchApi(
-        `/api/wellness/doctors/${doctorId}/time-slots?date=${date}`,
-      );
+      const params = new URLSearchParams({ date });
+      if (serviceId) params.set("serviceId", serviceId);
+      const slotsData = await fetchApi(`/api/wellness/doctors/${doctorId}/time-slots?${params.toString()}`);
+      if (requestId !== slotFetchId.current) return;
       if (slotsData.available && Array.isArray(slotsData.slots)) {
         setAvailableSlots(filterPastSlots(slotsData.slots, date));
       } else {
@@ -283,21 +337,24 @@ export default function BookAppointment() {
         }
       }
     } catch (err) {
+      if (requestId !== slotFetchId.current) return;
       console.error("Failed to load time slots:", err);
       setAvailableSlots([]);
       notify.error("Failed to load available time slots");
     } finally {
-      setSlotsLoading(false);
+      if (requestId === slotFetchId.current) setSlotsLoading(false);
     }
   };
 
   const handleDoctorChange = async (doctorId) => {
     setFormData({ ...formData, doctorId, appointmentTime: "" });
     if (doctorId) {
-      await loadTimeSlots(doctorId, formData.appointmentDate);
+      await loadTimeSlots(doctorId, formData.appointmentDate, formData.serviceId);
     } else {
       // Patient cleared the doctor → revert to generic slots so they can still
       // pick a preferred time. Admin will reconcile against an actual doctor.
+      slotFetchId.current += 1;
+      setSlotsLoading(false);
       setAvailableSlots(
         filterPastSlots(GENERIC_SLOTS, formData.appointmentDate),
       );
@@ -329,7 +386,7 @@ export default function BookAppointment() {
           label: doc.specialty
             ? `${displayName} — ${doc.specialty}`
             : displayName,
-          hint: doc.available ? "" : "(On Leave)",
+          hint: doc.available ? "" : `(${doc.unavailableReason || "Unavailable"})`,
           keywords: `${name} ${doc.specialty || ""}`,
           disabled: !doc.available,
         };
@@ -571,7 +628,7 @@ export default function BookAppointment() {
   }
 
   return (
-    <div style={{ padding: "2rem", animation: "fadeIn 0.5s ease-out" }}>
+    <div ref={pageRef} style={{ padding: "2rem", animation: "fadeIn 0.5s ease-out" }}>
       <PageHeader
         icon={Calendar}
         title="Book an Appointment"
@@ -658,11 +715,15 @@ export default function BookAppointment() {
               <SearchableSelect
                 value={formData.doctorId}
                 onChange={handleDoctorChange}
+                onOpen={() => refreshDoctors(formData.appointmentDate, formData.serviceId)}
                 options={doctorOptions}
                 placeholder="Search doctors, or leave blank for no preference"
-                emptyLabel="No doctor matches that search"
+                emptyLabel={doctorsLoading ? "Loading doctors…" : "No doctor matches that search"}
                 ariaLabel="Preferred doctor"
               />
+              {!doctorsLoading && doctors.length > 0 && doctors.every((doctor) => !doctor.available) && (
+                <div style={INFO_CALLOUT_STYLE}>No doctors have available slots on this date. Choose another date or leave the doctor unselected.</div>
+              )}
               {!formData.doctorId && (
                 <div style={INFO_CALLOUT_STYLE}>
                   <Info size={13} style={{ marginTop: 2, flexShrink: 0 }} />
@@ -689,9 +750,10 @@ export default function BookAppointment() {
               </label>
               <SearchableSelect
                 value={formData.serviceId}
-                onChange={(serviceId) =>
-                  setFormData({ ...formData, serviceId })
-                }
+                onChange={(serviceId) => {
+                  setFormData({ ...formData, serviceId, appointmentTime: "" });
+                  if (formData.doctorId) loadTimeSlots(formData.doctorId, formData.appointmentDate, serviceId);
+                }}
                 options={serviceOptions}
                 placeholder="Search services by name…"
                 emptyLabel="No service matches that search"

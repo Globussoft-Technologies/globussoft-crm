@@ -69,6 +69,7 @@ const prisma = requireCJS('../../lib/prisma');
 
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn();
+prisma.user.findFirst = vi.fn();
 prisma.user.update = vi.fn();
 prisma.subscription = prisma.subscription || {};
 prisma.subscription.findFirst = vi.fn();
@@ -154,6 +155,7 @@ function authedPatch(app, path, body, opts) {
 
 beforeEach(() => {
   prisma.user.findUnique.mockReset();
+  prisma.user.findFirst.mockReset();
   prisma.user.update.mockReset();
   prisma.subscription.findFirst.mockReset();
   prisma.subscription.findUnique.mockReset();
@@ -175,6 +177,7 @@ beforeEach(() => {
     trialEndsAt: new Date('2026-06-01'),
     subscriptionStatus: 'TRIAL',
   });
+  prisma.user.findFirst.mockResolvedValue(null);
   prisma.user.update.mockResolvedValue({ id: 7 });
   prisma.subscription.findFirst.mockResolvedValue(null);
   prisma.subscription.findUnique.mockResolvedValue(null);
@@ -198,6 +201,7 @@ describe('server paywall renewal bypass', () => {
 
     expect(checkSubscriptionIndex).toBeGreaterThan(0);
     for (const endpoint of [
+      '/subscriptions/access',
       '/subscriptions/status',
       '/subscriptions/invoices',
       '/subscriptions/create-order',
@@ -207,6 +211,29 @@ describe('server paywall renewal bypass', () => {
       expect(endpointIndex, endpoint + ' must bypass the paywall so expired admins can renew').toBeGreaterThan(0);
       expect(endpointIndex, endpoint + ' must be checked before checkSubscription').toBeLessThan(checkSubscriptionIndex);
     }
+  });
+});
+
+describe('GET /access - staff-safe workspace access state', () => {
+  test('returns expired to a doctor without exposing billing details', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 7 });
+    prisma.subscription.findFirst.mockImplementation(({ where }) =>
+      Promise.resolve(where.status ? null : { id: 42 }));
+
+    const res = await authedGet(makeApp(), '/api/subscriptions/access', { role: 'USER' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ subscriptionStatus: 'EXPIRED', daysRemaining: 0 });
+  });
+
+  test('returns active to staff when the clinic has paid coverage', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 7 });
+    prisma.subscription.findFirst.mockResolvedValue({ id: 42 });
+
+    const res = await authedGet(makeApp(), '/api/subscriptions/access', { role: 'USER' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ subscriptionStatus: 'ACTIVE', daysRemaining: 0 });
   });
 });
 

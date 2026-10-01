@@ -297,6 +297,33 @@ describe('<Staff /> — list rendering + stats bar', () => {
     expect(screen.getByText('aman@enhancedwellness.in')).toBeInTheDocument();
   });
 
+  it('scrolls the wellness staff list to reveal later rows', async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      name: `Staff ${index + 1}`,
+      email: `staff${index + 1}@example.com`,
+      role: 'USER',
+      wellnessRole: 'doctor',
+      createdAt: '2026-01-01T00:00:00Z',
+      deactivatedAt: null,
+    }));
+    renderStaff('ADMIN', {}, 'wellness', '/staff', rows);
+
+    await waitFor(() => expect(screen.getByText('Staff 12')).toBeInTheDocument());
+    expect(screen.queryByText('Staff 13')).not.toBeInTheDocument();
+
+    const scrollContainer = screen.getByRole('table').parentElement;
+    expect(scrollContainer).toHaveStyle({ overflowY: 'auto' });
+    Object.defineProperties(scrollContainer, {
+      scrollTop: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 600 },
+      clientHeight: { configurable: true, value: 300 },
+    });
+    fireEvent.scroll(scrollContainer);
+
+    await waitFor(() => expect(screen.getByText('Staff 20')).toBeInTheDocument());
+  });
+
   it('stats bar surfaces accurate admin / manager / user / total counts', async () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());

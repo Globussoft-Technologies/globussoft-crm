@@ -1932,12 +1932,12 @@ export default function Staff() {
         ) : (
           <div
             onScroll={handleStaffTableScroll}
-            style={isTravel ? {
+            style={isTravel || isWellness ? {
               width: "100%",
               minWidth: 0,
               maxHeight: "calc(100vh - 28rem)",
               overflowY: "auto",
-              overflowX: "hidden",
+              overflowX: isTravel ? "hidden" : "auto",
             } : {
               maxHeight: "calc(100vh - 28rem)",
               overflow: "visible",

@@ -1137,6 +1137,7 @@ app.use("/api", (req, res, next) => {
   // Route handlers below still enforce auth + ADMIN role, so this only
   // bypasses the paywall layer, not authorization.
   if (
+    (req.method === "GET" && req.path === "/subscriptions/access") ||
     (req.method === "GET" && req.path === "/subscriptions/status") ||
     (req.method === "GET" && req.path === "/subscriptions/invoices") ||
     (req.method === "POST" && req.path === "/subscriptions/create-order") ||

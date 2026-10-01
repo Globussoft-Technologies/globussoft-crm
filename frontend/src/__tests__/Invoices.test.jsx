@@ -540,7 +540,28 @@ describe('<Invoices /> — page surface', () => {
     const moreButton = screen.getByRole('button', { name: /More actions for invoice INV-001/i });
     expect(moreButton).toHaveTextContent('More');
     expect(moreButton.querySelector('.lucide-more-horizontal')).toBeNull();
-    expect(screen.getByRole('menu').closest('td')).toHaveClass('invoice-actions-cell--menu-open');
+    const menu = screen.getByRole('menu');
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.style.top).not.toBe('');
+    expect(moreButton.closest('td')).toHaveClass('invoice-actions-cell--menu-open');
+  });
+
+  it('keeps the More menu outside the table and moves it above the button near the viewport edge', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    openInvoiceActions('INV-001');
+
+    const button = screen.getByRole('button', { name: /More actions for invoice INV-001/i });
+    const menu = screen.getByRole('menu', { name: /Actions for invoice INV-001/i });
+    Object.defineProperty(menu, 'offsetWidth', { configurable: true, value: 200 });
+    Object.defineProperty(menu, 'offsetHeight', { configurable: true, value: 100 });
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
+      top: 700, bottom: 730, left: 900, right: 1000, width: 100, height: 30,
+    });
+
+    fireEvent.scroll(window);
+    expect(menu).toHaveStyle({ top: '593px', left: '800px' });
+    expect(menu.closest('.invoice-table-scroll')).toBeNull();
   });
 
   it('gives the wellness invoice and product columns consistent usable widths', async () => {

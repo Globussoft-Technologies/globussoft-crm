@@ -11,7 +11,7 @@ import MultiSelectDropdown from './MultiSelectDropdown';
 import SingleSelectDropdown from './SingleSelectDropdown';
 import ImageUploadField from './ImageUploadField';
 
-export default function CatalogTab({ services, total, loading, loadingMore, hasMore, onLoadMore, sortBy, onSortChange, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
+export default function CatalogTab({ services, total, loading, loadingMore, hasMore, onLoadMore, sortBy, onSortChange, categories, categoriesLoading, categorySearch, onCategorySearch, onOpenCategories, onLoadMoreCategories, hasMoreCategories, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const { hasPermission, isReady: permsReady } = usePermissions();
   const canManageServices = permsReady && hasPermission('services', 'write');
   const notify = useNotify();
@@ -79,6 +79,11 @@ export default function CatalogTab({ services, total, loading, loadingMore, hasM
               <MultiSelectDropdown
                 categories={categories}
                 categoriesLoading={categoriesLoading}
+                search={categorySearch}
+                onSearch={onCategorySearch}
+                onOpen={onOpenCategories}
+                onLoadMore={onLoadMoreCategories}
+                hasMore={hasMoreCategories}
                 selectedIds={form.categoryIds}
                 onChange={(ids) => setForm({ ...form, categoryIds: ids })}
               />

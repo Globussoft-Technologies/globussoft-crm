@@ -22,8 +22,7 @@ import { fetchApi } from '../utils/api';
 //   - No role bypass: everyone must have valid coverage before using the CRM.
 //
 // State source:
-//   GET /api/subscriptions/status — returns
-//     { subscriptionStatus, trialEndsAt, daysRemaining, subscription, ... }
+//   GET /api/subscriptions/access returns tenant access state to all staff.
 //   The backend's checkSubscription middleware ALSO 402s every protected
 //   API call when expired, so a stale gate state self-corrects: the first
 //   401-not-401 response with `error: 'TRIAL_EXPIRED'` or
@@ -60,7 +59,7 @@ export default function SubscriptionGate({ children }) {
   const refresh = useCallback(async () => {
     if (!token || !user) return;
     try {
-      const data = await fetchApi('/api/subscriptions/status', { silent: true });
+      const data = await fetchApi('/api/subscriptions/access', { silent: true });
       setStatus(data);
     } catch (err) {
       // 402 from checkSubscription means we're behind the paywall — surface

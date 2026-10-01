@@ -63,10 +63,16 @@ export default function Services() {
   const serviceRequestRef = useRef({ sequence: 0, loadingPage: null });
   const [packageServiceOptions, setPackageServiceOptions] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [categorySearch, setCategorySearch] = useState('');
+  const [categoryPage, setCategoryPage] = useState(0);
+  const [categoryTotal, setCategoryTotal] = useState(0);
+  const categoryRequestRef = useRef(0);
+  const categoryLoadingRef = useRef(false);
+  const categorySearchTimerRef = useRef(null);
   const [treatments, setTreatments] = useState([]);
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [treatmentsLoading, setTreatmentsLoading] = useState(false);
   const [packagesLoading, setPackagesLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -132,12 +138,37 @@ export default function Services() {
     load({ page: servicePage + 1, append: true });
   }, [load, loadingMoreServices, servicePage, serviceTotal, services.length]);
 
-  const loadCategories = () => {
+  const loadCategories = (page = 1, q = '') => {
+    if (page > 1 && categoryLoadingRef.current) return;
+    const requestId = ++categoryRequestRef.current;
+    categoryLoadingRef.current = true;
     setCategoriesLoading(true);
-    fetchApi('/api/wellness/service-categories?limit=1000')
-      .then(res => setCategories(res.sort((a, b) => a.name.localeCompare(b.name))))
-      .catch(() => setCategories([]))
-      .finally(() => setCategoriesLoading(false));
+    const params = new URLSearchParams({ fields: 'summary', page: String(page), pageSize: '20' });
+    if (q.trim()) params.set('q', q.trim());
+    fetchApi(`/api/wellness/service-categories?${params}`)
+      .then((res) => {
+        if (requestId !== categoryRequestRef.current) return;
+        const rows = Array.isArray(res?.data) ? res.data : [];
+        setCategories((current) => page === 1 ? rows : [...current, ...rows]);
+        setCategoryPage(page);
+        setCategoryTotal(Number(res?.total) || 0);
+      })
+      .catch(() => { if (requestId === categoryRequestRef.current && page === 1) setCategories([]); })
+      .finally(() => {
+        if (requestId === categoryRequestRef.current) {
+          categoryLoadingRef.current = false;
+          setCategoriesLoading(false);
+        }
+      });
+  };
+  const searchCategories = (q) => {
+    setCategorySearch(q);
+    setCategories([]);
+    setCategoryPage(0);
+    setCategoriesLoading(true);
+    categoryRequestRef.current += 1;
+    clearTimeout(categorySearchTimerRef.current);
+    categorySearchTimerRef.current = setTimeout(() => loadCategories(1, q), 250);
   };
 
   const loadTreatments = ({ quiet = false } = {}) => {
@@ -148,7 +179,7 @@ export default function Services() {
   };
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { loadCategories(); }, []);
+  useEffect(() => () => clearTimeout(categorySearchTimerRef.current), []);
   // Customers only ever see published packages; the backend enforces that
   // too, so a crafted request cannot pull drafts.
   const loadPackages = ({ quiet = false } = {}) => {
@@ -300,6 +331,11 @@ export default function Services() {
           onSortChange={setServiceSort}
           categories={categories}
           categoriesLoading={categoriesLoading}
+          categorySearch={categorySearch}
+          onCategorySearch={searchCategories}
+          onOpenCategories={() => { if (categoryPage === 0) loadCategories(); }}
+          onLoadMoreCategories={() => loadCategories(categoryPage + 1, categorySearch)}
+          hasMoreCategories={categories.length < categoryTotal}
           showAdd={showAdd}
           form={form}
           setForm={setForm}

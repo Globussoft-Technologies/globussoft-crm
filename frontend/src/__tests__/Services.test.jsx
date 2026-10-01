@@ -98,6 +98,43 @@ describe('<Services /> — Catalog tab', () => {
     fetchApi.mockResolvedValue(services);
   });
 
+  it('loads category options only when the new-service picker opens, 20 at a time', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/service-categories?')) {
+        return Promise.resolve(url.includes('page=2')
+          ? { data: [{ id: 21, name: 'Skin' }], total: 21 }
+          : { data: Array.from({ length: 20 }, (_, index) => ({ id: index + 1, name: index === 0 ? 'Hair' : `Category ${index + 1}` })), total: 21 });
+      }
+      if (url.startsWith('/api/wellness/services?')) {
+        return Promise.resolve({ data: services, total: services.length });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await screen.findByText('GFC Hair');
+    expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/wellness/service-categories?'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /new service/i }));
+    expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/wellness/service-categories?'))).toBe(false);
+    expect(screen.queryByRole('searchbox', { name: 'Search categories' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /select categories/i }));
+    const categorySearch = screen.getByRole('searchbox', { name: 'Search categories' });
+    expect(categorySearch).toHaveFocus();
+    expect(parseInt(categorySearch.parentElement.style.height, 10)).toBeGreaterThanOrEqual(200);
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/wellness/service-categories?fields=summary&page=1&pageSize=20'));
+    expect(await screen.findByText('Hair')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /load more categories/i })).not.toBeInTheDocument();
+    const options = screen.getByTestId('category-options-scroll');
+    Object.defineProperty(options, 'clientHeight', { value: 200, configurable: true });
+    Object.defineProperty(options, 'scrollHeight', { value: 800, configurable: true });
+    options.scrollTop = 590;
+    fireEvent.scroll(options);
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/wellness/service-categories?fields=summary&page=2&pageSize=20'));
+    expect(await screen.findByText('Skin')).toBeInTheDocument();
+  });
+
   it('renders catalog cards with price, duration, and radius', async () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());

@@ -14,6 +14,7 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { ipKeyGenerator } = require("express-rate-limit");
 const prisma = require("../lib/prisma");
+const { hasTenantPortalAccess } = require("../lib/subscriptionAccess");
 const {
   normalizePrescriptionDrugs,
   normalizePrescriptionList,
@@ -173,6 +174,25 @@ const { PORTAL_JWT_SECRET, JWT_SECRET } = require("../config/secrets");
 //      Patient via Patient.userId (see schema.prisma "Self-booking user"
 //      field) so the dashboard widgets next-appointment / my-prescriptions
 //      work for these users without forcing an extra phone+OTP step.
+function portalSubscriptionExpired(res) {
+  return res.status(402).json({
+    code: "CLINIC_SUBSCRIPTION_EXPIRED",
+    error: "This clinic's patient portal is temporarily unavailable. Please contact the clinic.",
+  });
+}
+
+async function allowPatientPortalAccess(req, res, next) {
+  try {
+    if (!(await hasTenantPortalAccess(req.patient.tenantId))) {
+      return portalSubscriptionExpired(res);
+    }
+    return next();
+  } catch (err) {
+    console.error("[wellness] patient portal subscription check failed:", err.message);
+    return res.status(500).json({ error: "Unable to check clinic access" });
+  }
+}
+
 async function verifyPatientToken(req, res, next) {
   const hdr = req.headers.authorization || "";
   const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : null;
@@ -215,7 +235,7 @@ async function verifyPatientToken(req, res, next) {
         tenantId: patientRow.tenantId,
         phoneLast10: decoded.phoneLast10,
       };
-      return next();
+      return allowPatientPortalAccess(req, res, next);
     } catch (err) {
       console.error(
         "[wellness] verifyPatientToken Path A patient lookup failed:",
@@ -265,6 +285,13 @@ async function verifyPatientToken(req, res, next) {
         });
         if (!userRow || userRow.deactivatedAt) {
           return res.status(401).json({ error: "Invalid portal token" });
+        }
+
+        // Claiming or creating a Patient row changes clinic data. Check
+        // coverage before either write, then check again at request entry
+        // below so an existing session cannot continue after expiry.
+        if (!(await hasTenantPortalAccess(decoded.tenantId))) {
+          return portalSubscriptionExpired(res);
         }
 
         // Step 2  claim an unlinked Patient with the same email so we
@@ -319,7 +346,7 @@ async function verifyPatientToken(req, res, next) {
         phoneLast10:
           (patient.phone || "").replace(/\D/g, "").slice(-10) || null,
       };
-      return next();
+      return allowPatientPortalAccess(req, res, next);
     } catch (err) {
       console.error(
         "[wellness] verifyPatientToken patient lookup failed:",
@@ -15072,6 +15099,10 @@ router.post("/portal/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired code" });
     }
 
+    if (!(await hasTenantPortalAccess(patient.tenantId))) {
+      return portalSubscriptionExpired(res);
+    }
+
     // Single-use OTP  mark consumed before issuing the token.
     await prisma.patientOtp.update({
       where: { id: otpRecord.id },
@@ -17452,6 +17483,10 @@ router.post("/portal/login/verify-otp", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired code" });
     }
 
+    if (!(await hasTenantPortalAccess(patient.tenantId))) {
+      return portalSubscriptionExpired(res);
+    }
+
     // Mark OTP used (single-use). Skip for demo bypass  no record exists.
     if (record) {
       await prisma.patientOtp.update({
@@ -19812,6 +19847,58 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
     const onLeaveIds = new Set(approvedLeaves.map((l) => l.userId));
     const hasBlockTimeIds = new Set(blockTimes.map((b) => b.userId));
 
+    // Booking forms ask for doctors who actually have a bookable slot on this
+    // date. Keep this opt-in because calendar assignment also uses the
+    // day-level roster and must continue seeing fully booked doctors.
+    let availableSlotCounts = null;
+    if (req.query.withSlots === "true" && doctors.length > 0) {
+      let slotDuration = parseInt(req.query.durationMin, 10);
+      if (!Number.isFinite(slotDuration) || slotDuration <= 0) {
+        const serviceId = parseInt(req.query.serviceId, 10);
+        if (Number.isFinite(serviceId)) {
+          const service = await prisma.service.findFirst({
+            where: { id: serviceId, tenantId },
+            select: { durationMin: true },
+          });
+          slotDuration = service?.durationMin;
+        }
+      }
+      if (!Number.isFinite(slotDuration) || slotDuration <= 0) slotDuration = DEFAULT_DURATION_MIN;
+
+      const bookedVisits = await prisma.visit.findMany({
+        where: {
+          tenantId,
+          doctorId: { in: doctors.map((doctor) => doctor.id) },
+          visitDate: {
+            gte: new Date(`${dateParam}T00:00:00+05:30`),
+            lte: new Date(`${dateParam}T23:59:59+05:30`),
+          },
+          status: { in: OCCUPYING_STATUSES },
+        },
+        select: { doctorId: true, visitDate: true, service: { select: { durationMin: true } } },
+      });
+      const visitsByDoctor = new Map();
+      for (const visit of bookedVisits) {
+        const list = visitsByDoctor.get(visit.doctorId) || [];
+        list.push(visit);
+        visitsByDoctor.set(visit.doctorId, list);
+      }
+      const cutoff = Date.now() + 30 * 60 * 1000;
+      const candidates = [];
+      for (let hour = 9; hour < 18; hour++) {
+        for (let minute = 0; minute < 60; minute += 30) {
+          const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+          const startsAt = new Date(`${dateParam}T${time}:00+05:30`);
+          if (startsAt.getTime() > cutoff) candidates.push({ time, startsAt });
+        }
+      }
+      availableSlotCounts = new Map(doctors.map((doctor) => [
+        doctor.id,
+        markSlotAvailability(candidates, visitsByDoctor.get(doctor.id) || [], slotDuration)
+          .filter((slot) => slot.available).length,
+      ]));
+    }
+
     // Existing appointments at the requested TIME.
     //
     // Previously this endpoint only knew about whole-day absences (leave and
@@ -19852,12 +19939,14 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
       const clash = busyByDoctor.get(doctor.id) || null;
       const onLeave = onLeaveIds.has(doctor.id);
       const blocked = hasBlockTimeIds.has(doctor.id);
+      const availableSlotCount = availableSlotCounts?.get(doctor.id);
       return {
         id: doctor.id,
         name: doctor.name,
         specialty: doctor.specialty || null,
         wellnessRole: doctor.wellnessRole || null,
-        available: !onLeave && !blocked && !clash,
+        available: !onLeave && !blocked && !clash && (availableSlotCount === undefined || availableSlotCount > 0),
+        ...(availableSlotCount === undefined ? {} : { availableSlotCount }),
         // Why they're unavailable, so the dropdown can say so rather than
         // silently hiding a practitioner the operator expected to see.
         unavailableReason: onLeave
@@ -19866,6 +19955,8 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
             ? "Blocked time"
             : clash
               ? "Already booked at this time"
+              : availableSlotCount === 0
+                ? "No available slots on this date"
               : null,
         conflictVisitId: clash ? clash.id : null,
       };

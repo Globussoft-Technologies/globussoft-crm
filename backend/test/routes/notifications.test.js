@@ -182,6 +182,25 @@ describe('GET / — list notifications', () => {
     expect(args.take).toBe(10);
   });
 
+  test('returns the full unread total when the list is limited to one page', async () => {
+    prisma.notification.findMany.mockResolvedValue([{ id: 1, isRead: false }]);
+    /** @param {{ where: { isRead?: boolean } }} query */
+    const countNotifications = (query) => Promise.resolve(query.where.isRead === false ? 137 : 180);
+    prisma.notification.count.mockImplementation(countNotifications);
+
+    const res = await request(makeApp())
+      .get('/api/notifications?limit=1')
+      .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body.notifications).toHaveLength(1);
+    expect(res.body.total).toBe(180);
+    expect(res.body.unreadTotal).toBe(137);
+    expect(prisma.notification.count).toHaveBeenCalledWith({
+      where: { userId: 7, tenantId: 1, isRead: false },
+    });
+  });
+
   test('applies unread=true filter as isRead:false in the where clause', async () => {
     prisma.notification.findMany.mockResolvedValue([]);
     prisma.notification.count.mockResolvedValue(0);

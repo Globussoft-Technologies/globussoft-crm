@@ -52,6 +52,7 @@ function matches(option, query) {
 export default function SearchableSelect({
   value,
   onChange,
+  onOpen,
   options = [],
   placeholder = "Select…",
   emptyLabel = "No matches",
@@ -71,6 +72,12 @@ export default function SearchableSelect({
   const wrapRef = useRef(null);
   const inputRef = useRef(null);
   const popRef = useRef(null);
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
+
+  useEffect(() => {
+    if (open) onOpenRef.current?.();
+  }, [open]);
 
   const selected = useMemo(
     () => options.find((o) => String(o.value) === String(value ?? "")),

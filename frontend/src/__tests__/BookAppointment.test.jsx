@@ -119,6 +119,33 @@ afterEach(() => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe('<BookAppointment /> — page chrome', () => {
+  it('stops the shared page scroll at the cards while keeping appointment-list scrolling', async () => {
+    installDefaultMock({ appointments: [SAMPLE_APPOINTMENT] });
+    const { container } = render(
+      <MemoryRouter initialEntries={['/wellness/book-appointment']}>
+        <AuthContext.Provider value={{ user: { id: 1, name: 'Test Patient' } }}>
+          <main data-tour="page-content"><BookAppointment /></main>
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await screen.findByTestId('my-appointments-scroll');
+
+    const main = container.querySelector('main');
+    const page = main.firstElementChild;
+    Object.defineProperty(main, 'clientHeight', { configurable: true, value: 708 });
+    main.getBoundingClientRect = () => ({ top: 65 });
+    page.getBoundingClientRect = () => ({ bottom: 575 });
+    main.scrollTop = 409;
+
+    fireEvent.scroll(main);
+
+    expect(main.scrollTop).toBe(211);
+    expect(screen.getByTestId('my-appointments-scroll')).toHaveStyle({
+      maxHeight: '60vh',
+      overflowY: 'auto',
+    });
+  });
+
   it('renders the "Book an Appointment" heading once loading completes', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-07-07T10:00:00'));
@@ -368,7 +395,7 @@ describe('<BookAppointment /> — searchable doctor + service comboboxes', () =>
   const DOCTORS = [
     { id: 11, name: 'Anjali', wellnessRole: 'doctor', specialty: 'Dermatology', available: true },
     { id: 12, name: 'ARJUN KUMAR', wellnessRole: 'doctor', specialty: '', available: true },
-    { id: 13, name: 'Balveer Bairwa', wellnessRole: 'doctor', specialty: '', available: false },
+    { id: 13, name: 'Balveer Bairwa', wellnessRole: 'doctor', specialty: '', available: false, unavailableReason: 'On Leave' },
   ];
   const SERVICES = [
     { id: 21, name: 'Abdomen - Stretch Marks', basePrice: 9999 },
@@ -405,6 +432,56 @@ describe('<BookAppointment /> — searchable doctor + service comboboxes', () =>
 
     fireEvent.change(input, { target: { value: 'arjun' } });
     expect(optionLabels(/Preferred doctor/i)).toEqual(['Dr. ARJUN KUMAR']);
+  });
+
+  it('refreshes live date-specific doctor availability when the dropdown opens', async () => {
+    primeToday();
+    installDefaultMock({ doctors: DOCTORS });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+    const beforeOpen = fetchApiMock.mock.calls.filter(([url]) =>
+      String(url).includes('/api/wellness/doctors/availability')).length;
+
+    openCombobox(/Preferred doctor/i);
+
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(([url]) =>
+        String(url).includes('/api/wellness/doctors/availability'));
+      expect(calls.length).toBeGreaterThan(beforeOpen);
+      expect(calls.at(-1)[0]).toContain('date=2026-07-07');
+      expect(calls.at(-1)[0]).toContain('withSlots=true');
+    });
+  });
+
+  it('refreshes doctor availability for the newly selected date', async () => {
+    primeToday();
+    installDefaultMock({ doctors: DOCTORS });
+    const { getDateInput } = renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    fireEvent.change(getDateInput(), { target: { value: '2026-07-08' } });
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        String(url).includes('/api/wellness/doctors/availability?') &&
+        String(url).includes('date=2026-07-08') &&
+        String(url).includes('withSlots=true'))).toBe(true);
+    });
+  });
+
+  it('explains when every doctor has no slots on the selected date', async () => {
+    primeToday();
+    installDefaultMock({ doctors: [
+      { id: 11, name: 'Anjali', wellnessRole: 'doctor', available: false, unavailableReason: 'No available slots on this date' },
+    ] });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    expect(await screen.findByText(/No doctors have available slots on this date/i)).toBeInTheDocument();
+    openCombobox(/Preferred doctor/i);
+    const [doctor] = options(/Preferred doctor/i).filter((option) => option.textContent.includes('Anjali'));
+    expect(doctor).toBeDisabled();
+    expect(doctor.textContent).toMatch(/No available slots on this date/i);
   });
 
   it('matches a doctor on specialty, which is not part of the visible label', async () => {

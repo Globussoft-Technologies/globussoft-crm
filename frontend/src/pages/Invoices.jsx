@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useContext, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useContext, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Receipt,
   Plus,
@@ -262,6 +263,9 @@ export default function Invoices() {
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
   const [linkCopied, setLinkCopied] = useState(false);
   const [openActionMenuId, setOpenActionMenuId] = useState(null);
+  const actionMenuButtonRef = useRef(null);
+  const actionMenuRef = useRef(null);
+  const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [pdfPreview, setPdfPreview] = useState(null); // { url, invoiceNum } | null
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm());
@@ -311,7 +315,8 @@ export default function Invoices() {
       const target = event.target;
       if (
         target instanceof Element &&
-        target.closest(`[data-invoice-action-menu="${openActionMenuId}"]`)
+        (actionMenuButtonRef.current?.contains(target) ||
+          actionMenuRef.current?.contains(target))
       ) {
         return;
       }
@@ -325,6 +330,36 @@ export default function Invoices() {
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openActionMenuId]);
+
+  useLayoutEffect(() => {
+    if (openActionMenuId == null) return undefined;
+    const updatePosition = () => {
+      const button = actionMenuButtonRef.current;
+      const menu = actionMenuRef.current;
+      if (!button || !menu) return;
+      const rect = button.getBoundingClientRect();
+      const menuWidth = menu.offsetWidth;
+      const menuHeight = menu.offsetHeight;
+      const gap = 7;
+      const viewportPadding = 8;
+      const below = rect.bottom + gap;
+      const above = rect.top - gap - menuHeight;
+      setActionMenuPosition({
+        top: below + menuHeight > window.innerHeight - viewportPadding && above >= viewportPadding
+          ? above
+          : Math.max(viewportPadding, Math.min(below, window.innerHeight - menuHeight - viewportPadding)),
+        left: Math.max(viewportPadding, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding)),
+      });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    // Capture scrolls from the table as well as from the page.
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
     };
   }, [openActionMenuId]);
 
@@ -2484,13 +2519,15 @@ export default function Invoices() {
                           />
                           <div className="invoice-more-action">
                             <button
+                              ref={openActionMenuId === inv.id ? actionMenuButtonRef : null}
                               type="button"
                               className="invoice-action-button invoice-action-button--more"
-                              onClick={() =>
+                              onClick={() => {
+                                setActionMenuPosition(null);
                                 setOpenActionMenuId((current) =>
                                   current === inv.id ? null : inv.id,
-                                )
-                              }
+                                );
+                              }}
                               aria-haspopup="menu"
                               aria-expanded={openActionMenuId === inv.id}
                               aria-controls={`invoice-actions-menu-${inv.id}`}
@@ -2499,12 +2536,14 @@ export default function Invoices() {
                               <span>More</span>
                               <ChevronDown size={14} aria-hidden="true" />
                             </button>
-                            {openActionMenuId === inv.id && (
+                            {openActionMenuId === inv.id && createPortal(
                               <div
+                                ref={actionMenuRef}
                                 id={`invoice-actions-menu-${inv.id}`}
                                 className="invoice-actions-menu"
                                 role="menu"
                                 aria-label={`Actions for invoice ${inv.invoiceNum}`}
+                                style={actionMenuPosition || { visibility: "hidden" }}
                               >
                                 {inv.status !== "PAID" && inv.status !== "VOIDED" && (
                                   <>
@@ -2583,7 +2622,8 @@ export default function Invoices() {
                                     </button>
                                   </>
                                 )}
-                              </div>
+                              </div>,
+                              document.body,
                             )}
                           </div>
                           {/* #304: a voided invoice should never offer recurring
@@ -3113,11 +3153,8 @@ export default function Invoices() {
           display: inline-flex;
         }
         .invoice-actions-menu {
-          position: absolute;
-          top: calc(100% + 0.45rem);
-          left: auto;
-          right: 0;
-          z-index: 100;
+          position: fixed;
+          z-index: 1000;
           width: 14.5rem;
           max-width: calc(100vw - 2rem);
           padding: 0.4rem;

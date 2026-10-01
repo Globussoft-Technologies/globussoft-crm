@@ -53,9 +53,16 @@ prisma.patient.findUnique = vi.fn();
 prisma.patient.findFirst = vi.fn();
 prisma.patient.update = vi.fn();
 prisma.patient.create = vi.fn();
+prisma.patient.findMany = vi.fn();
+prisma.patientOtp = prisma.patientOtp || {};
+prisma.patientOtp.findFirst = vi.fn();
+prisma.patientOtp.update = vi.fn();
 
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn();
+prisma.user.findFirst = vi.fn();
+prisma.subscription = prisma.subscription || {};
+prisma.subscription.findFirst = vi.fn();
 
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
@@ -123,7 +130,12 @@ beforeEach(() => {
   prisma.patient.findFirst.mockReset();
   prisma.patient.update.mockReset();
   prisma.patient.create.mockReset();
+  prisma.patient.findMany.mockReset();
+  prisma.patientOtp.findFirst.mockReset();
+  prisma.patientOtp.update.mockReset();
   prisma.user.findUnique.mockReset();
+  prisma.user.findFirst.mockReset();
+  prisma.subscription.findFirst.mockReset();
   prisma.visit.findMany.mockReset();
   prisma.visit.findFirst.mockReset();
   prisma.consentForm.findMany.mockReset();
@@ -146,6 +158,94 @@ beforeEach(() => {
   prisma.signatureRequest.findFirst.mockResolvedValue(null);
   prisma.service.findMany.mockResolvedValue([]);
   prisma.location.findFirst.mockResolvedValue(null);
+  prisma.subscription.findFirst.mockResolvedValue({ id: 1, tenantId: 7 });
+  prisma.user.findFirst.mockResolvedValue(null);
+});
+
+describe('patient portal clinic subscription gate', () => {
+  test('blocks an existing patient token when its clinic subscription expires', async () => {
+    prisma.subscription.findFirst.mockResolvedValue(null);
+    const token = signPortalJwt({ patientId: 50 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/visits')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(prisma.visit.findMany).not.toHaveBeenCalled();
+    expect(prisma.subscription.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 7 }),
+    }));
+  });
+
+  test('keeps another clinic accessible when it has active coverage', async () => {
+    prisma.patient.findUnique.mockResolvedValue({ id: 51, tenantId: 8 });
+    /** @param {{ where: { tenantId: number } }} query */
+    const findCoverage = (query) => Promise.resolve(query.where.tenantId === 8 ? { id: 2 } : null);
+    prisma.subscription.findFirst.mockImplementation(findCoverage);
+    const token = signPortalJwt({ patientId: 51 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/visits')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.subscription.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 8 }),
+    }));
+  });
+
+  test('allows patient access during the clinic admin trial', async () => {
+    prisma.subscription.findFirst.mockResolvedValue(null);
+    prisma.user.findFirst.mockResolvedValue({ trialEndsAt: new Date(Date.now() + 86_400_000) });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/visits')
+      .set('Authorization', `Bearer ${signPortalJwt()}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 7, role: 'ADMIN', subscriptionStatus: 'TRIAL' }),
+    }));
+  });
+
+  test('blocks a linked customer token for an expired clinic', async () => {
+    prisma.subscription.findFirst.mockResolvedValue(null);
+    prisma.patient.findFirst.mockResolvedValue({ id: 42, phone: '+919123456789', tenantId: 7 });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/visits')
+      .set('Authorization', `Bearer ${signCustomerJwt()}`);
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(prisma.visit.findMany).not.toHaveBeenCalled();
+  });
+
+  test('does not claim or create a patient record for an expired clinic', async () => {
+    prisma.subscription.findFirst.mockResolvedValue(null);
+    prisma.patient.findFirst.mockResolvedValue(null);
+    prisma.user.findUnique.mockResolvedValue({ name: 'Patient', email: 'patient@example.com' });
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/visits')
+      .set('Authorization', `Bearer ${signCustomerJwt()}`);
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(prisma.patient.update).not.toHaveBeenCalled();
+    expect(prisma.patient.create).not.toHaveBeenCalled();
+  });
+
+  test('does not consume an OTP or issue a token for an expired clinic', async () => {
+    prisma.subscription.findFirst.mockResolvedValue(null);
+    prisma.patientOtp.findFirst.mockResolvedValue({ id: 5 });
+    prisma.patient.findMany.mockResolvedValue([{ id: 50, name: 'Patient', phone: '9123456789', tenantId: 7 }]);
+    const res = await request(makeApp())
+      .post('/api/wellness/portal/login/verify-otp')
+      .send({ phone: '9123456789', otp: '1234' });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(res.body.token).toBeUndefined();
+    expect(prisma.patientOtp.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('verifyPatientToken — Path A (patient-portal token)', () => {
@@ -170,7 +270,7 @@ describe('verifyPatientToken — Path A (patient-portal token)', () => {
 
 describe('verifyPatientToken — Path B step 1 (linked Patient.userId)', () => {
   test('CUSTOMER JWT with a pre-linked Patient resolves on the fast path', async () => {
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 42, phone: '+919123456789' });
+    prisma.patient.findFirst.mockResolvedValueOnce({ id: 42, phone: '+919123456789', tenantId: 7 });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
@@ -200,7 +300,7 @@ describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
       email: 'narendra@example.com',
     });
     // Step 2: unlinked Patient with same email exists
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 99, phone: '+919999900000' });
+    prisma.patient.findFirst.mockResolvedValueOnce({ id: 99, phone: '+919999900000', tenantId: 7 });
     prisma.patient.update.mockResolvedValueOnce({ id: 99 });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
@@ -241,7 +341,7 @@ describe('verifyPatientToken — Path B step 3 (auto-create)', () => {
       email: 'narendra@example.com',
     });
     prisma.patient.findFirst.mockResolvedValueOnce(null); // no claimable
-    prisma.patient.create.mockResolvedValueOnce({ id: 500, phone: null });
+    prisma.patient.create.mockResolvedValueOnce({ id: 500, phone: null, tenantId: 7 });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
@@ -268,7 +368,7 @@ describe('verifyPatientToken — Path B step 3 (auto-create)', () => {
   test('Auto-create falls back to email then a literal "Customer" when User.name is missing', async () => {
     prisma.patient.findFirst.mockResolvedValueOnce(null);
     prisma.user.findUnique.mockResolvedValueOnce({ name: null, email: null });
-    prisma.patient.create.mockResolvedValueOnce({ id: 501, phone: null });
+    prisma.patient.create.mockResolvedValueOnce({ id: 501, phone: null, tenantId: 7 });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
@@ -317,7 +417,7 @@ describe('verifyPatientToken — auth-gate negatives', () => {
     // exists. Pin the contract that the middleware accepts this and
     // does NOT try to auto-create / claim by email (those paths stay
     // CUSTOMER-only).
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 77, phone: '+918888800000' });
+    prisma.patient.findFirst.mockResolvedValueOnce({ id: 77, phone: '+918888800000', tenantId: 7 });
 
     const token = signStaffJwt();
     const res = await request(makeApp())

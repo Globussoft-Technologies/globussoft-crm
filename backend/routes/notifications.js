@@ -50,13 +50,16 @@ router.get("/", async (req, res) => {
       };
     }
 
-    const [notifications, total] = await Promise.all([
+    const [notifications, total, unreadTotal] = await Promise.all([
       prisma.notification.findMany(findManyArgs),
       prisma.notification.count({ where }),
+      prisma.notification.count({
+        where: { userId: req.user.userId, tenantId: req.user.tenantId, isRead: false },
+      }),
     ]);
 
     console.log('[notifications.get] Found:', { total, returned: notifications.length });
-    res.json({ notifications, total, page, limit, pages: Math.ceil(total / limit) });
+    res.json({ notifications, total, unreadTotal, page, limit, pages: Math.ceil(total / limit) });
   } catch (err) {
     console.error("[Notifications] List error:", err);
     res.status(500).json({ error: "Failed to fetch notifications" });

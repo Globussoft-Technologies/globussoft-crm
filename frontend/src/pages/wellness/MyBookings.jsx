@@ -167,14 +167,17 @@ export default function MyBookings({
     }
   }, [effectiveFetcher]);
 
-  // Load every bucket on mount so the section counts are populated. Each
-  // bucket is independent — UI shows them in parallel. Stop firing once
-  // the backend has confirmed this isn't a patient session (so we don't
-  // flood the API with 403s on every focus event).
+  // Load the initially selected bucket only. Other buckets load when opened.
   useEffect(() => {
     if (noPatientProfile) return;
-    BUCKETS.forEach((b) => { loadBucket(b.key); });
+    loadBucket('upcoming');
   }, [loadBucket, noPatientProfile]);
+
+  const handleBucketChange = (bucket) => {
+    if (bucket === activeBucket || noPatientProfile) return;
+    setActiveBucket(bucket);
+    loadBucket(bucket);
+  };
 
   // Refetch the active bucket whenever the tab regains focus, so visits
   // created / cancelled elsewhere (Calendar, staff override, another
@@ -344,7 +347,7 @@ export default function MyBookings({
               role="tab"
               aria-selected={active}
               data-testid={`my-bookings-tab-${b.key}`}
-              onClick={() => setActiveBucket(b.key)}
+              onClick={() => handleBucketChange(b.key)}
               className="glass"
               style={{
                 padding: '0.75rem 1rem',

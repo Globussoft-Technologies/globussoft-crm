@@ -8,6 +8,11 @@ export default function MultiSelectDropdown({
   categoriesLoading,
   selectedIds,
   onChange,
+  search,
+  onSearch,
+  onOpen,
+  onLoadMore,
+  hasMore = false,
   // Defaulted so the existing category call sites read exactly as before —
   // the package builder reuses this component for services.
   placeholder = 'Select categories...',
@@ -19,10 +24,12 @@ export default function MultiSelectDropdown({
   // menu behind the sibling service cards.
   const [menuRect, setMenuRect] = useState({ openUp: false, top: 0, bottom: 0, left: 0, width: 0, maxHeight: DROPDOWN_MAX_HEIGHT });
   const buttonRef = useRef(null);
+  const knownNames = useRef(new Map());
+  categories.forEach((cat) => knownNames.current.set(cat.id, cat.name));
 
-  const selectedNames = categories
-    .filter(cat => selectedIds.includes(cat.id))
-    .map(cat => cat.name)
+  const selectedNames = selectedIds
+    .map(id => knownNames.current.get(id))
+    .filter(Boolean)
     .join(', ');
 
   const handleToggle = (catId) => {
@@ -36,13 +43,21 @@ export default function MultiSelectDropdown({
   const updateRect = useCallback(() => {
     if (!buttonRef.current) return;
     setMenuRect(anchorDropdown(buttonRef.current, {
-      desiredHeight: estimateDropdownHeight(categories.length),
+      // A searchable list needs stable room even before its first page arrives.
+      desiredHeight: onSearch ? DROPDOWN_MAX_HEIGHT : estimateDropdownHeight(categories.length, selectedIds.length ? 44 : 0),
     }));
-  }, [categories.length]);
+  }, [categories.length, onSearch, selectedIds.length]);
+
+  const handleOptionsScroll = (e) => {
+    if (!hasMore || categoriesLoading || !onLoadMore) return;
+    const list = e.currentTarget;
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 48) onLoadMore();
+  };
 
   const handleOpen = () => {
     updateRect();
     setIsOpen(true);
+    onOpen?.();
   };
 
   // Re-anchor menu on scroll / resize while open.
@@ -124,6 +139,7 @@ export default function MultiSelectDropdown({
               ...(menuRect.openUp ? { bottom: menuRect.bottom } : { top: menuRect.top }),
               left: menuRect.left,
               width: menuRect.width,
+              ...(onSearch ? { height: menuRect.maxHeight } : {}),
               maxHeight: menuRect.maxHeight,
               background: 'var(--bg-color)',
               border: '1px solid var(--border-color)',
@@ -135,15 +151,29 @@ export default function MultiSelectDropdown({
               flexDirection: 'column',
             }}
           >
+            {onSearch && (
+              <input
+                type="search"
+                aria-label="Search categories"
+                placeholder="Search categories"
+                autoFocus
+                value={search || ''}
+                onChange={(e) => onSearch(e.target.value)}
+                style={{ padding: '0.65rem', margin: '0.5rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--surface-color)', color: 'var(--text-primary)' }}
+              />
+            )}
             {/* Scrollable content area */}
             <div
+              data-testid="category-options-scroll"
+              onScroll={handleOptionsScroll}
               style={{
                 overflowY: 'auto',
                 overflowX: 'hidden',
-                flex: 1,
+                flex: '1 1 auto',
+                minHeight: 0,
               }}
             >
-              {categoriesLoading ? (
+              {categoriesLoading && categories.length === 0 ? (
                 <div style={{ padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
                   Loading categories...
                 </div>
@@ -192,6 +222,11 @@ export default function MultiSelectDropdown({
                     </label>
                   );
                 })
+              )}
+              {categoriesLoading && categories.length > 0 && (
+                <div style={{ padding: '0.65rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.8rem' }}>
+                  Loading more categories...
+                </div>
               )}
             </div>
 

@@ -24,6 +24,8 @@ const getNotificationTime = (notification) => {
 const sortNewestFirst = (list) =>
   [...list].sort((a, b) => getNotificationTime(b) - getNotificationTime(a));
 
+const PAGE_SIZE = 25;
+
 const NotificationBell = () => {
   const navigate = useNavigate();
   const { user } = useContext(AuthContext);
@@ -31,7 +33,13 @@ const NotificationBell = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const ref = useRef(null);
+  const requestGeneration = useRef(0);
+  const loadingRef = useRef(false);
+  const nextPageRef = useRef(1);
+  const hasMoreRef = useRef(true);
 
   const getPriorityColor = (priority) => {
     switch (priority) {
@@ -57,15 +65,14 @@ const NotificationBell = () => {
     }
   }, []);
 
-  const fetchNotifications = useCallback(async () => {
+  const fetchNotifications = useCallback(async (page, generation) => {
+    if (loadingRef.current || !hasMoreRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    setLoadError(false);
     try {
-      // #622 — read both the unread-count and the panel list from a single
-      // endpoint so the bell badge can never disagree with what the panel
-      // actually shows. Pre-fix the badge polled /unread-count separately
-      // and the panel pulled /api/notifications, drifting after role-switch
-      // / soft-deletes / cross-tab clears. We compute the unread count
-      // directly from the same payload that fills the panel.
-      const data = await fetchApi("/api/notifications");
+      const data = await fetchApi(`/api/notifications?page=${page}&limit=${PAGE_SIZE}`);
+      if (generation !== requestGeneration.current) return;
       // Backend returns { notifications, total, page, limit, pages }; tolerate the
       // older array shape too in case any other consumer is still on it. Crashed the
       // whole app pre-fix when state became an object and .map() was called on it (#113).
@@ -74,14 +81,28 @@ const NotificationBell = () => {
         : Array.isArray(data?.notifications)
           ? data.notifications
           : [];
-      setNotifications(sortNewestFirst(list));
-      // Recompute the unread count from the panel payload itself — single
-      // source of truth. If the panel shows 4 items and 2 are unread, the
-      // badge reflects 2 (not 7 from a stale role's /unread-count).
-      const unread = list.filter((n) => !n.isRead).length;
-      setUnreadCount(unread);
+      setNotifications((previous) => {
+        if (page === 1) return sortNewestFirst(list);
+        const seen = new Set(previous.map((item) => item.id));
+        return sortNewestFirst([...previous, ...list.filter((item) => !seen.has(item.id))]);
+      });
+      nextPageRef.current = page + 1;
+      hasMoreRef.current = Number.isFinite(data?.total)
+        ? page * PAGE_SIZE < data.total
+        : list.length === PAGE_SIZE;
+      // The unread badge represents all pages, not just the loaded rows.
+      const unread = Number.isFinite(data?.unreadTotal)
+        ? data.unreadTotal
+        : null;
+      if (unread !== null) setUnreadCount(unread);
+      else if (page === 1) setUnreadCount(list.filter((n) => !n.isRead).length);
     } catch (err) {
-      // silently fail
+      if (generation === requestGeneration.current) setLoadError(true);
+    } finally {
+      if (generation === requestGeneration.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -154,8 +175,31 @@ const NotificationBell = () => {
   }, []);
 
   useEffect(() => {
-    if (open) fetchNotifications();
-  }, [open, fetchNotifications]);
+    if (!open) return undefined;
+    const generation = ++requestGeneration.current;
+    loadingRef.current = false;
+    nextPageRef.current = 1;
+    hasMoreRef.current = true;
+    setNotifications([]);
+    fetchNotifications(1, generation);
+    return () => {
+      requestGeneration.current += 1;
+      loadingRef.current = false;
+    };
+  }, [open, userId, fetchNotifications]);
+
+  const loadNextPage = () => {
+    if (hasMoreRef.current && !loadingRef.current) {
+      fetchNotifications(nextPageRef.current, requestGeneration.current);
+    }
+  };
+
+  const handlePanelScroll = (event) => {
+    const panel = event.currentTarget;
+    if (panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 80) {
+      loadNextPage();
+    }
+  };
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -270,6 +314,8 @@ const NotificationBell = () => {
 
       {open && (
         <div
+          onScroll={handlePanelScroll}
+          aria-label="Notification list"
           style={{
             position: isMobile ? "fixed" : "absolute",
             ...(isMobile
@@ -335,7 +381,7 @@ const NotificationBell = () => {
           </div>
 
           {/* Notification List */}
-          {notifications.length === 0 ? (
+          {notifications.length === 0 && !loading && !loadError ? (
             <div
               style={{
                 padding: "32px 16px",
@@ -502,6 +548,17 @@ const NotificationBell = () => {
                 </div>
               </div>
             ))
+          )}
+
+          {loading && (
+            <div role="status" style={{ padding: 12, textAlign: "center", color: "var(--text-secondary)" }}>
+              Loading notifications...
+            </div>
+          )}
+          {loadError && (
+            <div style={{ padding: 12, textAlign: "center" }}>
+              <button type="button" onClick={loadNextPage}>Could not load notifications. Retry</button>
+            </div>
           )}
 
           {/* #853 — Footer "View all" link deep-links to the full

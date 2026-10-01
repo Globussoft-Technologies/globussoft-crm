@@ -1026,6 +1026,80 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
   });
 
+  test('copies the Generic phone into whatsappPhone when the same-number checkbox is selected', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Same WhatsApp Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappSameAsPhone', 'true');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        phone: '+919876543210',
+        whatsappPhone: '+919876543210',
+      }),
+    }));
+  });
+
+  test('stores a separate Generic WhatsApp number when the same-number checkbox is not selected', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Separate WhatsApp Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhone', '9123456789');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        phone: '+919876543210',
+        whatsappPhone: '+919123456789',
+      }),
+    }));
+  });
+
+  test('rejects non-numeric characters in a separate Generic WhatsApp number', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid WhatsApp Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhone', '98765abc10');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { whatsappPhone: 'Only numbers are allowed.' },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a Generic WhatsApp number with the wrong country-specific length', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid WhatsApp Length')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhone', '12345');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { whatsappPhone: expect.stringContaining('10 digits') },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
   test('accepts a valid 8-digit Singapore number from the Generic country selector', async () => {
     mockGenericPhoneForm();
 

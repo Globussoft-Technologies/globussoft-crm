@@ -60,6 +60,7 @@ const BUILTIN_COLUMNS = {
     { key: "name", label: "Name", lockedVisible: true }, // always shown — the row's identity, hiding it would leave no way to tell rows apart
     { key: "email", label: "Email" },
     { key: "phone", label: "Phone" },
+    { key: "whatsappPhone", label: "WhatsApp Number" },
     { key: "company", label: "Company" },
     { key: "aiScore", label: "Lead Score" },
     { key: "source", label: "Source" },
@@ -175,7 +176,7 @@ function getDefaultVisibleColumns(tableKey, vertical) {
   // should not suddenly receive every optional column after this change.
   if (vertical === "generic" && tableKey === "leads") {
     return [
-      "name", "email", "company", "phone", "aiScore", "source", "webForm",
+      "name", "email", "company", "phone", "whatsappPhone", "aiScore", "source", "webForm",
       "medium", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
       "callStatus", "callifiedAi", "callifiedScore",
     ];

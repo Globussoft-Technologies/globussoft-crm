@@ -23,9 +23,10 @@ import { useNotify } from "../utils/notify";
 import { isRichTextMarkup, RichText } from "../utils/richText";
 
 function getInboxPageSize() {
-  if (typeof window === "undefined") return 24;
-  const usableHeight = Math.max(window.innerHeight - 340, 480);
-  return Math.max(12, Math.min(40, Math.ceil(usableHeight / 92)));
+  // Keep the page size fixed so pagination represents a predictable batch.
+  // The inbox card is independently scrollable, so viewport height should not
+  // reduce the number of records fetched from the server.
+  return 50;
 }
 
 function mergeUniqueById(previous, next) {
@@ -324,6 +325,7 @@ export default function Inbox() {
   const inboxScrollRef = useRef(null);
   const inboxActionsRef = useRef(null);
   const loadMoreLockRef = useRef(false);
+  const pendingReadIdsRef = useRef(new Set());
   const emailPaginationRef = useRef(emailPagination);
   const inboxRequestSequenceRef = useRef(0);
 
@@ -359,18 +361,33 @@ export default function Inbox() {
   // blue dot immediately) + persist via POST /api/communications/inbox/:id/read
   // so the dot stays cleared across reloads. Works for thread-less rows too
   // (threadId is null on most inbound/sent mail). Already-read rows skip both.
-  const openEmail = (email) => {
+  const openEmail = async (email) => {
     if (!email) return;
     setDetail({ ...email, read: true });
     if (email.read) return;
+    pendingReadIdsRef.current.add(email.id);
     setEmails((prev) => prev.map((e) => (e.id === email.id ? { ...e, read: true } : e)));
     if (isGeneric && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("crm:inbox-unread-changed", { detail: { delta: 1 } }));
     }
-    fetchApi(`/api/communications/inbox/${email.id}/read`, {
-      method: 'POST',
-      silent: true,
-    }).catch(() => {});
+    try {
+      await fetchApi(`/api/communications/inbox/${email.id}/read`, {
+        method: 'POST',
+        silent: true,
+      });
+    } catch (err) {
+      // Do not leave the UI claiming an email is read when the database
+      // update failed. The previous implementation swallowed this error,
+      // so a refresh silently restored the unread state.
+      console.error("Failed to persist inbox read state", err);
+      setEmails((prev) => prev.map((e) => (e.id === email.id ? { ...e, read: false } : e)));
+      setDetail((current) => current?.id === email.id ? { ...current, read: false } : current);
+      if (isGeneric && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("crm:inbox-unread-changed", { detail: { delta: -1 } }));
+      }
+    } finally {
+      pendingReadIdsRef.current.delete(email.id);
+    }
   };
 
   const inboxPath =
@@ -441,7 +458,9 @@ export default function Inbox() {
 
     try {
       const data = await fetchApi(pageUrl);
-      const rows = extractPagedRows(data, "emails");
+      const rows = extractPagedRows(data, "emails").map((row) => (
+        pendingReadIdsRef.current.has(row?.id) ? { ...row, read: true } : row
+      ));
       const pagination = extractPagination(data, page, pageSize, rows);
 
       if (requestSequence !== inboxRequestSequenceRef.current) return [];

@@ -15,6 +15,7 @@ const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const s3Service = require("../services/s3Service");
 const { sendGenericWebFormWhatsApp } = require("../lib/genericWebFormWhatsApp");
+const { resolveProviderConfig, sendSms } = require("../services/smsProvider");
 const axios = require("axios");
 const { DEFAULT_PERSONAL_DOMAINS, cleanDomains, validateEmail } = require("../lib/webFormEmailValidation");
 
@@ -182,6 +183,7 @@ const CONTACT_FIELDS = new Set([
   "lastName",
   "email",
   "phone",
+  "whatsappPhone",
   "company",
   "title",
   "source",
@@ -230,6 +232,76 @@ function notificationValue(value) {
   if (value == null) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function renderContactNotification(template, contact, form) {
+  const values = {
+    name: contact?.name || "",
+    email: contact?.email || "",
+    phone: contact?.phone || "",
+    company: contact?.company || "",
+    form: form?.name || "",
+  };
+  return String(template || "Thank you for contacting us through {{form}}. Our team will be in touch shortly.")
+    .replace(/\{\{\s*(name|email|phone|company|form)\s*\}\}/g, (_, key) => values[key]);
+}
+
+async function sendContactNotifications({ form, settings, contact, submissionId }) {
+  const channels = Array.isArray(settings.contactNotificationChannels)
+    ? settings.contactNotificationChannels
+    : ["whatsapp"];
+  const body = renderContactNotification(settings.contactNotificationMessage, contact, form);
+  const result = {};
+
+  if (channels.includes("email")) {
+    if (!contact?.email) {
+      result.email = { sent: false, code: "LEAD_EMAIL_MISSING" };
+    } else {
+      try {
+        await sendEmail({
+          to: contact.email,
+          subject: `Thanks for contacting ${form.name}`,
+          text: body,
+        });
+        result.email = { sent: true };
+      } catch (error) {
+        console.error("[web_forms] contact email notification failed:", error.message);
+        result.email = { sent: false, code: "EMAIL_SEND_FAILED" };
+      }
+    }
+  }
+
+  if (channels.includes("sms")) {
+    if (!contact?.phone) {
+      result.sms = { sent: false, code: "LEAD_PHONE_MISSING" };
+    } else {
+      try {
+        const config = await resolveProviderConfig(prisma, form.tenantId);
+        if (!config) {
+          result.sms = { sent: false, code: "SMS_NOT_CONFIGURED" };
+        } else {
+          const sent = await sendSms({ ...config, to: contact.phone, body });
+          result.sms = sent?.success === false
+            ? { sent: false, code: "SMS_SEND_FAILED", error: sent.error }
+            : { sent: true, providerMsgId: sent?.providerMsgId };
+        }
+      } catch (error) {
+        console.error("[web_forms] contact SMS notification failed:", error.message);
+        result.sms = { sent: false, code: "SMS_SEND_FAILED" };
+      }
+    }
+  }
+
+  if (channels.includes("whatsapp") && form.scope === "generic") {
+    try {
+      result.whatsapp = await sendGenericWebFormWhatsApp({ form, contact, submissionId });
+    } catch (error) {
+      console.error("[web_forms] generic WhatsApp automation failed:", error.message);
+      result.whatsapp = { sent: false, code: "WHATSAPP_SEND_FAILED" };
+    }
+  }
+
+  return result;
 }
 
 function normalizeScope(raw) {
@@ -307,6 +379,23 @@ function normalizeGenericPhone(phone, phoneCountry) {
   // phoneCountry field. The embedded Generic form supplies phoneCountry and
   // is additionally checked for a matching prefix above.
   return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : null;
+}
+
+const GENERIC_PHONE_RULES = {
+  "+1": [10, 10], "+7": [10, 10], "+20": [8, 10], "+27": [9, 9],
+  "+33": [9, 9], "+44": [9, 10], "+49": [10, 11], "+61": [9, 9],
+  "+65": [8, 8], "+81": [9, 10], "+86": [11, 11], "+91": [10, 10],
+  "+971": [9, 9],
+};
+
+function genericPhoneLengthError(phone, phoneCountry) {
+  const countryCode = String(phoneCountry || "").trim();
+  if (!countryCode) return null;
+  const digits = String(phone || "").replace(/\D/g, "");
+  const rule = GENERIC_PHONE_RULES[countryCode] || [7, 15];
+  if (digits.length >= rule[0] && digits.length <= rule[1]) return null;
+  const range = rule[0] === rule[1] ? `${rule[0]}` : `${rule[0]}-${rule[1]}`;
+  return `Enter a valid ${countryCode} number with ${range} digits.`;
 }
 
 function parseJson(raw, fallback) {
@@ -526,6 +615,8 @@ function defaultSettings() {
     optInLinkUrl: "",
 
     notificationEmail: "",
+    contactNotificationChannels: ["whatsapp"],
+    contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
     phoneAllowAllCountries: true,
     phoneAllowedCountries: [],
     multiStepEnabled: false,
@@ -841,6 +932,15 @@ function normalizeSettings(raw) {
         : Boolean(settings.notificationEnabled),
 
     notificationEmail: textOr(settings.notificationEmail),
+
+    contactNotificationChannels: Array.isArray(settings.contactNotificationChannels)
+      ? [...new Set(settings.contactNotificationChannels.filter((channel) => ["email", "sms", "whatsapp"].includes(channel)))]
+      : ["whatsapp"],
+
+    contactNotificationMessage: textOr(
+      settings.contactNotificationMessage,
+      defaultSettings().contactNotificationMessage,
+    ),
 
     phoneAllowAllCountries: settings.phoneAllowAllCountries !== false,
     phoneAllowedCountries: Array.isArray(settings.phoneAllowedCountries)
@@ -1358,6 +1458,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       source: formScope === "travel" ? "inbound:web_form" : "website-form",
       status: "Lead",
     };
+    if (formScope === "generic") contactData.whatsappPhone = null;
 
     const missing = [];
 
@@ -1553,6 +1654,8 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const nameValue = String(contactData.name || "").trim();
     const emailValue = String(contactData.email || "").trim();
     const phoneValue = String(contactData.phone || "").trim();
+    const whatsappSameAsPhone = isTruthyValue("checkbox", body.whatsappSameAsPhone);
+    const whatsappPhoneValue = String(body.whatsappPhone || "").trim();
     const companyValue = String(contactData.company || "").trim();
     const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(formScope);
     const fieldErrors = {};
@@ -1574,12 +1677,30 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         phoneValue,
         req.body.phoneCountry,
       );
-      if (normalizedGenericPhone) contactData.phone = normalizedGenericPhone;
-      else fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
+      const phoneLengthError = genericPhoneLengthError(phoneValue, submittedPhoneCountry);
+      if (normalizedGenericPhone && !phoneLengthError) contactData.phone = normalizedGenericPhone;
+      else fieldErrors.phone = phoneLengthError || "Enter a valid international phone number with country code, for example +919876543210";
     } else if (phoneValue) {
       const digits = phoneValue.replace(/\D/g, "");
       if (!/^[+\d][\d\s().-]*$/.test(phoneValue) || digits.length < 7 || digits.length > 15) {
         fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
+      }
+    }
+    if (isGenericForm) {
+      if (whatsappSameAsPhone) {
+        contactData.whatsappPhone = contactData.phone || null;
+      } else if (whatsappPhoneValue) {
+        if (!/^\d+$/.test(whatsappPhoneValue)) {
+          fieldErrors.whatsappPhone = "Only numbers are allowed.";
+        } else {
+          const whatsappLengthError = genericPhoneLengthError(whatsappPhoneValue, body.phoneCountry);
+          const normalizedWhatsappPhone = normalizeGenericPhone(
+            whatsappPhoneValue,
+            body.phoneCountry,
+          );
+          if (normalizedWhatsappPhone && !whatsappLengthError) contactData.whatsappPhone = normalizedWhatsappPhone;
+          else fieldErrors.whatsappPhone = whatsappLengthError || "Enter a valid international WhatsApp number with country code, for example +919876543210";
+        }
       }
     }
     if (companyValue && (companyValue.length < 2 || companyValue.length > 150 || !/[\p{L}]/u.test(companyValue))) {
@@ -1657,6 +1778,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     }
 
     let contact = null;
+    let createdNewContact = false;
 
     submitStage = "find_existing_contact";
 
@@ -1677,6 +1799,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
     if (!contact) {
       submitStage = "create_contact";
+      createdNewContact = true;
 
       try {
         contact = await prisma.contact.create({
@@ -1695,6 +1818,13 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
         if (!contact) throw err;
       }
+    }
+
+    if (!createdNewContact && formScope === "generic" && Object.prototype.hasOwnProperty.call(contact, "whatsappPhone") && contact.whatsappPhone !== contactData.whatsappPhone) {
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: { whatsappPhone: contactData.whatsappPhone },
+      });
     }
 
     submitStage = "write_custom_fields";
@@ -1876,15 +2006,16 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       message: settings.successMessage,
     };
 
-    // Generic-only, best-effort automation. Never make lead creation depend
-    // on WhatsApp configuration, provider availability, or queue health.
-    if (formScope === "generic") {
-      try {
-        response.whatsapp = await sendGenericWebFormWhatsApp({ form, contact, submissionId: submission.id });
-      } catch (whatsappError) {
-        console.error("[web_forms] generic WhatsApp automation failed:", whatsappError.message);
-        response.whatsapp = { sent: false, code: "WHATSAPP_SEND_FAILED" };
-      }
+    // Contact notifications are independently selectable and best-effort.
+    // Provider availability must never make lead creation fail.
+    response.contactNotifications = await sendContactNotifications({
+      form,
+      settings,
+      contact,
+      submissionId: submission.id,
+    });
+    if (response.contactNotifications.whatsapp) {
+      response.whatsapp = response.contactNotifications.whatsapp;
     }
 
     if (settings.afterSubmitAction === "redirect" && settings.redirectUrl) {

@@ -416,6 +416,10 @@ function defaultSettings() {
  redirectUrl: "",
   notificationEnabled: false,
    notificationEmail: "",
+  // Keep the existing generic-form WhatsApp acknowledgement enabled for
+  // previously-created forms; email and SMS are opt-in per submitted lead.
+  contactNotificationChannels: ["whatsapp"],
+  contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
   optInEnabled: false,
    optInText: "I agree to receive communication on newsletters, promotional content, offers and events.",
   optInLinkText: "",
@@ -19865,6 +19869,26 @@ function WebFormsContent({ scope = "generic" }) {
                           />
                           <span>Show “Powered By GlobusCRM” on this web form</span>
                         </label>
+                      </div>
+                      <div className="wf-settings-block">
+                        <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>Send an automatic message to all leads</div>
+                        <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>Choose each channel independently. Messages are sent automatically to all leads using the contact details submitted with the form.</div>
+                        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                          {[['email', 'Send email automatically to all leads'], ['sms', 'Send SMS automatically to all leads'], ['whatsapp', 'Send WhatsApp automatically to all leads']].map(([channel, label]) => (
+                            <label key={channel} className="wf-settings-toggle">
+                              <input
+                                type="checkbox"
+                                checked={Array.isArray(selectedForm.settings.contactNotificationChannels) && selectedForm.settings.contactNotificationChannels.includes(channel)}
+                                onChange={(e) => {
+                                  const current = Array.isArray(selectedForm.settings.contactNotificationChannels) ? selectedForm.settings.contactNotificationChannels : [];
+                                  const next = e.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel);
+                                  applyDraft({ settings: { ...selectedForm.settings, contactNotificationChannels: next } });
+                                }}
+                              />
+                              <span>{label}</span>
+                            </label>
+                          ))}
+                        </div>
                       </div>
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">

@@ -73,6 +73,13 @@
 
     .check input{flex-shrink:0;width:auto;min-height:0;margin:2px 0 0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;transform:none}
 
+    .generic-phone-with-whatsapp{margin-bottom:0}
+    .generic-whatsapp-section{display:block;margin-top:-9px;padding-left:4px}
+    .generic-whatsapp-section>.check{display:flex;align-items:center;gap:8px;width:100%;margin-bottom:0;white-space:nowrap;line-height:1.2}
+    .generic-whatsapp-section>.check input{margin-top:0}
+    .generic-whatsapp-number{margin-top:0}
+    .generic-whatsapp-number .phone-input>span{width:96px;min-width:0;box-sizing:border-box}
+
     .choices{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 
     .choices .check span{line-height:1.35;color:var(--gbs-label,#34405e);font-size:var(--gbs-label-size,.78rem)}
@@ -629,6 +636,58 @@
 
       }
 
+      function setupGenericWhatsapp(){
+        if (scope !== 'generic') return;
+        var phoneInput = root.querySelector('input[name="phone"]');
+        if (!phoneInput) return;
+        var phoneField = phoneInput.closest('.field');
+        if (!phoneField) return;
+        phoneField.classList.add('generic-phone-with-whatsapp');
+        var phoneCountry = root.querySelector('select[name="phoneCountry"]');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'field full generic-whatsapp-section';
+        wrapper.innerHTML = '<label class="check"><input type="checkbox" name="whatsappSameAsPhone" value="true" /><span>WhatsApp number is the same as phone number</span></label><div id="whatsapp-number-field" class="generic-whatsapp-number"><label for="f-whatsappPhone">WhatsApp number</label><div class="phone-input"><span id="whatsapp-country-code" style="display:flex;align-items:center;justify-content:center;padding:0 10px;border:1px solid var(--gbs-field-border);border-radius:8px;background:var(--gbs-field-bg);color:var(--gbs-field-text);font-size:14px"></span><input id="f-whatsappPhone" type="tel" name="whatsappPhone" placeholder="Enter WhatsApp number" autocomplete="tel" inputmode="numeric" /></div><span id="whatsapp-number-error" class="field-error" hidden>Only numbers are allowed.</span></div>';
+        phoneField.insertAdjacentElement('afterend', wrapper);
+        var sameCheckbox = wrapper.querySelector('input[name="whatsappSameAsPhone"]');
+        var whatsappInput = wrapper.querySelector('input[name="whatsappPhone"]');
+        var whatsappField = wrapper.querySelector('#whatsapp-number-field');
+        var whatsappCountryCode = wrapper.querySelector('#whatsapp-country-code');
+        var whatsappError = wrapper.querySelector('#whatsapp-number-error');
+        function showWhatsappError(show){
+          whatsappError.hidden = !show;
+          whatsappInput.setAttribute('aria-invalid', show ? 'true' : 'false');
+        }
+        function keepWhatsappNumeric(value){
+          var raw = String(value || '');
+          var invalid = /[^0-9]/.test(raw);
+          if (invalid) showWhatsappError(true);
+          whatsappInput.value = raw.replace(/[^0-9]/g, '');
+        }
+        function syncWhatsappField(){
+          var same = Boolean(sameCheckbox.checked);
+          whatsappField.hidden = same;
+          whatsappInput.disabled = same;
+          whatsappCountryCode.textContent = phoneCountry && phoneCountry.value ? phoneCountry.value : '+91';
+          if (same) whatsappInput.value = phoneInput.value || '';
+        }
+        sameCheckbox.addEventListener('change', syncWhatsappField);
+        phoneInput.addEventListener('input', syncWhatsappField);
+        whatsappInput.addEventListener('beforeinput', function(event){
+          if (event.data && /[^0-9]/.test(event.data)) {
+            event.preventDefault();
+            showWhatsappError(true);
+          }
+        });
+        whatsappInput.addEventListener('input', function(){ keepWhatsappNumeric(whatsappInput.value); });
+        whatsappInput.addEventListener('paste', function(event){
+          event.preventDefault();
+          var pasted = event.clipboardData ? event.clipboardData.getData('text') : '';
+          keepWhatsappNumeric(pasted);
+        });
+        if (phoneCountry) phoneCountry.addEventListener('change', syncWhatsappField);
+        syncWhatsappField();
+      }
+
       function conditionalDepth(field, fields){
         var depth = 1;
         var visited = {};
@@ -961,7 +1020,8 @@
         var stepConfig = multiStepConfig();
         var progress = stepConfig.enabled ? '<div class="step-progress" aria-label="Form progress">' + stepConfig.steps.map(function(step, index){ return '<div class="step-progress-item" data-step="' + index + '"><span class="step-number">' + (index + 1) + '</span>' + esc(step.title || ('Step ' + (index + 1))) + '</div>'; }).join('') + '</div><div id="step-description" class="step-description"></div>' : '';
         var stepActions = stepConfig.enabled ? '<button type="button" class="primary" id="step-previous">Previous</button><button type="button" class="primary" id="step-next">Next</button>' : '';
-          root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div>' + progress + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(function(field, index){ return conditionalFieldHtml(field, index, fields); }).join('') + '</div>' + optIn + recaptcha + '<div class="actions">' + stepActions + '<button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form>' + (footerLink ? '<div class="note powered-by">' + footerLink + '</div>' : '') + '</div>';
+        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div>' + progress + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(function(field, index){ return conditionalFieldHtml(field, index, fields); }).join('') + '</div>' + optIn + recaptcha + '<div class="actions">' + stepActions + '<button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form>' + (footerLink ? '<div class="note powered-by">' + footerLink + '</div>' : '') + '</div>';
+        setupGenericWhatsapp();
         setupGenericConditionalFields(fields);
         setupGenericPhone();
         setupGenericFieldTypeValidation(fields);
@@ -1215,6 +1275,24 @@
               return;
             }
             fd.set('phone', internationalPhone);
+          }
+
+          if (fd.get('whatsappPhone') && fd.get('phoneCountry')) {
+            var whatsappInput = String(fd.get('whatsappPhone')).trim();
+            var whatsappDigits = whatsappInput.replace(/\D/g, '');
+            var whatsappRule = phoneRules[String(fd.get('phoneCountry')).trim()] || [7, 15];
+            if (whatsappDigits.length < whatsappRule[0] || whatsappDigits.length > whatsappRule[whatsappRule.length - 1]) {
+              showBusy(false);
+              showFieldErrors({ whatsappPhone: 'Enter a valid WhatsApp number with ' + (whatsappRule[0] === whatsappRule[whatsappRule.length - 1] ? whatsappRule[0] : whatsappRule[0] + '-' + whatsappRule[whatsappRule.length - 1]) + ' digits.' });
+              return;
+            }
+            var internationalWhatsapp = String(fd.get('phoneCountry')).trim() + whatsappDigits;
+            if (!/^\+[1-9]\d{7,14}$/.test(internationalWhatsapp)) {
+              showBusy(false);
+              showFieldErrors({ whatsappPhone: 'Enter a valid international WhatsApp number.' });
+              return;
+            }
+            fd.set('whatsappPhone', internationalWhatsapp);
           }
 
         try {

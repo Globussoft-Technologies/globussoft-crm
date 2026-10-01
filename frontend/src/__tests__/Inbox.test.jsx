@@ -217,6 +217,20 @@ describe("<Inbox />", () => {
     expect(screen.queryByRole("tab", { name: /whatsapp/i })).not.toBeInTheDocument();
   });
 
+  it("persists an opened unread email as read", async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    const emailRow = await screen.findByText(sampleInboxEmail.subject);
+    await user.click(emailRow);
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(
+        ([url, opts]) => url === `/api/communications/inbox/${sampleInboxEmail.id}/read` && opts?.method === "POST",
+      )).toBe(true);
+    });
+  });
+
   it("uses the same page shell spacing as the other CRM pages", async () => {
     renderInbox();
 
@@ -457,7 +471,7 @@ describe("<Inbox />", () => {
     await user.type(screen.getByLabelText('To date'), '2026-09-04');
 
     await waitFor(() => {
-      expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/communications/inbox?dateFrom=2026-09-01&dateTo=2026-09-04&page=1&limit=12')).toBe(true);
+      expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/communications/inbox?dateFrom=2026-09-01&dateTo=2026-09-04&page=1&limit=50')).toBe(true);
     });
   });
 

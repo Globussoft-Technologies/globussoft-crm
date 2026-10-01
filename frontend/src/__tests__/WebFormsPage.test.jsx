@@ -391,6 +391,14 @@ describe('WebForms builder page', () => {
 
     await screen.findByText(/Send email notification to this address/i);
 
+    expect(screen.getByText(/Send an automatic message to all leads/i)).toBeInTheDocument();
+
+    expect(screen.getByText(/Send email automatically to all leads/i)).toBeInTheDocument();
+
+    expect(screen.getByText(/Send SMS automatically to all leads/i)).toBeInTheDocument();
+
+    expect(screen.getByText(/Send WhatsApp automatically to all leads/i)).toBeInTheDocument();
+
     expect(screen.getByText('Logo and form text')).toBeInTheDocument();
 
     expect(screen.getByRole('button', { name: /Upload/i })).toBeInTheDocument();

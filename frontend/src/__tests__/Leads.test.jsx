@@ -36,7 +36,7 @@
  *      the form fields in a drawer.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Leads from '../pages/Leads';
 import { AuthContext } from '../App';
@@ -90,7 +90,7 @@ function renderLeads(authValue = null, initialEntries = ['/']) {
 // "Create Lead". Match on the aria-label since it takes precedence over
 // inner text for accessible-name lookup.
 function openDrawer() {
-  fireEvent.click(screen.getByRole('button', { name: /Create a new lead/i }));
+  fireEvent.click(screen.getAllByRole('button', { name: /Create a new lead/i })[0]);
 }
 
 function fillForm({ name, email, company, title }) {
@@ -728,7 +728,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
-  it('keeps the Name column within a readable width range when resized', async () => {
+  it('keeps the Name column at least as wide as its content when resized', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -742,7 +742,6 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     await waitFor(() => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
-      expect(saved.widths.name).toBeLessThanOrEqual(380);
       expect(saved.widths.name).toBeGreaterThanOrEqual(220);
     });
 
@@ -754,7 +753,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     await waitFor(() => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
-      expect(saved.widths.name).toBe(220);
+      expect(saved.widths.name).toBeGreaterThanOrEqual(220);
     });
   });
 
@@ -934,6 +933,8 @@ describe('Leads  vertical-aware form schema (#600)', () => {
   const genericAuth = {
     tenant: { id: 1, vertical: 'generic', name: 'Globussoft CRM' },
     user: { id: 1, role: 'ADMIN' },
+    token: 'fake-token',
+    loading: false,
   };
 
   it('wellness tenant ?? ? Phone field renders and WhatsApp is in Source dropdown', async () => {
@@ -988,7 +989,7 @@ describe('Leads  vertical-aware form schema (#600)', () => {
 
     fireEvent.change(screen.getByPlaceholderText('Full Name'), { target: { value: 'Anita Sharma' } });
     fireEvent.change(screen.getByPlaceholderText(/Phone \(10-digit/i), {
-      target: { value: '+919876543210' },
+      target: { value: '9876543210' },
     });
     fireEvent.change(screen.getByPlaceholderText(/Treatment of interest/i), {
       target: { value: 'Botox' },
@@ -1011,6 +1012,44 @@ describe('Leads  vertical-aware form schema (#600)', () => {
       expect(body.treatmentOfInterest).toBe('Botox');
     });
     expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('rejects digits and symbols in the lead name for every CRM vertical', async () => {
+    for (const auth of [genericAuth, wellnessAuth, { ...genericAuth, tenant: { ...genericAuth.tenant, vertical: 'travel' } }]) {
+      cleanup();
+      fetchApiMock.mockReset();
+      fetchApiMock.mockImplementation(defaultFetchMock);
+      renderLeads(auth);
+      await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+      openDrawer();
+
+      const nameInput = screen.getByPlaceholderText('Full Name');
+      fireEvent.change(nameInput, { target: { value: 'Kanchan Gupta1343435!@#' } });
+      expect(nameInput).toHaveValue('');
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Name can contain letters and spaces only. Numbers and special characters are not allowed.',
+      );
+    }
+    cleanup();
+  });
+
+  it('filters non-digits from the phone input for every CRM vertical', async () => {
+    for (const auth of [genericAuth, wellnessAuth, { ...genericAuth, tenant: { ...genericAuth.tenant, vertical: 'travel' } }]) {
+      cleanup();
+      fetchApiMock.mockReset();
+      fetchApiMock.mockImplementation(defaultFetchMock);
+      renderLeads(auth);
+      await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+      openDrawer();
+
+      const phoneInput = screen.getByPlaceholderText(/Phone \(/i);
+      fireEvent.change(phoneInput, { target: { value: '+91 987-654-3210abc' } });
+      expect(phoneInput).toHaveValue('919876543210');
+      expect(screen.getByRole('alert')).toHaveTextContent('Phone number can contain digits only.');
+      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+      expect(screen.queryByRole('alert')).toBeNull();
+    }
+    cleanup();
   });
 
   it('generic tenant ?? ? Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {

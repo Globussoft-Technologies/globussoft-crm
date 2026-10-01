@@ -6192,7 +6192,15 @@ async function renderProfessionalWellnessInvoicePdf(invoice, contact, clinic, op
   let tableY = table.y;
   lines.forEach((line, index) => {
     const name = String(line?.name || line?.productName || line?.serviceName || "Item");
-    const description = String(line?.description || (String(line?.type || "service").toLowerCase() === "product" ? "Product" : "Service"));
+    const lineType = String(line?.type || "service").toLowerCase();
+    const description = String(
+      line?.description
+        || (lineType === "drug"
+          ? "Drug"
+          : lineType === "product"
+            ? "Product"
+            : "Service"),
+    );
     const quantity = Number.isFinite(Number(line?.quantity)) ? String(line.quantity) : "1";
     const amount = professionalInvoiceLineAmount(line);
     const unitPrice = Number.isFinite(Number(line?.unitPrice)) ? Number(line.unitPrice) : (Number(quantity) ? amount / Number(quantity) : amount);
@@ -6241,7 +6249,7 @@ async function renderProfessionalWellnessInvoicePdf(invoice, contact, clinic, op
   drawCard(left, summaryTop, paymentWidth, 106);
   doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent).text("Payment Information", left + 16, summaryTop + 16);
   doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#55716E").text("PAYMENT MODE", left + 16, summaryTop + 42);
-  doc.font("Helvetica-Bold").fontSize(12).fillColor("#203331").text(String(invoice?.paymentMode || "-").replace(/_/g, " ").toUpperCase(), left + 16, summaryTop + 56, { width: paymentWidth - 32 });
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#203331").text(String(invoice?.paymentMode || "Payment not received").replace(/_/g, " ").toUpperCase(), left + 16, summaryTop + 56, { width: paymentWidth - 32 });
   doc.font("Helvetica").fontSize(8.5).fillColor("#607572").text(isPaid ? "Payment received" : "Payment pending", left + 16, summaryTop + 81);
   const summaryRows = [
     ["Subtotal", money(subtotal)], ["Discount", money(0)], ["Tax (GST 0%)", money(0)],

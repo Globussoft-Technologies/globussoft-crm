@@ -22,6 +22,15 @@ const {
 } = require("../lib/prescriptionHelpers");
 const prescriptionRenewals = require("../lib/prescriptionRenewalService");
 const { applyPrescriptionStock } = require("../lib/drugStock");
+const {
+  SOURCE_TYPES,
+  roundMoney,
+  usagePricing,
+  syncPrescriptionConsumption,
+  enrichConsumptionRow,
+  getVisitTotalAmount,
+  getVisitInvoiceLineItems,
+} = require("../lib/inventoryConsumption");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
   getAllTreatmentPlans,
@@ -702,6 +711,23 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl, amount }) {
 
   const contact = await ensurePatientContact(patient, tenantId);
 
+  // Compose the invoice from the same completed visit that drives Inventory
+  // used. This keeps the service, every product/drug, quantity and usage
+  // value together when the customer pays through a hosted link.
+  const billing = await getVisitTotalAmount({ visit, tenantId });
+  const lineItems = await getVisitInvoiceLineItems({
+    visit,
+    tenantId,
+    serviceAmount: billing.baseAmount,
+  });
+  const invoiceSnapshot = {
+    customerName: patient.name || null,
+    customerPhone: patient.phone || null,
+    customerEmail: patient.email || null,
+    patientId: patient.id,
+    lineItemsJson: JSON.stringify(lineItems),
+  };
+
   let invoice = await prisma.invoice.findFirst({
     where: { visitId: visit.id, tenantId },
   });
@@ -721,14 +747,22 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl, amount }) {
         contactId: contact.id,
         tenantId,
         visitId: visit.id,
+        ...invoiceSnapshot,
       },
     });
-  } else if (amount != null && invoice.amount !== invoiceAmount) {
-    // Update existing invoice amount when a custom amount is supplied (e.g.
-    // coupon-adjusted balance on a previously-generated link).
+  } else {
+    // Refresh the snapshot on every link generation. This also repairs older
+    // visit invoices that were created before inventory/drug line items were
+    // persisted.
+    const updateData = { ...invoiceSnapshot };
+    if (amount != null && invoice.amount !== invoiceAmount) {
+      // Update existing invoice amount when a custom amount is supplied (e.g.
+      // coupon-adjusted balance on a previously-generated link).
+      updateData.amount = invoiceAmount;
+    }
     invoice = await prisma.invoice.update({
       where: { id: invoice.id },
-      data: { amount: invoiceAmount },
+      data: updateData,
     });
   }
 
@@ -852,6 +886,17 @@ function parseVisitCouponBreakdown(visit) {
   return null;
 }
 
+function hasPaymentAdjustment(breakdown) {
+  return Boolean(
+    breakdown && (
+      breakdown.couponCode
+      || Number(breakdown.discount) > 0
+      || Number(breakdown.excess) > 0
+      || Number(breakdown.lockingFee) > 0
+    ),
+  );
+}
+
 // Decorate one or more Visit rows for the frontend by parsing couponBreakdown
 // from its JSON-text column into an object. Mutates the row(s) in place.
 function attachCouponBreakdownToVisits(visits) {
@@ -867,6 +912,76 @@ function attachCouponBreakdownToVisits(visits) {
     if (parsed) visit.couponBreakdown = parsed;
   }
   return visits;
+}
+
+// Inventory can be added after a visit was completed. Before creating or
+// reusing a payment link, promote the stored visit charge to at least
+// service price + the current inventory ledger total. This keeps old links
+// from silently charging only the treatment amount.
+async function refreshVisitAmountWithInventory(visit, tenantId) {
+  const billing = await getVisitTotalAmount({ visit, tenantId });
+  const currentAmount = Number(visit.amountCharged) || 0;
+  const changed = billing.total !== currentAmount;
+  const previousBreakdown = parseVisitCouponBreakdown(visit);
+  const hasInventoryMetadata = previousBreakdown
+    && Number.isFinite(Number(previousBreakdown.serviceAmount))
+    && Number.isFinite(Number(previousBreakdown.inventoryTotal))
+    && Math.abs(Number(previousBreakdown.inventoryTotal) - billing.inventoryTotal) < 0.005;
+  const hasAppliedCoupon = previousBreakdown
+    && (previousBreakdown.couponCode || Number(previousBreakdown.discount) > 0);
+  const shouldPersistInventoryMetadata = billing.inventoryTotal > 0
+    && (!hasInventoryMetadata || changed)
+    && (!hasAppliedCoupon || changed);
+  if (!changed && !shouldPersistInventoryMetadata) return { ...billing, changed: false };
+
+  const data = {};
+  if (changed) {
+    data.amountCharged = billing.total;
+    data.paymentLinkUrl = null;
+    data.paymentLinkGeneratedAt = null;
+  }
+  if (shouldPersistInventoryMetadata) {
+    const lockingFee = Number(previousBreakdown?.lockingFee) > 0
+      ? Number(previousBreakdown.lockingFee)
+      : 0;
+    // A changed inventory cart invalidates coupon discounts calculated from
+    // the previous base amount, while preserving a booking fee already paid.
+    data.couponBreakdown = JSON.stringify({
+      baseAmount: billing.total,
+      discount: 0,
+      excess: 0,
+      lockingFee,
+      balance: Math.max(0, billing.total - lockingFee),
+      couponCode: null,
+      serviceAmount: billing.baseAmount,
+      inventoryTotal: billing.inventoryTotal,
+    });
+  }
+  const updated = await prisma.visit.update({ where: { id: visit.id }, data });
+  Object.assign(visit, data, updated || {});
+  return { ...billing, changed: true };
+}
+
+async function refreshCompletedVisitAmount(visitId, tenantId) {
+  if (!visitId) return null;
+  const visit = await prisma.visit.findFirst({
+    where: { id: Number(visitId), tenantId: Number(tenantId) },
+  });
+  if (!visit || visit.status !== "completed") return null;
+  return refreshVisitAmountWithInventory(visit, tenantId);
+}
+
+async function applyAutoConsumptionBeforeBilling(visit) {
+  if (!visit || visit.status !== "completed") return;
+  try {
+    const { applyAutoConsumptionForVisit } = require("../lib/autoConsumptionApplier");
+    await applyAutoConsumptionForVisit(visit);
+  } catch (consumptionErr) {
+    console.error(
+      "[wellness] synchronous auto-consumption failed:",
+      consumptionErr.message,
+    );
+  }
 }
 
 async function sendVisitPaymentLink({ visit, tenantId, baseUrl, amount }) {
@@ -1933,6 +2048,7 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
           include: {
             service: true,
             doctor: { select: { id: true, name: true, email: true } },
+            consumptions: { orderBy: { createdAt: "desc" } },
           },
         },
         prescriptions: {
@@ -3444,6 +3560,18 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       },
     });
 
+    if (visit.status === "completed") {
+      try {
+        await applyAutoConsumptionBeforeBilling(visit);
+        await refreshVisitAmountWithInventory(visit, req.user.tenantId);
+      } catch (billingErr) {
+        console.error(
+          "[wellness] completed visit inventory billing refresh failed:",
+          billingErr.message,
+        );
+      }
+    }
+
     // If linked to a treatment plan, increment completedSessions
     if (visit.treatmentPlanId && visit.status === "completed") {
       await prisma.treatmentPlan.update({
@@ -3705,6 +3833,22 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     }
 
     const updated = await prisma.visit.update({ where: { id }, data });
+    let inventoryBilling = null;
+
+    // Inventory may have been prescribed before the appointment was marked
+    // completed. Recalculate before the payment-link hook so the first hosted
+    // link includes the service and every linked consumption line.
+    if (data.status === "completed" && existing.status !== "completed") {
+      try {
+        await applyAutoConsumptionBeforeBilling(updated);
+        inventoryBilling = await refreshVisitAmountWithInventory(updated, req.user.tenantId);
+      } catch (billingErr) {
+        console.error(
+          "[wellness] completed visit inventory billing refresh failed:",
+          billingErr.message,
+        );
+      }
+    }
 
     // A session out of a package is only spent when the visit actually
     // completes. POST /visits already did this for a visit logged as completed
@@ -3844,6 +3988,8 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
           lockingFee: balanceCtx.lockingFee,
           balance: balanceCtx.balance,
           couponCode: balanceCtx.coupon?.code || null,
+          serviceAmount: inventoryBilling?.baseAmount ?? balanceCtx.baseAmount,
+          inventoryTotal: inventoryBilling?.inventoryTotal ?? 0,
         };
 
         if (balanceCtx.coupon && balanceCtx.applied) {
@@ -4003,10 +4149,12 @@ router.post("/visits/:id/payment-link", phiWriteGate, async (req, res) => {
     if (!visit) return res.status(404).json({ error: "Visit not found" });
     if (visit.status !== "completed")
       return res.status(400).json({ error: "Visit is not completed", code: "VISIT_NOT_COMPLETED" });
-    if (!Number(visit.amountCharged) || Number(visit.amountCharged) <= 0)
-      return res.status(400).json({ error: "Visit has no charge", code: "VISIT_NO_CHARGE" });
     if (visit.paymentStatus === "paid")
       return res.status(400).json({ error: "Visit is already paid", code: "VISIT_ALREADY_PAID" });
+
+    const billing = await refreshVisitAmountWithInventory(visit, req.user.tenantId);
+    if (!billing.total)
+      return res.status(400).json({ error: "Visit has no charge", code: "VISIT_NO_CHARGE" });
 
     const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
     const couponBreakdown = parseVisitCouponBreakdown(visit);
@@ -4014,7 +4162,7 @@ router.post("/visits/:id/payment-link", phiWriteGate, async (req, res) => {
       visit,
       tenantId: req.user.tenantId,
       baseUrl: getFrontendUrlFromRequest(req),
-      amount: couponBreakdown ? couponBreakdown.balance : undefined,
+      amount: hasPaymentAdjustment(couponBreakdown) ? couponBreakdown.balance : billing.total,
     });
 
     if (link.error)
@@ -4046,11 +4194,13 @@ router.post("/visits/:id/payment-link/send", phiWriteGate, async (req, res) => {
     if (visit.status !== "completed") {
       return res.status(400).json({ error: "Visit is not completed", code: "VISIT_NOT_COMPLETED" });
     }
-    if (!Number(visit.amountCharged) || Number(visit.amountCharged) <= 0) {
-      return res.status(400).json({ error: "Visit has no charge", code: "VISIT_NO_CHARGE" });
-    }
     if (visit.paymentStatus === "paid") {
       return res.status(400).json({ error: "Visit is already paid", code: "VISIT_ALREADY_PAID" });
+    }
+
+    const billing = await refreshVisitAmountWithInventory(visit, req.user.tenantId);
+    if (!billing.total) {
+      return res.status(400).json({ error: "Visit has no charge", code: "VISIT_NO_CHARGE" });
     }
 
     const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
@@ -4059,7 +4209,7 @@ router.post("/visits/:id/payment-link/send", phiWriteGate, async (req, res) => {
       visit,
       tenantId: req.user.tenantId,
       baseUrl: getFrontendUrlFromRequest(req),
-      amount: couponBreakdown ? couponBreakdown.balance : undefined,
+      amount: hasPaymentAdjustment(couponBreakdown) ? couponBreakdown.balance : billing.total,
     });
     if (result.error) {
       return res.status(502).json({ error: result.error, code: result.code });
@@ -4253,6 +4403,45 @@ router.get("/visits/:id/consumptions", phiReadGate, async (req, res) => {
       where: tenantWhere(req, { visitId: id }),
       orderBy: { createdAt: "desc" },
     });
+
+    // The patient-detail table is a ledger view, not a raw ServiceConsumption
+    // dump. Resolve the visit and catalogue rows in the same tenant before
+    // decorating every line with the spreadsheet fields. These lookups are
+    // deliberately best-effort for legacy rows whose old loose productId no
+    // longer resolves; the usage row itself must still be returned.
+    const visit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id }),
+      select: {
+        id: true,
+        visitDate: true,
+        patient: { select: { name: true } },
+        doctor: { select: { name: true } },
+        service: { select: { name: true } },
+      },
+    }).catch(() => null);
+    const productIds = [...new Set(items.map((item) => item.productId).filter(Boolean))];
+    const drugIds = [...new Set(items.map((item) => item.drugId).filter(Boolean))];
+    const [products, drugs] = await Promise.all([
+      productIds.length
+        ? prisma.product.findMany({
+            where: { tenantId: req.user.tenantId, id: { in: productIds } },
+            select: { id: true, name: true, productCode: true, price: true, volume: true, unit: true },
+          }).catch(() => [])
+        : Promise.resolve([]),
+      drugIds.length
+        ? prisma.drug.findMany({
+            where: { tenantId: req.user.tenantId, id: { in: drugIds } },
+            select: { id: true, name: true, productCode: true, salePrice: true, unit: true, dosageForm: true },
+          }).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    const productMap = new Map(products.map((product) => [product.id, product]));
+    const drugMap = new Map(drugs.map((drug) => [drug.id, drug]));
+    const ledgerItems = items.map((item) => enrichConsumptionRow(item, {
+      visit,
+      product: productMap.get(item.productId),
+      drug: drugMap.get(item.drugId),
+    }));
     // PRD 11 / T2.2: consumption items reveal what was administered during a
     // visit  clinical context tied to the patient. Audit per request.
     // #534 (PERF-1): fire-and-forget  see PATIENT_LIST_READ above.
@@ -4272,7 +4461,7 @@ router.get("/visits/:id/consumptions", phiReadGate, async (req, res) => {
         auditErr.message,
       );
     });
-    res.json(items);
+    res.json(ledgerItems);
   } catch (_e) {
     res.status(500).json({ error: "Failed to list consumption items" });
   }
@@ -4286,9 +4475,23 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
     });
     if (!visit) return res.status(404).json({ error: "Visit not found" });
 
-    const { productName, qty = 1, unitCost = 0, productId } = req.body;
+    const { productName, qty = 1, unitCost, productId } = req.body;
     if (!productName)
       return res.status(400).json({ error: "productName required" });
+
+    const requestedProductId = productId ? parseInt(productId, 10) : null;
+    const catalogProduct = await (requestedProductId
+      ? prisma.product.findFirst({
+          where: tenantWhere(req, { id: requestedProductId }),
+          select: { id: true, name: true, productCode: true, price: true, volume: true, unit: true },
+        })
+      : prisma.product.findFirst({
+          where: tenantWhere(req, { name: String(productName).trim() }),
+          select: { id: true, name: true, productCode: true, price: true, volume: true, unit: true },
+        })).catch(() => null);
+    if (requestedProductId && !catalogProduct) {
+      return res.status(400).json({ error: "product not found in this tenant", code: "PRODUCT_NOT_FOUND" });
+    }
 
     // #321: cap unitCost + qty + line total. P&L by Service was rendering
     // PRODUCT COST = 99,99,98,99,90,48,826 (~100 trillion) because a single
@@ -4297,11 +4500,18 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
     // amountCharged cap from #277. 10L per unit is already absurd for any
     // clinic consumable; the line total is capped at 1Cr to match the
     // cleanup-script threshold in the output note.
-    const qNum = parseInt(qty) || 1;
-    const cNum = parseFloat(unitCost) || 0;
-    if (qNum < 0 || cNum < 0) {
+    const qNum = Number(qty) || 1;
+    const requestedUnitCost = unitCost === undefined || unitCost === "" ? 0 : Number(unitCost);
+    const pricing = usagePricing({
+      qty: qNum,
+      salePrice: catalogProduct?.price,
+      volume: catalogProduct?.volume,
+      fallbackUnitCost: requestedUnitCost,
+    });
+    const cNum = catalogProduct ? pricing.unitCost : requestedUnitCost;
+    if (!Number.isFinite(qNum) || !Number.isFinite(cNum) || qNum <= 0 || cNum < 0) {
       return res.status(400).json({
-        error: "qty and unitCost must be non-negative",
+        error: "qty must be positive and unitCost must be non-negative",
         code: "AMOUNT_NEGATIVE",
       });
     }
@@ -4326,15 +4536,41 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
 
     const c = await prisma.serviceConsumption.create({
       data: {
-        productName,
+        productName: String(catalogProduct?.name || productName).trim(),
         qty: qNum,
         unitCost: cNum,
         visitId: id,
-        productId: productId ? parseInt(productId) : null,
+        productId: catalogProduct?.id || null,
+        sourceType: SOURCE_TYPES.MANUAL,
+        transactionType: "Sale",
+        unit: catalogProduct?.unit || req.body.unit || "unit",
+        productCode: catalogProduct?.productCode || null,
+        salePrice: Number(catalogProduct?.price) || 0,
+        usageValue: pricing.usageValue,
         tenantId: req.user.tenantId,
       },
     });
-    res.status(201).json(c);
+    const consumptionVisit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id }),
+      select: {
+        id: true,
+        visitDate: true,
+        patient: { select: { name: true } },
+        doctor: { select: { name: true } },
+        service: { select: { name: true } },
+      },
+    }).catch(() => null);
+    if (visit.status === "completed") {
+      try {
+        await refreshVisitAmountWithInventory(visit, req.user.tenantId);
+      } catch (billingErr) {
+        console.error(
+          "[wellness] consumption billing refresh failed:",
+          billingErr.message,
+        );
+      }
+    }
+    res.status(201).json(enrichConsumptionRow(c, { visit: consumptionVisit, product: catalogProduct }));
   } catch (e) {
     console.error("[wellness] consumption add error:", e.message);
     res.status(500).json({ error: "Failed to add consumption item" });
@@ -4413,6 +4649,7 @@ router.put(
           productName: String(productName).trim(),
           qty: qNum,
           unitCost: cNum,
+          usageValue: roundMoney(qNum * cNum),
         },
       });
 
@@ -4443,6 +4680,15 @@ router.put(
           auditErr.message,
         );
       });
+
+      try {
+        await refreshCompletedVisitAmount(visitId, req.user.tenantId);
+      } catch (billingErr) {
+        console.error(
+          "[wellness] amended consumption billing refresh failed:",
+          billingErr.message,
+        );
+      }
 
       res.json(updated);
     } catch (e) {
@@ -4702,7 +4948,32 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
       );
     }
 
-    res.status(201).json({ ...normalizePrescriptionDrugs(rx), stock });
+    // The prescription and the visit inventory ledger are two views of the
+    // same clinical action. Keep the Rx save independent from bookkeeping,
+    // but always attempt the ledger mirror before responding.
+    let inventory = null;
+    try {
+      inventory = await syncPrescriptionConsumption({
+        prescription: rx,
+        drugs: namedDrugs,
+      });
+    } catch (inventoryErr) {
+      console.warn(
+        "[wellness] prescription inventory sync failed:",
+        inventoryErr.message,
+      );
+      inventory = { created: 0, updated: 0, deactivated: 0, skipped: namedDrugs.length, error: "SYNC_FAILED" };
+    }
+    try {
+      await refreshCompletedVisitAmount(rx.visitId, req.user.tenantId);
+    } catch (billingErr) {
+      console.error(
+        "[wellness] prescription billing refresh failed:",
+        billingErr.message,
+      );
+    }
+
+    res.status(201).json({ ...normalizePrescriptionDrugs(rx), stock, inventory });
   } catch (e) {
     // Log the Prisma error code and the stack, not just the message. This
     // handler previously logged `e.message` alone and returned a bare 500, so
@@ -4817,7 +5088,31 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
         newValidityDays: updated.validityDays ?? null,
       },
     );
-    res.json(normalizePrescriptionDrugs(updated));
+    let inventory = null;
+    try {
+      inventory = await syncPrescriptionConsumption({
+        prescription: {
+          ...updated,
+          tenantId: updated.tenantId || req.user.tenantId,
+        },
+        drugs: newDrugs || [],
+      });
+    } catch (inventoryErr) {
+      console.warn(
+        "[wellness] amended prescription inventory sync failed:",
+        inventoryErr.message,
+      );
+      inventory = { created: 0, updated: 0, deactivated: 0, skipped: (newDrugs || []).length, error: "SYNC_FAILED" };
+    }
+    try {
+      await refreshCompletedVisitAmount(updated.visitId, req.user.tenantId);
+    } catch (billingErr) {
+      console.error(
+        "[wellness] amended prescription billing refresh failed:",
+        billingErr.message,
+      );
+    }
+    res.json({ ...normalizePrescriptionDrugs(updated), inventory });
   } catch (e) {
     console.error("[wellness] amend prescription error:", e.message);
     res.status(500).json({ error: "Failed to amend prescription" });
@@ -9096,6 +9391,7 @@ async function computePnlByService(req) {
   // revenue (visitDate-based) from cost (createdAt-based).
   const consumptionWhere = {
     tenantId,
+    isActive: true,
     visit: { visitDate: { gte: from, lte: to }, status: "completed" },
   };
   if (locationId) consumptionWhere.visit.locationId = locationId;

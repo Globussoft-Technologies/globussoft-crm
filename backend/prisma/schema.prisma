@@ -560,34 +560,34 @@ model Tenant {
 }
 
 model User {
-  id              Int       @id @default(autoincrement())
+  id                Int       @id @default(autoincrement())
   // Email is unique PER TENANT, not globally — the same person can hold a
   // separate account in multiple organisations (e.g. a customer of both a
   // travel agency and a wellness clinic). Composite uniqueness lives in
   // @@unique([email, tenantId]) at the bottom of the model. Because email is
   // no longer a standalone unique key, all lookups use findFirst (often
   // scoped by tenantId) rather than findUnique({ where: { email } }).
-  email           String
-  password        String
-  emailVerifiedAt DateTime? // set when a self-registered user verified their email via OTP (null for staff/invited/pre-feature users)
-  role            String    @default("USER") // ADMIN, USER, MANAGER
-  userType        String    @default("STAFF") // STAFF | OWNER | CUSTOMER
-  name            String
+  email             String
+  password          String
+  emailVerifiedAt   DateTime? // set when a self-registered user verified their email via OTP (null for staff/invited/pre-feature users)
+  role              String    @default("USER") // ADMIN, USER, MANAGER
+  userType          String    @default("STAFF") // STAFF | OWNER | CUSTOMER
+  name              String
   // Contact number the user maintains themselves on /profile. Nullable and
   // NOT unique on purpose: it is a convenience/contactability field, not an
   // identity key (email + tenantId remains the identity). For a CUSTOMER
   // whose account is linked to a wellness Patient row, PUT /api/auth/me
   // mirrors this onto Patient.phone so the clinic — and the Callified
   // calling flow on Appointments — can actually reach them.
-  phone           String?
-  jobTitle        String?
-  workNumber      String?
-  reportingToId   Int?
+  phone             String?
+  jobTitle          String?
+  workNumber        String?
+  reportingToId     Int?
   defaultPipelineId Int?
   reportingTo       User?     @relation("UserReportingLine", fields: [reportingToId], references: [id], onDelete: SetNull)
   directReports     User[]    @relation("UserReportingLine")
   defaultPipeline   Pipeline? @relation("UserDefaultPipeline", fields: [defaultPipelineId], references: [id], onDelete: SetNull)
-  createdAt       DateTime  @default(now())
+  createdAt         DateTime  @default(now())
 
   // 2FA
   twoFactorEnabled Boolean @default(false)
@@ -679,9 +679,9 @@ model User {
   whatsappThreads    WhatsAppThread[]    @relation("WhatsAppThreadAssignee")
   pushSubscriptions  PushSubscription[]
   landingPages       LandingPage[]
-  teamMemberships     SalesTeamMember[]
-  salesTeamsCreated  SalesTeam[] @relation("SalesTeamCreator")
-  salesTeamsUpdated  SalesTeam[] @relation("SalesTeamUpdater")
+  teamMemberships    SalesTeamMember[]
+  salesTeamsCreated  SalesTeam[]         @relation("SalesTeamCreator")
+  salesTeamsUpdated  SalesTeam[]         @relation("SalesTeamUpdater")
 
   // Wellness vertical
   doctorVisits                 Visit[]                    @relation("DoctorVisits")
@@ -4760,6 +4760,7 @@ model Prescription {
 
   // Renewal / medicine requests a patient raised against this Rx.
   renewalRequests PrescriptionRequest[]
+  consumptions    ServiceConsumption[]
 
   @@index([tenantId, createdAt])
   @@index([patientId])
@@ -5046,10 +5047,27 @@ model ServiceConsumption {
   qty         Float  @default(1) // quantity in ml (or product's unit)
   unitCost    Float  @default(0)
 
+  // Captured provenance and pricing keep the inventory-used view stable even
+  // after a catalogue row is renamed or repriced.
+  sourceType      String  @default("MANUAL") // MANUAL | PRESCRIPTION | AUTO_RULE
+  transactionType String  @default("Sale")
+  unit            String?
+  productCode     String?
+  salePrice       Float   @default(0)
+  usageValue      Float   @default(0)
+  isActive        Boolean @default(true)
+
   visitId Int
   visit   Visit @relation(fields: [visitId], references: [id], onDelete: Cascade)
 
   productId Int? // loose ref to Product
+
+  drugId           Int?
+  drug             Drug?         @relation(fields: [drugId], references: [id], onDelete: SetNull)
+  prescriptionId   Int?
+  prescription     Prescription? @relation(fields: [prescriptionId], references: [id], onDelete: SetNull)
+  // Zero-based source line makes prescription mirroring idempotent.
+  prescriptionLine Int?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -5058,6 +5076,8 @@ model ServiceConsumption {
 
   @@index([visitId])
   @@index([tenantId, createdAt])
+  @@unique([tenantId, prescriptionId, prescriptionLine])
+  @@index([tenantId, drugId])
 }
 
 model AgentRecommendation {
@@ -6328,6 +6348,12 @@ model Drug {
   name        String // brand or trade name as written on the prescription pad
   genericName String? // generic / INN — used for substitution / formulary cross-ref
 
+  // Optional commercial details used when a prescribed drug is also recorded
+  // in the per-visit inventory ledger.
+  productCode String?
+  salePrice   Float?
+  unit        String?
+
   // Dosage form — soft-enum (string) per project convention.
   // tablet | capsule | syrup | injection | topical | drops | inhaler | other
   dosageForm String @default("tablet")
@@ -6368,6 +6394,8 @@ model Drug {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  consumptions ServiceConsumption[]
 
   // Typeahead lookups go through these. Tenant-first per project
   // tenant-isolation index pattern. genericName is nullable but indexed
@@ -7687,20 +7715,20 @@ model TmcTrip {
   visaApplications      VisaApplication[]
   visaLetterGenerations VisaLetterGeneration[]
   visaLetterDocuments   VisaLetterDocument[]
-  rooming              RoomingAssignment[]
-  paymentPlan          TripPaymentPlan?
-  purchaseOrders       TravelPurchaseOrder[]
-  documentRequirements TripDocumentRequirement[]
-  microsite            TripMicrosite?
-  landingPage          LandingPage?
-  pendingRegistrations PendingTripRegistration[]
-  parentPortalLinks   TmcParentTrip[]
-  teacherReviews      TmcTripTeacherReview[]
-  parentReviews       TravelTripReview[]
+  rooming               RoomingAssignment[]
+  paymentPlan           TripPaymentPlan?
+  purchaseOrders        TravelPurchaseOrder[]
+  documentRequirements  TripDocumentRequirement[]
+  microsite             TripMicrosite?
+  landingPage           LandingPage?
+  pendingRegistrations  PendingTripRegistration[]
+  parentPortalLinks     TmcParentTrip[]
+  teacherReviews        TmcTripTeacherReview[]
+  parentReviews         TravelTripReview[]
   travelTallyCostCentre TravelTallyCostCentre?
-  tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  createdAt            DateTime                  @default(now())
-  updatedAt            DateTime                  @updatedAt
+  tenant                Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
 
   @@unique([tenantId, tripCode])
   @@index([tenantId, status])
@@ -7762,15 +7790,15 @@ model TmcParentDocument {
 // documents. The original PDF bytes stay in the tenant database so the
 // parent portal can stream the exact terms selected for each trip.
 model TmcConsentTemplate {
-  id         Int      @id @default(autoincrement())
-  tenantId   Int      @default(1)
-  tripType   String   // day_trip | domestic | international
-  filename   String
-  mimeType   String
-  fileSize   Int
-  fileBlob   Bytes    @db.MediumBlob
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        Int      @id @default(autoincrement())
+  tenantId  Int      @default(1)
+  tripType  String // day_trip | domestic | international
+  filename  String
+  mimeType  String
+  fileSize  Int
+  fileBlob  Bytes    @db.MediumBlob
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -8853,25 +8881,25 @@ model TravelTallyLedgerGroup {
 }
 
 model TravelTallyCostCentre {
-  id          Int       @id @default(autoincrement())
-  tenantId    Int       @default(1)
-  sourceType  String    @default("ITINERARY") @db.VarChar(30)
-  sourceId    Int
-  itineraryId Int?      @unique
-  tmcTripId   Int?      @unique
-  quoteId     Int?      @unique
-  code        String    @db.VarChar(80)
-  name        String    @db.VarChar(180)
-  status      String    @default("ACTIVE") @db.VarChar(20)
-  syncStatus  String    @default("NOT_CONNECTED") @db.VarChar(30)
-  voucherSyncStatus String? @db.VarChar(30)
+  id                Int          @id @default(autoincrement())
+  tenantId          Int          @default(1)
+  sourceType        String       @default("ITINERARY") @db.VarChar(30)
+  sourceId          Int
+  itineraryId       Int?         @unique
+  tmcTripId         Int?         @unique
+  quoteId           Int?         @unique
+  code              String       @db.VarChar(80)
+  name              String       @db.VarChar(180)
+  status            String       @default("ACTIVE") @db.VarChar(20)
+  syncStatus        String       @default("NOT_CONNECTED") @db.VarChar(30)
+  voucherSyncStatus String?      @db.VarChar(30)
   lastVoucherSyncAt DateTime?
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  itinerary   Itinerary? @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
-  tmcTrip     TmcTrip?  @relation(fields: [tmcTripId], references: [id], onDelete: Cascade)
-  quote       TravelQuote? @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  tenant            Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  itinerary         Itinerary?   @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  tmcTrip           TmcTrip?     @relation(fields: [tmcTripId], references: [id], onDelete: Cascade)
+  quote             TravelQuote? @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
   @@unique([tenantId, code])
   @@unique([tenantId, sourceType, sourceId])
@@ -9018,24 +9046,24 @@ model TravelTallyTaxMaster {
 }
 
 model TravelQuote {
-  id                   Int                   @id @default(autoincrement())
-  tenantId             Int                   @default(1)
-  itineraryId          Int?
-  subBrand             String
-  contactId            Int
-  contact              Contact               @relation(fields: [contactId], references: [id], onDelete: Restrict)
-  status               String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
-  totalAmount          Decimal?              @db.Decimal(15, 2)
+  id                    Int                    @id @default(autoincrement())
+  tenantId              Int                    @default(1)
+  itineraryId           Int?
+  subBrand              String
+  contactId             Int
+  contact               Contact                @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  status                String                 @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
+  totalAmount           Decimal?               @db.Decimal(15, 2)
   // Customer-facing tax configured for this quote. Kept at quote level so
   // approval, PDF, invoice, and payment-link flows can use the same value.
-  gstTcsPercent        Decimal?              @db.Decimal(5, 2)
-  gstTcsAmount         Decimal?              @db.Decimal(15, 2)
-  currency             String                @default("INR")
-  validUntil           DateTime?
+  gstTcsPercent         Decimal?               @db.Decimal(5, 2)
+  gstTcsAmount          Decimal?               @db.Decimal(15, 2)
+  currency              String                 @default("INR")
+  validUntil            DateTime?
   // Issue 11 — trip date for season-aware pricing breakdown.
   // Nullable: existing quotes keep working; new quotes can set it to anchor
   // TravelSeasonCalendar multiplier selection.
-  tripDate             DateTime?
+  tripDate              DateTime?
   // S47 — FX-lock dedicated columns. Populated at customer-accept time
   // by routes/travel_quotes_public.js (mirrors the fxLock block also
   // persisted in TravelQuoteSnapshot.snapshotJson for forensic history /
@@ -9054,34 +9082,34 @@ model TravelQuote {
   //   fxRateExpiresAt:       optional expiry for the lock (PRD §3.4.2 — not
   //                          enforced today; reserved for future "lock
   //                          expires after N days" gate).
-  fxRateSnapshot       Decimal?              @db.Decimal(15, 6)
-  fxRateSourceCurrency String?
-  fxRateTargetCurrency String?
-  fxRateLockedAt       DateTime?
-  fxRateExpiresAt      DateTime?
+  fxRateSnapshot        Decimal?               @db.Decimal(15, 6)
+  fxRateSourceCurrency  String?
+  fxRateTargetCurrency  String?
+  fxRateLockedAt        DateTime?
+  fxRateExpiresAt       DateTime?
   // G017 (PRD §3.3 FR-3.6) — clone-with-margin lineage. When a sub-agent
   // operator duplicates a quote via POST /quotes/:id/duplicate?marginPercent=X,
   // we record both the source quote id (clonedFromQuoteId) and the markup
   // percent applied (appliedMarkupPercent). Lets a sub-agent revenue
   // report later sum margin across their cloned quotes. Both nullable —
   // unmarked clones (or non-clone source quotes) leave them null.
-  clonedFromQuoteId    Int?
-  appliedMarkupPercent Decimal?              @db.Decimal(5, 2)
-  assignedToUserId     Int?
-  assignedToUser       User?                 @relation("TravelQuoteAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  clonedFromQuoteId     Int?
+  appliedMarkupPercent  Decimal?               @db.Decimal(5, 2)
+  assignedToUserId      Int?
+  assignedToUser        User?                  @relation("TravelQuoteAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
   // Advance payment transaction references — stored for refund tracking.
   //   advancePlinkId:   Razorpay payment-link ID (plink_XXXX) created on quote accept.
   //   advancePaymentId: Razorpay payment ID (pay_XXXX) populated when the customer pays.
-  advancePlinkId       String?               @db.VarChar(64)
-  advancePaymentId     String?               @db.VarChar(64)
-  lines                TravelQuoteLine[]
-  invoices             TravelInvoice[]
-  snapshots            TravelQuoteSnapshot[]
-  itinerary            Itinerary?            @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
+  advancePlinkId        String?                @db.VarChar(64)
+  advancePaymentId      String?                @db.VarChar(64)
+  lines                 TravelQuoteLine[]
+  invoices              TravelInvoice[]
+  snapshots             TravelQuoteSnapshot[]
+  itinerary             Itinerary?             @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
   travelTallyCostCentre TravelTallyCostCentre?
-  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
@@ -11223,17 +11251,17 @@ model ProductSalesImportRow {
 }
 
 model SalesTeam {
-  id        Int               @id @default(autoincrement())
-  tenantId  Int               @default(1)
-  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name      String
+  id          Int               @id @default(autoincrement())
+  tenantId    Int               @default(1)
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
   createdById Int?
   updatedById Int?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  members   SalesTeamMember[]
-  createdBy User? @relation("SalesTeamCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy User? @relation("SalesTeamUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  members     SalesTeamMember[]
+  createdBy   User?             @relation("SalesTeamCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy   User?             @relation("SalesTeamUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
 }

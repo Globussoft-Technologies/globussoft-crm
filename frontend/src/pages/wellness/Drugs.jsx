@@ -116,6 +116,9 @@ export function formatStrength(value, unit) {
 const EMPTY_FORM = {
   name: '',
   genericName: '',
+  productCode: '',
+  salePrice: '',
+  unit: '',
   dosageForm: 'tablet',
   strengthValue: '',
   quantity: '',
@@ -232,6 +235,9 @@ export default function Drugs() {
     setForm({
       name: drug.name || '',
       genericName: drug.genericName || '',
+      productCode: drug.productCode || '',
+      salePrice: drug.salePrice ?? '',
+      unit: drug.unit || '',
       dosageForm: drug.dosageForm || 'tablet',
       strengthValue: drug.strengthValue || '',
       quantity: drug.quantity ?? '',
@@ -525,6 +531,9 @@ export default function Drugs() {
             >
               <input required placeholder="Brand / trade name (e.g. Crocin)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <input placeholder="Generic name (e.g. Acetaminophen)" value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} />
+              <input placeholder="Product code (optional)" value={form.productCode} onChange={(e) => setForm({ ...form, productCode: e.target.value })} />
+              <input type="number" min="0" step="0.01" placeholder="Sale price per unit (₹)" value={form.salePrice} onChange={(e) => setForm({ ...form, salePrice: e.target.value })} />
+              <input placeholder="Inventory unit (e.g. tablet, bottle)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
               <select value={form.dosageForm} onChange={(e) => setForm({ ...form, dosageForm: e.target.value })}>
                 {DOSAGE_FORMS.map((f) => <option key={f} value={f}>{f}</option>)}
               </select>

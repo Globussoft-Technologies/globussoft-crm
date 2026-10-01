@@ -32,6 +32,7 @@
 const prisma = require("./prisma");
 const { bus } = require("./eventBus");
 const { isConvertible, convertQuantity } = require("./consumptionUnits");
+const { SOURCE_TYPES, usagePricing } = require("./inventoryConsumption");
 
 /**
  * Apply all auto-consumption rules for a visit. Exposed for unit testing
@@ -66,7 +67,17 @@ async function applyAutoConsumptionForVisit(visit, _opts = {}) {
   const products = productIds.length
     ? await prisma.product.findMany({
         where: { id: { in: productIds } },
-        select: { id: true, name: true, currentStock: true, threshold: true, volume: true, unit: true, partialMlUsed: true },
+        select: {
+          id: true,
+          name: true,
+          currentStock: true,
+          threshold: true,
+          volume: true,
+          unit: true,
+          partialMlUsed: true,
+          productCode: true,
+          price: true,
+        },
       })
     : [];
   const productMap = new Map(products.map((p) => [p.id, p]));
@@ -139,13 +150,24 @@ async function applyAutoConsumptionForVisit(visit, _opts = {}) {
       );
 
       await prisma.$transaction(async (tx) => {
+        const pricing = usagePricing({
+          qty: consumedMl,
+          salePrice: rule.product.price,
+          volume: rule.product.volume,
+        });
         await tx.serviceConsumption.create({
           data: {
             visitId: visit.id,
             productId: rule.productId,
             productName: rule.product.name,
             qty: consumedMl,
-            unitCost: 0,
+            unitCost: pricing.unitCost,
+            usageValue: pricing.usageValue,
+            salePrice: Number(rule.product.price) || 0,
+            unit: rule.product.unit || null,
+            productCode: rule.product.productCode || null,
+            sourceType: SOURCE_TYPES.AUTO_RULE,
+            transactionType: "Sale",
             tenantId: visit.tenantId,
           },
         });

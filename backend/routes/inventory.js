@@ -1379,7 +1379,16 @@ router.get("/auto-consumption-rules", canReadProducts, async (req, res) => {
     const products = productIds.length
       ? await prisma.product.findMany({
           where: { id: { in: productIds } },
-          select: { id: true, name: true, sku: true, currentStock: true, unit: true },
+          select: {
+            id: true,
+            name: true,
+            sku: true,
+            productCode: true,
+            price: true,
+            volume: true,
+            currentStock: true,
+            unit: true,
+          },
         })
       : [];
     const productMap = new Map(products.map((p) => [p.id, p]));

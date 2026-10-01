@@ -156,6 +156,8 @@ const KEYS = {
   TRAVEL_EXTERNAL_REVIEW_URL:            "travel.externalReviewUrl",
   GENERIC_RECAPTCHA_SITE_KEY:            "generic.webForm.recaptcha.siteKey",
   GENERIC_RECAPTCHA_SECRET_KEY:          "generic.webForm.recaptcha.secretKey",
+  TRAVEL_RECAPTCHA_SITE_KEY:             "travel.webForm.recaptcha.siteKey",
+  TRAVEL_RECAPTCHA_SECRET_KEY:           "travel.webForm.recaptcha.secretKey",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -166,6 +168,8 @@ const KEYS = {
 const DEFAULTS = {
   [KEYS.GENERIC_RECAPTCHA_SITE_KEY]: process.env.RECAPTCHA_SITE_KEY || "",
   [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: process.env.RECAPTCHA_SECRET_KEY || "",
+  [KEYS.TRAVEL_RECAPTCHA_SITE_KEY]: process.env.TRAVEL_RECAPTCHA_SITE_KEY || "",
+  [KEYS.TRAVEL_RECAPTCHA_SECRET_KEY]: process.env.TRAVEL_RECAPTCHA_SECRET_KEY || "",
   [KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.ADSGPT_MONTHLY_CAP_USD_CENTS ?? 5000),
   [KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS]:

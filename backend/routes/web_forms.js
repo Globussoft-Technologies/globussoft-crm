@@ -221,6 +221,10 @@ const LEAD_CUSTOM_TO_CONTACT = {
 };
 const FORM_SCOPES = new Set(["generic", "travel"]);
 
+function supportsAdvancedWebFormFeatures(scope) {
+  return scope === "generic" || scope === "travel";
+}
+
 function notificationValue(value) {
   if (Array.isArray(value)) return value.map((item) => textOr(item)).filter(Boolean).join(", ");
   if (value == null) return "";
@@ -411,6 +415,16 @@ function defaultFields() {
 }
 
 function defaultStyle() {
+  const elementTextStyles = {
+    form: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    title: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 20, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    label: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 600, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    placeholder: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 14, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    input: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    button: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    error: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    success: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "center" },
+  };
   return {
     fontFamily: "system-ui, sans-serif",
 
@@ -429,6 +443,8 @@ function defaultStyle() {
     accentColor: "#12344D",
 
     logoUrl: "",
+    logoSize: 48,
+    logoPosition: "left",
     fontSize: 16,
     fontWeight: 400,
     labelFontSize: 13,
@@ -458,6 +474,8 @@ function defaultStyle() {
     containerBorderWidth: 1,
     containerBorderRadius: 24,
     containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerShadowColor: "#1E2960",
+    containerShadowOpacity: 14,
     containerPadding: 30,
     containerMargin: 0,
     buttonHoverColor: "#0D2639",
@@ -473,6 +491,7 @@ function defaultStyle() {
     buttonLoadingText: "Submitting...",
     successMessageColor: "#065F46",
     errorMessageColor: "#B91C1C",
+    elementTextStyles,
   };
 }
 
@@ -588,7 +607,7 @@ function normalizeFields(raw, scope = "generic") {
 
   const fields = parsed.map((field, index) => normalizeField(field, index));
 
-  if (scope !== "generic") return fields.map((field) => ({ ...field, showWhen: null }));
+  if (!supportsAdvancedWebFormFeatures(scope)) return fields.map((field) => ({ ...field, showWhen: null }));
 
   const byId = new Map(fields.map((field) => [String(field.id), field]));
   const bySourceKey = new Map();
@@ -679,6 +698,25 @@ function normalizeStyle(raw) {
     "Inter, system-ui, sans-serif", "system-ui, sans-serif", "Arial, sans-serif",
     "Helvetica, Arial, sans-serif", "Georgia, serif", "Tahoma, sans-serif", "Verdana, sans-serif",
   ];
+  const textStyleKeys = ["form", "title", "label", "placeholder", "input", "button", "error", "success"];
+  const defaultElementTextStyles = defaultStyle().elementTextStyles;
+  const submittedElementTextStyles = style.elementTextStyles && typeof style.elementTextStyles === "object" && !Array.isArray(style.elementTextStyles)
+    ? style.elementTextStyles
+    : {};
+  const elementTextStyles = Object.fromEntries(textStyleKeys.map((key) => {
+    const fallback = defaultElementTextStyles[key];
+    const candidate = submittedElementTextStyles[key] && typeof submittedElementTextStyles[key] === "object" && !Array.isArray(submittedElementTextStyles[key])
+      ? submittedElementTextStyles[key]
+      : {};
+    return [key, {
+      fontFamily: safeEnum(candidate.fontFamily, fontFamilies, fallback.fontFamily),
+      fontSize: safeNumber(candidate.fontSize, fallback.fontSize, 9, 40),
+      fontWeight: safeEnum(Number(candidate.fontWeight), [400, 500, 600, 700], fallback.fontWeight),
+      fontStyle: safeEnum(candidate.fontStyle, ["normal", "italic"], fallback.fontStyle),
+      textDecoration: safeEnum(candidate.textDecoration, ["none", "underline"], fallback.textDecoration),
+      textAlign: safeEnum(candidate.textAlign, ["left", "center", "right", "justify"], fallback.textAlign),
+    }];
+  }));
 
   return {
     fontFamily: safeEnum(style.fontFamily, fontFamilies, defaultStyle().fontFamily),
@@ -698,6 +736,8 @@ function normalizeStyle(raw) {
     accentColor: textOr(style.accentColor, defaultStyle().accentColor),
 
     logoUrl: textOr(style.logoUrl),
+    logoSize: safeNumber(style.logoSize, 48, 20, 200),
+    logoPosition: safeEnum(style.logoPosition, ["left", "center", "right"], "left"),
     fontSize: safeNumber(style.fontSize, 16, 10, 32),
     fontWeight: safeEnum(Number(style.fontWeight), [400, 500, 600, 700], 400),
     labelFontSize: safeNumber(style.labelFontSize, 13, 9, 24),
@@ -727,6 +767,8 @@ function normalizeStyle(raw) {
     containerBorderWidth: safeNumber(style.containerBorderWidth, 1, 0, 8),
     containerBorderRadius: safeNumber(style.containerBorderRadius, 24, 0, 48),
     containerShadow: safeEnum(style.containerShadow, ["none", "0 24px 70px rgba(30,41,96,.14)", "0 8px 24px rgba(15,23,42,.18)"], defaultStyle().containerShadow),
+    containerShadowColor: safeColor(style.containerShadowColor, "#1E2960"),
+    containerShadowOpacity: safeNumber(style.containerShadowOpacity, 14, 0, 100),
     containerPadding: safeNumber(style.containerPadding, 30, 0, 80),
     containerMargin: safeNumber(style.containerMargin, 0, 0, 80),
     buttonHoverColor: safeColor(style.buttonHoverColor, "#0D2639"),
@@ -742,6 +784,7 @@ function normalizeStyle(raw) {
     buttonLoadingText: textOr(style.buttonLoadingText, "Submitting...").slice(0, 80),
     successMessageColor: safeColor(style.successMessageColor, "#065F46"),
     errorMessageColor: safeColor(style.errorMessageColor, "#B91C1C"),
+    elementTextStyles,
   };
 }
 
@@ -903,7 +946,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
       settings,
       submissionCount,
     };
-    if (row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+    if (supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
       payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
     }
     if (origin) payload.embedCode = buildEmbedCode(row, origin);
@@ -922,7 +965,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
     submissionCount,
   };
 
-  if (isPublic && row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+  if (isPublic && supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
     payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
   }
 
@@ -1191,8 +1234,14 @@ router.get("/public/:slug", async (req, res) => {
     // browser reuse an older public configuration after a successful save.
     res.set("Cache-Control", "no-store");
     const publicPayload = shapeForm(form, 0, origin, true);
-    if (form.scope === "generic" && publicPayload.settings?.recaptchaEnabled) {
-      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SITE_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SITE_KEY || "" }));
+    if (supportsAdvancedWebFormFeatures(form.scope || "generic") && publicPayload.settings?.recaptchaEnabled) {
+      const recaptchaSiteKey = form.scope === "travel"
+        ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
+        : KEYS.GENERIC_RECAPTCHA_SITE_KEY;
+      const recaptchaSiteFallback = form.scope === "travel"
+        ? process.env.TRAVEL_RECAPTCHA_SITE_KEY || ""
+        : process.env.RECAPTCHA_SITE_KEY || "";
+      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, { coerce: String, fallback: recaptchaSiteFallback }));
     }
     res.json(publicPayload);
   } catch (err) {
@@ -1265,9 +1314,15 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       });
     }
 
-    if (formScope === "generic" && settings.recaptchaEnabled) {
+    if (supportsAdvancedWebFormFeatures(formScope) && settings.recaptchaEnabled) {
       const token = textOr(body.recaptchaToken);
-      const secret = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SECRET_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SECRET_KEY || "" }));
+      const recaptchaSecretKey = formScope === "travel"
+        ? KEYS.TRAVEL_RECAPTCHA_SECRET_KEY
+        : KEYS.GENERIC_RECAPTCHA_SECRET_KEY;
+      const recaptchaSecretFallback = formScope === "travel"
+        ? process.env.TRAVEL_RECAPTCHA_SECRET_KEY || ""
+        : process.env.RECAPTCHA_SECRET_KEY || "";
+      const secret = textOr(await getSetting(form.tenantId, recaptchaSecretKey, { coerce: String, fallback: recaptchaSecretFallback }));
       let verified = false;
       if (token && secret) {
         try {
@@ -1311,7 +1366,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     }
 
     for (const field of fields) {
-      if (formScope === "generic" && !isConditionalFieldVisible(field, fields, body)) {
+      if (supportsAdvancedWebFormFeatures(formScope) && !isConditionalFieldVisible(field, fields, body)) {
         payload[field.sourceKey] = null;
         continue;
       }
@@ -1499,18 +1554,18 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const emailValue = String(contactData.email || "").trim();
     const phoneValue = String(contactData.phone || "").trim();
     const companyValue = String(contactData.company || "").trim();
-    const isGenericForm = formScope === "generic";
+    const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(formScope);
     const fieldErrors = {};
     if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
       fieldErrors.name = "Enter a valid name using letters, spaces, hyphens, or apostrophes";
     }
-    if (emailValue && isGenericForm) {
+    if (emailValue && supportsAdvancedFeatures) {
       const emailResult = await validateEmail(emailValue, settings);
       if (!emailResult.valid) fieldErrors.email = emailResult.message;
     } else if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^\s]+$/.test(emailValue))) {
       fieldErrors.email = "Enter a valid email address";
     }
-    if (phoneValue && isGenericForm) {
+    if (phoneValue && supportsAdvancedFeatures) {
       const submittedPhoneCountry = `+${String(req.body.phoneCountry || "").replace(/\D/g, "")}`;
       if (!settings.phoneAllowAllCountries && settings.phoneAllowedCountries.length && !settings.phoneAllowedCountries.includes(submittedPhoneCountry)) {
         fieldErrors.phone = "Please select an allowed country code";
@@ -2001,6 +2056,38 @@ router.post("/logo-upload", verifyToken, uploadLogoOrReject, async (req, res) =>
     });
   } catch (err) {
     console.error("[web-forms] logo upload error:", err && err.message);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to upload form logo",
+      code: err.code || "FORM_LOGO_UPLOAD_FAILED",
+    });
+  }
+});
+
+// Generic CRM web-form logo upload. This keeps the existing Generic editor
+// behavior scoped to cloud/local object storage without changing Travel's
+// upload route or Wellness's data-URL behavior.
+router.post("/generic-logo-upload", verifyToken, uploadLogoOrReject, async (req, res) => {
+  try {
+    requestedScope(req);
+    if (!req.file) {
+      return res.status(400).json({ error: "No logo image provided", code: "LOGO_REQUIRED" });
+    }
+
+    const url = await s3Service.uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      `generic/web-forms/${req.user.tenantId}/logos`,
+    );
+    return res.status(201).json({
+      url,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      storage: s3Service.isOciUrl(url) ? "ocs" : (s3Service.isLocalUrl(url) ? "local" : "s3"),
+    });
+  } catch (err) {
+    console.error("[web-forms] generic logo upload error:", err && err.message);
     return res.status(err.statusCode || 500).json({
       error: err.statusCode ? err.message : "Failed to upload form logo",
       code: err.code || "FORM_LOGO_UPLOAD_FAILED",

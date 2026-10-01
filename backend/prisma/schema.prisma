@@ -801,6 +801,9 @@ model Contact {
   email                 String? // nullable: some inbound leads arrive without an email; duplicates are checked at the route level so product-specific leads can share an email.
   emailVerifiedAt       DateTime? // set when a self-registered portal customer verified their email via OTP
   phone                 String?
+  // Generic web-form WhatsApp number. Nullable so wellness/travel and all
+  // existing contacts remain unchanged.
+  whatsappPhone         String?
   company               String?
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
@@ -3444,6 +3447,7 @@ model Territory {
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
 }
 
 // ── Approval Workflows ───────────────────────────────────────────
@@ -3481,6 +3485,10 @@ model AbTest {
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  // Preserve the existing FK-supporting index so `prisma db push` does not
+  // attempt to drop an index required by MySQL's tenant foreign key.
+  @@index([tenantId], name: "AbTest_tenantId_fkey")
 }
 
 // ── Marketing Attribution ────────────────────────────────────────
@@ -11126,7 +11134,7 @@ model ServicePackage {
   /// so 3 + 4 is 4 visits. "separate" = one service per visit, so 3 + 4 is 7.
   /// `sessions` is the resulting visit count, because that is what the
   /// treatment plan counts down.
-  sessionMode     String  @default("combined")
+  sessionMode     String  @db.VarChar(255) @default("combined")
   /// How many times the WHOLE bundle repeats.
   sessions        Int     @default(6)
   discountPercent Int     @default(0)

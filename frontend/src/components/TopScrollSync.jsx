@@ -30,6 +30,7 @@ const TopScrollSync = ({
   hideTopBar = false,
   verticalOverflow = "visible",
   stickyBottom = false,
+  topBarLeadingWidth = 0,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
@@ -128,25 +129,30 @@ const TopScrollSync = ({
     // to its clientWidth even though the table's own content is wider.
     // Taking the max of both catches that case without affecting the
     // normal case (where they're already equal).
-    const measure = () =>
-      {
-        setMeasuredWidth(
-          Math.max(
-            bottom.scrollWidth,
-            bottom.firstElementChild ? bottom.firstElementChild.scrollWidth : 0,
-          ),
-        );
-        setClientWidth(bottom.clientWidth);
-      };
+    const measure = () => {
+      const nextMeasuredWidth = Math.max(
+        bottom.scrollWidth,
+        bottom.firstElementChild ? bottom.firstElementChild.scrollWidth : 0,
+      );
+      setMeasuredWidth((current) =>
+        current === nextMeasuredWidth ? current : nextMeasuredWidth,
+      );
+      setClientWidth((current) =>
+        current === bottom.clientWidth ? current : bottom.clientWidth,
+      );
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(bottom);
     if (bottom.firstElementChild) ro.observe(bottom.firstElementChild);
     return () => ro.disconnect();
-  });
+  }, [scrollWidth]);
 
   const spacerWidth =
     scrollWidth !== undefined ? scrollWidth : `${measuredWidth}px`;
+  const topSpacerWidth = topBarLeadingWidth
+    ? `calc(${topBarLeadingWidth}px + ${spacerWidth})`
+    : spacerWidth;
   const explicitScrollWidth =
     typeof scrollWidth === "number"
       ? scrollWidth
@@ -175,6 +181,8 @@ const TopScrollSync = ({
             overflowX: forceScrollbar ? "scroll" : "auto",
             overflowY: "hidden",
             height: "16px",
+            marginLeft: topBarLeadingWidth ? `-${topBarLeadingWidth}px` : undefined,
+            width: topBarLeadingWidth ? `calc(100% + ${topBarLeadingWidth}px)` : undefined,
             minWidth: 0,
             maxWidth: "100%",
             position: stickyTop ? "sticky" : "static",
@@ -183,7 +191,7 @@ const TopScrollSync = ({
             background: stickyTop ? "var(--surface-color)" : "transparent",
           }}
         >
-          <div style={{ width: spacerWidth, height: "1px" }} />
+          <div style={{ width: topSpacerWidth, height: "1px" }} />
         </div>
       ) : null}
       <div

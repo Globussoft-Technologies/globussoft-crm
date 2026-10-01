@@ -90,7 +90,7 @@ function renderLeads(authValue = null, initialEntries = ['/']) {
 // "Create Lead". Match on the aria-label since it takes precedence over
 // inner text for accessible-name lookup.
 function openDrawer() {
-  fireEvent.click(screen.getByRole('button', { name: /Create a new lead/i }));
+  fireEvent.click(screen.getAllByRole('button', { name: /Create a new lead/i })[0]);
 }
 
 function fillForm({ name, email, company, title }) {
@@ -625,7 +625,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.getByText('Open full detail')).toBeInTheDocument();
   });
 
-  it('keeps the Name column fixed and renders saved visible columns in order', async () => {
+  it('keeps the Name column movable and renders saved visible columns in order', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
@@ -669,10 +669,10 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
 
     const nameHeader = screen.getByText('Name').closest('th');
-    expect(nameHeader.closest('.leads-table-frozen-pane')).toBeTruthy();
+    expect(nameHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const aliceNameCell = screen.getByText('Alice Smith').closest('td');
-    expect(aliceNameCell.closest('.leads-table-frozen-pane')).toBeTruthy();
+    expect(aliceNameCell.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const phoneHeader = screen.getByText('Phone').closest('th');
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
@@ -728,7 +728,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
-  it('keeps the Name column within a readable width range when resized', async () => {
+  it('keeps the Name column at least as wide as its content when resized', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -742,7 +742,6 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     await waitFor(() => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
-      expect(saved.widths.name).toBeLessThanOrEqual(380);
       expect(saved.widths.name).toBeGreaterThanOrEqual(220);
     });
 
@@ -754,7 +753,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     await waitFor(() => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
-      expect(saved.widths.name).toBe(220);
+      expect(saved.widths.name).toBeGreaterThanOrEqual(220);
     });
   });
 
@@ -773,7 +772,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
         user: { id: 1, role: 'ADMIN' },
       },
     ],
-  ])('synchronizes split-table row heights for %s tenants', async (_label, verticalAuth) => {
+  ])('renders one scrollable Leads table for %s tenants', async (_label, verticalAuth) => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -803,45 +802,22 @@ describe('Leads Freshsales-style list UI affordances', () => {
       await screen.findByText('Alice Lead');
 
       await waitFor(() => {
-        const frozenHeader = container.querySelector('.leads-table-frozen-pane thead tr');
         const scrollHeader = container.querySelector('.leads-table-scroll-pane thead tr');
-        const frozenRows = Array.from(
-          container.querySelectorAll('.leads-table-frozen-pane tbody tr'),
-        );
         const scrollRows = Array.from(
           container.querySelectorAll('.leads-table-scroll-pane tbody tr'),
         );
 
-        expect(frozenHeader).toBeTruthy();
+        expect(container.querySelector('.leads-table-frozen-pane')).toBeNull();
         expect(scrollHeader).toBeTruthy();
-        expect(frozenHeader).toHaveClass('leads-table-header-row');
         expect(scrollHeader).toHaveClass('leads-table-header-row');
-        if (_label === 'travel') {
-          expect(frozenHeader.closest('table')).toHaveClass('leads-table--fit', 'leads-table--frozen');
-          expect(frozenHeader.firstElementChild.querySelector('div')).toHaveStyle({
-            gap: '0.8rem',
-          });
-        }
-        expect(frozenHeader.style.height).toBe('66px');
-        expect(scrollHeader.style.height).toBe('66px');
-        expect(frozenRows.length).toBeGreaterThan(0);
-        expect(frozenRows.length).toBe(scrollRows.length);
-        expect(frozenRows.map((row) => row.dataset.leadRowId)).toEqual(
-          scrollRows.map((row) => row.dataset.leadRowId),
-        );
-        frozenRows.forEach((row) => {
-          expect(row.style.height).toBe('66px');
-        });
-        scrollRows.forEach((row) => {
-          expect(row.style.height).toBe('66px');
-        });
+        expect(scrollRows.length).toBeGreaterThan(0);
       });
     } finally {
       rectMock.mockRestore();
     }
   });
 
-  it('synchronizes the generic split-table header and row heights', async () => {
+  it('renders the Generic Leads table with Name in the scrollable pane', async () => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -893,18 +869,12 @@ describe('Leads Freshsales-style list UI affordances', () => {
       await screen.findByText('Alice Lead');
 
       await waitFor(() => {
-        const frozenHeader = container.querySelector('.leads-table-frozen-pane thead tr');
         const scrollHeader = container.querySelector('.leads-table-scroll-pane thead tr');
 
-        expect(frozenHeader).toBeTruthy();
+        expect(container.querySelector('.leads-table-frozen-pane')).toBeNull();
         expect(scrollHeader).toBeTruthy();
-        expect(frozenHeader.style.height).toBe('66px');
-        expect(scrollHeader.style.height).toBe('66px');
-
-        const frozenBody = container.querySelector('.leads-table-frozen-pane tbody tr');
         const scrollBody = container.querySelector('.leads-table-scroll-pane tbody tr');
-        expect(frozenBody.style.height).toBe('66px');
-        expect(scrollBody.style.height).toBe('66px');
+        expect(scrollBody).toBeTruthy();
       });
     } finally {
       rectMock.mockRestore();
@@ -934,6 +904,8 @@ describe('Leads  vertical-aware form schema (#600)', () => {
   const genericAuth = {
     tenant: { id: 1, vertical: 'generic', name: 'Globussoft CRM' },
     user: { id: 1, role: 'ADMIN' },
+    token: 'fake-token',
+    loading: false,
   };
 
   it('wellness tenant ?? ? Phone field renders and WhatsApp is in Source dropdown', async () => {
@@ -988,7 +960,7 @@ describe('Leads  vertical-aware form schema (#600)', () => {
 
     fireEvent.change(screen.getByPlaceholderText('Full Name'), { target: { value: 'Anita Sharma' } });
     fireEvent.change(screen.getByPlaceholderText(/Phone \(10-digit/i), {
-      target: { value: '+919876543210' },
+      target: { value: '9876543210' },
     });
     fireEvent.change(screen.getByPlaceholderText(/Treatment of interest/i), {
       target: { value: 'Botox' },
@@ -1006,11 +978,37 @@ describe('Leads  vertical-aware form schema (#600)', () => {
       expect(postCall).toBeDefined();
       const body = JSON.parse(postCall[1].body);
       expect(body.name).toBe('Anita Sharma');
-      expect(body.phone).toBe('+919876543210');
+      expect(body.phone).toBe('9876543210');
       expect(body.source).toBe('whatsapp');
       expect(body.treatmentOfInterest).toBe('Botox');
     });
     expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('rejects digits and symbols in the lead name for Generic CRM', async () => {
+    renderLeads(genericAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const nameInput = screen.getByPlaceholderText('Full Name');
+    fireEvent.change(nameInput, { target: { value: 'Kanchan Gupta1343435!@#' } });
+    expect(nameInput).toHaveValue('');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Name can contain letters and spaces only. Numbers and special characters are not allowed.',
+    );
+  });
+
+  it('filters non-digits from the phone input for Generic CRM', async () => {
+    renderLeads(genericAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const phoneInput = screen.getByPlaceholderText(/Phone \(/i);
+    fireEvent.change(phoneInput, { target: { value: '+91 987-654-3210abc' } });
+    expect(phoneInput).toHaveValue('919876543210');
+    expect(screen.getByRole('alert')).toHaveTextContent('Phone number can contain digits only.');
+    fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('generic tenant ?? ? Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {

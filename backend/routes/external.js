@@ -128,21 +128,6 @@ function resolveRequestOrigin(req) {
   return resolvePartnerOrigin(req?.body);
 }
 
-function hasConfiguredEmbedAllowlist(allowlistJson) {
-  if (!allowlistJson) return false;
-
-  let allowlist = allowlistJson;
-  if (typeof allowlistJson === "string") {
-    try {
-      allowlist = JSON.parse(allowlistJson);
-    } catch (_err) {
-      return false;
-    }
-  }
-
-  return Array.isArray(allowlist) && allowlist.length > 0;
-}
-
 function splitCustomLeadFields(body) {
   if (!body || typeof body !== "object") return { rawCustomFields: {}, storageCustomFields: {} };
   const rawCustomFields = {};
@@ -396,15 +381,13 @@ router.post("/leads", async (req, res) => {
     }
     const isGenericLeadAwaitingCall = (tenantCfg?.vertical || "generic") === "generic";
     const partnerOrigin = resolveRequestOrigin(req);
-    const hasEmbedAllowlist = hasConfiguredEmbedAllowlist(tenantCfg?.embedAllowlistJson);
 
-    if (hasEmbedAllowlist && !partnerOrigin) {
-      return res.status(403).json({
-        error: "Partner origin is required",
-        code: "ORIGIN_REQUIRED",
-      });
-    }
-
+    // Origin is optional for this API because X-API-Key is the trust boundary
+    // for server-to-server callers (Callified, Postman, native integrations).
+    // When a browser supplies Origin/Referer, or a partner explicitly supplies
+    // an origin in the body, enforce the tenant's embed allowlist. Requiring an
+    // origin here would reject legitimate non-browser API clients whenever the
+    // tenant has configured its browser/embed allowlist.
     if (partnerOrigin && !isEmbedOriginAllowed(partnerOrigin, tenantCfg?.embedAllowlistJson)) {
       await notifyAdminsOfBlockedLeadOrigin({
         tenantId: req.tenantId,

@@ -1148,6 +1148,60 @@ describe('GET /api/landing-pages/public/by-slug/:slug (no auth, full published p
     );
   });
 
+  test('?absoluteUrls=true returns CRM-owned runtime URLs for a client Next.js host', async () => {
+    const previousPublicCrmUrl = process.env.PUBLIC_CRM_URL;
+    process.env.PUBLIC_CRM_URL = 'http://crm.example.test';
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 77,
+      slug: 'modern-classroom',
+      title: 'The Modern Classroom',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'The Modern Classroom',
+      metaDescription: 'Landing page',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: JSON.stringify({
+        register: { endpoint: '/old-submit', paymentOrderEndpoint: '/old-payment' },
+      }),
+    });
+
+    try {
+      const res = await request(makeApp())
+        .get('/api/landing-pages/public/by-slug/modern-classroom?absoluteUrls=true')
+        .set('Host', 'crm.example.test');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        publicUrl: 'http://crm.example.test/trips/77',
+        submitUrl: 'http://crm.example.test/p/modern-classroom/submit',
+        paymentOrderUrl: 'http://crm.example.test/p/modern-classroom/payment-order',
+        clientRoute: '/trips/77',
+        crmUrls: {
+          page: 'http://crm.example.test/trips/77',
+          runtimePage: 'http://crm.example.test/p/modern-classroom',
+          json: 'http://crm.example.test/p/modern-classroom/json',
+          registrationDraft: 'http://crm.example.test/p/modern-classroom/registration-draft',
+          registrationDocuments: 'http://crm.example.test/p/modern-classroom/registration-documents',
+          paymentStatus: 'http://crm.example.test/p/modern-classroom/payment-status',
+          track: 'http://crm.example.test/p/modern-classroom/track',
+        },
+        content: {
+          register: {
+            endpoint: 'http://crm.example.test/p/modern-classroom/submit',
+            paymentOrderEndpoint: 'http://crm.example.test/p/modern-classroom/payment-order',
+          },
+        },
+      });
+    } finally {
+      if (previousPublicCrmUrl === undefined) delete process.env.PUBLIC_CRM_URL;
+      else process.env.PUBLIC_CRM_URL = previousPublicCrmUrl;
+    }
+  });
+
   test('404 when the slug is not published', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(null);
 

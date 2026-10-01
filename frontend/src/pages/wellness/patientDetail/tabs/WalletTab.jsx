@@ -6,10 +6,11 @@ import { formatMoney } from '../../../../utils/money';
 import TopScrollSync from '../../../../components/TopScrollSync';
 
 // ── Wallet tab — balance + recent transactions + redeem-giftcard ──
-// Wave 11 Agent FF. Read-only history; redeem flow lets staff paste a gift
-// code that the patient handed in (the credit lands in this patient's
-// wallet). For larger flows (admin manual credit/debit, full ledger view)
-// see /wellness/wallet at the admin sidebar entry.
+// D16 wallet reads are intentionally split into balance + transaction
+// endpoints. This keeps the patient tab on the canonical wallet API and makes
+// an empty transaction list distinguishable from a missing/failed request.
+// The gift-card redeem flow remains on the wellness route because it is a
+// separate credit channel.
 export default function WalletTab({ patient }) {
   const [data, setData] = useState(null);
   const [code, setCode] = useState('');
@@ -20,8 +21,19 @@ export default function WalletTab({ patient }) {
   const load = async () => {
     setLoading(true);
     try {
-      const j = await fetchApi(`/api/wellness/patients/${patient.id}/wallet`);
-      setData(j);
+      const [balance, transactionPage] = await Promise.all([
+        fetchApi(`/api/wallet/${patient.id}/balance`),
+        fetchApi(`/api/wallet/${patient.id}/transactions?limit=10`),
+      ]);
+      setData({
+        wallet: {
+          balance: Number(balance?.balanceCents || 0) / 100,
+          currency: balance?.currency || 'INR',
+        },
+        transactions: Array.isArray(transactionPage?.transactions)
+          ? transactionPage.transactions
+          : [],
+      });
     } catch (e) {
       notify.error(e.message || 'Failed to load wallet');
     } finally {

@@ -136,56 +136,6 @@ function uploadLogoOrReject(req, res, next) {
   });
 }
 
-function normalizeGenericDuplicateEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-const genericEmailSubmissionLocks = new Map();
-
-async function acquireGenericEmailSubmissionLock(tenantId, email) {
-  const key = `${tenantId}:${normalizeGenericDuplicateEmail(email)}`;
-  const previous = genericEmailSubmissionLocks.get(key) || Promise.resolve();
-  let releaseCurrent;
-  const current = new Promise((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.then(() => current);
-  genericEmailSubmissionLocks.set(key, queued);
-  await previous;
-
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    releaseCurrent();
-    if (genericEmailSubmissionLocks.get(key) === queued) genericEmailSubmissionLocks.delete(key);
-  };
-}
-
-async function findGenericDuplicateContact(tenantId, email) {
-  const normalizedEmail = normalizeGenericDuplicateEmail(email);
-  if (!normalizedEmail) return null;
-
-  const exact = await prisma.contact.findFirst({
-    where: { tenantId, email: normalizedEmail },
-  });
-  if (exact) return exact;
-
-  const contacts = await prisma.contact.findMany({
-    where: { tenantId },
-    select: { id: true, email: true },
-  });
-
-  return contacts.find((contact) => normalizeGenericDuplicateEmail(contact.email) === normalizedEmail) || null;
-}
-
-function duplicateGenericEmailResponse(res) {
-  return res.status(409).json({
-    error: "This email already exists. Please use a different email address.",
-    code: "DUPLICATE_EMAIL",
-  });
-}
-
 const FIELD_TYPES = new Set([
   "text",
   "email",
@@ -465,6 +415,16 @@ function defaultFields() {
 }
 
 function defaultStyle() {
+  const elementTextStyles = {
+    form: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    title: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 20, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    label: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 600, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    placeholder: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 14, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    input: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    button: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    error: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    success: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "center" },
+  };
   return {
     fontFamily: "system-ui, sans-serif",
 
@@ -514,6 +474,8 @@ function defaultStyle() {
     containerBorderWidth: 1,
     containerBorderRadius: 24,
     containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerShadowColor: "#1E2960",
+    containerShadowOpacity: 14,
     containerPadding: 30,
     containerMargin: 0,
     buttonHoverColor: "#0D2639",
@@ -529,6 +491,7 @@ function defaultStyle() {
     buttonLoadingText: "Submitting...",
     successMessageColor: "#065F46",
     errorMessageColor: "#B91C1C",
+    elementTextStyles,
   };
 }
 
@@ -735,6 +698,25 @@ function normalizeStyle(raw) {
     "Inter, system-ui, sans-serif", "system-ui, sans-serif", "Arial, sans-serif",
     "Helvetica, Arial, sans-serif", "Georgia, serif", "Tahoma, sans-serif", "Verdana, sans-serif",
   ];
+  const textStyleKeys = ["form", "title", "label", "placeholder", "input", "button", "error", "success"];
+  const defaultElementTextStyles = defaultStyle().elementTextStyles;
+  const submittedElementTextStyles = style.elementTextStyles && typeof style.elementTextStyles === "object" && !Array.isArray(style.elementTextStyles)
+    ? style.elementTextStyles
+    : {};
+  const elementTextStyles = Object.fromEntries(textStyleKeys.map((key) => {
+    const fallback = defaultElementTextStyles[key];
+    const candidate = submittedElementTextStyles[key] && typeof submittedElementTextStyles[key] === "object" && !Array.isArray(submittedElementTextStyles[key])
+      ? submittedElementTextStyles[key]
+      : {};
+    return [key, {
+      fontFamily: safeEnum(candidate.fontFamily, fontFamilies, fallback.fontFamily),
+      fontSize: safeNumber(candidate.fontSize, fallback.fontSize, 9, 40),
+      fontWeight: safeEnum(Number(candidate.fontWeight), [400, 500, 600, 700], fallback.fontWeight),
+      fontStyle: safeEnum(candidate.fontStyle, ["normal", "italic"], fallback.fontStyle),
+      textDecoration: safeEnum(candidate.textDecoration, ["none", "underline"], fallback.textDecoration),
+      textAlign: safeEnum(candidate.textAlign, ["left", "center", "right", "justify"], fallback.textAlign),
+    }];
+  }));
 
   return {
     fontFamily: safeEnum(style.fontFamily, fontFamilies, defaultStyle().fontFamily),
@@ -785,6 +767,8 @@ function normalizeStyle(raw) {
     containerBorderWidth: safeNumber(style.containerBorderWidth, 1, 0, 8),
     containerBorderRadius: safeNumber(style.containerBorderRadius, 24, 0, 48),
     containerShadow: safeEnum(style.containerShadow, ["none", "0 24px 70px rgba(30,41,96,.14)", "0 8px 24px rgba(15,23,42,.18)"], defaultStyle().containerShadow),
+    containerShadowColor: safeColor(style.containerShadowColor, "#1E2960"),
+    containerShadowOpacity: safeNumber(style.containerShadowOpacity, 14, 0, 100),
     containerPadding: safeNumber(style.containerPadding, 30, 0, 80),
     containerMargin: safeNumber(style.containerMargin, 0, 0, 80),
     buttonHoverColor: safeColor(style.buttonHoverColor, "#0D2639"),
@@ -800,6 +784,7 @@ function normalizeStyle(raw) {
     buttonLoadingText: textOr(style.buttonLoadingText, "Submitting...").slice(0, 80),
     successMessageColor: safeColor(style.successMessageColor, "#065F46"),
     errorMessageColor: safeColor(style.errorMessageColor, "#B91C1C"),
+    elementTextStyles,
   };
 }
 
@@ -1569,7 +1554,6 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const emailValue = String(contactData.email || "").trim();
     const phoneValue = String(contactData.phone || "").trim();
     const companyValue = String(contactData.company || "").trim();
-    const isGenericForm = formScope === "generic";
     const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(formScope);
     const fieldErrors = {};
     if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
@@ -1613,17 +1597,6 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     if (contactData.company === "") contactData.company = null;
 
     if (contactData.title === "") contactData.title = null;
-
-    // Generic web forms must reject an existing email before any Contact,
-    // Deal, attachment, or submission record is created. Travel forms keep
-    // their existing contact-reuse behavior below.
-    if (isGenericForm && contactData.email) {
-      const releaseGenericEmailLock = await acquireGenericEmailSubmissionLock(form.tenantId, contactData.email);
-      res.once("finish", releaseGenericEmailLock);
-      res.once("close", releaseGenericEmailLock);
-      const duplicateContact = await findGenericDuplicateContact(form.tenantId, contactData.email);
-      if (duplicateContact) return duplicateGenericEmailResponse(res);
-    }
 
     // Keep the canonical Contact status even when a legacy embedded form
     // posts `lead`/`LEAD`; downstream auto-dial and list filters use the
@@ -1688,16 +1661,9 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     submitStage = "find_existing_contact";
 
     if (contactData.email) {
-      if (isGenericForm) {
-        // Re-check immediately before creation so a contact inserted after
-        // the initial validation is rejected instead of being reused.
-        contact = await findGenericDuplicateContact(form.tenantId, contactData.email);
-        if (contact) return duplicateGenericEmailResponse(res);
-      } else {
-        contact = await prisma.contact.findFirst({
-          where: { tenantId: form.tenantId, email: contactData.email },
-        });
-      }
+      contact = await prisma.contact.findFirst({
+        where: { tenantId: form.tenantId, email: contactData.email },
+      });
     }
 
     // Backfill Callified campaign on existing leads when a form re-submission

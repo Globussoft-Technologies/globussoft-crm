@@ -28,6 +28,7 @@ export function buildWebFormPreviewUrl(form, origin, options = {}) {
   const preview = encodeURIComponent(JSON.stringify(form || {}));
   const query = new URLSearchParams({ previewVersion: String(Date.now()) });
   if (options.previewDevice) query.set('device', String(options.previewDevice));
+  if (form?.scope && form.scope !== 'generic') query.set('scope', String(form.scope));
   return base + '/embed/web-form.html?' + query.toString() + '#preview=' + preview;
 }
 

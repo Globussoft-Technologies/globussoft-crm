@@ -65,7 +65,7 @@ for (const key of ['findMany', 'findFirst', 'create', 'update', 'delete', 'group
 
 }
 
-for (const key of ['findMany', 'findFirst', 'create', 'update']) {
+for (const key of ['findFirst', 'create', 'update']) {
 
   prisma.contact[key] = vi.fn();
 
@@ -145,8 +145,6 @@ beforeEach(() => {
   prisma.webForm.create.mockResolvedValue({ id: 1, tenantId: TENANT_ID, createdByUserId: USER_ID, name: 'Contact Us', slug: 'contact-us', description: '', isActive: true, fieldsJson: JSON.stringify([]), styleJson: JSON.stringify({}), settingsJson: JSON.stringify({}) });
 
   prisma.contact.findFirst.mockResolvedValue(null);
-
-  prisma.contact.findMany.mockResolvedValue([]);
 
   prisma.contact.create.mockResolvedValue({ id: 2001, name: 'Jane Doe', email: 'jane@example.com', phone: '9876543210' });
 
@@ -513,6 +511,28 @@ describe('POST /api/forms/logo-upload', () => {
     expect(res.body.code).toBe('FORM_SCOPE_FORBIDDEN');
     expect(s3Service.uploadImage).not.toHaveBeenCalled();
   });
+
+  test('uploads a Generic form logo into the Generic tenant storage prefix', async () => {
+    s3Service.uploadImage.mockResolvedValueOnce('https://objectstorage.example.com/generic-logo.png');
+    s3Service.isOciUrl.mockReturnValueOnce(true);
+
+    const res = await request(makeApp('generic'))
+      .post('/api/forms/generic-logo-upload?scope=generic')
+      .attach('image', PNG, 'generic-logo.png');
+
+    expect(res.status).toBe(201);
+    expect(s3Service.uploadImage).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      'generic-logo.png',
+      'image/png',
+      `generic/web-forms/${TENANT_ID}/logos`,
+    );
+    expect(res.body).toMatchObject({
+      storage: 'ocs',
+      originalName: 'generic-logo.png',
+      mimeType: 'image/png',
+    });
+  });
 });
 
 
@@ -528,6 +548,11 @@ describe('PUT /api/forms/:id', () => {
       titleColor: '#223344',
       fieldLabelColor: '#334455',
       buttonColor: '#99B177',
+      containerShadowColor: '#445566',
+      containerShadowOpacity: 37,
+      elementTextStyles: {
+        title: { fontFamily: 'Georgia, serif', fontSize: 28, fontWeight: 700, fontStyle: 'italic', textDecoration: 'underline', textAlign: 'center' },
+      },
     };
     const updatedSettings = {
       formTitle: 'Updated public title',
@@ -582,7 +607,14 @@ describe('PUT /api/forms/:id', () => {
       description: 'After',
       isActive: false,
       fields: expect.arrayContaining([expect.objectContaining({ label: 'Full name' })]),
-      style: expect.objectContaining({ buttonColor: '#99B177' }),
+      style: expect.objectContaining({
+        buttonColor: '#99B177',
+        containerShadowColor: '#445566',
+        containerShadowOpacity: 37,
+        elementTextStyles: expect.objectContaining({
+          title: expect.objectContaining({ fontFamily: 'Georgia, serif', fontSize: 28, fontStyle: 'italic', textAlign: 'center' }),
+        }),
+      }),
       settings: expect.objectContaining({
         submitButtonLabel: 'Send request',
         multiStepEnabled: true,
@@ -599,6 +631,14 @@ describe('PUT /api/forms/:id', () => {
         settingsJson: expect.stringContaining('Requirements'),
       }),
     }));
+    const persistedStyle = JSON.parse(prisma.webForm.update.mock.calls[0][0].data.styleJson);
+    expect(persistedStyle).toMatchObject({
+      containerShadowColor: '#445566',
+      containerShadowOpacity: 37,
+      elementTextStyles: {
+        title: { fontFamily: 'Georgia, serif', fontSize: 28, fontWeight: 700, fontStyle: 'italic', textDecoration: 'underline', textAlign: 'center' },
+      },
+    });
   });
 
   test('renames a form without touching the slug so shared links keep working', async () => {
@@ -808,12 +848,12 @@ describe('GET /api/forms/public/:slug', () => {
 
 describe('POST /api/forms/public/:slug/submit', () => {
 
-  function mockCaptchaForm({ withFile = false } = {}) {
+  function mockCaptchaForm({ withFile = false, scope = 'generic' } = {}) {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 83,
       tenantId: TENANT_ID,
       createdByUserId: USER_ID,
-      scope: 'generic',
+      scope,
       name: 'Protected form',
       slug: 'protected-form',
       description: '',
@@ -827,9 +867,10 @@ describe('POST /api/forms/public/:slug/submit', () => {
       styleJson: '{}',
       settingsJson: JSON.stringify({ recaptchaEnabled: true }),
     });
+    const expectedKey = `${scope}.webForm.recaptcha.secretKey`;
     prisma.tenantSetting.findUnique.mockImplementation((params) => (
-      params.where?.tenantId_key?.key === 'generic.webForm.recaptcha.secretKey'
-        ? { value: 'server-only-secret' }
+      params.where?.tenantId_key?.key === expectedKey
+        ? { value: `${scope}-server-only-secret` }
         : null
     ));
   }
@@ -846,13 +887,33 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(response.status).toBe(201);
     expect(axios.post).toHaveBeenCalledWith(
       'https://www.google.com/recaptcha/api/siteverify',
-      expect.stringContaining('secret=server-only-secret'),
+      expect.stringContaining('secret=generic-server-only-secret'),
       expect.objectContaining({
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         timeout: 8000,
       }),
     );
-    expect(axios.post.mock.calls[0][0]).not.toContain('server-only-secret');
+    expect(axios.post.mock.calls[0][0]).not.toContain('generic-server-only-secret');
+  });
+
+  test('uses the Travel-specific CAPTCHA secret for Travel web forms', async () => {
+    mockCaptchaForm({ scope: 'travel' });
+    axios.post.mockResolvedValue({ data: { success: true } });
+
+    const response = await request(makeApp('travel'))
+      .post('/api/forms/public/protected-form/submit?scope=travel')
+      .field('name', 'Travel Customer')
+      .field('recaptchaToken', 'travel-browser-token');
+
+    expect(response.status).toBe(201);
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'travel.webForm.recaptcha.secretKey' } },
+    }));
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://www.google.com/recaptcha/api/siteverify',
+      expect.stringContaining('secret=travel-server-only-secret'),
+      expect.any(Object),
+    );
   });
 
   test('rejects invalid CAPTCHA before persisting uploaded files or CRM records', async () => {
@@ -1169,7 +1230,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
   });
 
-  test('rejects a duplicate email before creating a contact or submission', async () => {
+  test('reuses an existing contact when the submitted email already exists', async () => {
 
     prisma.webForm.findFirst.mockResolvedValue({
 
@@ -1201,9 +1262,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
     });
 
-    prisma.contact.findMany.mockResolvedValueOnce([
-      { id: 2002, email: 'Monica999@Gmail.com' },
-    ]);
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 2002, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com' });
 
 
     const res = await request(makeApp())
@@ -1212,21 +1271,20 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
       .field('name', 'Monica')
 
-      .field('email', '  MONICA999@gmail.com  ');
+      .field('email', 'monica999@gmail.com');
 
 
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(201);
 
-    expect(res.body).toEqual({
-      error: 'This email already exists. Please use a different email address.',
-      code: 'DUPLICATE_EMAIL',
-    });
+    expect(res.body.contactId).toBe(2002);
 
     expect(prisma.contact.create).not.toHaveBeenCalled();
 
     expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
 
-    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
+    expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ contactId: 2002, tenantId: TENANT_ID }),
+    }));
 
 });
 
@@ -1318,7 +1376,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
   });
 
-  test('rejects a duplicate before Callified campaign backfill', async () => {
+  test('backfills Callified campaign on existing contact when rule matches', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 1,
       tenantId: TENANT_ID,
@@ -1357,13 +1415,15 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .field('name', 'Monica')
       .field('email', 'monica999@gmail.com');
 
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(201);
     expect(prisma.contact.create).not.toHaveBeenCalled();
-    expect(prisma.contact.update).not.toHaveBeenCalled();
-    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 2003 },
+      data: { callifiedCampaignId: 77 },
+    });
   });
 
-  test('rejects a duplicate existing non-Lead contact', async () => {
+  test('does not backfill a Callified campaign onto an existing non-Lead contact', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 1,
       tenantId: TENANT_ID,
@@ -1406,10 +1466,12 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .field('name', 'Existing Customer')
       .field('email', 'customer@example.com');
 
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(201);
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(prisma.contact.update).not.toHaveBeenCalled();
-    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
+    expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ contactId: 2004, tenantId: TENANT_ID }),
+    }));
   });
 
   test('maps picker fallback customs to Contact columns instead of dropping them', async () => {

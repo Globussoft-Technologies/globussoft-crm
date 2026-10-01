@@ -24,6 +24,18 @@ describe('buildWebFormPreviewUrl', () => {
     expect(url).toContain('#preview=');
     expect(url).toContain(encodeURIComponent('Draft Form'));
   });
+
+  test('preserves Travel scope and preview device in the embedded runtime URL', () => {
+    const url = buildWebFormPreviewUrl(
+      { name: 'Travel Enquiry', slug: 'travel-enquiry', scope: 'travel' },
+      'https://crm.example.com',
+      { previewDevice: 'mobile' },
+    );
+    const parsed = new URL(url);
+
+    expect(parsed.searchParams.get('scope')).toBe('travel');
+    expect(parsed.searchParams.get('device')).toBe('mobile');
+  });
 });
 
 describe('buildWebFormEmbedCode', () => {

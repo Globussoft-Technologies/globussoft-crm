@@ -60,6 +60,7 @@ describe("Meeting Form embed calendar", () => {
         timezone: "Asia/Kolkata",
         embedFontFamily: "Poppins",
         fields: [
+          { key: "designation", label: "Designation", type: "select", required: true, options: ["Principal", "Vice Principal", "Other"] },
           { key: "institution", label: "School / Institution", type: "text", required: true },
           { key: "contactPhone", label: "Phone / WhatsApp", type: "tel", required: true },
         ],
@@ -80,6 +81,9 @@ describe("Meeting Form embed calendar", () => {
     expect(document.querySelector("#next-month")).not.toBeDisabled();
     expect(document.documentElement.style.getPropertyValue("--embed-font")).toContain("Poppins");
     expect(document.querySelector("#meeting-google-font")).toHaveAttribute("href", expect.stringContaining("family=Poppins"));
+    const designation = document.querySelector('[name="designation"]');
+    expect(designation.tagName).toBe("SELECT");
+    expect(Array.from(designation.options).map((option) => option.value)).toEqual(["", "Principal", "Vice Principal", "Other"]);
     const institution = document.querySelector('[name="institution"]');
     institution.setCustomValidity("School / Institution must contain a valid institution name, not a URL");
     institution.value = "Chennai Public School";

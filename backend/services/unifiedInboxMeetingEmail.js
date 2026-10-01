@@ -1,13 +1,7 @@
 const prisma = require("../lib/prisma");
 const { sendEmail } = require("../lib/emailSender");
-const { readTenantConfig } = require("./travelSendGrid");
-const { google } = require("googleapis");
-const { buildRawMessage } = require("../lib/gmailMessage");
 const { formatInTenantTZ } = require("../lib/datetime");
 
-const GOOGLE_CLIENT_ID = () => process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
-const GOOGLE_CLIENT_SECRET = () => process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
-const GMAIL_REDIRECT_URI = () => process.env.GMAIL_REDIRECT_URI || process.env.GOOGLE_GMAIL_REDIRECT_URI || "http://localhost:5000/api/gmail/callback";
 const MEETING_BUTTON_MARKER = "[[TMC_MEETING_BUTTON]]";
 
 function escapeHtml(value) {
@@ -103,84 +97,21 @@ function buildMeetingHtml({ form, text, meetingUrl }) {
   return `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#122647">${body}${logo}</div>`;
 }
 
-async function sendThroughConnectedInbox({ form, booking, subject, text, html }) {
-  const integration = await prisma.gmailIntegration.findUnique({
-    where: {
-      tenantId_userId_provider: {
-        tenantId: booking.tenantId,
-        userId: form.hostUserId,
-        provider: "google",
-      },
-    },
-  });
-  if (!integration) return null;
-
-  const client = new google.auth.OAuth2(GOOGLE_CLIENT_ID(), GOOGLE_CLIENT_SECRET(), GMAIL_REDIRECT_URI());
-  client.setCredentials({
-    access_token: integration.accessToken,
-    refresh_token: integration.refreshToken || undefined,
-    expiry_date: integration.expiresAt ? integration.expiresAt.getTime() : undefined,
-  });
-  client.on("tokens", async (tokens) => {
-    const data = {};
-    if (tokens.access_token) data.accessToken = tokens.access_token;
-    if (tokens.refresh_token) data.refreshToken = tokens.refresh_token;
-    if (tokens.expiry_date) data.expiresAt = new Date(tokens.expiry_date);
-    if (Object.keys(data).length) {
-      await prisma.gmailIntegration.update({ where: { id: integration.id }, data }).catch(() => {});
-    }
-  });
-
-  try {
-    const gmail = google.gmail({ version: "v1", auth: client });
-    const sent = await gmail.users.messages.send({
-      userId: "me",
-      requestBody: {
-        raw: buildRawMessage({
-          from: integration.emailAddress || undefined,
-          to: booking.contactEmail,
-          subject,
-          text,
-          html,
-        }),
-      },
-    });
-    return {
-      sent: true,
-      from: integration.emailAddress || "me",
-      threadId: sent.data?.threadId || `travel-meeting-${booking.id}`,
-    };
-  } catch (error) {
-    console.error("[travel-meeting-email] connected Gmail send failed:", error.message);
-    return { sent: false, reason: error.code ? `gmail_${error.code}` : "gmail_send_failed" };
-  }
-}
-
 async function sendMeetingConfirmation({ form, booking }) {
   const { values, subject, text, plainText } = renderMeetingTemplate({ form, booking });
   const html = buildMeetingHtml({ form, text, meetingUrl: values.meeting_url });
 
-  // A tenant-configured SendGrid account is an explicit delivery choice and
-  // takes precedence over the host's connected Gmail mailbox. Without a
-  // tenant override, preserve the existing Gmail -> backend SendGrid flow.
-  // A corrupt encrypted override fails visibly instead of silently using a
-  // different sender.
-  let tenantSendGridConfigured = false;
-  try {
-    tenantSendGridConfigured = Boolean(await readTenantConfig(booking.tenantId));
-  } catch {
-    tenantSendGridConfigured = true;
-  }
-  const inboxResult = tenantSendGridConfigured
-    ? null
-    : await sendThroughConnectedInbox({ form, booking, subject, text: plainText, html });
-  const sendGridResult = inboxResult?.sent
-    ? null
-    : await sendEmail({ tenantId: booking.tenantId, to: booking.contactEmail, subject, text: plainText, html });
-  const result = inboxResult?.sent ? inboxResult : sendGridResult;
-  const failureReason = result?.sent
-    ? null
-    : [inboxResult?.reason, sendGridResult?.reason].filter(Boolean).join("; ") || "email_send_failed";
+  // Travel CRM email always follows its SendGrid selection: the tenant's
+  // customer-managed credentials when configured, otherwise the CRM-managed
+  // backend credentials. A connected Gmail inbox does not change this route.
+  const result = await sendEmail({
+    tenantId: booking.tenantId,
+    to: booking.contactEmail,
+    subject,
+    text: plainText,
+    html,
+  });
+  const failureReason = result?.sent ? null : result?.reason || "email_send_failed";
   let emailMessageId = null;
   try {
     const tenant = await prisma.tenant.findUnique({ where: { id: booking.tenantId }, select: { emailRetention: true } });

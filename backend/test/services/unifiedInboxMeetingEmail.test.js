@@ -7,18 +7,14 @@ const mocks = vi.hoisted(() => {
   const fromBackend = Module.createRequire(process.cwd() + "/");
   const prismaPath = fromBackend.resolve("./lib/prisma");
   const emailPath = fromBackend.resolve("./lib/emailSender");
-  const travelSendGridPath = fromBackend.resolve("./services/travelSendGrid");
   const prisma = {
     tenant: { findUnique: vi.fn() },
     emailMessage: { create: vi.fn() },
-    gmailIntegration: { findUnique: vi.fn(), update: vi.fn() },
   };
   const sendEmail = vi.fn();
-  const readTenantConfig = vi.fn().mockResolvedValue(null);
   Module._cache[prismaPath] = { id: prismaPath, filename: prismaPath, loaded: true, exports: prisma, children: [], paths: [] };
   Module._cache[emailPath] = { id: emailPath, filename: emailPath, loaded: true, exports: { sendEmail }, children: [], paths: [] };
-  Module._cache[travelSendGridPath] = { id: travelSendGridPath, filename: travelSendGridPath, loaded: true, exports: { readTenantConfig }, children: [], paths: [] };
-  return { prisma, sendEmail, readTenantConfig };
+  return { prisma, sendEmail };
 });
 
 const service = requireCJS("../../services/unifiedInboxMeetingEmail");
@@ -88,7 +84,6 @@ describe("unifiedInboxMeetingEmail", () => {
   });
 
   it("sends through the shared email pipeline and saves the outbound conversation", async () => {
-    mocks.prisma.gmailIntegration.findUnique.mockResolvedValue(null);
     mocks.sendEmail.mockResolvedValue({ sent: true });
     mocks.prisma.tenant.findUnique.mockResolvedValue({ emailRetention: true });
     mocks.prisma.emailMessage.create.mockResolvedValue({ id: 81 });
@@ -102,7 +97,6 @@ describe("unifiedInboxMeetingEmail", () => {
   });
 
   it("respects tenant Unified Inbox retention settings", async () => {
-    mocks.prisma.gmailIntegration.findUnique.mockResolvedValue(null);
     mocks.sendEmail.mockResolvedValue({ sent: true });
     mocks.prisma.tenant.findUnique.mockResolvedValue({ emailRetention: false });
     await service.sendMeetingConfirmation({
@@ -112,23 +106,8 @@ describe("unifiedInboxMeetingEmail", () => {
     expect(mocks.prisma.emailMessage.create).not.toHaveBeenCalled();
   });
 
-  it("uses the host mailbox connected to Unified Inbox before the SendGrid fallback", async () => {
-    const { google } = requireCJS("googleapis");
-    const setCredentials = vi.fn();
-    const on = vi.fn();
-    const gmailSend = vi.fn().mockResolvedValue({ data: { id: "gmail-1", threadId: "thread-1" } });
-    vi.spyOn(google.auth, "OAuth2").mockImplementation(function MockOAuth2() {
-      this.setCredentials = setCredentials;
-      this.on = on;
-    });
-    vi.spyOn(google, "gmail").mockReturnValue({ users: { messages: { send: gmailSend } } });
-    mocks.prisma.gmailIntegration.findUnique.mockResolvedValue({
-      id: 12,
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      expiresAt: new Date("2099-01-01T00:00:00Z"),
-      emailAddress: "host@tmc.test",
-    });
+  it("records the customer-managed SendGrid sender selected by the shared pipeline", async () => {
+    mocks.sendEmail.mockResolvedValue({ sent: true, from: "bookings@tmc.test", source: "tenant" });
     mocks.prisma.tenant.findUnique.mockResolvedValue({ emailRetention: true });
     mocks.prisma.emailMessage.create.mockResolvedValue({ id: 82 });
 
@@ -138,17 +117,12 @@ describe("unifiedInboxMeetingEmail", () => {
     });
 
     expect(result).toEqual({ sent: true, reason: null, emailMessageId: 82 });
-    expect(gmailSend).toHaveBeenCalledOnce();
-    expect(mocks.sendEmail).not.toHaveBeenCalled();
-    expect(mocks.prisma.emailMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ from: "host@tmc.test", threadId: "thread-1" }) });
+    expect(mocks.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 2, to: "asha@example.edu" }));
+    expect(mocks.prisma.emailMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ from: "bookings@tmc.test", threadId: "travel-meeting-11" }) });
   });
 
-  it("uses tenant SendGrid before the connected host mailbox when BYOK is configured", async () => {
-    const { google } = requireCJS("googleapis");
-    const gmailSend = vi.fn();
-    vi.spyOn(google, "gmail").mockReturnValue({ users: { messages: { send: gmailSend } } });
-    mocks.readTenantConfig.mockResolvedValueOnce({ config: { fromEmail: "bookings@tmc.test" } });
-    mocks.sendEmail.mockResolvedValue({ sent: true, from: "bookings@tmc.test", source: "tenant" });
+  it("records the CRM-managed SendGrid sender when the tenant has no BYOK configuration", async () => {
+    mocks.sendEmail.mockResolvedValue({ sent: true, from: "noreply@crm.globusdemos.com", source: "backend" });
     mocks.prisma.tenant.findUnique.mockResolvedValue({ emailRetention: true });
     mocks.prisma.emailMessage.create.mockResolvedValue({ id: 84 });
 
@@ -159,28 +133,6 @@ describe("unifiedInboxMeetingEmail", () => {
 
     expect(result).toEqual({ sent: true, reason: null, emailMessageId: 84 });
     expect(mocks.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 2, to: "asha@example.edu" }));
-    expect(gmailSend).not.toHaveBeenCalled();
-  });
-
-  it("falls back to SendGrid when the connected host mailbox rejects the send", async () => {
-    const { google } = requireCJS("googleapis");
-    vi.spyOn(google.auth, "OAuth2").mockImplementation(function MockOAuth2() {
-      this.setCredentials = vi.fn();
-      this.on = vi.fn();
-    });
-    vi.spyOn(google, "gmail").mockReturnValue({ users: { messages: { send: vi.fn().mockRejectedValue(Object.assign(new Error("expired"), { code: 401 })) } } });
-    mocks.prisma.gmailIntegration.findUnique.mockResolvedValue({ id: 12, accessToken: "expired", emailAddress: "host@tmc.test" });
-    mocks.sendEmail.mockResolvedValue({ sent: true, from: "confirmed@tmc.test" });
-    mocks.prisma.tenant.findUnique.mockResolvedValue({ emailRetention: true });
-    mocks.prisma.emailMessage.create.mockResolvedValue({ id: 83 });
-
-    const result = await service.sendMeetingConfirmation({
-      form: { hostUserId: 5, durationMins: 30, emailSubject: "Confirmed", emailBody: "Join {{meeting_url}}" },
-      booking: { id: 12, tenantId: 2, contactId: 7, contactName: "Asha", contactEmail: "asha@example.edu", scheduledAt: new Date("2026-10-15T04:30:00Z"), timezone: "Asia/Kolkata", meetingUrl: "https://zoom.us/j/1" },
-    });
-
-    expect(result).toEqual({ sent: true, reason: null, emailMessageId: 83 });
-    expect(mocks.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "asha@example.edu" }));
-    expect(mocks.prisma.emailMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ from: "confirmed@tmc.test" }) });
+    expect(mocks.prisma.emailMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ from: "noreply@crm.globusdemos.com" }) });
   });
 });

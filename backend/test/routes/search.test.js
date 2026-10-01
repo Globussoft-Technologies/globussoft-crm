@@ -97,7 +97,12 @@ const MODELS = [
   'survey',
   'whatsappMessage',
 ];
+const TRAVEL_MODELS = ['itinerary', 'travelQuote', 'travelInvoice', 'travelSupplier', 'tmcTrip'];
 for (const m of MODELS) {
+  prisma[m] = prisma[m] || {};
+  prisma[m].findMany = vi.fn();
+}
+for (const m of TRAVEL_MODELS) {
   prisma[m] = prisma[m] || {};
   prisma[m].findMany = vi.fn();
 }
@@ -122,6 +127,8 @@ for (const m of MODELS) {
 //   documented in T36 (audit-recipe correction).
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findMany = vi.fn();
 
@@ -193,7 +200,9 @@ beforeEach(() => {
   // T33 — generic tenant by default so canSearchPatients() returns false and
   // patient.findMany is never invoked. Wellness-specific tests can override.
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 1, vertical: 'generic' });
+  prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null, userRoles: [] });
   prisma.patient.findMany.mockReset().mockResolvedValue([]);
+  for (const m of TRAVEL_MODELS) prisma[m].findMany.mockReset().mockResolvedValue([]);
   authState.useReal = false;
 });
 
@@ -320,5 +329,64 @@ describe('GET /api/search — global search envelope', () => {
     expect(res.body).toEqual({ error: 'Search failed' });
     // Negative pin: the internal error message MUST NOT appear in the body.
     expect(JSON.stringify(res.body)).not.toContain('DB connection lost');
+  });
+
+  test('travel tenant searches travel records only and scopes them to the active sub-brand', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+    prisma.contact.findMany.mockResolvedValue([{ id: 1, name: 'Goa School', subBrand: 'tmc' }]);
+    prisma.itinerary.findMany.mockResolvedValue([{ id: 2, destination: 'Goa', subBrand: 'tmc' }]);
+    prisma.travelQuote.findMany.mockResolvedValue([{ id: 3, subBrand: 'tmc' }]);
+    prisma.travelInvoice.findMany.mockResolvedValue([{ id: 4, invoiceNum: 'TINV-GOA', subBrand: 'tmc' }]);
+    prisma.travelSupplier.findMany.mockResolvedValue([{ id: 5, name: 'Goa Coaches', subBrand: 'tmc' }]);
+    prisma.tmcTrip.findMany.mockResolvedValue([{ id: 6, tripCode: 'GOA-26', destination: 'Goa' }]);
+
+    const res = await request(makeApp()).get('/api/search?q=goa&subBrand=tmc');
+
+    expect(res.status).toBe(200);
+    expect(res.body.totalResults).toBe(6);
+    expect(Object.keys(res.body)).toEqual(expect.arrayContaining([
+      'contacts', 'itineraries', 'travelQuotes', 'travelInvoices', 'travelSuppliers', 'tmcTrips',
+    ]));
+    for (const model of ['contact', 'itinerary', 'travelQuote', 'travelInvoice', 'travelSupplier']) {
+      const args = prisma[model].findMany.mock.calls[0][0];
+      expect(args.where.tenantId).toBe(TENANT_ID);
+      expect(args.where.subBrand).toBe('tmc');
+      expect(args.take).toBe(20);
+    }
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+  });
+
+  test('travel search does not query TMC trips while another sub-brand is active', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+
+    const res = await request(makeApp()).get('/api/search?q=goa&subBrand=rfu');
+
+    expect(res.status).toBe(200);
+    expect(res.body.tmcTrips).toEqual([]);
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+  });
+
+  test('travel search ranks exact matches first, limits responses, and keeps mixed-case matching', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 1, name: 'Goa School One' },
+      { id: 2, name: 'Goa School Two' },
+      { id: 3, name: 'Goa School Three' },
+      { id: 4, name: 'Goa School Four' },
+      { id: 5, name: 'Goa School Five' },
+      { id: 6, name: 'GoA' },
+    ]);
+
+    const res = await request(makeApp()).get('/api/search?q=GoA');
+
+    expect(res.status).toBe(200);
+    expect(res.body.contacts).toHaveLength(5);
+    expect(res.body.contacts[0]).toMatchObject({ id: 6, name: 'GoA' });
+    const contactArgs = prisma.contact.findMany.mock.calls[0][0];
+    expect(contactArgs.take).toBe(20);
+    expect(contactArgs.where.OR).toEqual(expect.arrayContaining([
+      { name: { contains: 'GoA' } },
+      { email: { contains: 'GoA' } },
+    ]));
   });
 });

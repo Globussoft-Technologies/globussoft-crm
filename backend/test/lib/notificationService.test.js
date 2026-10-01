@@ -35,6 +35,22 @@ vi.hoisted(() => {
   // value is what notificationService.js captures at module load.
   process.env.SENDGRID_API_KEY = 'test-sendgrid-key';
 });
+const tenantEmailMocks = vi.hoisted(() => {
+  const Module = require('node:module');
+  const fromBackend = Module.createRequire(process.cwd() + '/');
+  const emailSenderPath = fromBackend.resolve('./lib/emailSender');
+  const sendEmail = vi.fn();
+  Module._cache[emailSenderPath] = {
+    id: emailSenderPath,
+    filename: emailSenderPath,
+    loaded: true,
+    exports: { sendEmail },
+    children: [],
+    paths: [],
+  };
+  return { sendEmail };
+});
+const { sendEmail: sendTenantEmail } = tenantEmailMocks;
 import { createRequire } from 'node:module';
 import prisma from '../../lib/prisma.js';
 
@@ -52,6 +68,7 @@ const NOTIF_ROW = { id: 1, title: 'Hi', message: 'world' };
 beforeAll(() => {
   prisma.notification = { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() };
   prisma.user = { findUnique: vi.fn(), findMany: vi.fn() };
+  prisma.tenant = { findUnique: vi.fn() };
   // PR #710 / #702 — notify() now reads NotificationPreference before
   // routing. Default to "no custom prefs row" so the helper falls back
   // to DEFAULT_PREFERENCES (every category + every channel enabled).
@@ -68,6 +85,8 @@ beforeEach(() => {
   prisma.notification.update.mockReset();
   prisma.user.findUnique.mockReset();
   prisma.user.findMany.mockReset();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  sendTenantEmail.mockReset().mockResolvedValue({ sent: true, source: 'tenant' });
   prisma.notificationPreference.findUnique.mockReset();
   // PR #710 (#702) — DEFAULT_PREFERENCES has `channels.email = false` and
   // `channels.push = false` (sensible opt-in defaults). Most of the legacy
@@ -182,6 +201,31 @@ describe('lib/notificationService — notify', () => {
     await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', channels: ['db', 'email'] });
     expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
     expect(global.fetch).toHaveBeenCalled();
+  });
+
+  test('email channel: Travel uses tenant delivery while Generic and Wellness remain on the platform provider', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'traveller@example.com' });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+
+    await notify({ userId: 1, tenantId: 73, title: 'Trip update', message: 'Ready', channels: ['db', 'email'] });
+
+    expect(sendTenantEmail).toHaveBeenCalledWith({
+      tenantId: 73,
+      to: 'traveller@example.com',
+      subject: 'Trip update',
+      text: 'Ready',
+      html: 'Ready',
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    for (const vertical of ['generic', 'wellness']) {
+      sendTenantEmail.mockClear();
+      global.fetch.mockReset().mockResolvedValue({ ok: true });
+      prisma.tenant.findUnique.mockResolvedValue({ vertical });
+      await notify({ userId: 1, tenantId: 73, title: 'CRM update', message: 'Ready', channels: ['db', 'email'] });
+      expect(sendTenantEmail).not.toHaveBeenCalled();
+      expect(global.fetch).toHaveBeenCalledOnce();
+    }
   });
 
   // PR #511 SendGrid contract: assert the request hits the right URL,

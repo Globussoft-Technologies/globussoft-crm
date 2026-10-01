@@ -80,6 +80,22 @@ authMw.verifyToken = (req, res, next) => {
   return next();
 };
 
+// Travel global search must follow the same RBAC catalogue as its pages.
+// Patch the conditional helper before the router captures its reference.
+const permissionMw = requireCJS('../../middleware/requirePermission');
+const permissionState = {
+  allowed: new Set([
+    'contacts.read',
+    'itineraries.read',
+    'quotes.read',
+    'invoices.read',
+    'suppliers.read',
+    'trips.read',
+  ]),
+};
+const getUserPermissions = vi.fn(async () => permissionState.allowed);
+permissionMw.getUserPermissions = getUserPermissions;
+
 // ── Prisma singleton patching — every model method search.js touches ────
 const MODELS = [
   'contact',
@@ -203,6 +219,15 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null, userRoles: [] });
   prisma.patient.findMany.mockReset().mockResolvedValue([]);
   for (const m of TRAVEL_MODELS) prisma[m].findMany.mockReset().mockResolvedValue([]);
+  permissionState.allowed = new Set([
+    'contacts.read',
+    'itineraries.read',
+    'quotes.read',
+    'invoices.read',
+    'suppliers.read',
+    'trips.read',
+  ]);
+  getUserPermissions.mockClear();
   authState.useReal = false;
 });
 
@@ -351,7 +376,8 @@ describe('GET /api/search — global search envelope', () => {
       const args = prisma[model].findMany.mock.calls[0][0];
       expect(args.where.tenantId).toBe(TENANT_ID);
       expect(args.where.subBrand).toBe('tmc');
-      expect(args.take).toBe(20);
+      expect(args.take).toBe(model === 'contact' ? 20 : 5);
+      expect(args.orderBy).toEqual([{ updatedAt: 'desc' }, { id: 'desc' }]);
     }
     expect(prisma.deal.findMany).not.toHaveBeenCalled();
   });
@@ -368,14 +394,15 @@ describe('GET /api/search — global search envelope', () => {
 
   test('travel search ranks exact matches first, limits responses, and keeps mixed-case matching', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
-    prisma.contact.findMany.mockResolvedValue([
+    prisma.contact.findMany
+      .mockResolvedValueOnce([{ id: 6, name: 'GoA' }])
+      .mockResolvedValueOnce([
       { id: 1, name: 'Goa School One' },
       { id: 2, name: 'Goa School Two' },
       { id: 3, name: 'Goa School Three' },
       { id: 4, name: 'Goa School Four' },
       { id: 5, name: 'Goa School Five' },
-      { id: 6, name: 'GoA' },
-    ]);
+      ]);
 
     const res = await request(makeApp()).get('/api/search?q=GoA');
 
@@ -385,8 +412,41 @@ describe('GET /api/search — global search envelope', () => {
     const contactArgs = prisma.contact.findMany.mock.calls[0][0];
     expect(contactArgs.take).toBe(20);
     expect(contactArgs.where.OR).toEqual(expect.arrayContaining([
-      { name: { contains: 'GoA' } },
-      { email: { contains: 'GoA' } },
+      { name: 'GoA' },
+      { email: 'GoA' },
     ]));
+    expect(contactArgs.orderBy).toEqual([{ updatedAt: 'desc' }, { id: 'desc' }]);
+    expect(prisma.contact.findMany.mock.calls[1][0]).toMatchObject({
+      take: 19,
+      where: { id: { notIn: [6] } },
+    });
+  });
+
+  test('travel search never queries or returns entities without their read permission', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+    permissionState.allowed = new Set(['quotes.read']);
+    prisma.travelQuote.findMany.mockResolvedValueOnce([{ id: 31, status: 'Draft', itinerary: { title: 'Goa' } }]);
+
+    const res = await request(makeApp()).get('/api/search?q=goa&subBrand=tmc');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      contacts: [],
+      itineraries: [],
+      travelInvoices: [],
+      travelSuppliers: [],
+      tmcTrips: [],
+      totalResults: 1,
+    });
+    expect(res.body.travelQuotes).toHaveLength(1);
+    expect(prisma.travelQuote.findMany).toHaveBeenCalled();
+    expect(prisma.travelQuote.findMany.mock.calls[0][0].select).not.toHaveProperty('contact');
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.itinerary.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelSupplier.findMany).not.toHaveBeenCalled();
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+    expect(getUserPermissions).toHaveBeenCalledOnce();
+    expect(getUserPermissions).toHaveBeenCalledWith(TENANT_ID, USER_ID);
   });
 });

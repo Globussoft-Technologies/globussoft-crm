@@ -1,5 +1,6 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/auth");
+const { getUserPermissions } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { SEARCHABLE_ENTITIES } = require("../lib/searchableEntities");
 const {
@@ -49,8 +50,8 @@ const searchContains = (value) => ({
   contains: value,
 });
 
-const TRAVEL_SEARCH_CANDIDATE_LIMIT = 20;
 const TRAVEL_SEARCH_RESULT_LIMIT = 5;
+const TRAVEL_SEARCH_ORDER = [{ updatedAt: "desc" }, { id: "desc" }];
 
 function normalizeSearchText(value) {
   return String(value || "")
@@ -76,12 +77,60 @@ function travelRelevance(values, query) {
   return best;
 }
 
-function rankTravelRows(rows, query, valuesForRow) {
+function rankTravelRows(rows, query, valuesForRow, limit = TRAVEL_SEARCH_RESULT_LIMIT) {
   return rows
     .map((row, index) => ({ row, index, score: travelRelevance(valuesForRow(row), query) }))
     .sort((left, right) => left.score - right.score || left.index - right.index)
-    .slice(0, TRAVEL_SEARCH_RESULT_LIMIT)
+    .slice(0, limit)
     .map(({ row }) => row);
+}
+
+function uniqueTravelRows(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    if (!row || seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
+}
+
+/**
+ * Fetch exact matches independently from substring matches so a recently
+ * updated partial match cannot push an older exact match out of the candidate
+ * window. Both queries remain bounded and deterministically ordered.
+ */
+async function findTravelMatches(model, {
+  where,
+  exactOr,
+  partialOr,
+  select,
+  query,
+  valuesForRow,
+  limit = TRAVEL_SEARCH_RESULT_LIMIT,
+}) {
+  const exactRows = exactOr.length
+    ? await model.findMany({
+        where: { ...where, OR: exactOr },
+        take: limit,
+        select,
+        orderBy: TRAVEL_SEARCH_ORDER,
+      })
+    : [];
+  const exact = uniqueTravelRows(exactRows).slice(0, limit);
+  if (exact.length === limit) return exact;
+
+  const partialRows = await model.findMany({
+    where: {
+      ...where,
+      OR: partialOr,
+      ...(exact.length ? { id: { notIn: exact.map((row) => row.id) } } : {}),
+    },
+    take: limit - exact.length,
+    select,
+    orderBy: TRAVEL_SEARCH_ORDER,
+  });
+  const partial = rankTravelRows(uniqueTravelRows(partialRows), query, valuesForRow, limit);
+  return uniqueTravelRows([...exact, ...partial]).slice(0, limit);
 }
 
 function extractTravelRecordId(query, prefix) {
@@ -107,140 +156,137 @@ async function searchTravelEntities(req, query) {
   };
   const contains = searchContains(query);
   const quoteId = extractTravelRecordId(query, "(?:QT|QUOTE)");
-  const tripVisible = (!requestedSubBrand || requestedSubBrand === "tmc") && canAccessSubBrand(allowed, "tmc");
+  const permissionPairs = [
+    ["contacts", "contacts"],
+    ["itineraries", "itineraries"],
+    ["travelQuotes", "quotes"],
+    ["travelInvoices", "invoices"],
+    ["travelSuppliers", "suppliers"],
+    ["tmcTrips", "trips"],
+  ];
+  const effectivePermissions = req.user.isOwner
+    ? null
+    : req.user.userType === "CUSTOMER"
+      ? new Set()
+      : await getUserPermissions(req.user.tenantId, req.user.userId);
+  const permissionEntries = permissionPairs.map(([key, module]) => [
+    key,
+    effectivePermissions === null || effectivePermissions.has(`${module}.read`),
+  ]);
+  const canSearch = Object.fromEntries(permissionEntries);
+  const tripVisible = canSearch.tmcTrips
+    && (!requestedSubBrand || requestedSubBrand === "tmc")
+    && canAccessSubBrand(allowed, "tmc");
+  const contactSelect = { id: true, name: true, email: true, company: true, phone: true, status: true, subBrand: true };
+  const contactRelationSelect = canSearch.contacts ? { select: { name: true, email: true } } : undefined;
 
-  // MySQL's utf8mb4_unicode_ci collation makes these contains filters
-  // case-insensitive. Pull a small candidate window, then rank exact/prefix
-  // matches ahead of recent substring matches before returning five rows.
-  const contactCandidates = await prisma.contact.findMany({
-    where: {
-      tenantId,
-      ...scopedWhere(),
-      OR: ["name", "email", "company", "phone"].map((field) => ({ [field]: contains })),
-    },
-    take: TRAVEL_SEARCH_CANDIDATE_LIMIT,
-    select: { id: true, name: true, email: true, company: true, phone: true, status: true, subBrand: true },
-    orderBy: { updatedAt: "desc" },
-  });
+  // Every entity is both sub-brand scoped and permission scoped. Exact rows
+  // are fetched separately so result correctness does not depend on recency.
+  const contactsPromise = canSearch.contacts
+    ? findTravelMatches(prisma.contact, {
+        where: scopedWhere(),
+        exactOr: ["name", "email", "company", "phone"].map((field) => ({ [field]: query })),
+        partialOr: ["name", "email", "company", "phone"].map((field) => ({ [field]: contains })),
+        select: contactSelect,
+        query,
+        valuesForRow: (row) => [row.name, row.company, row.email, row.phone],
+        // Keep a bounded relationship lookup window for invoice/TMC matching,
+        // while only returning five contacts to the Omnibar below.
+        limit: 20,
+      })
+    : Promise.resolve([]);
+
+  const contactCandidates = await contactsPromise;
+  const contacts = contactCandidates.slice(0, TRAVEL_SEARCH_RESULT_LIMIT);
   const matchingContactIds = contactCandidates.map((contact) => contact.id);
-
-  const [itineraryCandidates, quoteCandidates, invoiceCandidates, supplierCandidates, tripCandidates] = await Promise.all([
-    prisma.itinerary.findMany({
-      where: {
-        tenantId,
-        ...scopedWhere(),
-        OR: [
-          { destination: contains },
-          { title: contains },
-          { contact: { is: { OR: [{ name: contains }, { email: contains }] } } },
-        ],
-      },
-      take: TRAVEL_SEARCH_CANDIDATE_LIMIT,
-      select: {
-        id: true,
-        destination: true,
-        title: true,
-        status: true,
-        subBrand: true,
-        startDate: true,
-        contact: { select: { name: true, email: true } },
-      },
-      orderBy: { updatedAt: "desc" },
-    }),
-    prisma.travelQuote.findMany({
-      where: {
-        tenantId,
-        ...scopedWhere(),
-        OR: [
-          ...(quoteId ? [{ id: quoteId }] : []),
-          { contact: { is: { OR: [{ name: contains }, { email: contains }] } } },
-          { itinerary: { is: { OR: [{ destination: contains }, { title: contains }] } } },
-        ],
-      },
-      take: TRAVEL_SEARCH_CANDIDATE_LIMIT,
-      select: {
-        id: true,
-        status: true,
-        totalAmount: true,
-        currency: true,
-        subBrand: true,
-        contact: { select: { name: true, email: true } },
-        itinerary: { select: { destination: true, title: true } },
-      },
-      orderBy: { updatedAt: "desc" },
-    }),
-    prisma.travelInvoice.findMany({
-      where: {
-        tenantId,
-        ...scopedWhere(),
-        OR: [
-          { invoiceNum: contains },
-          ...(matchingContactIds.length > 0 ? [{ contactId: { in: matchingContactIds } }] : []),
-        ],
-      },
-      take: TRAVEL_SEARCH_CANDIDATE_LIMIT,
-      select: {
-        id: true,
-        invoiceNum: true,
-        status: true,
-        totalAmount: true,
-        currency: true,
-        subBrand: true,
-        contactId: true,
-      },
-      orderBy: { updatedAt: "desc" },
-    }),
-    prisma.travelSupplier.findMany({
-      where: {
-        tenantId,
-        ...scopedWhere(),
-        OR: ["name", "contactPerson", "email", "phone", "gstin"].map((field) => ({ [field]: contains })),
-      },
-      take: TRAVEL_SEARCH_CANDIDATE_LIMIT,
-      select: {
-        id: true,
-        name: true,
-        contactPerson: true,
-        email: true,
-        phone: true,
-        gstin: true,
-        supplierCategory: true,
-        status: true,
-        subBrand: true,
-      },
-      orderBy: { updatedAt: "desc" },
-    }),
-    tripVisible
-      ? prisma.tmcTrip.findMany({
-          where: {
-            tenantId,
-            OR: [
-              { tripCode: contains },
-              { destination: contains },
-              ...(matchingContactIds.length > 0 ? [{ schoolContactId: { in: matchingContactIds } }] : []),
-            ],
+  const [itineraries, travelQuotes, travelInvoices, travelSuppliers, tmcTrips] = await Promise.all([
+    canSearch.itineraries
+      ? findTravelMatches(prisma.itinerary, {
+          where: scopedWhere(),
+          exactOr: [
+            { destination: query },
+            { title: query },
+            ...(canSearch.contacts ? [{ contact: { is: { OR: [{ name: query }, { email: query }] } } }] : []),
+          ],
+          partialOr: [
+            { destination: contains },
+            { title: contains },
+            ...(canSearch.contacts ? [{ contact: { is: { OR: [{ name: contains }, { email: contains }] } } }] : []),
+          ],
+          select: {
+            id: true, destination: true, title: true, status: true, subBrand: true, startDate: true,
+            ...(contactRelationSelect ? { contact: contactRelationSelect } : {}),
           },
-          take: TRAVEL_SEARCH_CANDIDATE_LIMIT,
+          query,
+          valuesForRow: (row) => [row.title, row.destination, row.contact?.name, row.contact?.email],
+        })
+      : Promise.resolve([]),
+    canSearch.travelQuotes
+      ? findTravelMatches(prisma.travelQuote, {
+          where: scopedWhere(),
+          exactOr: [
+            ...(quoteId ? [{ id: quoteId }] : []),
+            ...(canSearch.contacts ? [{ contact: { is: { OR: [{ name: query }, { email: query }] } } }] : []),
+            { itinerary: { is: { OR: [{ destination: query }, { title: query }] } } },
+          ],
+          partialOr: [
+            ...(quoteId ? [{ id: quoteId }] : []),
+            ...(canSearch.contacts ? [{ contact: { is: { OR: [{ name: contains }, { email: contains }] } } }] : []),
+            { itinerary: { is: { OR: [{ destination: contains }, { title: contains }] } } },
+          ],
+          select: {
+            id: true, status: true, totalAmount: true, currency: true, subBrand: true,
+            ...(contactRelationSelect ? { contact: contactRelationSelect } : {}),
+            itinerary: { select: { destination: true, title: true } },
+          },
+          query,
+          valuesForRow: (row) => [
+            `QT-${String(row.id).padStart(4, "0")}`, `QUOTE-${row.id}`,
+            row.contact?.name, row.contact?.email, row.itinerary?.title, row.itinerary?.destination,
+          ],
+        })
+      : Promise.resolve([]),
+    canSearch.travelInvoices
+      ? findTravelMatches(prisma.travelInvoice, {
+          where: scopedWhere(),
+          exactOr: [{ invoiceNum: query }],
+          partialOr: [
+            { invoiceNum: contains },
+            ...(matchingContactIds.length ? [{ contactId: { in: matchingContactIds } }] : []),
+          ],
+          select: { id: true, invoiceNum: true, status: true, totalAmount: true, currency: true, subBrand: true },
+          query,
+          valuesForRow: (row) => [row.invoiceNum],
+        })
+      : Promise.resolve([]),
+    canSearch.travelSuppliers
+      ? findTravelMatches(prisma.travelSupplier, {
+          where: scopedWhere(),
+          exactOr: ["name", "contactPerson", "email", "phone", "gstin"].map((field) => ({ [field]: query })),
+          partialOr: ["name", "contactPerson", "email", "phone", "gstin"].map((field) => ({ [field]: contains })),
+          select: {
+            id: true, name: true, contactPerson: true, email: true, phone: true, gstin: true,
+            supplierCategory: true, status: true, subBrand: true,
+          },
+          query,
+          valuesForRow: (row) => [row.name, row.contactPerson, row.email, row.phone, row.gstin],
+        })
+      : Promise.resolve([]),
+    tripVisible
+      ? findTravelMatches(prisma.tmcTrip, {
+          where: { tenantId },
+          exactOr: [{ tripCode: query }, { destination: query }],
+          partialOr: [
+            { tripCode: contains },
+            { destination: contains },
+            ...(matchingContactIds.length ? [{ schoolContactId: { in: matchingContactIds } }] : []),
+          ],
           select: { id: true, tripCode: true, destination: true, status: true, departDate: true },
-          orderBy: { updatedAt: "desc" },
+          query,
+          valuesForRow: (row) => [row.tripCode, row.destination],
         })
       : Promise.resolve([]),
   ]);
-
-  const contacts = rankTravelRows(contactCandidates, query, (row) => [row.name, row.company, row.email, row.phone]);
-  const itineraries = rankTravelRows(itineraryCandidates, query, (row) => [
-    row.title, row.destination, row.contact?.name, row.contact?.email,
-  ]);
-  const travelQuotes = rankTravelRows(quoteCandidates, query, (row) => [
-    `QT-${String(row.id).padStart(4, "0")}`, `QUOTE-${row.id}`,
-    row.contact?.name, row.contact?.email,
-    row.itinerary?.title, row.itinerary?.destination,
-  ]);
-  const travelInvoices = rankTravelRows(invoiceCandidates, query, (row) => [row.invoiceNum]);
-  const travelSuppliers = rankTravelRows(supplierCandidates, query, (row) => [
-    row.name, row.contactPerson, row.email, row.phone, row.gstin,
-  ]);
-  const tmcTrips = rankTravelRows(tripCandidates, query, (row) => [row.tripCode, row.destination]);
 
   const response = { contacts, itineraries, travelQuotes, travelInvoices, travelSuppliers, tmcTrips };
   response.totalResults = Object.values(response).reduce((sum, rows) => sum + rows.length, 0);

@@ -56,4 +56,54 @@ describe("emailSender tenant SendGrid selection", () => {
     expect(result).toMatchObject({ sent: false, reason: "tenant_sendgrid_config_invalid", source: "tenant" });
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
+
+  test("keeps platform credentials when no tenant provider is configured", async () => {
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: "SG.platform.key",
+      fromEmail: "noreply@crm.test",
+      fromName: "Globus CRM",
+      source: "backend",
+    });
+
+    const result = await sendEmail({ tenantId: 12, to: "user@example.test", subject: "Notice", text: "Hello" });
+
+    const payload = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(payload.from).toEqual({ email: "noreply@crm.test", name: "Globus CRM" });
+    expect(globalThis.fetch.mock.calls[0][1].headers.Authorization).toBe("Bearer SG.platform.key");
+    expect(result).toMatchObject({ sent: true, source: "backend" });
+  });
+
+  test("preserves cc, bcc, attachment, and explicit sender-name fields for tenant delivery", async () => {
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: "SG.tenant.key",
+      fromEmail: "bookings@travel.test",
+      fromName: "Stored Name",
+      source: "tenant",
+    });
+
+    await sendEmail({
+      tenantId: 73,
+      to: "guest@example.test",
+      cc: ["agent@example.test"],
+      bcc: "audit@example.test",
+      subject: "Voucher",
+      text: "Attached",
+      fromName: "Travel Desk",
+      attachments: [{ filename: "voucher.pdf", content: "cGRm", type: "application/pdf" }],
+    });
+
+    const payload = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(payload.personalizations[0]).toEqual({
+      to: [{ email: "guest@example.test" }],
+      cc: [{ email: "agent@example.test" }],
+      bcc: [{ email: "audit@example.test" }],
+    });
+    expect(payload.from).toEqual({ email: "bookings@travel.test", name: "Travel Desk" });
+    expect(payload.attachments).toEqual([{
+      content: "cGRm",
+      filename: "voucher.pdf",
+      type: "application/pdf",
+      disposition: "attachment",
+    }]);
+  });
 });

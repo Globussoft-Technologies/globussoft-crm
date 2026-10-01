@@ -19870,7 +19870,7 @@ function WebFormsContent({ scope = "generic" }) {
                           <span>Show “Powered By GlobusCRM” on this web form</span>
                         </label>
                       </div>
-                      <div className="wf-settings-block">
+                      {scope === "generic" ? <div className="wf-settings-block">
                         <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>Send an automatic message to all leads</div>
                         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>Choose each channel independently. Messages are sent automatically to all leads using the contact details submitted with the form.</div>
                         <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
@@ -19889,7 +19889,7 @@ function WebFormsContent({ scope = "generic" }) {
                             </label>
                           ))}
                         </div>
-                      </div>
+                      </div> : null}
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">
                           <input
@@ -20078,4 +20078,3 @@ function WebFormsContent({ scope = "generic" }) {
   );
 
 }
-

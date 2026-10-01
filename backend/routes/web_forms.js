@@ -247,6 +247,11 @@ function renderContactNotification(template, contact, form) {
 }
 
 async function sendContactNotifications({ form, settings, contact, submissionId }) {
+  // Contact acknowledgement controls belong to Generic CRM. Travel forms have
+  // their own submission workflows and provider configuration, so never let a
+  // shared settings payload trigger Generic notifications for that scope.
+  if (form.scope !== "generic") return {};
+
   const channels = Array.isArray(settings.contactNotificationChannels)
     ? settings.contactNotificationChannels
     : ["whatsapp"];
@@ -258,12 +263,19 @@ async function sendContactNotifications({ form, settings, contact, submissionId 
       result.email = { sent: false, code: "LEAD_EMAIL_MISSING" };
     } else {
       try {
-        await sendEmail({
+        const sent = await sendEmail({
+          tenantId: form.tenantId,
           to: contact.email,
           subject: `Thanks for contacting ${form.name}`,
           text: body,
         });
-        result.email = { sent: true };
+        result.email = sent?.sent
+          ? { sent: true }
+          : {
+              sent: false,
+              code: "EMAIL_SEND_FAILED",
+              ...(sent?.reason ? { reason: sent.reason } : {}),
+            };
       } catch (error) {
         console.error("[web_forms] contact email notification failed:", error.message);
         result.email = { sent: false, code: "EMAIL_SEND_FAILED" };
@@ -1458,8 +1470,6 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       source: formScope === "travel" ? "inbound:web_form" : "website-form",
       status: "Lead",
     };
-    if (formScope === "generic") contactData.whatsappPhone = null;
-
     const missing = [];
 
     if (settings.optInEnabled) {
@@ -1656,6 +1666,9 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const phoneValue = String(contactData.phone || "").trim();
     const whatsappSameAsPhone = isTruthyValue("checkbox", body.whatsappSameAsPhone);
     const whatsappPhoneValue = String(body.whatsappPhone || "").trim();
+    const whatsappWasSubmitted =
+      Object.prototype.hasOwnProperty.call(body, "whatsappSameAsPhone") ||
+      Object.prototype.hasOwnProperty.call(body, "whatsappPhone");
     const companyValue = String(contactData.company || "").trim();
     const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(formScope);
     const fieldErrors = {};
@@ -1686,9 +1699,9 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
       }
     }
-    if (isGenericForm) {
-      if (whatsappSameAsPhone) {
-        contactData.whatsappPhone = contactData.phone || null;
+    if (formScope === "generic" && whatsappWasSubmitted) {
+      if (whatsappSameAsPhone && contactData.phone) {
+        contactData.whatsappPhone = contactData.phone;
       } else if (whatsappPhoneValue) {
         if (!/^\d+$/.test(whatsappPhoneValue)) {
           fieldErrors.whatsappPhone = "Only numbers are allowed.";
@@ -1820,7 +1833,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       }
     }
 
-    if (!createdNewContact && formScope === "generic" && Object.prototype.hasOwnProperty.call(contact, "whatsappPhone") && contact.whatsappPhone !== contactData.whatsappPhone) {
+    if (!createdNewContact && formScope === "generic" && Object.prototype.hasOwnProperty.call(contactData, "whatsappPhone") && contact.whatsappPhone !== contactData.whatsappPhone) {
       contact = await prisma.contact.update({
         where: { id: contact.id },
         data: { whatsappPhone: contactData.whatsappPhone },

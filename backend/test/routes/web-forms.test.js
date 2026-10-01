@@ -162,7 +162,8 @@ beforeEach(() => {
 
   prisma.user.findFirst.mockResolvedValue(null);
 
-  emailSender.sendEmail.mockClear();
+  emailSender.sendEmail.mockReset();
+  emailSender.sendEmail.mockResolvedValue({ sent: true });
   axios.post.mockReset();
   s3Service.uploadImage.mockReset();
   s3Service.uploadImage.mockResolvedValue('https://objectstorage.example.com/n/ns/b/forms/o/travel/web-forms/11/logos/logo.png');
@@ -1062,6 +1063,110 @@ describe('POST /api/forms/public/:slug/submit', () => {
         whatsappPhone: '+919123456789',
       }),
     }));
+  });
+
+  test('preserves an existing Generic WhatsApp number when the form does not submit WhatsApp fields', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 82,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: '{}',
+    });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 2002,
+      tenantId: TENANT_ID,
+      name: 'Existing Customer',
+      email: 'existing@example.com',
+      whatsappPhone: '+919999999999',
+    });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Existing Customer')
+      .field('email', 'existing@example.com');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('reports a failed Generic contact email notification and resolves tenant credentials', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 82,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: JSON.stringify({ contactNotificationChannels: ['email'] }),
+    });
+    emailSender.sendEmail.mockResolvedValue({ sent: false, reason: 'no_api_key' });
+    prisma.contact.create.mockResolvedValue({
+      id: 2001,
+      name: 'Email Customer',
+      email: 'email@example.com',
+      phone: null,
+    });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Email Customer')
+      .field('email', 'email@example.com');
+
+    expect(response.status).toBe(201);
+    expect(response.body.contactNotifications.email).toEqual({
+      sent: false,
+      code: 'EMAIL_SEND_FAILED',
+      reason: 'no_api_key',
+    });
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: TENANT_ID,
+      to: 'email@example.com',
+    }));
+  });
+
+  test('does not run Generic contact notifications for a Travel form', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 81,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'travel',
+      name: 'Plan my trip',
+      slug: 'plan-my-trip',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: JSON.stringify({ contactNotificationChannels: ['email'] }),
+    });
+
+    const response = await request(makeApp('travel'))
+      .post('/api/forms/public/plan-my-trip/submit?scope=travel')
+      .field('name', 'Travel Customer')
+      .field('email', 'travel@example.com');
+
+    expect(response.status).toBe(201);
+    expect(response.body.contactNotifications).toEqual({});
+    expect(emailSender.sendEmail).not.toHaveBeenCalled();
   });
 
   test('rejects non-numeric characters in a separate Generic WhatsApp number', async () => {

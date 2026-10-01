@@ -36,7 +36,7 @@
  *      the form fields in a drawer.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Leads from '../pages/Leads';
 import { AuthContext } from '../App';
@@ -978,49 +978,37 @@ describe('Leads  vertical-aware form schema (#600)', () => {
       expect(postCall).toBeDefined();
       const body = JSON.parse(postCall[1].body);
       expect(body.name).toBe('Anita Sharma');
-      expect(body.phone).toBe('+919876543210');
+      expect(body.phone).toBe('9876543210');
       expect(body.source).toBe('whatsapp');
       expect(body.treatmentOfInterest).toBe('Botox');
     });
     expect(notifyError).not.toHaveBeenCalled();
   });
 
-  it('rejects digits and symbols in the lead name for every CRM vertical', async () => {
-    for (const auth of [genericAuth, wellnessAuth, { ...genericAuth, tenant: { ...genericAuth.tenant, vertical: 'travel' } }]) {
-      cleanup();
-      fetchApiMock.mockReset();
-      fetchApiMock.mockImplementation(defaultFetchMock);
-      renderLeads(auth);
-      await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
-      openDrawer();
+  it('rejects digits and symbols in the lead name for Generic CRM', async () => {
+    renderLeads(genericAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
 
-      const nameInput = screen.getByPlaceholderText('Full Name');
-      fireEvent.change(nameInput, { target: { value: 'Kanchan Gupta1343435!@#' } });
-      expect(nameInput).toHaveValue('');
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        'Name can contain letters and spaces only. Numbers and special characters are not allowed.',
-      );
-    }
-    cleanup();
+    const nameInput = screen.getByPlaceholderText('Full Name');
+    fireEvent.change(nameInput, { target: { value: 'Kanchan Gupta1343435!@#' } });
+    expect(nameInput).toHaveValue('');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Name can contain letters and spaces only. Numbers and special characters are not allowed.',
+    );
   });
 
-  it('filters non-digits from the phone input for every CRM vertical', async () => {
-    for (const auth of [genericAuth, wellnessAuth, { ...genericAuth, tenant: { ...genericAuth.tenant, vertical: 'travel' } }]) {
-      cleanup();
-      fetchApiMock.mockReset();
-      fetchApiMock.mockImplementation(defaultFetchMock);
-      renderLeads(auth);
-      await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
-      openDrawer();
+  it('filters non-digits from the phone input for Generic CRM', async () => {
+    renderLeads(genericAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
 
-      const phoneInput = screen.getByPlaceholderText(/Phone \(/i);
-      fireEvent.change(phoneInput, { target: { value: '+91 987-654-3210abc' } });
-      expect(phoneInput).toHaveValue('919876543210');
-      expect(screen.getByRole('alert')).toHaveTextContent('Phone number can contain digits only.');
-      fireEvent.change(phoneInput, { target: { value: '9876543210' } });
-      expect(screen.queryByRole('alert')).toBeNull();
-    }
-    cleanup();
+    const phoneInput = screen.getByPlaceholderText(/Phone \(/i);
+    fireEvent.change(phoneInput, { target: { value: '+91 987-654-3210abc' } });
+    expect(phoneInput).toHaveValue('919876543210');
+    expect(screen.getByRole('alert')).toHaveTextContent('Phone number can contain digits only.');
+    fireEvent.change(phoneInput, { target: { value: '9876543210' } });
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('generic tenant ?? ? Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {

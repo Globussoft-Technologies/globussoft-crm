@@ -127,8 +127,9 @@ const WELLNESS_SOURCE_OPTIONS = [
   { value: "event", label: "Event" },
   { value: "other", label: "Other" },
 ];
-// Wellness lead phone input is a bare 10-digit Indian mobile (starting 6-9);
-// the country code is selected separately in the form.
+// Preserve the established Wellness contract: bare Indian mobile or an
+// optional +91/91-prefixed value. Generic CRM uses the country rules below.
+const INDIAN_MOBILE_RE = /^(?:\+?91)?[6-9]\d{9}$/;
 const LEAD_NAME_RE = /^\p{L}+(?: +\p{L}+)*$/u;
 const sanitizeLeadNameInput = (value) =>
   String(value || "")
@@ -1400,15 +1401,7 @@ function BuiltInInlineCellEditor({
       type={type}
       value={draft}
       disabled={saving}
-      onChange={(e) =>
-        setDraft(
-          field === "name"
-            ? sanitizeLeadNameInput(e.target.value)
-            : field === "phone"
-              ? e.target.value.replace(/\D/g, "")
-              : e.target.value,
-        )
-      }
+      onChange={(e) => setDraft(e.target.value)}
       onBlur={() => save()}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
@@ -3162,7 +3155,7 @@ const Leads = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [creating]);
   useEffect(() => {
-    if (!creating || genericPhoneCountryDetectionRunRef.current) return undefined;
+    if (!creating || !isGeneric || genericPhoneCountryDetectionRunRef.current) return undefined;
     genericPhoneCountryDetectionRunRef.current = true;
     let cancelled = false;
     detectGenericPhoneCountryCode().then((countryCode) => {
@@ -3220,7 +3213,7 @@ const Leads = () => {
         email: "",
         company: "",
         title: "",
-        countryCode: isWellness || isTravel ? "+91" : "+1",
+        countryCode: "+1",
         phone: "",
         source: "Organic",
         status: "Lead",
@@ -3309,7 +3302,7 @@ const Leads = () => {
       notify.error("Name is required");
       return;
     }
-    if (!LEAD_NAME_RE.test(finalName)) {
+    if (isGeneric && !LEAD_NAME_RE.test(finalName)) {
       notify.error("Name can contain letters and spaces only");
       return;
     }
@@ -3329,64 +3322,58 @@ const Leads = () => {
       return;
     }
 
-    // Phone handling per vertical. The number of national digits follows the
-    // same country-specific rules used by the embedded web form.
+    // Keep established Wellness/Travel behavior intact. Only Generic CRM uses
+    // the country-specific national-number contract introduced by this PR.
     let phone = String(newLead.phone || "").trim();
-    const phoneDigits = phone.replace(/\D/g, "");
-    const [phoneMinDigits, phoneMaxDigits] = getLeadPhoneRule(
-      newLead.countryCode,
-    );
-    if (isWellness && !phoneDigits) {
-      notify.error("Phone is required");
-      return;
-    }
-    if (phoneDigits && (phoneDigits.length < phoneMinDigits || phoneDigits.length > phoneMaxDigits)) {
-      notify.error(
-        `Enter a valid ${newLead.countryCode} phone number (${phoneMinDigits === phoneMaxDigits ? phoneMinDigits : `${phoneMinDigits}-${phoneMaxDigits}`} digits).`,
+    if (isGeneric) {
+      const phoneDigits = phone.replace(/\D/g, "");
+      const [phoneMinDigits, phoneMaxDigits] = getLeadPhoneRule(
+        newLead.countryCode,
       );
-      return;
+      if (phoneDigits && (phoneDigits.length < phoneMinDigits || phoneDigits.length > phoneMaxDigits)) {
+        notify.error(
+          `Enter a valid ${newLead.countryCode} phone number (${phoneMinDigits === phoneMaxDigits ? phoneMinDigits : `${phoneMinDigits}-${phoneMaxDigits}`} digits).`,
+        );
+        return;
+      }
+      if (phoneDigits && newLead.countryCode === "+91" && !/^[6-9]\d{9}$/.test(phoneDigits)) {
+        notify.error("Enter a valid +91 mobile number starting with 6-9.");
+        return;
+      }
+      phone = phoneDigits;
+    } else if (isWellness) {
+      const phoneClean = phone.replace(/[\s\-()]/g, "");
+      if (!phoneClean) {
+        notify.error("Phone is required");
+        return;
+      }
+      if (!INDIAN_MOBILE_RE.test(phoneClean)) {
+        notify.error(
+          "Enter a valid mobile number (10 digits, starting 6-9; +91 prefix optional).",
+        );
+        return;
+      }
+      phone = phoneClean;
     }
-    // Indian mobile numbers have an additional national prefix rule in the
-    // web-form contract; retain that rule for +91 in every CRM vertical.
-    if (phoneDigits && newLead.countryCode === "+91" && !/^[6-9]\d{9}$/.test(phoneDigits)) {
-      notify.error("Enter a valid +91 mobile number starting with 6-9.");
-      return;
-    }
-    phone = phoneDigits;
 
-    // Validate every value rendered by this form. The form uses noValidate so
-    // the same targeted feedback is used for native fields and admin-defined
-    // custom fields across generic, travel, and wellness tenants.
-    const allowedSources = isWellness
-      ? WELLNESS_SOURCE_OPTIONS.map((option) => option.value)
-      : isTravel
-        ? TRAVEL_SOURCE_OPTIONS.map((option) => option.value)
-        : SOURCE_OPTIONS;
-    if (!allowedSources.includes(newLead.source)) {
+    // Generic CRM uses targeted feedback because this form disables native
+    // validation. Other verticals retain their established validation flow.
+    if (isGeneric && !SOURCE_OPTIONS.includes(newLead.source)) {
       notify.error("Please select a valid lead source");
       return;
     }
-    if (!COUNTRY_CODES.some(({ code }) => code === newLead.countryCode)) {
+    if (isGeneric && !COUNTRY_CODES.some(({ code }) => code === newLead.countryCode)) {
       notify.error("Please select a valid country code");
       return;
     }
-    for (const field of ["company", "title", "treatmentOfInterest"]) {
+    for (const field of isGeneric ? ["company", "title"] : []) {
       const value = String(newLead[field] || "");
       if (value && CONTROL_CHAR_RE.test(value)) {
         notify.error(`${field} contains invalid control characters`);
         return;
       }
     }
-    if (newLead.preferredLocationId && !locations.some((location) => String(location.id) === String(newLead.preferredLocationId))) {
-      notify.error("Please select a valid preferred clinic");
-      return;
-    }
-    const doctors = staff.filter((member) => (member.wellnessRole || "").toLowerCase() === "doctor");
-    if (newLead.preferredPractitionerId && !doctors.some((doctor) => String(doctor.id) === String(newLead.preferredPractitionerId))) {
-      notify.error("Please select a valid preferred practitioner");
-      return;
-    }
-    for (const definition of customFieldDefs) {
+    for (const definition of isGeneric ? customFieldDefs : []) {
       const value = newLead.customFields?.[definition.fieldKey];
       const empty = Array.isArray(value) ? value.length === 0 : String(value ?? "").trim() === "";
       if (definition.isRequired && (definition.fieldType === "checkbox" ? value !== true : empty)) {
@@ -3443,9 +3430,9 @@ const Leads = () => {
       // is the local-part). Wellness: phone is already canonicalised by
       // the +91-optional regex above  store as-is.
       const phoneOut = isWellness
-        ? `${newLead.countryCode}${phone}`
-        : phone
-          ? `${newLead.countryCode} ${phone}`
+        ? phone
+        : newLead.phone
+          ? `${newLead.countryCode} ${isGeneric ? phone : newLead.phone}`
           : "";
       await fetchApi("/api/contacts", {
         method: "POST",
@@ -3463,7 +3450,7 @@ const Leads = () => {
         email: "",
         company: "",
         title: "",
-        countryCode: isWellness || isTravel ? "+91" : "+1",
+        countryCode: "+1",
         phone: "",
         source: "Organic",
         status: "Lead",
@@ -3523,7 +3510,7 @@ const Leads = () => {
       notify.error("Name is required");
       return;
     }
-    if (!LEAD_NAME_RE.test(editName)) {
+    if (isGeneric && !LEAD_NAME_RE.test(editName)) {
       notify.error("Name can contain letters and spaces only");
       return;
     }
@@ -4022,7 +4009,7 @@ const Leads = () => {
   };
 
   const handleChange = (field, value) => {
-    if (field === "name") {
+    if (isGeneric && field === "name") {
       const sanitizedName = sanitizeLeadNameInput(value);
       if (sanitizedName !== value) {
         setCreateFieldErrors((prev) => ({
@@ -4036,7 +4023,7 @@ const Leads = () => {
         setCreateFieldErrors((prev) => ({ ...prev, name: "" }));
       }
     }
-    if (field === "phone") {
+    if (isGeneric && field === "phone") {
       const rawPhone = String(value);
       const digitsOnlyPhone = rawPhone.replace(/\D/g, "");
       setCreateFieldErrors((prev) => ({
@@ -4855,11 +4842,11 @@ const Leads = () => {
       notify.error("Name is required");
       throw new Error("Name is required");
     }
-    if (field === "name" && !LEAD_NAME_RE.test(String(value))) {
+    if (isGeneric && field === "name" && !LEAD_NAME_RE.test(String(value))) {
       notify.error("Name can contain letters and spaces only");
       throw new Error("Invalid name");
     }
-    if (field === "phone" && value && !/^\d{7,15}$/.test(String(value))) {
+    if (isGeneric && field === "phone" && value && !/^\d{7,15}$/.test(String(value))) {
       notify.error("Phone number can contain digits only (7-15 digits)");
       throw new Error("Invalid phone number");
     }
@@ -10525,45 +10512,62 @@ const Leads = () => {
               {/* Phone field — required for wellness, optional for generic and travel. */}
               <div>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
-                  <input
-                    type="text"
-                    inputMode="tel"
-                    list="lead-country-code-options"
-                    aria-label="Country code"
-                    className="input-field"
-                    placeholder="+1"
-                    value={newLead.countryCode}
-                    onChange={(e) => {
-                      genericPhoneCountryUserChangedRef.current = true;
-                      const raw = e.target.value.replace(/[^\d+]/g, "");
-                      handleChange(
-                        "countryCode",
-                        raw && !raw.startsWith("+") ? `+${raw}` : raw,
-                      );
-                    }}
-                    style={{ width: "100px" }}
-                  />
-                  <datalist id="lead-country-code-options">
-                    {COUNTRY_CODES.map((cc) => (
-                      <option
-                        key={cc.code}
-                        value={cc.code}
-                        label={`${cc.country} (${cc.code})`}
+                  {isGeneric ? (
+                    <>
+                      <input
+                        type="text"
+                        inputMode="tel"
+                        list="lead-country-code-options"
+                        aria-label="Country code"
+                        className="input-field"
+                        placeholder="+1"
+                        value={newLead.countryCode}
+                        onChange={(e) => {
+                          genericPhoneCountryUserChangedRef.current = true;
+                          const raw = e.target.value.replace(/[^\d+]/g, "");
+                          handleChange(
+                            "countryCode",
+                            raw && !raw.startsWith("+") ? `+${raw}` : raw,
+                          );
+                        }}
+                        style={{ width: "100px" }}
                       />
-                    ))}
-                  </datalist>
+                      <datalist id="lead-country-code-options">
+                        {COUNTRY_CODES.map((cc) => (
+                          <option
+                            key={cc.code}
+                            value={cc.code}
+                            label={`${cc.country} (${cc.code})`}
+                          />
+                        ))}
+                      </datalist>
+                    </>
+                  ) : (
+                    <select
+                      className="input-field"
+                      value={newLead.countryCode}
+                      onChange={(e) => handleChange("countryCode", e.target.value)}
+                      style={{ width: "100px" }}
+                    >
+                      {COUNTRY_CODES.map((cc) => (
+                        <option key={cc.code} value={cc.code}>{cc.code}</option>
+                      ))}
+                    </select>
+                  )}
                   <input
                     type="tel"
                     placeholder={
                       isWellness
                         ? "Phone (10-digit mobile, e.g. 9876543210)"
-                        : `Phone (${getLeadPhoneRule(newLead.countryCode).join("-")} digits, optional)`
+                        : isGeneric
+                          ? `Phone (${getLeadPhoneRule(newLead.countryCode).join("-")} digits, optional)`
+                          : "Phone (optional)"
                     }
                     required={isWellness}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    minLength={getLeadPhoneRule(newLead.countryCode)[0]}
-                    maxLength={getLeadPhoneRule(newLead.countryCode)[1]}
+                    inputMode={isGeneric ? "numeric" : undefined}
+                    pattern={isGeneric ? "[0-9]*" : undefined}
+                    minLength={isGeneric ? getLeadPhoneRule(newLead.countryCode)[0] : undefined}
+                    maxLength={isGeneric ? getLeadPhoneRule(newLead.countryCode)[1] : undefined}
                     className="input-field"
                     value={newLead.phone}
                     aria-invalid={Boolean(createFieldErrors.phone)}
@@ -10820,7 +10824,12 @@ const Leads = () => {
                 className="input-field"
                 value={editForm.name}
                 onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, name: sanitizeLeadNameInput(e.target.value) }))
+                  setEditForm((prev) => ({
+                    ...prev,
+                    name: isGeneric
+                      ? sanitizeLeadNameInput(e.target.value)
+                      : e.target.value,
+                  }))
                 }
               />
               <input

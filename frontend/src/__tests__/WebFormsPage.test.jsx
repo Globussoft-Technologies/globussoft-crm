@@ -254,6 +254,16 @@ function renderTravelPage(form = FORM_FIXTURE) {
   );
 }
 
+test('contact notification channel controls are limited to Generic web forms', async () => {
+  renderTravelPage();
+  await openBuilder();
+
+  fireEvent.click(screen.getByRole('button', { name: /Settings/i }));
+
+  expect(screen.queryByText(/Send an automatic message to all leads/i)).toBeNull();
+  expect(screen.queryByText(/Send WhatsApp automatically to all leads/i)).toBeNull();
+});
+
 
 
 async function openBuilder(formName = 'Brand intake') {

@@ -1006,6 +1006,9 @@ async function main() {
         userType: 'OWNER',
         role: 'ADMIN',
         tenantId: travelTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
     prisma.user.create({
@@ -1016,6 +1019,9 @@ async function main() {
         userType: 'STAFF',
         role: 'ADMIN',
         tenantId: travelTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
     prisma.user.create({
@@ -1026,6 +1032,9 @@ async function main() {
         userType: 'STAFF',
         role: 'MANAGER',
         tenantId: travelTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
     prisma.user.create({
@@ -1036,6 +1045,9 @@ async function main() {
         userType: 'STAFF',
         role: 'USER',
         tenantId: travelTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
     prisma.user.create({
@@ -1046,6 +1058,9 @@ async function main() {
         userType: 'STAFF',
         role: 'USER',
         tenantId: travelTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
       },
     }),
   ]);

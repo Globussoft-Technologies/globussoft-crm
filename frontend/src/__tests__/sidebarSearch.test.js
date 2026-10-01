@@ -75,6 +75,7 @@ describe('filterSidebarPages', () => {
       { path: '/travel/visa', label: 'Visa Dashboard', description: 'Visa Sure sub-brand overview' },
       { path: '/travel-stall', label: 'Travel Stall Dashboard', description: 'Travel Stall sub-brand overview' },
       { path: '/travel/forms', label: 'Web Forms', description: 'Embedded travel lead capture forms' },
+      { path: '/travel/meeting-forms', label: 'Meeting Forms', description: 'Booking forms' },
       { path: '/landing-pages', label: 'Landing Pages', description: 'Lead-capture landing pages' },
       { path: '/developer', label: 'Developer', description: 'API + webhook console' },
       { path: '/lead-routing', label: 'Routing Rules', description: 'Rules that auto-assign incoming leads' },
@@ -85,9 +86,10 @@ describe('filterSidebarPages', () => {
       activeSubBrand: 'travelstall',
     });
 
-    expect(filtered.map((page) => page.path)).toEqual(['/leads', '/travel/forms', '/landing-pages', '/developer']);
+    expect(filtered.map((page) => page.path)).toEqual(['/leads', '/travel/forms', '/travel/meeting-forms', '/landing-pages', '/developer']);
     expect(filtered.find((page) => page.path === '/leads')?.label).toBe('Leads');
     expect(filtered.find((page) => page.path === '/travel/forms')?.label).toBe('Web Forms');
+    expect(filtered.find((page) => page.path === '/travel/meeting-forms')?.aliases).toContain('zoom meeting');
     expect(filtered.find((page) => page.path === '/developer')?.label).toBe('Developer');
     expect(filtered.some((page) => page.path === '/travel/leads')).toBe(false);
     expect(filtered.some((page) => page.path === '/travel/inbound-leads')).toBe(false);
@@ -202,6 +204,7 @@ describe('filterSidebarPages', () => {
       '/travel/school-terms',
       '/travel/brochures',
       '/travel/forms',
+      '/travel/meeting-forms',
       '/landing-pages',
       '/inbox',
       '/tasks',

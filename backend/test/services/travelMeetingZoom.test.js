@@ -52,6 +52,12 @@ describe("travelMeetingZoom", () => {
     expect(prisma.travelMeetingZoomCredential.upsert).not.toHaveBeenCalled();
   });
 
+  it("rejects me as the host for a Server-to-Server OAuth connection", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => ({ access_token: "token", scope: "meeting:write:meeting:admin meeting:delete:meeting:admin" }) });
+    await expect(zoom.connect({ tenantId: 8, accountId: "account", clientId: "client", clientSecret: "secret", zoomHostUserId: "me" })).rejects.toMatchObject({ code: "ZOOM_HOST_USER_REQUIRED", status: 400 });
+    expect(prisma.travelMeetingZoomCredential.upsert).not.toHaveBeenCalled();
+  });
+
   it("creates meetings with only the requesting tenant's stored connection", async () => {
     prisma.travelMeetingZoomCredential.findUnique.mockResolvedValue({
       tenantId: 8,

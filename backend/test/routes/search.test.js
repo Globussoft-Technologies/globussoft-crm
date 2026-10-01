@@ -80,6 +80,22 @@ authMw.verifyToken = (req, res, next) => {
   return next();
 };
 
+// Travel global search must follow the same RBAC catalogue as its pages.
+// Patch the conditional helper before the router captures its reference.
+const permissionMw = requireCJS('../../middleware/requirePermission');
+const permissionState = {
+  allowed: new Set([
+    'contacts.read',
+    'itineraries.read',
+    'quotes.read',
+    'invoices.read',
+    'suppliers.read',
+    'trips.read',
+  ]),
+};
+const getUserPermissions = vi.fn(async () => permissionState.allowed);
+permissionMw.getUserPermissions = getUserPermissions;
+
 // ── Prisma singleton patching — every model method search.js touches ────
 const MODELS = [
   'contact',
@@ -97,7 +113,12 @@ const MODELS = [
   'survey',
   'whatsappMessage',
 ];
+const TRAVEL_MODELS = ['itinerary', 'travelQuote', 'travelInvoice', 'travelSupplier', 'tmcTrip'];
 for (const m of MODELS) {
+  prisma[m] = prisma[m] || {};
+  prisma[m].findMany = vi.fn();
+}
+for (const m of TRAVEL_MODELS) {
   prisma[m] = prisma[m] || {};
   prisma[m].findMany = vi.fn();
 }
@@ -122,6 +143,8 @@ for (const m of MODELS) {
 //   documented in T36 (audit-recipe correction).
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findMany = vi.fn();
 
@@ -193,7 +216,18 @@ beforeEach(() => {
   // T33 — generic tenant by default so canSearchPatients() returns false and
   // patient.findMany is never invoked. Wellness-specific tests can override.
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 1, vertical: 'generic' });
+  prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null, userRoles: [] });
   prisma.patient.findMany.mockReset().mockResolvedValue([]);
+  for (const m of TRAVEL_MODELS) prisma[m].findMany.mockReset().mockResolvedValue([]);
+  permissionState.allowed = new Set([
+    'contacts.read',
+    'itineraries.read',
+    'quotes.read',
+    'invoices.read',
+    'suppliers.read',
+    'trips.read',
+  ]);
+  getUserPermissions.mockClear();
   authState.useReal = false;
 });
 
@@ -320,5 +354,99 @@ describe('GET /api/search — global search envelope', () => {
     expect(res.body).toEqual({ error: 'Search failed' });
     // Negative pin: the internal error message MUST NOT appear in the body.
     expect(JSON.stringify(res.body)).not.toContain('DB connection lost');
+  });
+
+  test('travel tenant searches travel records only and scopes them to the active sub-brand', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+    prisma.contact.findMany.mockResolvedValue([{ id: 1, name: 'Goa School', subBrand: 'tmc' }]);
+    prisma.itinerary.findMany.mockResolvedValue([{ id: 2, destination: 'Goa', subBrand: 'tmc' }]);
+    prisma.travelQuote.findMany.mockResolvedValue([{ id: 3, subBrand: 'tmc' }]);
+    prisma.travelInvoice.findMany.mockResolvedValue([{ id: 4, invoiceNum: 'TINV-GOA', subBrand: 'tmc' }]);
+    prisma.travelSupplier.findMany.mockResolvedValue([{ id: 5, name: 'Goa Coaches', subBrand: 'tmc' }]);
+    prisma.tmcTrip.findMany.mockResolvedValue([{ id: 6, tripCode: 'GOA-26', destination: 'Goa' }]);
+
+    const res = await request(makeApp()).get('/api/search?q=goa&subBrand=tmc');
+
+    expect(res.status).toBe(200);
+    expect(res.body.totalResults).toBe(6);
+    expect(Object.keys(res.body)).toEqual(expect.arrayContaining([
+      'contacts', 'itineraries', 'travelQuotes', 'travelInvoices', 'travelSuppliers', 'tmcTrips',
+    ]));
+    for (const model of ['contact', 'itinerary', 'travelQuote', 'travelInvoice', 'travelSupplier']) {
+      const args = prisma[model].findMany.mock.calls[0][0];
+      expect(args.where.tenantId).toBe(TENANT_ID);
+      expect(args.where.subBrand).toBe('tmc');
+      expect(args.take).toBe(model === 'contact' ? 20 : 5);
+      expect(args.orderBy).toEqual([{ updatedAt: 'desc' }, { id: 'desc' }]);
+    }
+    expect(prisma.deal.findMany).not.toHaveBeenCalled();
+  });
+
+  test('travel search does not query TMC trips while another sub-brand is active', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+
+    const res = await request(makeApp()).get('/api/search?q=goa&subBrand=rfu');
+
+    expect(res.status).toBe(200);
+    expect(res.body.tmcTrips).toEqual([]);
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+  });
+
+  test('travel search ranks exact matches first, limits responses, and keeps mixed-case matching', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+    prisma.contact.findMany
+      .mockResolvedValueOnce([{ id: 6, name: 'GoA' }])
+      .mockResolvedValueOnce([
+      { id: 1, name: 'Goa School One' },
+      { id: 2, name: 'Goa School Two' },
+      { id: 3, name: 'Goa School Three' },
+      { id: 4, name: 'Goa School Four' },
+      { id: 5, name: 'Goa School Five' },
+      ]);
+
+    const res = await request(makeApp()).get('/api/search?q=GoA');
+
+    expect(res.status).toBe(200);
+    expect(res.body.contacts).toHaveLength(5);
+    expect(res.body.contacts[0]).toMatchObject({ id: 6, name: 'GoA' });
+    const contactArgs = prisma.contact.findMany.mock.calls[0][0];
+    expect(contactArgs.take).toBe(20);
+    expect(contactArgs.where.OR).toEqual(expect.arrayContaining([
+      { name: 'GoA' },
+      { email: 'GoA' },
+    ]));
+    expect(contactArgs.orderBy).toEqual([{ updatedAt: 'desc' }, { id: 'desc' }]);
+    expect(prisma.contact.findMany.mock.calls[1][0]).toMatchObject({
+      take: 19,
+      where: { id: { notIn: [6] } },
+    });
+  });
+
+  test('travel search never queries or returns entities without their read permission', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'travel' });
+    permissionState.allowed = new Set(['quotes.read']);
+    prisma.travelQuote.findMany.mockResolvedValueOnce([{ id: 31, status: 'Draft', itinerary: { title: 'Goa' } }]);
+
+    const res = await request(makeApp()).get('/api/search?q=goa&subBrand=tmc');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      contacts: [],
+      itineraries: [],
+      travelInvoices: [],
+      travelSuppliers: [],
+      tmcTrips: [],
+      totalResults: 1,
+    });
+    expect(res.body.travelQuotes).toHaveLength(1);
+    expect(prisma.travelQuote.findMany).toHaveBeenCalled();
+    expect(prisma.travelQuote.findMany.mock.calls[0][0].select).not.toHaveProperty('contact');
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.itinerary.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelSupplier.findMany).not.toHaveBeenCalled();
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+    expect(getUserPermissions).toHaveBeenCalledOnce();
+    expect(getUserPermissions).toHaveBeenCalledWith(TENANT_ID, USER_ID);
   });
 });

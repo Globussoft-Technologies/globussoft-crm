@@ -1426,11 +1426,38 @@ async function getTmcParentRegistrationUrl(page, req) {
   });
 }
 
-function decoratePublishedPublicPayload(page, parsedContent, tmcParentRegistrationUrl = null) {
+function shouldUseAbsolutePublicUrls(req) {
+  const value = String(req?.query?.absoluteUrls || "").trim().toLowerCase();
+  return ["1", "true", "yes"].includes(value);
+}
 
-  const publicUrl = `/p/${encodeURIComponent(page.slug)}`;
-  const submitUrl = `${publicUrl}/submit`;
-  const paymentOrderUrl = `${publicUrl}/payment-order`;
+function getPublicCrmBaseUrl(req) {
+  const configured = process.env.PUBLIC_CRM_URL || process.env.PUBLIC_BASE_URL;
+  return String(configured || getFrontendUrlFromRequest(req) || "").replace(/\/+$/, "");
+}
+
+function decoratePublishedPublicPayload(
+  page,
+  parsedContent,
+  tmcParentRegistrationUrl = null,
+  { absoluteUrls = false, baseUrl = "" } = {},
+) {
+
+  const relativeRuntimeUrl = `/p/${encodeURIComponent(page.slug)}`;
+  const relativeClientRoute = `/trips/${encodeURIComponent(String(page.id))}`;
+  const normalizedBaseUrl = String(baseUrl || "").replace(/\/+$/, "");
+  const useAbsoluteUrls = absoluteUrls && normalizedBaseUrl;
+  const runtimeUrl = useAbsoluteUrls
+    ? `${normalizedBaseUrl}${relativeRuntimeUrl}`
+    : relativeRuntimeUrl;
+  // The published landing-page URL is always the numeric /trips route in
+  // external-host mode. The slug-based /p route remains only as the CRM's
+  // internal runtime endpoint for forms, payments, and tracking.
+  const publicUrl = useAbsoluteUrls
+    ? `${normalizedBaseUrl}${relativeClientRoute}`
+    : relativeRuntimeUrl;
+  const submitUrl = `${runtimeUrl}/submit`;
+  const paymentOrderUrl = `${runtimeUrl}/payment-order`;
 
   let decoratedContent = parsedContent;
 
@@ -1452,7 +1479,7 @@ function decoratePublishedPublicPayload(page, parsedContent, tmcParentRegistrati
     }
   }
 
-  return {
+  const response = {
     ...page,
     content: decoratedContent,
     publicUrl,
@@ -1460,6 +1487,27 @@ function decoratePublishedPublicPayload(page, parsedContent, tmcParentRegistrati
     paymentOrderUrl,
     tmcParentRegistrationUrl,
   };
+
+  if (useAbsoluteUrls) {
+    response.crmBaseUrl = normalizedBaseUrl;
+    response.crmUrls = {
+      page: publicUrl,
+      runtimePage: runtimeUrl,
+      json: `${runtimeUrl}/json`,
+      submit: submitUrl,
+      track: `${runtimeUrl}/track`,
+      registrationDraft: `${runtimeUrl}/registration-draft`,
+      registrationDocuments: `${runtimeUrl}/registration-documents`,
+      paymentOrder: paymentOrderUrl,
+      paymentStatus: `${runtimeUrl}/payment-status`,
+    };
+    // The client owns this route in its Next.js app. One dynamic page is
+    // enough for every published trip; publishing a CRM page does not create
+    // source files in the client repository.
+    response.clientRoute = relativeClientRoute;
+  }
+
+  return response;
 }
 
 
@@ -1596,7 +1644,12 @@ router.get("/public/featured-full", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(
+      publicPage,
+      parsedContent,
+      await getTmcParentRegistrationUrl(page, req),
+      { absoluteUrls: shouldUseAbsolutePublicUrls(req), baseUrl: getPublicCrmBaseUrl(req) },
+    ));
 
   } catch (err) {
 
@@ -1684,7 +1737,12 @@ router.get("/public/by-slug/:slug", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(
+      publicPage,
+      parsedContent,
+      await getTmcParentRegistrationUrl(page, req),
+      { absoluteUrls: shouldUseAbsolutePublicUrls(req), baseUrl: getPublicCrmBaseUrl(req) },
+    ));
 
   } catch (err) {
 
@@ -1785,7 +1843,12 @@ router.get("/public/by-id/:id", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(
+      publicPage,
+      parsedContent,
+      await getTmcParentRegistrationUrl(page, req),
+      { absoluteUrls: shouldUseAbsolutePublicUrls(req), baseUrl: getPublicCrmBaseUrl(req) },
+    ));
 
   } catch (err) {
 
@@ -1887,7 +1950,12 @@ router.get("/public/by-trip/:tripId", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(publicPage, parsedContent, await getTmcParentRegistrationUrl(page, req)));
+    return res.json(decoratePublishedPublicPayload(
+      publicPage,
+      parsedContent,
+      await getTmcParentRegistrationUrl(page, req),
+      { absoluteUrls: shouldUseAbsolutePublicUrls(req), baseUrl: getPublicCrmBaseUrl(req) },
+    ));
 
   } catch (err) {
 

@@ -14,8 +14,8 @@
  *
  * Pinned invariants:
  *   1. Patient core fetch resolves and renders the patient name as a heading.
- *   2. Tab strip exposes the Wallet tab; clicking it loads the wallet
- *      sub-route /api/wellness/patients/:id/wallet.
+ *   2. Tab strip exposes the Wallet tab; clicking it loads the canonical
+ *      balance and transaction wallet endpoints.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -72,9 +72,15 @@ const samplePatient = {
   treatmentPlans: [],
 };
 
-const sampleWallet = {
-  wallet: { balance: 2500, currency: 'INR' },
+const sampleWalletBalance = {
+  balanceCents: 250000,
+  currency: 'INR',
+  lastUpdated: '2026-09-30T10:00:00.000Z',
+};
+
+const sampleWalletTransactions = {
   transactions: [],
+  total: 0,
 };
 
 function defaultFetchMock(url) {
@@ -83,9 +89,8 @@ function defaultFetchMock(url) {
   }
   if (url === '/api/wellness/services') return Promise.resolve([]);
   if (url === '/api/staff') return Promise.resolve([]);
-  if (url === `/api/wellness/patients/${PATIENT_ID}/wallet`) {
-    return Promise.resolve(sampleWallet);
-  }
+  if (url === `/api/wallet/${PATIENT_ID}/balance`) return Promise.resolve(sampleWalletBalance);
+  if (url === `/api/wallet/${PATIENT_ID}/transactions?limit=10`) return Promise.resolve(sampleWalletTransactions);
   if (url === `/api/wellness/loyalty/${PATIENT_ID}`) return Promise.resolve(null);
   return Promise.resolve(null);
 }
@@ -122,7 +127,7 @@ describe('<wellness/PatientDetail /> — page surface', () => {
     expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument();
   });
 
-  it('renders the Wallet tab in the tab strip and clicking it loads the wallet sub-resource', async () => {
+  it('renders the Wallet tab and clicking it loads balance + transactions', async () => {
     renderPatientDetail();
     await screen.findByRole('heading', { name: /Anita Sharma/i });
 
@@ -134,10 +139,10 @@ describe('<wellness/PatientDetail /> — page surface', () => {
     fireEvent.click(walletTab);
 
     await waitFor(() => {
-      const walletCall = fetchApiMock.mock.calls.find(
-        ([u]) => u === `/api/wellness/patients/${PATIENT_ID}/wallet`,
-      );
-      expect(walletCall).toBeTruthy();
+      expect(fetchApiMock.mock.calls).toEqual(expect.arrayContaining([
+        [`/api/wallet/${PATIENT_ID}/balance`],
+        [`/api/wallet/${PATIENT_ID}/transactions?limit=10`],
+      ]));
     });
 
     // Wallet panel renders the balance heading.
@@ -162,7 +167,8 @@ describe('<wellness/PatientDetail /> — page surface', () => {
       }
       if (url === '/api/wellness/services') return Promise.resolve([]);
       if (url === '/api/staff') return Promise.resolve([]);
-      if (url === `/api/wellness/patients/${PATIENT_ID}/wallet`) return Promise.resolve(sampleWallet);
+      if (url === `/api/wallet/${PATIENT_ID}/balance`) return Promise.resolve(sampleWalletBalance);
+      if (url === `/api/wallet/${PATIENT_ID}/transactions?limit=10`) return Promise.resolve(sampleWalletTransactions);
       if (url === '/api/wellness/loyalty/') return Promise.resolve(null);
       return Promise.resolve(null);
     });

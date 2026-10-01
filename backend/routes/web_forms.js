@@ -15,6 +15,7 @@ const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const s3Service = require("../services/s3Service");
 const { sendGenericWebFormWhatsApp } = require("../lib/genericWebFormWhatsApp");
+const { resolveProviderConfig, sendSms } = require("../services/smsProvider");
 const axios = require("axios");
 const { DEFAULT_PERSONAL_DOMAINS, cleanDomains, validateEmail } = require("../lib/webFormEmailValidation");
 
@@ -182,6 +183,7 @@ const CONTACT_FIELDS = new Set([
   "lastName",
   "email",
   "phone",
+  "whatsappPhone",
   "company",
   "title",
   "source",
@@ -221,11 +223,97 @@ const LEAD_CUSTOM_TO_CONTACT = {
 };
 const FORM_SCOPES = new Set(["generic", "travel"]);
 
+function supportsAdvancedWebFormFeatures(scope) {
+  return scope === "generic" || scope === "travel";
+}
+
 function notificationValue(value) {
   if (Array.isArray(value)) return value.map((item) => textOr(item)).filter(Boolean).join(", ");
   if (value == null) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function renderContactNotification(template, contact, form) {
+  const values = {
+    name: contact?.name || "",
+    email: contact?.email || "",
+    phone: contact?.phone || "",
+    company: contact?.company || "",
+    form: form?.name || "",
+  };
+  return String(template || "Thank you for contacting us through {{form}}. Our team will be in touch shortly.")
+    .replace(/\{\{\s*(name|email|phone|company|form)\s*\}\}/g, (_, key) => values[key]);
+}
+
+async function sendContactNotifications({ form, settings, contact, submissionId }) {
+  // Contact acknowledgement controls belong to Generic CRM. Travel forms have
+  // their own submission workflows and provider configuration, so never let a
+  // shared settings payload trigger Generic notifications for that scope.
+  if (form.scope !== "generic") return {};
+
+  const channels = Array.isArray(settings.contactNotificationChannels)
+    ? settings.contactNotificationChannels
+    : ["whatsapp"];
+  const body = renderContactNotification(settings.contactNotificationMessage, contact, form);
+  const result = {};
+
+  if (channels.includes("email")) {
+    if (!contact?.email) {
+      result.email = { sent: false, code: "LEAD_EMAIL_MISSING" };
+    } else {
+      try {
+        const sent = await sendEmail({
+          tenantId: form.tenantId,
+          to: contact.email,
+          subject: `Thanks for contacting ${form.name}`,
+          text: body,
+        });
+        result.email = sent?.sent
+          ? { sent: true }
+          : {
+              sent: false,
+              code: "EMAIL_SEND_FAILED",
+              ...(sent?.reason ? { reason: sent.reason } : {}),
+            };
+      } catch (error) {
+        console.error("[web_forms] contact email notification failed:", error.message);
+        result.email = { sent: false, code: "EMAIL_SEND_FAILED" };
+      }
+    }
+  }
+
+  if (channels.includes("sms")) {
+    if (!contact?.phone) {
+      result.sms = { sent: false, code: "LEAD_PHONE_MISSING" };
+    } else {
+      try {
+        const config = await resolveProviderConfig(prisma, form.tenantId);
+        if (!config) {
+          result.sms = { sent: false, code: "SMS_NOT_CONFIGURED" };
+        } else {
+          const sent = await sendSms({ ...config, to: contact.phone, body });
+          result.sms = sent?.success === false
+            ? { sent: false, code: "SMS_SEND_FAILED", error: sent.error }
+            : { sent: true, providerMsgId: sent?.providerMsgId };
+        }
+      } catch (error) {
+        console.error("[web_forms] contact SMS notification failed:", error.message);
+        result.sms = { sent: false, code: "SMS_SEND_FAILED" };
+      }
+    }
+  }
+
+  if (channels.includes("whatsapp") && form.scope === "generic") {
+    try {
+      result.whatsapp = await sendGenericWebFormWhatsApp({ form, contact, submissionId });
+    } catch (error) {
+      console.error("[web_forms] generic WhatsApp automation failed:", error.message);
+      result.whatsapp = { sent: false, code: "WHATSAPP_SEND_FAILED" };
+    }
+  }
+
+  return result;
 }
 
 function normalizeScope(raw) {
@@ -303,6 +391,23 @@ function normalizeGenericPhone(phone, phoneCountry) {
   // phoneCountry field. The embedded Generic form supplies phoneCountry and
   // is additionally checked for a matching prefix above.
   return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : null;
+}
+
+const GENERIC_PHONE_RULES = {
+  "+1": [10, 10], "+7": [10, 10], "+20": [8, 10], "+27": [9, 9],
+  "+33": [9, 9], "+44": [9, 10], "+49": [10, 11], "+61": [9, 9],
+  "+65": [8, 8], "+81": [9, 10], "+86": [11, 11], "+91": [10, 10],
+  "+971": [9, 9],
+};
+
+function genericPhoneLengthError(phone, phoneCountry) {
+  const countryCode = String(phoneCountry || "").trim();
+  if (!countryCode) return null;
+  const digits = String(phone || "").replace(/\D/g, "");
+  const rule = GENERIC_PHONE_RULES[countryCode] || [7, 15];
+  if (digits.length >= rule[0] && digits.length <= rule[1]) return null;
+  const range = rule[0] === rule[1] ? `${rule[0]}` : `${rule[0]}-${rule[1]}`;
+  return `Enter a valid ${countryCode} number with ${range} digits.`;
 }
 
 function parseJson(raw, fallback) {
@@ -411,6 +516,16 @@ function defaultFields() {
 }
 
 function defaultStyle() {
+  const elementTextStyles = {
+    form: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    title: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 20, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    label: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 600, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    placeholder: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 14, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    input: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    button: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    error: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+    success: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "center" },
+  };
   return {
     fontFamily: "system-ui, sans-serif",
 
@@ -429,6 +544,8 @@ function defaultStyle() {
     accentColor: "#12344D",
 
     logoUrl: "",
+    logoSize: 48,
+    logoPosition: "left",
     fontSize: 16,
     fontWeight: 400,
     labelFontSize: 13,
@@ -458,6 +575,8 @@ function defaultStyle() {
     containerBorderWidth: 1,
     containerBorderRadius: 24,
     containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerShadowColor: "#1E2960",
+    containerShadowOpacity: 14,
     containerPadding: 30,
     containerMargin: 0,
     buttonHoverColor: "#0D2639",
@@ -473,6 +592,7 @@ function defaultStyle() {
     buttonLoadingText: "Submitting...",
     successMessageColor: "#065F46",
     errorMessageColor: "#B91C1C",
+    elementTextStyles,
   };
 }
 
@@ -507,6 +627,8 @@ function defaultSettings() {
     optInLinkUrl: "",
 
     notificationEmail: "",
+    contactNotificationChannels: ["whatsapp"],
+    contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
     phoneAllowAllCountries: true,
     phoneAllowedCountries: [],
     multiStepEnabled: false,
@@ -588,7 +710,7 @@ function normalizeFields(raw, scope = "generic") {
 
   const fields = parsed.map((field, index) => normalizeField(field, index));
 
-  if (scope !== "generic") return fields.map((field) => ({ ...field, showWhen: null }));
+  if (!supportsAdvancedWebFormFeatures(scope)) return fields.map((field) => ({ ...field, showWhen: null }));
 
   const byId = new Map(fields.map((field) => [String(field.id), field]));
   const bySourceKey = new Map();
@@ -679,6 +801,25 @@ function normalizeStyle(raw) {
     "Inter, system-ui, sans-serif", "system-ui, sans-serif", "Arial, sans-serif",
     "Helvetica, Arial, sans-serif", "Georgia, serif", "Tahoma, sans-serif", "Verdana, sans-serif",
   ];
+  const textStyleKeys = ["form", "title", "label", "placeholder", "input", "button", "error", "success"];
+  const defaultElementTextStyles = defaultStyle().elementTextStyles;
+  const submittedElementTextStyles = style.elementTextStyles && typeof style.elementTextStyles === "object" && !Array.isArray(style.elementTextStyles)
+    ? style.elementTextStyles
+    : {};
+  const elementTextStyles = Object.fromEntries(textStyleKeys.map((key) => {
+    const fallback = defaultElementTextStyles[key];
+    const candidate = submittedElementTextStyles[key] && typeof submittedElementTextStyles[key] === "object" && !Array.isArray(submittedElementTextStyles[key])
+      ? submittedElementTextStyles[key]
+      : {};
+    return [key, {
+      fontFamily: safeEnum(candidate.fontFamily, fontFamilies, fallback.fontFamily),
+      fontSize: safeNumber(candidate.fontSize, fallback.fontSize, 9, 40),
+      fontWeight: safeEnum(Number(candidate.fontWeight), [400, 500, 600, 700], fallback.fontWeight),
+      fontStyle: safeEnum(candidate.fontStyle, ["normal", "italic"], fallback.fontStyle),
+      textDecoration: safeEnum(candidate.textDecoration, ["none", "underline"], fallback.textDecoration),
+      textAlign: safeEnum(candidate.textAlign, ["left", "center", "right", "justify"], fallback.textAlign),
+    }];
+  }));
 
   return {
     fontFamily: safeEnum(style.fontFamily, fontFamilies, defaultStyle().fontFamily),
@@ -698,6 +839,8 @@ function normalizeStyle(raw) {
     accentColor: textOr(style.accentColor, defaultStyle().accentColor),
 
     logoUrl: textOr(style.logoUrl),
+    logoSize: safeNumber(style.logoSize, 48, 20, 200),
+    logoPosition: safeEnum(style.logoPosition, ["left", "center", "right"], "left"),
     fontSize: safeNumber(style.fontSize, 16, 10, 32),
     fontWeight: safeEnum(Number(style.fontWeight), [400, 500, 600, 700], 400),
     labelFontSize: safeNumber(style.labelFontSize, 13, 9, 24),
@@ -727,6 +870,8 @@ function normalizeStyle(raw) {
     containerBorderWidth: safeNumber(style.containerBorderWidth, 1, 0, 8),
     containerBorderRadius: safeNumber(style.containerBorderRadius, 24, 0, 48),
     containerShadow: safeEnum(style.containerShadow, ["none", "0 24px 70px rgba(30,41,96,.14)", "0 8px 24px rgba(15,23,42,.18)"], defaultStyle().containerShadow),
+    containerShadowColor: safeColor(style.containerShadowColor, "#1E2960"),
+    containerShadowOpacity: safeNumber(style.containerShadowOpacity, 14, 0, 100),
     containerPadding: safeNumber(style.containerPadding, 30, 0, 80),
     containerMargin: safeNumber(style.containerMargin, 0, 0, 80),
     buttonHoverColor: safeColor(style.buttonHoverColor, "#0D2639"),
@@ -742,6 +887,7 @@ function normalizeStyle(raw) {
     buttonLoadingText: textOr(style.buttonLoadingText, "Submitting...").slice(0, 80),
     successMessageColor: safeColor(style.successMessageColor, "#065F46"),
     errorMessageColor: safeColor(style.errorMessageColor, "#B91C1C"),
+    elementTextStyles,
   };
 }
 
@@ -798,6 +944,15 @@ function normalizeSettings(raw) {
         : Boolean(settings.notificationEnabled),
 
     notificationEmail: textOr(settings.notificationEmail),
+
+    contactNotificationChannels: Array.isArray(settings.contactNotificationChannels)
+      ? [...new Set(settings.contactNotificationChannels.filter((channel) => ["email", "sms", "whatsapp"].includes(channel)))]
+      : ["whatsapp"],
+
+    contactNotificationMessage: textOr(
+      settings.contactNotificationMessage,
+      defaultSettings().contactNotificationMessage,
+    ),
 
     phoneAllowAllCountries: settings.phoneAllowAllCountries !== false,
     phoneAllowedCountries: Array.isArray(settings.phoneAllowedCountries)
@@ -903,7 +1058,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
       settings,
       submissionCount,
     };
-    if (row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+    if (supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
       payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
     }
     if (origin) payload.embedCode = buildEmbedCode(row, origin);
@@ -922,7 +1077,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
     submissionCount,
   };
 
-  if (isPublic && row.scope === "generic" && payload.settings?.recaptchaEnabled) {
+  if (isPublic && supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
     payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
   }
 
@@ -1191,8 +1346,14 @@ router.get("/public/:slug", async (req, res) => {
     // browser reuse an older public configuration after a successful save.
     res.set("Cache-Control", "no-store");
     const publicPayload = shapeForm(form, 0, origin, true);
-    if (form.scope === "generic" && publicPayload.settings?.recaptchaEnabled) {
-      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SITE_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SITE_KEY || "" }));
+    if (supportsAdvancedWebFormFeatures(form.scope || "generic") && publicPayload.settings?.recaptchaEnabled) {
+      const recaptchaSiteKey = form.scope === "travel"
+        ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
+        : KEYS.GENERIC_RECAPTCHA_SITE_KEY;
+      const recaptchaSiteFallback = form.scope === "travel"
+        ? process.env.TRAVEL_RECAPTCHA_SITE_KEY || ""
+        : process.env.RECAPTCHA_SITE_KEY || "";
+      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, { coerce: String, fallback: recaptchaSiteFallback }));
     }
     res.json(publicPayload);
   } catch (err) {
@@ -1265,9 +1426,15 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       });
     }
 
-    if (formScope === "generic" && settings.recaptchaEnabled) {
+    if (supportsAdvancedWebFormFeatures(formScope) && settings.recaptchaEnabled) {
       const token = textOr(body.recaptchaToken);
-      const secret = textOr(await getSetting(form.tenantId, KEYS.GENERIC_RECAPTCHA_SECRET_KEY, { coerce: String, fallback: process.env.RECAPTCHA_SECRET_KEY || "" }));
+      const recaptchaSecretKey = formScope === "travel"
+        ? KEYS.TRAVEL_RECAPTCHA_SECRET_KEY
+        : KEYS.GENERIC_RECAPTCHA_SECRET_KEY;
+      const recaptchaSecretFallback = formScope === "travel"
+        ? process.env.TRAVEL_RECAPTCHA_SECRET_KEY || ""
+        : process.env.RECAPTCHA_SECRET_KEY || "";
+      const secret = textOr(await getSetting(form.tenantId, recaptchaSecretKey, { coerce: String, fallback: recaptchaSecretFallback }));
       let verified = false;
       if (token && secret) {
         try {
@@ -1303,7 +1470,6 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       source: formScope === "travel" ? "inbound:web_form" : "website-form",
       status: "Lead",
     };
-
     const missing = [];
 
     if (settings.optInEnabled) {
@@ -1311,7 +1477,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     }
 
     for (const field of fields) {
-      if (formScope === "generic" && !isConditionalFieldVisible(field, fields, body)) {
+      if (supportsAdvancedWebFormFeatures(formScope) && !isConditionalFieldVisible(field, fields, body)) {
         payload[field.sourceKey] = null;
         continue;
       }
@@ -1498,19 +1664,24 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const nameValue = String(contactData.name || "").trim();
     const emailValue = String(contactData.email || "").trim();
     const phoneValue = String(contactData.phone || "").trim();
+    const whatsappSameAsPhone = isTruthyValue("checkbox", body.whatsappSameAsPhone);
+    const whatsappPhoneValue = String(body.whatsappPhone || "").trim();
+    const whatsappWasSubmitted =
+      Object.prototype.hasOwnProperty.call(body, "whatsappSameAsPhone") ||
+      Object.prototype.hasOwnProperty.call(body, "whatsappPhone");
     const companyValue = String(contactData.company || "").trim();
-    const isGenericForm = formScope === "generic";
+    const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(formScope);
     const fieldErrors = {};
     if (nameValue && (nameValue.length < 2 || nameValue.length > 100 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(nameValue))) {
       fieldErrors.name = "Enter a valid name using letters, spaces, hyphens, or apostrophes";
     }
-    if (emailValue && isGenericForm) {
+    if (emailValue && supportsAdvancedFeatures) {
       const emailResult = await validateEmail(emailValue, settings);
       if (!emailResult.valid) fieldErrors.email = emailResult.message;
     } else if (emailValue && (emailValue.length > 254 || !/^[^@\s]+@[^@\s]+\.[^\s]+$/.test(emailValue))) {
       fieldErrors.email = "Enter a valid email address";
     }
-    if (phoneValue && isGenericForm) {
+    if (phoneValue && supportsAdvancedFeatures) {
       const submittedPhoneCountry = `+${String(req.body.phoneCountry || "").replace(/\D/g, "")}`;
       if (!settings.phoneAllowAllCountries && settings.phoneAllowedCountries.length && !settings.phoneAllowedCountries.includes(submittedPhoneCountry)) {
         fieldErrors.phone = "Please select an allowed country code";
@@ -1519,12 +1690,30 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         phoneValue,
         req.body.phoneCountry,
       );
-      if (normalizedGenericPhone) contactData.phone = normalizedGenericPhone;
-      else fieldErrors.phone = "Enter a valid international phone number with country code, for example +919876543210";
+      const phoneLengthError = genericPhoneLengthError(phoneValue, submittedPhoneCountry);
+      if (normalizedGenericPhone && !phoneLengthError) contactData.phone = normalizedGenericPhone;
+      else fieldErrors.phone = phoneLengthError || "Enter a valid international phone number with country code, for example +919876543210";
     } else if (phoneValue) {
       const digits = phoneValue.replace(/\D/g, "");
       if (!/^[+\d][\d\s().-]*$/.test(phoneValue) || digits.length < 7 || digits.length > 15) {
         fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
+      }
+    }
+    if (formScope === "generic" && whatsappWasSubmitted) {
+      if (whatsappSameAsPhone && contactData.phone) {
+        contactData.whatsappPhone = contactData.phone;
+      } else if (whatsappPhoneValue) {
+        if (!/^\d+$/.test(whatsappPhoneValue)) {
+          fieldErrors.whatsappPhone = "Only numbers are allowed.";
+        } else {
+          const whatsappLengthError = genericPhoneLengthError(whatsappPhoneValue, body.phoneCountry);
+          const normalizedWhatsappPhone = normalizeGenericPhone(
+            whatsappPhoneValue,
+            body.phoneCountry,
+          );
+          if (normalizedWhatsappPhone && !whatsappLengthError) contactData.whatsappPhone = normalizedWhatsappPhone;
+          else fieldErrors.whatsappPhone = whatsappLengthError || "Enter a valid international WhatsApp number with country code, for example +919876543210";
+        }
       }
     }
     if (companyValue && (companyValue.length < 2 || companyValue.length > 150 || !/[\p{L}]/u.test(companyValue))) {
@@ -1602,6 +1791,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     }
 
     let contact = null;
+    let createdNewContact = false;
 
     submitStage = "find_existing_contact";
 
@@ -1622,6 +1812,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
     if (!contact) {
       submitStage = "create_contact";
+      createdNewContact = true;
 
       try {
         contact = await prisma.contact.create({
@@ -1640,6 +1831,13 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
         if (!contact) throw err;
       }
+    }
+
+    if (!createdNewContact && formScope === "generic" && Object.prototype.hasOwnProperty.call(contactData, "whatsappPhone") && contact.whatsappPhone !== contactData.whatsappPhone) {
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: { whatsappPhone: contactData.whatsappPhone },
+      });
     }
 
     submitStage = "write_custom_fields";
@@ -1821,15 +2019,16 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       message: settings.successMessage,
     };
 
-    // Generic-only, best-effort automation. Never make lead creation depend
-    // on WhatsApp configuration, provider availability, or queue health.
-    if (formScope === "generic") {
-      try {
-        response.whatsapp = await sendGenericWebFormWhatsApp({ form, contact, submissionId: submission.id });
-      } catch (whatsappError) {
-        console.error("[web_forms] generic WhatsApp automation failed:", whatsappError.message);
-        response.whatsapp = { sent: false, code: "WHATSAPP_SEND_FAILED" };
-      }
+    // Contact notifications are independently selectable and best-effort.
+    // Provider availability must never make lead creation fail.
+    response.contactNotifications = await sendContactNotifications({
+      form,
+      settings,
+      contact,
+      submissionId: submission.id,
+    });
+    if (response.contactNotifications.whatsapp) {
+      response.whatsapp = response.contactNotifications.whatsapp;
     }
 
     if (settings.afterSubmitAction === "redirect" && settings.redirectUrl) {
@@ -2001,6 +2200,38 @@ router.post("/logo-upload", verifyToken, uploadLogoOrReject, async (req, res) =>
     });
   } catch (err) {
     console.error("[web-forms] logo upload error:", err && err.message);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to upload form logo",
+      code: err.code || "FORM_LOGO_UPLOAD_FAILED",
+    });
+  }
+});
+
+// Generic CRM web-form logo upload. This keeps the existing Generic editor
+// behavior scoped to cloud/local object storage without changing Travel's
+// upload route or Wellness's data-URL behavior.
+router.post("/generic-logo-upload", verifyToken, uploadLogoOrReject, async (req, res) => {
+  try {
+    requestedScope(req);
+    if (!req.file) {
+      return res.status(400).json({ error: "No logo image provided", code: "LOGO_REQUIRED" });
+    }
+
+    const url = await s3Service.uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      `generic/web-forms/${req.user.tenantId}/logos`,
+    );
+    return res.status(201).json({
+      url,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      storage: s3Service.isOciUrl(url) ? "ocs" : (s3Service.isLocalUrl(url) ? "local" : "s3"),
+    });
+  } catch (err) {
+    console.error("[web-forms] generic logo upload error:", err && err.message);
     return res.status(err.statusCode || 500).json({
       error: err.statusCode ? err.message : "Failed to upload form logo",
       code: err.code || "FORM_LOGO_UPLOAD_FAILED",

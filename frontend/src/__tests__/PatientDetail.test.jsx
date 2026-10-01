@@ -937,6 +937,11 @@ describe('<PatientDetail />', () => {
 
       await waitFor(() => expect(screen.getByText(/Botox vial 100u/)).toBeInTheDocument());
       expect(screen.getByText(/PRP kit/)).toBeInTheDocument();
+      expect(screen.getByRole('columnheader', { name: 'Quantity' })).toHaveStyle({ textAlign: 'left' });
+      expect(screen.getByRole('columnheader', { name: 'Product Name' })).toHaveStyle({ textAlign: 'left' });
+      expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveStyle({ textAlign: 'left' });
+      expect(screen.getAllByText('No staff assigned').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('No product code').length).toBeGreaterThan(0);
       // Total cost row: 2*5000 + 1*2500 = 12,500 — locale formatting tolerates either separator.
       expect(screen.getAllByText(/Total cost/i).length).toBeGreaterThan(0);
     });

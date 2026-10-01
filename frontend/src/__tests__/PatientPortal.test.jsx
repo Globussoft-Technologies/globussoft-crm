@@ -483,6 +483,25 @@ describe('<PatientPortal /> — authenticated dashboard', () => {
     localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
   });
 
+  it('shows clinic unavailable when the subscription expires during an existing session', async () => {
+    const fetchStub = installFetchMock();
+    const baseFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url, options) => {
+      if (url === '/api/wellness/portal/me') {
+        return Promise.resolve({
+          ok: false,
+          status: 402,
+          json: () => Promise.resolve({ code: 'CLINIC_SUBSCRIPTION_EXPIRED', error: 'Clinic portal unavailable' }),
+        });
+      }
+      return baseFetch(url, options);
+    });
+
+    render(<PatientPortal />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Patient portal temporarily unavailable');
+    expect(fetchStub).not.toHaveBeenCalledWith('/api/wellness/portal/prescriptions', expect.anything());
+  });
+
   it('loads /portal/me + /me/permissions + /prescriptions with Bearer token; visits (appointments) render', async () => {
     // Drift (815a8783): the dashboard now resolves /portal/me +
     // /portal/me/permissions in parallel (NOT /portal/visits), then gates the

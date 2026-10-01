@@ -76,6 +76,9 @@ async function connect({ tenantId, accountId, clientId, clientSecret, zoomHostUs
   if (!values.accountId || !values.clientId || !values.clientSecret) throw providerError("Account ID, Client ID, and Client Secret are required.", "ZOOM_CREDENTIALS_REQUIRED", 400);
   const token = await requestAccessToken(values);
   assertMeetingScopes(token.scopes);
+  if (values.zoomHostUserId.toLowerCase() === "me") {
+    throw providerError("Enter the licensed Zoom host's email address or Zoom user ID. Server-to-Server OAuth cannot reliably resolve me to a host user.", "ZOOM_HOST_USER_REQUIRED", 400);
+  }
   const now = new Date();
   const stored = {
     accountId: encryptTravelMeetingCredential(values.accountId),
@@ -135,7 +138,10 @@ async function createMeeting({ tenantId, topic, startTime, durationMins, timezon
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw providerError(`Zoom could not create the meeting (${response.status}): ${detail.slice(0, 180)}`, "ZOOM_CREATE_FAILED");
+    const hostHint = connection.zoomHostUserId === "me"
+      ? " Replace the Zoom host user with the licensed Zoom user's email address or user ID, then verify the connection again."
+      : "";
+    throw providerError(`Zoom could not create the meeting (${response.status}): ${detail.slice(0, 180)}${hostHint}`, "ZOOM_CREATE_FAILED");
   }
   const payload = await response.json();
   return { joinUrl: payload.join_url || null, startUrl: payload.start_url || null, meetingId: payload.id || null, password: payload.password || null };

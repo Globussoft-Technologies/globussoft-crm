@@ -19,6 +19,7 @@ import MyBookings from './MyBookings';
 
 const PORTAL_TOKEN_KEY = 'patientPortalToken';
 const PORTAL_NAME_KEY = 'patientPortalName';
+const CLINIC_ACCESS_EXPIRED_EVENT = 'wellness:clinic-subscription-expired';
 
 // Standalone portal fetch — uses its own Bearer token, not the staff CRM token.
 const portalFetch = async (url, token, options = {}) => {
@@ -30,6 +31,9 @@ const portalFetch = async (url, token, options = {}) => {
   const r = await fetch(url, { ...options, headers });
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
+    if (r.status === 402 && data.code === 'CLINIC_SUBSCRIPTION_EXPIRED') {
+      window.dispatchEvent(new Event(CLINIC_ACCESS_EXPIRED_EVENT));
+    }
     throw new Error(data.error || data.message || 'Request failed');
   }
   if (r.status === 204) return true;
@@ -1087,6 +1091,13 @@ function Dashboard({ token, onLogout }) {
 
 export default function PatientPortal() {
   const [token, setToken] = useState(() => localStorage.getItem(PORTAL_TOKEN_KEY));
+  const [clinicUnavailable, setClinicUnavailable] = useState(false);
+
+  useEffect(() => {
+    const markUnavailable = () => setClinicUnavailable(true);
+    window.addEventListener(CLINIC_ACCESS_EXPIRED_EVENT, markUnavailable);
+    return () => window.removeEventListener(CLINIC_ACCESS_EXPIRED_EVENT, markUnavailable);
+  }, []);
 
   const handleSuccess = (t) => setToken(t);
   const handleLogout = () => {
@@ -1094,6 +1105,17 @@ export default function PatientPortal() {
     localStorage.removeItem(PORTAL_NAME_KEY);
     setToken(null);
   };
+
+  if (clinicUnavailable) {
+    return (
+      <div role="alert" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}>
+        <div>
+          <h1>Patient portal temporarily unavailable</h1>
+          <p>Please contact your clinic for assistance.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!token) return <Login onSuccess={handleSuccess} />;
   return <Dashboard token={token} onLogout={handleLogout} />;

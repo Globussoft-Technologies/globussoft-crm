@@ -757,6 +757,7 @@ const { renderPage } = require("./services/landingPageRenderer");
 const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
 const { router: travelPromotionalWebsiteRoutes } = require("./routes/travel_promotional_website");
+const travelEmailProviderRoutes = require("./routes/travel_email_provider");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
 const userPreferencesRoutes = require("./routes/user_preferences");
 const tourProgressRoutes = require("./routes/tour_progress");
@@ -1136,6 +1137,7 @@ app.use("/api", (req, res, next) => {
   // Route handlers below still enforce auth + ADMIN role, so this only
   // bypasses the paywall layer, not authorization.
   if (
+    (req.method === "GET" && req.path === "/subscriptions/access") ||
     (req.method === "GET" && req.path === "/subscriptions/status") ||
     (req.method === "GET" && req.path === "/subscriptions/invoices") ||
     (req.method === "POST" && req.path === "/subscriptions/create-order") ||
@@ -1347,6 +1349,7 @@ app.use("/api/landing-pages", landingPagesRoutes);
 app.use("/api/landing-sites", landingSitesRoutes);
 app.use("/api/tenants", tenantsRoutes);
 app.use("/api/travel/promotional-website", travelPromotionalWebsiteRoutes);
+app.use("/api/travel/email-provider", travelEmailProviderRoutes);
 // /api/tenant-settings — operator-writable cap-override surface backing the
 // per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted
 // next to /api/tenants because the URL space + audience are sibling concerns.

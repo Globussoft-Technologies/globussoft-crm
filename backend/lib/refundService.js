@@ -142,6 +142,7 @@ async function notifyRefundInitiated(payment, meta, amount) {
         `You'll receive it in your original payment method within 5-7 working days.</p>` +
         `<p>&mdash; ${org}</p>`;
       await sendEmail({
+        tenantId: payment.tenantId,
         to: contact.email,
         subject: `Refund initiated — ${cur} ${amt}`,
         text,

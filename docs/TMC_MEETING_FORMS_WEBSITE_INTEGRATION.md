@@ -48,10 +48,11 @@ Before the website team starts acceptance testing, the CRM administrator must co
   - `meeting:delete:meeting:admin`
 - Configure the timezone, appointment duration, weekly hours, minimum notice, buffers, booking horizon, date limits, daily limit, overrides, and blackout dates.
 - Configure and order all public form fields.
+- Confirm that **Designation** is configured as a Select field. New and legacy forms use these default choices: Principal, Vice Principal, Head of School, Academic Coordinator, Teacher / Faculty, School Management, and Other.
 - Configure the confirmation email subject, body, placeholders, and optional footer logo.
-- Configure a working outbound email channel:
-  - connect the selected host's Gmail account to Unified Inbox; or
-  - configure SendGrid with an active plan/available credits, a key with `mail.send`, and a verified sender.
+- Review the Travel CRM SendGrid status under **CRM Settings**:
+  - when customer-managed SendGrid (BYOK) is configured, its API key and verified sender are used; or
+  - when BYOK is not configured, the CRM-managed backend SendGrid account is used automatically.
 - Add the website's exact HTTPS origin under **CRM Settings → Embed Allowlist**.
 - Enable **Create Zoom meeting** and **Active/published**.
 - Save changes and copy the current embed/API details.
@@ -72,7 +73,7 @@ The CRM administrator only needs to add the website's origin under **CRM Setting
 | `GET` | Copy the **availability** URL | Read live dates and slots; replace `YYYY-MM-DD` |
 | `POST` | Copy the **validate-slot** URL | Revalidate a chosen slot immediately before booking |
 | `POST` | Copy the **book** URL | Atomically reserve and confirm the appointment |
-| `GET` | Copy the **booking details** URL | Replace `{confirmationToken}` with the returned token |
+| `GET` | Copy the **booking details** URL | After booking, replace `{confirmationToken}` in code with `payload.booking.confirmationToken` |
 | `GET` | Add `/calendar.ics` to the booking-details URL | Download an add-to-calendar file |
 
 ## 5. Option B — Embed
@@ -154,11 +155,60 @@ Example response:
       "order": 1,
       "placeholder": "",
       "options": []
+    },
+    {
+      "key": "designation",
+      "label": "Designation",
+      "type": "select",
+      "required": true,
+      "enabled": true,
+      "order": 2,
+      "placeholder": "",
+      "options": [
+        "Principal",
+        "Vice Principal",
+        "Head of School",
+        "Academic Coordinator",
+        "Teacher / Faculty",
+        "School Management",
+        "Other"
+      ]
     }
   ],
+  "apiFields": [
+    { "key": "firstName", "label": "First Name", "type": "text", "required": true, "maxLength": 80 },
+    { "key": "lastName", "label": "Last Name", "type": "text", "required": true, "maxLength": 80 },
+    {
+      "key": "designation",
+      "label": "Designation",
+      "type": "select",
+      "required": true,
+      "options": ["Principal", "Vice Principal", "Head of School", "Academic Coordinator", "Teacher / Faculty", "School Management", "Other"]
+    },
+    { "key": "school", "label": "School / Institution", "type": "text", "required": true, "maxLength": 200 },
+    { "key": "city", "label": "City", "type": "text", "required": true, "maxLength": 120 },
+    { "key": "email", "label": "Work Email", "type": "email", "required": true, "maxLength": 191 },
+    { "key": "phone", "label": "Phone / WhatsApp", "type": "tel", "required": true, "minLength": 7, "maxLength": 15, "inputMode": "numeric", "pattern": "[0-9]{7,15}" }
+  ],
+  "bookingFlow": {
+    "version": 1,
+    "steps": [
+      { "id": "details", "number": 1, "label": "Your Details", "fields": ["firstName", "lastName", "designation", "school", "city"] },
+      { "id": "time", "number": 2, "label": "Choose a Time", "fields": ["selectedStartTime"] },
+      { "id": "contact", "number": 3, "label": "Contact Details", "fields": ["email", "phone"] }
+    ]
+  },
+  "bookingSubmission": {
+    "method": "POST",
+    "endpointSuffix": "/book",
+    "slotField": "selectedStartTime",
+    "idempotencyKeyHeader": "Idempotency-Key",
+    "idempotencyKeyRequired": true,
+    "confirmationTokenPath": "booking.confirmationToken"
+  },
   "confirmationMessage": "Your conversation has been scheduled.",
   "meetingType": "Zoom",
-  "apiVersion": "2026-09-24",
+  "apiVersion": "2026-10-01",
   "acceptedBookingFields": [
     "firstName",
     "lastName",
@@ -174,7 +224,15 @@ Example response:
 }
 ```
 
-Render fields dynamically from `fields`; do not permanently hardcode the current field list. Supported field types are `text`, `email`, `tel`, `select`, and `textarea`. For a `select`, submit one of its returned `options` exactly.
+For the customer website's three-step UI, render inputs from `apiFields` and group them using `bookingFlow.steps`. Do not permanently hardcode the current field list or Designation choices. `fields` remains the hosted-form configuration and backward-compatible field contract. Supported field types are `text`, `email`, `tel`, `select`, and `textarea`. For a `select`, submit one of its returned `options` exactly.
+
+The standard flow is:
+
+1. **Your Details:** first name, last name, Designation dropdown, school/institution, and city.
+2. **Choose a Time:** dates and exact `selectedStartTime` values returned by availability.
+3. **Contact Details:** work email, numeric phone/WhatsApp, selected-conversation summary, and final submit.
+
+If an older saved form has Designation stored as a text field, the public API upgrades it to the Select contract automatically. The website does not need a one-off migration.
 
 ## 7. Read availability
 
@@ -304,7 +362,7 @@ async function createBooking(formValues, selectedSlot, config) {
       school: formValues.school,
       city: formValues.city,
       email: formValues.email,
-      phone: formValues.phone,
+      phone: String(formValues.phone || "").replace(/\D/g, "").slice(0, 15),
       selectedStartTime: selectedSlot.start,
       duration: config.durationMins,
       timezone: config.timezone,
@@ -331,7 +389,7 @@ The preferred website contract is:
   "school": "Delhi Public School",
   "city": "Bengaluru",
   "email": "priya.sharma@school.edu.in",
-  "phone": "+91 98765 43210",
+  "phone": "919876543210",
   "selectedStartTime": "2026-09-28T04:30:00.000Z",
   "duration": 30,
   "timezone": "Asia/Kolkata",
@@ -377,7 +435,7 @@ Status `201` means the booking itself is confirmed. An idempotent replay returns
     "school": "Delhi Public School",
     "city": "Bengaluru",
     "email": "priya.sharma@school.edu.in",
-    "phone": "+91 98765 43210",
+    "phone": "919876543210",
     "selectedStartTime": "2026-09-28T04:30:00.000Z",
     "duration": 30,
     "zoomEventId": "<server-created-zoom-id>",
@@ -392,11 +450,11 @@ Status `201` means the booking itself is confirmed. An idempotent replay returns
 }
 ```
 
-If `warning` is present and `emailStatus` is `FAILED`, the meeting is still confirmed. Show the booking confirmation and Zoom details; do not submit the booking again. The CRM team can use **Bookings → Resend** after repairing the outbound email provider.
+If `warning` is present and `emailStatus` is `FAILED`, the meeting is still confirmed. Show the booking confirmation and Zoom details; do not submit the booking again. An operator on the CRM end can use **Bookings → Resend** after repairing the outbound email provider.
 
 ## 10. Confirmation lookup and calendar download
 
-Persist the returned `confirmationToken` if the website needs to restore the confirmation screen.
+The website does not create or manually configure a confirmation token. Read it from `payload.booking.confirmationToken` after a successful `/book` response. Persist that returned value only if the website needs to restore the confirmation screen later, then replace the `{confirmationToken}` placeholder programmatically.
 
 ```http
 GET /api/travel/meeting-forms/public/{PUBLIC_KEY}/bookings/{confirmationToken}
@@ -427,8 +485,8 @@ All JSON failures use an `error` message and stable `code`. The website should b
 | `409` | `SLOT_UNAVAILABLE` | Replace the slot list from the response and ask for another selection. |
 | `409` | `BOOKING_IN_PROGRESS` | Wait briefly, then retrieve/retry with the same idempotency key. |
 | `429` | `BOOKING_RATE_LIMITED` | Stop automatic retries and ask the visitor to try later. |
-| `502` | `ZOOM_CREATE_FAILED` | Show a temporary service error; do not claim confirmation. |
-| `503` | `ZOOM_NOT_CONFIGURED` | CRM administrator must repair Zoom setup. |
+| `424` | `ZOOM_CREATE_FAILED` | Show a temporary service error; do not claim confirmation. |
+| `424` | `ZOOM_NOT_CONFIGURED` | CRM administrator must repair Zoom setup. |
 | `503` | `AVAILABILITY_UNAVAILABLE` | Show retry UI; Google Calendar may be disconnected/unavailable. |
 
 For network timeouts, retain the same idempotency key and retry conservatively. Never interpret a timeout as proof that the booking failed.
@@ -449,63 +507,52 @@ For network timeouts, retain the same idempotency key and retry conservatively. 
 
 Email delivery is separate from booking confirmation:
 
-1. The CRM first tries the selected host's Gmail connection in Unified Inbox.
-2. If Gmail is absent or its send fails, the CRM tries SendGrid.
-3. The status is `SENT` only after Gmail or SendGrid accepts the message.
-4. A Google Calendar update is not counted as confirmed email delivery.
-5. If both channels fail, the booking remains `CONFIRMED`, `emailStatus` becomes `FAILED`, and the CRM operator can resend it.
+1. If the Travel CRM tenant has customer-managed SendGrid (BYOK) configured, the CRM sends with that API key, sender email, and sender name.
+2. If the tenant has no BYOK configuration, the CRM sends with its CRM-managed backend SendGrid credentials and sender identity.
+3. A saved but invalid customer-managed configuration fails visibly; it does not silently switch to the CRM-managed account.
+4. A connected Gmail account in Unified Inbox is not used to deliver Meeting Form confirmation emails.
+5. The status is `SENT` only after the selected SendGrid account accepts the message.
+6. A Google Calendar update is not counted as confirmed email delivery.
+7. If SendGrid delivery fails, the booking remains `CONFIRMED`, `emailStatus` becomes `FAILED`, and the CRM operator can resend it.
 
 Operational examples:
 
-- `sendgrid_401` with `Maximum credits exceeded` means the SendGrid account must renew, upgrade, or wait for its credit reset.
+- `sendgrid_401` with `Maximum credits exceeded` means the selected SendGrid account must renew, upgrade, or wait for its credit reset.
 - A recipient mailbox does not need CRM synchronization.
-- Connecting the host's Gmail account provides the primary sending route and avoids depending exclusively on SendGrid.
+- The Meeting Forms UI identifies the active route as **Using customer-managed SendGrid email** or **Using CRM-managed SendGrid email**.
 
 ## 14. Custom API UI state flow
 
 ```text
-Load public config
+Load public config (`apiFields` + `bookingFlow`)
+  → Step 1: collect Your Details
   → Load availability
-  → Render configured fields, dates, and slots
-  → Visitor chooses a slot
+  → Step 2: choose the exact returned slot
+  → Step 3: collect Contact Details and show the slot summary
   → Validate slot
   → POST booking with stable Idempotency-Key
-      → 201/200: show confirmation and Zoom details
-      → SLOT_UNAVAILABLE: refresh slots and return to selection
+      → 201/200: read `booking.confirmationToken`; show confirmation and Zoom details
+      → SLOT_UNAVAILABLE: refresh slots and return to Step 2
+      → field error: map `fieldErrors` to Step 1 or Step 3
       → timeout: retry with the same Idempotency-Key
       → provider/config error: show retry/support message
 ```
 
 Disable the submit button while `/book` is pending. Do not allow double-click submission.
 
-## 15. Launch checklist
+## 15. Launch checklist when using APIs
 
-### CRM team
-
-- [ ] Correct host selected.
-- [ ] Host Google Calendar connected.
-- [ ] Zoom Server-to-Server OAuth verified.
-- [ ] Schedule, timezone, duration, horizon, and blackout dates reviewed.
-- [ ] Form fields reviewed.
-- [ ] Confirmation subject/body/logo reviewed.
-- [ ] Gmail sender connected or SendGrid credits/key/sender verified.
-- [ ] Production and staging website origins added to Embed Allowlist.
-- [ ] Form saved and Active/published enabled.
-
-### Website team
-
-- [ ] Production code uses the HTTPS deployed CRM origin, not localhost.
-- [ ] Current public key is configured per environment.
-- [ ] Iframe renders without horizontal scrolling, or custom UI renders fields dynamically.
-- [ ] Later months load up to the configured horizon.
-- [ ] Exact availability ISO values are submitted.
-- [ ] A stable UUID is sent in `Idempotency-Key`.
-- [ ] Submit button is disabled during booking.
-- [ ] `SLOT_UNAVAILABLE` refreshes available times.
-- [ ] Confirmed booking displays even when only email delivery fails.
-- [ ] Zoom link opens in a new tab with `rel="noopener noreferrer"`.
-- [ ] Iframe message handler validates `event.origin`.
-- [ ] Mobile, keyboard, and screen-reader behaviour has been tested.
+- [ ] The Meeting Form is configured, saved, and active.
+- [ ] Google Calendar, Zoom, and SendGrid are ready in Travel CRM.
+- [ ] The website domain is added to **CRM Settings → Embed Allowlist**.
+- [ ] The website uses the correct production API URLs and public key.
+- [ ] Form fields and Designation choices are loaded from the configuration API.
+- [ ] Available dates and times are loaded from the availability API.
+- [ ] Phone numbers contain only 7 to 15 digits.
+- [ ] The selected time is validated before the booking is submitted.
+- [ ] The submit button is disabled while the booking request is processing.
+- [ ] A successful booking shows the confirmation and meeting link.
+- [ ] Booking, unavailable-slot, email-failure, and mobile flows have been tested.
 
 ### End-to-end acceptance test
 
@@ -541,7 +588,7 @@ Another calendar event or booking now conflicts with the slot. Use the refreshed
 
 ### Booking confirmed but email failed
 
-Do not create another booking. The CRM operator should repair Gmail/SendGrid and use Resend from the Bookings tab.
+Do not create another booking. The CRM operator should repair the selected customer-managed or CRM-managed SendGrid configuration and use Resend from the Bookings tab.
 
 ### Local URLs work but production does not
 

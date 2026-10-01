@@ -27,6 +27,13 @@ function validDateKey(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 }
 
+function storedDateKey(value) {
+  if (!value) return null;
+  if (validDateKey(value)) return String(value);
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
 function addUtcDays(dateKey, amount) {
   const date = new Date(`${dateKey}T00:00:00.000Z`);
   if (Number.isNaN(date.getTime())) return null;
@@ -99,10 +106,13 @@ function buildAvailability({ form, startDate, days, busyIntervals = [], reserved
   const beforeMs = clampInt(form.bufferBeforeMins, 0, 0, 240) * 60_000;
   const afterMs = clampInt(form.bufferAfterMins, 0, 0, 240) * 60_000;
   const noticeCutoff = now.getTime() + clampInt(form.minimumNoticeMins, 0, 0, 43_200) * 60_000;
-  const horizonKey = addUtcDays(formatInTenantTZ(now, form.timezone, "yyyy-MM-dd"), clampInt(form.bookingHorizonDays, 60, 1, 730));
+  const todayKey = formatInTenantTZ(now, form.timezone, "yyyy-MM-dd");
+  const horizonKey = addUtcDays(todayKey, clampInt(form.bookingHorizonDays, 60, 1, 730));
   const blackouts = new Set(parseJson(form.blackoutDatesJson, []));
-  const allowedStart = form.allowedStartDate ? formatInTenantTZ(form.allowedStartDate, form.timezone, "yyyy-MM-dd") : null;
-  const allowedEnd = form.allowedEndDate ? formatInTenantTZ(form.allowedEndDate, form.timezone, "yyyy-MM-dd") : null;
+  // These columns represent date-only administrator choices stored at UTC
+  // boundaries. Reading them through the form timezone can shift the day.
+  const allowedStart = storedDateKey(form.allowedStartDate);
+  const allowedEnd = storedDateKey(form.allowedEndDate);
   const maxPerDay = form.maxBookingsPerDay == null ? null : clampInt(form.maxBookingsPerDay, 1, 1, 500);
 
   const normalizedBusy = [...busyIntervals, ...reservedSlots].map((row) => ({
@@ -114,7 +124,7 @@ function buildAvailability({ form, startDate, days, busyIntervals = [], reserved
   for (let offset = 0; offset < requestedDays; offset += 1) {
     const date = addUtcDays(startDate, offset);
     if (!date) continue;
-    const outsideRange = (allowedStart && date < allowedStart) || (allowedEnd && date > allowedEnd) || date > horizonKey;
+    const outsideRange = date < todayKey || (allowedStart && date < allowedStart) || (allowedEnd && date > allowedEnd) || date > horizonKey;
     const dayReservations = reservedSlots.filter((row) => formatInTenantTZ(row.start || row.scheduledAt, form.timezone, "yyyy-MM-dd") === date);
     const dailyLimitReached = maxPerDay != null && dayReservations.length >= maxPerDay;
     const slots = [];
@@ -159,5 +169,6 @@ module.exports = {
   normalizeWindows,
   windowsForDate,
   validDateKey,
+  storedDateKey,
   addUtcDays,
 };

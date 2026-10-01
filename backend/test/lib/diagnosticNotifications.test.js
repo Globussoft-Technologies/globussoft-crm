@@ -178,13 +178,20 @@ describe("sendTestNotification", () => {
   test("reports 'unavailable' for email/whatsapp when not configured/connected", async () => {
     prisma.user.findFirst.mockResolvedValue({ id: 1, email: "a@b.com", phone: "+919999999999" });
     delete process.env.SENDGRID_API_KEY;
+    // Tenant-aware delivery resolves both the tenant override and backend
+    // fallback inside emailSender. Model the no-provider result instead of
+    // bypassing the sender based only on the process-level environment.
+    emailSender.sendEmail.mockResolvedValueOnce({ sent: false, reason: "no_api_key" });
     whatsappWebClient.isConnected.mockReturnValue(false);
 
     const result = await diagnosticNotifications.sendTestNotification({ tenantId: 1, subBrand: "tmc", userId: 1 });
 
     expect(result.email).toBe("unavailable");
     expect(result.whatsapp).toBe("unavailable");
-    expect(emailSender.sendEmail).not.toHaveBeenCalled();
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 1,
+      to: "a@b.com",
+    }));
     expect(whatsappWebClient.sendBestEffort).not.toHaveBeenCalled();
   });
 

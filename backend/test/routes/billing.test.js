@@ -87,6 +87,10 @@ prisma.patient = {
 };
 prisma.visit = {
   findFirst: vi.fn(),
+  findMany: vi.fn(),
+};
+prisma.serviceConsumption = {
+  findMany: vi.fn(),
 };
 prisma.service = {
   findMany: vi.fn(),
@@ -171,6 +175,8 @@ beforeEach(() => {
   prisma.invoice.update.mockReset();
   prisma.patient.findFirst.mockReset();
   prisma.visit.findFirst.mockReset();
+  prisma.visit.findMany.mockReset();
+  prisma.serviceConsumption.findMany.mockReset();
   prisma.service.findMany.mockReset();
   prisma.product.findMany.mockReset();
   prisma.contact.findFirst.mockReset();
@@ -213,6 +219,8 @@ beforeEach(() => {
     currency: "USD",
   });
   prisma.payment.findMany.mockResolvedValue([]);
+  prisma.visit.findMany.mockResolvedValue([]);
+  prisma.serviceConsumption.findMany.mockResolvedValue([]);
   prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
   eventBus.emitEvent.mockClear();
 });
@@ -795,6 +803,140 @@ describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
 });
 
 describe("billing response vertical isolation", () => {
+  test("wellness visit invoices hydrate service, inventory/drug lines, quantities and payment details", async () => {
+    prisma.invoice.findMany.mockResolvedValue([
+      {
+        id: 22,
+        invoiceNum: "INV-WELLNESS",
+        amount: 5499,
+        status: "PAID",
+        tenantId: 1,
+        visitId: 232,
+        paymentMode: null,
+        lineItemsJson: null,
+        contact: { id: 7, name: "Faruk Sha" },
+        deal: null,
+      },
+    ]);
+    prisma.visit.findMany.mockResolvedValue([
+      {
+        id: 232,
+        serviceId: 385,
+        amountCharged: 5499,
+        couponBreakdown: null,
+        service: { id: 385, name: "Shila Massage Hot Stone Therapy", basePrice: 5000 },
+      },
+    ]);
+    prisma.serviceConsumption.findMany.mockResolvedValue([
+      {
+        id: 5,
+        visitId: 232,
+        productName: "Derma Facial Cream",
+        qty: 1,
+        unitCost: 499,
+        usageValue: 499,
+        salePrice: 499,
+        productId: null,
+        drugId: 17,
+        unit: "piece",
+        productCode: "DF-01",
+        transactionType: "Sale",
+        sourceType: "PRESCRIPTION",
+        prescriptionId: 9,
+        prescriptionLine: 0,
+      },
+    ]);
+    prisma.payment.findMany.mockResolvedValue([
+      {
+        id: 77,
+        invoiceId: 22,
+        amount: 5499,
+        currency: "INR",
+        gateway: "razorpay",
+        gatewayId: "pay_123",
+        status: "SUCCESS",
+        paidAt: new Date("2026-09-30T10:00:00.000Z"),
+        createdAt: new Date("2026-09-30T10:00:00.000Z"),
+        metadata: JSON.stringify({ paymentMode: "upi" }),
+      },
+    ]);
+
+    const res = await request(makeApp({ vertical: "wellness" })).get(
+      "/api/billing",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].paymentMode).toBe("upi");
+    expect(res.body[0].paymentDetails[0]).toMatchObject({
+      gateway: "razorpay",
+      status: "SUCCESS",
+      paymentMode: "upi",
+    });
+    expect(JSON.parse(res.body[0].lineItemsJson)).toEqual([
+      expect.objectContaining({
+        type: "service",
+        name: "Shila Massage Hot Stone Therapy",
+        quantity: 1,
+        amount: 5000,
+      }),
+      expect.objectContaining({
+        type: "drug",
+        name: "Derma Facial Cream",
+        quantity: 1,
+        unit: "piece",
+        amount: 499,
+        sourceType: "PRESCRIPTION",
+      }),
+    ]);
+    expect(prisma.serviceConsumption.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, visitId: { in: [232] }, isActive: true },
+    }));
+  });
+
+  test("wellness invoice reads preserve an existing historical line-item snapshot", async () => {
+    const historicalSnapshot = [
+      { type: "service", itemId: 21, name: "Historical service", quantity: 1, unitPrice: 1000, amount: 1000 },
+    ];
+    prisma.invoice.findMany.mockResolvedValue([
+      {
+        id: 23,
+        invoiceNum: "INV-HISTORICAL",
+        amount: 1000,
+        status: "PAID",
+        tenantId: 1,
+        visitId: 233,
+        lineItemsJson: JSON.stringify(historicalSnapshot),
+        contact: { id: 8, name: "Historical Patient" },
+        deal: null,
+      },
+    ]);
+    prisma.visit.findMany.mockResolvedValue([
+      {
+        id: 233,
+        serviceId: 21,
+        amountCharged: 2400,
+        couponBreakdown: null,
+        service: { id: 21, name: "Renamed service", basePrice: 2000 },
+      },
+    ]);
+    prisma.serviceConsumption.findMany.mockResolvedValue([
+      {
+        id: 6,
+        visitId: 233,
+        productName: "Later inventory edit",
+        qty: 1,
+        unitCost: 400,
+        usageValue: 400,
+      },
+    ]);
+    prisma.payment.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ vertical: "wellness" })).get("/api/billing");
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body[0].lineItemsJson)).toEqual(historicalSnapshot);
+  });
+
   test("generic invoice responses omit travel-only fields", async () => {
     prisma.invoice.findMany.mockResolvedValue([
       {

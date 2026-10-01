@@ -9,6 +9,7 @@ const { parseDateTimeLocalInTZ } = require("../lib/datetime");
 const { summarizeMessages } = require("../lib/leadConversationSummary");
 const { notify, notifyMany } = require("../lib/notificationService");
 const { sendEmail } = require("../lib/emailSender");
+const { isSendGridConfigured } = require("../services/travelSendGrid");
 const { toE164 } = require("../utils/deduplication");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -201,12 +202,14 @@ async function notifyTravelTaskAssignment({ task, actorId, tenantId }) {
 
   const content = taskAssignmentText(task, assignee);
   const channels = [];
+  const configured = await isSendGridConfigured(tenantId);
   if (!assignee.email) {
-    channels.push({ channel: "email", status: "skipped", configured: emailConfigured(), reason: "Assignee has no email address", recipient: null });
-  } else if (!emailConfigured()) {
+    channels.push({ channel: "email", status: "skipped", configured, reason: "Assignee has no email address", recipient: null });
+  } else if (!configured) {
     channels.push({ channel: "email", status: "skipped", configured: false, reason: "SendGrid is not configured", recipient: assignee.email });
   } else {
     const result = await sendEmail({
+      tenantId,
       to: assignee.email,
       subject: content.subject,
       text: content.text,
@@ -489,12 +492,13 @@ router.get("/assignment-readiness", verifyToken, async (req, res) => {
         whatsapp: { configured: false, reason: "Travel assignment WhatsApp notifications only run for Travel CRM tenants" },
       });
     }
+    const emailReady = await isSendGridConfigured(req.user.tenantId);
     const whatsapp = await getWhatsappReadiness(req.user.tenantId);
     return res.json({
       travel: true,
       requiresAssigneeAndDueDate: true,
       statuses: Array.from(TRAVEL_TASK_STATUSES),
-      email: { configured: emailConfigured(), reason: emailConfigured() ? null : "SendGrid is not configured" },
+      email: { configured: emailReady, reason: emailReady ? null : "SendGrid is not configured" },
       whatsapp: { configured: whatsapp.configured, reason: whatsapp.reason },
     });
   } catch (err) {

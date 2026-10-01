@@ -10,6 +10,7 @@ const { sendSms, resolveProviderConfig } = require("../services/smsProvider");
 // requires eventBus, so there is no cycle.
 const workflowSchema = require("./workflowSchema");
 const workflowActions = require("./workflowActions");
+const { sendEmail } = require("./emailSender");
 
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
@@ -110,6 +111,28 @@ function toRecipientList(raw) {
 }
 
 async function sendSendGrid(to, subject, body, options = {}) {
+  if (options.tenantId) {
+    let tenant = null;
+    try {
+      tenant = await prisma.tenant.findUnique({
+        where: { id: options.tenantId },
+        select: { vertical: true },
+      });
+    } catch (_error) {
+      // Preserve the existing backend-managed path if tenant lookup is unavailable.
+    }
+    if (String(tenant?.vertical || "").toLowerCase() === "travel") {
+      return sendEmail({
+        tenantId: options.tenantId,
+        to,
+        cc: options.cc,
+        bcc: options.bcc,
+        subject,
+        text: body,
+        html: String(body).replace(/\n/g, "<br>"),
+      });
+    }
+  }
   if (!SENDGRID_API_KEY) {
     console.log(`[WorkflowEngine] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
@@ -892,6 +915,7 @@ async function runSingleAction(rule, actionType, config, payload, tenantId, io, 
       const subject = renderTemplate(content.subject || `Notification: ${rule.name}`, payload);
       const body = renderTemplate(content.body || `Workflow "${rule.name}" was triggered.`, payload);
       const sent = await sendSendGrid(resolveActionValue(to, payload), subject, body, {
+        tenantId,
         cc: config.cc ? resolveActionValue(config.cc, payload) : null,
         bcc: config.bcc ? resolveActionValue(config.bcc, payload) : null,
         fromName: config.fromName ? renderTemplate(config.fromName, payload) : null,

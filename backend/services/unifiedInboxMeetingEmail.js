@@ -1,12 +1,8 @@
 const prisma = require("../lib/prisma");
 const { sendEmail } = require("../lib/emailSender");
-const { google } = require("googleapis");
-const { buildRawMessage } = require("../lib/gmailMessage");
 const { formatInTenantTZ } = require("../lib/datetime");
 
-const GOOGLE_CLIENT_ID = () => process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
-const GOOGLE_CLIENT_SECRET = () => process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
-const GMAIL_REDIRECT_URI = () => process.env.GMAIL_REDIRECT_URI || process.env.GOOGLE_GMAIL_REDIRECT_URI || "http://localhost:5000/api/gmail/callback";
+const MEETING_BUTTON_MARKER = "[[TMC_MEETING_BUTTON]]";
 
 function escapeHtml(value) {
   return String(value == null ? "" : value).replace(/[&<>"']/g, (char) => ({
@@ -26,13 +22,14 @@ function templateValues(form, booking) {
     timezone: booking.timezone,
     duration: String(form.durationMins),
     meeting_url: booking.meetingUrl || "",
+    meeting_button: MEETING_BUTTON_MARKER,
     institution: booking.institution || "",
   };
 }
 
 function renderMeetingTemplate({ form, booking }) {
   const values = templateValues(form, booking);
-  const subject = interpolate(form.emailSubject, values);
+  const subject = interpolate(form.emailSubject, { ...values, meeting_button: "Join Meeting" });
   const configuredBody = interpolate(form.emailBody, values);
   const text = configuredBody || [
     `Hi ${values.name},`,
@@ -44,7 +41,11 @@ function renderMeetingTemplate({ form, booking }) {
     "",
     `Join Zoom Meeting: ${values.meeting_url}`,
   ].join("\n");
-  return { values, subject, text };
+  const plainText = text.replaceAll(
+    MEETING_BUTTON_MARKER,
+    values.meeting_url ? `Join Meeting: ${values.meeting_url}` : "",
+  );
+  return { values, subject, text, plainText };
 }
 
 function publicAssetUrl(value) {
@@ -73,10 +74,17 @@ function publicAssetUrl(value) {
 
 function buildMeetingHtml({ form, text, meetingUrl }) {
   const escapedMeetingUrl = escapeHtml(meetingUrl);
-  let linkedBody = escapeHtml(text);
-  if (escapedMeetingUrl) {
-    linkedBody = linkedBody.replace(escapedMeetingUrl, `<a href="${escapedMeetingUrl}" style="display:inline-block;padding:12px 18px;background:#0798d4;color:#fff;text-decoration:none;border-radius:6px">Join Zoom Meeting</a>`);
-  }
+  const escapedButtonMarker = escapeHtml(MEETING_BUTTON_MARKER);
+  const meetingLink = escapedMeetingUrl
+    ? `<a href="${escapedMeetingUrl}" style="color:#2563eb;text-decoration:underline">${escapedMeetingUrl}</a>`
+    : "";
+  const meetingButton = escapedMeetingUrl
+    ? `<a href="${escapedMeetingUrl}" style="display:inline-block;padding:12px 18px;background:#0798d4;color:#fff;text-decoration:none;border-radius:6px;font-weight:700">Join Meeting</a>`
+    : "";
+  const linkedBody = escapeHtml(text)
+    .split(escapedButtonMarker)
+    .map((segment) => (escapedMeetingUrl ? segment.split(escapedMeetingUrl).join(meetingLink) : segment))
+    .join(meetingButton);
   const body = linkedBody
     .split(/\n\s*\n/)
     .filter(Boolean)
@@ -89,74 +97,21 @@ function buildMeetingHtml({ form, text, meetingUrl }) {
   return `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#122647">${body}${logo}</div>`;
 }
 
-async function sendThroughConnectedInbox({ form, booking, subject, text, html }) {
-  const integration = await prisma.gmailIntegration.findUnique({
-    where: {
-      tenantId_userId_provider: {
-        tenantId: booking.tenantId,
-        userId: form.hostUserId,
-        provider: "google",
-      },
-    },
-  });
-  if (!integration) return null;
-
-  const client = new google.auth.OAuth2(GOOGLE_CLIENT_ID(), GOOGLE_CLIENT_SECRET(), GMAIL_REDIRECT_URI());
-  client.setCredentials({
-    access_token: integration.accessToken,
-    refresh_token: integration.refreshToken || undefined,
-    expiry_date: integration.expiresAt ? integration.expiresAt.getTime() : undefined,
-  });
-  client.on("tokens", async (tokens) => {
-    const data = {};
-    if (tokens.access_token) data.accessToken = tokens.access_token;
-    if (tokens.refresh_token) data.refreshToken = tokens.refresh_token;
-    if (tokens.expiry_date) data.expiresAt = new Date(tokens.expiry_date);
-    if (Object.keys(data).length) {
-      await prisma.gmailIntegration.update({ where: { id: integration.id }, data }).catch(() => {});
-    }
-  });
-
-  try {
-    const gmail = google.gmail({ version: "v1", auth: client });
-    const sent = await gmail.users.messages.send({
-      userId: "me",
-      requestBody: {
-        raw: buildRawMessage({
-          from: integration.emailAddress || undefined,
-          to: booking.contactEmail,
-          subject,
-          text,
-          html,
-        }),
-      },
-    });
-    return {
-      sent: true,
-      from: integration.emailAddress || "me",
-      threadId: sent.data?.threadId || `travel-meeting-${booking.id}`,
-    };
-  } catch (error) {
-    console.error("[travel-meeting-email] connected Gmail send failed:", error.message);
-    return { sent: false, reason: error.code ? `gmail_${error.code}` : "gmail_send_failed" };
-  }
-}
-
 async function sendMeetingConfirmation({ form, booking }) {
-  const { values, subject, text } = renderMeetingTemplate({ form, booking });
+  const { values, subject, text, plainText } = renderMeetingTemplate({ form, booking });
   const html = buildMeetingHtml({ form, text, meetingUrl: values.meeting_url });
 
-  // Prefer the host's mailbox already connected to Unified Inbox. If that
-  // connection is missing, expired, or rejected, still try the transactional
-  // sender before reporting the confirmation as failed.
-  const inboxResult = await sendThroughConnectedInbox({ form, booking, subject, text, html });
-  const sendGridResult = inboxResult?.sent
-    ? null
-    : await sendEmail({ to: booking.contactEmail, subject, text, html });
-  const result = inboxResult?.sent ? inboxResult : sendGridResult;
-  const failureReason = result?.sent
-    ? null
-    : [inboxResult?.reason, sendGridResult?.reason].filter(Boolean).join("; ") || "email_send_failed";
+  // Travel CRM email always follows its SendGrid selection: the tenant's
+  // customer-managed credentials when configured, otherwise the CRM-managed
+  // backend credentials. A connected Gmail inbox does not change this route.
+  const result = await sendEmail({
+    tenantId: booking.tenantId,
+    to: booking.contactEmail,
+    subject,
+    text: plainText,
+    html,
+  });
+  const failureReason = result?.sent ? null : result?.reason || "email_send_failed";
   let emailMessageId = null;
   try {
     const tenant = await prisma.tenant.findUnique({ where: { id: booking.tenantId }, select: { emailRetention: true } });

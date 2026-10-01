@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useContext, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useContext, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Receipt,
   Plus,
@@ -72,8 +73,29 @@ function getInvoiceLineItems(invoice) {
   }
 }
 
+function formatInvoiceQuantity(item) {
+  const quantity = Number(item?.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) return "No quantity recorded";
+  const unit = String(item?.unit || "").trim();
+  // Older snapshots could contain a numeric package size in `unit` (for
+  // example "100"). It is not a measurement unit and must not turn qty 1
+  // into the misleading display "1 100".
+  const displayUnit = unit && !/^\d+(?:\.\d+)?$/.test(unit) ? unit : "";
+  return displayUnit ? `${quantity} ${displayUnit}` : String(quantity);
+}
+
 function formatPaymentMode(mode) {
-  return WELLNESS_PAYMENT_MODES.find((option) => option.value === mode)?.label || mode || "—";
+  const labels = {
+    manual: "Manual",
+    razorpay: "Razorpay",
+    netbanking: "Net banking",
+    wallet: "Wallet",
+    emi: "EMI",
+  };
+  return WELLNESS_PAYMENT_MODES.find((option) => option.value === mode)?.label
+    || labels[String(mode || "").toLowerCase()]
+    || mode
+    || "Payment not received";
 }
 
 const WELLNESS_PAYMENT_MODES = [
@@ -241,6 +263,9 @@ export default function Invoices() {
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
   const [linkCopied, setLinkCopied] = useState(false);
   const [openActionMenuId, setOpenActionMenuId] = useState(null);
+  const actionMenuButtonRef = useRef(null);
+  const actionMenuRef = useRef(null);
+  const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [pdfPreview, setPdfPreview] = useState(null); // { url, invoiceNum } | null
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm());
@@ -290,7 +315,8 @@ export default function Invoices() {
       const target = event.target;
       if (
         target instanceof Element &&
-        target.closest(`[data-invoice-action-menu="${openActionMenuId}"]`)
+        (actionMenuButtonRef.current?.contains(target) ||
+          actionMenuRef.current?.contains(target))
       ) {
         return;
       }
@@ -304,6 +330,36 @@ export default function Invoices() {
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openActionMenuId]);
+
+  useLayoutEffect(() => {
+    if (openActionMenuId == null) return undefined;
+    const updatePosition = () => {
+      const button = actionMenuButtonRef.current;
+      const menu = actionMenuRef.current;
+      if (!button || !menu) return;
+      const rect = button.getBoundingClientRect();
+      const menuWidth = menu.offsetWidth;
+      const menuHeight = menu.offsetHeight;
+      const gap = 7;
+      const viewportPadding = 8;
+      const below = rect.bottom + gap;
+      const above = rect.top - gap - menuHeight;
+      setActionMenuPosition({
+        top: below + menuHeight > window.innerHeight - viewportPadding && above >= viewportPadding
+          ? above
+          : Math.max(viewportPadding, Math.min(below, window.innerHeight - menuHeight - viewportPadding)),
+        left: Math.max(viewportPadding, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding)),
+      });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    // Capture scrolls from the table as well as from the page.
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
     };
   }, [openActionMenuId]);
 
@@ -2266,11 +2322,7 @@ export default function Invoices() {
                 <tbody>
                   {visibleInvoices.map((inv) => {
                     const wellnessLineItems = getInvoiceLineItems(inv);
-                    const wellnessQuantity = wellnessLineItems.reduce(
-                      (total, item) => total + (Number(item.quantity) || 0),
-                      0,
-                    );
-                    const customerName = inv.customerName || inv.contact?.name || "Unknown";
+                    const customerName = inv.customerName || inv.contact?.name || "No customer data";
                     const customerContact = inv.customerPhone || inv.customerEmail || "";
                     return (
                     <tr
@@ -2329,17 +2381,28 @@ export default function Invoices() {
                           {wellnessLineItems.length > 0 ? (
                             wellnessLineItems.map((item, index) => (
                               <div key={`${item.type || "item"}-${item.itemId || index}`} style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                                {item.name || "Unnamed item"}
+                                {item.name || "Unnamed inventory item"}
+                                <span style={{ fontSize: "0.7rem", marginLeft: "0.35rem" }}>
+                                  ({item.type || "item"})
+                                </span>
                               </div>
                             ))
                           ) : (
-                            "—"
+                            "No products or services"
                           )}
                         </td>
                       )}
                       {isWellness && (
                         <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
-                          {wellnessQuantity || "—"}
+                          {wellnessLineItems.length > 0 ? (
+                            wellnessLineItems.map((item, index) => (
+                              <div key={`${item.type || "item"}-qty-${item.itemId || index}`}>
+                                {formatInvoiceQuantity(item)}
+                              </div>
+                            ))
+                          ) : (
+                            "No quantity recorded"
+                          )}
                         </td>
                       )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
@@ -2370,7 +2433,7 @@ export default function Invoices() {
                         }}
                       >
                         {isWellness ? (
-                          formatDate(inv.dueDate)
+                          inv.dueDate ? formatDate(inv.dueDate) : "No due date"
                         ) : (
                           <span
                             style={{
@@ -2391,7 +2454,7 @@ export default function Invoices() {
                         }}
                       >
                         {/* #111: Invoice schema uses issuedDate, not createdAt. */}
-                        {inv.issuedDate ? formatDate(inv.issuedDate) : "—"}
+                        {inv.issuedDate ? formatDate(inv.issuedDate) : "No issue date"}
                       </td>
                       {!isWellness && <td
                         style={{
@@ -2456,13 +2519,15 @@ export default function Invoices() {
                           />
                           <div className="invoice-more-action">
                             <button
+                              ref={openActionMenuId === inv.id ? actionMenuButtonRef : null}
                               type="button"
                               className="invoice-action-button invoice-action-button--more"
-                              onClick={() =>
+                              onClick={() => {
+                                setActionMenuPosition(null);
                                 setOpenActionMenuId((current) =>
                                   current === inv.id ? null : inv.id,
-                                )
-                              }
+                                );
+                              }}
                               aria-haspopup="menu"
                               aria-expanded={openActionMenuId === inv.id}
                               aria-controls={`invoice-actions-menu-${inv.id}`}
@@ -2471,12 +2536,14 @@ export default function Invoices() {
                               <span>More</span>
                               <ChevronDown size={14} aria-hidden="true" />
                             </button>
-                            {openActionMenuId === inv.id && (
+                            {openActionMenuId === inv.id && createPortal(
                               <div
+                                ref={actionMenuRef}
                                 id={`invoice-actions-menu-${inv.id}`}
                                 className="invoice-actions-menu"
                                 role="menu"
                                 aria-label={`Actions for invoice ${inv.invoiceNum}`}
+                                style={actionMenuPosition || { visibility: "hidden" }}
                               >
                                 {inv.status !== "PAID" && inv.status !== "VOIDED" && (
                                   <>
@@ -2555,7 +2622,8 @@ export default function Invoices() {
                                     </button>
                                   </>
                                 )}
-                              </div>
+                              </div>,
+                              document.body,
                             )}
                           </div>
                           {/* #304: a voided invoice should never offer recurring
@@ -3085,11 +3153,8 @@ export default function Invoices() {
           display: inline-flex;
         }
         .invoice-actions-menu {
-          position: absolute;
-          top: calc(100% + 0.45rem);
-          left: auto;
-          right: 0;
-          z-index: 100;
+          position: fixed;
+          z-index: 1000;
           width: 14.5rem;
           max-width: calc(100vw - 2rem);
           padding: 0.4rem;

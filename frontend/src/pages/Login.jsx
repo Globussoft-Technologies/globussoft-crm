@@ -31,6 +31,7 @@ function shouldShowQuickLogin() {
 const Login = () => {
   const branding = getDomainBranding();
   const showQuickLogin = shouldShowQuickLogin();
+  const showOrganizationSignup = window.location.hostname.toLowerCase() !== "app.themodernclassroom.in";
   // Read URL params up-front so the email field can be pre-filled from the
   // marketing-site handoff (?email=...) instead of the demo default.
   const _initialSearchParams = new URLSearchParams(
@@ -1083,27 +1084,29 @@ const Login = () => {
               </>
             )}
 
-            <div
-              style={{
-                marginTop: "1rem",
-                textAlign: "center",
-                fontSize: "0.875rem",
-              }}
-            >
-              <span style={{ color: "var(--text-secondary)" }}>
-                Create an organization?{" "}
-              </span>
-              <Link
-                to="/signup"
+            {showOrganizationSignup && (
+              <div
                 style={{
-                  color: "var(--primary-color)",
-                  textDecoration: "none",
-                  fontWeight: "500",
+                  marginTop: "1rem",
+                  textAlign: "center",
+                  fontSize: "0.875rem",
                 }}
               >
-                Sign up
-              </Link>
-            </div>
+                <span style={{ color: "var(--text-secondary)" }}>
+                  Create an organization?{" "}
+                </span>
+                <Link
+                  to="/signup"
+                  style={{
+                    color: "var(--primary-color)",
+                    textDecoration: "none",
+                    fontWeight: "500",
+                  }}
+                >
+                  Sign up
+                </Link>
+              </div>
+            )}
             <div
               style={{
                 marginTop: "0.5rem",

@@ -17,6 +17,7 @@
     label { display:grid; gap:5px; font-size:12px; font-weight:700; }
     input,select,textarea { width:100%; border:1px solid var(--line); border-radius:7px; padding:10px 11px; font:inherit; color:var(--ink); background:#fff; }
     textarea { min-height:80px; resize:vertical; }
+    input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"] { border-color:#dc2626; box-shadow:0 0 0 2px rgba(220,38,38,.12); }
     .section { border-top:1px solid var(--line); padding-top:16px; margin-top:16px; }
     .section h2 { font-size:14px; margin:0 0 3px; }
     .scheduler { display:grid; grid-template-columns:minmax(290px,1fr) minmax(190px,.72fr); gap:18px; margin-top:14px; }
@@ -77,13 +78,25 @@
       const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
       const notifyHeight = () => parent.postMessage({ source:'gbs-meeting-form', type:'size', height:document.documentElement.scrollHeight }, '*');
       const localStart = () => new Intl.DateTimeFormat('en-CA', { timeZone:config?.timezone || 'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date());
+      const bookingStart = () => config?.allowedStartDate && config.allowedStartDate > localStart() ? config.allowedStartDate : localStart();
 
       async function fetchJson(url, options, timeoutMs=15000) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const response = await fetch(url, { ...(options || {}), signal:controller.signal });
-          const payload = await response.json();
+          const raw = await response.text();
+          let payload = {};
+          try {
+            payload = raw ? JSON.parse(raw) : {};
+          } catch {
+            payload = {
+              error: response.ok
+                ? 'The scheduling service returned an invalid response. Please retry.'
+                : `The scheduling service could not complete the request (${response.status}). Please retry.`,
+              code: 'INVALID_SERVICE_RESPONSE',
+            };
+          }
           return { response, payload };
         } catch (error) {
           if (error.name === 'AbortError') throw new Error('The scheduling service took too long to respond. Please retry.');
@@ -108,13 +121,58 @@
 
       function fieldHtml(field) {
         const required = field.required ? 'required' : '';
+        const constraints = {
+          contactName: { minlength:2, maxlength:160 }, firstName: { minlength:2, maxlength:80 }, lastName: { minlength:2, maxlength:80 },
+          designation: { minlength:2, maxlength:160 }, institution: { minlength:2, maxlength:200 }, school: { minlength:2, maxlength:200 },
+          city: { minlength:2, maxlength:120 }, contactEmail: { maxlength:191 }, email: { maxlength:191 },
+          contactPhone: { minlength:7, maxlength:15 }, phone: { minlength:7, maxlength:15 },
+        }[field.key] || { maxlength:field.type === 'textarea' ? 5000 : field.type === 'email' ? 191 : 500 };
+        const limits = Object.entries(constraints).map(([key, value]) => `${key}="${value}"`).join(' ');
         const options = (field.options || []).map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
         const control = field.type === 'select'
           ? `<select name="${esc(field.key)}" autocomplete="off" ${required}><option value="">Select…</option>${options}</select>`
           : field.type === 'textarea'
-            ? `<textarea name="${esc(field.key)}" placeholder="${esc(field.placeholder)}" maxlength="5000" autocomplete="off" ${required}></textarea>`
-            : `<input name="${esc(field.key)}" type="${esc(field.type || 'text')}" placeholder="${esc(field.placeholder)}" maxlength="${field.type === 'email' ? 191 : 500}" autocomplete="off" ${field.type === 'tel' ? 'pattern="[+0-9() .-]{7,25}" title="Enter a valid phone number"' : ''} ${required} />`;
+            ? `<textarea name="${esc(field.key)}" placeholder="${esc(field.placeholder)}" ${limits} autocomplete="off" ${required}></textarea>`
+            : `<input name="${esc(field.key)}" type="${esc(field.type || 'text')}" placeholder="${esc(field.placeholder)}" ${limits} autocomplete="off" ${field.type === 'tel' ? 'inputmode="numeric" pattern="[0-9]{7,15}" title="Enter 7 to 15 digits only"' : ''} ${required} />`;
         return `<label>${esc(field.label)}${field.required ? ' *' : ''}${control}</label>`;
+      }
+
+      function fieldValidationMessage(field, value) {
+        const key = String(field.key || '').toLowerCase();
+        const label = field.label || 'This field';
+        const urlLike = /(?:https?:\/\/|www\.|(?:^|\s)[^\s@]+\.(?:com|org|net|in|co|edu|io|ai)(?:[/?#:]|\s|$))/i;
+        const hasLetter = /\p{L}/u;
+        const name = /^[\p{L}\p{M}][\p{L}\p{M}\s.'’()-]*$/u;
+        const city = /^[\p{L}\p{M}][\p{L}\p{M}\s.'’(),-]*$/u;
+        const designation = /^[\p{L}\p{M}\d][\p{L}\p{M}\d\s&.,'’()/+-]*$/u;
+        const institution = /^[\p{L}\p{M}\d][\p{L}\p{M}\d\s&.,'’()/-]*$/u;
+        if (!value) return field.required ? `${label} is required` : '';
+        if (field.type === 'email' || ['contactemail','email'].includes(key)) return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 191 ? '' : `Enter a valid ${label.toLowerCase()}`;
+        if (field.type === 'tel' || ['contactphone','phone'].includes(key)) return /^\d{7,15}$/.test(value) ? '' : `${label} must contain only 7 to 15 digits`;
+        if (field.type === 'select') return (field.options || []).includes(value) ? '' : `Choose a valid ${label.toLowerCase()} option`;
+        if (['contactname','firstname','lastname'].includes(key)) return value.length >= 2 && value.length <= (key === 'contactname' ? 160 : 80) && !urlLike.test(value) && name.test(value) ? '' : `${label} must contain a valid name`;
+        if (key === 'designation') return value.length >= 2 && value.length <= 160 && !urlLike.test(value) && hasLetter.test(value) && designation.test(value) && !/(?:\p{L}|\p{M})\d|\d(?:\p{L}|\p{M})/u.test(value) ? '' : `${label} must contain a valid role or title`;
+        if (['institution','school'].includes(key)) return value.length >= 2 && value.length <= 200 && !urlLike.test(value) && hasLetter.test(value) && institution.test(value) ? '' : `${label} must contain a valid institution name, not a URL`;
+        if (key === 'city') return value.length >= 2 && value.length <= 120 && !urlLike.test(value) && city.test(value) ? '' : `${label} must contain a valid city name`;
+        if (field.type === 'textarea') return value.length <= 5000 ? '' : `${label} must be 5,000 characters or fewer`;
+        return value.length <= 500 ? '' : `${label} must be 500 characters or fewer`;
+      }
+
+      function applyFieldErrors(form, fieldErrors={}) {
+        let firstInvalid = null;
+        for (const field of config.fields || []) {
+          const control = form.elements.namedItem(field.key);
+          if (!control) continue;
+          const message = fieldErrors[field.key] || '';
+          control.setCustomValidity(message);
+          control.setAttribute('aria-invalid', message ? 'true' : 'false');
+          if (message && !firstInvalid) firstInvalid = control;
+        }
+        if (firstInvalid) {
+          firstInvalid.reportValidity();
+          firstInvalid.focus();
+        }
+        return !firstInvalid;
       }
 
       function render() {
@@ -129,7 +187,17 @@
         renderSlots();
         document.getElementById('previous-month').addEventListener('click', () => changeMonth(-1).catch((error) => showMessage(error.message)));
         document.getElementById('next-month').addEventListener('click', () => changeMonth(1).catch((error) => showMessage(error.message)));
-        document.getElementById('booking-form').addEventListener('submit', submitBooking);
+        const bookingForm = document.getElementById('booking-form');
+        bookingForm.addEventListener('submit', submitBooking);
+        for (const control of bookingForm.querySelectorAll('input, textarea, select')) {
+          const clearStaleValidation = () => {
+            if (control.matches('input[type="tel"]')) control.value = control.value.replace(/\D/g, '').slice(0, 15);
+            control.setCustomValidity('');
+            control.setAttribute('aria-invalid', 'false');
+          };
+          control.addEventListener('input', clearStaleValidation);
+          control.addEventListener('change', clearStaleValidation);
+        }
         notifyHeight();
       }
 
@@ -139,6 +207,7 @@
 
       function isViewableDay(day) {
         if (!day) return false;
+        if (day.date < bookingStart() || day.date > horizonEnd()) return false;
         if (day.available && day.slots?.length) return true;
         return (day.displaySlots || []).some((slot) => slot.unavailableReason === 'occupied');
       }
@@ -156,7 +225,8 @@
       }
 
       function horizonEnd() {
-        return addDays(localStart(), Math.max(1, Number(config?.bookingHorizonDays || 30)));
+        const horizon = addDays(localStart(), Math.max(1, Number(config?.bookingHorizonDays || 30)));
+        return config?.allowedEndDate && config.allowedEndDate < horizon ? config.allowedEndDate : horizon;
       }
 
       function daysRemainingFrom(start) {
@@ -168,7 +238,7 @@
       function monthIsLoaded(value) {
         const monthStart = `${value}-01`;
         const nextMonthStart = `${monthOffset(value, 1)}-01`;
-        const effectiveStart = monthStart < localStart() ? localStart() : monthStart;
+        const effectiveStart = monthStart < bookingStart() ? bookingStart() : monthStart;
         const monthEnd = addDays(nextMonthStart, -1);
         const effectiveEnd = monthEnd > horizonEnd() ? horizonEnd() : monthEnd;
         if (effectiveStart > effectiveEnd) return true;
@@ -178,7 +248,7 @@
 
       async function changeMonth(amount) {
         const next = monthOffset(visibleMonth, amount);
-        const firstMonth = monthKey(localStart());
+        const firstMonth = monthKey(bookingStart());
         const lastMonth = monthKey(horizonEnd());
         if (next < firstMonth || next > lastMonth) return;
         if (!monthIsLoaded(next)) {
@@ -199,14 +269,14 @@
         for (let dayNumber = 1; dayNumber <= daysInMonth; dayNumber += 1) {
           const dateKey = `${visibleMonth}-${String(dayNumber).padStart(2, '0')}`;
           const day = byDate.get(dateKey);
-          const available = day?.available && day.slots?.length;
+          const available = dateKey >= bookingStart() && dateKey <= horizonEnd() && day?.available && day.slots?.length;
           const hasTimes = isViewableDay(day);
           const fullLabel = new Date(`${dateKey}T12:00:00Z`).toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric', year:'numeric', timeZone:'UTC' });
           cells.push(`<button type="button" class="calendar-day ${hasTimes ? 'has-times' : ''} ${available ? 'available' : ''} ${selectedDate === dateKey ? 'active' : ''}" data-date="${dateKey}" aria-label="${esc(fullLabel)}" ${hasTimes ? '' : 'disabled'}>${dayNumber}</button>`);
         }
         root.innerHTML = cells.join('');
         document.getElementById('calendar-title').textContent = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month:'long', year:'numeric', timeZone:'UTC' });
-        document.getElementById('previous-month').disabled = visibleMonth <= monthKey(localStart());
+        document.getElementById('previous-month').disabled = visibleMonth <= monthKey(bookingStart());
         document.getElementById('next-month').disabled = visibleMonth >= monthKey(horizonEnd());
         root.querySelectorAll('[data-date]').forEach((button) => button.addEventListener('click', () => {
           selectedDate = button.dataset.date; selectedSlot = null; renderDays(); renderSlots();
@@ -219,7 +289,7 @@
         const heading = document.getElementById('selected-date');
         heading.textContent = selectedDate ? new Date(`${selectedDate}T12:00:00Z`).toLocaleDateString(undefined, { weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'UTC' }) : 'Select a date';
         const displaySlots = day?.displaySlots?.length ? day.displaySlots : (day?.slots || []).map((slot) => ({ ...slot, available:true }));
-        root.innerHTML = displaySlots.length ? displaySlots.map((slot) => `<button type="button" class="slot ${slot.available === false ? 'unavailable' : ''} ${selectedSlot?.start === slot.start ? 'active' : ''}" data-start="${slot.start}" aria-label="${esc(slot.label)}${slot.available === false ? ' unavailable' : ''}" ${slot.available === false ? 'disabled' : ''}>${esc(slot.label)}</button>`).join('') : '<span class="hint">No times configured for this date.</span>';
+        root.innerHTML = displaySlots.length ? displaySlots.map((slot) => `<button type="button" class="slot ${slot.available === false ? 'unavailable' : ''} ${selectedSlot?.start === slot.start ? 'active' : ''}" data-start="${slot.start}" aria-label="${esc(slot.label)}${slot.available === false ? ' unavailable' : ''}" ${slot.available === false ? 'disabled' : ''}>${esc(slot.label)}</button>`).join('') : '<span class="hint">No booking times are available for this date.</span>';
         root.querySelectorAll('[data-start]').forEach((button) => button.addEventListener('click', () => {
           selectedSlot = day.slots.find((slot) => slot.start === button.dataset.start); renderSlots();
         }));
@@ -230,7 +300,7 @@
         const node = document.getElementById('message'); node.className = `message ${type}`; node.textContent = text; notifyHeight();
       }
 
-      async function loadAvailability(start=localStart(), append=false) {
+      async function loadAvailability(start=bookingStart(), append=false) {
         // Keep provider queries bounded. For longer horizons, later months are
         // loaded in 62-day chunks only when the visitor navigates to them.
         const days = Math.min(62, daysRemainingFrom(start));
@@ -244,23 +314,30 @@
         } else {
           availability = payload.dates || [];
         }
-        const firstAvailable = availability.find((day) => day.available && day.slots?.length);
+        const firstAvailable = availability.find((day) => day.date >= bookingStart() && day.date <= horizonEnd() && day.available && day.slots?.length);
         const currentDay = availability.find((day) => day.date === selectedDate);
         if (!isViewableDay(currentDay) && firstAvailable) selectedDate = firstAvailable.date;
-        if (!append) visibleMonth = monthKey(selectedDate || availability[0]?.date || localStart());
+        if (!append) visibleMonth = monthKey(selectedDate || availability[0]?.date || bookingStart());
       }
 
       async function submitBooking(event) {
         event.preventDefault();
-        if (!selectedSlot) return showMessage('Please select an available date and time.');
         const form = event.currentTarget;
+        const raw = Object.fromEntries(new FormData(form).entries());
+        const localErrors = {};
+        for (const field of config.fields || []) {
+          const message = fieldValidationMessage(field, String(raw[field.key] || '').trim());
+          if (message) localErrors[field.key] = message;
+        }
+        if (!applyFieldErrors(form, localErrors)) return showMessage('Please correct the highlighted fields.');
+        if (!form.reportValidity()) return;
+        if (!selectedSlot) return showMessage('Please select an available date and time.');
         const submit = document.getElementById('submit');
         const progress = document.getElementById('booking-progress');
         submit.disabled = true;
         submit.innerHTML = '<span class="loading-row"><span class="spinner" aria-hidden="true"></span><span>Submitting…</span></span>';
         progress.hidden = false;
         form.setAttribute('aria-busy', 'true');
-        const raw = Object.fromEntries(new FormData(event.currentTarget).entries());
         const known = ['contactName','designation','institution','city','contactEmail','contactPhone'];
         const body = { scheduledAt:selectedSlot.start, idempotencyKey, diagnosticReportSlug:params.get('diagnostic') || undefined, sourceUrl:document.referrer || undefined, customFields:{} };
         for (const [key,value] of Object.entries(raw)) known.includes(key) ? body[key] = value : body.customFields[key] = value;
@@ -269,6 +346,7 @@
           if (response.status === 409 && payload.code === 'SLOT_UNAVAILABLE') {
             await loadAvailability(); selectedSlot = null; renderDays(); renderSlots(); throw new Error(payload.error);
           }
+          if (payload.fieldErrors) applyFieldErrors(form, payload.fieldErrors);
           if (!response.ok) throw new Error(payload.error || 'The meeting could not be confirmed.');
           const booking = payload.booking;
           app.innerHTML = `<div class="confirmed"><h1>Your Conversation Is Confirmed</h1><p>You're all set, ${esc(booking.name)}.</p><h2>${esc(booking.formattedDate)}</h2><p>${esc(booking.formattedTime)}<br>${esc(booking.durationMins)} minutes · Zoom</p><a href="${esc(booking.meetingUrl)}" target="_blank" rel="noopener">Join Zoom Meeting</a><p class="hint">${booking.emailStatus === 'SENT' ? 'A confirmation email has also been sent.' : 'Your meeting is confirmed. Email delivery is being retried.'}</p></div>`;

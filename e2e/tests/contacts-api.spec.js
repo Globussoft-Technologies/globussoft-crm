@@ -643,16 +643,28 @@ test.describe('Contacts API — GET /', () => {
   });
 
   test('pagination — offset skips rows', async ({ request }) => {
+    // Isolate this assertion from the thousands of parallel API tests that
+    // create contacts in the same seeded tenant. Comparing unfiltered live
+    // pages is racy: an insert between requests shifts the offset and can put
+    // the former first row onto page two even though pagination is correct.
+    const marker = `offset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const rows = [];
+    for (const suffix of ['a', 'b', 'c']) {
+      rows.push(await createContact(request, { label: `${marker}-${suffix}` }));
+    }
     const { token } = await getAdmin(request);
-    const first = await get(request, token, '/api/contacts?limit=2&offset=0');
-    const second = await get(request, token, '/api/contacts?limit=2&offset=2');
+    const query = encodeURIComponent(marker);
+    const first = await get(request, token, `/api/contacts?q=${query}&limit=2&offset=0`);
+    const second = await get(request, token, `/api/contacts?q=${query}&limit=2&offset=2`);
     expect(first.status()).toBe(200);
     expect(second.status()).toBe(200);
     const a = await first.json();
     const b = await second.json();
-    if (a.length === 2 && b.length >= 1) {
-      expect(b[0].id).not.toBe(a[0].id);
-    }
+    expect(a).toHaveLength(2);
+    expect(b).toHaveLength(1);
+    expect([...a, ...b].map((row) => row.id).sort((x, y) => x - y))
+      .toEqual(rows.map((row) => row.id).sort((x, y) => x - y));
+    expect(b[0].id).not.toBe(a[0].id);
   });
 
   test('paginated score filtering and sorting apply to the complete result set', async ({ request }) => {

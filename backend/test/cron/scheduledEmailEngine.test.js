@@ -56,7 +56,24 @@ import { describe, test, expect, vi, beforeAll, beforeEach, afterEach } from 'vi
 // time and the runtime check uses `process.env.SENDGRID_API_KEY || <captured>`,
 // so a leftover value from .env (auto-loaded by @prisma/client) would
 // poison the "missing key" branch by surviving `delete process.env.*`.
-vi.hoisted(() => { delete process.env.SENDGRID_API_KEY; });
+const travelProviderMocks = vi.hoisted(() => {
+  delete process.env.SENDGRID_API_KEY;
+  const Module = require('node:module');
+  const fromBackend = Module.createRequire(process.cwd() + '/');
+  const servicePath = fromBackend.resolve('./services/travelSendGrid');
+  const resolveSendGridConfig = vi.fn();
+  Module._cache[servicePath] = {
+    id: servicePath,
+    filename: servicePath,
+    loaded: true,
+    exports: { resolveSendGridConfig },
+    children: [],
+    paths: [],
+  };
+  return { resolveSendGridConfig };
+});
+
+const { resolveSendGridConfig } = travelProviderMocks;
 
 import prisma from '../../lib/prisma.js';
 
@@ -69,6 +86,7 @@ beforeAll(() => {
   // Per-tenant settings reader (lib/tenantSettings → getSetting) runs on the
   // prisma singleton. Stub it so getSetting falls back to DEFAULTS.
   prisma.tenantSetting = { findUnique: vi.fn() };
+  prisma.tenant = { findUnique: vi.fn() };
 });
 
 let originalFetch;
@@ -81,6 +99,8 @@ beforeEach(() => {
   prisma.emailMessage.create.mockReset();
   prisma.emailTracking.create.mockReset();
   prisma.tenantSetting.findUnique.mockReset();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  resolveSendGridConfig.mockReset();
 
   prisma.scheduledEmail.findMany.mockResolvedValue([]);
   prisma.scheduledEmail.update.mockResolvedValue({});
@@ -155,6 +175,43 @@ describe('cron/scheduledEmailEngine — empty due-set', () => {
     expect(prisma.emailMessage.create).not.toHaveBeenCalled();
     expect(prisma.emailTracking.create).not.toHaveBeenCalled();
     expect(prisma.scheduledEmail.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('cron/scheduledEmailEngine — vertical provider isolation', () => {
+  test('Travel uses tenant SendGrid credentials and sender identity', async () => {
+    prisma.scheduledEmail.findMany.mockResolvedValueOnce([
+      pendingRow({ tenantId: 73, to: 'traveller@example.com' }),
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: 'SG.travel.key',
+      fromEmail: 'bookings@travel.test',
+      fromName: 'Acme Travel',
+      source: 'tenant',
+    });
+    mockOkResponse();
+
+    await processScheduledEmails();
+
+    expect(resolveSendGridConfig).toHaveBeenCalledWith(73);
+    const payload = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer SG.travel.key');
+    expect(payload.from).toEqual({ email: 'bookings@travel.test', name: 'Acme Travel' });
+    expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toBe('Acme Travel <bookings@travel.test>');
+  });
+
+  test.each(['generic', 'wellness'])('%s keeps the platform SendGrid provider', async (vertical) => {
+    prisma.scheduledEmail.findMany.mockResolvedValueOnce([
+      pendingRow({ tenantId: 81, to: 'customer@example.com' }),
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({ vertical });
+    mockOkResponse();
+
+    await processScheduledEmails();
+
+    expect(resolveSendGridConfig).not.toHaveBeenCalled();
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer SG.testkey-deterministic');
   });
 });
 

@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const toDataURLMock = vi.fn();
@@ -220,11 +220,16 @@ describe('QRGenerator', () => {
     Object.defineProperty(list, 'scrollTop', { value: 1000, writable: true, configurable: true });
     Object.defineProperty(list, 'clientHeight', { value: 300, writable: true, configurable: true });
     Object.defineProperty(list, 'scrollHeight', { value: 1000, writable: true, configurable: true });
-    fireEvent.scroll(list, { target: list });
-
-    await waitFor(() => {
-      expect(screen.getByText('QR 11')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.scroll(list, { target: list });
+      // Let React flush the state update before asserting. The full frontend
+      // suite can heavily load CI workers, so relying on waitFor's short
+      // default polling window made this assertion intermittently time out.
+      await Promise.resolve();
     });
+
+    expect(await screen.findByText('QR 11', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByText('QR 12')).toBeInTheDocument();
   });
 
   it('adds a generated QR to the selected event', async () => {

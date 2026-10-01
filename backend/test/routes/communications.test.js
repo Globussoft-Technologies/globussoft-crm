@@ -102,6 +102,7 @@ const requireCJS = createRequire(import.meta.url);
 delete process.env.SENDGRID_API_KEY;
 
 const communicationsRouter = requireCJS('../../routes/communications');
+const travelSendGrid = requireCJS('../../services/travelSendGrid');
 const {
   parseRecipients, isValidEmail, escapeHtml, linkifyHtml, sanitizeComposeHtml, composeHtmlToText,
   decodeEscapedComposeHtml,
@@ -123,6 +124,8 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', vertical = 'generic
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ emailRetention: true, vertical: 'generic' });
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
   prisma.emailMessage.count.mockReset().mockResolvedValue(0);
@@ -366,6 +369,31 @@ describe('POST /send-email — #624 outbound persistence', () => {
     for (const call of prisma.emailMessage.create.mock.calls) {
       expect(call[0].data.direction).toBe('OUTBOUND');
     }
+  });
+});
+
+describe('POST /send-email — Travel SendGrid BYOK identity', () => {
+  test('uses and persists the customer-managed sender name and email', async () => {
+    vi.spyOn(travelSendGrid, 'resolveSendGridConfig').mockResolvedValue({
+      apiKey: '',
+      fromEmail: 'bookings@acme-travel.test',
+      fromName: 'Acme Travel',
+      source: 'tenant',
+    });
+    prisma.tenant.findUnique.mockResolvedValueOnce({ emailRetention: true, vertical: 'travel' });
+
+    const res = await request(makeApp({ tenantId: 73, vertical: 'travel' }))
+      .post('/api/communications/send-email')
+      .send({ to: 'guest@example.com', subject: 'Travel confirmation', body: 'Hello' });
+
+    expect(res.status).toBe(200);
+    expect(travelSendGrid.resolveSendGridConfig).toHaveBeenCalledWith(73);
+    expect(prisma.emailMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: 73,
+        from: 'Acme Travel <bookings@acme-travel.test>',
+      }),
+    });
   });
 });
 

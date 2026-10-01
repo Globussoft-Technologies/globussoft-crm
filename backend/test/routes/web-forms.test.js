@@ -162,7 +162,8 @@ beforeEach(() => {
 
   prisma.user.findFirst.mockResolvedValue(null);
 
-  emailSender.sendEmail.mockClear();
+  emailSender.sendEmail.mockReset();
+  emailSender.sendEmail.mockResolvedValue({ sent: true });
   axios.post.mockReset();
   s3Service.uploadImage.mockReset();
   s3Service.uploadImage.mockResolvedValue('https://objectstorage.example.com/n/ns/b/forms/o/travel/web-forms/11/logos/logo.png');
@@ -262,7 +263,7 @@ describe('Generic conditional fields', () => {
     expect(fields[1].showWhen).toBeNull();
   });
 
-  test('clears self, deleted, invalid-choice, and non-Generic rules safely', () => {
+  test('clears self, deleted, and invalid-choice rules while preserving Travel rules', () => {
     const fields = normalizeFields(JSON.stringify([
       { id: 'parent', sourceKind: 'custom', sourceKey: 'parent', fieldType: 'dropdown', options: ['Yes', 'No'] },
       { id: 'self', sourceKind: 'custom', sourceKey: 'self', fieldType: 'text', showWhen: { fieldId: 'self', value: 'x' } },
@@ -272,7 +273,12 @@ describe('Generic conditional fields', () => {
     const travelFields = normalizeFields(JSON.stringify(configuredFields), 'travel');
 
     expect(fields.slice(1).every((field) => field.showWhen === null)).toBe(true);
-    expect(travelFields[1].showWhen).toBeNull();
+    expect(travelFields[1].showWhen).toEqual({
+      fieldId: 'interest',
+      fieldKey: 'interest',
+      parentQuestion: 'Are you interested in?',
+      value: 'Shopify',
+    });
   });
 
   test('clears cyclic nested rules while preserving valid chains', () => {
@@ -506,6 +512,28 @@ describe('POST /api/forms/logo-upload', () => {
     expect(res.body.code).toBe('FORM_SCOPE_FORBIDDEN');
     expect(s3Service.uploadImage).not.toHaveBeenCalled();
   });
+
+  test('uploads a Generic form logo into the Generic tenant storage prefix', async () => {
+    s3Service.uploadImage.mockResolvedValueOnce('https://objectstorage.example.com/generic-logo.png');
+    s3Service.isOciUrl.mockReturnValueOnce(true);
+
+    const res = await request(makeApp('generic'))
+      .post('/api/forms/generic-logo-upload?scope=generic')
+      .attach('image', PNG, 'generic-logo.png');
+
+    expect(res.status).toBe(201);
+    expect(s3Service.uploadImage).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      'generic-logo.png',
+      'image/png',
+      `generic/web-forms/${TENANT_ID}/logos`,
+    );
+    expect(res.body).toMatchObject({
+      storage: 'ocs',
+      originalName: 'generic-logo.png',
+      mimeType: 'image/png',
+    });
+  });
 });
 
 
@@ -521,6 +549,11 @@ describe('PUT /api/forms/:id', () => {
       titleColor: '#223344',
       fieldLabelColor: '#334455',
       buttonColor: '#99B177',
+      containerShadowColor: '#445566',
+      containerShadowOpacity: 37,
+      elementTextStyles: {
+        title: { fontFamily: 'Georgia, serif', fontSize: 28, fontWeight: 700, fontStyle: 'italic', textDecoration: 'underline', textAlign: 'center' },
+      },
     };
     const updatedSettings = {
       formTitle: 'Updated public title',
@@ -575,7 +608,14 @@ describe('PUT /api/forms/:id', () => {
       description: 'After',
       isActive: false,
       fields: expect.arrayContaining([expect.objectContaining({ label: 'Full name' })]),
-      style: expect.objectContaining({ buttonColor: '#99B177' }),
+      style: expect.objectContaining({
+        buttonColor: '#99B177',
+        containerShadowColor: '#445566',
+        containerShadowOpacity: 37,
+        elementTextStyles: expect.objectContaining({
+          title: expect.objectContaining({ fontFamily: 'Georgia, serif', fontSize: 28, fontStyle: 'italic', textAlign: 'center' }),
+        }),
+      }),
       settings: expect.objectContaining({
         submitButtonLabel: 'Send request',
         multiStepEnabled: true,
@@ -592,6 +632,14 @@ describe('PUT /api/forms/:id', () => {
         settingsJson: expect.stringContaining('Requirements'),
       }),
     }));
+    const persistedStyle = JSON.parse(prisma.webForm.update.mock.calls[0][0].data.styleJson);
+    expect(persistedStyle).toMatchObject({
+      containerShadowColor: '#445566',
+      containerShadowOpacity: 37,
+      elementTextStyles: {
+        title: { fontFamily: 'Georgia, serif', fontSize: 28, fontWeight: 700, fontStyle: 'italic', textDecoration: 'underline', textAlign: 'center' },
+      },
+    });
   });
 
   test('renames a form without touching the slug so shared links keep working', async () => {
@@ -801,12 +849,12 @@ describe('GET /api/forms/public/:slug', () => {
 
 describe('POST /api/forms/public/:slug/submit', () => {
 
-  function mockCaptchaForm({ withFile = false } = {}) {
+  function mockCaptchaForm({ withFile = false, scope = 'generic' } = {}) {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 83,
       tenantId: TENANT_ID,
       createdByUserId: USER_ID,
-      scope: 'generic',
+      scope,
       name: 'Protected form',
       slug: 'protected-form',
       description: '',
@@ -820,9 +868,10 @@ describe('POST /api/forms/public/:slug/submit', () => {
       styleJson: '{}',
       settingsJson: JSON.stringify({ recaptchaEnabled: true }),
     });
+    const expectedKey = `${scope}.webForm.recaptcha.secretKey`;
     prisma.tenantSetting.findUnique.mockImplementation((params) => (
-      params.where?.tenantId_key?.key === 'generic.webForm.recaptcha.secretKey'
-        ? { value: 'server-only-secret' }
+      params.where?.tenantId_key?.key === expectedKey
+        ? { value: `${scope}-server-only-secret` }
         : null
     ));
   }
@@ -839,13 +888,33 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(response.status).toBe(201);
     expect(axios.post).toHaveBeenCalledWith(
       'https://www.google.com/recaptcha/api/siteverify',
-      expect.stringContaining('secret=server-only-secret'),
+      expect.stringContaining('secret=generic-server-only-secret'),
       expect.objectContaining({
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         timeout: 8000,
       }),
     );
-    expect(axios.post.mock.calls[0][0]).not.toContain('server-only-secret');
+    expect(axios.post.mock.calls[0][0]).not.toContain('generic-server-only-secret');
+  });
+
+  test('uses the Travel-specific CAPTCHA secret for Travel web forms', async () => {
+    mockCaptchaForm({ scope: 'travel' });
+    axios.post.mockResolvedValue({ data: { success: true } });
+
+    const response = await request(makeApp('travel'))
+      .post('/api/forms/public/protected-form/submit?scope=travel')
+      .field('name', 'Travel Customer')
+      .field('recaptchaToken', 'travel-browser-token');
+
+    expect(response.status).toBe(201);
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'travel.webForm.recaptcha.secretKey' } },
+    }));
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://www.google.com/recaptcha/api/siteverify',
+      expect.stringContaining('secret=travel-server-only-secret'),
+      expect.any(Object),
+    );
   });
 
   test('rejects invalid CAPTCHA before persisting uploaded files or CRM records', async () => {
@@ -956,6 +1025,184 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ phone: '+919876543210' }),
     }));
+  });
+
+  test('copies the Generic phone into whatsappPhone when the same-number checkbox is selected', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Same WhatsApp Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappSameAsPhone', 'true');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        phone: '+919876543210',
+        whatsappPhone: '+919876543210',
+      }),
+    }));
+  });
+
+  test('stores a separate Generic WhatsApp number when the same-number checkbox is not selected', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Separate WhatsApp Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhone', '9123456789');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        phone: '+919876543210',
+        whatsappPhone: '+919123456789',
+      }),
+    }));
+  });
+
+  test('preserves an existing Generic WhatsApp number when the form does not submit WhatsApp fields', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 82,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: '{}',
+    });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 2002,
+      tenantId: TENANT_ID,
+      name: 'Existing Customer',
+      email: 'existing@example.com',
+      whatsappPhone: '+919999999999',
+    });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Existing Customer')
+      .field('email', 'existing@example.com');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('reports a failed Generic contact email notification and resolves tenant credentials', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 82,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: JSON.stringify({ contactNotificationChannels: ['email'] }),
+    });
+    emailSender.sendEmail.mockResolvedValue({ sent: false, reason: 'no_api_key' });
+    prisma.contact.create.mockResolvedValue({
+      id: 2001,
+      name: 'Email Customer',
+      email: 'email@example.com',
+      phone: null,
+    });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Email Customer')
+      .field('email', 'email@example.com');
+
+    expect(response.status).toBe(201);
+    expect(response.body.contactNotifications.email).toEqual({
+      sent: false,
+      code: 'EMAIL_SEND_FAILED',
+      reason: 'no_api_key',
+    });
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: TENANT_ID,
+      to: 'email@example.com',
+    }));
+  });
+
+  test('does not run Generic contact notifications for a Travel form', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 81,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'travel',
+      name: 'Plan my trip',
+      slug: 'plan-my-trip',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: JSON.stringify({ contactNotificationChannels: ['email'] }),
+    });
+
+    const response = await request(makeApp('travel'))
+      .post('/api/forms/public/plan-my-trip/submit?scope=travel')
+      .field('name', 'Travel Customer')
+      .field('email', 'travel@example.com');
+
+    expect(response.status).toBe(201);
+    expect(response.body.contactNotifications).toEqual({});
+    expect(emailSender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  test('rejects non-numeric characters in a separate Generic WhatsApp number', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid WhatsApp Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhone', '98765abc10');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { whatsappPhone: 'Only numbers are allowed.' },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a Generic WhatsApp number with the wrong country-specific length', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Invalid WhatsApp Length')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhone', '12345');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'INVALID_CONTACT_FIELDS',
+      fields: { whatsappPhone: expect.stringContaining('10 digits') },
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
   });
 
   test('accepts a valid 8-digit Singapore number from the Generic country selector', async () => {
@@ -1215,15 +1462,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
 
     expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
-
-      data: expect.objectContaining({
-
-        contactId: 2002,
-
-        tenantId: TENANT_ID,
-
-      }),
-
+      data: expect.objectContaining({ contactId: 2002, tenantId: TENANT_ID }),
     }));
 
 });
@@ -1409,6 +1648,9 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(res.status).toBe(201);
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ contactId: 2004, tenantId: TENANT_ID }),
+    }));
   });
 
   test('maps picker fallback customs to Contact columns instead of dropping them', async () => {

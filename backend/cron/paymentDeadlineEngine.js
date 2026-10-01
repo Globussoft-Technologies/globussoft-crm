@@ -164,7 +164,7 @@ async function runPaymentDeadlineTick(now = new Date()) {
         await prisma.paymentDeadlineNudge.update({ where: { id: claim.id }, data: { status: "failed" } }).catch(() => {});
         continue;
       }
-      const res = await emailSender.sendEmail({ to: contact.email, subject: nudge.subject, text: nudge.text, html: nudge.html });
+      const res = await emailSender.sendEmail({ tenantId: itin.tenantId, to: contact.email, subject: nudge.subject, text: nudge.text, html: nudge.html });
       const status = res.sent ? "sent" : res.reason === "no_api_key" ? "logged" : "failed";
       if (res.sent) summary.sent += 1;
       summary.remindersSent += 1;
@@ -185,7 +185,7 @@ async function runPaymentDeadlineTick(now = new Date()) {
 
     // ── Overdue (T-6+) — customer at-risk notice + advisor flag, no auto-cancel ──
     const notice = content.buildOverdueNotice(common);
-    const res = await emailSender.sendEmail({ to: contact.email, subject: notice.subject, text: notice.text, html: notice.html });
+    const res = await emailSender.sendEmail({ tenantId: itin.tenantId, to: contact.email, subject: notice.subject, text: notice.text, html: notice.html });
     if (res.sent) summary.sent += 1;
     const emailStatus = res.sent ? "sent" : res.reason === "no_api_key" ? "logged" : "failed";
 

@@ -181,6 +181,23 @@ describe('<Login /> — page surface', () => {
       .toHaveAttribute('src', '/tmc-dark.png');
   });
 
+  it('hides organization signup only on the Modern Classroom production domain', () => {
+    window.location.hostname = 'app.themodernclassroom.in';
+    renderLogin();
+
+    expect(screen.queryByText(/Create an organization\?/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Sign up' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Create a customer account' })).toBeInTheDocument();
+  });
+
+  it('keeps organization signup on other domains', () => {
+    window.location.hostname = 'app.customer-example.com';
+    renderLogin();
+
+    expect(screen.getByText(/Create an organization\?/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign up' })).toHaveAttribute('href', '/signup');
+  });
+
   // Helper: type the canonical demo credentials into the empty form so
   // performLogin() reaches the fetch call. Post-46247368 the form starts
   // empty, so every Sign-In-path test must type before clicking.

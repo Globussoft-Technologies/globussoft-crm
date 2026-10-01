@@ -127,10 +127,14 @@ const WELLNESS_SOURCE_OPTIONS = [
   { value: "event", label: "Event" },
   { value: "other", label: "Other" },
 ];
-// Accept either a bare 10-digit Indian mobile (starting 6-9) OR with
-// an optional `+91` / `91` prefix. The wellness phone validator strips
-// whitespace/dashes/parens before testing.
+// Preserve the established Wellness contract: bare Indian mobile or an
+// optional +91/91-prefixed value. Generic CRM uses the country rules below.
 const INDIAN_MOBILE_RE = /^(?:\+?91)?[6-9]\d{9}$/;
+const LEAD_NAME_RE = /^\p{L}+(?: +\p{L}+)*$/u;
+const sanitizeLeadNameInput = (value) =>
+  String(value || "")
+    .replace(/[^\p{L} ]/gu, "")
+    .replace(/ {2,}/g, " ");
 const FIELD_LIMITS = {
   name: 191,
   email: 191,
@@ -171,6 +175,7 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
   "name",
   "email",
   "phone",
+  "whatsappPhone",
   "company",
   "aiScore",
   "assignedTo",
@@ -180,7 +185,6 @@ const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
 const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
-const LEADS_NAME_COLUMN_MAX_WIDTH = 380;
 const LEADS_ACTIONS_COLUMN_WIDTH = 176;
 const LEADS_SOURCE_COLUMN_MIN_WIDTH = 190;
 const LEADS_ASSIGNED_COLUMN_MIN_WIDTH = 190;
@@ -201,6 +205,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "email",
   "company",
   "phone",
+  "whatsappPhone",
   "aiScore",
   "source",
   "webForm",
@@ -952,6 +957,29 @@ const COUNTRY_CODES = [
   { code: "+60", country: "Malaysia" },
 ];
 
+// Keep Create Lead phone validation aligned with the embedded web form's
+// country rules. Values are national-number digit bounds; the selected
+// country code is prepended only after validation.
+const LEAD_PHONE_RULES = {
+  "+1": [10, 10],
+  "+44": [9, 10],
+  "+91": [10, 10],
+  "+61": [9, 9],
+  "+33": [9, 9],
+  "+49": [10, 11],
+  "+39": [9, 10],
+  "+34": [9, 9],
+  "+81": [9, 10],
+  "+86": [11, 11],
+  "+55": [10, 11],
+  "+27": [9, 9],
+  "+971": [9, 9],
+  "+65": [8, 8],
+  "+60": [9, 10],
+};
+const getLeadPhoneRule = (countryCode) =>
+  LEAD_PHONE_RULES[countryCode] || [7, 15];
+
 const GENERIC_PHONE_COUNTRY_BY_ISO = {
   US: "+1",
   CA: "+1",
@@ -1209,6 +1237,7 @@ function BuiltInInlineCellEditor({
   renderValue = null,
   editOnDisplayClick = true,
   showEditButton = true,
+  disableTruncation = false,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -1276,9 +1305,9 @@ function BuiltInInlineCellEditor({
             flex: "1 1 auto",
             width: 0,
             minWidth: 0,
-            maxWidth: "100%",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            maxWidth: disableTruncation ? "none" : "100%",
+            overflow: disableTruncation ? "visible" : "hidden",
+            textOverflow: disableTruncation ? "clip" : "ellipsis",
             whiteSpace: "nowrap",
             color: isEmpty ? "var(--accent-color)" : "inherit",
           }}
@@ -1385,6 +1414,9 @@ function BuiltInInlineCellEditor({
         }
       }}
       aria-label={`Edit ${label} for ${lead.name || "lead"}`}
+      inputMode={field === "phone" ? "numeric" : undefined}
+      pattern={field === "phone" ? "[0-9]*" : undefined}
+      maxLength={field === "phone" ? 15 : undefined}
       style={{
         width: "100%",
         minWidth: 120,
@@ -2051,14 +2083,7 @@ const Leads = () => {
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
     return {
       name: Math.ceil(
-        Math.min(
-          LEADS_NAME_COLUMN_MAX_WIDTH,
-          Math.max(
-            LEADS_NAME_COLUMN_MIN_WIDTH,
-            nameValueWidth,
-            nameHeaderWidth,
-          ),
-        ),
+        Math.max(LEADS_NAME_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth),
       ),
       phone: Math.ceil(
         Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth),
@@ -2090,10 +2115,7 @@ const Leads = () => {
       Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
     if (key === "name") {
       const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
-      return Math.min(
-        LEADS_NAME_COLUMN_MAX_WIDTH,
-        Math.max(autoFitLeadColumnWidths[key], manuallySizedWidth),
-      );
+      return Math.max(autoFitLeadColumnWidths[key], manuallySizedWidth);
     }
     if (key === "phone") {
       const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
@@ -2126,8 +2148,7 @@ const Leads = () => {
               : key === "assignedTo"
                 ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
                 : LEADS_COLUMN_MIN_WIDTH;
-    const maxWidth =
-      key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
+    const maxWidth = Number.POSITIVE_INFINITY;
     const genericLabelMinWidth = isGeneric
       ? LEADS_GENERIC_LABEL_MIN_WIDTHS[key] || 0
       : 0;
@@ -2191,6 +2212,10 @@ const Leads = () => {
     preferredLocationId: "",
     preferredPractitionerId: "",
     customFields: {},
+  });
+  const [createFieldErrors, setCreateFieldErrors] = useState({
+    name: "",
+    phone: "",
   });
 
   const fetchLeads = async ({ background = false, pageOverride } = {}) => {
@@ -2298,6 +2323,7 @@ const Leads = () => {
     try {
       const data = await fetchApi(
         "/api/contacts/filter-values/tags?status=Lead",
+        { silent: true },
       );
       const rows = Array.isArray(data?.values)
         ? data.values
@@ -2677,7 +2703,7 @@ const Leads = () => {
     fetchStaff();
     loadAutoCampaignRules();
     if (isTravel) {
-      fetchApi("/api/pipeline_stages")
+      fetchApi("/api/pipeline_stages", { silent: true })
         .then((data) => setPipelineStages(Array.isArray(data) ? data : []))
         .catch(() => setPipelineStages([]));
       fetchApi("/api/deals?limit=500")
@@ -2795,10 +2821,10 @@ const Leads = () => {
   // chatter from the generic tenant hitting wellness-only endpoints.
   useEffect(() => {
     if (!isWellness) return;
-    fetchApi("/api/wellness/services")
+    fetchApi("/api/wellness/services", { silent: true })
       .then((d) => setServices(Array.isArray(d) ? d : d?.services || []))
       .catch(() => setServices([]));
-    fetchApi("/api/wellness/locations")
+    fetchApi("/api/wellness/locations", { silent: true })
       .then((d) => setLocations(Array.isArray(d) ? d : d?.locations || []))
       .catch(() => setLocations([]));
   }, [isWellness]);
@@ -3153,12 +3179,14 @@ const Leads = () => {
   const openCreate = () => {
     genericPhoneCountryUserChangedRef.current = false;
     genericPhoneCountryDetectionRunRef.current = false;
+    setCreateFieldErrors({ name: "", phone: "" });
     setCreating(true);
   };
   const closeCreate = () => {
     setCreating(false);
     setLeadDuplicate(null);
     genericPhoneCountryDetectionRunRef.current = false;
+    setCreateFieldErrors({ name: "", phone: "" });
   };
 
   const createSeparateProductLead = async () => {
@@ -3274,6 +3302,10 @@ const Leads = () => {
       notify.error("Name is required");
       return;
     }
+    if (isGeneric && !LEAD_NAME_RE.test(finalName)) {
+      notify.error("Name can contain letters and spaces only");
+      return;
+    }
 
     // 5. Email shape  basic regex (matches backend lib/validateContactInput
     //    + CSV importer). The backend rejects with 400 either way.
@@ -3290,12 +3322,26 @@ const Leads = () => {
       return;
     }
 
-    // Phone handling per vertical:
-    //   wellness  required, validated against Indian-mobile pattern
-    //   travel    optional, free-form (prepend country code if provided)
-    //   generic   optional, free-form (prepend country code if provided)
+    // Keep established Wellness/Travel behavior intact. Only Generic CRM uses
+    // the country-specific national-number contract introduced by this PR.
     let phone = String(newLead.phone || "").trim();
-    if (isWellness) {
+    if (isGeneric) {
+      const phoneDigits = phone.replace(/\D/g, "");
+      const [phoneMinDigits, phoneMaxDigits] = getLeadPhoneRule(
+        newLead.countryCode,
+      );
+      if (phoneDigits && (phoneDigits.length < phoneMinDigits || phoneDigits.length > phoneMaxDigits)) {
+        notify.error(
+          `Enter a valid ${newLead.countryCode} phone number (${phoneMinDigits === phoneMaxDigits ? phoneMinDigits : `${phoneMinDigits}-${phoneMaxDigits}`} digits).`,
+        );
+        return;
+      }
+      if (phoneDigits && newLead.countryCode === "+91" && !/^[6-9]\d{9}$/.test(phoneDigits)) {
+        notify.error("Enter a valid +91 mobile number starting with 6-9.");
+        return;
+      }
+      phone = phoneDigits;
+    } else if (isWellness) {
       const phoneClean = phone.replace(/[\s\-()]/g, "");
       if (!phoneClean) {
         notify.error("Phone is required");
@@ -3308,6 +3354,69 @@ const Leads = () => {
         return;
       }
       phone = phoneClean;
+    }
+
+    // Generic CRM uses targeted feedback because this form disables native
+    // validation. Other verticals retain their established validation flow.
+    if (isGeneric && !SOURCE_OPTIONS.includes(newLead.source)) {
+      notify.error("Please select a valid lead source");
+      return;
+    }
+    if (isGeneric && !COUNTRY_CODES.some(({ code }) => code === newLead.countryCode)) {
+      notify.error("Please select a valid country code");
+      return;
+    }
+    for (const field of isGeneric ? ["company", "title"] : []) {
+      const value = String(newLead[field] || "");
+      if (value && CONTROL_CHAR_RE.test(value)) {
+        notify.error(`${field} contains invalid control characters`);
+        return;
+      }
+    }
+    for (const definition of isGeneric ? customFieldDefs : []) {
+      const value = newLead.customFields?.[definition.fieldKey];
+      const empty = Array.isArray(value) ? value.length === 0 : String(value ?? "").trim() === "";
+      if (definition.isRequired && (definition.fieldType === "checkbox" ? value !== true : empty)) {
+        notify.error(`${definition.label} is required`);
+        return;
+      }
+      if (value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
+      if (typeof value === "string" && CONTROL_CHAR_RE.test(value)) {
+        notify.error(`${definition.label} contains invalid control characters`);
+        return;
+      }
+      if (definition.fieldType === "number" && !Number.isFinite(Number(value))) {
+        notify.error(`${definition.label} must be a valid number`);
+        return;
+      }
+      if (definition.fieldType === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+        notify.error(`${definition.label} must be a valid date`);
+        return;
+      }
+      if (definition.fieldType === "url") {
+        try {
+          const parsed = new URL(String(value));
+          if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("invalid protocol");
+        } catch (_error) {
+          notify.error(`${definition.label} must be a valid URL`);
+          return;
+        }
+      }
+      if (["dropdown", "radio"].includes(definition.fieldType) && !(definition.options || []).includes(value)) {
+        notify.error(`Please select a valid ${definition.label}`);
+        return;
+      }
+      if (definition.fieldType === "multiselect") {
+        const selected = Array.isArray(value) ? value : [value];
+        if (selected.some((option) => !(definition.options || []).includes(option))) {
+          notify.error(`Please select valid values for ${definition.label}`);
+          return;
+        }
+      }
+      if (typeof value === "string" && value.length > 2000) {
+        notify.error(`${definition.label} is too long (maximum 2000 characters)`);
+        return;
+      }
     }
 
     // #315: refetch leads after a successful create so the "All Leads" pipeline
@@ -3323,7 +3432,7 @@ const Leads = () => {
       const phoneOut = isWellness
         ? phone
         : newLead.phone
-          ? `${newLead.countryCode} ${newLead.phone}`
+          ? `${newLead.countryCode} ${isGeneric ? phone : newLead.phone}`
           : "";
       await fetchApi("/api/contacts", {
         method: "POST",
@@ -3396,8 +3505,13 @@ const Leads = () => {
 
   const submitEdit = async (e) => {
     e.preventDefault();
-    if (!editForm.name.trim()) {
+    const editName = editForm.name.trim();
+    if (!editName) {
       notify.error("Name is required");
+      return;
+    }
+    if (isGeneric && !LEAD_NAME_RE.test(editName)) {
+      notify.error("Name can contain letters and spaces only");
       return;
     }
     setEditSaving(true);
@@ -3406,7 +3520,7 @@ const Leads = () => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: editForm.name.trim(),
+          name: editName,
           email: editForm.email.trim(),
           company: editForm.company.trim(),
           title: editForm.title.trim(),
@@ -3420,7 +3534,7 @@ const Leads = () => {
           row.id === editing.id
             ? {
                 ...row,
-                name: editForm.name.trim(),
+                name: editName,
                 email: editForm.email.trim(),
                 company: editForm.company.trim(),
                 title: editForm.title.trim(),
@@ -3895,6 +4009,29 @@ const Leads = () => {
   };
 
   const handleChange = (field, value) => {
+    if (isGeneric && field === "name") {
+      const sanitizedName = sanitizeLeadNameInput(value);
+      if (sanitizedName !== value) {
+        setCreateFieldErrors((prev) => ({
+          ...prev,
+          name: "Name can contain letters and spaces only. Numbers and special characters are not allowed.",
+        }));
+        // Preserve the existing submit-time sanitizer flow for pasted markup
+        // and control characters; ordinary digits/symbols are blocked here.
+        if (!/[<>]/.test(value) && !CONTROL_CHAR_RE.test(value)) return;
+      } else {
+        setCreateFieldErrors((prev) => ({ ...prev, name: "" }));
+      }
+    }
+    if (isGeneric && field === "phone") {
+      const rawPhone = String(value);
+      const digitsOnlyPhone = rawPhone.replace(/\D/g, "");
+      setCreateFieldErrors((prev) => ({
+        ...prev,
+        phone: /\D/.test(rawPhone) ? "Phone number can contain digits only." : "",
+      }));
+      value = digitsOnlyPhone;
+    }
     setNewLead((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -3966,6 +4103,7 @@ const Leads = () => {
         key === "email" ||
         key === "company" ||
         key === "phone" ||
+        (key === "whatsappPhone" && isGeneric) ||
         key === "aiScore" ||
         key === "source" ||
         key === "medium" ||
@@ -4030,6 +4168,7 @@ const Leads = () => {
       if (key === "company")
         return { key, label: isTravel ? "Category" : "Company" };
       if (key === "phone") return { key, label: "Phone" };
+      if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
       if (key === "medium") return { key, label: "Medium" };
@@ -4137,6 +4276,8 @@ const Leads = () => {
         };
       case "phone":
         return { fieldKey: "phone", label: "Phone", kind: "text" };
+      case "whatsappPhone":
+        return { fieldKey: "whatsappPhone", label: "WhatsApp Number", kind: "text" };
       case "source":
         return { fieldKey: "source", label: "Source", kind: "text" };
       case "medium":
@@ -4400,6 +4541,8 @@ const Leads = () => {
           return lead.company || "";
         case "phone":
           return lead.phone || "";
+        case "whatsappPhone":
+          return lead.whatsappPhone || "";
         case "firstName":
           return splitLeadName(lead.name).firstName;
         case "lastName":
@@ -4514,12 +4657,10 @@ const Leads = () => {
     ...leadFixedExtraColumnDefs,
     { key: "actions", label: "Actions", locked: true },
   ];
-  const leadsFrozenColumnDefs = tableColumnDefs.filter(
-    (column) => column.key === "name",
-  );
-  const leadsScrollableColumnDefs = tableColumnDefs.filter(
-    (column) => column.key !== "name",
-  );
+  // Keep Name in the same scrollable table as every other column so users
+  // can move and resize it through the normal column controls.
+  const leadsFrozenColumnDefs = [];
+  const leadsScrollableColumnDefs = tableColumnDefs;
   const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
     (sum, column) => sum + getColumnWidth(column.key),
     0,
@@ -4546,9 +4687,11 @@ const Leads = () => {
     : isGeneric
       ? "leads-table leads-table--compact"
       : "leads-table";
-  const phoneColumnIndex = leadUserColumnDefs.findIndex(
+  const phoneColumnOffset = leadUserColumnDefs.findIndex(
     (column) => column.key === "phone",
   );
+  const phoneColumnIndex =
+    phoneColumnOffset < 0 ? -1 : phoneColumnOffset + 1;
   useLayoutEffect(() => {
     const table = leadsScrollableTableRef.current;
     if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
@@ -4698,6 +4841,14 @@ const Leads = () => {
     if (field === "name" && !value) {
       notify.error("Name is required");
       throw new Error("Name is required");
+    }
+    if (isGeneric && field === "name" && !LEAD_NAME_RE.test(String(value))) {
+      notify.error("Name can contain letters and spaces only");
+      throw new Error("Invalid name");
+    }
+    if (isGeneric && field === "phone" && value && !/^\d{7,15}$/.test(String(value))) {
+      notify.error("Phone number can contain digits only (7-15 digits)");
+      throw new Error("Invalid phone number");
     }
     if (typeof value === "string" && CONTROL_CHAR_RE.test(value)) {
       notify.error(`${field} contains invalid control characters`);
@@ -5146,6 +5297,7 @@ const Leads = () => {
             <input
               type="checkbox"
               checked={Boolean(value)}
+              required={f.isRequired}
               onChange={(e) => handle(e.target.checked)}
             />
             {label}
@@ -5201,6 +5353,7 @@ const Leads = () => {
                   <input
                     type="checkbox"
                     checked={selected.includes(opt)}
+                    required={f.isRequired && selected.length === 0}
                     onChange={(e) => {
                       const next = e.target.checked
                         ? [...selected, opt]
@@ -5360,6 +5513,7 @@ const Leads = () => {
     extraStyle = {},
     renderValue,
     required = false,
+    disableTruncation = false,
     onSave = updateLeadInlineValue,
     className,
   }) => (
@@ -5378,6 +5532,7 @@ const Leads = () => {
         onSave={onSave}
         renderValue={renderValue}
         required={required}
+        disableTruncation={disableTruncation}
       />
     </td>
   );
@@ -5500,11 +5655,25 @@ const Leads = () => {
           label: "Phone",
           value: lead.phone,
           type: "tel",
+          disableTruncation: true,
           extraStyle: {
             color: "var(--text-secondary)",
             fontSize: "0.875rem",
           },
         });
+      case "whatsappPhone":
+        return (
+          <td
+            style={getBodyCellStyle("whatsappPhone", {
+              color: "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+            title={lead.whatsappPhone || undefined}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {lead.whatsappPhone || "—"}
+          </td>
+        );
       case "aiScore":
         return (
           <td style={getBodyCellStyle("aiScore")}>
@@ -8215,7 +8384,7 @@ const Leads = () => {
               : undefined
           }
         >
-          <div
+          {leadsFrozenColumnDefs.length > 0 && <div
             className="leads-table-frozen-pane"
             style={{ width: leadsFrozenTableWidthPx }}
           >
@@ -8326,6 +8495,7 @@ const Leads = () => {
                               onSave={updateLeadInlineValue}
                               required
                               editOnDisplayClick={false}
+                              disableTruncation
                               renderValue={(name) => (
                                 <a
                                   href={
@@ -8348,8 +8518,8 @@ const Leads = () => {
                                   }
                                   style={{
                                     minWidth: 0,
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
+                                    overflow: "visible",
+                                    textOverflow: "clip",
                                     whiteSpace: "nowrap",
                                     color: "var(--accent-color)",
                                     fontWeight: 700,
@@ -8376,14 +8546,18 @@ const Leads = () => {
                 )}
               </tbody>
             </table>
-          </div>
+          </div>}
           <div className="leads-table-scroll-pane">
-            <TopScrollSync
-              forceScrollbar={showLeadsTopScrollbar}
-              scrollWidth={leadsScrollableTableMinWidth}
-              stickyTop
+              <TopScrollSync
+                forceScrollbar={showLeadsTopScrollbar}
+                scrollWidth={leadsScrollableTableMinWidth}
+                topBarLeadingWidth={leadsFrozenTableWidth}
+                stickyTop
               stickyTopOffset={0}
-              hideBottomScrollbar={showLeadsTopScrollbar && !isGeneric}
+              // Travel CRM must keep the native table scrollbar visible;
+              // hiding it leaves no usable horizontal-scroll affordance when
+              // the wide lead table exceeds the viewport.
+              hideBottomScrollbar={false}
               verticalOverflow="visible"
               stickyBottom={isGeneric}
             >
@@ -8414,6 +8588,26 @@ const Leads = () => {
                       backgroundColor: "var(--table-header-bg)",
                     }}
                   >
+                    {renderColumnHeaderCell(
+                      "name",
+                      "Name",
+                      { paddingRight: "2rem" },
+                      {},
+                      renderHeaderMenuTrigger({ key: "name", label: "Name" }),
+                      isAdmin ? (
+                        <input
+                          type="checkbox"
+                          checked={
+                            selectedLeads.length === filteredLeads.length &&
+                            filteredLeads.length > 0
+                          }
+                          onChange={toggleSelectAll}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label="Select all leads"
+                          style={LEAD_CHECKBOX_STYLE}
+                        />
+                      ) : null,
+                    )}
                     {leadUserColumnDefs.map((column) => (
                       <Fragment key={column.key}>
                         {renderLeadUserHeaderCell(column)}
@@ -8534,6 +8728,65 @@ const Leads = () => {
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
+                        <td
+                          style={getBodyCellStyle("name", { fontWeight: "500" })}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.5rem",
+                              minWidth: 0,
+                            }}
+                          >
+                            {isAdmin && (
+                              <input
+                                type="checkbox"
+                                checked={selectedLeads.includes(lead.id)}
+                                onChange={() => toggleSelect(lead.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label={`Select ${lead.name || "lead"}`}
+                                style={LEAD_CHECKBOX_STYLE}
+                              />
+                            )}
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <BuiltInInlineCellEditor
+                                lead={lead}
+                                field="name"
+                                label="Name"
+                                value={lead.name}
+                                onSave={updateLeadInlineValue}
+                                required
+                                editOnDisplayClick={false}
+                                disableTruncation
+                                renderValue={(name) => (
+                                  <a
+                                    href={isTravel ? "#lead-preview" : leadDetailPath(lead)}
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (isTravel) setPreviewLead(lead);
+                                      else navigate(leadDetailPath(lead));
+                                    }}
+                                    title={isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`}
+                                    style={{
+                                      minWidth: 0,
+                                      overflow: "visible",
+                                      textOverflow: "clip",
+                                      whiteSpace: "nowrap",
+                                      color: "var(--accent-color)",
+                                      fontWeight: 700,
+                                      textDecoration: "none",
+                                    }}
+                                  >
+                                    {name || "Unnamed lead"}
+                                  </a>
+                                )}
+                              />
+                            </div>
+                          </div>
+                        </td>
                         {leadUserColumnDefs.map((column) => (
                           <Fragment key={column.key}>
                             {renderLeadUserBodyCell(lead, column)}
@@ -10203,15 +10456,28 @@ const Leads = () => {
                 gap: "0.875rem",
               }}
             >
-              <input
-                type="text"
-                placeholder="Full Name"
-                required
-                maxLength={191}
-                className="input-field"
-                value={newLead.name}
-                onChange={(e) => handleChange("name", e.target.value)}
-              />
+              <div>
+                <input
+                  type="text"
+                  placeholder="Full Name"
+                  required
+                  maxLength={191}
+                  className="input-field"
+                  value={newLead.name}
+                  aria-invalid={Boolean(createFieldErrors.name)}
+                  aria-describedby={createFieldErrors.name ? "create-lead-name-error" : undefined}
+                  onChange={(e) => handleChange("name", e.target.value)}
+                />
+                {createFieldErrors.name && (
+                  <div
+                    id="create-lead-name-error"
+                    role="alert"
+                    style={{ color: "#b42318", fontSize: "0.8rem", marginTop: "0.35rem" }}
+                  >
+                    {createFieldErrors.name}
+                  </div>
+                )}
+              </div>
               <input
                 type="email"
                 placeholder="Email Address"
@@ -10244,35 +10510,81 @@ const Leads = () => {
                 />
               )}
               {/* Phone field — required for wellness, optional for generic and travel. */}
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <select
-                  className="input-field"
-                  value={newLead.countryCode}
-                  onChange={(e) => {
-                    genericPhoneCountryUserChangedRef.current = true;
-                    handleChange("countryCode", e.target.value);
-                  }}
-                  style={{ width: "100px" }}
-                >
-                  {COUNTRY_CODES.map((cc) => (
-                    <option key={cc.code} value={cc.code}>
-                      {cc.code}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="tel"
-                  placeholder={
-                    isWellness
-                      ? "Phone (10-digit mobile, e.g. 9876543210)"
-                      : "Phone (optional)"
-                  }
-                  required={isWellness}
-                  className="input-field"
-                  value={newLead.phone}
-                  onChange={(e) => handleChange("phone", e.target.value)}
-                  style={{ flex: 1 }}
-                />
+              <div>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  {isGeneric ? (
+                    <>
+                      <input
+                        type="text"
+                        inputMode="tel"
+                        list="lead-country-code-options"
+                        aria-label="Country code"
+                        className="input-field"
+                        placeholder="+1"
+                        value={newLead.countryCode}
+                        onChange={(e) => {
+                          genericPhoneCountryUserChangedRef.current = true;
+                          const raw = e.target.value.replace(/[^\d+]/g, "");
+                          handleChange(
+                            "countryCode",
+                            raw && !raw.startsWith("+") ? `+${raw}` : raw,
+                          );
+                        }}
+                        style={{ width: "100px" }}
+                      />
+                      <datalist id="lead-country-code-options">
+                        {COUNTRY_CODES.map((cc) => (
+                          <option
+                            key={cc.code}
+                            value={cc.code}
+                            label={`${cc.country} (${cc.code})`}
+                          />
+                        ))}
+                      </datalist>
+                    </>
+                  ) : (
+                    <select
+                      className="input-field"
+                      value={newLead.countryCode}
+                      onChange={(e) => handleChange("countryCode", e.target.value)}
+                      style={{ width: "100px" }}
+                    >
+                      {COUNTRY_CODES.map((cc) => (
+                        <option key={cc.code} value={cc.code}>{cc.code}</option>
+                      ))}
+                    </select>
+                  )}
+                  <input
+                    type="tel"
+                    placeholder={
+                      isWellness
+                        ? "Phone (10-digit mobile, e.g. 9876543210)"
+                        : isGeneric
+                          ? `Phone (${getLeadPhoneRule(newLead.countryCode).join("-")} digits, optional)`
+                          : "Phone (optional)"
+                    }
+                    required={isWellness}
+                    inputMode={isGeneric ? "numeric" : undefined}
+                    pattern={isGeneric ? "[0-9]*" : undefined}
+                    minLength={isGeneric ? getLeadPhoneRule(newLead.countryCode)[0] : undefined}
+                    maxLength={isGeneric ? getLeadPhoneRule(newLead.countryCode)[1] : undefined}
+                    className="input-field"
+                    value={newLead.phone}
+                    aria-invalid={Boolean(createFieldErrors.phone)}
+                    aria-describedby={createFieldErrors.phone ? "create-lead-phone-error" : undefined}
+                    onChange={(e) => handleChange("phone", e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                </div>
+                {createFieldErrors.phone && (
+                  <div
+                    id="create-lead-phone-error"
+                    role="alert"
+                    style={{ color: "#b42318", fontSize: "0.8rem", marginTop: "0.35rem" }}
+                  >
+                    {createFieldErrors.phone}
+                  </div>
+                )}
               </div>
               <select
                 className="input-field"
@@ -10512,7 +10824,12 @@ const Leads = () => {
                 className="input-field"
                 value={editForm.name}
                 onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, name: e.target.value }))
+                  setEditForm((prev) => ({
+                    ...prev,
+                    name: isGeneric
+                      ? sanitizeLeadNameInput(e.target.value)
+                      : e.target.value,
+                  }))
                 }
               />
               <input

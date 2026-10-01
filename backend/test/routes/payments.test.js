@@ -625,7 +625,10 @@ describe('POST /confirm-razorpay — signature verification', () => {
     // Invoice marked PAID via markInvoicePaid helper
     expect(prisma.invoice.update).toHaveBeenCalledWith({
       where: { id: 50 },
-      data: { status: 'PAID' },
+      data: expect.objectContaining({
+        status: 'PAID',
+        paidAt: expect.any(Date),
+      }),
     });
   });
 
@@ -789,7 +792,11 @@ describe('POST /webhook/razorpay — signature verification + event dispatch', (
     });
     expect(prisma.invoice.update).toHaveBeenCalledWith({
       where: { id: 22 },
-      data: { status: 'PAID' },
+      data: expect.objectContaining({
+        status: 'PAID',
+        paidAt: expect.any(Date),
+        paymentMode: 'razorpay',
+      }),
     });
   });
 
@@ -1098,7 +1105,7 @@ describe('POST /webhook/razorpay — payment_link.paid wellness-visit reconcilia
           },
         },
         payment: {
-          entity: { id: 'pay_wellness_123' },
+          entity: { id: 'pay_wellness_123', method: 'upi' },
         },
       },
     };
@@ -1138,7 +1145,11 @@ describe('POST /webhook/razorpay — payment_link.paid wellness-visit reconcilia
     expect(res.status).toBe(200);
     expect(prisma.invoice.update).toHaveBeenCalledWith({
       where: { id: 55 },
-      data: { status: 'PAID' },
+      data: expect.objectContaining({
+        status: 'PAID',
+        paidAt: expect.any(Date),
+        paymentMode: 'upi',
+      }),
     });
     expect(prisma.visit.update).toHaveBeenCalledWith({
       where: { id: 99 },

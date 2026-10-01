@@ -258,10 +258,10 @@ describe('Layout', () => {
   // daysRemaining=0, the .app-main subtree has no stray "0" text node child
   // before <main>.
   it('does not render a stray "0" text node when daysRemaining === 0 (#730)', async () => {
-    // Make the subscriptions/status probe return daysRemaining=0 to force
+    // Make the subscriptions/access probe return daysRemaining=0 to force
     // the falsy-numeric path that previously bled through.
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/subscriptions/status') {
+      if (url === '/api/subscriptions/access') {
         return Promise.resolve({ daysRemaining: 0, trialEndsAt: null });
       }
       return Promise.resolve({});
@@ -438,14 +438,28 @@ describe('Layout', () => {
   // The subscription-status fetch is gated on user truthiness. Pin the
   // silent:true + endpoint to prevent a future refactor from flipping it
   // to a noisy fetch on every render.
-  it('fetches /api/subscriptions/status when user is present', async () => {
+  it('fetches /api/subscriptions/access when user is present', async () => {
     renderLayout();
     await new Promise((r) => setTimeout(r, 10));
     const subCalls = fetchApiMock.mock.calls.filter(
-      (c) => c[0] === '/api/subscriptions/status',
+      (c) => c[0] === '/api/subscriptions/access',
     );
     expect(subCalls.length).toBeGreaterThanOrEqual(1);
     expect(subCalls[0][1]).toMatchObject({ silent: true });
+  });
+
+  it('blocks a wellness doctor when the clinic subscription has expired', async () => {
+    fetchApiMock.mockImplementation((url) =>
+      Promise.resolve(url === '/api/subscriptions/access'
+        ? { subscriptionStatus: 'EXPIRED', daysRemaining: 0 }
+        : {}));
+    renderLayout({
+      user: { name: 'Doctor', role: 'USER', wellnessRole: 'doctor' },
+      tenant: { vertical: 'wellness' },
+    });
+
+    expect(await screen.findByRole('dialog', { name: /Your subscription has ended/i })).toBeInTheDocument();
+    expect(screen.getByText(/Only the workspace admin can purchase or renew/i)).toBeInTheDocument();
   });
 
   it('renders a travel keyboard-shortcuts info button on travel routes', () => {

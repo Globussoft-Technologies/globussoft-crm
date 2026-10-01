@@ -15,6 +15,8 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   const [selectedVisitId, setSelectedVisitId] = useState(null);
   const [notes, setNotes] = useState('');
   const [consumptionRules, setConsumptionRules] = useState([]);
+  const [inventoryItems, setInventoryItems] = useState([]);
+  const [inventoryTotal, setInventoryTotal] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [generatingLinkId, setGeneratingLinkId] = useState(null);
   const [paymentLinkAction, setPaymentLinkAction] = useState(null);
@@ -52,6 +54,8 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
     setPreviewBreakdown(null);
     setBillingBreakdown(null);
     setCouponError('');
+    setInventoryItems([]);
+    setInventoryTotal(0);
     // Default the bill to the service price; staff can override it before marking
     // the visit completed. Use the visit's existing amountCharged if already set.
     setAmountCharged(
@@ -60,11 +64,32 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
         : String(services.find((s) => s.id === apt.serviceId)?.basePrice || ''),
     );
     try {
-      const rules = await fetchApi('/api/wellness/auto-consumption-rules');
-      const serviceRules = Array.isArray(rules) ? rules.filter((r) => r.serviceId === apt.serviceId) : [];
+      const rulesResponse = await fetchApi('/api/wellness/auto-consumption-rules');
+      const serviceRules = Array.isArray(rulesResponse) ? rulesResponse.filter((r) => r.serviceId === apt.serviceId) : [];
       setConsumptionRules(serviceRules);
     } catch (_e) {
       setConsumptionRules([]);
+    }
+    try {
+      const rows = await fetchApi(`/api/wellness/visits/${apt.id}/consumptions`);
+      const nextItems = Array.isArray(rows) ? rows : [];
+      const total = nextItems.reduce((sum, item) => {
+        const value = item.usageValue !== undefined && item.usageValue !== null
+          ? Number(item.usageValue)
+          : (Number(item.qty) || 0) * (Number(item.unitCost) || 0);
+        return sum + (Number.isFinite(value) ? value : 0);
+      }, 0);
+      setInventoryItems(nextItems);
+      setInventoryTotal(total);
+      // The bill is service price plus all already-added drugs/products. A
+      // staff override remains respected when this visit already has a bill.
+      if (apt.amountCharged == null || apt.amountCharged === '') {
+        const servicePrice = Number(services.find((s) => s.id === apt.serviceId)?.basePrice) || 0;
+        setAmountCharged(String(servicePrice + total));
+      }
+    } catch (_e) {
+      setInventoryItems([]);
+      setInventoryTotal(0);
     }
   };
 
@@ -213,6 +238,8 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       setSelectedVisitId(null);
       setNotes('');
       setConsumptionRules([]);
+      setInventoryItems([]);
+      setInventoryTotal(0);
       setAmountCharged('');
       setCouponCode('');
       setAppliedCoupon(null);
@@ -497,10 +524,10 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   }}
                 >
                   <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>
-                    {formatDate(apt.visitDate)} - {apt.service?.name || 'Consultation'}
+                    {formatDate(apt.visitDate)} - {apt.service?.name || 'No service assigned'}
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    Doctor: {apt.doctor?.name || '-'} - Status: <span style={{ textTransform: 'capitalize', color: 'var(--accent-color)' }}>{apt.status}</span>
+                    Doctor: {apt.doctor?.name || 'No staff assigned'} - Status: <span style={{ textTransform: 'capitalize', color: 'var(--accent-color)' }}>{apt.status}</span>
                   </div>
                 </div>
               ))}
@@ -526,10 +553,10 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   }}
                 >
                   <div style={{ fontWeight: 500, marginBottom: '0.25rem', color: 'var(--text-primary)' }}>
-                    {formatDate(visit.visitDate)} - {visit.service?.name || 'Consultation'}
+                    {formatDate(visit.visitDate)} - {visit.service?.name || 'No service assigned'}
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    Doctor: {visit.doctor?.name || '-'}
+                    Doctor: {visit.doctor?.name || 'No staff assigned'}
                     {visit.amountCharged > 0 && (
                       <>
                         {' - '}
@@ -537,7 +564,12 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                           const breakdown = typeof visit.couponBreakdown === 'string'
                             ? (() => { try { return JSON.parse(visit.couponBreakdown); } catch (_e) { return null; } })()
                             : visit.couponBreakdown;
-                          if (breakdown && typeof breakdown === 'object' && Number.isFinite(Number(breakdown.balance))) {
+                          const hasPaymentAdjustment = breakdown
+                            && (breakdown.couponCode
+                              || Number(breakdown.discount) > 0
+                              || Number(breakdown.excess) > 0
+                              || Number(breakdown.lockingFee) > 0);
+                          if (hasPaymentAdjustment && Number.isFinite(Number(breakdown.balance))) {
                             return (
                               <>
                                 <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{Number(breakdown.baseAmount).toLocaleString('en-IN')}</span>
@@ -561,6 +593,19 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                       </>
                     )}
                   </div>
+                  {(visit.consumptions || []).length > 0 && (
+                    <div style={{ marginTop: '0.45rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      Inventory used: <strong style={{ color: 'var(--success-color)' }}>
+                        ₹{(visit.consumptions || []).reduce((sum, item) => {
+                          const value = item.usageValue != null
+                            ? Number(item.usageValue)
+                            : (Number(item.qty) || 0) * (Number(item.unitCost) || 0);
+                          return sum + (Number.isFinite(value) ? value : 0);
+                        }, 0).toLocaleString('en-IN')}
+                      </strong>
+                      {' · '}{(visit.consumptions || []).map((item) => item.productName).filter(Boolean).join(', ')}
+                    </div>
+                  )}
                   {renderPaymentLinkBlock(visit)}
                 </div>
               ))}
@@ -586,6 +631,20 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                 <strong>{selectedService?.durationMin || 30} min</strong>
               </div>
             </div>
+          </div>
+
+          <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: 8, border: '1px solid rgba(16, 185, 129, 0.2)', fontSize: '0.85rem' }}>
+            <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Linked drugs and products</div>
+            {inventoryItems.length === 0 ? (
+              <span style={{ color: 'var(--text-secondary)' }}>No inventory items have been added to this visit yet.</span>
+            ) : (
+              <>
+                <div style={{ color: 'var(--text-secondary)' }}>
+                  {inventoryItems.map((item) => `${item.productName} × ${item.quantity || item.qty}`).join(', ')}
+                </div>
+                <div style={{ marginTop: '0.35rem', fontWeight: 600 }}>Inventory usage: ₹{inventoryTotal.toLocaleString('en-IN')}</div>
+              </>
+            )}
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
@@ -627,7 +686,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
             )}
 
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
-              Edit the final bill (add medicines, extra services, etc.). Defaults to the service price.
+              Edit the final bill (add medicines, extra services, etc.). Defaults to the service price plus linked inventory usage.
             </div>
           </div>
 

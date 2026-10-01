@@ -333,6 +333,43 @@ describe('<wellness/LogVisitTab />  payment link surface', () => {
     expect(await screen.findByDisplayValue('https://rzp.io/l/visit-10')).toBeInTheDocument();
   });
 
+  it('loads linked prescription/product usage and includes it in the default bill', async () => {
+    fetchApiMock
+      .mockResolvedValueOnce([]) // auto-consumption rules
+      .mockResolvedValueOnce([
+        {
+          id: 91,
+          productName: 'LE PROGRES Hair Growth Serum',
+          qty: 1,
+          quantity: '1 ml',
+          usageValue: 37.7,
+        },
+      ]);
+
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 18,
+          status: 'booked',
+          visitDate: '2026-07-22T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Anita Das' },
+        },
+      ],
+    };
+
+    renderTab({ patient });
+    fireEvent.click(screen.getByText(/2026-07-22 - Botox Treatment/));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/visits/18/consumptions');
+      expect(screen.getByText(/LE PROGRES Hair Growth Serum/)).toBeInTheDocument();
+      expect(screen.getByDisplayValue('25037.7')).toBeInTheDocument();
+    });
+  });
+
   it('submits a final bill above the service price without applying a service-price ceiling', async () => {
     fetchApiMock.mockResolvedValue([]);
 

@@ -10,6 +10,7 @@ const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const emailOtp = require("../lib/emailOtp");
+const { sendEmail: sendTenantEmail } = require("../lib/emailSender");
 const phoneOtp = require("../lib/phoneOtp");
 const { registerLimiter, otpRequestLimiter, otpVerifyLimiter } = require("../middleware/apiRateLimiters");
 const { writeAudit } = require("../lib/audit");
@@ -408,10 +409,29 @@ router.post("/check-organization-name", registerLimiter, async (req, res) => {
 // HTTP response goes out before the SendGrid round-trip even completes,
 // so timing is also identical. On dev/local with no API key, the link
 // is logged to stdout so QA can still complete the flow.
-async function sendPasswordResetEmail(toEmail, token, frontendBase, brandName = "Globussoft CRM") {
+async function sendPasswordResetEmail(toEmail, token, frontendBase, brandName = "Globussoft CRM", options = {}) {
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
   const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
   const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
+  const subject = `Reset your ${brandName} password`;
+  const text = `Click this link to reset your ${brandName} password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.`;
+  const html = `<p>Click the link below to reset your ${brandName} password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>`;
+  let vertical = options.vertical;
+  if (!vertical && options.tenantId) {
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: options.tenantId },
+        select: { vertical: true },
+      });
+      vertical = tenant?.vertical;
+    } catch (_error) {
+      // Preserve the platform-managed recovery path if tenant lookup fails.
+    }
+  }
+  if (String(vertical || "").toLowerCase() === "travel") {
+    await sendTenantEmail({ tenantId: options.tenantId, to: toEmail, subject, text, html });
+    return;
+  }
 
   if (!SENDGRID_API_KEY) {
     console.log(`[auth/forgot-password] SendGrid not configured — reset link for ${toEmail}: ${resetUrl}`);
@@ -422,10 +442,10 @@ async function sendPasswordResetEmail(toEmail, token, frontendBase, brandName = 
     const payload = {
       personalizations: [{ to: [{ email: toEmail }] }],
       from: { email: FROM_EMAIL },
-      subject: `Reset your ${brandName} password`,
+      subject,
       content: [
-        { type: "text/plain", value: `Click this link to reset your ${brandName} password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.` },
-        { type: "text/html", value: `<p>Click the link below to reset your ${brandName} password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>` }
+        { type: "text/plain", value: text },
+        { type: "text/html", value: html }
       ]
     };
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
@@ -1538,6 +1558,7 @@ router.post("/forgot-password", async (req, res) => {
         token,
         frontendBase,
         isTmcOrigin ? "The Modern Classroom" : "Globussoft CRM",
+        { tenantId: user.tenantId, vertical: user.tenant?.vertical },
       ).catch(() => { });
     }
 

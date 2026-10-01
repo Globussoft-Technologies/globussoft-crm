@@ -32,18 +32,15 @@
   <script>
     window.GBS_DIAGNOSTIC_EMBED_CONFIG = window.GBS_DIAGNOSTIC_EMBED_CONFIG || {
       // DevOps installs this file ONCE on the client domain and never has to
-      // touch it again. Ordered tenant aliases resolve the current published
-      // form, while an explicit pageId query remains available when needed.
+      // touch it again. The production page is pinned to the current TMC
+      // tenant, while an explicit pageId query remains available when needed.
       // Production client pages should be pinned to one CRM environment.
       // Falling back to another environment is unsafe because numeric page
       // IDs and tenant slugs can identify different customers there.
       apiBase: 'https://globuscrm.globussoft.com',
       formBase: 'https://globuscrm.globussoft.com',
       subBrand: 'tmc',
-      // Try known tenant slugs in priority order. This keeps an older client
-      // installation working while the newer tenant owns the active form.
-      tenantSlugs: ['travel-stall-2', 'travel-stall'],
-      tenantSlug: '',
+      tenantSlug: 'travel-stall-2',
       customerId: '',
       pageId: ''
     };
@@ -76,11 +73,6 @@
 
       var subBrand = (params.get('subBrand') || config.subBrand || 'tmc').trim();
       var tenantSlug = (params.get('tenantSlug') || config.tenantSlug || '').trim();
-      var configuredTenantSlugs = Array.isArray(config.tenantSlugs)
-        ? config.tenantSlugs.map(function(value){ return String(value || '').trim(); }).filter(Boolean)
-        : [];
-      var tenantSlugs = tenantSlug ? [tenantSlug] : configuredTenantSlugs;
-      if (!tenantSlugs.length) tenantSlugs = [''];
       var customerId = (params.get('customerId') || config.customerId || '').trim();
       var pageId = (params.get('pageId') || config.pageId || '').trim();
       var statusEl = document.getElementById('status');
@@ -134,17 +126,14 @@
         return apiBase + '/api/diagnostic-pages/public/featured-full?' + qs.toString();
       }
 
-      // Tries each candidate CRM environment in order and uses the first one
-      // that actually has a published form. Not-found (404) on one
-      // environment moves on to the next; any other failure (network error,
-      // 5xx, malformed payload) is remembered and only surfaces if every
-      // candidate fails.
+      // Resolve the published form from the configured CRM environment and
+      // tenant. There is deliberately no legacy tenant-slug fallback.
       async function resolvePublishedForm(){
         var lastError = null;
         var tried = [];
         for (var i = 0; i < candidateBases.length; i++) {
           var base = candidateBases[i];
-          var slugCandidates = pageId || customerId ? [''] : tenantSlugs;
+          var slugCandidates = pageId || customerId ? [''] : [tenantSlug];
           for (var j = 0; j < slugCandidates.length; j++) {
             var candidateTenantSlug = slugCandidates[j];
             var endpoint = buildEndpoint(base.api, candidateTenantSlug);

@@ -1,23 +1,10 @@
 const prisma = require('./prisma');
 
-async function resolveSubscriptionAccess(user) {
-  if (!user || !user.userId || !user.tenantId) return null;
-
-  const now = new Date();
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.userId },
-    select: {
-      id: true,
-      subscriptionStatus: true,
-      trialEndsAt: true,
-    },
-  });
-
-  if (!dbUser) return null;
-
-  const activeCoverage = await prisma.subscription.findFirst({
+async function getTenantCoverage(tenantId, now = new Date()) {
+  if (!tenantId) return null;
+  const coverage = await prisma.subscription.findFirst({
     where: {
-      tenantId: user.tenantId,
+      tenantId,
       status: { in: ['ACTIVE', 'SCHEDULED'] },
       startDate: { lte: now },
       endDate: { gt: now },
@@ -27,9 +14,56 @@ async function resolveSubscriptionAccess(user) {
       { startDate: 'desc' },
     ],
   });
+  return coverage;
+}
 
-  const trialEndsAt = dbUser.trialEndsAt || null;
-  const trialStillValid = !!trialEndsAt && now <= new Date(trialEndsAt);
+async function hasTenantSubscriptionCoverage(tenantId, now = new Date()) {
+  return !!(await getTenantCoverage(tenantId, now));
+}
+
+async function getTenantTrialEnd(tenantId, now = new Date()) {
+  // Once a clinic has purchased a plan, an old personal trial cannot reopen
+  // the workspace after that paid period expires.
+  const previousPurchase = await prisma.subscription.findFirst({
+    where: { tenantId },
+    select: { id: true },
+  });
+  if (previousPurchase) return null;
+  const trialAdmin = await prisma.user.findFirst({
+    where: {
+      tenantId,
+      role: 'ADMIN',
+      subscriptionStatus: 'TRIAL',
+      trialEndsAt: { gte: now },
+      deactivatedAt: null,
+    },
+    select: { trialEndsAt: true },
+  });
+  return trialAdmin?.trialEndsAt || null;
+}
+
+// Patients and staff share the clinic's paid coverage or original admin trial.
+async function hasTenantPortalAccess(tenantId, now = new Date()) {
+  if (await hasTenantSubscriptionCoverage(tenantId, now)) return true;
+  return !!(await getTenantTrialEnd(tenantId, now));
+}
+
+async function resolveSubscriptionAccess(user) {
+  if (!user || !user.userId || !user.tenantId) return null;
+
+  const now = new Date();
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { id: true },
+  });
+
+  if (!dbUser) return null;
+
+  const activeCoverage = await getTenantCoverage(user.tenantId, now);
+  const tenantTrialEndsAt = activeCoverage ? null : await getTenantTrialEnd(user.tenantId, now);
+
+  const trialEndsAt = tenantTrialEndsAt;
+  const trialStillValid = !!trialEndsAt;
   const daysRemaining = trialEndsAt
     ? Math.max(0, Math.ceil((new Date(trialEndsAt) - now) / (1000 * 60 * 60 * 24)))
     : 0;
@@ -37,11 +71,7 @@ async function resolveSubscriptionAccess(user) {
   let subscriptionStatus;
   if (activeCoverage) {
     subscriptionStatus = 'ACTIVE';
-  } else if (dbUser.subscriptionStatus === 'TRIAL' && trialStillValid) {
-    subscriptionStatus = 'TRIAL';
-  } else if (dbUser.subscriptionStatus === 'CANCELLED') {
-    subscriptionStatus = 'CANCELLED';
-  } else if (dbUser.subscriptionStatus === 'TRIAL') {
+  } else if (trialStillValid) {
     subscriptionStatus = 'TRIAL';
   } else {
     subscriptionStatus = 'EXPIRED';
@@ -66,4 +96,6 @@ async function resolveSubscriptionAccess(user) {
 
 module.exports = {
   resolveSubscriptionAccess,
+  hasTenantSubscriptionCoverage,
+  hasTenantPortalAccess,
 };

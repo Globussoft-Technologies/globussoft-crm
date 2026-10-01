@@ -23,7 +23,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowDown, ArrowUp, ChevronDown, Code2, Copy, Eye, GripVertical, Hash,
   Link2, ListChecks, Paperclip, Plus, Save, Search, Trash2, Type,
-  Upload, Info, X, CheckCircle2,
+  Upload, Info, Monitor, Smartphone, Tablet, X, CheckCircle2,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -355,6 +355,8 @@ function defaultStyle() {
  buttonColor: "#12344D",
  accentColor: "#12344D",
     logoUrl: "",
+    logoSize: 48,
+    logoPosition: "left",
     fontSize: 16,
     fontWeight: 400,
     labelFontSize: 13,
@@ -384,6 +386,8 @@ function defaultStyle() {
     containerBorderWidth: 1,
     containerBorderRadius: 24,
     containerShadow: "0 24px 70px rgba(30,41,96,.14)",
+    containerShadowColor: "#1E2960",
+    containerShadowOpacity: 14,
     containerPadding: 30,
     containerMargin: 0,
     buttonHoverColor: "#0D2639",
@@ -412,6 +416,10 @@ function defaultSettings() {
  redirectUrl: "",
   notificationEnabled: false,
    notificationEmail: "",
+  // Keep the existing generic-form WhatsApp acknowledgement enabled for
+  // previously-created forms; email and SMS are opt-in per submitted lead.
+  contactNotificationChannels: ["whatsapp"],
+  contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
   optInEnabled: false,
    optInText: "I agree to receive communication on newsletters, promotional content, offers and events.",
   optInLinkText: "",
@@ -2082,6 +2090,26 @@ function normalizeHexColor(value, fallback = "#FFFFFF") {
 
 
 
+function labelLengthStyle(label) {
+  const labelLength = String(label || "").length;
+  const widthInCh = Math.max(11, Math.ceil(labelLength * 0.72 + 4));
+  return {
+    "--wf-label-length": String(labelLength),
+    "--wf-control-width": `${widthInCh}ch`,
+  };
+}
+
+function optionLengthStyle(options) {
+  const longestOption = (options || []).reduce((longest, option) => Math.max(longest, String(option || "").length), 0);
+  const widthInCh = Math.max(14, Math.ceil(longestOption * 0.9 + 6));
+  return {
+    "--wf-option-length": String(longestOption),
+    "--wf-option-width": `${widthInCh}ch`,
+    width: `${widthInCh}ch`,
+    minWidth: `${widthInCh}ch`,
+  };
+}
+
 function ColorField({ label, value, onChange, fallback }) {
 
 
@@ -2130,7 +2158,7 @@ function ColorField({ label, value, onChange, fallback }) {
 
 
 
-    <label className="wf-color-field">
+    <label className="wf-color-field" style={labelLengthStyle(label)}>
 
 
 
@@ -2262,7 +2290,7 @@ function ColorField({ label, value, onChange, fallback }) {
 
 function StyleNumberField({ label, value, min, max, step = 1, onChange }) {
   return (
-    <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+    <label style={{ display: "grid", gap: 6, minWidth: 0, ...labelLengthStyle(label) }}>
       <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>{label}</span>
       <input className="input-field" type="number" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
     </label>
@@ -3227,6 +3255,279 @@ function toggleFormat(formats, value) {
 
 
 
+function supportsAdvancedWebFormFeatures(scope) {
+  return scope === "generic" || scope === "travel";
+}
+
+const GENERIC_ELEMENT_TEXT_DEFAULTS = {
+  form: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+  title: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 20, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+  label: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 600, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+  placeholder: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 14, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+  input: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+  button: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+  error: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: 400, fontStyle: "normal", textDecoration: "none", textAlign: "left" },
+  success: { fontFamily: "Inter, system-ui, sans-serif", fontSize: 16, fontWeight: 700, fontStyle: "normal", textDecoration: "none", textAlign: "center" },
+};
+
+function GenericElementTextControls({ element, value, onChange }) {
+  const update = (changes) => onChange({ ...value, ...changes });
+  return (
+    <div className="wf-generic-element-text-controls">
+      <label><span>Font</span><select value={value.fontFamily} onChange={(e) => update({ fontFamily: e.target.value })}><option value="Inter, system-ui, sans-serif">Inter / system UI</option><option value="Arial, sans-serif">Arial</option><option value="Georgia, serif">Georgia</option><option value="Tahoma, sans-serif">Tahoma</option><option value="Verdana, sans-serif">Verdana</option></select></label>
+      <label><span>Size</span><input type="number" min={9} max={40} value={value.fontSize} onChange={(e) => update({ fontSize: Number(e.target.value) })} /></label>
+      <div className="wf-generic-text-toggle-group" aria-label={`${element} text formatting`}>
+        <button type="button" className={value.fontWeight >= 700 ? "is-active" : ""} onClick={() => update({ fontWeight: value.fontWeight >= 700 ? 400 : 700 })} aria-label="Toggle bold"><strong>B</strong></button>
+        <button type="button" className={value.fontStyle === "italic" ? "is-active" : ""} onClick={() => update({ fontStyle: value.fontStyle === "italic" ? "normal" : "italic" })} aria-label="Toggle italic"><em>I</em></button>
+        <button type="button" className={value.textDecoration === "underline" ? "is-active" : ""} onClick={() => update({ textDecoration: value.textDecoration === "underline" ? "none" : "underline" })} aria-label="Toggle underline"><u>U</u></button>
+      </div>
+      <label><span>Align</span><select value={value.textAlign} onChange={(e) => update({ textAlign: e.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="justify">Justify</option></select></label>
+    </div>
+  );
+}
+
+function GenericFormStyleControls({ group, form, style, updateStyle, applyDraft, logoUploadRef, uploadingLogo, onLogoUpload, previewDevice, setPreviewDevice, hidePreviewDevice = false }) {
+  const field = (label, value, onChange, min, max) => <StyleNumberField label={label} value={value} min={min} max={max} onChange={onChange} />;
+  if (group === "front") return <>
+    <div className="wf-logo-upload">
+      <div className="wf-logo-upload-label">Add a logo to your form</div>
+      <input ref={logoUploadRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onLogoUpload} />
+      <button type="button" className="btn-secondary" disabled={uploadingLogo} onClick={() => logoUploadRef.current?.click()}>{uploadingLogo ? "Uploading..." : "Upload"}</button>
+      {style.logoUrl ? <button type="button" className="btn-secondary" onClick={() => updateStyle({ logoUrl: "" })}>Remove</button> : null}
+    </div>
+    {style.logoUrl ? <div className="wf-logo-preview"><img src={style.logoUrl} alt="Form logo preview" /><span>Logo uploaded</span></div> : null}
+    <label style={{ display: "grid", gap: 6 }}><span>Title of the form</span><input className="input-field" value={form.settings.formTitle} onChange={(e) => applyDraft({ settings: { ...form.settings, formTitle: e.target.value } })} /></label>
+    <label style={{ display: "grid", gap: 6 }}><span>Description</span><input className="input-field" value={form.description || ""} onChange={(e) => applyDraft({ description: e.target.value })} /></label>
+    <label style={{ display: "grid", gap: 6 }}><span>Submit button label</span><input className="input-field" value={form.settings.submitButtonLabel} onChange={(e) => applyDraft({ settings: { ...form.settings, submitButtonLabel: e.target.value } })} /></label>
+    <StyleNumberField label="Logo size (px)" value={style.logoSize} min={20} max={200} onChange={(value) => updateStyle({ logoSize: value })} />
+    <label style={{ display: "grid", gap: 6 }}><span>Logo position</span><select className="input-field" value={style.logoPosition} onChange={(e) => updateStyle({ logoPosition: e.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+  </>;
+  if (group === "form") return <>
+    <ColorField label="Background color" value={style.backgroundColor} onChange={(value) => updateStyle({ backgroundColor: value })} fallback="#EBEFF3" />
+    <ColorField label="Form color" value={style.formColor} onChange={(value) => updateStyle({ formColor: value })} fallback="#FFFFFF" />
+  </>;
+  if (group === "layout") return <>
+    {!hidePreviewDevice ? <div style={{ display: "grid", gap: 6 }}><span>Preview device</span><div style={{ display: "flex", gap: 8 }} aria-label="Preview device"><button type="button" className="btn-secondary" style={previewDevice === "desktop" ? { borderColor: "var(--accent-color)", background: "var(--accent-color)", color: "#fff" } : undefined} onClick={() => setPreviewDevice("desktop")} aria-label="Desktop preview" title="Desktop preview"><Monitor size={18} /></button><button type="button" className="btn-secondary" style={previewDevice === "tablet" ? { borderColor: "var(--accent-color)", background: "var(--accent-color)", color: "#fff" } : undefined} onClick={() => setPreviewDevice("tablet")} aria-label="Tablet preview" title="Tablet preview"><Tablet size={18} /></button><button type="button" className="btn-secondary" style={previewDevice === "mobile" ? { borderColor: "var(--accent-color)", background: "var(--accent-color)", color: "#fff" } : undefined} onClick={() => setPreviewDevice("mobile")} aria-label="Mobile preview" title="Mobile preview"><Smartphone size={18} /></button></div></div> : null}
+    <label style={{ display: "grid", gap: 6 }}><span>Desktop columns</span><select className="input-field" value={style.layoutColumns} onChange={(e) => updateStyle({ layoutColumns: e.target.value })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+    {field("Custom column width (%)", style.customColumnWidth, (value) => updateStyle({ customColumnWidth: value }), 25, 75)}
+    {field("Row gap (px)", style.rowGap, (value) => updateStyle({ rowGap: value }), 0, 64)}
+    {field("Column gap (px)", style.columnGap, (value) => updateStyle({ columnGap: value }), 0, 64)}
+    <label style={{ display: "grid", gap: 6 }}><span>Tablet layout</span><select className="input-field" value={style.tabletColumns} onChange={(e) => updateStyle({ tabletColumns: e.target.value })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+    <label style={{ display: "grid", gap: 6 }}><span>Mobile layout</span><select className="input-field" value={style.mobileColumns} onChange={(e) => updateStyle({ mobileColumns: e.target.value })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+  </>;
+  if (group === "container") return <>
+    <label style={{ display: "grid", gap: 6 }}><span>Container background</span><select className="input-field" value={style.containerBackgroundMode} onChange={(e) => updateStyle({ containerBackgroundMode: e.target.value })}><option value="solid">Solid background</option><option value="gradient">Gradient background</option></select></label>
+    {style.containerBackgroundMode === "gradient" ? <><ColorField label="Gradient start" value={style.gradientStart} onChange={(value) => updateStyle({ gradientStart: value })} fallback="#FFFFFF" /><ColorField label="Gradient end" value={style.gradientEnd} onChange={(value) => updateStyle({ gradientEnd: value })} fallback="#EEF1FF" /><StyleNumberField label="Gradient angle (degrees)" value={style.gradientAngle} min={0} max={360} onChange={(value) => updateStyle({ gradientAngle: value })} /></> : null}
+    <ColorField label="Container border" value={style.containerBorderColor} onChange={(value) => updateStyle({ containerBorderColor: value })} fallback="#D8DDEC" />
+    {field("Container border width (px)", style.containerBorderWidth, (value) => updateStyle({ containerBorderWidth: value }), 0, 8)}
+    {field("Container radius (px)", style.containerBorderRadius, (value) => updateStyle({ containerBorderRadius: value }), 0, 48)}
+    {field("Container padding (px)", style.containerPadding, (value) => updateStyle({ containerPadding: value }), 0, 80)}
+    {field("Container margin (px)", style.containerMargin, (value) => updateStyle({ containerMargin: value }), 0, 80)}
+    <label style={{ display: "grid", gap: 6 }}><span>Shadow</span><select className="input-field" value={style.containerShadow} onChange={(e) => updateStyle({ containerShadow: e.target.value })}><option value="none">None</option><option value="0 24px 70px rgba(30,41,96,.14)">Soft</option><option value="0 8px 24px rgba(15,23,42,.18)">Compact</option></select></label>
+    <ColorField label="Shadow color" value={style.containerShadowColor} onChange={(value) => updateStyle({ containerShadowColor: value })} fallback="#1E2960" />
+    {field("Shadow opacity (%)", style.containerShadowOpacity, (value) => updateStyle({ containerShadowOpacity: value }), 0, 100)}
+  </>;
+  if (group === "title") return <ColorField label="Title color" value={style.titleColor} onChange={(value) => updateStyle({ titleColor: value })} fallback="#000000" />;
+  if (group === "label") return <><ColorField label="Field label color" value={style.fieldLabelColor} onChange={(value) => updateStyle({ fieldLabelColor: value })} fallback="#666666" />{field("Label size (px)", style.labelFontSize, (value) => updateStyle({ labelFontSize: value }), 9, 24)}</>;
+  if (group === "placeholder") return <><ColorField label="Placeholder color" value={style.placeholderColor} onChange={(value) => updateStyle({ placeholderColor: value })} fallback="#6B7280" />{field("Placeholder size (px)", style.placeholderFontSize, (value) => updateStyle({ placeholderFontSize: value }), 9, 24)}</>;
+  if (group === "input") return <>{field("Field width (%)", style.fieldWidth, (value) => updateStyle({ fieldWidth: value }), 50, 100)}{field("Field height (px)", style.fieldHeight, (value) => updateStyle({ fieldHeight: value }), 10, 96)}{field("Border width (px)", style.fieldBorderWidth, (value) => updateStyle({ fieldBorderWidth: value }), 0, 8)}{field("Border radius (px)", style.fieldBorderRadius, (value) => updateStyle({ fieldBorderRadius: value }), 0, 40)}<ColorField label="Border color" value={style.fieldBorderColor} onChange={(value) => updateStyle({ fieldBorderColor: value })} fallback="#D8DDEC" /><ColorField label="Focus border color" value={style.fieldFocusBorderColor} onChange={(value) => updateStyle({ fieldFocusBorderColor: value })} fallback="#6366F1" /><ColorField label="Field background" value={style.fieldBackgroundColor} onChange={(value) => updateStyle({ fieldBackgroundColor: value })} fallback="#FFFFFF" /><ColorField label="Text color" value={style.fieldTextColor} onChange={(value) => updateStyle({ fieldTextColor: value })} fallback="#111827" /></>;
+  if (group === "error") return <ColorField label="Error message color" value={style.errorMessageColor} onChange={(value) => updateStyle({ errorMessageColor: value })} fallback="#B91C1C" />;
+  if (group === "success") return <ColorField label="Success message color" value={style.successMessageColor} onChange={(value) => updateStyle({ successMessageColor: value })} fallback="#065F46" />;
+  return null;
+}
+
+function _TravelCustomizationEditor({ form, selection, onSelectionChange, applyDraft, logoUploadRef, uploadingLogo, onLogoUpload }) {
+  const style = form.style;
+  const elementTextStyles = { ...GENERIC_ELEMENT_TEXT_DEFAULTS, ...(style.elementTextStyles || {}) };
+  const updateStyle = (changes) => applyDraft({ style: { ...style, ...changes } });
+  const updateSelectedTextStyle = (value) => updateStyle({ elementTextStyles: { ...elementTextStyles, [selection]: value } });
+  const selectedTextStyle = elementTextStyles[selection] || elementTextStyles.form;
+
+  return (
+    <div className="wf-travel-customization">
+      <div className="wf-generic-live-inspector-title">Customize selected element</div>
+      <div className="wf-generic-live-elements">
+        {[["form", "Form"], ["title", "Title"], ["label", "Label"], ["placeholder", "Placeholder"], ["input", "Input box"], ["button", "Submit button"], ["error", "Error message"], ["success", "Success message"], ["layout", "Layout"], ["container", "Form container"]].map(([value, label]) => (
+          <button key={value} type="button" className={selection === value ? "is-selected" : ""} onClick={() => onSelectionChange(value)}>{label}</button>
+        ))}
+      </div>
+      {["title", "label", "placeholder", "input", "button", "error", "success"].includes(selection) ? <GenericElementTextControls element={selection} value={selectedTextStyle} onChange={updateSelectedTextStyle} /> : null}
+      <div className="wf-generic-live-context-options">
+        {selection === "form" ? <>
+          <GenericFormStyleControls group="front" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} />
+          <GenericFormStyleControls group="form" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} />
+        </> : null}
+        {selection === "layout" ? <GenericFormStyleControls group="layout" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} hidePreviewDevice /> : null}
+        {selection === "container" ? <GenericFormStyleControls group="container" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+        {selection === "title" ? <GenericFormStyleControls group="title" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+        {selection === "label" ? <GenericFormStyleControls group="label" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+        {selection === "placeholder" ? <GenericFormStyleControls group="placeholder" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+        {selection === "input" ? <GenericFormStyleControls group="input" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+        {selection === "button" ? <>
+          <ColorField label="Submit button color" value={style.buttonColor} onChange={(value) => updateStyle({ buttonColor: value })} fallback="#12344D" />
+          <ColorField label="Hover color" value={style.buttonHoverColor} onChange={(value) => updateStyle({ buttonHoverColor: value })} fallback="#0D2639" />
+          <ColorField label="Button text color" value={style.buttonTextColor} onChange={(value) => updateStyle({ buttonTextColor: value })} fallback="#FFFFFF" />
+          <label style={{ display: "grid", gap: 6 }}><span>Button position</span><select className="input-field" value={style.buttonAlignment} onChange={(e) => updateStyle({ buttonAlignment: e.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="full">Full width</option></select></label>
+          <StyleNumberField label="Button height (px)" value={style.buttonHeight} min={30} max={96} onChange={(value) => updateStyle({ buttonHeight: value })} />
+          <StyleNumberField label="Button radius (px)" value={style.buttonBorderRadius} min={0} max={40} onChange={(value) => updateStyle({ buttonBorderRadius: value })} />
+          <ColorField label="Button border" value={style.buttonBorderColor} onChange={(value) => updateStyle({ buttonBorderColor: value })} fallback="#12344D" />
+          <StyleNumberField label="Button border width (px)" value={style.buttonBorderWidth} min={0} max={8} onChange={(value) => updateStyle({ buttonBorderWidth: value })} />
+          <label style={{ display: "grid", gap: 6 }}><span>Width</span><select className="input-field" value={style.buttonWidth} onChange={(e) => updateStyle({ buttonWidth: e.target.value })}><option value="auto">Auto</option><option value="full">Full width</option></select></label>
+          <ColorField label="Loading color" value={style.buttonLoadingColor} onChange={(value) => updateStyle({ buttonLoadingColor: value })} fallback="#12344D" />
+          <label style={{ display: "grid", gap: 6 }}><span>Loading text</span><input className="input-field" value={style.buttonLoadingText} onChange={(e) => updateStyle({ buttonLoadingText: e.target.value })} /></label>
+        </> : null}
+        {selection === "error" ? <GenericFormStyleControls group="error" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+        {selection === "success" ? <GenericFormStyleControls group="success" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionChange, applyDraft, logoUploadRef, uploadingLogo, onLogoUpload }) {
+  const style = form.style;
+  const livePreviewFrameRef = useRef(null);
+  const [previewDevice, setPreviewDevice] = useState("desktop");
+  const livePreviewSrcRef = useRef(buildWebFormPreviewUrl(form, typeof window !== "undefined" ? window.location.origin : "", { previewDevice }));
+  const livePreviewSrc = livePreviewSrcRef.current;
+  const formTitle = form.settings?.formTitle ?? form.formTitle ?? form.name ?? "";
+  const [previewValues, setPreviewValues] = useState({});
+
+  useEffect(() => {
+    const handlePreviewMessage = (event) => {
+      const frame = livePreviewFrameRef.current;
+      if (
+        !frame ||
+        event.source !== frame.contentWindow ||
+        !event.data ||
+        event.data.source !== "gbs-web-form" ||
+        event.data.type !== "size"
+      ) return;
+      const height = Number(event.data.height);
+      if (!Number.isFinite(height) || height <= 0) return;
+      frame.style.height = `${Math.ceil(height)}px`;
+      frame.style.minHeight = "0px";
+    };
+    window.addEventListener("message", handlePreviewMessage);
+    return () => window.removeEventListener("message", handlePreviewMessage);
+  }, []);
+
+  useEffect(() => {
+    const frame = livePreviewFrameRef.current;
+    if (!frame) return undefined;
+    const sendPreviewUpdate = () => {
+      frame.contentWindow?.postMessage({ source: "gbs-web-form-host", type: "preview-update", form, previewDevice }, "*");
+    };
+    frame.addEventListener("load", sendPreviewUpdate);
+    sendPreviewUpdate();
+    return () => frame.removeEventListener("load", sendPreviewUpdate);
+  }, [form, previewDevice]);
+  const fieldOptions = fields.filter((field) => field.fieldType !== "file");
+  const previewOptionsFor = (field) => Array.isArray(field.options) && field.options.length ? field.options : splitOptions(field.optionsText);
+  const previewValueFor = (field) => previewValues[String(field.id)] ?? "";
+  const isPreviewFieldVisible = (field) => {
+    if (!field.showWhen) return true;
+    const parent = resolveConditionalParent(field, fieldOptions);
+    return Boolean(parent) && String(previewValueFor(parent)) === String(field.showWhen.value ?? "");
+  };
+  const elementTextStyles = { ...GENERIC_ELEMENT_TEXT_DEFAULTS, ...(style.elementTextStyles || {}) };
+  const updatePreviewValue = (field, value) => setPreviewValues((current) => ({ ...current, [String(field.id)]: value }));
+  const updateStyle = (changes) => {
+    const legacyTextFields = { fontFamily: "form", fontSize: "form", fontWeight: "form", labelFontSize: "label", placeholderFontSize: "placeholder", buttonFontSize: "button", errorFontSize: "error", successFontSize: "success" };
+    const nextElementTextStyles = { ...elementTextStyles };
+    Object.entries(legacyTextFields).forEach(([styleKey, elementKey]) => {
+      if (Object.prototype.hasOwnProperty.call(changes, styleKey)) {
+        nextElementTextStyles[elementKey] = { ...nextElementTextStyles[elementKey], ...(styleKey === "fontFamily" ? { fontFamily: changes[styleKey] } : styleKey === "fontWeight" ? { fontWeight: changes[styleKey] } : { fontSize: changes[styleKey] }) };
+      }
+    });
+    const hasTextStyleChange = Object.keys(legacyTextFields).some((key) => Object.prototype.hasOwnProperty.call(changes, key));
+    applyDraft({ style: { ...style, ...changes, ...(hasTextStyleChange ? { elementTextStyles: nextElementTextStyles } : {}) } });
+  };
+  const selectedTextStyle = elementTextStyles[selection] || elementTextStyles.form;
+  const titleTextStyle = elementTextStyles.title;
+  const labelTextStyle = elementTextStyles.label;
+  const placeholderTextStyle = elementTextStyles.placeholder;
+  const inputTextStyle = elementTextStyles.input;
+  const buttonTextStyle = elementTextStyles.button;
+  const updateSelectedTextStyle = (nextValue) => updateStyle({ elementTextStyles: { ...elementTextStyles, [selection]: nextValue } });
+  const isLabelSelection = selection === "label";
+  const isPlaceholderSelection = selection === "placeholder";
+  const isInputSelection = selection === "input";
+
+  return (
+    <div className="wf-generic-live-editor">
+      <div className="wf-generic-live-layout">
+        <div className="wf-generic-live-preview-wrap" style={{ background: style.backgroundColor }}>
+          <div className="wf-generic-live-preview-label">Preview</div>
+          <div className="wf-generic-live-preview">
+            <iframe ref={livePreviewFrameRef} title="Web form live preview" src={livePreviewSrc} style={{ width: "100%", height: "620px", minHeight: 0, border: 0, display: "block", background: "transparent" }} />
+          </div>
+          <div hidden>
+            {style.logoUrl ? <img src={style.logoUrl} alt="Form logo" className="wf-generic-live-logo" onClick={(event) => { event.stopPropagation(); onSelectionChange("form"); }} /> : null}
+            <h3 style={{ margin: "0 0 6px", color: style.titleColor, fontFamily: titleTextStyle.fontFamily, fontSize: `${titleTextStyle.fontSize}px`, fontWeight: titleTextStyle.fontWeight, fontStyle: titleTextStyle.fontStyle, textDecoration: titleTextStyle.textDecoration, textAlign: titleTextStyle.textAlign }} onClick={(event) => { event.stopPropagation(); onSelectionChange("title"); }}>{formTitle}</h3>
+            {form.description ? <p style={{ margin: "0 0 16px", color: style.fieldLabelColor }}>{form.description}</p> : null}
+            <div className="wf-generic-live-fields" style={{ width: `${Math.min(Math.max(Number(style.fieldWidth) || 100, 50), 100)}%` }}>
+              {fieldOptions.filter(isPreviewFieldVisible).map((field) => (
+                <div role="button" tabIndex={0} key={field.id} className={`wf-generic-live-field${isInputSelection ? " is-selected" : ""}`} onClick={(event) => { event.stopPropagation(); onSelectionChange("input"); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onSelectionChange("input"); } }}>
+                  <span className={isLabelSelection ? "is-selected" : ""} style={{ fontFamily: labelTextStyle.fontFamily, fontSize: `${labelTextStyle.fontSize}px`, fontWeight: labelTextStyle.fontWeight, fontStyle: labelTextStyle.fontStyle, textDecoration: labelTextStyle.textDecoration, textAlign: labelTextStyle.textAlign }} onClick={(event) => { event.stopPropagation(); onSelectionChange("label"); }}>{field.label}</span>
+                  <div className="wf-generic-live-field-control">
+                    {field.fieldType === "textarea" ? <textarea value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} placeholder={field.placeholder || ""} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign, "--wf-live-placeholder-font": placeholderTextStyle.fontFamily, "--wf-live-placeholder-size": `${placeholderTextStyle.fontSize}px`, "--wf-live-placeholder-weight": placeholderTextStyle.fontWeight, "--wf-live-placeholder-style": placeholderTextStyle.fontStyle, "--wf-live-placeholder-decoration": placeholderTextStyle.textDecoration, "--wf-live-placeholder-align": placeholderTextStyle.textAlign, "--wf-live-placeholder-color": style.placeholderColor }} onClick={(event) => { event.stopPropagation(); onSelectionChange("placeholder"); }} /> : field.fieldType === "dropdown" || field.fieldType === "radio" || field.fieldType === "multiselect" ? <select value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign }} onClick={(event) => { event.stopPropagation(); onSelectionChange("input"); }}><option value="">{field.placeholder || "Select an option"}</option>{previewOptionsFor(field).map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} type={field.fieldType === "email" ? "email" : field.fieldType === "number" ? "number" : field.fieldType === "url" ? "url" : field.fieldType === "date" ? "date" : "text"} placeholder={field.placeholder || ""} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign, "--wf-live-placeholder-font": placeholderTextStyle.fontFamily, "--wf-live-placeholder-size": `${placeholderTextStyle.fontSize}px`, "--wf-live-placeholder-weight": placeholderTextStyle.fontWeight, "--wf-live-placeholder-style": placeholderTextStyle.fontStyle, "--wf-live-placeholder-decoration": placeholderTextStyle.textDecoration, "--wf-live-placeholder-align": placeholderTextStyle.textAlign, "--wf-live-placeholder-color": style.placeholderColor }} onClick={(event) => { event.stopPropagation(); onSelectionChange("placeholder"); }} />}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button type="button" className={`wf-generic-live-submit${selection === "button" ? " is-selected" : ""}`} onClick={(event) => { event.stopPropagation(); onSelectionChange("button"); }} style={{ background: style.buttonColor, color: style.buttonTextColor, fontFamily: buttonTextStyle.fontFamily, fontSize: `${buttonTextStyle.fontSize}px`, fontWeight: buttonTextStyle.fontWeight, fontStyle: buttonTextStyle.fontStyle, textDecoration: buttonTextStyle.textDecoration, textAlign: buttonTextStyle.textAlign, height: `${style.buttonHeight}px`, borderRadius: `${style.buttonBorderRadius}px`, border: `${style.buttonBorderWidth}px solid ${style.buttonBorderColor}`, width: style.buttonWidth === "full" || style.buttonAlignment === "full" ? "100%" : "auto", display: "block", marginLeft: style.buttonAlignment === "center" ? "auto" : undefined, marginRight: style.buttonAlignment === "center" ? "auto" : undefined, float: style.buttonAlignment === "right" ? "right" : "none" }}>{form.settings.submitButtonLabel}</button>
+           </div>
+           </div>
+         <div className="wf-generic-live-inspector">
+          <div className="wf-generic-live-inspector-title">Customize selected element</div>
+          <div className="wf-generic-live-elements">
+            <button type="button" className={selection === "form" ? "is-selected" : ""} onClick={() => onSelectionChange("form")}>Form</button>
+            <button type="button" className={selection === "title" ? "is-selected" : ""} onClick={() => onSelectionChange("title")}>Title</button>
+            <button type="button" className={isLabelSelection ? "is-selected" : ""} onClick={() => onSelectionChange("label")}>Label</button>
+            <button type="button" className={isPlaceholderSelection ? "is-selected" : ""} onClick={() => onSelectionChange("placeholder")}>Placeholder</button>
+            <button type="button" className={isInputSelection ? "is-selected" : ""} onClick={() => onSelectionChange("input")}>Input box</button>
+            <button type="button" className={selection === "button" ? "is-selected" : ""} onClick={() => onSelectionChange("button")}>Submit button</button>
+            <button type="button" className={selection === "error" ? "is-selected" : ""} onClick={() => onSelectionChange("error")}>Error message</button>
+            <button type="button" className={selection === "success" ? "is-selected" : ""} onClick={() => onSelectionChange("success")}>Success message</button>
+            <button type="button" className={selection === "layout" ? "is-selected" : ""} onClick={() => onSelectionChange("layout")}>Layout</button>
+            <button type="button" className={selection === "container" ? "is-selected" : ""} onClick={() => onSelectionChange("container")}>Form container</button>
+          </div>
+          {["title", "label", "placeholder", "input", "button", "error", "success"].includes(selection) ? <GenericElementTextControls element={selection} value={selectedTextStyle} onChange={updateSelectedTextStyle} /> : null}
+          <div className="wf-generic-live-context-options">
+            {selection === "form" ? <>
+              <GenericFormStyleControls group="front" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} />
+              <GenericFormStyleControls group="form" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} />
+            </> : null}
+            {selection === "layout" ? <GenericFormStyleControls group="layout" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} previewDevice={previewDevice} setPreviewDevice={setPreviewDevice} /> : null}
+            {selection === "container" ? <GenericFormStyleControls group="container" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+            {selection === "title" ? <GenericFormStyleControls group="title" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+            {isLabelSelection ? <GenericFormStyleControls group="label" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+            {isPlaceholderSelection ? <>
+              <GenericFormStyleControls group="placeholder" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} />
+            </> : null}
+            {isInputSelection ? <GenericFormStyleControls group="input" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+            {selection === "button" ? <>
+              <ColorField label="Submit button color" value={style.buttonColor} onChange={(value) => updateStyle({ buttonColor: value })} fallback="#12344D" />
+              <ColorField label="Hover color" value={style.buttonHoverColor} onChange={(value) => updateStyle({ buttonHoverColor: value })} fallback="#0D2639" />
+              <ColorField label="Button text color" value={style.buttonTextColor} onChange={(value) => updateStyle({ buttonTextColor: value })} fallback="#FFFFFF" />
+              <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Button position</span><select className="input-field" value={style.buttonAlignment} onChange={(e) => updateStyle({ buttonAlignment: e.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="full">Full width</option></select></label>
+              <StyleNumberField label="Button height (px)" value={style.buttonHeight} min={30} max={96} onChange={(value) => updateStyle({ buttonHeight: value })} />
+              <StyleNumberField label="Button radius (px)" value={style.buttonBorderRadius} min={0} max={40} onChange={(value) => updateStyle({ buttonBorderRadius: value })} />
+              <ColorField label="Button border" value={style.buttonBorderColor} onChange={(value) => updateStyle({ buttonBorderColor: value })} fallback="#12344D" />
+              <StyleNumberField label="Button border width (px)" value={style.buttonBorderWidth} min={0} max={8} onChange={(value) => updateStyle({ buttonBorderWidth: value })} />
+              <label style={{ display: "grid", gap: 6 }}><span>Width</span><select className="input-field" value={style.buttonWidth} onChange={(e) => updateStyle({ buttonWidth: e.target.value })}><option value="auto">Auto</option><option value="full">Full width</option></select></label>
+              <ColorField label="Loading color" value={style.buttonLoadingColor} onChange={(value) => updateStyle({ buttonLoadingColor: value })} fallback="#12344D" />
+              <label style={{ display: "grid", gap: 6 }}><span>Loading text</span><input className="input-field" value={style.buttonLoadingText} onChange={(e) => updateStyle({ buttonLoadingText: e.target.value })} /></label>
+            </> : null}
+            {selection === "error" ? <GenericFormStyleControls group="error" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+            {selection === "success" ? <GenericFormStyleControls group="success" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFields, scope, onChange, onMove, onRemove, phoneSettings, onPhoneSettingsChange, onAddConditionalChild, steps = [], multiStepEnabled = false, formScope = scope || "generic", formSettings, onFormSettingsChange }) {
 
 
@@ -3243,8 +3544,38 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-  const isConditional = scope === "generic" && Boolean(field.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey));
+  const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(scope);
+  const isConditional = supportsAdvancedFeatures && Boolean(field.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey));
   const isChoice = CHOICE_FIELD_TYPES.has(field.fieldType);
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+  const [countrySearch, setCountrySearch] = useState("");
+  const [countryPickerOrder, setCountryPickerOrder] = useState(PHONE_COUNTRY_OPTIONS);
+  const countryPickerRef = useRef(null);
+
+  const toggleCountryPicker = () => {
+    if (countryPickerOpen) {
+      setCountryPickerOpen(false);
+      return;
+    }
+
+    const selectedCountries = new Set(phoneSettings?.phoneAllowAllCountries === false ? (phoneSettings.phoneAllowedCountries || []) : []);
+    setCountryPickerOrder([...PHONE_COUNTRY_OPTIONS].sort(([codeA], [codeB]) => Number(selectedCountries.has(codeB)) - Number(selectedCountries.has(codeA))));
+    setCountrySearch("");
+    setCountryPickerOpen(true);
+  };
+
+  useEffect(() => {
+    if (!countryPickerOpen) return undefined;
+
+    const handleOutsideCountryPickerClick = (event) => {
+      if (!countryPickerRef.current?.contains(event.target)) {
+        setCountryPickerOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handleOutsideCountryPickerClick);
+    return () => document.removeEventListener("pointerdown", handleOutsideCountryPickerClick);
+  }, [countryPickerOpen]);
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(field.id) });
 
@@ -3324,7 +3655,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
     }
     return [];
   };
-  const conditionalParentFields = scope === "generic"
+  const conditionalParentFields = supportsAdvancedFeatures
     ? (conditionalFlowFields.length ? conditionalFlowFields : allFields).filter((candidate) => (
       String(candidate.id) !== String(field.id) &&
       !candidate.hidden &&
@@ -3335,7 +3666,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
     : [];
   const selectedConditionalField = resolveConditionalParent(field, conditionalParentFields) || null;
   const conditionalOptions = getConditionalOptions(selectedConditionalField);
-  const branchOptions = scope === "generic" ? getConditionalOptions(field) : [];
+  const branchOptions = supportsAdvancedFeatures ? getConditionalOptions(field) : [];
   const conditionalDepth = isConditional ? getConditionalDepth(field, allFields) : 0;
   const conditionalPath = isConditional ? getConditionalPath(field, allFields) : [];
   const fieldTypeOptions = editableFieldTypes;
@@ -4662,7 +4993,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-    <div ref={setNodeRef} className="wf-field-card" style={{ ...fieldCardStyle, overflow: formScope === "generic" && field.sourceKind === "contact" && field.sourceKey === "email" ? "visible" : undefined }}>
+    <div ref={setNodeRef} className="wf-field-card" style={{ ...fieldCardStyle, overflow: supportsAdvancedWebFormFeatures(formScope) && field.sourceKind === "contact" && field.sourceKey === "email" ? "visible" : undefined }}>
 
 
 
@@ -4998,7 +5329,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-        <div data-testid="wf-field-editor-grid" className="wf-field-editor-grid" style={{ display: "grid", gridTemplateColumns: field.hidden ? "minmax(220px, 1fr) minmax(220px, max-content)" : "minmax(220px, 1fr) minmax(180px, 0.8fr) minmax(260px, max-content)", gap: 10, minWidth: 0, alignItems: "start" }}>
+        <div data-testid="wf-field-editor-grid" className={`wf-field-editor-grid${supportsAdvancedWebFormFeatures(formScope) ? " wf-generic-field-editor-grid" : ""}`} style={{ display: "grid", gridTemplateColumns: field.hidden ? "minmax(220px, 1fr) minmax(220px, max-content)" : "minmax(220px, 1fr) minmax(180px, 0.8fr) minmax(260px, max-content)", gap: 10, minWidth: 0, alignItems: "start" }}>
 
 
 
@@ -5014,7 +5345,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-          <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+          <label className="wf-generic-field-label" style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
 
 
@@ -5079,7 +5410,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
           {multiStepEnabled && steps.length > 0 ? (
-            <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+            <label className="wf-generic-field-step" style={{ display: "grid", gap: 6, minWidth: 0 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Form step</span>
               <select className="input-field" value={field.stepId || steps[0].id} onChange={(e) => onChange(index, { stepId: e.target.value })}>
                 {steps.map((step, stepIndex) => <option key={step.id} value={step.id}>{step.title || `Step ${stepIndex + 1}`}</option>)}
@@ -5089,7 +5420,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
           {field.hidden ? (
 
-            <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+            <label className="wf-generic-field-default" style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
               <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Select a default value for this hidden field</span>
 
@@ -5139,9 +5470,9 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
           ) : (
 
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 0.8fr) minmax(200px, 1fr)", gap: 10, minWidth: 0, alignItems: "start" }}>
+            <div className="wf-generic-field-controls" style={{ display: "grid", gridTemplateColumns: "minmax(160px, 0.8fr) minmax(200px, 1fr)", gap: 10, minWidth: 0, alignItems: "start" }}>
 
-              <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+              <label className="wf-generic-field-type" style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
                 <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Field type</span>
 
@@ -5168,17 +5499,17 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
               {isChoice ? (
 
-                <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                <label className="wf-generic-field-secondary" style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
                   <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
 
-                  <textarea className="input-field" rows={4} value={field.optionsText || ""} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Type one option per line (or use commas)" />
+                  <textarea className="input-field wf-generic-options-input" rows={2} value={field.optionsText || ""} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Type one option per line (or use commas)" />
 
                 </label>
 
               ) : (
 
-                <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                <label className="wf-generic-field-secondary" style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
                   <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Placeholder</span>
 
@@ -5207,7 +5538,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-          <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "flex-end", flexWrap: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "wrap" : "nowrap", flexDirection: "row", minWidth: 0, width: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "100%" : "max-content", gridColumn: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && formScope === "generic") ? "1 / -1" : "auto", justifySelf: "end", alignSelf: "start" }}>
+          <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "flex-end", flexWrap: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && supportsAdvancedFeatures) ? "wrap" : "nowrap", flexDirection: "row", minWidth: 0, width: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && supportsAdvancedFeatures) ? "100%" : "max-content", gridColumn: phoneSettings || (field.sourceKind === "contact" && field.sourceKey === "email" && supportsAdvancedFeatures) ? "1 / -1" : "auto", justifySelf: "end", alignSelf: "start" }}>
 
 
 
@@ -5337,10 +5668,30 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
             </label>
 
             {field.sourceKey === "phone" && phoneSettings ? (
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap", paddingTop: 2 }}>
+              <div className="wf-phone-country-controls" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-primary)", fontSize: 13, whiteSpace: "nowrap", paddingTop: 2 }}>
                 <span style={{ fontWeight: 700 }}>Countries:</span>
-                <select value={phoneSettings.phoneAllowAllCountries !== false ? "all" : "selected"} onChange={(e) => onPhoneSettingsChange({ ...phoneSettings, phoneAllowAllCountries: e.target.value === "all" })} style={{ fontSize: 12, padding: "3px 5px", borderRadius: 6 }}><option value="all">All</option><option value="selected">Selected</option></select>
-                {phoneSettings.phoneAllowAllCountries === false ? <select multiple size={1} value={phoneSettings.phoneAllowedCountries || []} onChange={(e) => onPhoneSettingsChange({ ...phoneSettings, phoneAllowedCountries: Array.from(e.target.selectedOptions).map((option) => option.value) })} title="Select one or more allowed country codes" style={{ width: 145, height: 26, fontSize: 12, padding: "2px 5px", borderRadius: 6 }}>{PHONE_COUNTRY_OPTIONS.map(([code, name]) => <option key={code} value={code}>{code} - {name}</option>)}</select> : null}
+                  <div ref={countryPickerRef} className="wf-country-picker">
+                    <button type="button" className="wf-country-picker-trigger" onClick={toggleCountryPicker} aria-expanded={countryPickerOpen}>
+                      <span>{phoneSettings.phoneAllowAllCountries !== false ? "All" : `${(phoneSettings.phoneAllowedCountries || []).length} selected`}</span>
+                      <ChevronDown size={13} />
+                    </button>
+                    {countryPickerOpen ? (
+                      <div className="wf-country-picker-panel">
+                        <input className="wf-country-picker-search" value={countrySearch} onChange={(e) => setCountrySearch(e.target.value)} placeholder="Search countries" aria-label="Search countries" />
+                        <div className="wf-country-picker-actions">
+                          <button type="button" className="wf-country-picker-clear" onClick={() => onPhoneSettingsChange({ ...phoneSettings, phoneAllowAllCountries: true, phoneAllowedCountries: [] })}>Select all</button>
+                          <button type="button" className="wf-country-picker-clear" onClick={() => onPhoneSettingsChange({ ...phoneSettings, phoneAllowAllCountries: false, phoneAllowedCountries: [] })}>Clear all</button>
+                        </div>
+                        <div className="wf-country-picker-options">
+                          {countryPickerOrder.filter(([code, name]) => `${code} ${name}`.toLowerCase().includes(countrySearch.trim().toLowerCase())).map(([code, name]) => {
+                            const selected = phoneSettings.phoneAllowAllCountries === false && (phoneSettings.phoneAllowedCountries || []).includes(code);
+                            return <label key={code} className="wf-country-picker-option"><input type="checkbox" checked={phoneSettings.phoneAllowAllCountries !== false || selected} onChange={() => { const nextAllowedCountries = selected ? (phoneSettings.phoneAllowedCountries || []).filter((item) => item !== code) : [...(phoneSettings.phoneAllowedCountries || []), code]; onPhoneSettingsChange({ ...phoneSettings, phoneAllowAllCountries: nextAllowedCountries.length === 0, phoneAllowedCountries: nextAllowedCountries }); }} /><span>{code} - {name}</span></label>;
+                          })}
+                          {!countryPickerOrder.some(([code, name]) => `${code} ${name}`.toLowerCase().includes(countrySearch.trim().toLowerCase())) ? <div className="wf-country-picker-empty">No countries found</div> : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
               </div>
             ) : null}
 
@@ -5358,9 +5709,9 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-            {formScope === "generic" && field.sourceKind === "contact" && field.sourceKey === "email" && formSettings && onFormSettingsChange ? (
-              <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", flexBasis: "100%", order: 2, color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap" }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>Email validation
+            {supportsAdvancedFeatures && field.sourceKind === "contact" && field.sourceKey === "email" && formSettings && onFormSettingsChange ? (
+                <div className="wf-email-validation-controls" style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", flexBasis: "100%", order: 2, color: "var(--text-primary)", fontSize: 13, whiteSpace: "nowrap" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><span className="wf-email-validation-label">Email validation</span>
                   <select className="input-field" style={{ width: 150, padding: "0.35rem 0.45rem" }} value={formSettings.emailValidationType || "all"} onChange={(e) => onFormSettingsChange({ ...formSettings, emailValidationType: e.target.value })}>
                     <option value="all">Allow all email addresses</option><option value="company">Company email only</option>
                   </select>
@@ -5457,15 +5808,15 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-        {scope === "generic" && isConditional ? (
+        {supportsAdvancedFeatures && isConditional ? (
 
-          <div style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--wf-border)", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(180px, 0.8fr)", gap: 10 }}>
+          <div className="wf-conditional-config" style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--wf-border)", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(180px, 0.8fr)", gap: 10 }}>
 
             <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>
               Conditional level {conditionalDepth}{conditionalPath.length > 1 ? ` · ${conditionalPath.join(" → ")}` : ""}
             </div>
 
-            <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+            <label className="wf-conditional-parent-select" style={{ display: "grid", gap: 6, minWidth: 0 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Parent question</span>
               <select
                 className="input-field"
@@ -5482,7 +5833,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
             </label>
 
             {selectedConditionalField ? (
-              <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+              <label className="wf-conditional-answer-select" style={{ display: "grid", gap: 6, minWidth: 0 }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Child answer</span>
                 {conditionalOptions.length > 0 ? (
                   <select
@@ -5507,7 +5858,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
         ) : null}
 
-        {scope === "generic" && branchOptions.length > 0 && onAddConditionalChild ? (
+        {supportsAdvancedFeatures && branchOptions.length > 0 && onAddConditionalChild ? (
           <div style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px dashed var(--wf-border)", display: "grid", gap: 8 }}>
             <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 700 }}>
               Add a child question for an answer
@@ -6771,6 +7122,11 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 
 export default function WebForms({ scope = "generic" }) {
+  if (scope !== "travel" && scope !== "generic") return null;
+  return <WebFormsContent scope={scope} />;
+}
+
+function WebFormsContent({ scope = "generic" }) {
   const auth = useContext(AuthContext);
   const [leadsForm, setLeadsForm] = useState(null);
   const canViewFormLeads = scope === "generic" && (auth?.tenant?.vertical || auth?.user?.vertical || "generic") === "generic";
@@ -6924,6 +7280,7 @@ export default function WebForms({ scope = "generic" }) {
   const [selectedForm, setSelectedForm] = useState(null);
   const [activeBuilderStepId, setActiveBuilderStepId] = useState("step-1");
   const [pageDialog, setPageDialog] = useState(null);
+  const [genericStyleSelection, setGenericStyleSelection] = useState("form");
 
   const [builderOpen, setBuilderOpen] = useState(false);
 
@@ -7864,39 +8221,6 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-  if (scope !== "travel" && scope !== "generic") {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    return null;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  }
 
 
 
@@ -8104,6 +8428,26 @@ export default function WebForms({ scope = "generic" }) {
         const body = new FormData();
         body.append("image", file);
         const uploaded = await fetchApi("/api/forms/logo-upload?scope=travel", {
+          method: "POST",
+          body,
+        });
+        applyDraft({ style: { ...selectedForm.style, logoUrl: uploaded.url } });
+        notifyRef.current.success(uploaded.storage === "ocs" ? "Logo uploaded to OCS." : "Logo uploaded.");
+      } catch (error) {
+        notifyRef.current.error(error?.data?.error || error?.message || "Failed to upload form logo.");
+      } finally {
+        setUploadingLogo(false);
+        if (event.target) event.target.value = "";
+      }
+      return;
+    }
+
+    if (formScope === "generic") {
+      setUploadingLogo(true);
+      try {
+        const body = new FormData();
+        body.append("image", file);
+        const uploaded = await fetchApi("/api/forms/generic-logo-upload?scope=generic", {
           method: "POST",
           body,
         });
@@ -8381,7 +8725,7 @@ export default function WebForms({ scope = "generic" }) {
 
       fields[index] = { ...(fields[index] || {}), ...patch };
 
-      if (current?.scope === "generic" && Object.prototype.hasOwnProperty.call(patch, "stepId")) {
+      if (supportsAdvancedWebFormFeatures(current?.scope) && Object.prototype.hasOwnProperty.call(patch, "stepId")) {
         const changedField = fields[index];
         const isConditionalRoot = !changedField.showWhen && (
           changedField?.conditionalFlow === true ||
@@ -8632,7 +8976,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-      if (current?.scope === "generic") {
+      if (supportsAdvancedWebFormFeatures(current?.scope)) {
         const groups = buildConditionalFieldGroups(fields, true);
         const selectedGroup = groups.find((group) =>
           group.fields.some(({ field }) => String(field.id) === String(fields[index]?.id))
@@ -8804,7 +9148,7 @@ export default function WebForms({ scope = "generic" }) {
   };
 
   const addConditionalFlow = () => {
-    if (selectedForm?.scope !== "generic") return;
+    if (!supportsAdvancedWebFormFeatures(selectedForm?.scope)) return;
 
     const root = {
       ...emptyFieldFor("custom", leadFields, "", "dropdown", ""),
@@ -8861,7 +9205,7 @@ export default function WebForms({ scope = "generic" }) {
   };
 
   const addConditionalChild = (parentFieldId, answer) => {
-    if (selectedForm?.scope !== "generic") return;
+    if (!supportsAdvancedWebFormFeatures(selectedForm?.scope)) return;
 
     const parent = (selectedForm.fields || []).find((field) => String(field.id) === String(parentFieldId));
     if (!parent) return;
@@ -10310,9 +10654,17 @@ export default function WebForms({ scope = "generic" }) {
   const previewSrc = selectedForm ? buildWebFormPreviewUrl(selectedForm, origin) : "";
 
   const builderFields = selectedForm?.fields || [];
-  const builderFieldGroups = selectedForm?.scope === "generic"
+  const builderFieldGroups = supportsAdvancedWebFormFeatures(selectedForm?.scope)
     ? buildConditionalFieldGroups(builderFields, true)
     : builderFields.map((field, index) => ({ root: field, firstIndex: index, fields: [{ field, index }] }));
+
+  useEffect(() => {
+    if (selectedForm?.scope !== "generic") return;
+    if (["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container"].includes(genericStyleSelection)) return;
+    if (!["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container"].includes(genericStyleSelection)) {
+      setGenericStyleSelection("form");
+    }
+  }, [selectedForm?.scope, builderFields, genericStyleSelection]);
 
 
 
@@ -10360,7 +10712,7 @@ export default function WebForms({ scope = "generic" }) {
 
 
 
-    <div className={scope === "generic" ? "web-form-builder web-form-builder-generic" : "web-form-builder"} style={{ padding: "1.5rem", display: "grid", gap: 16, alignContent: "start", color: "var(--text-primary)", animation: "fadeIn 0.2s ease" }}>
+    <div className={`${scope === "generic" ? "web-form-builder web-form-builder-generic" : "web-form-builder"}${scope === "travel" ? " web-form-builder-travel" : ""}`} style={{ padding: "1.5rem", display: "grid", gap: 16, alignContent: "start", color: "var(--text-primary)", animation: "fadeIn 0.2s ease" }}>
 
 
 
@@ -10645,15 +10997,1259 @@ export default function WebForms({ scope = "generic" }) {
           --wf-popover-bg: #1a1d24;
         }
 
+        .web-form-builder-travel .wf-travel-customization {
+          display: grid;
+          gap: 12px;
+          max-width: 100%;
+          padding: 12px;
+          border: 1px solid var(--border-color);
+          border-radius: 10px;
+          background: var(--surface-hover);
+        }
+
+        .wf-travel-customization .wf-generic-live-inspector-title {
+          color: var(--text-primary);
+          font-weight: 700;
+        }
+
+        .wf-travel-customization .wf-generic-live-elements {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          max-height: 150px;
+          overflow: auto;
+        }
+
+        .wf-travel-customization .wf-generic-live-elements button {
+          max-width: 100%;
+          padding: 6px 8px;
+          overflow: hidden;
+          border: 1px solid var(--border-color);
+          border-radius: 7px;
+          background: var(--surface-color);
+          color: var(--text-secondary);
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          cursor: pointer;
+        }
+
+        .wf-travel-customization .wf-generic-live-elements button.is-selected {
+          border-color: var(--accent-color, #6366f1);
+          color: var(--text-primary);
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #6366f1) 20%, transparent);
+        }
+
+        .wf-travel-customization .wf-generic-live-context-options {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+          gap: 10px;
+          align-items: start;
+        }
+
+        .wf-travel-customization .wf-generic-live-context-options > label > span,
+        .wf-travel-customization .wf-generic-live-context-options .wf-logo-upload-label {
+          font-size: 0.8rem;
+          line-height: 1.2;
+        }
+
+        .wf-travel-customization .wf-generic-element-text-controls {
+          display: flex;
+          align-items: end;
+          flex-wrap: wrap;
+          gap: 8px;
+          padding: 8px;
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          background: var(--surface-color);
+        }
+
+        .wf-travel-customization .wf-generic-element-text-controls > label {
+          display: grid;
+          gap: 4px;
+          min-width: 84px;
+          color: var(--text-secondary);
+          font-size: 0.76rem;
+        }
+
+        .wf-travel-customization .wf-generic-text-toggle-group {
+          display: flex;
+          gap: 5px;
+          align-items: center;
+        }
+
+        .wf-travel-customization .wf-generic-text-toggle-group button {
+          min-width: 32px;
+          padding: 6px 8px;
+          border: 1px solid var(--border-color);
+          border-radius: 7px;
+          background: var(--surface-color);
+          color: var(--text-secondary);
+          cursor: pointer;
+        }
+
+        .wf-travel-customization .wf-generic-text-toggle-group button.is-active {
+          border-color: var(--accent-color, #6366f1);
+          color: var(--text-primary);
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #6366f1) 20%, transparent);
+        }
+
+        .web-form-builder-generic .wf-generic-live-editor {
+          display: grid;
+          gap: 16px;
+          margin-bottom: 22px;
+          padding: 16px;
+          border: 1px solid var(--border-color);
+          border-radius: 14px;
+          background: var(--surface-color);
+        }
+
+        .web-form-builder-generic .wf-generic-live-toolbar {
+          display: flex;
+          align-items: end;
+          flex-wrap: wrap;
+          gap: 12px;
+          padding-bottom: 14px;
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .web-form-builder-generic .wf-generic-live-toolbar-title,
+        .web-form-builder-generic .wf-generic-live-inspector-title {
+          color: var(--text-primary);
+          font-weight: 700;
+        }
+
+        .web-form-builder-generic .wf-generic-live-toolbar-title {
+          margin-right: auto;
+          font-size: 1rem;
+        }
+
+        .web-form-builder-generic .wf-generic-live-toolbar-control {
+          display: grid;
+          gap: 5px;
+          min-width: 120px;
+        }
+
+        .web-form-builder-generic .wf-generic-live-toolbar-control span,
+        .web-form-builder-generic .wf-generic-live-preview-label {
+          color: var(--text-secondary);
+          font-size: 0.76rem;
+        }
+
+        .web-form-builder-generic .wf-generic-live-toolbar-control select {
+          min-height: 36px;
+          padding: 0 9px;
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          background: var(--surface-color);
+          color: var(--text-primary);
+        }
+
+        .web-form-builder-generic .wf-generic-live-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.65fr);
+          gap: 16px;
+          align-items: start;
+        }
+
+        .web-form-builder-generic .wf-generic-live-preview-wrap,
+        .web-form-builder-generic .wf-generic-live-inspector {
+          min-width: 0;
+        }
+
+        .web-form-builder-generic .wf-generic-live-preview-wrap {
+          padding: 10px;
+          border-radius: 10px;
+        }
+
+        .web-form-builder-generic .wf-generic-live-preview-label {
+          margin-bottom: 7px;
+          font-weight: 700;
+        }
+
+        .web-form-builder-generic .wf-generic-live-preview {
+          min-height: 300px;
+          overflow: hidden;
+        }
+
+        .web-form-builder-generic .wf-generic-live-logo {
+          display: block;
+          max-width: 150px;
+          max-height: 46px;
+          margin-bottom: 12px;
+          object-fit: contain;
+        }
+
+        .web-form-builder-generic .wf-generic-live-fields {
+          display: grid;
+          gap: 10px;
+          margin: 16px 0;
+        }
+
+        .web-form-builder-generic .wf-generic-live-field {
+          display: grid;
+          gap: 6px;
+          width: 100%;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: inherit;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .web-form-builder-generic .wf-generic-live-field > span {
+          color: var(--wf-live-label-color, currentColor);
+          font-size: var(--wf-live-label-size, 0.8rem);
+          font-weight: 600;
+        }
+
+        .web-form-builder-generic .wf-generic-live-field-control input,
+        .web-form-builder-generic .wf-generic-live-field-control select,
+        .web-form-builder-generic .wf-generic-live-field-control textarea {
+          width: 100%;
+          min-height: var(--wf-live-field-height, 40px);
+          box-sizing: border-box;
+          padding: 8px 10px;
+          border: 1px solid var(--wf-live-border-color, var(--border-color));
+          border-radius: 8px;
+          background: var(--wf-live-field-bg, var(--surface-color));
+          color: inherit;
+          font: inherit;
+        }
+
+        .web-form-builder-generic .wf-generic-live-field-control input::placeholder,
+        .web-form-builder-generic .wf-generic-live-field-control textarea::placeholder {
+          font-family: var(--wf-live-placeholder-font, inherit);
+          font-size: var(--wf-live-placeholder-size, inherit);
+          font-weight: var(--wf-live-placeholder-weight, inherit);
+          font-style: var(--wf-live-placeholder-style, normal);
+          text-decoration: var(--wf-live-placeholder-decoration, none);
+          text-align: var(--wf-live-placeholder-align, left);
+          color: var(--wf-live-placeholder-color, currentColor);
+          opacity: 1;
+        }
+
+        .web-form-builder-generic .wf-generic-live-field-control textarea {
+          min-height: 70px;
+          resize: vertical;
+        }
+
+        .web-form-builder-generic .wf-generic-live-field.is-selected .wf-generic-live-field-control input,
+        .web-form-builder-generic .wf-generic-live-field.is-selected .wf-generic-live-field-control select,
+        .web-form-builder-generic .wf-generic-live-field.is-selected .wf-generic-live-field-control textarea,
+        .web-form-builder-generic .wf-generic-live-submit.is-selected {
+          outline: 2px solid var(--accent-color, #6366f1);
+          outline-offset: 2px;
+        }
+
+        .web-form-builder-generic .wf-generic-live-message {
+          margin-top: 10px;
+          padding: 8px 10px;
+          border-radius: 6px;
+          cursor: pointer;
+        }
+
+        .web-form-builder-generic .wf-generic-live-error {
+          background: color-mix(in srgb, #b91c1c 8%, transparent);
+        }
+
+        .web-form-builder-generic .wf-generic-live-success {
+          background: color-mix(in srgb, #065f46 8%, transparent);
+        }
+
+        .web-form-builder-generic .wf-generic-live-message.is-selected {
+          outline: 2px solid var(--accent-color, #6366f1);
+          outline-offset: 2px;
+        }
+
+        .web-form-builder-generic .wf-generic-live-field > span.is-selected {
+          outline: 2px solid var(--accent-color, #6366f1);
+          outline-offset: 2px;
+          border-radius: 3px;
+        }
+
+        .web-form-builder-generic .wf-generic-live-submit {
+          min-width: 120px;
+          padding: 0 16px;
+          cursor: pointer;
+        }
+
+        .web-form-builder-generic .wf-generic-live-inspector {
+          display: grid;
+          gap: 12px;
+          padding: 12px;
+          border: 1px solid var(--border-color);
+          border-radius: 10px;
+          background: var(--surface-hover);
+        }
+
+        .web-form-builder-generic .wf-generic-live-elements {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          max-height: 150px;
+          overflow: auto;
+        }
+
+        .web-form-builder-generic .wf-generic-live-elements button {
+          max-width: 100%;
+          padding: 6px 8px;
+          overflow: hidden;
+          border: 1px solid var(--border-color);
+          border-radius: 7px;
+          background: var(--surface-color);
+          color: var(--text-secondary);
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          cursor: pointer;
+        }
+
+        .web-form-builder-generic .wf-generic-live-elements button.is-selected {
+          border-color: var(--accent-color, #6366f1);
+          color: var(--text-primary);
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #6366f1) 20%, transparent);
+        }
+
+        .web-form-builder-generic .wf-generic-live-context-options {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+          gap: 10px;
+          align-items: start;
+        }
+
+        .web-form-builder-generic .wf-generic-live-context-options > div:first-child {
+          grid-column: 1 / -1;
+          min-width: 0;
+        }
+
+        .web-form-builder-generic .wf-generic-live-context-options > div:first-child > div {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .web-form-builder-generic .wf-generic-live-context-options > div:first-child > div > button {
+          width: 60px;
+          min-width: 60px;
+          height: 42px;
+          padding: 0;
+          display: inline-grid;
+          place-items: center;
+          box-sizing: border-box;
+        }
+
+        .web-form-builder-generic .wf-generic-live-context-options > label > span,
+        .web-form-builder-generic .wf-generic-live-context-options .wf-logo-upload-label {
+          font-size: 0.8rem;
+          line-height: 1.2;
+        }
+
+        .web-form-builder-generic .wf-generic-element-text-controls {
+          display: flex;
+          align-items: end;
+          flex-wrap: wrap;
+          gap: 8px;
+          padding: 8px;
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          background: var(--surface-color);
+        }
+
+        .web-form-builder-generic .wf-generic-element-text-controls > label {
+          display: grid;
+          gap: 4px;
+          min-width: 84px;
+          color: var(--text-secondary);
+          font-size: 0.72rem;
+        }
+
+        .web-form-builder-generic .wf-generic-element-text-controls select,
+        .web-form-builder-generic .wf-generic-element-text-controls input {
+          min-height: 30px;
+          min-width: 0;
+          box-sizing: border-box;
+          padding: 4px 6px;
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          background: var(--surface-color);
+          color: var(--text-primary);
+          font: inherit;
+          font-size: 0.78rem;
+        }
+
+        .web-form-builder-generic .wf-generic-text-toggle-group {
+          display: flex;
+          gap: 4px;
+        }
+
+        .web-form-builder-generic .wf-generic-text-toggle-group button {
+          width: 30px;
+          height: 30px;
+          padding: 0;
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          background: var(--surface-color);
+          color: var(--text-secondary);
+          cursor: pointer;
+        }
+
+        .web-form-builder-generic .wf-generic-text-toggle-group button.is-active {
+          border-color: var(--accent-color, #6366f1);
+          background: color-mix(in srgb, var(--accent-color, #6366f1) 14%, var(--surface-color));
+          color: var(--text-primary);
+        }
+
+        @media (max-width: 900px) {
+          .web-form-builder-generic .wf-generic-live-layout {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 560px) {
+          .web-form-builder-generic .wf-generic-live-editor {
+            padding: 12px;
+          }
+
+          .web-form-builder-generic .wf-generic-live-toolbar-control,
+          .web-form-builder-generic .wf-generic-live-toolbar .wf-color-field,
+          .web-form-builder-generic .wf-generic-live-toolbar .wf-style-number-field {
+            width: 100%;
+            min-width: 0;
+          }
+        }
+
+        .web-form-builder-generic .wf-style-grid-top > label,
+        .web-form-builder-generic .wf-style-grid-colors > label,
+        .web-form-builder-generic .wf-style-grid-colors > .wf-color-field {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .web-form-builder-generic .wf-style-grid-top,
+        .web-form-builder-generic .wf-style-grid-colors {
+          display: flex !important;
+          flex-wrap: wrap;
+          align-items: flex-start;
+          justify-content: flex-start !important;
+          gap: 24px !important;
+          column-gap: 24px !important;
+          row-gap: 24px !important;
+        }
+
+        .web-form-builder-generic .wf-style-grid-top > label,
+        .web-form-builder-generic .wf-style-grid-colors > label,
+        .web-form-builder-generic .wf-style-grid-colors > .wf-color-field {
+          width: max-content !important;
+          min-width: 0;
+          max-width: none;
+        }
+
+        .web-form-builder-generic .wf-style-grid-top > label,
+        .web-form-builder-generic .wf-style-grid-colors > label,
+        .web-form-builder-generic .wf-style-grid-colors > .wf-color-field {
+          flex: 0 0 auto !important;
+        }
+
+    .web-form-builder-generic .wf-style-grid-top .input-field,
+    .web-form-builder-generic .wf-style-grid-top select {
+      width: var(--wf-control-width);
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+        }
+
+    .web-form-builder-generic .wf-style-grid-colors > label:not(.wf-color-field) > .input-field {
+      width: var(--wf-control-width);
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+        }
+
+    .web-form-builder-generic .wf-style-grid-top select,
+    .web-form-builder-generic .wf-style-grid-colors > label:not(.wf-color-field) > select {
+      width: var(--wf-option-width);
+      min-width: var(--wf-option-width);
+      max-width: none;
+      justify-self: start;
+    }
+
+    .web-form-builder-generic .wf-style-grid-colors .wf-color-control {
+      width: var(--wf-control-width);
+      max-width: 100%;
+    }
+
+    .web-form-builder-generic .wf-style-block .wf-style-grid-top > label > span,
+    .web-form-builder-generic .wf-style-block .wf-style-grid-colors > label > span,
+    .web-form-builder-generic .wf-style-block .wf-style-grid-colors > .wf-color-field > span {
+      color: var(--text-primary) !important;
+      font-weight: 700 !important;
+    }
+
+    .web-form-builder-generic .wf-style-block .wf-style-kicker {
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+
+    .web-form-builder-generic .wf-style-block .wf-style-grid-top .input-field,
+    .web-form-builder-generic .wf-style-block .wf-style-grid-colors .input-field {
+      color: var(--text-primary);
+      background: var(--surface-color);
+      border-color: var(--border-color);
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid {
+      display: flex !important;
+      position: relative;
+      padding-right: 280px;
+      align-items: flex-start !important;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      gap: 16px !important;
+    }
+
+    .web-form-builder-generic .wf-field-grid {
+      grid-template-columns: max-content minmax(0, 1fr) !important;
+      gap: 16px !important;
+      align-items: start !important;
+    }
+
+    .web-form-builder-generic .wf-conditional-child-card {
+      margin-left: clamp(18px, 3vw, 44px);
+      margin-right: 0;
+    }
+
+    .web-form-builder-generic .wf-conditional-child-card.wf-conditional-depth-2 {
+      margin-left: clamp(42px, 6vw, 84px);
+    }
+
+    .web-form-builder-generic .wf-conditional-child-card.wf-conditional-depth-3 {
+      margin-left: clamp(66px, 9vw, 124px);
+    }
+
+    .web-form-builder-generic .wf-conditional-config {
+      display: flex !important;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 12px !important;
+    }
+
+    .web-form-builder-generic .wf-conditional-config > div:first-child {
+      flex-basis: 100%;
+    }
+
+    .web-form-builder-generic .wf-conditional-config > .wf-conditional-parent-select {
+      flex: 0 1 300px;
+      width: 300px;
+      min-width: 220px;
+      max-width: 300px;
+    }
+
+    .web-form-builder-generic .wf-conditional-config > .wf-conditional-answer-select {
+      flex: 0 1 180px;
+      width: 180px;
+      min-width: 150px;
+      max-width: 220px;
+    }
+
+    .web-form-builder-generic .wf-conditional-config .input-field {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-label {
+      flex: 0 1 clamp(180px, 20vw, 220px);
+      width: clamp(180px, 20vw, 220px);
+      min-width: min(100%, 180px);
+      max-width: 220px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-step {
+      flex: 0 0 160px;
+      width: 160px;
+      min-width: 150px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-default {
+      flex: 1 1 240px;
+      width: min(100%, 280px);
+      min-width: min(100%, 220px);
+      max-width: 280px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-controls {
+      display: flex !important;
+      flex: 1 1 380px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 16px !important;
+      min-width: min(100%, 380px);
+    }
+
+    .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-type {
+      flex: 0 0 160px;
+      width: 160px;
+      min-width: 150px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-secondary {
+      flex: 0 1 220px;
+      width: 220px;
+      min-width: 180px;
+      max-width: 260px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 1;
+      display: flex !important;
+      flex: 0 0 auto;
+      width: auto !important;
+      max-width: calc(100% - 16px);
+      min-width: 0;
+      justify-content: flex-end !important;
+      align-items: flex-start !important;
+      flex-wrap: wrap !important;
+      gap: 10px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions > button.btn-secondary {
+      padding: 0 !important;
+      width: 20px;
+      min-width: 20px;
+      height: 20px;
+      border: 0 !important;
+      background: transparent !important;
+      box-shadow: none !important;
+      display: inline-grid;
+      place-items: center;
+      align-self: flex-start !important;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-email-validation-controls),
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-phone-country-controls) {
+      width: min(100%, 520px) !important;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid:has(.wf-email-validation-controls),
+    .web-form-builder-generic .wf-generic-field-editor-grid:has(.wf-phone-country-controls) {
+      padding-bottom: 20px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-email-validation-controls {
+      position: absolute;
+      top: 76px;
+      right: 0;
+      width: min(100%, 520px);
+      justify-content: flex-end;
+      order: 2;
+    }
+
+    .web-form-builder-generic .wf-email-validation-controls {
+      align-items: center;
+      gap: 6px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .web-form-builder-generic .wf-email-validation-controls > label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 700;
+    }
+
+    .web-form-builder-generic .wf-email-validation-controls select {
+      font-size: 12px !important;
+      padding: 3px 5px !important;
+      border-radius: 6px !important;
+      box-sizing: border-box;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-phone-country-controls {
+      position: absolute;
+      top: 76px;
+      right: 0;
+      flex-basis: auto;
+      order: 3;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      min-width: 0;
+      width: min(100%, 520px);
+      margin-left: auto;
+    }
+
+    .web-form-builder-generic .wf-phone-country-controls select {
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid .input-field {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    .web-form-builder-generic .wf-generic-options-input {
+      height: 44px;
+      min-height: 44px;
+      resize: both;
+    }
+
+    /* Keep Generic CRM field controls compact and aligned without changing behavior. */
+    .web-form-builder-generic .wf-generic-field-editor-grid {
+      padding-right: 220px;
+      gap: 12px !important;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-label {
+      flex: 0 1 180px;
+      width: 180px;
+      min-width: 165px;
+      max-width: 190px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-step {
+      flex: 0 1 150px;
+      width: 150px;
+      min-width: 135px;
+      max-width: 160px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-controls {
+      flex: 1 1 340px;
+      min-width: 320px;
+      gap: 12px !important;
+    }
+
+    .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-type {
+      flex: 0 1 140px;
+      width: 140px;
+      min-width: 130px;
+      max-width: 150px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-secondary {
+      flex: 0 1 200px;
+      width: 200px;
+      min-width: 180px;
+      max-width: 220px;
+    }
+
+    .web-form-builder-generic .wf-generic-field-editor-grid .input-field,
+    .web-form-builder-generic .wf-generic-field-editor-grid textarea {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    @media (max-width: 760px) {
+      .web-form-builder-generic .wf-generic-field-editor-grid {
+        display: flex !important;
+        padding-right: 0;
+        padding-bottom: 0;
+        gap: 16px !important;
+      }
+
+      .web-form-builder-generic .wf-generic-field-controls {
+        display: flex !important;
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        gap: 16px !important;
+      }
+
+      .web-form-builder-generic .wf-field-grid {
+        grid-template-columns: 1fr !important;
+      }
+
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions {
+        position: static;
+        width: 100% !important;
+        max-width: none;
+        min-width: 0;
+        justify-content: flex-start !important;
+      }
+
+      .web-form-builder-generic .wf-phone-country-controls {
+        position: static;
+        width: 100%;
+        flex-basis: 100%;
+        justify-content: flex-end;
+      }
+
+      .web-form-builder-generic .wf-email-validation-controls {
+        position: static;
+        width: 100%;
+      }
+
+      .web-form-builder-generic .wf-generic-field-editor-grid,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-email-validation-controls,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-phone-country-controls {
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-email-validation-controls,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-phone-country-controls {
+        position: static !important;
+        top: auto !important;
+        right: auto !important;
+        width: 100% !important;
+        flex: 1 1 100%;
+        flex-basis: 100%;
+        justify-content: flex-start;
+        white-space: normal;
+        margin-left: 0;
+      }
+
+      .web-form-builder-generic .wf-email-validation-controls > label {
+        flex-wrap: wrap;
+      }
+
+      .web-form-builder-generic .wf-email-validation-controls select,
+      .web-form-builder-generic .wf-phone-country-controls select {
+        max-width: 100%;
+      }
+
+      .web-form-builder-generic .wf-conditional-child-card {
+        margin-left: 12px;
+        margin-right: 0;
+      }
+
+      .web-form-builder-generic .wf-conditional-child-card.wf-conditional-depth-2 {
+        margin-left: 24px;
+      }
+
+      .web-form-builder-generic .wf-conditional-child-card.wf-conditional-depth-3 {
+        margin-left: 36px;
+      }
+
+      .web-form-builder-generic .wf-conditional-config > .wf-conditional-parent-select,
+      .web-form-builder-generic .wf-conditional-config > .wf-conditional-answer-select {
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+      }
+
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-label,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-step,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-default,
+      .web-form-builder-generic .wf-generic-field-controls,
+      .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-type,
+      .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-secondary {
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+      }
+
+      .web-form-builder-generic .wf-field-card,
+      .web-form-builder-generic .wf-field-grid,
+      .web-form-builder-generic .wf-generic-field-editor-grid,
+      .web-form-builder-generic .wf-generic-field-controls {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0 !important;
+        box-sizing: border-box;
+      }
+
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-label,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-step,
+      .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-default,
+      .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-type,
+      .web-form-builder-generic .wf-generic-field-controls > .wf-generic-field-secondary {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        flex-basis: 100%;
+      }
+
+      .web-form-builder-generic .wf-conditional-child-card {
+        margin-left: 8px;
+      }
+
+      .web-form-builder-generic .wf-conditional-child-card.wf-conditional-depth-2 {
+        margin-left: 16px;
+      }
+
+      .web-form-builder-generic .wf-conditional-child-card.wf-conditional-depth-3 {
+        margin-left: 24px;
+      }
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid {
+      display: flex !important;
+      position: relative;
+      padding-right: 190px;
+      align-items: flex-start !important;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      gap: 10px !important;
+    }
+
+    .web-form-builder-travel .wf-field-grid {
+      grid-template-columns: max-content minmax(0, 1fr) !important;
+      gap: 12px !important;
+      align-items: start !important;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-generic-field-label {
+      flex: 0 1 160px;
+      width: 160px;
+      min-width: 145px;
+      max-width: 175px;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-generic-field-step {
+      flex: 0 1 130px;
+      width: 130px;
+      min-width: 120px;
+      max-width: 145px;
+    }
+
+    .web-form-builder-travel .wf-generic-field-controls {
+      display: flex !important;
+      flex: 1 1 300px;
+      min-width: 280px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 10px !important;
+    }
+
+    .web-form-builder-travel .wf-generic-field-controls > .wf-generic-field-type {
+      flex: 0 1 125px;
+      width: 125px;
+      min-width: 115px;
+      max-width: 135px;
+    }
+
+    .web-form-builder-travel .wf-generic-field-controls > .wf-generic-field-secondary {
+      flex: 0 1 180px;
+      width: 180px;
+      min-width: 165px;
+      max-width: 200px;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid .input-field,
+    .web-form-builder-travel .wf-generic-field-editor-grid textarea {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 1;
+      display: flex !important;
+      flex: 0 0 auto;
+      width: auto !important;
+      max-width: calc(100% - 12px);
+      min-width: 0;
+      justify-content: flex-end !important;
+      align-items: flex-start !important;
+      flex-wrap: wrap !important;
+      gap: 10px;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > button.btn-secondary {
+      padding: 0 !important;
+      width: 20px;
+      min-width: 20px;
+      height: 20px;
+      border: 0 !important;
+      background: transparent !important;
+      box-shadow: none !important;
+      display: inline-grid;
+      place-items: center;
+      align-self: flex-start !important;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-email-validation-controls),
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-phone-country-controls) {
+      width: 100% !important;
+      height: 100%;
+      min-height: 42px;
+      box-sizing: border-box;
+      pointer-events: none;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-email-validation-controls) > label,
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-email-validation-controls) > button,
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-phone-country-controls) > label,
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-phone-country-controls) > button,
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-email-validation-controls,
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-phone-country-controls {
+      pointer-events: auto;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid:has(.wf-email-validation-controls),
+    .web-form-builder-travel .wf-generic-field-editor-grid:has(.wf-phone-country-controls) {
+      padding-bottom: 20px;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-email-validation-controls,
+    .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-phone-country-controls {
+      position: static;
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      flex-basis: auto;
+      width: auto;
+      max-width: calc(100% - 12px);
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .web-form-builder-travel .wf-email-validation-controls,
+    .web-form-builder-travel .wf-phone-country-controls {
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    .web-form-builder-travel .wf-email-validation-label {
+      font-weight: 700;
+    }
+
+    .web-form-builder-travel .wf-generic-field-editor-grid:has(.wf-email-validation-controls),
+    .web-form-builder-travel .wf-generic-field-editor-grid:has(.wf-phone-country-controls) {
+      padding-bottom: 32px;
+    }
+
+    .web-form-builder-generic .wf-country-picker,
+    .web-form-builder-travel .wf-country-picker {
+      position: relative;
+      min-width: 145px;
+    }
+
+    .web-form-builder-generic .wf-country-picker-trigger,
+    .web-form-builder-travel .wf-country-picker-trigger {
+      width: 145px;
+      min-height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 3px 7px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: var(--surface-color);
+      color: var(--text-primary);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .web-form-builder-generic .wf-country-picker-panel,
+    .web-form-builder-travel .wf-country-picker-panel {
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + 6px);
+      z-index: 10000;
+      width: min(260px, calc(100vw - 24px));
+      box-sizing: border-box;
+      padding: 8px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      background: #ffffff !important;
+      opacity: 1 !important;
+      isolation: isolate;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+    }
+
+    .web-form-builder-generic .wf-field-card:has(.wf-country-picker-panel),
+    .web-form-builder-travel .wf-field-card:has(.wf-country-picker-panel) {
+      position: relative;
+      z-index: 10001;
+    }
+
+    .web-form-builder-generic .wf-field-card:has(.wf-country-picker-panel) {
+      z-index: 10004;
+    }
+
+    .web-form-builder-generic .wf-country-picker-panel {
+      z-index: 10005;
+      background: #ffffff !important;
+      opacity: 1 !important;
+    }
+
+    .web-form-builder-generic .wf-field-card:has(.wf-email-domain-popover),
+    .web-form-builder-travel .wf-field-card:has(.wf-email-domain-popover) {
+      position: relative;
+      z-index: 10002;
+    }
+
+    html[data-theme="dark"] .web-form-builder-generic .wf-country-picker-panel,
+    [data-theme="dark"] .web-form-builder-generic .wf-country-picker-panel,
+    html[data-theme="dark"] .web-form-builder-travel .wf-country-picker-panel,
+    [data-theme="dark"] .web-form-builder-travel .wf-country-picker-panel {
+      background: #1a1d24 !important;
+    }
+
+    .web-form-builder-generic .wf-country-picker-search,
+    .web-form-builder-travel .wf-country-picker-search {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      display: block;
+      padding: 6px 8px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: var(--surface-color);
+      color: var(--text-primary);
+      font: inherit;
+      font-size: 12px;
+    }
+
+    .web-form-builder-generic .wf-country-picker-clear,
+    .web-form-builder-travel .wf-country-picker-clear {
+      width: auto;
+      box-sizing: border-box;
+      display: inline-block;
+      margin: 0;
+      padding: 4px 2px;
+      border: 0;
+      background: transparent;
+      color: var(--accent-color, #4f46e5);
+      font: inherit;
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .web-form-builder-generic .wf-country-picker-actions,
+    .web-form-builder-travel .wf-country-picker-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-top: 6px;
+    }
+
+    .web-form-builder-generic .wf-country-picker-clear:hover,
+    .web-form-builder-travel .wf-country-picker-clear:hover {
+      text-decoration: underline;
+    }
+
+    .web-form-builder-generic .wf-country-picker-options,
+    .web-form-builder-travel .wf-country-picker-options {
+      display: grid;
+      gap: 4px;
+      max-height: 150px;
+      margin-top: 7px;
+      overflow-y: auto;
+    }
+
+    .web-form-builder-generic .wf-country-picker-option,
+    .web-form-builder-travel .wf-country-picker-option {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding: 3px 2px;
+      color: var(--text-primary);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .web-form-builder-generic .wf-country-picker-option span,
+    .web-form-builder-travel .wf-country-picker-option span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .web-form-builder-generic .wf-country-picker-empty,
+    .web-form-builder-travel .wf-country-picker-empty {
+      padding: 8px 2px;
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    @media (max-width: 760px) {
+      .web-form-builder-travel .wf-generic-field-editor-grid {
+        display: flex !important;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        padding: 0;
+        gap: 10px !important;
+      }
+
+      .web-form-builder-travel .wf-field-card,
+      .web-form-builder-travel .wf-field-grid,
+      .web-form-builder-travel .wf-generic-field-controls {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0 !important;
+        box-sizing: border-box;
+      }
+
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-generic-field-label,
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-generic-field-step,
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-generic-field-default,
+      .web-form-builder-travel .wf-generic-field-controls,
+      .web-form-builder-travel .wf-generic-field-controls > .wf-generic-field-type,
+      .web-form-builder-travel .wf-generic-field-controls > .wf-generic-field-secondary {
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .web-form-builder-travel .wf-generic-field-controls {
+        gap: 12px !important;
+      }
+
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions {
+        position: static;
+        width: 100% !important;
+        max-width: 100%;
+        min-width: 0;
+        justify-content: flex-start !important;
+      }
+
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-email-validation-controls,
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-phone-country-controls {
+        position: static !important;
+        width: 100% !important;
+        max-width: 100%;
+        flex-basis: 100%;
+        justify-content: flex-start;
+        white-space: normal;
+      }
+
+      .web-form-builder-travel .wf-phone-country-controls select,
+      .web-form-builder-travel .wf-email-validation-controls select {
+        max-width: 100%;
+      }
+    }
+
         .web-form-builder-generic .wf-email-domain-popover {
           isolation: isolate;
           color: var(--text-primary);
           opacity: 1 !important;
         }
 
-        .web-form-builder-generic .wf-email-domain-popover .input-field {
+    .web-form-builder-generic .wf-email-domain-popover .input-field {
           opacity: 1 !important;
         }
+
+    .web-form-builder-generic .wf-email-validation-controls .wf-email-domain-popover {
+      top: auto !important;
+      bottom: 100% !important;
+      margin-top: 0 !important;
+      margin-bottom: 6px;
+    }
 
 
 
@@ -18048,7 +19644,7 @@ export default function WebForms({ scope = "generic" }) {
           </button>
 
                       <button type="button" className="btn-secondary" onClick={() => addField("file")}><Paperclip size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add field for file attachment</button>
-                      {selectedForm?.scope === "generic" ? (
+                      {supportsAdvancedWebFormFeatures(selectedForm?.scope) ? (
                         <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
                           <button type="button" className="btn-secondary" onClick={addConditionalFlow}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add conditional flow</button>
                           <button type="button" className="btn-secondary" onClick={addFormStep}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add page</button>
@@ -18064,7 +19660,7 @@ export default function WebForms({ scope = "generic" }) {
                           {builderFieldGroups.map((group) => {
                             const groupFields = group.fields.map(({ field }) => field);
                             const renderField = ({ field, index }) => (
-                              <FieldCard key={field.id} field={field} index={index} allFields={builderFields} conditionalFlowFields={groupFields} leadFields={leadFields} scope={selectedForm.scope} onChange={updateField} onMove={moveField} onRemove={removeField} phoneSettings={selectedForm.scope === "generic" && field.sourceKey === "phone" ? selectedForm.settings : null} onPhoneSettingsChange={(settings) => applyDraft({ settings })} onAddConditionalChild={addConditionalChild} steps={selectedForm.settings.steps} multiStepEnabled={selectedForm.settings.multiStepEnabled} formScope={selectedForm.scope} formSettings={selectedForm.settings} onFormSettingsChange={(settings) => applyDraft({ settings })} />
+                              <FieldCard key={field.id} field={field} index={index} allFields={builderFields} conditionalFlowFields={groupFields} leadFields={leadFields} scope={selectedForm.scope} onChange={updateField} onMove={moveField} onRemove={removeField} phoneSettings={supportsAdvancedWebFormFeatures(selectedForm.scope) && field.sourceKey === "phone" ? selectedForm.settings : null} onPhoneSettingsChange={(settings) => applyDraft({ settings })} onAddConditionalChild={addConditionalChild} steps={selectedForm.settings.steps} multiStepEnabled={selectedForm.settings.multiStepEnabled} formScope={selectedForm.scope} formSettings={selectedForm.settings} onFormSettingsChange={(settings) => applyDraft({ settings })} />
                             );
 
                             if (group.fields.length === 1) return renderField(group.fields[0]);
@@ -18077,21 +19673,45 @@ export default function WebForms({ scope = "generic" }) {
                                   <small>For each child: choose its parent question and answer. A child can become the next parent.</small>
                                 </div>
                                 <div className="wf-conditional-group-fields">
-                                  {group.fields.map((entry, entryIndex) => (
-                                    entryIndex === 0
-                                      ? renderField(entry)
-                                      : (
-                                        <div key={`conditional-child-${entry.field.id}`} className="wf-conditional-child-card">
-                                          <div className="wf-conditional-child-heading">
-                                            <span aria-hidden="true">↳</span>
-                                            <strong>Show question</strong>
-                                            <span>when answer is</span>
-                                            <em>{entry.field.showWhen?.value || "Not specified"}</em>
+                                  {(() => {
+                                    const entriesById = new Map(group.fields.map((entry) => [String(entry.field.id), entry]));
+                                    const childrenByParent = new Map();
+
+                                    group.fields.forEach((entry) => {
+                                      const parentId = entry.field.showWhen?.fieldId ? String(entry.field.showWhen.fieldId) : "";
+                                      if (!parentId || !entriesById.has(parentId)) return;
+                                      if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+                                      childrenByParent.get(parentId).push(entry);
+                                    });
+
+                                    const renderConditionalEntry = (entry, isRoot = false, depth = 0) => {
+                                      const rendered = [
+                                        isRoot ? renderField(entry) : (
+                                          <div key={`conditional-child-${entry.field.id}`} className={`wf-conditional-child-card wf-conditional-depth-${depth}`}>
+                                            <div className="wf-conditional-child-heading">
+                                              <span aria-hidden="true">↳</span>
+                                              <strong>Show question</strong>
+                                              <span>when answer is</span>
+                                              <em>{entry.field.showWhen?.value || "Not specified"}</em>
+                                            </div>
+                                            {renderField(entry)}
                                           </div>
-                                          {renderField(entry)}
-                                        </div>
-                                      )
-                                  ))}
+                                        ),
+                                      ];
+
+                                      (childrenByParent.get(String(entry.field.id)) || []).forEach((child) => {
+                                        rendered.push(...renderConditionalEntry(child, false, depth + 1));
+                                      });
+                                      return rendered;
+                                    };
+
+                                    const rootEntries = group.fields.filter((entry) => {
+                                      const parentId = entry.field.showWhen?.fieldId ? String(entry.field.showWhen.fieldId) : "";
+                                      return !parentId || !entriesById.has(parentId);
+                                    });
+
+                                    return rootEntries.flatMap((entry) => renderConditionalEntry(entry, true));
+                                  })()}
                                 </div>
                               </div>
                             );
@@ -18101,7 +19721,9 @@ export default function WebForms({ scope = "generic" }) {
                  </div>
                   </Section>
                  <Section id="wf-style" step={2} title="Customize text and colors" subtitle="Tune the copy, logo, font, and colors so the embedded form matches your brand.">
-                    <div className="wf-style-block">
+                    {selectedForm.scope === "generic" ? <GenericLiveCustomizationEditor form={selectedForm} fields={builderFields} selection={genericStyleSelection} onSelectionChange={setGenericStyleSelection} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={handleLogoUpload} /> : null}
+                    {selectedForm.scope === "travel" ? <div className="web-form-builder-generic wf-travel-live-preview-scope"><GenericLiveCustomizationEditor form={selectedForm} fields={builderFields} selection={genericStyleSelection} onSelectionChange={setGenericStyleSelection} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={handleLogoUpload} /></div> : null}
+                    {selectedForm.scope !== "generic" && selectedForm.scope !== "travel" ? <div className="wf-style-block">
                      <div className="wf-style-kicker">Logo and form text</div>
 
                       <div className="wf-logo-upload">
@@ -18123,23 +19745,23 @@ export default function WebForms({ scope = "generic" }) {
                </div>
 
                       <div className="wf-style-grid-top">
-                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0, ...labelLengthStyle("Title of the form") }}>
                           <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Title of the form</span>
                           <input className="input-field" value={selectedForm.settings.formTitle} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, formTitle: e.target.value } })} />
                         </label>
-                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0, ...labelLengthStyle("Description") }}>
                           <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Description</span>
                           <input className="input-field" value={selectedForm.description} onChange={(e) => applyDraft({ description: e.target.value })} placeholder="Tell people what the form is for" />
                         </label>
-                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0, ...labelLengthStyle("Field label for Submit button *") }}>
                           <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Field label for Submit button *</span>
                           <input className="input-field" value={selectedForm.settings.submitButtonLabel} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, submitButtonLabel: e.target.value } })} />
                         </label>
 
-                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0, ...labelLengthStyle("Font *") }}>
                           <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Font *</span>
 
-                          <select className="input-field" value={selectedForm.style.fontFamily} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontFamily: e.target.value } })}>
+                          <select className="input-field" style={optionLengthStyle(["Inter / system UI", "Arial", "Georgia", "Tahoma", "Verdana"])} value={selectedForm.style.fontFamily} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontFamily: e.target.value } })}>
 
                             <option value="Inter, system-ui, sans-serif">Inter / system UI</option>
 
@@ -18160,12 +19782,12 @@ export default function WebForms({ scope = "generic" }) {
                           <ColorField label="Color of field labels *" value={selectedForm.style.fieldLabelColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldLabelColor: value } })} fallback="#666666" />
                         </div>
                       </div>
-                      {selectedForm.scope === "generic" ? (
+                      {supportsAdvancedWebFormFeatures(selectedForm.scope) ? (
                         <div className="wf-style-divider" style={{ display: "grid", gap: 18 }}>
                           <div className="wf-style-kicker">Typography</div>
                           <div className="wf-style-grid-colors">
                             <StyleNumberField label="Font size (px)" value={selectedForm.style.fontSize} min={10} max={32} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fontSize: value } })} />
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Font weight</span><select className="input-field" value={selectedForm.style.fontWeight} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontWeight: Number(e.target.value) } })}>{[400, 500, 600, 700].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Font weight") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Font weight</span><select className="input-field" style={optionLengthStyle([400, 500, 600, 700])} value={selectedForm.style.fontWeight} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontWeight: Number(e.target.value) } })}>{[400, 500, 600, 700].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
                             <StyleNumberField label="Label size (px)" value={selectedForm.style.labelFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, labelFontSize: value } })} />
                             <StyleNumberField label="Placeholder size (px)" value={selectedForm.style.placeholderFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, placeholderFontSize: value } })} />
                             <StyleNumberField label="Error message size (px)" value={selectedForm.style.errorFontSize} min={9} max={24} onChange={(value) => applyDraft({ style: { ...selectedForm.style, errorFontSize: value } })} />
@@ -18174,7 +19796,7 @@ export default function WebForms({ scope = "generic" }) {
                           <div className="wf-style-kicker">Fields</div>
                           <div className="wf-style-grid-colors">
                             <StyleNumberField label="Field width (%)" value={selectedForm.style.fieldWidth} min={50} max={100} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldWidth: value } })} />
-                            <StyleNumberField label="Field height (px)" value={selectedForm.style.fieldHeight} min={28} max={96} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldHeight: value } })} />
+                            <StyleNumberField label="Field height (px)" value={selectedForm.style.fieldHeight} min={10} max={96} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldHeight: value } })} />
                             <StyleNumberField label="Border width (px)" value={selectedForm.style.fieldBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderWidth: value } })} />
                             <StyleNumberField label="Border radius (px)" value={selectedForm.style.fieldBorderRadius} min={0} max={40} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderRadius: value } })} />
                             <ColorField label="Border color" value={selectedForm.style.fieldBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldBorderColor: value } })} fallback="#D8DDEC" />
@@ -18185,16 +19807,16 @@ export default function WebForms({ scope = "generic" }) {
                           </div>
                           <div className="wf-style-kicker">Layout</div>
                           <div className="wf-style-grid-colors">
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Desktop columns</span><select className="input-field" value={selectedForm.style.layoutColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, layoutColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Desktop columns") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Desktop columns</span><select className="input-field" style={optionLengthStyle(["One column", "Two columns"])} value={selectedForm.style.layoutColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, layoutColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
                             <StyleNumberField label="Custom column width (%)" value={selectedForm.style.customColumnWidth} min={25} max={75} onChange={(value) => applyDraft({ style: { ...selectedForm.style, customColumnWidth: value } })} />
                             <StyleNumberField label="Row gap (px)" value={selectedForm.style.rowGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, rowGap: value } })} />
                             <StyleNumberField label="Column gap (px)" value={selectedForm.style.columnGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, columnGap: value } })} />
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Tablet layout</span><select className="input-field" value={selectedForm.style.tabletColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, tabletColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile layout</span><select className="input-field" value={selectedForm.style.mobileColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, mobileColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Tablet layout") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Tablet layout</span><select className="input-field" style={optionLengthStyle(["One column", "Two columns"])} value={selectedForm.style.tabletColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, tabletColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Mobile layout") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile layout</span><select className="input-field" style={optionLengthStyle(["One column", "Two columns"])} value={selectedForm.style.mobileColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, mobileColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
                           </div>
                           <div className="wf-style-kicker">Form Container</div>
                           <div className="wf-style-grid-colors">
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Background</span><select className="input-field" value={selectedForm.style.containerBackgroundMode} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerBackgroundMode: e.target.value } })}><option value="solid">Solid background</option><option value="gradient">Gradient background</option></select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Background") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Background</span><select className="input-field" style={optionLengthStyle(["Solid background", "Gradient background"])} value={selectedForm.style.containerBackgroundMode} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerBackgroundMode: e.target.value } })}><option value="solid">Solid background</option><option value="gradient">Gradient background</option></select></label>
                             {selectedForm.style.containerBackgroundMode === "gradient" ? <>
                               <ColorField label="Gradient start" value={selectedForm.style.gradientStart} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientStart: value } })} fallback="#FFFFFF" />
                               <ColorField label="Gradient end" value={selectedForm.style.gradientEnd} onChange={(value) => applyDraft({ style: { ...selectedForm.style, gradientEnd: value } })} fallback="#EEF1FF" />
@@ -18205,7 +19827,7 @@ export default function WebForms({ scope = "generic" }) {
                             <StyleNumberField label="Container radius (px)" value={selectedForm.style.containerBorderRadius} min={0} max={48} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerBorderRadius: value } })} />
                             <StyleNumberField label="Container padding (px)" value={selectedForm.style.containerPadding} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerPadding: value } })} />
                             <StyleNumberField label="Container margin (px)" value={selectedForm.style.containerMargin} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, containerMargin: value } })} />
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Shadow</span><select className="input-field" value={selectedForm.style.containerShadow} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerShadow: e.target.value } })}><option value="none">None</option><option value="0 24px 70px rgba(30,41,96,.14)">Soft</option><option value="0 8px 24px rgba(15,23,42,.18)">Compact</option></select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Shadow") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Shadow</span><select className="input-field" style={optionLengthStyle(["None", "Soft", "Compact"])} value={selectedForm.style.containerShadow} onChange={(e) => applyDraft({ style: { ...selectedForm.style, containerShadow: e.target.value } })}><option value="none">None</option><option value="0 24px 70px rgba(30,41,96,.14)">Soft</option><option value="0 8px 24px rgba(15,23,42,.18)">Compact</option></select></label>
                           </div>
                           <div className="wf-style-kicker">Button</div>
                           <div className="wf-style-grid-colors">
@@ -18216,8 +19838,8 @@ export default function WebForms({ scope = "generic" }) {
                             <StyleNumberField label="Button radius (px)" value={selectedForm.style.buttonBorderRadius} min={0} max={40} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderRadius: value } })} />
                             <ColorField label="Button border" value={selectedForm.style.buttonBorderColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderColor: value } })} fallback="#12344D" />
                             <StyleNumberField label="Button border width (px)" value={selectedForm.style.buttonBorderWidth} min={0} max={8} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonBorderWidth: value } })} />
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Width</span><select className="input-field" value={selectedForm.style.buttonWidth} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonWidth: e.target.value } })}><option value="auto">Auto</option><option value="full">Full width</option></select></label>
-                            <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Alignment</span><select className="input-field" value={selectedForm.style.buttonAlignment} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonAlignment: e.target.value } })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="full">Full width</option></select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Width") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Width</span><select className="input-field" style={optionLengthStyle(["Auto", "Full width"])} value={selectedForm.style.buttonWidth} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonWidth: e.target.value } })}><option value="auto">Auto</option><option value="full">Full width</option></select></label>
+                            <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Alignment") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Alignment</span><select className="input-field" style={optionLengthStyle(["Left", "Center", "Right", "Full width"])} value={selectedForm.style.buttonAlignment} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonAlignment: e.target.value } })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="full">Full width</option></select></label>
                             <ColorField label="Loading color" value={selectedForm.style.buttonLoadingColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonLoadingColor: value } })} fallback="#12344D" />
                             <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Loading text</span><input className="input-field" value={selectedForm.style.buttonLoadingText} onChange={(e) => applyDraft({ style: { ...selectedForm.style, buttonLoadingText: e.target.value } })} /></label>
                           </div>
@@ -18228,11 +19850,11 @@ export default function WebForms({ scope = "generic" }) {
                           </div>
                         </div>
                       ) : null}
-                    </div>
+                    </div> : null}
                   </Section>
                  <Section id="wf-settings" step={3} title="Settings" subtitle="Choose what happens after submit and how the submission should be routed.">
                     <div className="wf-settings-stack">
-                      {selectedForm.scope === "generic" ? (<div className="wf-settings-block">
+                      {supportsAdvancedWebFormFeatures(selectedForm.scope) ? (<div className="wf-settings-block">
                         <label className="wf-settings-toggle">
                           <input type="checkbox" checked={Boolean(selectedForm.settings.recaptchaEnabled)} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, recaptchaEnabled: e.target.checked } })} />
                           <span>Enable reCAPTCHA</span>
@@ -18248,6 +19870,26 @@ export default function WebForms({ scope = "generic" }) {
                           <span>Show “Powered By GlobusCRM” on this web form</span>
                         </label>
                       </div>
+                      {scope === "generic" ? <div className="wf-settings-block">
+                        <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>Send an automatic message to all leads</div>
+                        <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>Choose each channel independently. Messages are sent automatically to all leads using the contact details submitted with the form.</div>
+                        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                          {[['email', 'Send email automatically to all leads'], ['sms', 'Send SMS automatically to all leads'], ['whatsapp', 'Send WhatsApp automatically to all leads']].map(([channel, label]) => (
+                            <label key={channel} className="wf-settings-toggle">
+                              <input
+                                type="checkbox"
+                                checked={Array.isArray(selectedForm.settings.contactNotificationChannels) && selectedForm.settings.contactNotificationChannels.includes(channel)}
+                                onChange={(e) => {
+                                  const current = Array.isArray(selectedForm.settings.contactNotificationChannels) ? selectedForm.settings.contactNotificationChannels : [];
+                                  const next = e.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel);
+                                  applyDraft({ settings: { ...selectedForm.settings, contactNotificationChannels: next } });
+                                }}
+                              />
+                              <span>{label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div> : null}
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">
                           <input
@@ -18436,4 +20078,3 @@ export default function WebForms({ scope = "generic" }) {
   );
 
 }
-

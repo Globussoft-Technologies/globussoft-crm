@@ -168,7 +168,7 @@ const sampleWellnessInvoices = [
     paymentMode: 'upi',
     lineItemsJson: JSON.stringify([
       { type: 'service', itemId: 21, name: 'Skin consultation', quantity: 2, unitPrice: 1500, amount: 3000 },
-      { type: 'product', itemId: 31, name: 'Aftercare kit', quantity: 1, unitPrice: 500, amount: 500 },
+      { type: 'product', itemId: 31, name: 'Aftercare kit', quantity: 1, unit: '100', unitPrice: 500, amount: 500 },
     ]),
   },
 ];
@@ -540,7 +540,28 @@ describe('<Invoices /> — page surface', () => {
     const moreButton = screen.getByRole('button', { name: /More actions for invoice INV-001/i });
     expect(moreButton).toHaveTextContent('More');
     expect(moreButton.querySelector('.lucide-more-horizontal')).toBeNull();
-    expect(screen.getByRole('menu').closest('td')).toHaveClass('invoice-actions-cell--menu-open');
+    const menu = screen.getByRole('menu');
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.style.top).not.toBe('');
+    expect(moreButton.closest('td')).toHaveClass('invoice-actions-cell--menu-open');
+  });
+
+  it('keeps the More menu outside the table and moves it above the button near the viewport edge', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    openInvoiceActions('INV-001');
+
+    const button = screen.getByRole('button', { name: /More actions for invoice INV-001/i });
+    const menu = screen.getByRole('menu', { name: /Actions for invoice INV-001/i });
+    Object.defineProperty(menu, 'offsetWidth', { configurable: true, value: 200 });
+    Object.defineProperty(menu, 'offsetHeight', { configurable: true, value: 100 });
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
+      top: 700, bottom: 730, left: 900, right: 1000, width: 100, height: 30,
+    });
+
+    fireEvent.scroll(window);
+    expect(menu).toHaveStyle({ top: '593px', left: '800px' });
+    expect(menu.closest('.invoice-table-scroll')).toBeNull();
   });
 
   it('gives the wellness invoice and product columns consistent usable widths', async () => {
@@ -743,7 +764,7 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.queryByRole('button', { name: /Activate monthly/i })).toBeNull();
   });
 
-  it('row with null contact falls back to "Unknown" in the Contact column', async () => {
+  it('row with null contact shows a clear no-customer message', async () => {
     const noContact = [
       { ...sampleInvoices[0], id: 70, invoiceNum: 'INV-070', contact: null },
     ];
@@ -756,7 +777,7 @@ describe('<Invoices /> — page surface', () => {
     });
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-070')).toBeInTheDocument());
-    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(screen.getByText('No customer data')).toBeInTheDocument();
   });
 
   it('nextInvoiceNum defaults to INV-001 when the invoice list is empty', async () => {
@@ -1164,7 +1185,8 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
     expect(screen.getByText('Skin consultation')).toBeInTheDocument();
     expect(screen.getByText('Aftercare kit')).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: '3' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '2 1' })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /1 100/ })).toBeNull();
     expect(screen.getByText('UPI')).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '2026-06-01' }).querySelector('svg')).toBeNull();
     const wellnessUnpaidBadge = screen.getAllByText('Unpaid').find((node) => node.closest('tr'));

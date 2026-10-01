@@ -6,6 +6,7 @@ const razorpayService = require('../services/razorpayService');
 const { reconcileSubscriptions, fulfillSubscriptionOrder } = require('../lib/subscriptionFulfillment');
 const { formatMoney } = require('../utils/formatMoney');
 const { filterDuplicatePlans } = require('../lib/subscriptionPlanCatalog');
+const { resolveSubscriptionAccess } = require('../lib/subscriptionAccess');
 // Shared rupee-glyph fix: registers the embedded Poppins family under the Helvetica
 // names so the rupee sign renders as rupee instead of "AA1" (built-in WinAnsi gap).
 const { applyRupeeCapableFonts } = require('../services/pdfRenderer');
@@ -43,6 +44,22 @@ const requireOwner = (req, res, next) => {
 // in routes/payments.js so a Subscription row is created exactly once
 // whichever path (client callback or Razorpay webhook) reports the payment
 // first. See that file for the state-machine/stacking-model comment.
+
+// Minimal access state for every authenticated staff member. Billing details
+// remain on the admin-only /status endpoint below.
+router.get('/access', verifyToken, async (req, res) => {
+  try {
+    const access = await resolveSubscriptionAccess(req.user);
+    if (!access) return res.status(401).json({ error: 'Subscription context missing' });
+    return res.json({
+      subscriptionStatus: access.subscriptionStatus,
+      daysRemaining: access.daysRemaining,
+    });
+  } catch (err) {
+    console.error('[subscriptions.get/access] Error:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch subscription access' });
+  }
+});
 
 // Get current user's subscription status. ADMIN-only - the tenant admin is
 // the one who buys + manages the subscription. Managers/staff don't see

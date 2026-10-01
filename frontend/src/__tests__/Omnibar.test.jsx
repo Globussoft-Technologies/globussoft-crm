@@ -67,7 +67,7 @@ vi.mock('../utils/api', () => ({
 
 import { fetchApi } from '../utils/api';
 
-const PLACEHOLDER = /Search pages, contacts/i;
+const PLACEHOLDER = /Search (?:pages, contacts|Travel CRM)/i;
 
 function pressKey(key, { ctrl = false, meta = false } = {}) {
   fireEvent.keyDown(window, { key, ctrlKey: ctrl, metaKey: meta });
@@ -341,6 +341,45 @@ describe('Omnibar (inline top-bar)', () => {
     expect(navigateMock).toHaveBeenCalledWith('/travel/trip-knowledge');
   });
 
+  it('uses the optimized travel search API response and opens travel record routes', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      if (url === '/api/search?q=goa') {
+        return Promise.resolve({
+          contacts: [],
+          itineraries: [{ id: 21, destination: 'Goa', title: 'Goa Learning Journey', status: 'draft', subBrand: 'tmc' }],
+          tmcTrips: [{ id: 22, tripCode: 'GOA-26', destination: 'Goa', status: 'confirmed' }],
+          travelQuotes: [{ id: 23, status: 'Draft', subBrand: 'tmc', contact: { name: 'Goa Public School' } }],
+          travelInvoices: [{ id: 24, invoiceNum: 'TINV-2026-0024', status: 'Issued', subBrand: 'tmc', totalAmount: 5000, currency: 'INR' }],
+          travelSuppliers: [{ id: 25, name: 'Goa Coaches', supplierCategory: 'transport', subBrand: 'tmc' }],
+          totalResults: 5,
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'goa' } });
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/search?q=goa', { silent: true }));
+    expect(await screen.findByText('Itineraries')).toBeInTheDocument();
+    expect(screen.getByText('TMC Trips')).toBeInTheDocument();
+    expect(screen.getByText('Travel Quotes')).toBeInTheDocument();
+    expect(screen.getByText('Travel Invoices')).toBeInTheDocument();
+    expect(screen.getByText('Suppliers')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('option', { name: /Goa Learning Journey/i }));
+    expect(navigateMock).toHaveBeenCalledWith('/travel/itineraries/21');
+  });
+
 
   it('matches accessible pages by description (e.g. "directory" → Contacts + Patients)', async () => {
     await renderOmnibarAndWaitForPages();
@@ -358,6 +397,7 @@ describe('Omnibar (inline top-bar)', () => {
         return Promise.resolve({
           pages: [
             { path: '/travel/forms', label: 'Web Forms', description: 'Embedded travel lead capture forms', category: 'Travel Marketing' },
+            { path: '/travel/meeting-forms', label: 'Meeting Forms', description: 'Appointment forms and booking APIs', category: 'Travel Marketing' },
             { path: '/travel/web-checkins', label: 'Web Check-ins', description: 'Airline web check-in tracking', category: 'Travel Operations' },
           ],
         });
@@ -374,11 +414,130 @@ describe('Omnibar (inline top-bar)', () => {
 
     const input = screen.getByPlaceholderText(PLACEHOLDER);
     input.focus();
-    fireEvent.change(input, { target: { value: 'web forms' } });
+    fireEvent.change(input, { target: { value: 'forms' } });
     const row = await screen.findByRole('option', { name: /Web Forms/i }, { timeout: 2000 });
-    expect(row).toBeInTheDocument();
+    const meetingRow = screen.getByRole('option', { name: /Meeting Forms/i });
+    expect(row.querySelector('svg.lucide-code')).toBeInTheDocument();
+    expect(meetingRow.querySelector('svg.lucide-calendar-clock')).toBeInTheDocument();
     fireEvent.click(row);
     expect(navigateMock).toHaveBeenCalledWith('/travel/forms');
+  });
+
+  it('finds Travel CRM features by task aliases instead of requiring exact menu labels', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            {
+              path: '/travel/meeting-forms',
+              label: 'Meeting Forms',
+              description: 'Configurable appointment forms, embeds, and booking APIs',
+              category: 'Travel Marketing',
+            },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'zoom meeting' } });
+
+    const row = await screen.findByRole('option', { name: /Meeting Forms/i });
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/travel/meeting-forms');
+  });
+
+  it('ranks label typo matches above loose aliases when the user types calender', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            {
+              path: '/travel/school-terms',
+              label: 'School Term Calendar',
+              description: 'TMC school term and holiday windows',
+              category: 'Travel Operations',
+            },
+            {
+              path: '/calendar-sync',
+              label: 'Calendar Sync',
+              description: 'Google and Outlook calendar integration',
+              category: 'Communication',
+            },
+            {
+              path: '/travel/meeting-forms',
+              label: 'Meeting Forms',
+              description: 'Appointment forms and booking APIs',
+              category: 'Travel Marketing',
+            },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'calender' } });
+
+    const rows = await screen.findAllByRole('option');
+    expect(rows[0]).toHaveAccessibleName(/School Term Calendar/i);
+    expect(screen.queryByRole('option', { name: /Meeting Forms/i })).toBeNull();
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/search?q=calender', { silent: true }));
+
+    fireEvent.change(input, { target: { value: 'calendar' } });
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/search?q=calendar', { silent: true }));
+    expect(screen.getByRole('option', { name: /School Term Calendar/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Meeting Forms/i })).toBeNull();
+    expect(screen.getAllByRole('option')[0]).toHaveAccessibleName(/^Calendar Google/i);
+    const row = screen.getByRole('option', { name: /^Calendar Google/i });
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/calendar-sync');
+  });
+
+  it('matches Travel CRM pages case-insensitively and across separated words', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            {
+              path: '/travel/school-terms',
+              label: 'School Term Calendar',
+              description: 'TMC school term and holiday windows',
+            },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'SCHOOL calendar' } });
+    expect(await screen.findByRole('option', { name: /School Term Calendar/i })).toBeInTheDocument();
   });
 
   it('shows all matching travel sidebar pages instead of truncating the Pages section', async () => {

@@ -6,6 +6,7 @@ const PDFDocument = require("pdfkit");
 // names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
 const { applyRupeeCapableFonts } = require("../services/pdfRenderer");
 const prisma = require("../lib/prisma");
+const { resolveSendGridConfig } = require("../services/travelSendGrid");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { httpFromPrismaError } = require("../lib/validators");
@@ -668,7 +669,7 @@ router.post("/:id/email", async (req, res) => {
 
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
-      select: { name: true, defaultCurrency: true, locale: true, emailRetention: true },
+      select: { name: true, defaultCurrency: true, locale: true, emailRetention: true, vertical: true },
     });
     const currency = tenant?.defaultCurrency || "USD";
     const locale = tenant?.locale || undefined;
@@ -688,12 +689,20 @@ router.post("/:id/email", async (req, res) => {
     // Persist the EmailMessage row when retention is on (#611).
     let emailRecord = null;
     const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+    const travelProvider = tenant?.vertical === "travel"
+      ? await resolveSendGridConfig(req.user.tenantId)
+      : null;
+    const outboundFromEmail = travelProvider?.fromEmail || FROM_EMAIL;
+    const outboundFromName = travelProvider?.fromName || senderName;
+    const outboundIdentity = outboundFromName
+      ? `${outboundFromName} <${outboundFromEmail}>`
+      : outboundFromEmail;
     if (tenant?.emailRetention !== false) {
       emailRecord = await prisma.emailMessage.create({
         data: {
           subject,
           body,
-          from: FROM_EMAIL,
+          from: outboundIdentity,
           to,
           direction: "OUTBOUND",
           read: true,
@@ -708,17 +717,18 @@ router.post("/:id/email", async (req, res) => {
     // dev), the row still lands but `delivered` is false.
     let delivered = false;
     let reason = "no_api_key";
-    if (process.env.SENDGRID_API_KEY) {
+    const sendGridApiKey = travelProvider?.apiKey || process.env.SENDGRID_API_KEY;
+    if (sendGridApiKey) {
       try {
         const r = await fetch("https://api.sendgrid.com/v3/mail/send", {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${process.env.SENDGRID_API_KEY}`,
+            "Authorization": `Bearer ${sendGridApiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
             personalizations: [{ to: [{ email: to }] }],
-            from: { email: FROM_EMAIL, name: senderName },
+            from: { email: outboundFromEmail, name: outboundFromName },
             subject,
             content: [{ type: "text/plain", value: body }],
           }),

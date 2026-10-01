@@ -1,6 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
+const { resolveSendGridConfig } = require("../services/travelSendGrid");
 
 const router = express.Router();
 
@@ -26,15 +27,39 @@ function sendGridHintFor(reason) {
   return null;
 }
 
-async function sendSendGrid(to, subject, body) {
-  if (!SENDGRID_API_KEY) {
+async function resolveTravelProvider(tenantId) {
+  let tenant = null;
+  try {
+    tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+  } catch (_error) {
+    return null;
+  }
+  return String(tenant?.vertical || "").toLowerCase() === "travel"
+    ? resolveSendGridConfig(tenantId)
+    : null;
+}
+
+function senderIdentity(provider) {
+  if (!provider) return FROM_EMAIL;
+  return provider.fromName ? `${provider.fromName} <${provider.fromEmail}>` : provider.fromEmail;
+}
+
+async function sendSendGrid(to, subject, body, provider = null) {
+  const apiKey = provider?.apiKey || SENDGRID_API_KEY;
+  if (!apiKey) {
     console.log(`[ScheduledEmail] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
   }
   const htmlBody = body.replace(/\n/g, "<br>");
   const payload = {
     personalizations: [{ to: [{ email: to }] }],
-    from: { email: FROM_EMAIL },
+    from: {
+      email: provider?.fromEmail || FROM_EMAIL,
+      ...(provider?.fromName ? { name: provider.fromName } : {}),
+    },
     subject: subject,
     content: [
       { type: "text/plain", value: body },
@@ -45,7 +70,7 @@ async function sendSendGrid(to, subject, body) {
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(payload),
@@ -271,6 +296,7 @@ router.post("/:id/send-now", async (req, res) => {
     if (record.status === "SENT") {
       return res.status(400).json({ error: "Already sent", code: "ALREADY_SENT" });
     }
+    const travelProvider = await resolveTravelProvider(record.tenantId);
 
     let emailRecord;
     try {
@@ -278,7 +304,7 @@ router.post("/:id/send-now", async (req, res) => {
         data: {
           subject: record.subject,
           body: record.body,
-          from: FROM_EMAIL,
+          from: senderIdentity(travelProvider),
           to: record.to,
           direction: "OUTBOUND",
           read: true,
@@ -330,7 +356,7 @@ router.post("/:id/send-now", async (req, res) => {
       ? `${record.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`
       : record.body;
 
-    const result = await sendSendGrid(record.to, record.subject, trackedBody);
+    const result = await sendSendGrid(record.to, record.subject, trackedBody, travelProvider);
 
     if (result.sent) {
       const updated = await prisma.scheduledEmail.update({

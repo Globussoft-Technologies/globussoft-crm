@@ -11,6 +11,7 @@ const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
 const { hasModuleAction } = require("../middleware/fieldFilter");
 const { emailSendLimiter } = require("../middleware/apiRateLimiters");
+const travelSendGrid = require("../services/travelSendGrid");
 
 // Compose-mail attachments: memory storage so the buffer can be base64'd
 // straight into the SendGrid payload without a disk round-trip. multer is a
@@ -52,6 +53,19 @@ function composeAttachmentUpload(req, res, next) {
 // SendGrid email sending via their REST API
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+const FROM_NAME = process.env.SENDGRID_FROM_NAME || "";
+
+function formatSenderIdentity(provider) {
+  if (!provider?.fromName) return provider?.fromEmail || FROM_EMAIL;
+  return `${provider.fromName} <${provider.fromEmail}>`;
+}
+
+async function resolveCommunicationsEmailProvider(user) {
+  if (String(user?.vertical || "").toLowerCase() === "travel") {
+    return travelSendGrid.resolveSendGridConfig(user.tenantId);
+  }
+  return { apiKey: SENDGRID_API_KEY, fromEmail: FROM_EMAIL, fromName: FROM_NAME, source: "backend" };
+}
 
 function isValidEmail(email) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -142,9 +156,10 @@ function linkifyHtml(escaped) {
 }
 
 async function sendSendGrid(to, subject, body, opts = {}) {
-  if (!SENDGRID_API_KEY) {
+  const provider = opts.provider || { apiKey: SENDGRID_API_KEY, fromEmail: FROM_EMAIL, fromName: FROM_NAME, source: "backend" };
+  if (!provider.apiKey) {
     console.log(`[Email] SendGrid not configured — email to ${to} logged but not sent`);
-    return { sent: false, reason: "no_api_key" };
+    return { sent: false, reason: "no_api_key", source: provider.source };
   }
 
   if (!isValidEmail(to)) {
@@ -179,7 +194,10 @@ async function sendSendGrid(to, subject, body, opts = {}) {
   }
   const payload = {
     personalizations: [personalization],
-    from: { email: FROM_EMAIL },
+    from: {
+      email: provider.fromEmail,
+      ...(provider.fromName ? { name: provider.fromName } : {}),
+    },
     subject: subject,
     content: [
       { type: "text/plain", value: hasFormattedHtml ? (opts.textBody || composeHtmlToText(opts.htmlBody)) : body },
@@ -198,7 +216,7 @@ async function sendSendGrid(to, subject, body, opts = {}) {
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        "Authorization": `Bearer ${provider.apiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(payload),
@@ -207,15 +225,15 @@ async function sendSendGrid(to, subject, body, opts = {}) {
     if (response.ok) {
       const messageId = response.headers.get("x-message-id") || "sent";
       console.log(`[Email] Sent to ${to}: ${messageId}`);
-      return { sent: true, id: messageId };
+      return { sent: true, id: messageId, from: provider.fromEmail, fromName: provider.fromName || null, source: provider.source };
     } else {
       const err = await response.text();
       console.error(`[Email] SendGrid error (${response.status}):`, err);
-      return { sent: false, reason: `sendgrid_error_${response.status}`, details: err };
+      return { sent: false, reason: `sendgrid_error_${response.status}`, details: err, source: provider.source };
     }
   } catch (err) {
     console.error("[Email] Send error:", err.message);
-    return { sent: false, reason: "send_error", details: err.message };
+    return { sent: false, reason: "send_error", details: err.message, source: provider.source };
   }
 }
 
@@ -530,6 +548,17 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
     const sanitizedHtml = isGenericCrm && COMPOSE_HTML_TAG_RE.test(composeBody)
       ? sanitizeComposeHtml(composeBody)
       : '';
+    let emailProvider;
+    try {
+      emailProvider = await resolveCommunicationsEmailProvider(req.user);
+    } catch (error) {
+      console.error(`[Email] Tenant SendGrid configuration failed for tenant ${req.user.tenantId}:`, error.message);
+      return res.status(503).json({
+        error: "Customer-managed SendGrid configuration could not be loaded",
+        code: "TENANT_SENDGRID_CONFIG_INVALID",
+      });
+    }
+    const senderIdentity = formatSenderIdentity(emailProvider);
 
     for (const recipient of deliverable) {
       let emailRecord = null;
@@ -544,7 +573,7 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
           data: {
             subject,
             body,
-            from: FROM_EMAIL,
+            from: senderIdentity,
             to: recipient,
             cc: ccPersist,
             bcc: bccPersist,
@@ -586,6 +615,7 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
         htmlBody: sanitizedHtml,
         textBody: sanitizedHtml ? composeHtmlToText(sanitizedHtml) : body,
         trackingPixelHtml,
+        provider: emailProvider,
       });
 
       // Per-recipient Activity on the linked contact (if any). Same pattern as

@@ -1243,12 +1243,13 @@ export default function App() {
     }
   }, [tenant]);
 
-  // Fetch subscription status after login
+  // Admins receive billing details; other staff need only workspace access.
   useEffect(() => {
-    if (token) {
+    if (token && user) {
       const fetchSubscriptionStatus = async () => {
         try {
-          const data = await fetch("/api/subscriptions/status", {
+          const endpoint = user.role === 'ADMIN' ? '/api/subscriptions/status' : '/api/subscriptions/access';
+          const data = await fetch(endpoint, {
             headers: { Authorization: `Bearer ${token}` },
           }).then((res) => res.json());
           setSubscription(data);
@@ -1259,7 +1260,7 @@ export default function App() {
       };
       fetchSubscriptionStatus();
     }
-  }, [token]);
+  }, [token, user?.role]);
 
   useEffect(() => {
     let effectiveTheme = theme;

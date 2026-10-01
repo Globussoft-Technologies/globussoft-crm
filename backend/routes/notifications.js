@@ -35,7 +35,10 @@ router.get("/", async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where,
-      orderBy: { createdAt: "desc" },
+      // Offset pagination must be deterministic when multiple notifications
+      // are created in the same timestamp tick. Without the unique id
+      // tie-breaker a row can move between pages and be repeated or skipped.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip,
       take: limit,
     };
@@ -50,13 +53,16 @@ router.get("/", async (req, res) => {
       };
     }
 
-    const [notifications, total] = await Promise.all([
+    const [notifications, total, unreadTotal] = await Promise.all([
       prisma.notification.findMany(findManyArgs),
       prisma.notification.count({ where }),
+      prisma.notification.count({
+        where: { userId: req.user.userId, tenantId: req.user.tenantId, isRead: false },
+      }),
     ]);
 
     console.log('[notifications.get] Found:', { total, returned: notifications.length });
-    res.json({ notifications, total, page, limit, pages: Math.ceil(total / limit) });
+    res.json({ notifications, total, unreadTotal, page, limit, pages: Math.ceil(total / limit) });
   } catch (err) {
     console.error("[Notifications] List error:", err);
     res.status(500).json({ error: "Failed to fetch notifications" });

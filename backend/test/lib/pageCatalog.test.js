@@ -551,6 +551,26 @@ describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
     expect(onTravel.find((p) => p.path === '/travel/forms')).toBeDefined();
   });
 
+  it('travel: keeps the visible Calendar sidebar page searchable with integrations.read', () => {
+    const onTravel = getAccessiblePages(new Set(['integrations.read']), { vertical: 'travel' });
+    const calendar = onTravel.find((p) => p.path === '/calendar-sync');
+    expect(calendar).toMatchObject({
+      label: 'Calendar',
+      requiredPermissions: [{ module: 'integrations', action: 'read' }],
+    });
+
+    const wrongPermission = getAccessiblePages(new Set(['calendar.read']), { vertical: 'travel' });
+    expect(wrongPermission.find((p) => p.path === '/calendar-sync')).toBeUndefined();
+  });
+
+  it('generic: preserves the existing Calendar Sync permission contract', () => {
+    const onGeneric = getAccessiblePages(new Set(['calendar.read']), { vertical: 'generic' });
+    expect(onGeneric.find((p) => p.path === '/calendar-sync')).toMatchObject({
+      label: 'Calendar Sync',
+      requiredPermissions: [{ module: 'calendar', action: 'read' }],
+    });
+  });
+
   it('wellness: hides /travel/* pages even when the role holds the matching perm', () => {
     const perms = new Set(['itineraries.read']);
     const onWellness = getAccessiblePages(perms, { vertical: 'wellness' });

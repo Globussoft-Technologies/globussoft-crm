@@ -127,7 +127,7 @@ async function notifyDiagnosticSubmitted({
       }
       if (r.channels.includes("email") && user.email) {
         try {
-          await sendEmail({ to: user.email, subject: title, text: message });
+          await sendEmail({ tenantId, to: user.email, subject: title, text: message });
         } catch (e) {
           console.warn(`[diagnosticNotifications] email failed for user ${r.userId} (non-fatal):`, e.message);
         }
@@ -182,14 +182,12 @@ async function sendTestNotification({ tenantId, subBrand, userId }) {
     result.db = "failed";
   }
 
-  if (!process.env.SENDGRID_API_KEY) {
-    result.email = "unavailable";
-  } else if (!user.email) {
+  if (!user.email) {
     result.email = "no_email_on_file";
   } else {
     try {
-      const r = await sendEmail({ to: user.email, subject: title, text: message });
-      result.email = r?.sent ? "sent" : "failed";
+      const r = await sendEmail({ tenantId, to: user.email, subject: title, text: message });
+      result.email = r?.sent ? "sent" : r?.reason === "no_api_key" ? "unavailable" : "failed";
     } catch {
       result.email = "failed";
     }

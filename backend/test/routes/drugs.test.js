@@ -253,6 +253,11 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       // showing what's on the shelf at the point of prescribing.
       quantity: true,
       lowStockThreshold: true,
+      // Commercial fields let the prescription writer show the inventory
+      // code, dispense unit, and billable price without fetching full rows.
+      productCode: true,
+      salePrice: true,
+      unit: true,
     });
   });
 

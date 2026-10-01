@@ -8,8 +8,7 @@
  *
  *   1. Page renders the heading "My Bookings" + four bucket tabs
  *      (Upcoming / Pending / Completed / Cancelled).
- *   2. Mount fires one GET /api/wellness/portal/appointments?bucket=<key>
- *      per bucket so every section's count is populated.
+ *   2. Mount fetches only the upcoming bucket; other buckets load on selection.
  *   3. Upcoming bucket renders one card per appointment with service
  *      name, doctor name, date+time, and a status pill.
  *   4. Pending bucket cards render the "Pending assignment" doctor label
@@ -103,7 +102,7 @@ beforeEach(() => {
   notifySuccess.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockImplementation(() => Promise.resolve(true));
-  // Per-bucket GET routing. The page mounts each bucket independently.
+  // Per-bucket GET routing.
   fetchApiMock.mockImplementation(async (url) => {
     if (url.includes('bucket=upcoming'))  return { bucket: 'upcoming',  count: sampleUpcoming.length,  appointments: sampleUpcoming };
     if (url.includes('bucket=pending'))   return { bucket: 'pending',   count: samplePending.length,   appointments: samplePending };
@@ -133,17 +132,32 @@ describe('MyBookings — page shell', () => {
     expect(screen.getByTestId('my-bookings-tab-cancelled')).toBeInTheDocument();
   });
 
-  it('fires one GET per bucket on mount', async () => {
+  it('fetches only the active bucket on mount', async () => {
     renderPage();
-    await waitFor(() => {
-      const calls = fetchApiMock.mock.calls.map((c) => c[0]);
-      expect(calls).toEqual(expect.arrayContaining([
-        expect.stringContaining('bucket=upcoming'),
-        expect.stringContaining('bucket=pending'),
-        expect.stringContaining('bucket=completed'),
-        expect.stringContaining('bucket=cancelled'),
-      ]));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
+    expect(fetchApiMock.mock.calls[0][0]).toContain('bucket=upcoming');
+    expect(screen.getByTestId('my-bookings-tab-pending')).toHaveTextContent('—');
+  });
+
+  it('refetches only the selected bucket when switching tabs and updates its count', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
+
+    fetchApiMock.mockImplementation(async (url) => {
+      const bucket = new URL(url, 'http://localhost').searchParams.get('bucket');
+      const appointments = bucket === 'completed' ? sampleCompleted : [];
+      return { bucket, count: appointments.length, appointments };
     });
+
+    fireEvent.click(screen.getByTestId('my-bookings-tab-pending'));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('my-bookings-tab-pending')).toHaveTextContent('0 appointments'));
+    expect(fetchApiMock.mock.calls[1][0]).toContain('bucket=pending');
+
+    fireEvent.click(screen.getByTestId('my-bookings-tab-completed'));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(3));
+    expect(fetchApiMock.mock.calls[2][0]).toContain('bucket=completed');
+    await waitFor(() => expect(screen.getByTestId('my-bookings-tab-completed')).toHaveTextContent('1 appointment'));
   });
 });
 

@@ -9,7 +9,16 @@
 
 const { resolveSendGridConfig } = require("../services/travelSendGrid");
 
-async function sendEmail({ tenantId = null, to, subject, text, html, attachments = [] }) {
+function recipientList(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(",");
+  const recipients = values
+    .map((email) => String(email || "").trim())
+    .filter(Boolean)
+    .map((email) => ({ email }));
+  return recipients.length ? recipients : undefined;
+}
+
+async function sendEmail({ tenantId = null, to, cc = [], bcc = [], subject, text, html, attachments = [], fromName = null }) {
   if (!to || !subject) {
     return { sent: false, reason: "missing_to_or_subject" };
   }
@@ -25,11 +34,17 @@ async function sendEmail({ tenantId = null, to, subject, text, html, attachments
     console.log(`[Email] SendGrid not configured — email to ${to} ("${subject}") logged, not sent`);
     return { sent: false, reason: "no_api_key", source: provider.source };
   }
+  const personalization = { to: [{ email: to }] };
+  const ccRecipients = recipientList(cc);
+  const bccRecipients = recipientList(bcc);
+  if (ccRecipients) personalization.cc = ccRecipients;
+  if (bccRecipients) personalization.bcc = bccRecipients;
+  const senderName = String(fromName || provider.fromName || "").trim();
   const payload = {
-    personalizations: [{ to: [{ email: to }] }],
+    personalizations: [personalization],
     from: {
       email: provider.fromEmail,
-      ...(provider.fromName ? { name: provider.fromName } : {}),
+      ...(senderName ? { name: senderName } : {}),
     },
     subject,
     content: [
@@ -55,7 +70,7 @@ async function sendEmail({ tenantId = null, to, subject, text, html, attachments
     });
     if (resp.ok) {
       console.log(`[Email] Sent to ${to}: "${subject}"`);
-      return { sent: true, from: provider.fromEmail, source: provider.source };
+      return { sent: true, from: provider.fromEmail, fromName: senderName || null, source: provider.source };
     }
     const t = await resp.text();
     console.error(`[Email] SendGrid error ${resp.status}: ${t}`);

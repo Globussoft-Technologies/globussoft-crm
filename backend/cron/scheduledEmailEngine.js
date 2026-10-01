@@ -4,16 +4,40 @@ const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 // Branding Wave 4 G090 + G097: per-sub-brand brand-kit token interpolation.
 const { renderEmailWithBrand } = require("../lib/emailRender");
+const { resolveSendGridConfig } = require("../services/travelSendGrid");
 
 const DEFAULT_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
-async function sendViaSendGrid(to, subject, body, fromEmail) {
-  const key = process.env.SENDGRID_API_KEY;
+async function resolveTravelProvider(tenantId) {
+  let tenant = null;
+  try {
+    tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+  } catch (_error) {
+    return null;
+  }
+  return String(tenant?.vertical || "").toLowerCase() === "travel"
+    ? resolveSendGridConfig(tenantId)
+    : null;
+}
+
+function senderIdentity(provider, fallbackEmail) {
+  if (!provider) return fallbackEmail;
+  return provider.fromName ? `${provider.fromName} <${provider.fromEmail}>` : provider.fromEmail;
+}
+
+async function sendViaSendGrid(to, subject, body, fromEmail, provider = null) {
+  const key = provider?.apiKey || process.env.SENDGRID_API_KEY;
   if (!key) return { sent: false, reason: "no_api_key" };
   const htmlBody = body.replace(/\n/g, "<br>");
   const payload = {
     personalizations: [{ to: [{ email: to }] }],
-    from: { email: fromEmail || DEFAULT_FROM_EMAIL },
+    from: {
+      email: provider?.fromEmail || fromEmail || DEFAULT_FROM_EMAIL,
+      ...(provider?.fromName ? { name: provider.fromName } : {}),
+    },
     subject: subject,
     content: [
       { type: "text/plain", value: body },
@@ -59,6 +83,7 @@ async function processScheduledEmails() {
       try {
         // Per-tenant from address (fallback to global default)
         const fromEmail = await getSetting(item.tenantId, KEYS.EMAIL_FROM_ADDRESS, { fallback: DEFAULT_FROM_EMAIL });
+        const travelProvider = await resolveTravelProvider(item.tenantId);
 
         // G097: resolve anchor sub-brand from Contact.subBrand →
         // Tenant.defaultSubBrand → null. Drives BrandKit token rendering.
@@ -78,7 +103,7 @@ async function processScheduledEmails() {
           data: {
             subject: renderedSubject,
             body: renderedBody,
-            from: fromEmail,
+            from: senderIdentity(travelProvider, fromEmail),
             to: item.to,
             direction: "OUTBOUND",
             read: true,
@@ -102,7 +127,7 @@ async function processScheduledEmails() {
         const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
         const trackedBody = `${renderedBody}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
 
-        const result = await sendViaSendGrid(item.to, renderedSubject, trackedBody, fromEmail);
+        const result = await sendViaSendGrid(item.to, renderedSubject, trackedBody, fromEmail, travelProvider);
 
         if (result.sent) {
           await prisma.scheduledEmail.update({

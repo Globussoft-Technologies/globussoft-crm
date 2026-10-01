@@ -8,6 +8,7 @@
  */
 
 const prisma = require("./prisma");
+const { sendEmail } = require("./emailSender");
 
 // Default preferences when no custom row exists
 const DEFAULT_PREFERENCES = {
@@ -112,6 +113,25 @@ async function sendSendGrid(to, subject, body) {
     console.error("[Notification-Email] SendGrid request failed:", err.message);
     return { sent: false, reason: err.message };
   }
+}
+
+async function sendNotificationEmail(tenantId, to, subject, body) {
+  let tenant = null;
+  try {
+    tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+  } catch (_error) {
+    // Preserve the existing backend-managed path if tenant lookup is unavailable.
+  }
+  if (String(tenant?.vertical || "").toLowerCase() === "travel") {
+    return sendEmail({
+      tenantId,
+      to,
+      subject,
+      text: body,
+      html: String(body).replace(/\n/g, "<br>"),
+    });
+  }
+  return sendSendGrid(to, subject, body);
 }
 
 // --------------- Core dispatcher ---------------
@@ -246,7 +266,7 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
     try {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (user?.email) {
-        await sendSendGrid(user.email, title, message);
+        await sendNotificationEmail(tenantId, user.email, title, message);
       }
     } catch (e) {
       console.warn("[Notification-Email] Email delivery failed:", e.message);

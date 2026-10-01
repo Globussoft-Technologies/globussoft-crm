@@ -11,6 +11,7 @@ const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { blockCustomers } = require("../middleware/blockCustomers");
 const { renderConsentPdf } = require("../services/pdfRenderer");
 const { writeAudit } = require("../lib/audit");
+const { sendEmail: sendTenantEmail } = require("../lib/emailSender");
 
 const router = express.Router();
 
@@ -93,10 +94,25 @@ async function sendViaSmtp(to, subject, text, html) {
 // `content` is either a plain string or a { text, html } pair. A string is
 // sent as-is with a naive <br> html fallback; the { text, html } shape lets
 // callers ship a proper html body (e.g. a clickable signing link).
-async function sendSignatureEmail(to, subject, content) {
+async function sendSignatureEmail(to, subject, content, options = {}) {
   const key = process.env.SENDGRID_API_KEY;
   const text = typeof content === "string" ? content : content.text;
   const html = typeof content === "string" ? content.replace(/\n/g, "<br>") : content.html;
+  let vertical = options.vertical;
+  if (!vertical && options.tenantId) {
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: options.tenantId },
+        select: { vertical: true },
+      });
+      vertical = tenant?.vertical;
+    } catch (_error) {
+      // Preserve the existing provider path when tenant lookup is unavailable.
+    }
+  }
+  if (String(vertical || "").toLowerCase() === "travel") {
+    return sendTenantEmail({ tenantId: options.tenantId, to, subject, text, html });
+  }
 
   if (!key) {
     console.log(`[Signatures] SendGrid not configured — falling back to SMTP for ${to}`);
@@ -705,6 +721,7 @@ router.post("/sign/:token", async (req, res) => {
               customerEmail,
               `Invoice ${result.invoice.invoiceNum} — payment due`,
               body,
+              { tenantId: updated.tenantId },
             );
             customerEmailed = mail.sent;
           }
@@ -988,7 +1005,10 @@ router.post("/", async (req, res) => {
       companyName: companyBrand.name,
       logoUrl: resolveEmailLogoUrl(req, companyBrand.logoUrl),
     });
-    const mailResult = await sendSignatureEmail(signerEmail, subject, body);
+    const mailResult = await sendSignatureEmail(signerEmail, subject, body, {
+      tenantId: req.user.tenantId,
+      vertical: req.user.vertical,
+    });
 
     res.status(201).json({ ...created, emailDelivered: mailResult.sent });
   } catch (err) {
@@ -1067,7 +1087,10 @@ router.post("/:id/resend", async (req, res) => {
       companyName: companyBrand.name,
       logoUrl: resolveEmailLogoUrl(req, companyBrand.logoUrl),
     });
-    const mailResult = await sendSignatureEmail(reqRow.signerEmail, subject, body);
+    const mailResult = await sendSignatureEmail(reqRow.signerEmail, subject, body, {
+      tenantId: req.user.tenantId,
+      vertical: req.user.vertical,
+    });
     res.json({ success: true, emailDelivered: mailResult.sent });
   } catch (err) {
     console.error("[Signatures] resend error:", err);

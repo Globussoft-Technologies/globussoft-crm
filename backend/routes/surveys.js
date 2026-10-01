@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+const { sendEmail: sendTenantEmail } = require("../lib/emailSender");
 
 const router = express.Router();
 
@@ -136,7 +137,16 @@ const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.c
 // The respond link uses FRONTEND_URL.
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
-async function sendSurveyEmail(to, subject, textBody, htmlBody) {
+async function sendSurveyEmail(to, subject, textBody, htmlBody, options = {}) {
+  if (String(options.vertical || "").toLowerCase() === "travel") {
+    return sendTenantEmail({
+      tenantId: options.tenantId,
+      to,
+      subject,
+      text: textBody,
+      html: htmlBody || textBody.replace(/\n/g, "<br>"),
+    });
+  }
   if (!SENDGRID_API_KEY) {
     console.log(`[Surveys] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
@@ -1256,6 +1266,7 @@ router.post("/:id/send", async (req, res) => {
         `[Survey] ${survey.title || survey.name}`,
         textBody,
         htmlBody,
+        { tenantId: req.user.tenantId, vertical: req.user.vertical },
       );
       results.push({ [idField]: r.id, kind: r.kind, sent: !!result.sent, reason: result.reason || null });
       if (result.sent) sentCount += 1;

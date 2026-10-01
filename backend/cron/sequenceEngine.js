@@ -30,6 +30,7 @@ const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
 const flyerRenderEngine = require('../services/flyerRenderEngine');
 const shortUrlService = require('../services/shortUrl');
 const { writeAudit } = require('../lib/audit');
+const { resolveSendGridConfig } = require('../services/travelSendGrid');
 
 // S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — render-on-send for
 // SequenceStep.attachmentRefsJson entries with kind='flyer'.
@@ -60,13 +61,37 @@ function shortenUrlSafe(args) {
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@crm.globusdemos.com';
 
-async function trySendGridSend(to, subject, body, attachments) {
-  if (!SENDGRID_API_KEY || !to) return { sent: false, reason: 'no_api_key_or_to' };
+async function resolveSequenceTravelProvider(tenantId) {
+  let tenant = null;
+  try {
+    tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+  } catch (_error) {
+    return null;
+  }
+  return String(tenant?.vertical || '').toLowerCase() === 'travel'
+    ? resolveSendGridConfig(tenantId)
+    : null;
+}
+
+function sequenceSenderIdentity(provider) {
+  if (!provider) return FROM_EMAIL;
+  return provider.fromName ? `${provider.fromName} <${provider.fromEmail}>` : provider.fromEmail;
+}
+
+async function trySendGridSend(to, subject, body, attachments, provider = null) {
+  const apiKey = provider?.apiKey || SENDGRID_API_KEY;
+  if (!apiKey || !to) return { sent: false, reason: 'no_api_key_or_to' };
   try {
     const htmlBody = String(body).replace(/\n/g, '<br>');
     const payload = {
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: FROM_EMAIL },
+      from: {
+        email: provider?.fromEmail || FROM_EMAIL,
+        ...(provider?.fromName ? { name: provider.fromName } : {}),
+      },
       subject: subject,
       content: [
         { type: 'text/plain', value: body },
@@ -97,7 +122,7 @@ async function trySendGridSend(to, subject, body, attachments) {
     const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SENDGRID_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload),
@@ -359,6 +384,7 @@ async function processStep(step, enrollment) {
     // kind='flyer'. Resolves to a list of attachment descriptors. Errors per
     // ref are caught internally — the surrounding step send always proceeds.
     const attachments = await resolveStepAttachments(step, enrollment, 'email');
+    const travelProvider = await resolveSequenceTravelProvider(enrollment.tenantId);
 
     // Persist the outbound row (engine source of truth) before attempting
     // delivery. threadId convention is `seq-<enrollmentId>` so #7 reply
@@ -367,7 +393,7 @@ async function processStep(step, enrollment) {
       data: {
         subject,
         body,
-        from: FROM_EMAIL,
+        from: sequenceSenderIdentity(travelProvider),
         to,
         direction: 'OUTBOUND',
         contactId: enrollment.contact.id,
@@ -378,8 +404,8 @@ async function processStep(step, enrollment) {
     });
 
     // Best-effort delivery. Attachments threaded through for SendGrid MIME.
-    if (SENDGRID_API_KEY) {
-      trySendGridSend(to, subject, body, attachments).catch(() => {});
+    if (travelProvider?.apiKey || SENDGRID_API_KEY) {
+      trySendGridSend(to, subject, body, attachments, travelProvider).catch(() => {});
     }
     return { advance: true };
   }

@@ -625,7 +625,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.getByText('Open full detail')).toBeInTheDocument();
   });
 
-  it('keeps the Name column fixed and renders saved visible columns in order', async () => {
+  it('keeps the Name column movable and renders saved visible columns in order', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
@@ -669,10 +669,10 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
 
     const nameHeader = screen.getByText('Name').closest('th');
-    expect(nameHeader.closest('.leads-table-frozen-pane')).toBeTruthy();
+    expect(nameHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const aliceNameCell = screen.getByText('Alice Smith').closest('td');
-    expect(aliceNameCell.closest('.leads-table-frozen-pane')).toBeTruthy();
+    expect(aliceNameCell.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const phoneHeader = screen.getByText('Phone').closest('th');
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
@@ -772,7 +772,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
         user: { id: 1, role: 'ADMIN' },
       },
     ],
-  ])('synchronizes split-table row heights for %s tenants', async (_label, verticalAuth) => {
+  ])('renders one scrollable Leads table for %s tenants', async (_label, verticalAuth) => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -802,45 +802,22 @@ describe('Leads Freshsales-style list UI affordances', () => {
       await screen.findByText('Alice Lead');
 
       await waitFor(() => {
-        const frozenHeader = container.querySelector('.leads-table-frozen-pane thead tr');
         const scrollHeader = container.querySelector('.leads-table-scroll-pane thead tr');
-        const frozenRows = Array.from(
-          container.querySelectorAll('.leads-table-frozen-pane tbody tr'),
-        );
         const scrollRows = Array.from(
           container.querySelectorAll('.leads-table-scroll-pane tbody tr'),
         );
 
-        expect(frozenHeader).toBeTruthy();
+        expect(container.querySelector('.leads-table-frozen-pane')).toBeNull();
         expect(scrollHeader).toBeTruthy();
-        expect(frozenHeader).toHaveClass('leads-table-header-row');
         expect(scrollHeader).toHaveClass('leads-table-header-row');
-        if (_label === 'travel') {
-          expect(frozenHeader.closest('table')).toHaveClass('leads-table--fit', 'leads-table--frozen');
-          expect(frozenHeader.firstElementChild.querySelector('div')).toHaveStyle({
-            gap: '0.8rem',
-          });
-        }
-        expect(frozenHeader.style.height).toBe('66px');
-        expect(scrollHeader.style.height).toBe('66px');
-        expect(frozenRows.length).toBeGreaterThan(0);
-        expect(frozenRows.length).toBe(scrollRows.length);
-        expect(frozenRows.map((row) => row.dataset.leadRowId)).toEqual(
-          scrollRows.map((row) => row.dataset.leadRowId),
-        );
-        frozenRows.forEach((row) => {
-          expect(row.style.height).toBe('66px');
-        });
-        scrollRows.forEach((row) => {
-          expect(row.style.height).toBe('66px');
-        });
+        expect(scrollRows.length).toBeGreaterThan(0);
       });
     } finally {
       rectMock.mockRestore();
     }
   });
 
-  it('synchronizes the generic split-table header and row heights', async () => {
+  it('renders the Generic Leads table with Name in the scrollable pane', async () => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -892,18 +869,12 @@ describe('Leads Freshsales-style list UI affordances', () => {
       await screen.findByText('Alice Lead');
 
       await waitFor(() => {
-        const frozenHeader = container.querySelector('.leads-table-frozen-pane thead tr');
         const scrollHeader = container.querySelector('.leads-table-scroll-pane thead tr');
 
-        expect(frozenHeader).toBeTruthy();
+        expect(container.querySelector('.leads-table-frozen-pane')).toBeNull();
         expect(scrollHeader).toBeTruthy();
-        expect(frozenHeader.style.height).toBe('66px');
-        expect(scrollHeader.style.height).toBe('66px');
-
-        const frozenBody = container.querySelector('.leads-table-frozen-pane tbody tr');
         const scrollBody = container.querySelector('.leads-table-scroll-pane tbody tr');
-        expect(frozenBody.style.height).toBe('66px');
-        expect(scrollBody.style.height).toBe('66px');
+        expect(scrollBody).toBeTruthy();
       });
     } finally {
       rectMock.mockRestore();

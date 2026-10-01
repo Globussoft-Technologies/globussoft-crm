@@ -2356,7 +2356,7 @@ const Leads = () => {
 
   const fetchStaff = async () => {
     try {
-      const data = await fetchApi("/api/staff", { silent: true });
+      const data = await fetchApi("/api/staff");
       setStaff(Array.isArray(data) ? data : []);
     } catch {
       setStaff([]);
@@ -2713,7 +2713,7 @@ const Leads = () => {
       fetchApi("/api/pipeline_stages", { silent: true })
         .then((data) => setPipelineStages(Array.isArray(data) ? data : []))
         .catch(() => setPipelineStages([]));
-      fetchApi("/api/deals?limit=500", { silent: true })
+      fetchApi("/api/deals?limit=500")
         .then((data) => {
           const map = {};
           const rows = Array.isArray(data) ? data : [];
@@ -2730,7 +2730,7 @@ const Leads = () => {
       // Priority: advancePaidAmount (actual cash received) when it's recorded and > 0.
       // Fallback: totalAmount for committed statuses (accepted/advance_paid/fully_paid)
       // so that legacy itineraries without advancePaidAmount still show their value.
-      fetchApi("/api/travel/itineraries?limit=200", { silent: true })
+      fetchApi("/api/travel/itineraries?limit=200")
         .then((res) => {
           const rows = Array.isArray(res?.itineraries)
             ? res.itineraries
@@ -2762,7 +2762,7 @@ const Leads = () => {
         .catch(() => setBookingValueByContact({}));
       // Fetch TMC paid instalment totals keyed by parent email  covers leads
       // whose parent contact has no Itinerary row (common for TMC school trips).
-      fetchApi("/api/travel/trip-billing/paid-by-contact", { silent: true })
+      fetchApi("/api/travel/trip-billing/paid-by-contact")
         .then((res) => setTmcPaidByEmail(res?.byEmail || {}))
         .catch(() => setTmcPaidByEmail({}));
     }
@@ -2840,7 +2840,7 @@ const Leads = () => {
   // Skipped for Wellness tenants.
   useEffect(() => {
     if (!supportsLeadCustomFields) return;
-    fetchApi("/api/lead-custom-fields", { silent: true })
+    fetchApi("/api/lead-custom-fields")
       .then((d) => setCustomFieldDefs(Array.isArray(d) ? d : []))
       .catch(() => setCustomFieldDefs([]));
   }, [supportsLeadCustomFields]);
@@ -2851,7 +2851,7 @@ const Leads = () => {
       setCallifiedConfigured(false);
       return;
     }
-    fetchApi("/api/integrations/callified/config", { silent: true })
+    fetchApi("/api/integrations/callified/config")
       .then((d) => setCallifiedConfigured(!!d?.isActive))
       .catch(() => setCallifiedConfigured(false));
   }, [isGeneric]);
@@ -4670,8 +4670,8 @@ const Leads = () => {
     ...leadFixedExtraColumnDefs,
     { key: "actions", label: "Actions", locked: true },
   ];
-  // Keep the complete Leads table in one horizontal scroll surface. Name is
-  // intentionally scrollable with the other columns; it is not a frozen pane.
+  // Keep Name in the same scrollable table as every other column so users
+  // can move and resize it through the normal column controls.
   const leadsFrozenColumnDefs = [];
   const leadsScrollableColumnDefs = tableColumnDefs;
   const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
@@ -8567,7 +8567,10 @@ const Leads = () => {
                 topBarLeadingWidth={leadsFrozenTableWidth}
                 stickyTop
               stickyTopOffset={0}
-              hideBottomScrollbar={showLeadsTopScrollbar && !isGeneric}
+              // Travel CRM must keep the native table scrollbar visible;
+              // hiding it leaves no usable horizontal-scroll affordance when
+              // the wide lead table exceeds the viewport.
+              hideBottomScrollbar={false}
               verticalOverflow="visible"
               stickyBottom={isGeneric}
             >
@@ -10565,9 +10568,7 @@ const Leads = () => {
                     value={newLead.phone}
                     aria-invalid={Boolean(createFieldErrors.phone)}
                     aria-describedby={createFieldErrors.phone ? "create-lead-phone-error" : undefined}
-                    onChange={(e) =>
-                      handleChange("phone", e.target.value.replace(/\D/g, ""))
-                    }
+                    onChange={(e) => handleChange("phone", e.target.value)}
                     style={{ flex: 1 }}
                   />
                 </div>

@@ -165,6 +165,10 @@ function wellnessPaymentModeFromPayment(payment) {
   return gateway || null;
 }
 
+function hasInvoiceLineItemSnapshot(invoice) {
+  return Array.isArray(parseInvoiceJson(invoice?.lineItemsJson, null));
+}
+
 /**
  * Hydrate wellness visit invoices from the clinical source rows. This is
  * intentionally read-time compatible with legacy invoices whose snapshot was
@@ -198,7 +202,7 @@ async function hydrateWellnessInvoiceRows(invoices, tenantId) {
       },
     }),
     prisma.serviceConsumption.findMany({
-      where: { tenantId, visitId: { in: visitIds } },
+      where: { tenantId, visitId: { in: visitIds }, isActive: true },
       select: {
         id: true,
         visitId: true,
@@ -229,6 +233,11 @@ async function hydrateWellnessInvoiceRows(invoices, tenantId) {
   }
 
   const hydrated = invoices.map((invoice) => {
+    // Issued invoices are immutable accounting snapshots. Only legacy rows
+    // without any stored lineItemsJson may be hydrated from live clinical
+    // data; otherwise later catalogue or prescription edits would rewrite a
+    // historical invoice merely by viewing or downloading it.
+    if (hasInvoiceLineItemSnapshot(invoice)) return invoice;
     const visit = visitById.get(invoice.visitId);
     if (!visit) return invoice;
     const rows = consumptionsByVisitId.get(visit.id) || [];

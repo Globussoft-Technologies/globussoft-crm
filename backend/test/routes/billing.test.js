@@ -888,6 +888,53 @@ describe("billing response vertical isolation", () => {
         sourceType: "PRESCRIPTION",
       }),
     ]);
+    expect(prisma.serviceConsumption.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, visitId: { in: [232] }, isActive: true },
+    }));
+  });
+
+  test("wellness invoice reads preserve an existing historical line-item snapshot", async () => {
+    const historicalSnapshot = [
+      { type: "service", itemId: 21, name: "Historical service", quantity: 1, unitPrice: 1000, amount: 1000 },
+    ];
+    prisma.invoice.findMany.mockResolvedValue([
+      {
+        id: 23,
+        invoiceNum: "INV-HISTORICAL",
+        amount: 1000,
+        status: "PAID",
+        tenantId: 1,
+        visitId: 233,
+        lineItemsJson: JSON.stringify(historicalSnapshot),
+        contact: { id: 8, name: "Historical Patient" },
+        deal: null,
+      },
+    ]);
+    prisma.visit.findMany.mockResolvedValue([
+      {
+        id: 233,
+        serviceId: 21,
+        amountCharged: 2400,
+        couponBreakdown: null,
+        service: { id: 21, name: "Renamed service", basePrice: 2000 },
+      },
+    ]);
+    prisma.serviceConsumption.findMany.mockResolvedValue([
+      {
+        id: 6,
+        visitId: 233,
+        productName: "Later inventory edit",
+        qty: 1,
+        unitCost: 400,
+        usageValue: 400,
+      },
+    ]);
+    prisma.payment.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ vertical: "wellness" })).get("/api/billing");
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body[0].lineItemsJson)).toEqual(historicalSnapshot);
   });
 
   test("generic invoice responses omit travel-only fields", async () => {

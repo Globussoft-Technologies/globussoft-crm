@@ -129,7 +129,8 @@ function buildPrescriptionConsumptionData({ prescription, line, lineIndex, drug 
 /**
  * Mirror the current prescription lines into the visit inventory ledger.
  * Existing source rows are updated in place on an Rx amendment; missing rows
- * are created. No source row is deleted, preserving the clinical audit trail.
+ * are created. Removed lines are voided rather than deleted so they remain in
+ * the clinical audit trail without continuing to contribute to billing.
  */
 async function syncPrescriptionConsumption({ prescription, drugs, client = prisma }) {
   const lines = Array.isArray(drugs)
@@ -141,7 +142,7 @@ async function syncPrescriptionConsumption({ prescription, drugs, client = prism
     !prescription?.tenantId ||
     !client?.serviceConsumption
   ) {
-    return { created: 0, updated: 0, skipped: lines.length };
+    return { created: 0, updated: 0, deactivated: 0, skipped: lines.length };
   }
 
   const results = await Promise.allSettled([
@@ -151,13 +152,14 @@ async function syncPrescriptionConsumption({ prescription, drugs, client = prism
         tenantId: prescription.tenantId,
         prescriptionId: Number(prescription.id),
       },
-      select: { id: true, prescriptionLine: true },
+      select: { id: true, prescriptionLine: true, isActive: true },
     })),
   ]);
   if (results.some((result) => result.status === "rejected")) {
     return {
       created: 0,
       updated: 0,
+      deactivated: 0,
       skipped: lines.length,
       error: "SYNC_UNAVAILABLE",
     };
@@ -175,15 +177,39 @@ async function syncPrescriptionConsumption({ prescription, drugs, client = prism
       drug: resolveDrug(line, drugRows),
     });
     const existing = existingRows.find((row) => row.prescriptionLine === lineIndex);
-    if (existing) {
-      await client.serviceConsumption.update({ where: { id: existing.id }, data });
-      updated += 1;
-    } else {
-      await client.serviceConsumption.create({ data });
-      created += 1;
-    }
+    await client.serviceConsumption.upsert({
+      where: {
+        tenantId_prescriptionId_prescriptionLine: {
+          tenantId: Number(prescription.tenantId),
+          prescriptionId: Number(prescription.id),
+          prescriptionLine: lineIndex,
+        },
+      },
+      create: { ...data, isActive: true },
+      update: { ...data, isActive: true },
+    });
+    if (existing) updated += 1;
+    else created += 1;
   }
-  return { created, updated, skipped: 0 };
+
+  const activeLineIndexes = new Set(lines.map((_line, index) => index));
+  const staleIds = existingRows
+    .filter((row) => !activeLineIndexes.has(row.prescriptionLine) && row.isActive !== false)
+    .map((row) => row.id);
+  let deactivated = 0;
+  if (staleIds.length > 0) {
+    const result = await client.serviceConsumption.updateMany({
+      where: {
+        id: { in: staleIds },
+        tenantId: Number(prescription.tenantId),
+        prescriptionId: Number(prescription.id),
+      },
+      data: { isActive: false, transactionType: "Voided" },
+    });
+    deactivated = result.count;
+  }
+
+  return { created, updated, deactivated, skipped: 0 };
 }
 
 function enrichConsumptionRow(row, { visit, product, drug } = {}) {
@@ -233,7 +259,7 @@ function enrichConsumptionRow(row, { visit, product, drug } = {}) {
 async function getVisitInventoryTotal({ visitId, tenantId, client = prisma }) {
   if (!client?.serviceConsumption?.findMany) return 0;
   const rows = await client.serviceConsumption.findMany({
-    where: { visitId: Number(visitId), tenantId: Number(tenantId) },
+    where: { visitId: Number(visitId), tenantId: Number(tenantId), isActive: true },
     select: {
       id: true,
       productName: true,
@@ -386,7 +412,7 @@ async function getVisitInvoiceLineItems({
     });
   }
   const consumptions = await client.serviceConsumption.findMany({
-    where: { visitId: Number(visit.id), tenantId: Number(tenantId) },
+    where: { visitId: Number(visit.id), tenantId: Number(tenantId), isActive: true },
     select: {
       productName: true,
       qty: true,

@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   buildPrescriptionConsumptionData,
   enrichConsumptionRow,
+  getVisitInventoryTotal,
   normalizeInventoryUnit,
   syncPrescriptionConsumption,
   usagePricing,
@@ -62,8 +63,8 @@ describe("inventoryConsumption", () => {
       },
       serviceConsumption: {
         findMany: vi.fn().mockResolvedValue([]),
-        create: vi.fn().mockResolvedValue({ id: 100 }),
-        update: vi.fn(),
+        upsert: vi.fn().mockResolvedValue({ id: 100 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
     };
     const prescription = { id: 9, visitId: 80, tenantId: 3 };
@@ -72,22 +73,70 @@ describe("inventoryConsumption", () => {
       prescription,
       drugs: [{ name: "Amoxicillin", drugId: 12, qty: 2 }],
     });
-    expect(first).toEqual({ created: 1, updated: 0, skipped: 0 });
-    expect(client.serviceConsumption.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ prescriptionLine: 0, qty: 2, usageValue: 50 }),
+    expect(first).toEqual({ created: 1, updated: 0, deactivated: 0, skipped: 0 });
+    expect(client.serviceConsumption.upsert).toHaveBeenCalledWith({
+      where: {
+        tenantId_prescriptionId_prescriptionLine: {
+          tenantId: 3,
+          prescriptionId: 9,
+          prescriptionLine: 0,
+        },
+      },
+      create: expect.objectContaining({ prescriptionLine: 0, qty: 2, usageValue: 50, isActive: true }),
+      update: expect.objectContaining({ prescriptionLine: 0, qty: 2, usageValue: 50, isActive: true }),
     });
 
-    client.serviceConsumption.findMany.mockResolvedValue([{ id: 100, prescriptionLine: 0 }]);
+    client.serviceConsumption.findMany.mockResolvedValue([{ id: 100, prescriptionLine: 0, isActive: true }]);
     const second = await syncPrescriptionConsumption({
       client,
       prescription,
       drugs: [{ name: "Amoxicillin", drugId: 12, qty: 3 }],
     });
-    expect(second).toEqual({ created: 0, updated: 1, skipped: 0 });
-    expect(client.serviceConsumption.update).toHaveBeenCalledWith({
-      where: { id: 100 },
-      data: expect.objectContaining({ qty: 3, usageValue: 75 }),
+    expect(second).toEqual({ created: 0, updated: 1, deactivated: 0, skipped: 0 });
+    expect(client.serviceConsumption.upsert).toHaveBeenLastCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ qty: 3, usageValue: 75, isActive: true }),
+    }));
+  });
+
+  test("voids removed prescription lines without deleting their audit rows", async () => {
+    const client = {
+      drug: { findMany: vi.fn().mockResolvedValue([]) },
+      serviceConsumption: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 100, prescriptionLine: 0, isActive: true },
+          { id: 101, prescriptionLine: 1, isActive: true },
+        ]),
+        upsert: vi.fn().mockResolvedValue({ id: 100 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    const result = await syncPrescriptionConsumption({
+      client,
+      prescription: { id: 9, visitId: 80, tenantId: 3 },
+      drugs: [{ name: "Amoxicillin", qty: 1 }],
     });
+
+    expect(result).toEqual({ created: 0, updated: 1, deactivated: 1, skipped: 0 });
+    expect(client.serviceConsumption.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: [101] }, tenantId: 3, prescriptionId: 9 },
+      data: { isActive: false, transactionType: "Voided" },
+    });
+  });
+
+  test("totals only active inventory rows", async () => {
+    const client = {
+      serviceConsumption: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 1, qty: 2, unitCost: 25, usageValue: 50, productId: null, drugId: null },
+        ]),
+      },
+    };
+
+    await expect(getVisitInventoryTotal({ visitId: 80, tenantId: 3, client })).resolves.toBe(50);
+    expect(client.serviceConsumption.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { visitId: 80, tenantId: 3, isActive: true },
+    }));
   });
 
   test("enriches a legacy row with the spreadsheet fields", () => {

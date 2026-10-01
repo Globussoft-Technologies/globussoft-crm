@@ -4962,7 +4962,7 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
         "[wellness] prescription inventory sync failed:",
         inventoryErr.message,
       );
-      inventory = { created: 0, updated: 0, skipped: namedDrugs.length, error: "SYNC_FAILED" };
+      inventory = { created: 0, updated: 0, deactivated: 0, skipped: namedDrugs.length, error: "SYNC_FAILED" };
     }
     try {
       await refreshCompletedVisitAmount(rx.visitId, req.user.tenantId);
@@ -5102,7 +5102,7 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
         "[wellness] amended prescription inventory sync failed:",
         inventoryErr.message,
       );
-      inventory = { created: 0, updated: 0, skipped: (newDrugs || []).length, error: "SYNC_FAILED" };
+      inventory = { created: 0, updated: 0, deactivated: 0, skipped: (newDrugs || []).length, error: "SYNC_FAILED" };
     }
     try {
       await refreshCompletedVisitAmount(updated.visitId, req.user.tenantId);
@@ -9391,6 +9391,7 @@ async function computePnlByService(req) {
   // revenue (visitDate-based) from cost (createdAt-based).
   const consumptionWhere = {
     tenantId,
+    isActive: true,
     visit: { visitDate: { gte: from, lte: to }, status: "completed" },
   };
   if (locationId) consumptionWhere.visit.locationId = locationId;

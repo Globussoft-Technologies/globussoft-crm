@@ -5055,6 +5055,7 @@ model ServiceConsumption {
   productCode     String?
   salePrice       Float   @default(0)
   usageValue      Float   @default(0)
+  isActive        Boolean @default(true)
 
   visitId Int
   visit   Visit @relation(fields: [visitId], references: [id], onDelete: Cascade)
@@ -5075,7 +5076,7 @@ model ServiceConsumption {
 
   @@index([visitId])
   @@index([tenantId, createdAt])
-  @@index([tenantId, prescriptionId, prescriptionLine])
+  @@unique([tenantId, prescriptionId, prescriptionLine])
   @@index([tenantId, drugId])
 }
 

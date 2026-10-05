@@ -243,14 +243,14 @@ test.describe('PUT /api/roles/:id — landingPath update', () => {
     const created = await create.json();
     createdRoleIds.add(created.id);
 
-    // Grant integrations.read so /calendar-sync becomes accessible. The
+    // Grant calendar.read so /calendar-sync becomes accessible. The
     // landingPath-validate-against-perms contract rejects setting a
     // landingPath the role can't access. Calendar is gated on a DEDICATED
     // `calendar` module (pageCatalog.js) — separated from appointments so
     // view-only Calendar access can be granted without the Appointments list.
     const grant = await put(request, token, `/api/roles/${created.id}/permissions`, {
       permissions: [
-        { module: 'integrations', action: 'read' },
+        { module: 'calendar', action: 'read' },
       ],
     });
     expect(grant.status()).toBe(200);

@@ -98,14 +98,16 @@ async function put(request, token, path, body) {
 // Find the most-recent audit row for (entity, action) in the requester's
 // tenant whose createdAt >= afterMs. Returns null if not found within
 // the first /api/audit page (cap=100 per routes/audit.js).
-async function findAuditRow(request, token, entity, action, afterMs, userId) {
+async function findAuditRow(request, token, entity, action, afterMs, userId, entityId = null) {
   const r = await get(request, token, `/api/audit?entity=${encodeURIComponent(entity)}&action=${encodeURIComponent(action)}`);
   if (!r.ok()) return null;
   const rows = await r.json();
   const list = Array.isArray(rows) ? rows : (rows.audit || rows.data || []);
   const candidates = list.filter((row) => {
     const created = row.createdAt ? new Date(row.createdAt).getTime() : 0;
-    return created >= afterMs && (!userId || Number(row.userId) === Number(userId));
+    return created >= afterMs
+      && (!userId || Number(row.userId) === Number(userId))
+      && (entityId === null || Number(row.entityId) === Number(entityId));
   });
   // Newest first (server returns desc) — pick the first match.
   return candidates[0] || null;
@@ -221,7 +223,15 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
 
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'Visit', 'VISIT_CONSUMPTIONS_READ', before, userId);
+      row = await findAuditRow(
+        request,
+        token,
+        'Visit',
+        'VISIT_CONSUMPTIONS_READ',
+        before,
+        userId,
+        seededIds.visitId,
+      );
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
 

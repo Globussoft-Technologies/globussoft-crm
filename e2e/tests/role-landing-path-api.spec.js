@@ -243,27 +243,25 @@ test.describe('PUT /api/roles/:id — landingPath update', () => {
     const created = await create.json();
     createdRoleIds.add(created.id);
 
-    // Grant calendar.read so /wellness/calendar becomes accessible. The
+    // Grant integrations.read so /calendar-sync becomes accessible. The
     // landingPath-validate-against-perms contract rejects setting a
     // landingPath the role can't access. Calendar is gated on a DEDICATED
     // `calendar` module (pageCatalog.js) — separated from appointments so
     // view-only Calendar access can be granted without the Appointments list.
     const grant = await put(request, token, `/api/roles/${created.id}/permissions`, {
       permissions: [
-        { module: 'appointments', action: 'read' },
-        { module: 'appointments', action: 'write' },
-        { module: 'calendar', action: 'read' },
+        { module: 'integrations', action: 'read' },
       ],
     });
     expect(grant.status()).toBe(200);
 
     const update = await put(request, token, `/api/roles/${created.id}`, {
       name: created.name,
-      landingPath: '/wellness/calendar',
+      landingPath: '/calendar-sync',
     });
     expect(update.status(), await update.text()).toBe(200);
     const updated = await update.json();
-    expect(updated.landingPath).toBe('/wellness/calendar');
+    expect(updated.landingPath).toBe('/calendar-sync');
   });
 
   test('200 clears landingPath when passed an empty string', async ({

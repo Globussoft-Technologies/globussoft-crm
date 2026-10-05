@@ -67,8 +67,8 @@ const llmRouter = require("../lib/llmRouter");
 router.post(
   "/travelstall/personalised-pdf/regen",
   verifyToken,
-  requirePermission("reports", "export"),
   requireTravelTenant,
+  requirePermission("reports", "export"),
   async (req, res) => {
     try {
       const body = req.body || {};

@@ -160,6 +160,7 @@ describe('route registration', () => {
     permissions.PERMISSION_CACHE.set('7::55', {
       permissions: new Set(['appointments.ai_call']),
       timestamp: Date.now(),
+      vertical: 'wellness',
     });
 
     const authMiddlewareFor = (method, path) => {
@@ -171,6 +172,7 @@ describe('route registration', () => {
       return layer.route.stack.slice(1, -1).map((entry) => entry.handle);
     };
     const req = {
+      permissionTenant: { id: 7, vertical: 'wellness' },
       user: {
         userId: 55,
         tenantId: 7,

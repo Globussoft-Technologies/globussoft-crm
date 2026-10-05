@@ -419,6 +419,9 @@ test.describe("Travel trips API — document requirements", () => {
 
 test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
   const STUB_FOLDER_RE = /^stub-folder-[0-9a-f]+$/;
+  const futureDate = (days) => new Date(Date.now() + days * 86400000)
+    .toISOString()
+    .slice(0, 10);
 
   test("POST with status=confirmed auto-mints driveFolderId", async ({ request }) => {
     const token = await getTravelAdmin(request);
@@ -428,8 +431,8 @@ test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
       tripCode: code,
       schoolContactId,
       destination: `${RUN_TAG} Auto-Drive Tour`,
-      departDate: "2026-10-01",
-      returnDate: "2026-10-10",
+      departDate: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
+      returnDate: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
       status: "confirmed",
     });
     expect(res.status(), `create: ${await res.text()}`).toBe(201);
@@ -447,8 +450,8 @@ test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
       tripCode: code,
       schoolContactId,
       destination: `${RUN_TAG} Override Tour`,
-      departDate: "2026-10-15",
-      returnDate: "2026-10-22",
+      departDate: futureDate(21),
+      returnDate: futureDate(28),
       status: "confirmed",
       driveFolderId: overrideId,
     });
@@ -469,8 +472,8 @@ test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
       tripCode: code,
       schoolContactId,
       destination: `${RUN_TAG} Cancelled Tour`,
-      departDate: "2026-11-01",
-      returnDate: "2026-11-05",
+      departDate: futureDate(35),
+      returnDate: futureDate(42),
       status: "cancelled",
     });
     expect(res.status(), `create: ${await res.text()}`).toBe(201);
@@ -488,8 +491,8 @@ test.describe("Travel trips API — Drive folder auto-create (stub)", () => {
       tripCode: code,
       schoolContactId,
       destination: `${RUN_TAG} Flip Tour`,
-      departDate: "2026-12-01",
-      returnDate: "2026-12-08",
+      departDate: futureDate(49),
+      returnDate: futureDate(56),
       status: "cancelled",
     });
     expect(create.status()).toBe(201);

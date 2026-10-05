@@ -112,8 +112,16 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   return app;
 }
 
+function mockTenantLookup(routeResult) {
+  prismaMod.tenant.findUnique.mockImplementation(async (args) => {
+    if (args?.select?.vertical) return { vertical: 'generic' };
+    return routeResult;
+  });
+}
+
 beforeEach(() => {
   prismaMod.tenant.findUnique.mockReset();
+  mockTenantLookup(undefined);
   prismaMod.tenant.update.mockReset();
   auditMod.writeAudit.mockReset();
   auditMod.writeAudit.mockResolvedValue(undefined);
@@ -121,7 +129,7 @@ beforeEach(() => {
 
 describe('GET /api/admin/tenants/:id/embed-allowlist (S128)', () => {
   test('1. happy path: returns parsed origins from stored JSON', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: JSON.stringify(['https://partner1.com', 'https://partner2.com']),
       updatedAt: new Date('2026-06-11T00:00:00Z'),
@@ -139,7 +147,7 @@ describe('GET /api/admin/tenants/:id/embed-allowlist (S128)', () => {
   });
 
   test('2. null column → origins=[]', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 5,
       embedAllowlistJson: null,
       updatedAt: new Date(),
@@ -153,7 +161,7 @@ describe('GET /api/admin/tenants/:id/embed-allowlist (S128)', () => {
   });
 
   test('3. malformed JSON → origins=[] (parity with S66 fallback semantics)', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 9,
       embedAllowlistJson: '{not valid json',
       updatedAt: new Date(),
@@ -166,17 +174,17 @@ describe('GET /api/admin/tenants/:id/embed-allowlist (S128)', () => {
     expect(res.body.origins).toEqual([]);
   });
 
-  test('4. cross-tenant → 403 CROSS_TENANT_DENIED, prisma never touched', async () => {
+  test('4. cross-tenant → 403 CROSS_TENANT_DENIED before tenant data is loaded', async () => {
     const res = await request(makeApp({ tenantId: 1 }))
       .get('/api/admin/tenants/999/embed-allowlist');
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('CROSS_TENANT_DENIED');
-    expect(prismaMod.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prismaMod.tenant.findUnique).toHaveBeenCalledTimes(1);
   });
 
   test('5. non-existent tenant → 404 TENANT_NOT_FOUND', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue(null);
+    mockTenantLookup(null);
 
     const res = await request(makeApp({ tenantId: 77 }))
       .get('/api/admin/tenants/77/embed-allowlist');
@@ -191,13 +199,13 @@ describe('GET /api/admin/tenants/:id/embed-allowlist (S128)', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_TENANT_ID');
-    expect(prismaMod.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prismaMod.tenant.findUnique).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
   test('7. happy path: writes JSON.stringify(origins) + returns envelope', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: null,
     });
@@ -226,7 +234,7 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
   });
 
   test('8. empty array → embedAllowlistJson = null (wildcard back-compat)', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: JSON.stringify(['https://old.com']),
     });
@@ -289,7 +297,7 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
   });
 
   test('12. dedupe + trim: duplicate + whitespace-padded entries normalised', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: null,
     });
@@ -335,12 +343,12 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('CROSS_TENANT_DENIED');
-    expect(prismaMod.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prismaMod.tenant.findUnique).toHaveBeenCalledTimes(1);
     expect(prismaMod.tenant.update).not.toHaveBeenCalled();
   });
 
   test('15. non-existent tenant → 404 TENANT_NOT_FOUND', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue(null);
+    mockTenantLookup(null);
 
     const res = await request(makeApp({ tenantId: 77 }))
       .patch('/api/admin/tenants/77/embed-allowlist')
@@ -352,7 +360,7 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
   });
 
   test('16. writes audit row with before/after envelope', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: JSON.stringify(['https://old.com']),
     });
@@ -383,13 +391,13 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
     });
   });
 
-  test('17. USER role → 403 RBAC_DENIED, prisma never touched (GET)', async () => {
+  test('17. USER role → 403 RBAC_DENIED before tenant data is loaded (GET)', async () => {
     const res = await request(makeApp({ role: 'USER', tenantId: 42 }))
       .get('/api/admin/tenants/42/embed-allowlist');
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('RBAC_DENIED');
-    expect(prismaMod.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prismaMod.tenant.findUnique).toHaveBeenCalledTimes(1);
   });
 
   test('18. MANAGER role → 403 RBAC_DENIED (PATCH)', async () => {
@@ -405,7 +413,7 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
 
 describe('PATCH /api/admin/tenants/:id/embed-allowlist — S131 wildcard support', () => {
   test('19. accepts leftmost-wildcard `https://*.partner.com`', async () => {
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: null,
     });
@@ -433,7 +441,7 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist — S131 wildcard support
       'https://*.foo.bar:8443',
       'https://*.x.y.z/path',
     ];
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: null,
     });
@@ -495,7 +503,7 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist — S131 wildcard support
   test('25. empty wildcard-list still saves as null (S66 fallback parity)', async () => {
     // Wildcard support must NOT change empty-array semantics — empty list
     // still clears the column to null so the S66 wildcard-fallback applies.
-    prismaMod.tenant.findUnique.mockResolvedValue({
+    mockTenantLookup({
       id: 42,
       embedAllowlistJson: JSON.stringify(['https://*.partner.com']),
     });

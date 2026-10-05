@@ -43,13 +43,14 @@ function permissionForRequest(path, method) {
 }
 
 async function resolveVertical(req) {
-  if (req.user?.vertical) return req.user.vertical;
   const tenant = await prisma.tenant.findUnique({
     where: { id: req.user.tenantId },
     select: { vertical: true },
   });
-  const vertical = tenant?.vertical || 'generic';
+  const vertical = tenant?.vertical || null;
+  if (!vertical) throw new Error('Tenant vertical is unavailable');
   req.user.vertical = vertical;
+  req.permissionTenant = { id: req.user.tenantId, vertical };
   return vertical;
 }
 

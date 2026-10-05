@@ -320,7 +320,7 @@ test.describe("Travel POIs — rep suggest + approval queue", () => {
     expect(json.code).toBe("INVALID_ID");
   });
 
-  test("cross-tenant — generic-admin cannot approve travel-tenant POI -> 404", async ({ request }) => {
+  test("cross-vertical — generic admin cannot approve a travel POI", async ({ request }) => {
     const userToken = await getTravelUser(request);
     const travelAdmin = await getTravelAdmin(request);
     const genericAdmin = await getGenericAdmin(request);
@@ -332,11 +332,11 @@ test.describe("Travel POIs — rep suggest + approval queue", () => {
     }));
     const suggested = await suggestRes.json();
 
-    // Generic-admin tries to approve — should 404 (deliberate, avoids existence leak).
+    // Generic admins cannot hold the travel-only pois.manage permission.
     const r = await post(request, genericAdmin, `/api/travel/pois/${suggested.id}/approve`);
-    expect(r.status()).toBe(404);
+    expect(r.status()).toBe(403);
     const json = await r.json();
-    expect(json.code).toBe("POI_NOT_FOUND");
+    expect(json.code).toBe("RBAC_DENIED");
 
     // Cleanup with the travel admin.
     await post(request, travelAdmin, `/api/travel/pois/${suggested.id}/reject`).catch(() => {});

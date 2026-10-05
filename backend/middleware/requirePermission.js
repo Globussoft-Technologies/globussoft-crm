@@ -359,14 +359,16 @@ async function loadUserPermissions(tenantId, userId, vertical = null) {
 /**
  * Get cached permissions for a user, refreshing from DB if needed.
  */
-async function getUserPermissions(tenantId, userId) {
+async function getUserPermissions(tenantId, userId, verifiedVertical = null) {
   const cacheKey = `${tenantId}::${userId}`;
   const cached = PERMISSION_CACHE.get(cacheKey);
 
   // Resolve the tenant row before reusing a cached grant set. A vertical
   // migration must invalidate permissions immediately instead of waiting for
   // the normal 30-second user-role cache TTL.
-  const verticalResolution = await resolveTenantVerticalDetailed(tenantId);
+  const verticalResolution = verifiedVertical
+    ? { vertical: verifiedVertical, lookupFailed: false, error: null }
+    : await resolveTenantVerticalDetailed(tenantId);
   const resolvedVertical = verticalResolution.vertical;
   const verticalLookupError = verticalResolution.error;
 
@@ -474,9 +476,16 @@ function requirePermission(module, action, opts = {}) {
       // Load user's merged permissions (with cache)
       let userPermissions;
       try {
+        const verifiedVertical =
+          req.travelTenant?.id === req.user.tenantId
+            ? req.travelTenant.vertical
+            : req.permissionTenant?.id === req.user.tenantId
+              ? req.permissionTenant.vertical
+              : null;
         userPermissions = await getUserPermissions(
           req.user.tenantId,
           req.user.userId,
+          verifiedVertical,
         );
       } catch (err) {
         // Test-mode fallback for fixtures that forgot to mock prisma.userRole.
@@ -656,9 +665,16 @@ function requireAnyPermission(perms, opts = {}) {
       }
       let userPermissions;
       try {
+        const verifiedVertical =
+          req.travelTenant?.id === req.user.tenantId
+            ? req.travelTenant.vertical
+            : req.permissionTenant?.id === req.user.tenantId
+              ? req.permissionTenant.vertical
+              : null;
         userPermissions = await getUserPermissions(
           req.user.tenantId,
           req.user.userId,
+          verifiedVertical,
         );
       } catch (err) {
         if (process.env.NODE_ENV === 'test' && err && err.name === 'PrismaClientInitializationError') {
@@ -696,4 +712,3 @@ module.exports = {
   loadUserPermissions,
   getUserPermissions,
 };
-

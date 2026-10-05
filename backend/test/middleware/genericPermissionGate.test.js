@@ -7,7 +7,7 @@ import {
 import { clearAllCache } from '../../middleware/requirePermission.js';
 
 beforeEach(() => {
-  prisma.tenant = { findUnique: vi.fn() };
+  prisma.tenant = { findUnique: vi.fn().mockResolvedValue({ vertical: 'generic' }) };
   prisma.userRole = { findMany: vi.fn() };
   clearAllCache();
 });
@@ -45,6 +45,7 @@ describe('genericPermissionGate', () => {
 
   test('does not change wellness or travel API behavior', async () => {
     for (const vertical of ['wellness', 'travel']) {
+      prisma.tenant.findUnique.mockResolvedValueOnce({ vertical });
       const req = { path: '/cpq', method: 'GET', user: { tenantId: 7, vertical } };
       const next = vi.fn();
       await genericPermissionGate(req, {}, next);

@@ -229,8 +229,8 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
 router.post(
   "/",
   verifyToken,
-  requirePermission("quote_templates", "write"),
   requireTravelTenant,
+  requirePermission("quote_templates", "write"),
   async (req, res) => {
     try {
       const body = pickMutable(req.body || {});
@@ -327,8 +327,8 @@ router.get("/:id", verifyToken, requireTravelTenant, async (req, res) => {
 router.patch(
   "/:id",
   verifyToken,
-  requirePermission("quote_templates", "update"),
   requireTravelTenant,
+  requirePermission("quote_templates", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -408,8 +408,8 @@ router.patch(
 router.delete(
   "/:id",
   verifyToken,
-  requirePermission("quote_templates", "delete"),
   requireTravelTenant,
+  requirePermission("quote_templates", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -470,8 +470,8 @@ router.delete(
 router.post(
   "/:id/apply",
   verifyToken,
-  requirePermission("quotes", "write"),
   requireTravelTenant,
+  requirePermission("quotes", "write"),
   async (req, res) => {
     try {
       const templateId = parseInt(req.params.id, 10);

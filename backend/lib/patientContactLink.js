@@ -16,6 +16,31 @@
 
 const prisma = require('./prisma');
 
+function contactIdentityConflict(emailContact, phoneContact) {
+  const err = new Error(
+    'Patient email and phone belong to different contacts. Resolve the duplicate contacts before linking this patient.',
+  );
+  err.code = 'CONTACT_IDENTITY_CONFLICT';
+  err.status = 409;
+  err.details = {
+    emailContactId: emailContact.id,
+    phoneContactId: phoneContact.id,
+  };
+  return err;
+}
+
+async function findUnambiguousContact({ tenantId, email, phone }) {
+  const baseWhere = { tenantId, deletedAt: null };
+  const [emailContact, phoneContact] = await Promise.all([
+    email ? prisma.contact.findFirst({ where: { ...baseWhere, email } }) : null,
+    phone ? prisma.contact.findFirst({ where: { ...baseWhere, phone } }) : null,
+  ]);
+  if (emailContact && phoneContact && emailContact.id !== phoneContact.id) {
+    throw contactIdentityConflict(emailContact, phoneContact);
+  }
+  return emailContact || phoneContact || null;
+}
+
 /**
  * Ensure a wellness Patient is backed by a CRM Contact.
  *
@@ -70,17 +95,11 @@ async function ensurePatientContact(patient, tenantId) {
   // as an unlinked Patient plus a separate Contact). Do not run an empty OR
   // clause: Prisma rejects it and patients may legitimately have neither
   // email nor phone.
-  const identityClauses = [
-    ...(desiredEmail ? [{ email: desiredEmail }] : []),
-    ...(desiredPhone ? [{ phone: desiredPhone }] : []),
-  ];
-  if (identityClauses.length > 0) {
-    const existing = await prisma.contact.findFirst({
-      where: {
-        tenantId,
-        deletedAt: null,
-        OR: identityClauses,
-      },
+  if (desiredEmail || desiredPhone) {
+    const existing = await findUnambiguousContact({
+      tenantId,
+      email: desiredEmail,
+      phone: desiredPhone,
     });
     if (existing) {
       await prisma.patient.update({
@@ -126,14 +145,10 @@ async function ensurePatientContact(patient, tenantId) {
   } catch (err) {
     // If the create failed because a contact with this email/phone already
     // exists, link to that one instead of leaving the patient orphaned.
-    const existing = await prisma.contact.findFirst({
-      where: {
-        tenantId,
-        OR: [
-          ...(desiredEmail ? [{ email: desiredEmail }] : []),
-          ...(desiredPhone ? [{ phone: desiredPhone }] : []),
-        ],
-      },
+    const existing = await findUnambiguousContact({
+      tenantId,
+      email: desiredEmail,
+      phone: desiredPhone,
     });
     if (existing) {
       await prisma.patient.update({
@@ -160,4 +175,4 @@ async function ensurePatientContact(patient, tenantId) {
   }
 }
 
-module.exports = { ensurePatientContact };
+module.exports = { ensurePatientContact, findUnambiguousContact };

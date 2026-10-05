@@ -251,9 +251,7 @@ describe("applyPrescriptionStock", () => {
     prisma.drug.updateMany.mockImplementation(async ({ where, data }) => {
       const row = catalogue.find((d) => d.id === where.id);
       if (!row) return { count: 0 };
-      const filter = where.quantity || {};
-      if (filter.gte !== undefined && row.quantity < filter.gte) return { count: 0 };
-      if (filter.lt !== undefined && row.quantity >= filter.lt) return { count: 0 };
+      if (typeof where.quantity === 'number' && row.quantity !== where.quantity) return { count: 0 };
       row.quantity = typeof data.quantity === 'number'
         ? data.quantity
         : row.quantity - data.quantity.decrement;
@@ -272,8 +270,8 @@ describe("applyPrescriptionStock", () => {
     });
     expect(prisma.drug.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 96, tenantId: 1, quantity: { gte: 1 } },
-        data: { quantity: { decrement: 1 } },
+        where: { id: 96, tenantId: 1, quantity: 40 },
+        data: { quantity: 39 },
       }),
     );
     expect(out.adjusted[0]).toMatchObject({ name: "Minoxidil", units: 1, quantityAfter: 39 });
@@ -281,13 +279,15 @@ describe("applyPrescriptionStock", () => {
 
   test("honours an explicit qty — the doctor writes 2 units", async () => {
     await applyPrescriptionStock({ tenantId: 1, drugs: [{ name: "Minoxidil", qty: 2 }] });
-    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: { decrement: 2 } });
+    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: 38 });
   });
 
   test("uses a conditional decrement so concurrent saves cannot create negative stock", async () => {
     await applyPrescriptionStock({ tenantId: 1, drugs: [{ name: "Minoxidil" }] });
-    expect(prisma.drug.updateMany.mock.calls[0][0].data.quantity).toHaveProperty("decrement");
-    expect(prisma.drug.updateMany.mock.calls[0][0].where.quantity).toEqual({ gte: 1 });
+    expect(prisma.drug.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { id: 96, tenantId: 1, quantity: 40 },
+      data: { quantity: 39 },
+    });
   });
 
   test("collapses the same drug listed twice into one update", async () => {
@@ -296,7 +296,7 @@ describe("applyPrescriptionStock", () => {
       drugs: [{ name: "Minoxidil", qty: 2 }, { name: "Minoxidil 5%", qty: 3 }],
     });
     expect(prisma.drug.updateMany).toHaveBeenCalledTimes(1);
-    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: { decrement: 5 } });
+    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: 35 });
   });
 
   test("floors an over-dispensed prescription at zero instead of storing a negative quantity", async () => {
@@ -305,12 +305,37 @@ describe("applyPrescriptionStock", () => {
       drugs: [{ name: "Amoxicillin", qty: 99 }],
     });
 
-    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: { decrement: 99 } });
-    expect(prisma.drug.updateMany.mock.calls[1][0]).toMatchObject({
-      where: { id: 13, tenantId: 1, quantity: { lt: 99 } },
+    expect(prisma.drug.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.drug.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { id: 13, tenantId: 1, quantity: 5 },
       data: { quantity: 0 },
     });
     expect(out.adjusted[0]).toMatchObject({ units: 5, quantityBefore: 5, quantityAfter: 0 });
+  });
+
+  test("retries a lost race and reports only the stock actually dispensed", async () => {
+    prisma.drug.findFirst
+      .mockResolvedValueOnce({ ...catalogue[0], quantity: 40 })
+      .mockResolvedValueOnce({ ...catalogue[0], quantity: 7 });
+    prisma.drug.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    const out = await applyPrescriptionStock({
+      tenantId: 1,
+      drugs: [{ name: "Minoxidil", qty: 10 }],
+    });
+
+    expect(prisma.drug.updateMany.mock.calls[0][0].where.quantity).toBe(40);
+    expect(prisma.drug.updateMany.mock.calls[1][0]).toMatchObject({
+      where: { id: 96, tenantId: 1, quantity: 7 },
+      data: { quantity: 0 },
+    });
+    expect(out.adjusted[0]).toMatchObject({
+      units: 7,
+      quantityBefore: 7,
+      quantityAfter: 0,
+    });
   });
 
   test("reports free text back untouched instead of inventing stock", async () => {

@@ -70,14 +70,10 @@ describe("ensurePatientContact", () => {
     );
 
     expect(prisma.contact.findFirst).toHaveBeenCalledWith({
-      where: {
-        tenantId: 45,
-        deletedAt: null,
-        OR: [
-          { email: "mickey@example.com" },
-          { phone: "+919876500001" },
-        ],
-      },
+      where: { tenantId: 45, deletedAt: null, email: "mickey@example.com" },
+    });
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 45, deletedAt: null, phone: "+919876500001" },
     });
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(prisma.patient.update).toHaveBeenCalledWith({
@@ -110,14 +106,34 @@ describe("ensurePatientContact", () => {
       where: { id: 99 },
     });
     expect(prisma.contact.findFirst).toHaveBeenCalledWith({
-      where: {
-        tenantId: 45,
-        deletedAt: null,
-        OR: [{ email: "mickey@example.com" }],
-      },
+      where: { tenantId: 45, deletedAt: null, email: "mickey@example.com" },
     });
     expect(prisma.contact.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ tenantId: 45, status: "Lead" }),
     });
+  });
+
+  test("refuses to link when email and phone identify different contacts", async () => {
+    prisma.contact.findFirst
+      .mockResolvedValueOnce({ id: 82, email: "mickey@example.com", phone: null })
+      .mockResolvedValueOnce({ id: 83, email: null, phone: "+919876500001" });
+
+    await expect(ensurePatientContact(
+      {
+        id: 504,
+        name: "Mickey",
+        email: "mickey@example.com",
+        phone: "+919876500001",
+      },
+      45,
+    )).rejects.toMatchObject({
+      code: "CONTACT_IDENTITY_CONFLICT",
+      status: 409,
+      details: { emailContactId: 82, phoneContactId: 83 },
+    });
+
+    expect(prisma.patient.update).not.toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
   });
 });

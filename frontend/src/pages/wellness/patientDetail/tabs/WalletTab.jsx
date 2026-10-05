@@ -16,26 +16,30 @@ export default function WalletTab({ patient }) {
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const notify = useNotify();
 
   const load = async () => {
     setLoading(true);
+    setError(null);
     try {
       const [balance, transactionPage] = await Promise.all([
         fetchApi(`/api/wallet/${patient.id}/balance`),
         fetchApi(`/api/wallet/${patient.id}/transactions?limit=10`),
       ]);
+      if (typeof balance?.balanceCents !== 'number' || !Number.isFinite(balance.balanceCents) || !Array.isArray(transactionPage?.transactions)) {
+        throw new Error('Wallet data is unavailable. Please try again.');
+      }
       setData({
         wallet: {
           balance: Number(balance?.balanceCents || 0) / 100,
           currency: balance?.currency || 'INR',
         },
-        transactions: Array.isArray(transactionPage?.transactions)
-          ? transactionPage.transactions
-          : [],
+        transactions: transactionPage.transactions,
       });
     } catch (e) {
-      notify.error(e.message || 'Failed to load wallet');
+      setData(null);
+      setError(e.message || 'Failed to load wallet');
     } finally {
       setLoading(false);
     }
@@ -61,7 +65,8 @@ export default function WalletTab({ patient }) {
     }
   };
 
-  if (loading || !data) return <div>Loading wallet…</div>;
+  if (loading) return <div>Loading wallet…</div>;
+  if (error) return <div role="alert" className="glass" style={{ padding: '1.25rem' }}>Could not load wallet: {error} <button type="button" onClick={load}>Retry</button></div>;
   const wallet = data?.wallet ?? {};
   const transactions = data?.transactions || [];
 

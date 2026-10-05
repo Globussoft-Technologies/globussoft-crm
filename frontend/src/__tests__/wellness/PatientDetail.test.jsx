@@ -127,6 +127,44 @@ describe('<wellness/PatientDetail /> — page surface', () => {
     expect(screen.getByTestId('patient-header-subline')).toBeInTheDocument();
   });
 
+  it('fetches updated patient data when switching to Packages', async () => {
+    let patientReads = 0;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === `/api/wellness/patients/${PATIENT_ID}`) {
+        patientReads += 1;
+        return Promise.resolve(patientReads === 1 ? samplePatient : {
+          ...samplePatient,
+          treatmentPlans: [{ id: 77, name: 'Updated package', createdAt: '2026-09-30T10:00:00.000Z', totalSessions: 4, sessionsUsed: 0, totalPrice: 1000 }],
+        });
+      }
+      return defaultFetchMock(url);
+    });
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByRole('button', { name: /^Packages$/i }));
+    expect(await screen.findByText('Updated package')).toBeInTheDocument();
+    expect(patientReads).toBe(2);
+  });
+
+  it('shows a retry option instead of stale tab data when refresh fails', async () => {
+    let patientReads = 0;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === `/api/wellness/patients/${PATIENT_ID}`) {
+        patientReads += 1;
+        return patientReads === 2 ? Promise.reject(new Error('Refresh failed')) : Promise.resolve(samplePatient);
+      }
+      return defaultFetchMock(url);
+    });
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByRole('button', { name: /^Packages$/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Refresh failed');
+    expect(screen.queryByText('No packages yet.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No packages yet.')).toBeInTheDocument();
+    expect(patientReads).toBe(3);
+  });
+
   it('renders the Wallet tab and clicking it loads balance + transactions', async () => {
     renderPatientDetail();
     await screen.findByRole('heading', { name: /Anita Sharma/i });
@@ -147,6 +185,39 @@ describe('<wellness/PatientDetail /> — page surface', () => {
 
     // Wallet panel renders the balance heading.
     expect(await screen.findByText(/Wallet balance/i)).toBeInTheDocument();
+  });
+
+  it('shows the wallet empty state only after a valid empty transaction response', async () => {
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByRole('button', { name: /Wallet/i }));
+    expect(await screen.findByText('No transactions yet.')).toBeInTheDocument();
+  });
+
+  it('shows a retryable error when wallet transactions fail', async () => {
+    fetchApiMock.mockImplementation((url) => url === `/api/wallet/${PATIENT_ID}/transactions?limit=10`
+      ? Promise.reject(new Error('Transaction request failed'))
+      : defaultFetchMock(url));
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByRole('button', { name: /Wallet/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Transaction request failed');
+    expect(screen.queryByText('No transactions yet.')).not.toBeInTheDocument();
+
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No transactions yet.')).toBeInTheDocument();
+  });
+
+  it('does not treat a malformed transaction response as an empty wallet', async () => {
+    fetchApiMock.mockImplementation((url) => url === `/api/wallet/${PATIENT_ID}/transactions?limit=10`
+      ? Promise.resolve({ total: 0 })
+      : defaultFetchMock(url));
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+    fireEvent.click(screen.getByRole('button', { name: /Wallet/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wallet data is unavailable');
+    expect(screen.queryByText('No transactions yet.')).not.toBeInTheDocument();
   });
 
 

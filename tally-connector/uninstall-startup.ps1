@@ -1,33 +1,21 @@
 $ErrorActionPreference = "Stop"
 $installDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $executable = Join-Path $installDirectory "TallyConnector.exe"
-$configuration = Join-Path $installDirectory "config.json"
 $launcher = Join-Path $installDirectory "run-hidden.vbs"
 $shortcutPath = Join-Path ([Environment]::GetFolderPath("Startup")) "Globussoft Tally Connector.lnk"
-$wscript = Join-Path $env:WINDIR "System32\wscript.exe"
 
-foreach ($required in @($executable, $configuration, $launcher, $wscript)) {
-  if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-    throw "Missing required file: $required"
+if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
+  $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
+  if ($shortcut.Arguments -eq ('"' + $launcher + '"')) {
+    Remove-Item -LiteralPath $shortcutPath -Force
   }
 }
 
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $wscript
-$shortcut.Arguments = '"' + $launcher + '"'
-$shortcut.WorkingDirectory = $installDirectory
-$shortcut.WindowStyle = 7
-$shortcut.Description = "Starts Globussoft Tally Connector hidden at sign-in"
-$shortcut.Save()
+Get-CimInstance Win32_Process -Filter "Name = 'TallyConnector.exe'" |
+  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($executable, [StringComparison]::OrdinalIgnoreCase) } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
-$running = Get-CimInstance Win32_Process -Filter "Name = 'TallyConnector.exe'" |
-  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($executable, [StringComparison]::OrdinalIgnoreCase) }
-if (-not $running) {
-  $shell.Run('"' + $wscript + '" "' + $launcher + '"', 0, $false) | Out-Null
-}
-
-Write-Host "Globussoft Tally Connector installed in Startup and running from $installDirectory"
+Write-Host "Globussoft Tally Connector removed from Startup and stopped"
 
 # SIG # Begin signature block
 # MIISGAYJKoZIhvcNAQcCoIISCTCCEgUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
@@ -128,3 +116,4 @@ Write-Host "Globussoft Tally Connector installed in Startup and running from $in
 # FYrDPpH1wZ04Zy8o1kdUbohMghfdvZSAGS01TQ4V9Fe4d6yIh8TCNBHQ3znh/5PZ
 # BSLI4r/juStDDuY8VSJr1Bno4M6tX8ij1qEdVg==
 # SIG # End signature block
+

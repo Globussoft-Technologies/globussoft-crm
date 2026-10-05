@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const { verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+const { calculateCommission } = require("../lib/commissionCalculation");
 // #714 (HIGH): server-side validation for Staff edit. Pre-fix PUT /:id
 // allowed empty name and an arbitrary "not-an-email" string for email.
 // `ensureEmail` + `ensureStringLength` are the shared helpers used by
@@ -1385,6 +1386,16 @@ const VALID_COMMISSION_BASIS = [
 ];
 const VALID_COMMISSION_PERIOD = ["MONTHLY", "QUARTERLY", "YEARLY"];
 
+function validateCommissionRate({ basis = "REVENUE_PERCENT", percentage, flatAmount }) {
+  const hasPercentage = percentage !== undefined && percentage !== null && percentage !== "";
+  const hasFlat = flatAmount !== undefined && flatAmount !== null && flatAmount !== "";
+  if (hasPercentage && hasFlat) return "Set either percentage or flatAmount, not both";
+  if (basis === "REVENUE_PERCENT" && !hasPercentage) return "REVENUE_PERCENT requires percentage";
+  if (basis === "FLAT_PER_INVOICE" && !hasFlat) return "FLAT_PER_INVOICE requires flatAmount";
+  if (!hasPercentage && !hasFlat) return "either percentage or flatAmount must be set";
+  return null;
+}
+
 function validateCommissionBody(body, { partial = false } = {}) {
   const errors = [];
   if (!partial || body.name !== undefined) {
@@ -1415,6 +1426,10 @@ function validateCommissionBody(body, { partial = false } = {}) {
     (flat == null || flat === "")
   ) {
     errors.push("either percentage or flatAmount must be set");
+  }
+  if (!partial) {
+    const rateError = validateCommissionRate(body);
+    if (rateError && !errors.includes(rateError)) errors.push(rateError);
   }
   if (
     body.period !== undefined &&
@@ -1487,7 +1502,7 @@ router.post("/commission-profiles", verifyRole(["ADMIN"]), async (req, res) => {
     if (errors.length)
       return res.status(400).json({ error: errors.join("; ") });
 
-    const { name, percentage, flatAmount, basis, period, periodStart, periodEnd, appliesToCategory, isActive } =
+    const { name, percentage, flatAmount, basis, period, periodStart, periodEnd, appliesToCategory, appliesToProduct, isActive } =
       req.body;
     const row = await prisma.commissionProfile.create({
       data: {
@@ -1502,6 +1517,7 @@ router.post("/commission-profiles", verifyRole(["ADMIN"]), async (req, res) => {
         periodStart: periodStart ? new Date(periodStart) : null,
         periodEnd: periodEnd ? new Date(periodEnd) : null,
         appliesToCategory: appliesToCategory || null,
+        appliesToProduct: appliesToProduct || null,
         isActive: isActive === false ? false : true,
       },
     });
@@ -1543,6 +1559,8 @@ router.put(
         return res.status(404).json({ error: "Commission profile not found." });
 
       const errors = validateCommissionBody(req.body || {}, { partial: true });
+      const rateError = validateCommissionRate({ ...existing, ...req.body });
+      if (rateError) errors.push(rateError);
       if (errors.length)
         return res.status(400).json({ error: errors.join("; ") });
 
@@ -1555,6 +1573,7 @@ router.put(
         periodStart,
         periodEnd,
         appliesToCategory,
+        appliesToProduct,
         isActive,
       } = req.body || {};
       const data = {};
@@ -1573,6 +1592,8 @@ router.put(
         data.periodEnd = periodEnd ? new Date(periodEnd) : null;
       if (appliesToCategory !== undefined)
         data.appliesToCategory = appliesToCategory || null;
+      if (appliesToProduct !== undefined)
+        data.appliesToProduct = appliesToProduct || null;
       if (isActive !== undefined) data.isActive = Boolean(isActive);
 
       const row = await prisma.commissionProfile.update({
@@ -1792,15 +1813,16 @@ async function computeAchievedAmount(
   }
 }
 
-// Live aggregation for the Commission Profiles → Historical Data table.
-// Computes per-staff, per-period breakdowns from the same POS + payment sources
-// that feed revenue goals, so a goal that is achieved automatically surfaces
-// in the historical view without a separate cron or persisted table.
+// Live aggregation for Commission Profiles → Historical Data. Assigned active
+// profiles define commission periods; revenue goals still supply historical
+// periods for staff without a profile. The estimate uses POS + successful
+// visit payments and is never stored as a payroll disbursement.
 async function computeCommissionDataForPeriod(
   tenantId,
   user,
   periodStart,
   periodEnd,
+  profile = null,
 ) {
   const userId = user.id;
   const employeeName = user.name || user.email || "Unknown";
@@ -1811,6 +1833,12 @@ async function computeCommissionDataForPeriod(
   let membershipRevenue = 0;
   let giftcardRevenue = 0;
   let discount = 0;
+  let eligibleServiceRevenue = 0;
+  let eligibleProductRevenue = 0;
+  let eligibleServiceCount = 0;
+  let eligibleProductCount = 0;
+  let invoiceCount = 0;
+  let commissionUnavailable = false;
 
   try {
     const sales = await prisma.sale.findMany({
@@ -1822,17 +1850,53 @@ async function computeCommissionDataForPeriod(
       },
       include: { lineItems: true },
     });
+    invoiceCount = sales.length;
+
+    let serviceCategories = new Map();
+    if (profile?.basis === "PER_SERVICE" && profile.appliesToCategory) {
+      const serviceIds = [...new Set(sales.flatMap((sale) =>
+        (sale.lineItems || []).filter((item) => item.lineType === "SERVICE").map((item) => item.refId),
+      ))];
+      if (serviceIds.length) {
+        try {
+          const services = await prisma.service.findMany({
+            where: { tenantId, id: { in: serviceIds } },
+            select: { id: true, category: true },
+          });
+          serviceCategories = new Map(services.map((service) => [service.id, service.category]));
+          if (serviceIds.some((id) => !serviceCategories.has(id))) commissionUnavailable = true;
+        } catch (error) {
+          console.error("[staff][commission-data][serviceCategory]", error);
+          commissionUnavailable = true;
+        }
+      }
+    }
 
     for (const sale of sales) {
-      discount += Number(sale.discountTotal || 0);
+      // Sale.discountTotal includes line discounts, while lineTotal has already
+      // had those deducted. Subtract only the remaining order discount here.
+      const lineDiscounts = (sale.lineItems || []).reduce((sum, item) => sum + Number(item.lineDiscount || 0), 0);
+      const orderDiscount = Math.max(0, Number(sale.discountTotal || 0) - lineDiscounts);
+      discount += orderDiscount;
+      const saleGross = (sale.lineItems || []).reduce((sum, item) => sum + Number(item.lineTotal || 0), 0);
+      let serviceBase = 0;
+      let productBase = 0;
       for (const item of sale.lineItems || []) {
         const amount = Number(item.lineTotal || 0);
         switch (item.lineType) {
           case "SERVICE":
             serviceRevenue += amount;
+            if (!profile?.appliesToCategory || serviceCategories.get(item.refId) === profile.appliesToCategory) {
+              serviceBase += amount;
+              eligibleServiceCount += Number(item.quantity || 1);
+            }
             break;
           case "PRODUCT":
             productRevenue += amount;
+            if (!profile?.appliesToProduct || item.name === profile.appliesToProduct) {
+              productBase += amount;
+              eligibleProductCount += Number(item.quantity || 1);
+            }
             break;
           case "PACKAGE":
             packageRevenue += amount;
@@ -1847,18 +1911,30 @@ async function computeCommissionDataForPeriod(
             break;
         }
       }
+      // POS line totals already include line discounts. Allocate any sale-level
+      // discount proportionally so percentage commission uses paid revenue.
+      const discountRate = saleGross > 0 ? Math.min(1, orderDiscount / saleGross) : 0;
+      eligibleServiceRevenue += serviceBase * (1 - discountRate);
+      eligibleProductRevenue += productBase * (1 - discountRate);
     }
   } catch (err) {
     console.error("[staff][commission-data][saleAgg]", err);
+    throw err;
   }
 
   // Successful visit-linked payments count as service revenue for the doctor
   // who diagnosed the visit — same rule as revenue goals.
   try {
+    const needsServiceCategory = profile?.basis === "PER_SERVICE" && !!profile.appliesToCategory;
     const invoices = await prisma.invoice.findMany({
       where: { tenantId, visit: { doctorId: userId } },
-      select: { id: true },
+      select: needsServiceCategory
+        ? { id: true, visit: { select: { service: { select: { category: true } } } } }
+        : { id: true },
     });
+    if (needsServiceCategory && invoices.some((invoice) => !invoice.visit?.service)) {
+      commissionUnavailable = true;
+    }
     const invoiceIds = invoices.map((i) => i.id).filter(Boolean);
     if (invoiceIds.length > 0) {
       const paymentAgg = await prisma.payment.aggregate({
@@ -1870,10 +1946,40 @@ async function computeCommissionDataForPeriod(
         },
         _sum: { amount: true },
       });
-      serviceRevenue += Number(paymentAgg._sum.amount || 0);
+      const paymentRevenue = Number(paymentAgg._sum.amount || 0);
+      serviceRevenue += paymentRevenue;
+      if (profile?.basis === "PER_SERVICE") {
+        if (needsServiceCategory) {
+          const matchingIds = invoices.filter((invoice) => invoice.visit?.service?.category === profile.appliesToCategory).map((invoice) => invoice.id);
+          if (matchingIds.length) {
+            const matchingAgg = await prisma.payment.aggregate({
+              where: { tenantId, invoiceId: { in: matchingIds }, status: "SUCCESS", paidAt: { gte: periodStart, lt: periodEnd } },
+              _sum: { amount: true },
+            });
+            eligibleServiceRevenue += Number(matchingAgg._sum.amount || 0);
+          }
+        } else {
+          eligibleServiceRevenue += paymentRevenue;
+        }
+      }
+      if ((profile?.basis === "PER_SERVICE" && profile.flatAmount != null) || profile?.basis === "FLAT_PER_INVOICE") {
+        const countedIds = needsServiceCategory
+          ? invoices.filter((invoice) => invoice.visit?.service?.category === profile.appliesToCategory).map((invoice) => invoice.id)
+          : invoiceIds;
+        if (countedIds.length) {
+          const paidInvoices = await prisma.payment.findMany({
+            where: { tenantId, invoiceId: { in: countedIds }, status: "SUCCESS", paidAt: { gte: periodStart, lt: periodEnd } },
+            distinct: ["invoiceId"],
+            select: { invoiceId: true },
+          });
+          invoiceCount += paidInvoices.length;
+          if (profile?.basis === "PER_SERVICE") eligibleServiceCount += paidInvoices.length;
+        }
+      }
     }
   } catch (err) {
     console.error("[staff][commission-data][paymentAgg]", err);
+    throw err;
   }
 
   const totalSales =
@@ -1883,6 +1989,14 @@ async function computeCommissionDataForPeriod(
     membershipRevenue +
     giftcardRevenue;
   const netSales = totalSales - discount;
+  const calculated = commissionUnavailable ? null : calculateCommission(profile, {
+    netSales,
+    serviceRevenue: eligibleServiceRevenue,
+    productRevenue: eligibleProductRevenue,
+    serviceCount: eligibleServiceCount,
+    productCount: eligibleProductCount,
+    invoiceCount,
+  });
 
   return {
     employeeName,
@@ -1896,6 +2010,9 @@ async function computeCommissionDataForPeriod(
     totalSales,
     discount,
     netSales,
+    commissionProfile: profile ? { id: profile.id, name: profile.name, basis: profile.basis } : null,
+    commissionableAmount: calculated?.commissionableAmount ?? null,
+    commission: calculated?.commission ?? null,
   };
 }
 
@@ -2109,6 +2226,35 @@ router.delete("/revenue-goals/:id", verifyRole(["ADMIN"]), async (req, res) => {
 // Commission Data — Historical payroll/commission records
 // ─────────────────────────────────────────────────────────────────────
 
+function commissionProfilePeriods(profile) {
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const start = profile.periodStart ? new Date(profile.periodStart) : monthStart;
+  const end = profile.periodEnd ? new Date(profile.periodEnd) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) return [];
+  const months = profile.period === "YEARLY" ? 12 : profile.period === "QUARTERLY" ? 3 : 1;
+  const periods = [];
+  let cursor = start;
+  // Profile creation limits validity to one year; cap legacy rows as well.
+  while (cursor < end && cursor <= now && periods.length < 12) {
+    const targetMonth = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + months, 1));
+    const lastDay = new Date(Date.UTC(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth() + 1, 0)).getUTCDate();
+    const next = new Date(Date.UTC(
+      targetMonth.getUTCFullYear(),
+      targetMonth.getUTCMonth(),
+      Math.min(cursor.getUTCDate(), lastDay),
+      cursor.getUTCHours(),
+      cursor.getUTCMinutes(),
+      cursor.getUTCSeconds(),
+      cursor.getUTCMilliseconds(),
+    ));
+    if (next <= cursor) break;
+    periods.push({ start: cursor, end: next < end ? next : end });
+    cursor = next;
+  }
+  return periods;
+}
+
 // GET /commission-data — list all commission records (admin only)
 router.get("/commission-data", verifyRole(["ADMIN"]), async (req, res) => {
   try {
@@ -2121,9 +2267,8 @@ router.get("/commission-data", verifyRole(["ADMIN"]), async (req, res) => {
       if (endDate) goalWhere.periodStart.lte = new Date(endDate);
     }
 
-    // Historical data is derived from the staff revenue goal periods. A goal
-    // that has been achieved therefore automatically shows up here without
-    // requiring a separate cron or persisted CommissionData row.
+    // Keep existing goal periods for staff without an active assigned profile.
+    // Profiled staff get periods from their rule, so a revenue goal is optional.
     const goals = await prisma.staffRevenueGoal.findMany({
       where: goalWhere,
       include: {
@@ -2132,8 +2277,26 @@ router.get("/commission-data", verifyRole(["ADMIN"]), async (req, res) => {
       orderBy: [{ periodStart: "desc" }, { id: "desc" }],
     });
 
+    const assignedStaff = await prisma.user.findMany({
+      where: { tenantId: req.user.tenantId, deactivatedAt: null, commissionProfileId: { not: null } },
+      select: { id: true, name: true, email: true, commissionProfile: true },
+    });
+    const profilePeriods = assignedStaff.flatMap((user) => {
+      const profile = user.commissionProfile;
+      if (!profile || profile.isActive === false || profile.tenantId !== req.user.tenantId) return [];
+      return commissionProfilePeriods(profile)
+        .filter(({ start }) => (!startDate || start >= new Date(startDate)) && (!endDate || start <= new Date(endDate)))
+        .map((period) => ({ user, profile, ...period }));
+    });
+    const profiledUserIds = new Set(profilePeriods.map(({ user }) => user.id));
+
     const records = await Promise.all(
-      goals.map(async (g) => {
+      [
+        ...profilePeriods.map(async ({ user, profile, start, end }) => {
+          const computed = await computeCommissionDataForPeriod(req.user.tenantId, user, start, end, profile);
+          return { id: `profile-${user.id}-${start.toISOString()}`, ...computed, user };
+        }),
+        ...goals.filter((goal) => !profiledUserIds.has(goal.userId)).map(async (g) => {
         const computed = await computeCommissionDataForPeriod(
           req.user.tenantId,
           g.user,
@@ -2145,8 +2308,11 @@ router.get("/commission-data", verifyRole(["ADMIN"]), async (req, res) => {
           ...computed,
           user: g.user,
         };
-      }),
+        }),
+      ],
     );
+
+    records.sort((a, b) => new Date(b.periodStart) - new Date(a.periodStart) || a.employeeName.localeCompare(b.employeeName));
 
     const filtered = employeeName
       ? records.filter((r) =>

@@ -62,10 +62,30 @@ describe("TallyExportActions direct connector", () => {
     );
   });
 
+  it("does not rotate connector credentials when deployment files are missing", async () => {
+    fetchApi.mockResolvedValue({ configured: false, online: false });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({ ok: true, arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([1]).buffer) })
+      .mockResolvedValueOnce({
+        ok: false,
+        json: vi.fn().mockResolvedValue({ error: "Deployment files are unavailable" }),
+      }));
+    render(<TallyExportActions {...props} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Download Tally Connector/i }));
+
+    await waitFor(() => expect(error).toHaveBeenCalledWith("Deployment files are unavailable"));
+    expect(fetchApi).not.toHaveBeenCalledWith(
+      "/api/travel/tally/connector/credentials",
+      expect.anything(),
+    );
+  });
+
   it("downloads Masters and Voucher XML when push is attempted while the connector is offline", async () => {
     fetchApi.mockResolvedValue({ configured: true, online: false });
     render(<TallyExportActions {...props} />);
     await screen.findByText("Configured, but currently offline");
+    expect(screen.getByRole("button", { name: /Download Tally Connector/i })).toBeInTheDocument();
     const push = screen.getByRole("button", { name: /Push directly to Tally/i });
     expect(push).toBeEnabled();
 
@@ -88,6 +108,7 @@ describe("TallyExportActions direct connector", () => {
     });
     render(<TallyExportActions {...props} />);
     const push = await screen.findByRole("button", { name: /Push directly to Tally/i });
+    expect(screen.queryByRole("button", { name: /Download Tally Connector/i })).not.toBeInTheDocument();
     await waitFor(() => expect(push).toBeEnabled());
     fireEvent.click(push);
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(

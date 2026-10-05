@@ -472,6 +472,7 @@ async function sendPasswordResetEmail(
   token,
   frontendBase,
   brandName = "Globussoft CRM",
+  options = {},
 ) {
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
   const FROM_EMAIL =
@@ -516,18 +517,9 @@ async function sendPasswordResetEmail(
       from: { email: FROM_EMAIL },
       subject,
       content: [
-        {
-          type: "text/plain",
-          value: `Click this link to reset your ${brandName} password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.`,
-        },
-        {
-          type: "text/html",
-          value: `<p>Click the link below to reset your ${brandName} password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>`,
-        },
-      ],
         { type: "text/plain", value: text },
-        { type: "text/html", value: html }
-      ]
+        { type: "text/html", value: html },
+      ],
     };
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",

@@ -501,10 +501,10 @@ export default function RolesAdmin() {
   const [error, setError] = useState(null);
   const [visibleRoleCount, setVisibleRoleCount] = useState(ROLES_PAGE_SIZE);
   const [permissionModules, setPermissionModules] = useState(
-    PERMISSION_MODULES_FALLBACK,
+    tenantVertical === 'wellness' ? PERMISSION_MODULES_FALLBACK : [],
   );
   const [permissionDomains, setPermissionDomains] = useState(
-    PERMISSION_DOMAINS_FALLBACK,
+    tenantVertical === 'wellness' ? PERMISSION_DOMAINS_FALLBACK : [],
   );
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -543,13 +543,31 @@ export default function RolesAdmin() {
 
   // Fetch the server's permission catalog so the matrix can never offer a
   // checkbox the validator will reject. If the endpoint is unavailable
-  // (older backend), the fallback constant keeps the page functional.
+  // (older backend), the initial fallback is replaced with an empty matrix
+  // after mount; an empty state is safer than showing another vertical's
+  // permissions while the authoritative response is unavailable.
+  useEffect(() => {
+    // Never retain a catalog from the previously active tenant vertical while
+    // the new tenant's authoritative response is loading.
+    setPermissionModules(
+      tenantVertical === 'wellness' ? PERMISSION_MODULES_FALLBACK : [],
+    );
+    setPermissionDomains(
+      tenantVertical === 'wellness' ? PERMISSION_DOMAINS_FALLBACK : [],
+    );
+  }, [tenantVertical]);
+
   useEffect(() => {
     if (permLoading || !canRead) return;
     let cancelled = false;
     fetchApi('/api/roles/catalog')
       .then((res) => {
         if (cancelled) return;
+        // The backend is authoritative for vertical scoping. Do not render a
+        // response that is missing its tenant vertical or belongs to another
+        // vertical; the local fallback is intentionally safer than showing a
+        // cross-product permission matrix during a stale/failed session.
+        if (res?.vertical !== tenantVertical) return;
         const list = Array.isArray(res?.modules) ? res.modules : null;
         if (list && list.length) setPermissionModules(list);
         // Server-authoritative domain grouping — fall through to the
@@ -574,7 +592,7 @@ export default function RolesAdmin() {
     return () => {
       cancelled = true;
     };
-  }, [permLoading, canRead]);
+  }, [permLoading, canRead, tenantVertical]);
 
   useEffect(() => {
     if (!permLoading && canRead) loadRoles();
@@ -1751,14 +1769,8 @@ function validateLandingPathClient(value) {
 // ──────────────────────── Permissions matrix modal ───────────────────
 
 function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose, onSaved }) {
-  const matrix =
-    Array.isArray(modules) && modules.length
-      ? modules
-      : PERMISSION_MODULES_FALLBACK;
-  const domainList =
-    Array.isArray(domains) && domains.length
-      ? domains
-      : PERMISSION_DOMAINS_FALLBACK;
+  const matrix = Array.isArray(modules) ? modules : [];
+  const domainList = Array.isArray(domains) ? domains : [];
   // Build the set of currently-catalogued "module.action" strings so we
   // can filter the role's stored grants through it. A grant whose module
   // is no longer in the catalog (e.g. `billing.delete` after the v3.8.x

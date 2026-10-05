@@ -193,6 +193,20 @@ describe('drug stock fields on CRUD', () => {
     });
   });
 
+  test('create rejects negative, fractional, and non-numeric stock values', async () => {
+    for (const field of ['quantity', 'lowStockThreshold']) {
+      for (const bad of [-1, 1.5, 'plenty']) {
+        const res = await request(adminApp())
+          .post('/api/wellness/drugs')
+          .send({ name: 'Invalid stock drug', [field]: bad });
+
+        expect(res.status, `${field}=${bad}`).toBe(400);
+        expect(res.body.code).toBe('INVALID_STOCK_VALUE');
+      }
+    }
+    expect(prisma.drug.create).not.toHaveBeenCalled();
+  });
+
   test('a blank stock box on update leaves the count alone', async () => {
     // The edit form round-trips every field; a blank must never silently wipe
     // a stock count the admin did not intend to touch.

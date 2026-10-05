@@ -31,7 +31,7 @@
  *   GET    /inventory/movements                — PRODUCT_REQUIRED + combined ledger
  *   POST   /auto-consumption-rules             — create + Prisma P2002 → 409 RULE_DUPLICATE
  *
- * Cases pinned (15 total)
+ * Cases pinned (17 total)
  * ───────────────────────
  *   ProductCategory:
  *     1. GET — tenant-scoped findMany with _count include + ordered by parent/name
@@ -40,30 +40,30 @@
  *     4. PUT — 400 PARENT_SELF_REFERENCE when parentId === id
  *     5. DELETE — 404 cross-tenant (findFirst returns null)
  *
+ *   Product:
+ *     6. GET — tenant-scoped paginated catalogue returns items + pagination
+ *
  *   Vendor:
- *     6. GET — ?isActive=true narrows where clause
- *     7. POST — 400 INVALID_GSTIN when gstin length ≠ 15
- *     8. DELETE — deactivates (200 + isActive=false) when vendor has receipts;
+ *     7. GET — ?isActive=true narrows where clause
+ *     8. POST — 400 INVALID_GSTIN when gstin length ≠ 15
+ *     9. DELETE — deactivates (200 + isActive=false) when vendor has receipts;
  *        hard-deletes (204) when receipt count is 0
  *
  *   InventoryReceipt:
- *     9. POST — 400 QUANTITY_INVALID when quantity is 0 or negative
- *    10. POST — 201 with transactional currentStock increment via tx.product.update
- *    11. GET — 400 INVERTED_DATE_RANGE when ?to < ?from (#665 validateDateRange)
+ *    10. POST — 400 QUANTITY_INVALID when quantity is 0 or negative
+ *    11. POST — 201 with transactional currentStock increment via tx.product.update
+ *    12. GET — 400 INVERTED_DATE_RANGE when ?to < ?from (#665 validateDateRange)
  *
  *   InventoryAdjustment:
- *    12. POST — 400 INVALID_REASON when reason is not in VALID_ADJUSTMENT_REASONS
- *    13. POST — 201 with signed delta written through to product.update
- *        (NOTE: negative-stock prevention is NOT enforced by the route today —
- *         a delta that would drive currentStock below 0 still succeeds. See
- *         test #13's TODO note. This test pins TODAY's behavior; flag candidate
- *         for a follow-up bug-test-cron issue.)
+ *    13. POST — 400 INVALID_REASON when reason is not in VALID_ADJUSTMENT_REASONS
+ *    14. POST — 201 with signed delta and conditional non-negative stock update
+ *    15. POST — 400 INSUFFICIENT_STOCK when a debit exceeds currentStock
  *
  *   AutoConsumptionRule:
- *    14. POST — 409 RULE_DUPLICATE when Prisma raises P2002 (unique violation)
+ *    16. POST — 409 RULE_DUPLICATE when Prisma raises P2002 (unique violation)
  *
  *   Movements:
- *    15. GET — 400 PRODUCT_REQUIRED when ?productId is absent
+ *    17. GET — 400 PRODUCT_REQUIRED when ?productId is absent
  *
  * Auth gating
  * ───────────
@@ -100,6 +100,7 @@ prisma.product = prisma.product || {};
 prisma.product.findMany = vi.fn();
 prisma.product.findFirst = vi.fn();
 prisma.product.update = vi.fn();
+prisma.product.updateMany = vi.fn();
 prisma.product.create = vi.fn();
 prisma.product.count = vi.fn();
 
@@ -202,6 +203,7 @@ beforeEach(() => {
   prisma.product.findMany.mockReset();
   prisma.product.findFirst.mockReset();
   prisma.product.update.mockReset();
+  prisma.product.updateMany.mockReset();
   prisma.product.create.mockReset();
   prisma.product.count.mockReset();
   prisma.product.create.mockImplementation(async ({ data }) => ({ id: 500, ...data }));
@@ -234,6 +236,7 @@ beforeEach(() => {
   prisma.productCategory.findFirst.mockResolvedValue(null);
   prisma.product.findMany.mockResolvedValue([]);
   prisma.product.findFirst.mockResolvedValue(null);
+  prisma.product.updateMany.mockResolvedValue({ count: 1 });
   prisma.product.count.mockResolvedValue(0);
   prisma.vendor.findMany.mockResolvedValue([]);
   prisma.vendor.findFirst.mockResolvedValue(null);
@@ -334,6 +337,28 @@ describe('DELETE /product-categories/:id', () => {
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
     expect(prisma.productCategory.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /products — list', () => {
+  test('returns the tenant-scoped paginated product catalogue', async () => {
+    prisma.product.findMany.mockResolvedValue([
+      { id: 501, name: 'Botox 50U', tenantId: 42 },
+    ]);
+    prisma.product.count.mockResolvedValue(101);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/wellness/products?paginate=true&page=1&limit=100');
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.pagination).toEqual({ total: 101, page: 1, limit: 100, pages: 2 });
+    const listArg = prisma.product.findMany.mock.calls[0][0];
+    expect(listArg.where).toEqual({ tenantId: 42 });
+    expect(listArg.orderBy).toEqual([{ name: 'asc' }, { id: 'asc' }]);
+    expect(listArg.skip).toBe(0);
+    expect(listArg.take).toBe(100);
+    expect(prisma.product.count).toHaveBeenCalledWith({ where: { tenantId: 42 } });
   });
 });
 
@@ -474,7 +499,7 @@ describe('GET /inventory/receipts — list', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('POST /inventory/adjustments — create signed adjustment', () => {
-  test('12. 400 INVALID_REASON when reason is not in VALID_ADJUSTMENT_REASONS set', async () => {
+  test('13. 400 INVALID_REASON when reason is not in VALID_ADJUSTMENT_REASONS set', async () => {
     const res = await request(makeApp())
       .post('/api/wellness/inventory/adjustments')
       .send({ productId: 1, quantityDelta: -2, reason: 'WHIM' });
@@ -484,25 +509,14 @@ describe('POST /inventory/adjustments — create signed adjustment', () => {
     expect(prisma.inventoryAdjustment.create).not.toHaveBeenCalled();
   });
 
-  test('13. 201 with signed delta written through to product.update — and NEGATIVE STOCK IS NOT REJECTED today (TODAY\'s contract; flag for follow-up)', async () => {
-    // NOTE: this test pins what the route ACTUALLY does today. The route
-    // accepts any signed delta — even one that would drive currentStock
-    // below 0. There's no `if (newStock < 0) return 400` guard. The receipt
-    // SIDE EFFECT comment at line 561 explicitly describes the delta as
-    // shifting stock by the signed value with no floor check. Whether this
-    // is the right behavior is a separate product call (a clinic might
-    // legitimately need to record damage that exceeds known stock from a
-    // stale recount, or might want hard rejection — depends on workflow).
-    // Pin today's behavior here; if product calls "negative stock should
-    // be rejected" file a bug-test-cron issue and we'll flip this to a
-    // 400 expectation + skip until the route is fixed.
+  test('14. 201 with signed delta preserves non-negative stock', async () => {
     prisma.product.findFirst.mockResolvedValue({
-      id: 50, name: 'Vitamin C', currentStock: 2, tenantId: 1,
+      id: 50, name: 'Vitamin C', currentStock: 20, tenantId: 1,
     });
     prisma.inventoryAdjustment.create.mockResolvedValue({
       id: 200, productId: 50, quantityDelta: -10, reason: 'DAMAGE', tenantId: 1,
     });
-    prisma.product.update.mockResolvedValue({ id: 50, currentStock: -8 });
+    prisma.product.updateMany.mockResolvedValue({ count: 1 });
 
     const res = await request(makeApp({ tenantId: 1, userId: 7 }))
       .post('/api/wellness/inventory/adjustments')
@@ -510,12 +524,34 @@ describe('POST /inventory/adjustments — create signed adjustment', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.id).toBe(200);
-    expect(prisma.product.update).toHaveBeenCalledTimes(1);
-    const updateArg = prisma.product.update.mock.calls[0][0];
+    expect(prisma.product.updateMany).toHaveBeenCalledTimes(1);
+    const updateArg = prisma.product.updateMany.mock.calls[0][0];
     // delta = -10 → Math.floor(-10) = -10 → increment: -10
     expect(updateArg.data.currentStock).toEqual({ increment: -10 });
-    // No floor check today — the call goes through.
+    // The conditional update succeeded because 20 units covered the debit.
     expect(prisma.inventoryAdjustment.create).toHaveBeenCalled();
+  });
+
+  test('15. rejects a debit that would make stock negative', async () => {
+    prisma.product.findFirst.mockResolvedValue({
+      id: 50, name: 'Vitamin C', currentStock: 2, tenantId: 1,
+    });
+    prisma.inventoryAdjustment.create.mockResolvedValue({
+      id: 201, productId: 50, quantityDelta: -10, reason: 'DAMAGE', tenantId: 1,
+    });
+    prisma.product.updateMany.mockResolvedValue({ count: 0 });
+
+    const res = await request(makeApp({ tenantId: 1, userId: 7 }))
+      .post('/api/wellness/inventory/adjustments')
+      .send({ productId: 50, quantityDelta: -10, reason: 'DAMAGE' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INSUFFICIENT_STOCK');
+    expect(prisma.product.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, id: 50, currentStock: { gte: 10 } },
+      data: { currentStock: { increment: -10 } },
+    });
+    expect(prisma.inventoryAdjustment.create).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -524,7 +560,7 @@ describe('POST /inventory/adjustments — create signed adjustment', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('POST /auto-consumption-rules — create rule', () => {
-  test('14. 409 RULE_DUPLICATE when Prisma raises P2002 (unique constraint)', async () => {
+  test('16. 409 RULE_DUPLICATE when Prisma raises P2002 (unique constraint)', async () => {
     prisma.service.findFirst.mockResolvedValue({ id: 1, name: 'Facial', tenantId: 1 });
     prisma.product.findFirst.mockResolvedValue({ id: 5, name: 'Serum', tenantId: 1 });
     const p2002 = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });

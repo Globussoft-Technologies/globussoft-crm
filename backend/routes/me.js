@@ -30,9 +30,10 @@ const { getUserPermissions } = require('../middleware/requirePermission');
 const { resolvePrimaryRole } = require('../lib/roleResolution');
 const { getCatalog: getPageCatalog, getAccessiblePages } = require('../lib/pageCatalog');
 const {
-  getCatalog: getPermissionCatalog,
-  getGroupedCatalog,
+  getCatalogForVertical,
+  getGroupedCatalogForVertical,
 } = require('../lib/permissionCatalog');
+const { resolveTenantVertical } = require('../lib/tenantVertical');
 
 router.get('/', verifyToken, async (req, res) => {
   try {
@@ -82,13 +83,19 @@ router.get('/', verifyToken, async (req, res) => {
     // requirePermission middleware uses, so the UI's view matches the
     // enforcement view exactly. ADMIN runtime shortcut fires inside
     // getUserPermissions when applicable.
-    const permSet = await getUserPermissions(req.user.tenantId, req.user.userId);
+    const permSet = await getUserPermissions(
+      req.user.tenantId,
+      req.user.userId,
+    );
     const effectivePermissions = Array.from(permSet).sort((a, b) => a.localeCompare(b));
 
     // Nav = accessible pages intersected with effective permissions. The
     // sidebar already consumes /api/pages/me with the same logic; this
     // is the same shape so the frontend can use either endpoint.
-    const nav = getAccessiblePages(permSet, { isOwner: false });
+    const nav = getAccessiblePages(permSet, {
+      isOwner: false,
+      vertical: user.tenant?.vertical,
+    });
 
     // Widgets — UNION across all roles the user holds, per SPEC §B4.
     // De-dup by widgetKey, preferring the lowest position so the home
@@ -137,14 +144,21 @@ router.get('/', verifyToken, async (req, res) => {
 // list. Reuses the role-catalog response shape so any client targeting
 // either path works.
 const permissionsRouter = express.Router();
-permissionsRouter.get('/', verifyToken, (req, res) => {
-  const catalog = getPermissionCatalog();
+permissionsRouter.get('/', verifyToken, async (req, res) => {
+  const vertical = await resolveTenantVertical(req.user.tenantId);
+  if (!vertical) {
+    return res.status(503).json({
+      error: 'Tenant vertical is unavailable',
+      code: 'TENANT_VERTICAL_UNAVAILABLE',
+    });
+  }
+  const catalog = getCatalogForVertical(vertical);
   const modules = Object.entries(catalog).map(([module, actions]) => ({
     module,
     actions,
   }));
-  const domains = getGroupedCatalog();
-  res.json({ catalog, modules, domains });
+  const domains = getGroupedCatalogForVertical(vertical);
+  res.json({ catalog, modules, domains, vertical });
 });
 
 // Two-router export: keeps the SPEC §C3 endpoint surface (/api/me and

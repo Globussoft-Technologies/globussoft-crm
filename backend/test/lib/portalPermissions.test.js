@@ -29,6 +29,8 @@ import {
 beforeEach(() => {
   prisma.role = prisma.role || {};
   prisma.role.findFirst = vi.fn();
+  prisma.tenant = prisma.tenant || {};
+  prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
   clearCustomerRoleCache(null); // wipe between tests
 });
 
@@ -64,6 +66,22 @@ describe('loadCustomerRolePermissions', () => {
         where: { tenantId: 42, key: 'CUSTOMER' },
       }),
     );
+  });
+
+  test('filters legacy travel grants using the tenant vertical', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    prisma.role.findFirst.mockResolvedValueOnce({
+      id: 7,
+      permissions: [
+        { module: 'patients', action: 'read' },
+        { module: 'itineraries', action: 'read' },
+      ],
+    });
+
+    const perms = await loadCustomerRolePermissions(1);
+
+    expect(perms.has('patients.read')).toBe(true);
+    expect(perms.has('itineraries.read')).toBe(false);
   });
 });
 

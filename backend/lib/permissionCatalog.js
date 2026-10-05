@@ -19,11 +19,12 @@
  *
  * Backward compatibility:
  *   • PERMISSION_CATALOG (the UNION of common + wellness + travel) remains
- *     the validation surface — isValidPermission accepts any catalog entry
- *     regardless of vertical. Existing RolePermission rows referencing
- *     cross-vertical modules (e.g. a travel tenant carrying a stale
- *     `patients.read` grant) stay valid; the UI just hides them in the
- *     matrix via the vertical-filtered catalog endpoint.
+ *     the route-declaration validation surface — isValidPermission accepts
+ *     any catalog entry so modules can be wired into routes independently.
+ *     Role-permission writes must additionally use
+ *     validatePermissionForVertical. Existing cross-vertical rows are
+ *     retained for audit/history, but are filtered from active permission
+ *     reads and cannot be newly granted or restored.
  *   • Existing exports (getCatalog / getGroupedCatalog / PERMISSION_DOMAINS)
  *     keep returning the union shape every legacy caller already expects.
  *   • New helpers — getCatalogForVertical(v) / getGroupedCatalogForVertical(v)
@@ -590,11 +591,7 @@ function isValidPermission(module, action) {
  *   { ok: false, code: 'INVALID_ACTION', error } — module valid, action not
  *
  * Distinct from isValidPermission (union surface) so the role-write
- * endpoints can enforce vertical isolation post-cleanup. Routes wire
- * this in behind the RBAC_STRICT_VERTICAL_VALIDATION env flag — see
- * backend/routes/roles.js. Don't enable in production until the
- * cleanup-foreign-perms-report.js --apply pass has been verified for
- * every dirty tenant.
+ * endpoints can enforce vertical isolation at their write boundary.
  *
  * Error messages match the exact strings the QA spec requested so
  * test assertions and frontend toast copy can pin them verbatim.

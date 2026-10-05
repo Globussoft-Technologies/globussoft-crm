@@ -5,13 +5,13 @@
  * Scope: pins the page-surface invariants for the prescription-writer's
  * typeahead-master CRUD — heading + count sub-copy + CTA, loading state,
  * GET on mount, empty-state, drug-row render (name + generic + form +
- * strength + default-dosage + active status), search-then-Enter triggers
- * a re-fetch with `?q=` param, New-drug form open/close + CTA-label flip,
+ * strength + default-dosage + active status), stock-state labels, search-then-Enter
+ * triggers a re-fetch with `?q=` param, New-drug modal open/close + CTA-label flip,
  * create POST shape (including dosageForm select default + isActive bool),
  * native-confirm delete flow (true + false branches), and edit-prefill
  * → PUT.
  *
- * Test cases (10):
+ * Test cases (12):
  *   1. Heading "Drug catalogue" + Pill icon + "New drug" CTA + count sub-copy
  *      ("N drug(s) — used by the prescription writer's typeahead.") render.
  *   2. Loading state: "Loading catalogue…" renders while initial GET is
@@ -19,11 +19,11 @@
  *   3. GET /api/wellness/drugs fires on mount; rendered rows match payload.
  *   4. Empty-state copy "No drugs match." renders when GET resolves to [].
  *   5. Drug row renders name + generic + dosageForm + strength (value + unit
- *      joined) + defaultDosage + Active/Inactive status.
+ *      joined) + defaultDosage + stock-state label + Active/Inactive status.
  *   6. Search: typing alone triggers GET with `?q=<term>`, coalesced; Enter
  *      and the button run it immediately.
- *   7. Clicking "New drug" opens the form (name placeholder visible); CTA
- *      label flips to "Cancel"; clicking again resets + re-shows "New drug".
+ *   7. Clicking "New drug" opens the modal (name placeholder visible); CTA
+ *      label flips to "Cancel"; clicking Cancel resets + re-shows "New drug".
  *   8. Submitting Create POSTs /api/wellness/drugs with body shape
  *      {name, dosageForm, isActive, …} + notify.success + re-fetches list.
  *   9. Clicking row's Edit (Pencil, title="Edit") opens the form pre-filled
@@ -92,7 +92,7 @@
  * ServiceCategories / ProductCategories flat-path convention.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -327,6 +327,24 @@ describe('<Drugs /> — mount fetch + list render', () => {
     expect(screen.getByText(/^Inactive$/)).toBeInTheDocument();
   });
 
+  it('renders stock state labels without exposing positive or negative quantities', async () => {
+    installFetchMock({
+      page1: [
+        { ...CROCIN, quantity: 20, lowStockThreshold: 5 },
+        { ...COMBIFLAM, quantity: 2, lowStockThreshold: 5 },
+        { ...LEGACY_SYRUP, quantity: -3, lowStockThreshold: 5 },
+      ],
+      page2: [],
+    });
+    renderPage();
+
+    expect(await screen.findByText('In stock')).toBeInTheDocument();
+    expect(screen.getByText('Low stock')).toBeInTheDocument();
+    expect(screen.getByText('Out of stock')).toBeInTheDocument();
+    expect(screen.queryByText('-3')).toBeNull();
+    expect(screen.queryByText('20')).toBeNull();
+  });
+
   it('loads the next page when the infinite-scroll sentinel enters view', async () => {
     installFetchMock();
     renderPage();
@@ -490,8 +508,8 @@ describe('<Drugs /> — search re-fetch', () => {
   });
 });
 
-describe('<Drugs /> — New-drug form toggle', () => {
-  it('"New drug" opens the form (label flips to "Cancel"); click again closes it', async () => {
+describe('<Drugs /> — New-drug modal', () => {
+  it('"New drug" opens the modal (label flips to "Cancel"); click Cancel closes it', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
@@ -506,12 +524,13 @@ describe('<Drugs /> — New-drug form toggle', () => {
     expect(
       screen.getByPlaceholderText(/^Generic name \(e\.g\. Acetaminophen\)$/),
     ).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /Add new drug/i })).toBeInTheDocument();
     // CTA label flipped.
-    expect(
-      screen.getByRole('button', { name: /^Cancel$/ }),
-    ).toBeInTheDocument();
-    // Click Cancel → form closes.
-    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+    expect(screen.getAllByRole('button', { name: /^Cancel$/ })).toHaveLength(2);
+    // Click Cancel → modal closes.
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /^Cancel$/ }),
+    );
     expect(
       screen.queryByPlaceholderText(/Brand \/ trade name/i),
     ).toBeNull();
@@ -522,6 +541,25 @@ describe('<Drugs /> — New-drug form toggle', () => {
 });
 
 describe('<Drugs /> — create POST', () => {
+  it('rejects a negative stock quantity before sending the request', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Crocin 500')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New drug/i }));
+
+    const quantity = screen.getByPlaceholderText(/Quantity in stock/i);
+    expect(quantity).toHaveAttribute('min', '0');
+    fireEvent.change(quantity, { target: { value: '-2' } });
+    fireEvent.submit(quantity.closest('form'));
+
+    expect(notifyError).toHaveBeenCalledWith(expect.stringContaining('0 or more'));
+    expect(
+      fetchApiMock.mock.calls.some(([, opts]) => opts?.method === 'POST'),
+    ).toBe(false);
+  });
+
   it('Create → POST /api/wellness/drugs with body shape + notify.success + refetch', async () => {
     installFetchMock();
     renderPage();

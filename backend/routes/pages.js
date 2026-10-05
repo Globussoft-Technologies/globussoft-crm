@@ -14,10 +14,10 @@
 
 const express = require('express');
 const router = express.Router();
-const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
-const { getCatalog, getCatalogForVertical, getAccessiblePages } = require('../lib/pageCatalog');
+const { getCatalogForVertical, getAccessiblePages } = require('../lib/pageCatalog');
 const { getUserPermissions } = require('../middleware/requirePermission');
+const { resolveTenantVertical } = require('../lib/tenantVertical');
 
 function filterPageSearch(pages, rawQuery) {
   const query = String(rawQuery || '').trim().toLowerCase();
@@ -42,36 +42,29 @@ function filterPageSearch(pages, rawQuery) {
 // fetches this BEFORE a new role has any saved permissions, so the
 // usual perm-based filter (/api/roles/:id/accessible-pages) can't yet
 // help — this is the pre-save fallback that needs to stay
-// vertical-relevant. DB blip → fall back to the full union catalog
-// (better-than-empty UX; worst case the dropdown shows a cross-vertical
-// page that the post-save perm-based view will drop).
+// vertical-relevant. If the tenant vertical cannot be resolved, fail closed
+// rather than returning the union catalog to a different product vertical.
 router.get('/catalog', verifyToken, async (req, res) => {
-  let vertical = null;
-  try {
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: req.user.tenantId },
-      select: { vertical: true },
+  const vertical = await resolveTenantVertical(req.user.tenantId);
+  if (!vertical) {
+    return res.status(503).json({
+      error: 'Tenant vertical is unavailable',
+      code: 'TENANT_VERTICAL_UNAVAILABLE',
     });
-    vertical = tenant?.vertical || null;
-  } catch (err) {
-    console.error('[pages.catalog] tenant vertical lookup failed:', err && err.message);
   }
-  const catalog = vertical ? getCatalogForVertical(vertical) : getCatalog();
+  const catalog = getCatalogForVertical(vertical);
   const categories = Array.from(new Set(catalog.map((p) => p.category)));
   res.json({ catalog, categories, vertical });
 });
 
 router.get('/me', verifyToken, async (req, res) => {
   try {
-    let vertical = null;
-    try {
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: req.user.tenantId },
-        select: { vertical: true },
+    const vertical = await resolveTenantVertical(req.user.tenantId);
+    if (!vertical) {
+      return res.status(503).json({
+        error: 'Tenant vertical is unavailable',
+        code: 'TENANT_VERTICAL_UNAVAILABLE',
       });
-      vertical = tenant?.vertical || null;
-    } catch (err) {
-      console.error('[pages/me] tenant vertical lookup failed:', err && err.message);
     }
     if (req.user.isOwner) {
       const catalogPages = getCatalogForVertical(vertical);

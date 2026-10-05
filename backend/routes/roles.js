@@ -54,11 +54,10 @@ const { syncWellnessRoleFromRbacRoles } = require("../lib/wellnessRoleSync");
 const {
   isValidPermission,
   validatePermissionForVertical,
-  getCatalog,
-  getGroupedCatalog,
   getCatalogForVertical,
   getGroupedCatalogForVertical,
 } = require("../lib/permissionCatalog");
+const { resolveTenantVertical } = require("../lib/tenantVertical");
 const { validateRoleKey } = require("../lib/roleKey");
 const { writeAudit } = require("../lib/audit");
 const {
@@ -79,42 +78,22 @@ const {
   getRolePermissionVersion,
 } = require("../lib/rolePermissionVersions");
 
-// Bug 4 — strict per-vertical permission validation. Off by default
-// (back-compat with pre-cleanup state where roles legitimately carry
-// foreign perms). Set RBAC_STRICT_VERTICAL_VALIDATION=1 in the env
-// AFTER running cleanup-foreign-perms-report.js --apply for every
-// dirty tenant; the route then rejects any POST/PUT that would write a
-// foreign permission. See backend/lib/permissionCatalog.js for the
-// validator.
-//
-// Read per-request, NOT captured at module load — operators flip the
-// flag after running the cleanup script and we don't want to require a
-// pm2 restart for it to take effect. The vitest in
-// test/routes/roles-system-protection.test.js also relies on per-request
-// reads to toggle the flag between tests.
-function strictVerticalValidationOn() {
-  return (
-    process.env.RBAC_STRICT_VERTICAL_VALIDATION === "1" ||
-    process.env.RBAC_STRICT_VERTICAL_VALIDATION === "true"
-  );
-}
-
 // Resolve the active tenant's vertical for vertical-aware validation.
-// Looked up per request (not cached) because tenant.vertical CAN change
-// during a migration. Falls through to 'generic' if the tenant has no
-// vertical set — the generic catalog is a strict subset of every
-// vertical catalog so this is safe.
+// Looked up per request because tenant.vertical can change during a migration.
+// Writes use the generic catalogue only as a safe fallback when the tenant
+// lookup is unavailable; catalog reads fail closed instead.
 async function getTenantVertical(tenantId) {
   if (!tenantId) return "generic";
-  try {
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { vertical: true },
-    });
-    return (tenant && tenant.vertical) || "generic";
-  } catch {
-    return "generic";
-  }
+  const vertical = await resolveTenantVertical(tenantId);
+  return vertical || "generic";
+}
+
+function filterPermissionsForVertical(permissions, vertical) {
+  const catalog = getCatalogForVertical(vertical);
+  return (Array.isArray(permissions) ? permissions : []).filter((permission) => {
+    const actions = catalog[permission?.module];
+    return Boolean(actions && actions.includes(permission?.action));
+  });
 }
 
 function coerceRoleSubBrandScope(input) {
@@ -500,8 +479,10 @@ router.get(
             isVisible(p.module, p.action),
           );
           const { subBrandScopeJson, dataScope, ...roleClean } = role;
+          delete roleClean.permissions;
           return {
             ...roleClean,
+            permissions: visible,
             dataScope: normalizeDataScope(dataScope),
             subBrandScope: parseSubBrandScope(subBrandScopeJson),
             userCount: tenantVertical === "travel" && role.key === "CUSTOMER" && role.userType === "CUSTOMER"
@@ -537,35 +518,26 @@ router.get(
 // prescriptions / inventory / etc.). Existing RolePermission rows are
 // NOT pruned — see permissionCatalog.js for the soft-hide rationale.
 // `vertical` is echoed in the response for client-side observability /
-// debugging; absence falls through to the generic catalog.
+// debugging; an unavailable vertical returns a safe 503 instead of a
+// combined catalog.
 router.get(
   "/catalog",
   verifyToken,
   requirePermission("roles", "read"),
   async (req, res) => {
-    let vertical = null;
-    try {
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: req.user.tenantId },
-        select: { vertical: true },
+    const vertical = await resolveTenantVertical(req.user.tenantId);
+    if (!vertical) {
+      return res.status(503).json({
+        error: "Tenant vertical is unavailable",
+        code: "TENANT_VERTICAL_UNAVAILABLE",
       });
-      vertical = tenant?.vertical || null;
-    } catch (err) {
-      // DB blip — fall through to the generic catalog rather than 500.
-      // Worst case the matrix shows fewer modules until the next request.
-      console.error(
-        "[roles.catalog] tenant vertical lookup failed:",
-        err && err.message,
-      );
     }
-    const catalog = vertical ? getCatalogForVertical(vertical) : getCatalog();
+    const catalog = getCatalogForVertical(vertical);
     const modules = Object.entries(catalog).map(([module, actions]) => ({
       module,
       actions,
     }));
-    const domains = vertical
-      ? getGroupedCatalogForVertical(vertical)
-      : getGroupedCatalog();
+    const domains = getGroupedCatalogForVertical(vertical);
     res.json({ catalog, modules, domains, vertical });
   },
 );
@@ -596,6 +568,8 @@ router.get(
       }
 
       const { subBrandScopeJson, dataScope, ...roleClean } = role;
+      const vertical = await getTenantVertical(role.tenantId);
+      roleClean.permissions = filterPermissionsForVertical(role.permissions, vertical);
       const userCount = await countUsersForRole(role, role._count.userRoles);
       res.json({
         ...roleClean,
@@ -937,7 +911,11 @@ router.get(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      res.json({ roleId, permissions: role.permissions });
+      const vertical = await getTenantVertical(role.tenantId);
+      res.json({
+        roleId,
+        permissions: filterPermissionsForVertical(role.permissions, vertical),
+      });
     } catch (err) {
       console.error("[roles] permissions list error:", err);
       res.status(500).json({ error: "Failed to fetch permissions" });
@@ -977,27 +955,22 @@ router.post(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      // Bug 4 — Strict per-vertical validation (env-gated). Enable
-      // RBAC_STRICT_VERTICAL_VALIDATION=1 AFTER running the foreign-
-      // perms cleanup script for every dirty tenant. Once on, the
-      // route refuses cross-vertical grants (e.g. patients.read on a
-      // travel tenant) with the exact 400 shape the QA spec pins.
-      if (strictVerticalValidationOn()) {
-        const vertical = await getTenantVertical(role.tenantId);
-        const verticalCheck = validatePermissionForVertical(
+      // Every permission write rejects cross-vertical grants with the
+      // vertical validation error shape.
+      const vertical = await getTenantVertical(role.tenantId);
+      const verticalCheck = validatePermissionForVertical(
+        module,
+        action,
+        vertical,
+      );
+      if (!verticalCheck.ok) {
+        return res.status(400).json({
+          error: verticalCheck.error,
+          code: verticalCheck.code,
           module,
           action,
           vertical,
-        );
-        if (!verticalCheck.ok) {
-          return res.status(400).json({
-            error: verticalCheck.error,
-            code: verticalCheck.code,
-            module,
-            action,
-            vertical,
-          });
-        }
+        });
       }
 
       // Check if permission already exists
@@ -1208,31 +1181,25 @@ router.put(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      // Bug 4 — Strict per-vertical validation (env-gated). Reject
-      // the whole submission with the first foreign entry so the
-      // admin sees ONE error to fix rather than a chain of 400s.
-      // Same env flag + same error shape as POST /:id/permissions.
-      // Once enabled, the catalog endpoint's vertical filter and the
-      // editor's catalog filter mean a well-behaved client never
-      // submits a foreign perm — this guard catches scripted clients
-      // and legacy round-trips.
-      if (strictVerticalValidationOn()) {
-        const vertical = await getTenantVertical(role.tenantId);
-        for (const p of normalized) {
-          const verticalCheck = validatePermissionForVertical(
-            p.module,
-            p.action,
+      // Reject the whole submission with the first foreign entry so the
+      // admin sees one error to fix rather than a chain of 400s. The catalog
+      // endpoint and editor filter normally prevent foreign submissions;
+      // this guard also protects scripted clients and legacy round-trips.
+      const vertical = await getTenantVertical(role.tenantId);
+      for (const p of normalized) {
+        const verticalCheck = validatePermissionForVertical(
+          p.module,
+          p.action,
+          vertical,
+        );
+        if (!verticalCheck.ok) {
+          return res.status(400).json({
+            error: verticalCheck.error,
+            code: verticalCheck.code,
+            module: p.module,
+            action: p.action,
             vertical,
-          );
-          if (!verticalCheck.ok) {
-            return res.status(400).json({
-              error: verticalCheck.error,
-              code: verticalCheck.code,
-              module: p.module,
-              action: p.action,
-              vertical,
-            });
-          }
+          });
         }
       }
 
@@ -1403,7 +1370,7 @@ router.put(
 
       res.json({
         roleId,
-        permissions: newPermissions,
+        permissions: filterPermissionsForVertical(newPermissions, vertical),
         landingPathCleared,
         // Returned to the frontend so the success toast can mention how
         // many sensitive grants just landed — supplementary signal; the
@@ -2240,15 +2207,21 @@ router.get(
         take: req.query.take,
         skip: req.query.skip,
       });
+      const vertical = await getTenantVertical(role.tenantId);
       // Mark the most-recent version as the current head so the UI
       // can label it "Version N (Current)" without a separate fetch.
       const latest = versions[0] ? versions[0].versionNumber : null;
       res.json({
         roleId,
-        versions: versions.map((v) => ({
-          ...v,
-          isCurrent: v.versionNumber === latest,
-        })),
+        versions: versions.map((v) => {
+          const permissions = filterPermissionsForVertical(v.permissions, vertical);
+          return {
+            ...v,
+            permissions,
+            permissionCount: permissions.length,
+            isCurrent: v.versionNumber === latest,
+          };
+        }),
       });
     } catch (err) {
       console.error("[roles] list versions error:", err);
@@ -2282,7 +2255,14 @@ router.get(
           .status(404)
           .json({ error: "Version not found for this role" });
       }
-      res.json({ roleId, version });
+      const vertical = await getTenantVertical(role.tenantId);
+      res.json({
+        roleId,
+        version: {
+          ...version,
+          permissions: filterPermissionsForVertical(version.permissions, vertical),
+        },
+      });
     } catch (err) {
       console.error("[roles] get version error:", err);
       res.status(500).json({ error: "Failed to fetch version" });

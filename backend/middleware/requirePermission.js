@@ -15,7 +15,12 @@
  */
 
 const prisma = require('../lib/prisma');
-const { isValidPermission, PERMISSION_CATALOG } = require('../lib/permissionCatalog');
+const {
+  isValidPermission,
+  PERMISSION_CATALOG,
+  getCatalogForVertical,
+} = require('../lib/permissionCatalog');
+const { resolveTenantVerticalDetailed } = require('../lib/tenantVertical');
 
 // REVERTED v3.8.x ADMIN runtime shortcut. Earlier work added a
 // short-circuit that returned the entire catalogue whenever the user
@@ -126,6 +131,17 @@ function isVitestRuntime() {
   return process.env.VITEST === 'true' || process.env.NODE_ENV === 'test';
 }
 
+function filterPermissionsForVertical(permissions, vertical) {
+  if (!vertical) return permissions;
+  const catalog = getCatalogForVertical(vertical);
+  return new Set(
+    Array.from(permissions).filter((permission) => {
+      const [module, action] = permission.split('.');
+      return Boolean(catalog[module] && catalog[module].includes(action));
+    }),
+  );
+}
+
 // Central whitelist of permissions whose routes are safe for CUSTOMER
 // userType callers. The middleware lets a CUSTOMER through automatically
 // when the requested permission is in this Set AND the user has the
@@ -169,7 +185,7 @@ const CUSTOMER_SAFE_PERMISSIONS = new Set([
  * can treat null as a no-op and fall through to the normal empty-set
  * return path.
  */
-async function maybeSelfHealAdminPermissions(tenantId, userId) {
+async function maybeSelfHealAdminPermissions(tenantId, userId, vertical = null) {
   try {
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -232,7 +248,8 @@ async function maybeSelfHealAdminPermissions(tenantId, userId) {
         `[requirePermission] self-healed legacy-ADMIN user ${userId} on tenant ${tenantId} — granted ${healed.size} permission(s)`,
       );
     }
-    return healed.size > 0 ? healed : null;
+    const filtered = filterPermissionsForVertical(healed, vertical);
+    return filtered.size > 0 ? filtered : null;
   } catch (err) {
     console.warn(
       '[requirePermission] self-heal failed (non-fatal):',
@@ -246,7 +263,7 @@ async function maybeSelfHealAdminPermissions(tenantId, userId) {
  * Load the user's effective permissions from the database.
  * Returns a Set<"module.action"> representing the union of all assigned roles' permissions.
  */
-async function loadUserPermissions(tenantId, userId) {
+async function loadUserPermissions(tenantId, userId, vertical = null) {
   try {
     // Find all roles assigned to this user via UserRole junction table.
     //
@@ -311,11 +328,11 @@ async function loadUserPermissions(tenantId, userId) {
     //   - Any failure is logged + returns the empty set so the caller
     //     fails-closed naturally; the heal never blocks a legit request.
     if (permSet.size === 0) {
-      const healed = await maybeSelfHealAdminPermissions(tenantId, userId);
+      const healed = await maybeSelfHealAdminPermissions(tenantId, userId, vertical);
       if (healed) return healed;
     }
 
-    return permSet;
+    return filterPermissionsForVertical(permSet, vertical);
   } catch (err) {
     // Test-mode bypass: when a unit-test fixture forgot to mock
     // prisma.userRole (test sets up req.user with role/tenantId but no
@@ -346,14 +363,56 @@ async function getUserPermissions(tenantId, userId) {
   const cacheKey = `${tenantId}::${userId}`;
   const cached = PERMISSION_CACHE.get(cacheKey);
 
-  // Check if cache exists and is fresh
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+  // Resolve the tenant row before reusing a cached grant set. A vertical
+  // migration must invalidate permissions immediately instead of waiting for
+  // the normal 30-second user-role cache TTL.
+  const verticalResolution = await resolveTenantVerticalDetailed(tenantId);
+  const resolvedVertical = verticalResolution.vertical;
+  const verticalLookupError = verticalResolution.error;
+
+  // Some legacy route fixtures pre-date vertical-aware RBAC and intentionally
+  // do not mock the tenant surface. Preserve their existing test-only role
+  // fallback, while keeping a real tenant lookup failure fail-closed. This
+  // branch is limited to Vitest and only recognizes the test surface guard.
+  if (isVitestRuntime() && isUnmockedPrismaError(verticalLookupError)) {
+    throw verticalLookupError;
+  }
+
+  if (
+    cached &&
+    Object.prototype.hasOwnProperty.call(cached, 'vertical') &&
+    cached.vertical === resolvedVertical &&
+    Date.now() - cached.timestamp < CACHE_TTL_MS
+  ) {
     return cached.permissions;
   }
 
+  // The tenant row is authoritative. Do not trust a stale vertical claim in
+  // an older JWT, otherwise a tenant moved from Travel to Wellness could
+  // still resolve permissions against the Travel catalogue during the token's
+  // lifetime.
+  const cachedVertical = resolvedVertical || null;
+
+  // Permission resolution is a security boundary. An old token may not
+  // carry `vertical`, and a missing tenant row must never fall through to
+  // the union permission set.
+  if (!resolvedVertical) {
+    const permissions = new Set();
+    PERMISSION_CACHE.set(cacheKey, {
+      permissions,
+      timestamp: Date.now(),
+      vertical: null,
+    });
+    return permissions;
+  }
+
   // Cache miss or expired: reload from DB
-  const permissions = await loadUserPermissions(tenantId, userId);
-  PERMISSION_CACHE.set(cacheKey, { permissions, timestamp: Date.now() });
+  const permissions = await loadUserPermissions(tenantId, userId, resolvedVertical);
+  PERMISSION_CACHE.set(cacheKey, {
+    permissions,
+    timestamp: Date.now(),
+    vertical: cachedVertical,
+  });
 
   return permissions;
 }
@@ -417,7 +476,7 @@ function requirePermission(module, action, opts = {}) {
       try {
         userPermissions = await getUserPermissions(
           req.user.tenantId,
-          req.user.userId
+          req.user.userId,
         );
       } catch (err) {
         // Test-mode fallback for fixtures that forgot to mock prisma.userRole.
@@ -489,7 +548,10 @@ async function userHasPermission(user, module, action) {
   }
 
   try {
-    const permissions = await getUserPermissions(user.tenantId, user.userId);
+    const permissions = await getUserPermissions(
+      user.tenantId,
+      user.userId,
+    );
     return permissions.has(`${module}.${action}`);
   } catch (err) {
     console.error('[userHasPermission] error:', err);
@@ -594,7 +656,10 @@ function requireAnyPermission(perms, opts = {}) {
       }
       let userPermissions;
       try {
-        userPermissions = await getUserPermissions(req.user.tenantId, req.user.userId);
+        userPermissions = await getUserPermissions(
+          req.user.tenantId,
+          req.user.userId,
+        );
       } catch (err) {
         if (process.env.NODE_ENV === 'test' && err && err.name === 'PrismaClientInitializationError') {
           return next();

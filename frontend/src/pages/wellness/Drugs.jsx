@@ -6,11 +6,23 @@
  * enters view.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Pill, Plus, Pencil, Trash2, Search } from 'lucide-react';
+import {
+  Activity,
+  Boxes,
+  ClipboardList,
+  IndianRupee,
+  Layers3,
+  Pill,
+  Plus,
+  Pencil,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 import PageHeader from '../../components/PageHeader';
+import ModalShell from '../../components/wellness/ModalShell';
 
 const ICON_BTN_STYLE = {
   display: 'inline-flex',
@@ -34,32 +46,43 @@ const DANGER_ICON_BTN_STYLE = {
 const HEADER_GRID_TEMPLATE = 'minmax(150px, 1.35fr) minmax(180px, 1.65fr) minmax(90px, 0.9fr) minmax(90px, 0.9fr) minmax(140px, 1.25fr) minmax(110px, 0.95fr) minmax(90px, 0.75fr) minmax(92px, 0.6fr)';
 const ROW_GRID_TEMPLATE = HEADER_GRID_TEMPLATE;
 /**
- * Quantity on hand, with the reorder point as context.
- *
- * A drug with threshold 0 is not being tracked, so its count is shown plainly
- * rather than dressed as "in stock" — the clinic never claimed to be managing
- * it. Colours come from the semantic tokens so they hold in both themes.
+ * Show the stock state without exposing a raw quantity. Negative legacy values
+ * are treated as out of stock and never rendered to the user.
  */
 function StockCell({ drug }) {
   const qty = Number(drug.quantity ?? 0);
   const threshold = Number(drug.lowStockThreshold ?? 0);
 
-  let color = 'var(--text-primary)';
-  let note = threshold > 0 ? `reorder at ${threshold}` : 'not tracked';
-  if (qty <= 0) {
-    color = 'var(--danger-color)';
-    note = 'out of stock';
+  let label = 'Stock not tracked';
+  let color = 'var(--text-secondary)';
+  let background = 'rgba(148, 163, 184, 0.15)';
+  if (!Number.isFinite(qty) || qty <= 0) {
+    label = 'Out of stock';
+    color = 'var(--danger-color, #dc2626)';
+    background = 'rgba(220, 38, 38, 0.1)';
   } else if (threshold > 0 && qty <= threshold) {
-    color = 'var(--warning-color)';
-    note = `low · reorder at ${threshold}`;
+    label = 'Low stock';
+    color = 'var(--warning-color, #d97706)';
+    background = 'rgba(217, 119, 6, 0.12)';
+  } else if (threshold > 0) {
+    label = 'In stock';
+    color = 'var(--success-color, #16a34a)';
+    background = 'rgba(34, 197, 94, 0.12)';
   }
 
   return (
-    <span>
-      <span style={{ fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>{qty}</span>
-      <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginLeft: 6 }}>
-        {note}
-      </span>
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '0.22rem 0.6rem',
+        borderRadius: 999,
+        background,
+        color,
+        fontSize: '0.75rem',
+        fontWeight: 700,
+      }}
+    >
+      {label}
     </span>
   );
 }
@@ -96,6 +119,54 @@ const DOSAGE_FORMS = ['tablet', 'capsule', 'syrup', 'injection', 'topical', 'dro
 // and print as "--gm" on every prescription surface.
 const STRENGTH_UNITS = ['mg', 'g', 'mcg', 'ml', 'l', '%', 'IU', 'mEq', 'mg/ml', 'mcg/ml', 'units'];
 
+const FORM_CONTROL_STYLE = {
+  width: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  padding: '0.72rem 0.8rem',
+  borderRadius: 9,
+  border: '1px solid var(--border-color, rgba(120, 110, 90, 0.28))',
+  background: 'var(--surface-color, rgba(255, 255, 255, 0.72))',
+  color: 'var(--text-primary)',
+  fontSize: '0.9rem',
+  outline: 'none',
+  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+};
+
+const FORM_LABEL_STYLE = {
+  display: 'block',
+  marginBottom: '0.42rem',
+  color: 'var(--text-secondary)',
+  fontSize: '0.75rem',
+  fontWeight: 700,
+  letterSpacing: '0.045em',
+  textTransform: 'uppercase',
+};
+
+const FORM_SECTION_STYLE = {
+  padding: '1rem',
+  border: '1px solid var(--border-color, rgba(120, 110, 90, 0.18))',
+  borderRadius: 12,
+  background: 'rgba(255, 255, 255, 0.08)',
+};
+
+function DrugField({ label, required = false, hint, children, fullWidth = false }) {
+  return (
+    <div style={{ minWidth: 0, gridColumn: fullWidth ? '1 / -1' : undefined }}>
+      <label style={FORM_LABEL_STYLE}>
+        {label}
+        {required && <span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span>}
+      </label>
+      {children}
+      {hint && (
+        <div style={{ marginTop: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.35 }}>
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Render a catalogue strength for display.
  *
@@ -130,6 +201,199 @@ const EMPTY_FORM = {
   notes: '',
   isActive: true,
 };
+
+const STOCK_FIELDS = ['quantity', 'lowStockThreshold'];
+
+function hasInvalidStockValue(value) {
+  if (value === '' || value == null) return false;
+  const parsed = Number(value);
+  return !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0;
+}
+
+function DrugFormModal({ editingId, form, saving, onClose, onSubmit, onChange }) {
+  const control = (field) => ({
+    value: form[field],
+    onChange: (event) => onChange(field, event.target.value),
+    style: FORM_CONTROL_STYLE,
+  });
+
+  return (
+    <ModalShell
+      title={editingId ? 'Edit drug' : 'Add new drug'}
+      onClose={onClose}
+      width={860}
+      footer={(
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: '0.65rem 1.15rem',
+              border: '1px solid var(--border-color, rgba(120, 110, 90, 0.3))',
+              borderRadius: 9,
+              background: 'transparent',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="drug-form"
+            disabled={saving}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.45rem',
+              minWidth: 140,
+              padding: '0.65rem 1.2rem',
+              border: 'none',
+              borderRadius: 9,
+              background: 'var(--primary-color, var(--accent-color))',
+              color: '#fff',
+              cursor: saving ? 'wait' : 'pointer',
+              fontWeight: 700,
+              opacity: saving ? 0.7 : 1,
+            }}
+          >
+            <Plus size={16} />
+            {saving ? 'Saving...' : editingId ? 'Save changes' : 'Add drug'}
+          </button>
+        </>
+      )}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.8rem', marginBottom: '1.15rem' }}>
+        <div
+          aria-hidden="true"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 42,
+            height: 42,
+            flexShrink: 0,
+            borderRadius: 12,
+            background: 'rgba(38, 88, 85, 0.12)',
+            color: 'var(--primary-color, var(--accent-color))',
+          }}
+        >
+          <Pill size={22} />
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-primary)', fontSize: '0.98rem', fontWeight: 700 }}>
+            {editingId ? 'Update catalogue information' : 'Create a prescription-ready drug'}
+          </div>
+          <div style={{ marginTop: '0.25rem', color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.45 }}>
+            Keep clinical defaults and stock details consistent for the prescription team.
+          </div>
+        </div>
+      </div>
+
+      <form id="drug-form" onSubmit={onSubmit} style={{ display: 'grid', gap: '0.9rem' }}>
+        <section style={FORM_SECTION_STYLE} aria-labelledby="drug-core-details">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.9rem' }}>
+            <ClipboardList size={17} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
+            <h3 id="drug-core-details" style={{ margin: 0, color: 'var(--text-primary)', fontSize: '0.9rem' }}>Core details</h3>
+          </div>
+          <div style={{ display: 'grid', gap: '0.85rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 235px), 1fr))' }}>
+            <DrugField label="Brand / trade name" required hint="The name shown in the prescription writer.">
+              <input required autoFocus placeholder="Brand / trade name (e.g. Crocin)" {...control('name')} />
+            </DrugField>
+            <DrugField label="Generic name">
+              <input placeholder="Generic name (e.g. Acetaminophen)" {...control('genericName')} />
+            </DrugField>
+            <DrugField label="Product code" hint="Optional internal or supplier reference.">
+              <input placeholder="Product code (optional)" {...control('productCode')} />
+            </DrugField>
+            <DrugField label="Dosage form">
+              <select {...control('dosageForm')}>
+                {DOSAGE_FORMS.map((formType) => <option key={formType} value={formType}>{formType}</option>)}
+              </select>
+            </DrugField>
+          </div>
+        </section>
+
+        <section style={FORM_SECTION_STYLE} aria-labelledby="drug-stock-details">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.9rem' }}>
+            <Boxes size={17} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
+            <h3 id="drug-stock-details" style={{ margin: 0, color: 'var(--text-primary)', fontSize: '0.9rem' }}>Pricing &amp; inventory</h3>
+          </div>
+          <div style={{ display: 'grid', gap: '0.85rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 235px), 1fr))' }}>
+            <DrugField label="Sale price per unit" hint="Used for billing and inventory calculations.">
+              <div style={{ position: 'relative' }}>
+                <IndianRupee size={15} aria-hidden="true" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                <input type="number" min="0" step="0.01" placeholder="Sale price per unit (₹)" {...control('salePrice')} style={{ ...FORM_CONTROL_STYLE, paddingLeft: '2rem' }} />
+              </div>
+            </DrugField>
+            <DrugField label="Inventory unit">
+              <input placeholder="Inventory unit (e.g. tablet, bottle)" {...control('unit')} />
+            </DrugField>
+            <DrugField label="Quantity in stock">
+              <input type="number" min="0" step="1" placeholder="Quantity in stock (e.g. 40)" {...control('quantity')} />
+            </DrugField>
+            <DrugField label="Low-stock threshold" hint="Set to 0 when stock alerts are not needed.">
+              <input type="number" min="0" step="1" placeholder="Low-stock threshold (0 = no alert)" {...control('lowStockThreshold')} />
+            </DrugField>
+          </div>
+        </section>
+
+        <section style={FORM_SECTION_STYLE} aria-labelledby="drug-prescription-defaults">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.9rem' }}>
+            <Activity size={17} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
+            <h3 id="drug-prescription-defaults" style={{ margin: 0, color: 'var(--text-primary)', fontSize: '0.9rem' }}>Prescription defaults</h3>
+          </div>
+          <div style={{ display: 'grid', gap: '0.85rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 235px), 1fr))' }}>
+            <DrugField label="Strength value" hint="Examples: 500, 2.5, or 5/10.">
+              <input
+                placeholder="Strength value (e.g. 500)"
+                title="Must contain a number - e.g. 500, 2.5, or 5/10 for a combination"
+                pattern="[^0-9]*[0-9][\s\S]*"
+                {...control('strengthValue')}
+              />
+            </DrugField>
+            <DrugField label="Strength unit">
+              <input placeholder="Strength unit (mg, ml, %, IU...)" list="drug-strength-units" {...control('strengthUnit')} />
+              <datalist id="drug-strength-units">
+                {STRENGTH_UNITS.map((unit) => <option key={unit} value={unit} />)}
+              </datalist>
+            </DrugField>
+            <DrugField label="Default dosage">
+              <input placeholder="Default dosage (e.g. 1 tablet)" {...control('defaultDosage')} />
+            </DrugField>
+            <DrugField label="Default frequency">
+              <input placeholder="Default frequency (e.g. twice daily)" {...control('defaultFrequency')} />
+            </DrugField>
+            <DrugField label="Default duration">
+              <input placeholder="Default duration (e.g. 5 days)" {...control('defaultDuration')} />
+            </DrugField>
+          </div>
+        </section>
+
+        <section style={FORM_SECTION_STYLE} aria-labelledby="drug-notes-status">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.9rem' }}>
+            <Layers3 size={17} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
+            <h3 id="drug-notes-status" style={{ margin: 0, color: 'var(--text-primary)', fontSize: '0.9rem' }}>Notes &amp; status</h3>
+          </div>
+          <DrugField label="Admin notes" fullWidth hint="Add contraindications, scheduling guidance, or internal handling notes.">
+            <textarea placeholder="Admin notes (contraindications, schedule, etc.)" {...control('notes')} style={{ ...FORM_CONTROL_STYLE, minHeight: 92, resize: 'vertical', lineHeight: 1.45 }} />
+          </DrugField>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginTop: '0.9rem', padding: '0.75rem 0.85rem', borderRadius: 9, background: 'rgba(34, 197, 94, 0.08)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.88rem', fontWeight: 600 }}>
+            <input type="checkbox" checked={form.isActive} onChange={(event) => onChange('isActive', event.target.checked)} style={{ width: 17, height: 17, accentColor: '#16a34a' }} />
+            <span>
+              Active in prescription writer
+              <span style={{ display: 'block', marginTop: 2, color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 400 }}>
+                Inactive drugs remain in the catalogue but are hidden from new prescriptions.
+              </span>
+            </span>
+          </label>
+        </section>
+      </form>
+    </ModalShell>
+  );
+}
 
 export default function Drugs() {
   const notify = useNotify();
@@ -230,6 +494,16 @@ export default function Drugs() {
     setShowAdd(false);
   };
 
+  const updateFormField = (field, value) => {
+    setForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const openCreateModal = () => {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setShowAdd(true);
+  };
+
   const startEdit = (drug) => {
     setEditingId(drug.id);
     setForm({
@@ -254,6 +528,10 @@ export default function Drugs() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (STOCK_FIELDS.some((field) => hasInvalidStockValue(form[field]))) {
+      notify.error('Stock quantity and low-stock threshold must be whole numbers of 0 or more.');
+      return;
+    }
     setSaving(true);
     try {
       if (editingId) {
@@ -412,7 +690,7 @@ export default function Drugs() {
             onImported={() => load({ reset: true, nextPage: 1, query: search })}
           />
           <button
-            onClick={() => (showAdd ? resetForm() : setShowAdd(true))}
+            onClick={() => (showAdd ? resetForm() : openCreateModal())}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -477,116 +755,14 @@ export default function Drugs() {
         </div>
 
         {showAdd && (
-          <div
-            style={{
-              width: '100%',
-              background: 'var(--bg-elev)',
-              border: '1px solid var(--border-color, rgba(120, 110, 90, 0.2))',
-              borderRadius: '12px',
-              padding: '1rem',
-              boxSizing: 'border-box',
-              boxShadow: 'none',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: '0.9rem',
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    fontSize: '1rem',
-                    fontWeight: 600,
-                    color: 'var(--text-primary)',
-                  }}
-                >
-                  {editingId ? 'Edit drug' : 'Add new drug'}
-                </div>
-
-                <div
-                  style={{
-                    marginTop: '0.1rem',
-                    fontSize: '0.8rem',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-
-                </div>
-              </div>
-            </div>
-            <form
-              onSubmit={submit}
-              style={{
-                background: 'var(--bg-elev)',
-                padding: '1rem',
-                borderRadius: 8,
-                display: 'grid',
-                gap: '0.75rem',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
-              }}
-            >
-              <input required placeholder="Brand / trade name (e.g. Crocin)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              <input placeholder="Generic name (e.g. Acetaminophen)" value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} />
-              <input placeholder="Product code (optional)" value={form.productCode} onChange={(e) => setForm({ ...form, productCode: e.target.value })} />
-              <input type="number" min="0" step="0.01" placeholder="Sale price per unit (₹)" value={form.salePrice} onChange={(e) => setForm({ ...form, salePrice: e.target.value })} />
-              <input placeholder="Inventory unit (e.g. tablet, bottle)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
-              <select value={form.dosageForm} onChange={(e) => setForm({ ...form, dosageForm: e.target.value })}>
-                {DOSAGE_FORMS.map((f) => <option key={f} value={f}>{f}</option>)}
-              </select>
-              {/* Free text on purpose — combination drugs are written "5/10".
-                `pattern` gives the browser's own "must contain a number"
-                nudge before the request is made; the backend is still the
-                authority and returns INVALID_STRENGTH_VALUE either way. */}
-              <input
-                placeholder="Strength value (e.g. 500)"
-                title="Must contain a number — e.g. 500, 2.5, or 5/10 for a combination"
-                pattern="[^0-9]*[0-9][\s\S]*"
-                value={form.strengthValue}
-                onChange={(e) => setForm({ ...form, strengthValue: e.target.value })}
-              />
-              <input
-                placeholder="Strength unit (mg, ml, %, IU...)"
-                list="drug-strength-units"
-                title="A unit such as mg, ml, mcg, g, % or IU"
-                value={form.strengthUnit}
-                onChange={(e) => setForm({ ...form, strengthUnit: e.target.value })}
-              />
-              <datalist id="drug-strength-units">
-                {STRENGTH_UNITS.map((u) => <option key={u} value={u} />)}
-              </datalist>
-              {/* Stock lives on the drug: the clinic dispenses from the same
-                shelf the doctor prescribes off, so there is no separate
-                inventory row to reconcile against. */}
-              <input type="number" min="0" placeholder="Quantity in stock (e.g. 40)" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-              <input type="number" min="0" placeholder="Low-stock threshold (0 = no alert)" value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })} />
-              <input placeholder="Default dosage (e.g. 1 tablet)" value={form.defaultDosage} onChange={(e) => setForm({ ...form, defaultDosage: e.target.value })} />
-              <input placeholder="Default frequency (e.g. twice daily)" value={form.defaultFrequency} onChange={(e) => setForm({ ...form, defaultFrequency: e.target.value })} />
-              <input placeholder="Default duration (e.g. 5 days)" value={form.defaultDuration} onChange={(e) => setForm({ ...form, defaultDuration: e.target.value })} />
-              <textarea placeholder="Admin notes (contraindications, schedule, etc.)" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={{ gridColumn: '1 / -1', minHeight: 60 }} />
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
-                Active
-              </label>
-              <button
-                type="submit"
-                disabled={saving}
-                style={{
-                  gridColumn: '1 / -1',
-                  padding: '0.6rem',
-                  background: 'rgb(39, 43, 39)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 6,
-                }}
-              >
-                {saving ? 'Saving...' : editingId ? 'Save changes' : 'Add drug'}
-              </button>
-            </form>
-          </div>
+          <DrugFormModal
+            editingId={editingId}
+            form={form}
+            saving={saving}
+            onClose={resetForm}
+            onSubmit={submit}
+            onChange={updateFormField}
+          />
         )}
 
         {loading ? (

@@ -26,7 +26,8 @@ const prisma = requireCJS("../../lib/prisma");
 
 prisma.drug = prisma.drug || {};
 prisma.drug.findMany = vi.fn();
-prisma.drug.update = vi.fn();
+prisma.drug.findFirst = vi.fn();
+prisma.drug.updateMany = vi.fn();
 prisma.user = prisma.user || {};
 prisma.user.findMany = vi.fn();
 prisma.user.findUnique = vi.fn();
@@ -54,6 +55,7 @@ const {
 beforeEach(() => {
   vi.clearAllMocks();
   prisma.drug.findMany.mockResolvedValue([]);
+  prisma.drug.findFirst.mockResolvedValue(null);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.user.findUnique.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
@@ -243,10 +245,23 @@ describe("applyPrescriptionStock", () => {
   ];
 
   beforeEach(() => {
-    prisma.drug.findMany.mockResolvedValue(catalogue);
-    prisma.drug.update.mockImplementation(async ({ where, data }) => {
+    catalogue[0].quantity = 40;
+    catalogue[1].quantity = 5;
+    prisma.drug.findMany.mockResolvedValue(catalogue.map((row) => ({ ...row })));
+    prisma.drug.updateMany.mockImplementation(async ({ where, data }) => {
       const row = catalogue.find((d) => d.id === where.id);
-      return { ...row, quantity: row.quantity - data.quantity.decrement };
+      if (!row) return { count: 0 };
+      const filter = where.quantity || {};
+      if (filter.gte !== undefined && row.quantity < filter.gte) return { count: 0 };
+      if (filter.lt !== undefined && row.quantity >= filter.lt) return { count: 0 };
+      row.quantity = typeof data.quantity === 'number'
+        ? data.quantity
+        : row.quantity - data.quantity.decrement;
+      return { count: 1 };
+    });
+    prisma.drug.findFirst.mockImplementation(async ({ where }) => {
+      const row = catalogue.find((d) => d.id === where.id);
+      return row ? { ...row } : null;
     });
   });
 
@@ -255,9 +270,9 @@ describe("applyPrescriptionStock", () => {
       tenantId: 1,
       drugs: [{ name: "Minoxidil 5%" }],
     });
-    expect(prisma.drug.update).toHaveBeenCalledWith(
+    expect(prisma.drug.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 96 },
+        where: { id: 96, tenantId: 1, quantity: { gte: 1 } },
         data: { quantity: { decrement: 1 } },
       }),
     );
@@ -266,14 +281,13 @@ describe("applyPrescriptionStock", () => {
 
   test("honours an explicit qty — the doctor writes 2 units", async () => {
     await applyPrescriptionStock({ tenantId: 1, drugs: [{ name: "Minoxidil", qty: 2 }] });
-    expect(prisma.drug.update.mock.calls[0][0].data).toEqual({ quantity: { decrement: 2 } });
+    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: { decrement: 2 } });
   });
 
-  test("uses `decrement` so concurrent saves both land", async () => {
-    // A read-modify-write would let the second prescription overwrite the
-    // first's result; a relative decrement cannot.
+  test("uses a conditional decrement so concurrent saves cannot create negative stock", async () => {
     await applyPrescriptionStock({ tenantId: 1, drugs: [{ name: "Minoxidil" }] });
-    expect(prisma.drug.update.mock.calls[0][0].data.quantity).toHaveProperty("decrement");
+    expect(prisma.drug.updateMany.mock.calls[0][0].data.quantity).toHaveProperty("decrement");
+    expect(prisma.drug.updateMany.mock.calls[0][0].where.quantity).toEqual({ gte: 1 });
   });
 
   test("collapses the same drug listed twice into one update", async () => {
@@ -281,8 +295,22 @@ describe("applyPrescriptionStock", () => {
       tenantId: 1,
       drugs: [{ name: "Minoxidil", qty: 2 }, { name: "Minoxidil 5%", qty: 3 }],
     });
-    expect(prisma.drug.update).toHaveBeenCalledTimes(1);
-    expect(prisma.drug.update.mock.calls[0][0].data).toEqual({ quantity: { decrement: 5 } });
+    expect(prisma.drug.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: { decrement: 5 } });
+  });
+
+  test("floors an over-dispensed prescription at zero instead of storing a negative quantity", async () => {
+    const out = await applyPrescriptionStock({
+      tenantId: 1,
+      drugs: [{ name: "Amoxicillin", qty: 99 }],
+    });
+
+    expect(prisma.drug.updateMany.mock.calls[0][0].data).toEqual({ quantity: { decrement: 99 } });
+    expect(prisma.drug.updateMany.mock.calls[1][0]).toMatchObject({
+      where: { id: 13, tenantId: 1, quantity: { lt: 99 } },
+      data: { quantity: 0 },
+    });
+    expect(out.adjusted[0]).toMatchObject({ units: 5, quantityBefore: 5, quantityAfter: 0 });
   });
 
   test("reports free text back untouched instead of inventing stock", async () => {
@@ -292,7 +320,7 @@ describe("applyPrescriptionStock", () => {
     });
     expect(out.unmatched).toEqual(["Paracetamol"]);
     expect(out.adjusted).toHaveLength(1);
-    expect(prisma.drug.update).toHaveBeenCalledTimes(1);
+    expect(prisma.drug.updateMany).toHaveBeenCalledTimes(1);
   });
 
   test("notifies admins when a drug CROSSES its reorder point", async () => {
@@ -323,11 +351,9 @@ describe("applyPrescriptionStock", () => {
   });
 
   test("one drug failing does not abandon the rest", async () => {
-    prisma.drug.update
+    prisma.drug.updateMany
       .mockRejectedValueOnce(new Error("row locked"))
-      .mockImplementationOnce(async () => ({
-        id: 13, name: "Amoxicillin", quantity: 4, lowStockThreshold: 10,
-      }));
+      .mockImplementationOnce(async () => ({ count: 1 }));
 
     const out = await applyPrescriptionStock({
       tenantId: 1,
@@ -340,6 +366,6 @@ describe("applyPrescriptionStock", () => {
   test("an empty prescription is a no-op", async () => {
     const out = await applyPrescriptionStock({ tenantId: 1, drugs: [] });
     expect(out).toEqual({ adjusted: [], unmatched: [] });
-    expect(prisma.drug.update).not.toHaveBeenCalled();
+    expect(prisma.drug.updateMany).not.toHaveBeenCalled();
   });
 });

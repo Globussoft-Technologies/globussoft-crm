@@ -99,23 +99,43 @@ async function resolveSelfBookingPatient({ userId, tenantId }) {
     where: activePatientWhere({ tenantId, userId }),
   });
 
-  if (!existing) {
-    return await prisma.patient.create({
-      data: {
-        name: desired.name,
-        email: desired.email,
-        phone: desired.phone,
-        normalizedPhone: desired.phone ? normalizePhone(desired.phone) : null,
-        source: 'self-booking',
-        tenant: { connect: { id: tenantId } },
-        user: { connect: { id: userId } },
-      },
-    });
+  if (existing) {
+    const drift = identityDrift(existing, desired);
+    if (Object.keys(drift).length === 0) return existing;
+    return await prisma.patient.update({ where: { id: existing.id }, data: drift });
   }
 
-  const drift = identityDrift(existing, desired);
-  if (Object.keys(drift).length === 0) return existing;
-  return await prisma.patient.update({ where: { id: existing.id }, data: drift });
+  // Customer registration can happen before a clinic operator creates the
+  // matching Patient row. Reuse that unlinked row instead of creating a
+  // duplicate when the customer signs in or books for the first time.
+  if (user.email) {
+    const claimable = await prisma.patient.findFirst({
+      where: activePatientWhere({
+        tenantId,
+        email: user.email,
+        userId: null,
+      }),
+    });
+    if (claimable) {
+      const drift = identityDrift(claimable, desired);
+      return await prisma.patient.update({
+        where: { id: claimable.id },
+        data: { ...drift, userId },
+      });
+    }
+  }
+
+  return await prisma.patient.create({
+    data: {
+      name: desired.name,
+      email: desired.email,
+      phone: desired.phone,
+      normalizedPhone: desired.phone ? normalizePhone(desired.phone) : null,
+      source: 'self-booking',
+      tenant: { connect: { id: tenantId } },
+      user: { connect: { id: userId } },
+    },
+  });
 }
 
 /**

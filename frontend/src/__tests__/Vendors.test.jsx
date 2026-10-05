@@ -68,8 +68,11 @@ function installFetchMock({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (url === '/api/wellness/vendors' && method === 'GET') {
+    if (String(url).startsWith('/api/wellness/vendors?') && method === 'GET') {
       if (vendorsPromise) return vendorsPromise;
+      const filter = new URL(`http://test.local${url}`).searchParams.get('isActive');
+      if (filter === 'true') return Promise.resolve(vendors.filter((vendor) => vendor.isActive !== false));
+      if (filter === 'false') return Promise.resolve(vendors.filter((vendor) => vendor.isActive === false));
       return Promise.resolve(vendors);
     }
     if (/^\/api\/wellness\/vendors(\/\d+)?$/.test(url)) {
@@ -125,11 +128,11 @@ describe('<Vendors /> — page chrome', () => {
 });
 
 describe('<Vendors /> — mount fetch + list render', () => {
-  it('fires GET /api/wellness/vendors on mount and renders the active row', async () => {
+  it('fires an all-vendors GET on mount and renders the active row', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/vendors');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/vendors?isActive=all');
     });
     // Default 'active' filter → only the active vendor renders.
     expect(
@@ -163,8 +166,17 @@ describe('<Vendors /> — mount fetch + list render', () => {
     await waitFor(() => {
       expect(screen.getByText('Sterile Supplies Pvt Ltd')).toBeInTheDocument();
     });
+    const allCallsBefore = fetchApiMock.mock.calls.filter(
+      ([url]) => url === '/api/wellness/vendors?isActive=all',
+    ).length;
     // Click the "All" filter pill.
     fireEvent.click(screen.getByRole('tab', { name: /^All/i }));
+    await waitFor(() => {
+      const allCallsAfter = fetchApiMock.mock.calls.filter(
+        ([url]) => url === '/api/wellness/vendors?isActive=all',
+      ).length;
+      expect(allCallsAfter).toBeGreaterThan(allCallsBefore);
+    });
     expect(
       await screen.findByText('Legacy Pharma Distributors'),
     ).toBeInTheDocument();
@@ -172,6 +184,22 @@ describe('<Vendors /> — mount fetch + list render', () => {
     expect(screen.getAllByText(/^Archived$/).length).toBeGreaterThanOrEqual(1);
     // Both rows visible → em-dash fallbacks for inactive row's null optionals.
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('switching to "Archived" fetches archived vendors from the API', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Sterile Supplies Pvt Ltd')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /^Archived/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/vendors?isActive=false');
+    });
+    expect(await screen.findByText('Legacy Pharma Distributors')).toBeInTheDocument();
+    expect(screen.queryByText('Sterile Supplies Pvt Ltd')).toBeNull();
   });
 });
 
@@ -261,7 +289,7 @@ describe('<Vendors /> — create POST', () => {
     );
     const getCalls = fetchApiMock.mock.calls.filter(
       ([u, opts]) =>
-        u === '/api/wellness/vendors' && (opts?.method || 'GET') === 'GET',
+        String(u).startsWith('/api/wellness/vendors?') && (opts?.method || 'GET') === 'GET',
     );
     expect(getCalls.length).toBeGreaterThanOrEqual(2);
   });

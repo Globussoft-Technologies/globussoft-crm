@@ -188,6 +188,7 @@ const PRODUCT_JUV = {
 function installFetchMock({
   adjustments = [SHRINKAGE_ADJ, RECOUNT_ADJ, TRANSFER_ADJ],
   products = [PRODUCT_BOTOX, PRODUCT_JUV],
+  productPages = null,
   adjustmentsPromise = null,
   productsPromise = null,
 } = {}) {
@@ -200,7 +201,11 @@ function installFetchMock({
       if (adjustmentsPromise) return adjustmentsPromise;
       return Promise.resolve(adjustments);
     }
-    if (url === '/api/wellness/products' && method === 'GET') {
+    const productPageMatch = typeof url === 'string'
+      ? url.match(/^\/api\/wellness\/products\?paginate=true&page=(\d+)&limit=100$/)
+      : null;
+    if (productPageMatch && method === 'GET') {
+      if (productPages) return Promise.resolve(productPages[Number(productPageMatch[1])] || { items: [], pagination: { pages: 1 } });
       if (productsPromise) return productsPromise;
       return Promise.resolve(products);
     }
@@ -273,7 +278,7 @@ describe('<InventoryAdjustments /> — mount fetch + list render', () => {
       expect(fetchApiMock).toHaveBeenCalledWith(
         '/api/wellness/inventory/adjustments',
       );
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products?paginate=true&page=1&limit=100');
     });
     // Row anchors — product names from joined data. Each product that's BOTH
     // in the master products list AND surfaced in the filter dropdown will
@@ -290,6 +295,23 @@ describe('<InventoryAdjustments /> — mount fetch + list render', () => {
     expect(
       screen.getAllByText('Lidocaine 1%').length,
     ).toBeGreaterThanOrEqual(1);
+  });
+
+  it('loads products from every paginated catalogue response', async () => {
+    const rareProduct = { id: 999, name: 'Rare treatment kit', sku: 'RARE-1' };
+    installFetchMock({
+      adjustments: [],
+      productPages: {
+        1: { items: [PRODUCT_BOTOX], pagination: { pages: 2 } },
+        2: { items: [rareProduct], pagination: { pages: 2 } },
+      },
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'Rare treatment kit' })).toBeInTheDocument();
+    });
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products?paginate=true&page=2&limit=100');
   });
 
   it('renders empty-state copy "No adjustments recorded." when GET resolves to []', async () => {
@@ -381,8 +403,8 @@ describe('<InventoryAdjustments /> — filter Apply re-fetch', () => {
   });
 });
 
-describe('<InventoryAdjustments /> — New-adjustment form toggle', () => {
-  it('"New adjustment" opens the form (label flips to "Cancel"); click again closes it', async () => {
+describe('<InventoryAdjustments /> — New-adjustment modal', () => {
+  it('"New adjustment" opens the modal and Cancel closes it', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
@@ -391,20 +413,20 @@ describe('<InventoryAdjustments /> — New-adjustment form toggle', () => {
       expect(screen.getAllByText('Botox 50U').length).toBeGreaterThanOrEqual(1);
     });
     fireEvent.click(screen.getByRole('button', { name: /New adjustment/i }));
-    // Form fields visible: quantityDelta input placeholder.
+    const dialog = screen.getByRole('dialog', { name: 'New inventory adjustment' });
+    expect(dialog).toBeInTheDocument();
+    // Modal fields visible: quantityDelta input placeholder.
     expect(
-      screen.getByPlaceholderText(/Quantity delta — e\.g\. -3 or \+5/),
+      screen.getByPlaceholderText(/e\.g\. -3 or \+5/),
     ).toBeInTheDocument();
     // "Apply adjustment" submit button visible.
     expect(
       screen.getByRole('button', { name: /Apply adjustment/i }),
     ).toBeInTheDocument();
-    // CTA label flipped.
-    expect(screen.getByRole('button', { name: /^Cancel$/ })).toBeInTheDocument();
-    // Click Cancel → form closes, label flips back.
+    // Click the modal Cancel action → the modal closes.
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
     expect(
-      screen.queryByPlaceholderText(/Quantity delta — e\.g\. -3 or \+5/),
+      screen.queryByRole('dialog', { name: 'New inventory adjustment' }),
     ).toBeNull();
     expect(
       screen.getByRole('button', { name: /New adjustment/i }),
@@ -427,13 +449,13 @@ describe('<InventoryAdjustments /> — create POST', () => {
     // [0] = filter, [1] = product picker, [2] = reason
     fireEvent.change(formSelects[1], { target: { value: '501' } });
     fireEvent.change(
-      screen.getByPlaceholderText(/Quantity delta — e\.g\. -3 or \+5/),
+      screen.getByPlaceholderText(/e\.g\. -3 or \+5/),
       { target: { value: '7' } },
     );
     // Reason defaults to RECOUNT; change to DAMAGE to confirm payload carries it.
     fireEvent.change(formSelects[2], { target: { value: 'DAMAGE' } });
     fireEvent.change(
-      screen.getByPlaceholderText(/^Notes$/),
+      screen.getByPlaceholderText(/Add notes about this adjustment/),
       { target: { value: 'Restocked from supplier return' } },
     );
 
@@ -483,7 +505,7 @@ describe('<InventoryAdjustments /> — create POST', () => {
     const formSelects = screen.getAllByRole('combobox');
     fireEvent.change(formSelects[1], { target: { value: '502' } });
     fireEvent.change(
-      screen.getByPlaceholderText(/Quantity delta — e\.g\. -3 or \+5/),
+      screen.getByPlaceholderText(/e\.g\. -3 or \+5/),
       { target: { value: '-4' } },
     );
     // Reason left at default RECOUNT.
@@ -505,5 +527,26 @@ describe('<InventoryAdjustments /> — create POST', () => {
     expect(notifySuccess).toHaveBeenCalledWith(
       expect.stringMatching(/Stock debited by 4 \(RECOUNT\)/),
     );
+  });
+
+  it('rejects a zero delta in the modal before making a POST request', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getAllByText('Botox 50U').length).toBeGreaterThanOrEqual(1);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New adjustment/i }));
+    const formSelects = screen.getAllByRole('combobox');
+    fireEvent.change(formSelects[1], { target: { value: '501' } });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. -3 or \+5/), {
+      target: { value: '0' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Apply adjustment/i }));
+
+    expect(notifyError).toHaveBeenCalledWith(
+      'Select a product and enter a non-zero quantity delta.',
+    );
+    expect(fetchApiMock.mock.calls.some(([url, options]) =>
+      url === '/api/wellness/inventory/adjustments' && options?.method === 'POST')).toBe(false);
   });
 });

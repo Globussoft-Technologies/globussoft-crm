@@ -32,7 +32,7 @@
  *      the name input is empty (or whitespace-only). No POST fires.
  *   5. Generate Key happy path: typing a name + clicking Generate POSTs
  *      /api/developer/apikeys with { name: trimmed } body. The success
- *      notify fires with the rawKey + the "ATTENTION: ONLY time" copy,
+ *      notify fires with the rawKey + concise one-time-save copy,
  *      then re-fetches the list.
  *   6. Generate Key whitespace-only: submitting with "   " triggers the
  *      defense-in-depth notify.error("Key name is required.") and does
@@ -271,10 +271,10 @@ describe('<Developer /> — page surface, API key + webhook CRUD, agent activity
       // Generic tenant → NO subBrand field on the body.
       expect(body.subBrand).toBeUndefined();
     });
-    // Success notify carries the raw key + the "ONLY time" copy.
+    // Success notify carries the raw key + concise one-time-save copy.
     await waitFor(() => {
       expect(notifySuccess).toHaveBeenCalledWith(
-        expect.stringMatching(/ONLY time this key will be displayed/i),
+        expect.stringMatching(/API key created\. Save it securely/i),
         expect.objectContaining({ ttl: 30000 }),
       );
     });

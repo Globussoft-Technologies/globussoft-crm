@@ -117,6 +117,31 @@ describe('resolveSelfBookingPatient', () => {
     expect(data.normalizedPhone).toBeNull();
   });
 
+  test('claims an existing unlinked patient with the same email instead of duplicating it', async () => {
+    prisma.patient.findFirst = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 4100,
+        name: 'Mohit das',
+        email: 'mohit@example.test',
+        phone: null,
+        userId: null,
+      });
+
+    const patient = await resolveSelfBookingPatient({ userId: 251, tenantId: 1 });
+
+    expect(prisma.patient.create).not.toHaveBeenCalled();
+    expect(prisma.patient.update).toHaveBeenCalledWith({
+      where: { id: 4100 },
+      data: {
+        phone: '+916200039874',
+        normalizedPhone: '916200039874',
+        userId: 251,
+      },
+    });
+    expect(patient.id).toBe(4100);
+  });
+
   test('rejects a deactivated account instead of recreating the patient', async () => {
     prisma.user.findUnique = vi.fn().mockResolvedValue({
       ...USER,

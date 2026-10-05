@@ -317,17 +317,29 @@ async function applyPrescriptionStock({ tenantId, drugs, io }) {
   for (const [drugId, units] of wanted) {
     const before = index.byId.get(drugId);
     try {
-      const updated = await prisma.drug.update({
-        where: { id: drugId },
-        // `decrement` so two prescriptions saved at once both land, rather
-        // than the second overwriting the first's read-modify-write.
+      // Keep the decrement atomic while flooring stock at zero. The first
+      // update handles the normal case; when the prescription asks for more
+      // than is available, the second conditional update consumes what is
+      // left and clamps the ledger to zero without allowing a negative row.
+      const decremented = await prisma.drug.updateMany({
+        where: { id: drugId, tenantId, quantity: { gte: units } },
         data: { quantity: { decrement: units } },
+      });
+      if (decremented.count === 0) {
+        await prisma.drug.updateMany({
+          where: { id: drugId, tenantId, quantity: { lt: units } },
+          data: { quantity: 0 },
+        });
+      }
+      const updated = await prisma.drug.findFirst({
+        where: { id: drugId, tenantId },
         select: { id: true, name: true, quantity: true, lowStockThreshold: true },
       });
+      if (!updated) continue;
       result.adjusted.push({
         drugId,
         name: updated.name,
-        units,
+        units: Math.min(units, Math.max(0, Number(before?.quantity) || 0)),
         quantityBefore: before?.quantity ?? null,
         quantityAfter: updated.quantity,
       });

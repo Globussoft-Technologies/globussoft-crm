@@ -21,11 +21,10 @@
  *     even though the route's destructure ignores those fields.
  *
  *   Bug 4 (Strict per-vertical validation) — When
- *     RBAC_STRICT_VERTICAL_VALIDATION=1, POST /api/roles/:id/permissions
- *     rejects a foreign permission with 400 + INVALID_MODULE +
- *     the exact "Module 'X' is not valid for this tenant" string.
- *     Default-off: same call succeeds (back-compat with pre-cleanup
- *     state).
+ *     POST /api/roles/:id/permissions rejects a foreign permission with
+ *     400 + INVALID_MODULE + the exact "Module 'X' is not valid for this
+ *     tenant" string. The check is unconditional so a deployment flag
+ *     cannot reopen the cross-vertical grant path.
  *
  * Mock strategy mirrors backend/test/routes/admin.test.js — patch
  * middleware/auth.verifyToken + middleware/requirePermission.requirePermission
@@ -122,20 +121,29 @@ import request from 'supertest';
 // IMPORTANT: requireCJS so the route file's `const { requirePermission } =
 // require(...)` resolves against the already-patched module exports.
 const rolesRouter = requireCJS('../../routes/roles');
+const { permissionsRouter } = requireCJS('../../routes/me');
 
 function makeApp({
   userId = 7,
   tenantId = 11,
   isOwner = false,
   role = 'ADMIN',
+  vertical,
 } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
     req.user = { userId, tenantId, isOwner, role };
+    if (vertical) req.user.vertical = vertical;
     next();
   });
   app.use('/api/roles', rolesRouter);
+  return app;
+}
+
+function makePermissionsApp(options = {}) {
+  const app = makeApp(options);
+  app.use('/api/permissions', permissionsRouter);
   return app;
 }
 
@@ -159,7 +167,6 @@ beforeEach(() => {
   prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
   prisma.$queryRaw.mockReset();
   prisma.userRole.count.mockResolvedValue(2);
-  delete process.env.RBAC_STRICT_VERTICAL_VALIDATION;
 });
 
 describe('GET /api/roles pagination', () => {
@@ -570,10 +577,72 @@ describe('Bug 2 — PUT /api/roles/:id key/userType on a system role', () => {
   });
 });
 
+describe('vertical-scoped permission catalog responses', () => {
+  test('wellness roles catalog excludes travel modules and domains', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'wellness' });
+
+    const res = await request(makeApp({ vertical: 'wellness' })).get('/api/roles/catalog');
+
+    expect(res.status).toBe(200);
+    expect(res.body.vertical).toBe('wellness');
+    expect(res.body.catalog).toHaveProperty('patients');
+    expect(res.body.catalog).not.toHaveProperty('itineraries');
+    expect(res.body.domains.map((domain) => domain.domain)).not.toContain('Travel Sales');
+  });
+
+  test('vertical lookup failure returns no catalog instead of the union catalog', async () => {
+    prisma.tenant.findUnique.mockRejectedValue(new Error('database unavailable'));
+
+    const res = await request(makeApp()).get('/api/roles/catalog');
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      error: 'Tenant vertical is unavailable',
+      code: 'TENANT_VERTICAL_UNAVAILABLE',
+    });
+  });
+
+  test('the /api/permissions alias applies the same wellness filter', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'wellness' });
+
+    const res = await request(makePermissionsApp({ vertical: 'wellness' })).get('/api/permissions');
+
+    expect(res.status).toBe(200);
+    expect(res.body.vertical).toBe('wellness');
+    expect(res.body.modules.map((module) => module.module)).not.toContain('itineraries');
+    expect(res.body.domains.map((domain) => domain.domain)).not.toContain('Travel Sales');
+  });
+
+  test('role list hides legacy travel grants from a wellness tenant', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'wellness' });
+    prisma.role.findMany.mockResolvedValue([{
+      id: 9,
+      key: 'ADMIN',
+      name: 'Administrator',
+      tenantId: 11,
+      permissions: [
+        { module: 'patients', action: 'read' },
+        { module: 'itineraries', action: 'read' },
+      ],
+      _count: { userRoles: 1 },
+      dataScope: null,
+      subBrandScopeJson: null,
+    }]);
+
+    const res = await request(makeApp({ vertical: 'wellness' })).get('/api/roles');
+
+    expect(res.status).toBe(200);
+    expect(res.body.roles[0].permissions).toEqual([
+      { module: 'patients', action: 'read' },
+    ]);
+    expect(res.body.roles[0].hiddenPermissionCount).toBe(1);
+  });
+});
+
 // ─────────────── Bug 4 — Strict vertical validation ───────────────
 
 describe('Bug 4 — POST /api/roles/:id/permissions vertical validation', () => {
-  test('default (env flag off): foreign perm accepted (back-compat)', async () => {
+  test('foreign perm is rejected even when the legacy env flag is off', async () => {
     delete process.env.RBAC_STRICT_VERTICAL_VALIDATION;
     prisma.role.findUnique.mockResolvedValue({
       id: 9,
@@ -594,7 +663,9 @@ describe('Bug 4 — POST /api/roles/:id/permissions vertical validation', () => 
       .send({ module: 'patients', action: 'read' });
     // travel tenant + patients perm → without env flag the union
     // validator accepts. Pre-cleanup back-compat path.
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_MODULE');
+    expect(prisma.rolePermission.create).not.toHaveBeenCalled();
   });
 
   test('env flag ON: foreign perm rejected with 400 INVALID_MODULE', async () => {
@@ -661,6 +732,31 @@ describe('Bug 4 — POST /api/roles/:id/permissions vertical validation', () => 
       .post('/api/roles/9/permissions')
       .send({ module: 'contacts', action: 'read' });
     expect(res.status).toBe(201);
+  });
+
+  test('bulk permission replacement rejects a foreign permission unconditionally', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 9,
+      key: 'CUSTOM',
+      tenantId: 11,
+      isSystem: false,
+      permissions: [],
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'wellness' });
+
+    const res = await request(makeApp({ tenantId: 11 }))
+      .put('/api/roles/9/permissions')
+      .send({ permissions: [{ module: 'itineraries', action: 'read' }] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'INVALID_MODULE',
+      module: 'itineraries',
+      action: 'read',
+      vertical: 'wellness',
+    });
+    expect(prisma.rolePermission.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.rolePermission.createMany).not.toHaveBeenCalled();
   });
 });
 

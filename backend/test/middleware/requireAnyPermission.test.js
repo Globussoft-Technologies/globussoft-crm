@@ -28,7 +28,6 @@ const requireCJS = createRequire(import.meta.url);
 // affect the closure, so we replace the module-cache entry's compiled
 // function reference instead.
 const permMod = requireCJS('../../middleware/requirePermission');
-let stubUserPerms = new Set();
 
 // Re-bind the module's internal getUserPermissions reference. The
 // helper is defined inside the module so reassigning here doesn't
@@ -41,11 +40,13 @@ let stubUserPerms = new Set();
 import prisma from '../../lib/prisma.js';
 prisma.userRole = prisma.userRole || {};
 prisma.userRole.findMany = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 
 beforeEach(() => {
   permMod.clearAllCache();
   prisma.userRole.findMany.mockReset();
-  stubUserPerms = new Set();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
 });
 
 function makeReqRes({ user, perms }) {
@@ -56,9 +57,12 @@ function makeReqRes({ user, perms }) {
     permMod.PERMISSION_CACHE.set(`${user.tenantId}::${user.userId}`, {
       permissions: new Set(perms),
       timestamp: Date.now(),
+      vertical: user.vertical || 'generic',
     });
   }
-  const req = { user };
+  const req = {
+    user: user ? { ...user, vertical: user.vertical || 'generic' } : user,
+  };
   const res = {
     _status: 200,
     _body: null,

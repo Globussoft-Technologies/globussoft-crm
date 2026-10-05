@@ -18,6 +18,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 const prisma = require('../../lib/prisma');
 const {
   loadUserPermissions,
+  getUserPermissions,
   clearAllCache,
 } = require('../../middleware/requirePermission');
 
@@ -43,6 +44,82 @@ afterEach(() => {
 });
 
 describe('loadUserPermissions — matrix is authoritative', () => {
+  test('missing tenant vertical fails closed instead of returning the union', async () => {
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([
+      {
+        role: {
+          key: 'ADMIN',
+          permissions: [{ module: 'itineraries', action: 'read' }],
+        },
+      },
+    ]);
+    prisma.tenant.findUnique = vi.fn().mockRejectedValue(new Error('database unavailable'));
+
+    const perms = await getUserPermissions(1, 100);
+
+    expect(perms.size).toBe(0);
+  });
+
+  test('effective permissions use the tenant vertical as authority', async () => {
+    prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([
+      {
+        role: {
+          key: 'ADMIN',
+          permissions: [
+            { module: 'patients', action: 'read' },
+            { module: 'itineraries', action: 'read' },
+          ],
+        },
+      },
+    ]);
+
+    // A caller may still carry a stale Travel claim in its JWT; the helper
+    // resolves the tenant row itself and must keep the Travel grant out.
+    const perms = await getUserPermissions(1, 100);
+
+    expect(perms.has('patients.read')).toBe(true);
+    expect(perms.has('itineraries.read')).toBe(false);
+  });
+
+  test('wellness effective permissions exclude legacy travel grants', async () => {
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([
+      {
+        role: {
+          key: 'ADMIN',
+          permissions: [
+            { module: 'patients', action: 'read' },
+            { module: 'itineraries', action: 'read' },
+          ],
+        },
+      },
+    ]);
+
+    const perms = await loadUserPermissions(1, 100, 'wellness');
+
+    expect(perms.has('patients.read')).toBe(true);
+    expect(perms.has('itineraries.read')).toBe(false);
+  });
+
+  test('travel effective permissions exclude legacy wellness grants', async () => {
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([
+      {
+        role: {
+          key: 'ADMIN',
+          permissions: [
+            { module: 'patients', action: 'read' },
+            { module: 'itineraries', action: 'read' },
+          ],
+        },
+      },
+    ]);
+
+    const perms = await loadUserPermissions(1, 100, 'travel');
+
+    expect(perms.has('patients.read')).toBe(false);
+    expect(perms.has('itineraries.read')).toBe(true);
+  });
+
   test('ADMIN with empty grants returns empty set (no runtime shortcut)', async () => {
     // Pins the post-revert contract: if an admin unchecks every box on
     // the ADMIN role in the matrix and saves, the resolver returns an

@@ -37,15 +37,16 @@
  *   6. Missing Authorization header → 401.
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
-import jwt from 'jsonwebtoken';
+import { describe, test, expect, beforeEach, vi } from "vitest";
+import jwt from "jsonwebtoken";
 
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
+process.env.JWT_SECRET =
+  process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 // Force PORTAL_JWT_SECRET to match JWT_SECRET so the same signed token
 // verifies under both branches — mirrors the on-demo deployment.
 delete process.env.PORTAL_JWT_SECRET;
 
-import prisma from '../../lib/prisma.js';
+import prisma from "../../lib/prisma.js";
 
 // Stub every prisma surface the /portal/visits handler + middleware touch.
 prisma.patient = prisma.patient || {};
@@ -80,6 +81,8 @@ prisma.location = prisma.location || {};
 prisma.location.findFirst = vi.fn();
 prisma.role = prisma.role || {};
 prisma.role.findFirst = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 
 // writeAudit calls go through auditLog — make them no-op so the handler's
 // try/catch around the audit write is exercised in success-mode.
@@ -88,40 +91,40 @@ prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 prisma.auditLog.findMany = vi.fn().mockResolvedValue([]);
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 
-import express from 'express';
-import request from 'supertest';
-import { createRequire } from 'node:module';
+import express from "express";
+import request from "supertest";
+import { createRequire } from "node:module";
 
 const requireCJS = createRequire(import.meta.url);
-const wellnessRouter = requireCJS('../../routes/wellness');
-const { clearCustomerRoleCache } = requireCJS('../../lib/portalPermissions');
+const wellnessRouter = requireCJS("../../routes/wellness");
+const { clearCustomerRoleCache } = requireCJS("../../lib/portalPermissions");
 
 const { JWT_SECRET } = process.env;
 
 function signCustomerJwt({ userId = 100, tenantId = 7 } = {}) {
   return jwt.sign(
-    { userId, tenantId, role: 'CUSTOMER', userType: 'CUSTOMER' },
+    { userId, tenantId, role: "CUSTOMER", userType: "CUSTOMER" },
     JWT_SECRET,
-    { expiresIn: '5m' },
+    { expiresIn: "5m" },
   );
 }
 
-function signPortalJwt({ patientId = 50, phoneLast10 = '9123456789' } = {}) {
-  return jwt.sign({ patientId, phoneLast10 }, JWT_SECRET, { expiresIn: '5m' });
+function signPortalJwt({ patientId = 50, phoneLast10 = "9123456789" } = {}) {
+  return jwt.sign({ patientId, phoneLast10 }, JWT_SECRET, { expiresIn: "5m" });
 }
 
 function signStaffJwt({ userId = 1, tenantId = 7 } = {}) {
   return jwt.sign(
-    { userId, tenantId, role: 'ADMIN', userType: 'STAFF' },
+    { userId, tenantId, role: "ADMIN", userType: "STAFF" },
     JWT_SECRET,
-    { expiresIn: '5m' },
+    { expiresIn: "5m" },
   );
 }
 
 function makeApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api/wellness', wellnessRouter);
+  app.use("/api/wellness", wellnessRouter);
   return app;
 }
 
@@ -145,6 +148,7 @@ beforeEach(() => {
   prisma.service.findMany.mockReset();
   prisma.location.findFirst.mockReset();
   prisma.role.findFirst.mockReset();
+  prisma.tenant.findUnique.mockReset();
   clearCustomerRoleCache();
 
   // Sensible defaults — empty result set so the handler's body returns [].
@@ -158,102 +162,125 @@ beforeEach(() => {
   prisma.signatureRequest.findFirst.mockResolvedValue(null);
   prisma.service.findMany.mockResolvedValue([]);
   prisma.location.findFirst.mockResolvedValue(null);
+  prisma.tenant.findUnique.mockResolvedValue({ id: 7, vertical: "wellness" });
   prisma.subscription.findFirst.mockResolvedValue({ id: 1, tenantId: 7 });
   prisma.user.findFirst.mockResolvedValue(null);
 });
 
-describe('patient portal clinic subscription gate', () => {
-  test('blocks an existing patient token when its clinic subscription expires', async () => {
+describe("patient portal clinic subscription gate", () => {
+  test("blocks an existing patient token when its clinic subscription expires", async () => {
     prisma.subscription.findFirst.mockResolvedValue(null);
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(402);
-    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(res.body.code).toBe("CLINIC_SUBSCRIPTION_EXPIRED");
     expect(prisma.visit.findMany).not.toHaveBeenCalled();
-    expect(prisma.subscription.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: 7 }),
-    }));
+    expect(prisma.subscription.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 7 }),
+      }),
+    );
   });
 
-  test('keeps another clinic accessible when it has active coverage', async () => {
+  test("keeps another clinic accessible when it has active coverage", async () => {
     prisma.patient.findUnique.mockResolvedValue({ id: 51, tenantId: 8 });
     /** @param {{ where: { tenantId: number } }} query */
-    const findCoverage = (query) => Promise.resolve(query.where.tenantId === 8 ? { id: 2 } : null);
+    const findCoverage = (query) =>
+      Promise.resolve(query.where.tenantId === 8 ? { id: 2 } : null);
     prisma.subscription.findFirst.mockImplementation(findCoverage);
     const token = signPortalJwt({ patientId: 51 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(prisma.subscription.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: 8 }),
-    }));
+    expect(prisma.subscription.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 8 }),
+      }),
+    );
   });
 
-  test('allows patient access during the clinic admin trial', async () => {
+  test("allows patient access during the clinic admin trial", async () => {
     prisma.subscription.findFirst.mockResolvedValue(null);
-    prisma.user.findFirst.mockResolvedValue({ trialEndsAt: new Date(Date.now() + 86_400_000) });
+    prisma.user.findFirst.mockResolvedValue({
+      trialEndsAt: new Date(Date.now() + 86_400_000),
+    });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${signPortalJwt()}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${signPortalJwt()}`);
 
     expect(res.status).toBe(200);
-    expect(prisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: 7, role: 'ADMIN', subscriptionStatus: 'TRIAL' }),
-    }));
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 7,
+          role: "ADMIN",
+          subscriptionStatus: "TRIAL",
+        }),
+      }),
+    );
   });
 
-  test('blocks a linked customer token for an expired clinic', async () => {
+  test("blocks a linked customer token for an expired clinic", async () => {
     prisma.subscription.findFirst.mockResolvedValue(null);
-    prisma.patient.findFirst.mockResolvedValue({ id: 42, phone: '+919123456789', tenantId: 7 });
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 42,
+      phone: "+919123456789",
+      tenantId: 7,
+    });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${signCustomerJwt()}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${signCustomerJwt()}`);
 
     expect(res.status).toBe(402);
-    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(res.body.code).toBe("CLINIC_SUBSCRIPTION_EXPIRED");
     expect(prisma.visit.findMany).not.toHaveBeenCalled();
   });
 
-  test('does not claim or create a patient record for an expired clinic', async () => {
+  test("does not claim or create a patient record for an expired clinic", async () => {
     prisma.subscription.findFirst.mockResolvedValue(null);
     prisma.patient.findFirst.mockResolvedValue(null);
-    prisma.user.findUnique.mockResolvedValue({ name: 'Patient', email: 'patient@example.com' });
+    prisma.user.findUnique.mockResolvedValue({
+      name: "Patient",
+      email: "patient@example.com",
+    });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${signCustomerJwt()}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${signCustomerJwt()}`);
 
     expect(res.status).toBe(402);
-    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(res.body.code).toBe("CLINIC_SUBSCRIPTION_EXPIRED");
     expect(prisma.patient.update).not.toHaveBeenCalled();
     expect(prisma.patient.create).not.toHaveBeenCalled();
   });
 
-  test('does not consume an OTP or issue a token for an expired clinic', async () => {
+  test("does not consume an OTP or issue a token for an expired clinic", async () => {
     prisma.subscription.findFirst.mockResolvedValue(null);
     prisma.patientOtp.findFirst.mockResolvedValue({ id: 5 });
-    prisma.patient.findMany.mockResolvedValue([{ id: 50, name: 'Patient', phone: '9123456789', tenantId: 7 }]);
+    prisma.patient.findMany.mockResolvedValue([
+      { id: 50, name: "Patient", phone: "9123456789", tenantId: 7 },
+    ]);
     const res = await request(makeApp())
-      .post('/api/wellness/portal/login/verify-otp')
-      .send({ phone: '9123456789', otp: '1234' });
+      .post("/api/wellness/portal/login/verify-otp")
+      .send({ phone: "9123456789", otp: "1234" });
 
     expect(res.status).toBe(402);
-    expect(res.body.code).toBe('CLINIC_SUBSCRIPTION_EXPIRED');
+    expect(res.body.code).toBe("CLINIC_SUBSCRIPTION_EXPIRED");
     expect(res.body.token).toBeUndefined();
     expect(prisma.patientOtp.update).not.toHaveBeenCalled();
   });
 });
 
-describe('verifyPatientToken — Path A (patient-portal token)', () => {
-  test('classic { patientId } portal token resolves and returns the visit list', async () => {
+describe("verifyPatientToken — Path A (patient-portal token)", () => {
+  test("classic { patientId } portal token resolves and returns the visit list", async () => {
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
@@ -268,14 +295,18 @@ describe('verifyPatientToken — Path A (patient-portal token)', () => {
   });
 });
 
-describe('verifyPatientToken — Path B step 1 (linked Patient.userId)', () => {
-  test('CUSTOMER JWT with a pre-linked Patient resolves on the fast path', async () => {
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 42, phone: '+919123456789', tenantId: 7 });
+describe("verifyPatientToken — Path B step 1 (linked Patient.userId)", () => {
+  test("CUSTOMER JWT with a pre-linked Patient resolves on the fast path", async () => {
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 42,
+      phone: "+919123456789",
+      tenantId: 7,
+    });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
@@ -291,22 +322,26 @@ describe('verifyPatientToken — Path B step 1 (linked Patient.userId)', () => {
   });
 });
 
-describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
-  test('CUSTOMER JWT with no link claims an existing unlinked Patient by email', async () => {
+describe("verifyPatientToken — Path B step 2 (claim by email)", () => {
+  test("CUSTOMER JWT with no link claims an existing unlinked Patient by email", async () => {
     // Step 1: no linked patient yet
     prisma.patient.findFirst.mockResolvedValueOnce(null);
     prisma.user.findUnique.mockResolvedValueOnce({
-      name: 'Narendra Paul',
-      email: 'narendra@example.com',
+      name: "Narendra Paul",
+      email: "narendra@example.com",
     });
     // Step 2: unlinked Patient with same email exists
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 99, phone: '+919999900000', tenantId: 7 });
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 99,
+      phone: "+919999900000",
+      tenantId: 7,
+    });
     prisma.patient.update.mockResolvedValueOnce({ id: 99 });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(prisma.patient.findFirst).toHaveBeenNthCalledWith(1, {
@@ -316,7 +351,7 @@ describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
     expect(prisma.patient.findFirst).toHaveBeenNthCalledWith(2, {
       where: {
         tenantId: 7,
-        email: 'narendra@example.com',
+        email: "narendra@example.com",
         userId: null,
         deletedAt: null,
       },
@@ -333,29 +368,33 @@ describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
   });
 });
 
-describe('verifyPatientToken — Path B step 3 (auto-create)', () => {
-  test('CUSTOMER JWT with no link AND no email match auto-creates a Patient from the User profile', async () => {
+describe("verifyPatientToken — Path B step 3 (auto-create)", () => {
+  test("CUSTOMER JWT with no link AND no email match auto-creates a Patient from the User profile", async () => {
     prisma.patient.findFirst.mockResolvedValueOnce(null); // no link
     prisma.user.findUnique.mockResolvedValueOnce({
-      name: 'Narendra Paul',
-      email: 'narendra@example.com',
+      name: "Narendra Paul",
+      email: "narendra@example.com",
     });
     prisma.patient.findFirst.mockResolvedValueOnce(null); // no claimable
-    prisma.patient.create.mockResolvedValueOnce({ id: 500, phone: null, tenantId: 7 });
+    prisma.patient.create.mockResolvedValueOnce({
+      id: 500,
+      phone: null,
+      tenantId: 7,
+    });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(prisma.patient.create).toHaveBeenCalledWith({
       data: {
-        name: 'Narendra Paul',
-        email: 'narendra@example.com',
+        name: "Narendra Paul",
+        email: "narendra@example.com",
         tenantId: 7,
         userId: 100,
-        source: 'self-register',
+        source: "self-register",
       },
       select: { id: true, phone: true, tenantId: true },
     });
@@ -368,17 +407,21 @@ describe('verifyPatientToken — Path B step 3 (auto-create)', () => {
   test('Auto-create falls back to email then a literal "Customer" when User.name is missing', async () => {
     prisma.patient.findFirst.mockResolvedValueOnce(null);
     prisma.user.findUnique.mockResolvedValueOnce({ name: null, email: null });
-    prisma.patient.create.mockResolvedValueOnce({ id: 501, phone: null, tenantId: 7 });
+    prisma.patient.create.mockResolvedValueOnce({
+      id: 501,
+      phone: null,
+      tenantId: 7,
+    });
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(prisma.patient.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        name: 'Customer',
+        name: "Customer",
         email: null,
         userId: 100,
         tenantId: 7,
@@ -388,41 +431,45 @@ describe('verifyPatientToken — Path B step 3 (auto-create)', () => {
   });
 });
 
-describe('verifyPatientToken — auth-gate negatives', () => {
+describe("verifyPatientToken — auth-gate negatives", () => {
   // Updated for the looser Path B: a STAFF-typed session is no longer
   // rejected up-front (clinics use the USER role as a patient pool, so
   // userType-only gating was too narrow). Instead the middleware looks
   // up Patient.userId, and only rejects if no linked Patient row exists
   // — but with a distinct 403 NO_PATIENT_PROFILE code so the frontend
   // can show the role-mismatch view instead of force-redirecting.
-  test('staff JWT with NO linked Patient row → 403 NO_PATIENT_PROFILE', async () => {
+  test("staff JWT with NO linked Patient row → 403 NO_PATIENT_PROFILE", async () => {
     // findFirst returns null (no link). user.findUnique should NOT run
     // because auto-create is gated on userType === CUSTOMER.
     prisma.patient.findFirst.mockResolvedValueOnce(null);
 
     const token = signStaffJwt();
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe('NO_PATIENT_PROFILE');
+    expect(res.body.code).toBe("NO_PATIENT_PROFILE");
     expect(prisma.patient.findFirst).toHaveBeenCalledTimes(1);
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
     expect(prisma.patient.create).not.toHaveBeenCalled();
   });
 
-  test('staff JWT WITH a linked Patient row (USER-role-as-patient) → 200', async () => {
+  test("staff JWT WITH a linked Patient row (USER-role-as-patient) → 200", async () => {
     // Clinics map their USER role as patients — a Patient.userId link
     // exists. Pin the contract that the middleware accepts this and
     // does NOT try to auto-create / claim by email (those paths stay
     // CUSTOMER-only).
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 77, phone: '+918888800000', tenantId: 7 });
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 77,
+      phone: "+918888800000",
+      tenantId: 7,
+    });
 
     const token = signStaffJwt();
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
@@ -433,187 +480,241 @@ describe('verifyPatientToken — auth-gate negatives', () => {
   });
 
   test('missing Authorization header → 401 "Missing portal token"', async () => {
-    const res = await request(makeApp()).get('/api/wellness/portal/visits');
+    const res = await request(makeApp()).get("/api/wellness/portal/visits");
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/missing portal token/i);
   });
 
   test('garbage Bearer → 401 "Invalid or expired portal token"', async () => {
     const res = await request(makeApp())
-      .get('/api/wellness/portal/visits')
-      .set('Authorization', 'Bearer not.a.real.jwt');
+      .get("/api/wellness/portal/visits")
+      .set("Authorization", "Bearer not.a.real.jwt");
     expect(res.status).toBe(401);
   });
 });
-describe('portal consent read scope', () => {
+describe("portal consent read scope", () => {
   beforeEach(() => {
     prisma.role.findFirst.mockResolvedValue({
       id: 7,
-      permissions: [{ module: 'consents', action: 'read' }],
+      permissions: [{ module: "consents", action: "read" }],
     });
   });
 
-  test('lists only signed consent forms belonging to the portal patient', async () => {
-    const rows = [{
-      id: 801,
-      templateName: 'Hair Transplant',
-      signedAt: new Date('2026-08-28T14:33:00.000Z'),
-      patientId: 50,
-      serviceId: 12,
-      hasPdfBlob: true,
-      service: { id: 12, name: 'Hair Transplant' },
-    }];
+  test("lists only signed consent forms belonging to the portal patient", async () => {
+    const rows = [
+      {
+        id: 801,
+        templateName: "Hair Transplant",
+        signedAt: new Date("2026-08-28T14:33:00.000Z"),
+        patientId: 50,
+        serviceId: 12,
+        hasPdfBlob: true,
+        service: { id: 12, name: "Hair Transplant" },
+      },
+    ];
     prisma.consentForm.findMany.mockResolvedValue(rows);
 
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/consents')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/consents")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 801, patientId: 50 }),
-    ]));
-    expect(prisma.role.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId: 7, key: 'CUSTOMER' },
-    }));
-    expect(prisma.consentForm.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { patientId: 50, tenantId: 7 },
-    }));
+    expect(res.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 801, patientId: 50 }),
+      ]),
+    );
+    expect(prisma.role.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: 7, key: "CUSTOMER" },
+      }),
+    );
+    expect(prisma.consentForm.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { patientId: 50, tenantId: 7 },
+      }),
+    );
   });
 
-  test('denies list access when CUSTOMER role lacks consents.read', async () => {
+  test("denies list access when CUSTOMER role lacks consents.read", async () => {
     prisma.role.findFirst.mockResolvedValue({ id: 7, permissions: [] });
 
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/consents')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/consents")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe('PORTAL_RBAC_DENIED');
+    expect(res.body.code).toBe("PORTAL_RBAC_DENIED");
     expect(prisma.consentForm.findMany).not.toHaveBeenCalled();
   });
 
-  test('includes signed patient e-signatures in the consent list without replacing legacy rows', async () => {
-    prisma.consentForm.findMany.mockResolvedValueOnce([{
-      id: 802,
-      templateName: 'Legacy consent',
-      patientId: 50,
-      signedAt: new Date('2026-08-01T10:00:00.000Z'),
-      serviceId: 12,
-      service: { id: 12, name: 'Legacy service' },
-    }]);
-    prisma.signatureRequest.findMany.mockResolvedValueOnce([{
-      id: 910,
-      documentName: 'Hair Transplant Consent',
-      signedAt: new Date('2026-08-28T10:00:00.000Z'),
-      patientId: 50,
-      visitId: 901,
-      serviceIds: '[12]',
-    }]);
-    prisma.service.findMany.mockResolvedValueOnce([{ id: 12, name: 'Hair Transplant' }]);
+  test("includes signed patient e-signatures in the consent list without replacing legacy rows", async () => {
+    prisma.consentForm.findMany.mockResolvedValueOnce([
+      {
+        id: 802,
+        templateName: "Legacy consent",
+        patientId: 50,
+        signedAt: new Date("2026-08-01T10:00:00.000Z"),
+        serviceId: 12,
+        service: { id: 12, name: "Legacy service" },
+      },
+    ]);
+    prisma.signatureRequest.findMany.mockResolvedValueOnce([
+      {
+        id: 910,
+        documentName: "Hair Transplant Consent",
+        signedAt: new Date("2026-08-28T10:00:00.000Z"),
+        patientId: 50,
+        visitId: 901,
+        serviceIds: "[12]",
+      },
+    ]);
+    prisma.service.findMany.mockResolvedValueOnce([
+      { id: 12, name: "Hair Transplant" },
+    ]);
 
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/consents')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/consents")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 802, source: 'consent' }),
-      expect.objectContaining({ id: 910, source: 'signature', signatureRequestId: 910, visitId: 901 }),
-    ]));
-    expect(prisma.signatureRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ patientId: 50, tenantId: 7, status: 'SIGNED', documentType: 'Custom' }),
-    }));
+    expect(res.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 802, source: "consent" }),
+        expect.objectContaining({
+          id: 910,
+          source: "signature",
+          signatureRequestId: 910,
+          visitId: 901,
+        }),
+      ]),
+    );
+    expect(prisma.signatureRequest.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          patientId: 50,
+          tenantId: 7,
+          status: "SIGNED",
+          documentType: "Custom",
+        }),
+      }),
+    );
   });
 
-  test('regular CUSTOMER session token can list its linked consent forms', async () => {
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 50, phone: '+919123456789', tenantId: 7 });
+  test("regular CUSTOMER session token can list its linked consent forms", async () => {
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 50,
+      phone: "+919123456789",
+      tenantId: 7,
+    });
     prisma.consentForm.findMany.mockResolvedValueOnce([
-      { id: 802, templateName: 'General', patientId: 50, signedAt: new Date() },
+      { id: 802, templateName: "General", patientId: 50, signedAt: new Date() },
     ]);
 
     const token = signCustomerJwt({ userId: 100, tenantId: 7 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/consents')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/consents")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body[0]).toEqual(expect.objectContaining({ id: 802, patientId: 50 }));
-    expect(prisma.patient.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { userId: 100, tenantId: 7, deletedAt: null },
-    }));
+    expect(res.body[0]).toEqual(
+      expect.objectContaining({ id: 802, patientId: 50 }),
+    );
+    expect(prisma.patient.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 100, tenantId: 7, deletedAt: null },
+      }),
+    );
   });
 
-  test('returns a scoped consent PDF for the portal patient', async () => {
+  test("returns a scoped consent PDF for the portal patient", async () => {
     prisma.consentForm.findFirst.mockResolvedValue({
       id: 801,
       tenantId: 7,
       patientId: 50,
       serviceId: 12,
-      templateName: 'Hair Transplant',
-      signedPdfBlob: Buffer.from('%PDF-1.4 test'),
-      signedPdfMime: 'application/pdf',
-      patient: { id: 50, name: 'Patient' },
-      service: { id: 12, name: 'Hair Transplant' },
+      templateName: "Hair Transplant",
+      signedPdfBlob: Buffer.from("%PDF-1.4 test"),
+      signedPdfMime: "application/pdf",
+      patient: { id: 50, name: "Patient" },
+      service: { id: 12, name: "Hair Transplant" },
     });
 
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/consents/801/pdf')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/consents/801/pdf")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toMatch(/application\/pdf/);
-    expect(prisma.consentForm.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 801, patientId: 50, tenantId: 7 },
-    }));
+    expect(res.headers["content-type"]).toMatch(/application\/pdf/);
+    expect(prisma.consentForm.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 801, patientId: 50, tenantId: 7 },
+      }),
+    );
   });
 
-  test('does not return a consent PDF belonging to another patient', async () => {
+  test("does not return a consent PDF belonging to another patient", async () => {
     prisma.consentForm.findFirst.mockResolvedValue(null);
 
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/consents/999/pdf')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/consents/999/pdf")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(404);
-    expect(prisma.consentForm.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 999, patientId: 50, tenantId: 7 },
-    }));
+    expect(prisma.consentForm.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 999, patientId: 50, tenantId: 7 },
+      }),
+    );
   });
 
-  test('returns a scoped PDF for a signed patient e-signature', async () => {
+  test("returns a scoped PDF for a signed patient e-signature", async () => {
     prisma.signatureRequest.findFirst.mockResolvedValueOnce({
       id: 910,
       patientId: 50,
       visitId: 901,
-      serviceIds: '[12]',
-      documentName: 'Hair Transplant Consent',
-      signedAt: new Date('2026-08-28T10:00:00.000Z'),
+      serviceIds: "[12]",
+      documentName: "Hair Transplant Consent",
+      signedAt: new Date("2026-08-28T10:00:00.000Z"),
       signature: null,
     });
-    prisma.patient.findFirst.mockResolvedValueOnce({ id: 50, name: 'Patient', email: 'patient@example.com', phone: '+919123456789' });
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 50,
+      name: "Patient",
+      email: "patient@example.com",
+      phone: "+919123456789",
+    });
     prisma.visit.findFirst.mockResolvedValueOnce({
       id: 901,
-      visitDate: new Date('2026-08-28T09:00:00.000Z'),
+      visitDate: new Date("2026-08-28T09:00:00.000Z"),
       serviceId: 12,
-      service: { id: 12, name: 'Hair Transplant' },
+      service: { id: 12, name: "Hair Transplant" },
     });
-    prisma.service.findMany.mockResolvedValueOnce([{ id: 12, name: 'Hair Transplant' }]);
+    prisma.service.findMany.mockResolvedValueOnce([
+      { id: 12, name: "Hair Transplant" },
+    ]);
 
     const token = signPortalJwt({ patientId: 50 });
     const res = await request(makeApp())
-      .get('/api/wellness/portal/signatures/910/pdf')
-      .set('Authorization', `Bearer ${token}`);
+      .get("/api/wellness/portal/signatures/910/pdf")
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toMatch(/application\/pdf/);
-    expect(prisma.signatureRequest.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ id: 910, patientId: 50, tenantId: 7, status: 'SIGNED' }),
-    }));
+    expect(res.headers["content-type"]).toMatch(/application\/pdf/);
+    expect(prisma.signatureRequest.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 910,
+          patientId: 50,
+          tenantId: 7,
+          status: "SIGNED",
+        }),
+      }),
+    );
   });
 });

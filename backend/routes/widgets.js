@@ -24,14 +24,14 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
-const { getCatalog, getCatalogForVertical, getWidget } = require('../lib/widgetCatalog');
+const { getCatalogForVertical, getWidget } = require('../lib/widgetCatalog');
 const { getUserPermissions } = require('../middleware/requirePermission');
 
 // Resolve the requesting tenant's vertical (wellness | travel | generic).
 // Used by /catalog + /me to filter out cross-vertical widgets so a
 // travel-tenant admin's configurator doesn't show wellness clinical
-// widgets and vice-versa. DB blip → null (callers fall back to the
-// union catalog, better-than-empty UX).
+// widgets and vice-versa. DB blip → null; callers fail closed rather than
+// returning the union catalog.
 async function resolveTenantVertical(req) {
   try {
     const tenant = await prisma.tenant.findUnique({
@@ -54,7 +54,13 @@ async function resolveTenantVertical(req) {
 // vertical. Drives the Roles → Widgets configurator modal in RolesAdmin.
 router.get('/catalog', verifyToken, async (req, res) => {
   const vertical = await resolveTenantVertical(req);
-  const catalog = vertical ? getCatalogForVertical(vertical) : getCatalog();
+  if (!vertical) {
+    return res.status(503).json({
+      error: 'Tenant vertical is unavailable',
+      code: 'TENANT_VERTICAL_UNAVAILABLE',
+    });
+  }
+  const catalog = getCatalogForVertical(vertical);
   const categories = Array.from(new Set(catalog.map((w) => w.category)));
   res.json({ catalog, categories, vertical });
 });
@@ -62,16 +68,21 @@ router.get('/catalog', verifyToken, async (req, res) => {
 // GET /api/widgets/me — what should this user see on /home?
 router.get('/me', verifyToken, async (req, res) => {
   try {
+    const vertical = await resolveTenantVertical(req);
+    if (!vertical) {
+      return res.status(503).json({
+        error: 'Tenant vertical is unavailable',
+        code: 'TENANT_VERTICAL_UNAVAILABLE',
+      });
+    }
+
     // OWNER bypasses permission checks elsewhere; surface every enabled
     // widget in catalogue order so they can preview the full dashboard.
     // Vertical-aware (Phase 1): OWNER on a travel tenant previews travel
     // widgets, on wellness previews wellness — mirrors what real role-
     // scoped users will see in their configurator.
     if (req.user.isOwner) {
-      const ownerVertical = await resolveTenantVertical(req);
-      const list = ownerVertical
-        ? getCatalogForVertical(ownerVertical)
-        : getCatalog();
+      const list = getCatalogForVertical(vertical);
       const all = list.map((w, idx) => ({
         widgetKey: w.key,
         position: idx * 10,

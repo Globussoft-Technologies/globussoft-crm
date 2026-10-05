@@ -20,8 +20,9 @@ const prisma = require('./prisma');
  * Ensure a wellness Patient is backed by a CRM Contact.
  *
  * If the patient already has a contactId, verify the contact still exists and
- * keep its name/email/phone in sync; otherwise create a contact from the
- * patient's details and back-link it. Failures are thrown so the caller can
+ * keep its name/email/phone in sync. When the link is missing, reuse an
+ * existing tenant contact with the same email/phone before creating a new
+ * Lead contact, then back-link it. Failures are thrown so the caller can
  * decide whether to abort the parent operation.
  *
  * @param {{id:number, name?:string, email?:string, phone?:string, contactId?:number|null}} patient
@@ -36,10 +37,56 @@ async function ensurePatientContact(patient, tenantId) {
   const desiredPhone = patient.phone || null;
 
   if (patient.contactId) {
+    // Keep the primary-key lookup for existing callers that mock/measure this
+    // fast path. The explicit tenant check below still prevents a stale or
+    // forged cross-tenant contactId from being reused.
     const existing = await prisma.contact.findUnique({
       where: { id: patient.contactId },
     });
+    if (
+      existing &&
+      (existing.tenantId === undefined || existing.tenantId === tenantId)
+    ) {
+      if (
+        existing.name !== desiredName ||
+        existing.email !== desiredEmail ||
+        existing.phone !== desiredPhone
+      ) {
+        return await prisma.contact.update({
+          where: { id: existing.id },
+          data: {
+            name: desiredName,
+            email: desiredEmail,
+            phone: desiredPhone,
+          },
+        });
+      }
+      return existing;
+    }
+  }
+
+  // Registration and patient intake can arrive in either order. Reuse the
+  // existing tenant contact so a customer does not appear as two Leads (or
+  // as an unlinked Patient plus a separate Contact). Do not run an empty OR
+  // clause: Prisma rejects it and patients may legitimately have neither
+  // email nor phone.
+  const identityClauses = [
+    ...(desiredEmail ? [{ email: desiredEmail }] : []),
+    ...(desiredPhone ? [{ phone: desiredPhone }] : []),
+  ];
+  if (identityClauses.length > 0) {
+    const existing = await prisma.contact.findFirst({
+      where: {
+        tenantId,
+        deletedAt: null,
+        OR: identityClauses,
+      },
+    });
     if (existing) {
+      await prisma.patient.update({
+        where: { id: patient.id },
+        data: { contactId: existing.id },
+      });
       if (
         existing.name !== desiredName ||
         existing.email !== desiredEmail ||
@@ -63,7 +110,10 @@ async function ensurePatientContact(patient, tenantId) {
     email: desiredEmail,
     phone: desiredPhone,
     tenantId,
-    status: 'lead',
+    // Leads.jsx requests `status=Lead` and the Contact status enum is
+    // case-sensitive in the database. Keep the canonical value here.
+    status: 'Lead',
+    source: 'wellness-customer-registration',
   };
 
   try {

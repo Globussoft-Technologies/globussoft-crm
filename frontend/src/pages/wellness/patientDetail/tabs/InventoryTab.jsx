@@ -22,9 +22,7 @@ export default function InventoryTab({ patient, onSaved }) {
   const notify = useNotify();
   const [visitId, setVisitId] = useState(patient.visits[0]?.id || '');
   const [items, setItems] = useState([]);
-  const [form, setForm] = useState({ productName: '', qty: 1, unitCost: 0 });
   const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ productName: '', qty: 1, unitCost: 0 });
   const [savingEdit, setSavingEdit] = useState(false);
@@ -44,33 +42,6 @@ export default function InventoryTab({ patient, onSaved }) {
     fetchApi(`/api/wellness/visits/${visitId}/consumptions`)
       .then(setItems).catch(() => setItems([])).finally(() => setLoading(false));
   }, [visitId]);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!visitId || !form.productName) return;
-    if (Number(form.qty) <= 0) {
-      notify.error('Quantity must be at least 1.');
-      return;
-    }
-    if (Number(form.unitCost) < 0) {
-      notify.error('Unit cost cannot be negative.');
-      return;
-    }
-    if (submitting) return;
-    setSubmitting(true);
-    try {
-      await fetchApi(`/api/wellness/visits/${visitId}/consumptions`, {
-        method: 'POST', body: JSON.stringify(form),
-      });
-      notify.success(`Logged ${form.qty}× ${form.productName}`);
-      setForm({ productName: '', qty: 1, unitCost: 0 });
-      const next = await fetchApi(`/api/wellness/visits/${visitId}/consumptions`);
-      setItems(next);
-      if (onSaved) onSaved();
-    } catch (_err) { /* fetchApi already toasted */ } finally {
-      setSubmitting(false);
-    }
-  };
 
   const startEdit = (item) => {
     setEditingId(item.id);
@@ -217,38 +188,6 @@ export default function InventoryTab({ patient, onSaved }) {
             </div>
           )}
 
-          {(() => {
-            const productNameOk = !!form.productName && form.productName.trim().length > 0;
-            const qtyNum = Number(form.qty);
-            const qtyOk = Number.isFinite(qtyNum) && qtyNum >= 1;
-            const canAdd = productNameOk && qtyOk && !submitting;
-            const disabledReason = !productNameOk
-              ? 'Enter a product name first'
-              : !qtyOk
-                ? 'Quantity must be at least 1'
-                : '';
-            return (
-              <form onSubmit={submit} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '0.5rem', alignItems: 'end' }}>
-                <input placeholder="Product name (e.g. Botox vial 100u)" required value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} style={inputStyle} />
-                <input type="number" min={1} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value === '' ? '' : (parseInt(e.target.value) || 1) })} style={inputStyle} placeholder="Qty" />
-                <input type="number" min={0} step={0.01} value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })} style={inputStyle} placeholder="Unit cost ₹ (auto)" />
-                <button
-                  type="submit"
-                  disabled={!canAdd}
-                  title={disabledReason}
-                  style={{
-                    padding: '0.55rem 1rem',
-                    background: canAdd ? 'var(--success-color)' : 'rgba(107,114,128,0.3)',
-                    color: '#fff', border: 'none', borderRadius: 8,
-                    cursor: canAdd ? 'pointer' : 'not-allowed',
-                    opacity: canAdd ? 1 : 0.6,
-                  }}
-                >
-                  {submitting ? 'Adding…' : 'Add'}
-                </button>
-              </form>
-            );
-          })()}
         </>
       )}
     </div>

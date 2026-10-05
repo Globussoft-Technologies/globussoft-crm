@@ -109,9 +109,11 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
 
     render(<TallyExportPreviewPage />);
     await screen.findByText("Configured, but currently offline");
+    expect(screen.getByRole("button", { name: /Download Tally Connector/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Refresh status/i }));
 
     await screen.findByText("Online on office-pc-1");
+    expect(screen.queryByRole("button", { name: /Download Tally Connector/i })).not.toBeInTheDocument();
     expect(statusRequests).toBe(2);
     expect(navigate).not.toHaveBeenCalledWith("/travel/tally/export");
   });

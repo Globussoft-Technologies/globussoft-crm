@@ -162,11 +162,11 @@ describe('<Login /> — page surface', () => {
     // Post-46247368 refactor: email + password inputs render EMPTY on
     // initial mount (the hardcoded admin@globussoft.com / password123
     // defaults were removed; demo creds now live on the quick-login
-    // account objects). The placeholder strings stay the same.
-    const emailInput = screen.getByPlaceholderText('admin@globussoft.com');
+    // account objects).
+    const emailInput = screen.getByPlaceholderText('Enter your email');
     expect(emailInput).toBeInTheDocument();
     expect(emailInput.value).toBe('');
-    const passwordInput = screen.getByPlaceholderText('••••••••');
+    const passwordInput = screen.getByPlaceholderText('Enter your password');
     expect(passwordInput).toBeInTheDocument();
     expect(passwordInput.value).toBe('');
     expect(screen.getByRole('button', { name: /Sign In$/i })).toBeInTheDocument();
@@ -202,10 +202,10 @@ describe('<Login /> — page surface', () => {
   // performLogin() reaches the fetch call. Post-46247368 the form starts
   // empty, so every Sign-In-path test must type before clicking.
   function fillCredentials(email = 'admin@globussoft.com', password = 'password123') {
-    fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
+    fireEvent.change(screen.getByPlaceholderText('Enter your email'), {
       target: { value: email },
     });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+    fireEvent.change(screen.getByPlaceholderText('Enter your password'), {
       target: { value: password },
     });
   }
@@ -546,8 +546,8 @@ describe('<Login /> — page surface', () => {
 
   it('missing email or password surfaces the validation banner without firing fetch', async () => {
     renderLogin();
-    const emailInput = screen.getByPlaceholderText('admin@globussoft.com');
-    const passwordInput = screen.getByPlaceholderText('••••••••');
+    const emailInput = screen.getByPlaceholderText('Enter your email');
+    const passwordInput = screen.getByPlaceholderText('Enter your password');
     fireEvent.change(emailInput, { target: { value: '' } });
     fireEvent.change(passwordInput, { target: { value: '' } });
 

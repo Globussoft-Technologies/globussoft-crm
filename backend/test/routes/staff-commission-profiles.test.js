@@ -84,6 +84,19 @@ describe('GET /api/staff/commission-profiles', () => {
 });
 
 describe('POST /api/staff/commission-profiles', () => {
+  test('rejects a flat-only revenue percentage rule', async () => {
+    const today = new Date();
+    const periodStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+    const periodEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 1, 1));
+    const res = await request(makeApp()).post('/api/staff/commission-profiles').send({
+      name: 'Invalid rate', basis: 'REVENUE_PERCENT', percentage: null, flatAmount: 100,
+      period: 'MONTHLY', periodStart, periodEnd,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('REVENUE_PERCENT requires percentage');
+    expect(prisma.commissionProfile.create).not.toHaveBeenCalled();
+  });
+
   test('persists period + periodStart/periodEnd on create', async () => {
     const today = new Date();
     const periodStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
@@ -93,7 +106,7 @@ describe('POST /api/staff/commission-profiles', () => {
       id: 22,
       tenantId: 1,
       name: 'Monthly Bonus',
-      basis: 'REVENUE_PERCENT',
+      basis: 'PER_PRODUCT',
       percentage: '12.5',
       flatAmount: null,
       period: 'MONTHLY',
@@ -110,11 +123,11 @@ describe('POST /api/staff/commission-profiles', () => {
         name: '  Monthly Bonus  ',
         percentage: 12.5,
         flatAmount: null,
-        basis: 'REVENUE_PERCENT',
+        basis: 'PER_PRODUCT',
         period: 'MONTHLY',
         periodStart,
         periodEnd,
-        appliesToProduct: null,
+        appliesToProduct: 'Serum',
         isActive: true,
       });
 
@@ -126,6 +139,7 @@ describe('POST /api/staff/commission-profiles', () => {
           period: 'MONTHLY',
           periodStart: new Date(periodStart),
           periodEnd: new Date(periodEnd),
+          appliesToProduct: 'Serum',
         }),
       }),
     );

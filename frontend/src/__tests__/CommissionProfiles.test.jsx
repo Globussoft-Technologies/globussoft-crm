@@ -43,7 +43,6 @@
  *  14. Delete cancelled: when notify.confirm resolves false, no DELETE
  *      fires.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
@@ -114,6 +113,9 @@ const sampleCommissionData = [
     totalSales: 2200,
     discount: 50,
     netSales: 2150,
+    commissionProfile: { id: 11, name: 'Senior Doctor Cut', basis: 'REVENUE_PERCENT' },
+    commissionableAmount: 2150,
+    commission: 215,
   },
 ];
 
@@ -175,6 +177,44 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
       );
       expect(listCall).toBeTruthy();
     });
+  });
+
+  it('shows confirmed zero counts only after both list responses succeed', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === COMMISSION_URL || url === COMMISSION_DATA_URL || url === '/api/wellness/products') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    renderPage();
+    expect(screen.getByRole('button', { name: /Commission Rules \(…\)/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Commission Rules \(0\)/i })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Historical Data \(0\)/i })).toBeInTheDocument();
+  });
+
+  it('keeps historical data visible when the profiles request fails', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === COMMISSION_URL) return Promise.reject(new Error('Profiles unavailable'));
+      return defaultFetchMock(url);
+    });
+    renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load commission rules.');
+    expect(screen.getByRole('button', { name: /Commission Rules \(—\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Historical Data \(1\)/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Historical Data/i }));
+    expect(screen.getByText('Anita Das')).toBeInTheDocument();
+  });
+
+  it('shows a retryable error for malformed history instead of a zero count', async () => {
+    fetchApiMock.mockImplementation((url) => url === COMMISSION_DATA_URL
+      ? Promise.resolve({ rows: [] })
+      : defaultFetchMock(url));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Senior Doctor Cut')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Historical Data \(—\)/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Historical Data/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load historical data.');
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Anita Das')).toBeInTheDocument();
   });
 
   it('renders heading "Commission Profiles" + the "New profile" CTA', async () => {
@@ -407,11 +447,11 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
       target: { value: '  New Tier  ' },
     });
 
-    // Percentage number input — the first numeric input in the modal.
+    // Revenue percent rules expose the percentage input only.
     const numberInputs = document.querySelectorAll('input[type="number"]');
-    expect(numberInputs.length).toBeGreaterThanOrEqual(2);
+    expect(numberInputs.length).toBe(1);
     fireEvent.change(numberInputs[0], { target: { value: '15' } });
-    // Leave flat amount blank to pin "flatAmount: null when empty".
+    // Flat amount remains blank to pin "flatAmount: null when empty".
 
     fireEvent.click(screen.getByTestId('profile-form-save'));
 
@@ -563,5 +603,8 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     expect(screen.getByText('₹2200.00')).toBeInTheDocument();
     expect(screen.getByText('-₹50.00')).toBeInTheDocument();
     expect(screen.getByText('₹2150.00')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Commission Rule' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Est. Commission' })).toBeInTheDocument();
+    expect(screen.getByText('₹215.00')).toBeInTheDocument();
   });
 });

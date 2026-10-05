@@ -324,10 +324,10 @@ describe('Marketing-site → CRM redirect handoff', () => {
 
       // Login.jsx no longer has a tenant/organization picker — just email + password.
       // Labels aren't associated via htmlFor/id, so match by placeholder.
-      fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
+      fireEvent.change(screen.getByPlaceholderText('Enter your email'), {
         target: { value: 'patient@example.com' },
       });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      fireEvent.change(screen.getByPlaceholderText('Enter your password'), {
         target: { value: 'Secret123' },
       });
       fireEvent.click(screen.getByRole('button', { name: /^Sign in$/i }));
@@ -356,10 +356,10 @@ describe('Marketing-site → CRM redirect handoff', () => {
       renderAt(Login, '/login?next=%2F%2Fevil.com%2Fphish');
 
       // Login.jsx no longer has a tenant/organization picker — just email + password.
-      fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
+      fireEvent.change(screen.getByPlaceholderText('Enter your email'), {
         target: { value: 'patient@example.com' },
       });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      fireEvent.change(screen.getByPlaceholderText('Enter your password'), {
         target: { value: 'Secret123' },
       });
       fireEvent.click(screen.getByRole('button', { name: /^Sign in$/i }));

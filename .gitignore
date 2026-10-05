@@ -57,6 +57,8 @@ timeline.xctimeline
 # ──────────────────────────────────────────────
 
 node_modules
+tally-connector/config.json
+tally-connector/logs/
 .env
 .env.*
 !.env.example

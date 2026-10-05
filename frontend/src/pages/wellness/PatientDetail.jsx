@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, Calendar, FileText, FileSignature, ClipboardList, Plus, Camera, Package,
@@ -112,6 +112,9 @@ export default function PatientDetail() {
     }
   });
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState(null);
+  const refreshSeq = useRef(0);
 
   useEffect(() => {
     if (!tabStorageKey) return;
@@ -123,6 +126,9 @@ export default function PatientDetail() {
   }, [tab, tabStorageKey]);
 
   const load = () => {
+    refreshSeq.current += 1;
+    setRefreshing(false);
+    setRefreshError(null);
     setLoading(true);
     Promise.all([
       fetchApi(`/api/wellness/patients/${id}`),
@@ -136,6 +142,25 @@ export default function PatientDetail() {
   };
 
   useEffect(() => { load(); }, [id]);
+
+  const refreshPatient = async () => {
+    const request = ++refreshSeq.current;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const latest = await fetchApi(`/api/wellness/patients/${id}`);
+      if (request === refreshSeq.current) setPatient(latest);
+    } catch (e) {
+      if (request === refreshSeq.current) setRefreshError(e.message || 'Failed to refresh patient');
+    } finally {
+      if (request === refreshSeq.current) setRefreshing(false);
+    }
+  };
+
+  const switchTab = (nextTab) => {
+    setTab(nextTab);
+    refreshPatient();
+  };
 
   if (loading) return <div style={{ padding: '2rem' }}>Loading…</div>;
   if (!patient) return <div style={{ padding: '2rem' }}>Patient not found.</div>;
@@ -182,30 +207,34 @@ export default function PatientDetail() {
       <LoyaltyCard patientId={patient.id} />
 
       <div className="wellness-tab-strip" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        <button style={tabStyle(tab === 'history')} onClick={() => setTab('history')}><Calendar size={14} /> Case history</button>
-        <button style={tabStyle(tab === 'prescribe')} onClick={() => setTab('prescribe')}><FileText size={14} /> New prescription</button>
-        <button style={tabStyle(tab === 'consent')} onClick={() => setTab('consent')}><FileSignature size={14} /> Consent form</button>
+        <button style={tabStyle(tab === 'history')} onClick={() => switchTab('history')}><Calendar size={14} /> Case history</button>
+        <button style={tabStyle(tab === 'prescribe')} onClick={() => switchTab('prescribe')}><FileText size={14} /> New prescription</button>
+        <button style={tabStyle(tab === 'consent')} onClick={() => switchTab('consent')}><FileSignature size={14} /> Consent form</button>
         {/* "Packages" is what this clinic calls a course a patient has bought and is
             working through. The tab key stays `plans` — only the label changed. */}
-        <button style={tabStyle(tab === 'plans')} onClick={() => setTab('plans')}><ClipboardList size={14} /> Packages</button>
-        <button style={tabStyle(tab === 'visit')} onClick={() => setTab('visit')}><Plus size={14} /> Log visit</button>
-        <button style={tabStyle(tab === 'photos')} onClick={() => setTab('photos')}><Camera size={14} /> Photos</button>
-        <button style={tabStyle(tab === 'inventory')} onClick={() => setTab('inventory')}><Package size={14} /> Inventory used</button>
-        <button style={tabStyle(tab === 'telehealth')} onClick={() => setTab('telehealth')}><Video size={14} /> Telehealth</button>
-        <button style={tabStyle(tab === 'wallet')} onClick={() => setTab('wallet')}><WalletIcon size={14} /> Wallet</button>
-        <button style={tabStyle(tab === 'memberships')} onClick={() => setTab('memberships')}><Crown size={14} /> Memberships</button>
+        <button style={tabStyle(tab === 'plans')} onClick={() => switchTab('plans')}><ClipboardList size={14} /> Packages</button>
+        <button style={tabStyle(tab === 'visit')} onClick={() => switchTab('visit')}><Plus size={14} /> Log visit</button>
+        <button style={tabStyle(tab === 'photos')} onClick={() => switchTab('photos')}><Camera size={14} /> Photos</button>
+        <button style={tabStyle(tab === 'inventory')} onClick={() => switchTab('inventory')}><Package size={14} /> Inventory used</button>
+        <button style={tabStyle(tab === 'telehealth')} onClick={() => switchTab('telehealth')}><Video size={14} /> Telehealth</button>
+        <button style={tabStyle(tab === 'wallet')} onClick={() => switchTab('wallet')}><WalletIcon size={14} /> Wallet</button>
+        <button style={tabStyle(tab === 'memberships')} onClick={() => switchTab('memberships')}><Crown size={14} /> Memberships</button>
       </div>
 
-      {tab === 'history' && <CaseHistoryTab patient={patient} />}
-      {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
-      {tab === 'consent' && <ConsentTab patient={patient} services={services} />}
-      {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
-      {tab === 'visit' && <LogVisitTab patient={patient} services={services} doctors={doctors} onSaved={load} />}
-      {tab === 'photos' && <PhotosTab patient={patient} onSaved={load} />}
-      {tab === 'inventory' && <InventoryTab patient={patient} onSaved={load} />}
-      {tab === 'telehealth' && <TelehealthTab patient={patient} onSaved={load} />}
-      {tab === 'wallet' && <WalletTab patient={patient} />}
-      {tab === 'memberships' && <MembershipsTab patient={patient} services={services} />}
+      {refreshing && <div role="status" style={{ padding: '1rem' }}>Refreshing patient data…</div>}
+      {refreshError && <div role="alert" className="glass" style={{ padding: '1rem' }}>Could not refresh patient data: {refreshError} <button type="button" onClick={refreshPatient}>Retry</button></div>}
+      {!refreshing && !refreshError && <>
+        {tab === 'history' && <CaseHistoryTab patient={patient} />}
+        {tab === 'prescribe' && <PrescribeTab patient={patient} onSaved={load} />}
+        {tab === 'consent' && <ConsentTab patient={patient} services={services} />}
+        {tab === 'plans' && <PlansTab patient={patient} services={services} onSaved={load} />}
+        {tab === 'visit' && <LogVisitTab patient={patient} services={services} doctors={doctors} onSaved={load} />}
+        {tab === 'photos' && <PhotosTab patient={patient} onSaved={load} />}
+        {tab === 'inventory' && <InventoryTab patient={patient} onSaved={load} />}
+        {tab === 'telehealth' && <TelehealthTab patient={patient} onSaved={load} />}
+        {tab === 'wallet' && <WalletTab patient={patient} />}
+        {tab === 'memberships' && <MembershipsTab patient={patient} services={services} />}
+      </>}
     </div>
   );
 }

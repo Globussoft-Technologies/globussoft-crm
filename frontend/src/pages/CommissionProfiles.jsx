@@ -14,7 +14,7 @@
  *   a glance — clinics with 5-10 commission tiers don't fit on a sub-tab.
  *   Staff.jsx assigns one profile per user via the existing Edit modal.
  */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, Award, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -99,6 +99,7 @@ export default function CommissionProfiles() {
   const [rows, setRows] = useState([]);
   const [commissionData, setCommissionData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState({});
   const [editing, setEditing] = useState(null); // null | { id?, ...form }
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('rules'); // 'rules' or 'data'
@@ -108,20 +109,36 @@ export default function CommissionProfiles() {
 
   const load = async () => {
     setLoading(true);
-    try {
-      const [profilesData, dataRecords, productsData] = await Promise.all([
-        fetchApi('/api/staff/commission-profiles'),
-        fetchApi('/api/staff/commission-data'),
-        fetchApi('/api/wellness/products') // fetch available products
-      ]);
-      setRows(Array.isArray(profilesData) ? profilesData : []);
-      setCommissionData(Array.isArray(dataRecords) ? dataRecords : []);
-      setProducts(Array.isArray(productsData) ? productsData : []);
-    } catch (err) {
-      notify.error(err.message || 'Failed to load commission data.');
-    } finally {
-      setLoading(false);
+    setLoadErrors({});
+    fetchApi('/api/wellness/products', { silent: true })
+      .then((data) => {
+        if (!Array.isArray(data)) throw new Error('Invalid product list');
+        setProducts(data);
+      })
+      .catch(() => {
+        setProducts([]);
+        setLoadErrors((previous) => ({ ...previous, products: 'Could not load products.' }));
+      });
+
+    const [profiles, history] = await Promise.allSettled([
+      fetchApi('/api/staff/commission-profiles'),
+      fetchApi('/api/staff/commission-data'),
+    ]);
+    const errors = {};
+    if (profiles.status === 'fulfilled' && Array.isArray(profiles.value)) {
+      setRows(profiles.value);
+    } else {
+      setRows([]);
+      errors.rules = 'Could not load commission rules.';
     }
+    if (history.status === 'fulfilled' && Array.isArray(history.value)) {
+      setCommissionData(history.value);
+    } else {
+      setCommissionData([]);
+      errors.data = 'Could not load historical data.';
+    }
+    setLoadErrors((previous) => ({ ...previous, ...errors }));
+    setLoading(false);
   };
 
   useEffect(() => { load(); }, []);
@@ -165,6 +182,18 @@ export default function CommissionProfiles() {
     }
     if (!editing.percentage && !editing.flatAmount) {
       notify.error('Either percentage or flat amount must be set.');
+      return;
+    }
+    if (editing.percentage !== '' && editing.flatAmount !== '') {
+      notify.error('Set either percentage or flat amount, not both.');
+      return;
+    }
+    if (editing.basis === 'REVENUE_PERCENT' && editing.percentage === '') {
+      notify.error('Revenue percent requires a percentage.');
+      return;
+    }
+    if (editing.basis === 'FLAT_PER_INVOICE' && editing.flatAmount === '') {
+      notify.error('Flat per invoice requires a flat amount.');
       return;
     }
     if (!editing.periodStart || !editing.periodEnd) {
@@ -282,7 +311,7 @@ export default function CommissionProfiles() {
             marginBottom: '-1px',
           }}
         >
-          Commission Rules ({rows.length})
+          Commission Rules ({loading ? '…' : loadErrors.rules ? '—' : rows.length})
         </button>
         <button
           onClick={() => setActiveTab('data')}
@@ -299,7 +328,7 @@ export default function CommissionProfiles() {
             marginBottom: '-1px',
           }}
         >
-          Historical Data ({commissionData.length})
+          Historical Data ({loading ? '…' : loadErrors.data ? '—' : commissionData.length})
         </button>
       </div>
 
@@ -321,6 +350,8 @@ export default function CommissionProfiles() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Loading…</td></tr>
+              ) : loadErrors.rules ? (
+                <tr><td colSpan={7} role="alert" style={{ ...td, textAlign: 'center', padding: '2rem' }}>{loadErrors.rules} <button type="button" onClick={load}>Retry</button></td></tr>
               ) : rows.length === 0 ? (
                 <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
                   No commission profiles yet. Click &quot;New profile&quot; to add one.
@@ -366,13 +397,15 @@ export default function CommissionProfiles() {
         <div className="card" onScroll={handleDataScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 23rem)', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '20%' }} />
-              <col style={{ width: '16%' }} />
-              <col style={{ width: '16%' }} />
-              <col style={{ width: '16%' }} />
               <col style={{ width: '14%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '9%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '10%' }} />
             </colgroup>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -383,14 +416,18 @@ export default function CommissionProfiles() {
                 <th style={{ ...th, textAlign: 'center' }}>Total Sales</th>
                 <th style={{ ...th, textAlign: 'center' }}>Discount</th>
                 <th style={{ ...th, textAlign: 'center' }}>Net Sales</th>
+                <th style={th}>Commission Rule</th>
+                <th style={{ ...th, textAlign: 'center' }}>Est. Commission</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Loading…</td></tr>
+                <tr><td colSpan={9} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Loading…</td></tr>
+              ) : loadErrors.data ? (
+                <tr><td colSpan={9} role="alert" style={{ ...td, textAlign: 'center', padding: '2rem' }}>{loadErrors.data} <button type="button" onClick={load}>Retry</button></td></tr>
               ) : commissionData.length === 0 ? (
-                <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
-                  No commission data available.
+                <tr><td colSpan={9} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                  No commission data available. Assign a commission profile to a staff member to see an estimate.
                 </td></tr>
               ) : visibleCommissionData.map((record) => (
                 <tr key={record.id} style={{ borderTop: '1px solid var(--border-color)' }}>
@@ -403,6 +440,12 @@ export default function CommissionProfiles() {
                   <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600, color: '#fbbf24', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.totalSales || 0).toFixed(2)}</td>
                   <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', color: '#ef4444', fontVariantNumeric: 'tabular-nums' }}>-₹{parseFloat(record.discount || 0).toFixed(2)}</td>
                   <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.netSales || 0).toFixed(2)}</td>
+                  <td style={td}>{record.commissionProfile?.name || '—'}</td>
+                  <td style={{ ...td, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+                    {record.commission == null
+                      ? (record.commissionProfile ? 'Unavailable' : '—')
+                      : `₹${Number(record.commission).toFixed(2)}`}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -443,7 +486,12 @@ export default function CommissionProfiles() {
                 <select
                   className="input-field"
                   value={editing.basis}
-                  onChange={(e) => setEditing({ ...editing, basis: e.target.value })}
+                  onChange={(e) => setEditing({
+                    ...editing,
+                    basis: e.target.value,
+                    percentage: e.target.value === 'FLAT_PER_INVOICE' ? '' : editing.percentage,
+                    flatAmount: e.target.value === 'REVENUE_PERCENT' ? '' : editing.flatAmount,
+                  })}
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 >
                   {BASIS_OPTIONS.map((b) => (
@@ -490,7 +538,7 @@ export default function CommissionProfiles() {
               </Field>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <Field label="Percentage (0..100)">
+                {editing.basis !== 'FLAT_PER_INVOICE' && <Field label="Percentage (0..100)">
                   <input
                     type="number"
                     min="0"
@@ -501,8 +549,8 @@ export default function CommissionProfiles() {
                     onChange={(e) => setEditing({ ...editing, percentage: e.target.value })}
                     style={{ width: '100%', marginTop: '0.25rem' }}
                   />
-                </Field>
-                <Field label="Flat amount">
+                </Field>}
+                {editing.basis !== 'REVENUE_PERCENT' && <Field label="Flat amount">
                   <input
                     type="number"
                     min="0"
@@ -512,9 +560,9 @@ export default function CommissionProfiles() {
                     onChange={(e) => setEditing({ ...editing, flatAmount: e.target.value })}
                     style={{ width: '100%', marginTop: '0.25rem' }}
                   />
-                </Field>
+                </Field>}
               </div>
-              {(editing.basis === 'PER_PRODUCT' || editing.basis === 'REVENUE_PERCENT') && (
+              {editing.basis === 'PER_PRODUCT' && (
                 <Field label="Product filter (optional)">
                   <select
                     className="input-field"
@@ -529,6 +577,7 @@ export default function CommissionProfiles() {
                       </option>
                     ))}
                   </select>
+                  {loadErrors.products && <span role="alert" style={{ color: 'var(--danger-color)', fontSize: '0.8rem' }}>{loadErrors.products}</span>}
                 </Field>
               )}
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}>

@@ -6,7 +6,8 @@ const { WebSocket } = require("ws");
 
 const VERSION = "1.1.0";
 const baseDir = process.pkg ? path.dirname(process.execPath) : __dirname;
-const configPath = process.env.TALLY_CONNECTOR_CONFIG || path.join(baseDir, "config.json");
+const configPath = path.join(baseDir, "config.json");
+const logPath = path.join(baseDir, "logs", "connector.log");
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 let heartbeatTimer = null;
@@ -15,7 +16,12 @@ let shuttingDown = false;
 function log(level, message) {
   const line = `${new Date().toISOString()} [${level}] ${message}`;
   console.log(line);
-  try { fs.appendFileSync(path.join(baseDir, "connector.log"), `${line}\n`, "utf8"); } catch (_) { /* console logging remains available */ }
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, `${line}\n`, "utf8");
+  } catch (error) {
+    console.error(`Cannot write ${logPath}: ${error.message}`);
+  }
 }
 
 function loadConfig() {

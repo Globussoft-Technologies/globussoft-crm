@@ -11,7 +11,7 @@ import {
   buildVoucherRows,
   validateExport,
 } from "./tallyExportBuilder";
-import { downloadTallyConnectorPackage, fetchTallyConnectorBinary } from "./tallyConnectorConfig";
+import { downloadTallyConnectorPackage, fetchTallyConnectorBinary, fetchTallyConnectorDeploymentFiles } from "./tallyConnectorConfig";
 
 const button = {
   border: 0,
@@ -162,10 +162,11 @@ export default function TallyExportActions({
       // connector token. A missing binary must never disconnect a working
       // connector and leave the newly-created token unavailable.
       const executable = await fetchTallyConnectorBinary();
+      const deploymentFiles = await fetchTallyConnectorDeploymentFiles();
       const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
-      downloadTallyConnectorPackage(credentials, executable);
+      downloadTallyConnectorPackage(credentials, executable, deploymentFiles);
       await loadConnectorStatus();
-      notify.success("Tally Connector ZIP downloaded. Extract it and run the executable beside config.json.");
+      notify.success("Tally Connector ZIP downloaded. Extract it, then run install-startup.ps1 from PowerShell.");
     } catch (error) {
       notify.error(error.message || "Could not download the Tally Connector ZIP.");
     } finally {
@@ -329,11 +330,13 @@ export default function TallyExportActions({
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button type="button" className="btn-secondary" onClick={() => loadConnectorStatus(false)}>Refresh status</button>
-            <PermissionGate module="tally" action="update">
-              <button type="button" className="btn-secondary" onClick={downloadConnector} disabled={generatingCredentials} style={{ background: "#f4512c", borderColor: "#f4512c", color: "#fff" }}>
-                <Download size={15} /> {generatingCredentials ? "Preparing ZIP…" : "Download Tally Connector"}
-              </button>
-            </PermissionGate>
+            {!connectorStatus?.online && (
+              <PermissionGate module="tally" action="update">
+                <button type="button" className="btn-secondary" onClick={downloadConnector} disabled={generatingCredentials} style={{ background: "#f4512c", borderColor: "#f4512c", color: "#fff" }}>
+                  <Download size={15} /> {generatingCredentials ? "Preparing ZIP…" : "Download Tally Connector"}
+                </button>
+              </PermissionGate>
+            )}
           </div>
         </div>
         <small style={{ display: "block", marginTop: 10, color: "var(--text-secondary)" }}>Run the Globussoft connector on the Windows computer where Tally is open on localhost port 9000.</small>

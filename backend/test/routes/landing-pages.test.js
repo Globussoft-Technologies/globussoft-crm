@@ -94,6 +94,7 @@ prisma.deal = prisma.deal || {};
 prisma.deal.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.payment = prisma.payment || {};
 prisma.payment.findFirst = vi.fn();
+prisma.payment.findMany = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
 // PR #1399 — the submit path materialises trip instalments via
@@ -113,6 +114,7 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 // the lead-capture path leaves them untouched (assert with not.toHaveBeenCalled).
 prisma.pendingTripRegistration = prisma.pendingTripRegistration || {};
 prisma.pendingTripRegistration.create = vi.fn();
+prisma.pendingTripRegistration.findUnique = vi.fn();
 // PR #1399 — payment-linked submits mark the draft converted/OTP-verified.
 prisma.pendingTripRegistration.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripParticipant = prisma.tripParticipant || {};
@@ -262,12 +264,14 @@ beforeEach(() => {
   prisma.contact.update.mockReset().mockResolvedValue({ id: 1 });
   prisma.deal.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.payment.findFirst.mockReset();
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
   prisma.leadRoutingRule.findFirst.mockReset().mockResolvedValue(null);
   prisma.user.findFirst.mockReset().mockResolvedValue(null);
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.pendingTripRegistration.create.mockReset();
+  prisma.pendingTripRegistration.findUnique.mockReset().mockResolvedValue(null);
   prisma.tripParticipant.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.tripParticipant.update.mockReset().mockResolvedValue({ id: 1 });
@@ -1672,8 +1676,9 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
 });
 
 describe('POST /p/:slug/payment-order + payment submit', () => {
-  test('payment-order rejects an international registration without six-month passport validity', async () => {
+  test('payment-order does not require passport or document validation', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.payment.create.mockResolvedValue({ id: 902 });
 
     const res = await request(makeApp())
       .post('/p/australia-2026/payment-order')
@@ -1687,9 +1692,9 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
         },
       });
 
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'PASSPORT_REQUIRED' });
-    expect(getTenantRazorpayClientMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ paymentId: 902, paymentUrl: 'https://rzp.io/i/test' });
+    expect(getTenantRazorpayClientMock).toHaveBeenCalledWith(1);
   });
 
   test('payment-order creates a Razorpay order for the selected complete payment flow', async () => {
@@ -1762,7 +1767,50 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
       amountMajor: 9500,
       amountPaise: 950000,
       orderId: 'plink_complete_1',
+      parentEmail: 'parent@example.com',
+      parentPhone: '+919876543210',
+      registration: expect.objectContaining({
+        parentEmail: 'parent@example.com',
+        parentPhone: '+919876543210',
+      }),
     });
+  });
+
+  test('payment-order rejects a second request for an already-paid installment', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 903,
+      status: 'SUCCESS',
+      amount: 4500,
+      gatewayId: 'plink_installment_1',
+      metadata: JSON.stringify({
+        kind: 'landing-page-registration',
+        pageId: 51,
+        tripId: 7,
+        paymentMode: 'installment',
+        installmentIndex: 1,
+        installmentIndexes: [1],
+        draftToken: 'draft-paid-1',
+      }),
+    }]);
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/payment-order')
+      .send({
+        mode: 'installment',
+        installmentIndex: 1,
+        draftToken: 'draft-paid-1',
+        fields: { passport_status: 'Valid for 6+ months' },
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'ALREADY_PAID',
+      error: expect.stringMatching(/already paid/i),
+      installmentIndex: 1,
+    });
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+    expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 
   test('payment submit verifies Razorpay, creates the participant, and marks the payment complete', async () => {
@@ -1983,7 +2031,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     );
   });
 
-  test('non-valid passport status completes with thank-you response and no portal redirect', async () => {
+  test('non-valid passport status still continues to the parent portal', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1',
@@ -2006,10 +2054,8 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       ok: true,
-      redirect: { type: 'thanks' },
+      redirect: { type: 'customer-registration', url: expect.stringContaining('/customer/register') },
     });
-    expect(res.body.redirect).not.toHaveProperty('url');
-    expect(res.body.message).toMatch(/thank you/i);
   });
 
   test('redirects to customer portal (regardless of microsite) when trip has no published microsite', async () => {

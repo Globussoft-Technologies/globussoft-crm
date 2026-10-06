@@ -37,10 +37,66 @@ const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
 const { createDraftInvoiceForParticipant } = require("../lib/tmcParticipantInvoice");
-const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
+const { getTenantRazorpayClient } = require("../lib/tenantPaymentGateway");
+const { TRIP_PAYMENT_KINDS, isSuccessfulPayment, parseMetadata, reconcileTripPaymentRecord } = require("../lib/tripPaymentReconciliation");
 
 const VALID_ROOM_TYPES = ["single", "twin", "triple", "quad"];
 const VALID_INSTALMENT_STATUSES = ["pending", "partial", "paid", "overdue"];
+const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function toLocalDateInput(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isValidDateInput(value) {
+  const match = DATE_INPUT_PATTERN.exec(value);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year
+    && date.getMonth() === month - 1
+    && date.getDate() === day;
+}
+
+function validateTripPaymentPlanDates(instalments) {
+  const today = toLocalDateInput();
+  let previousDate = null;
+
+  for (let index = 0; index < instalments.length; index += 1) {
+    const dueDate = typeof instalments[index]?.dueDate === "string"
+      ? instalments[index].dueDate.trim()
+      : "";
+    const instalmentNumber = index + 1;
+
+    if (!isValidDateInput(dueDate)) {
+      return {
+        error: `Instalment ${instalmentNumber}: due date must be a valid date`,
+        code: "INVALID_DATE",
+      };
+    }
+    if (dueDate < today) {
+      return {
+        error: `Instalment ${instalmentNumber}: due date cannot be in the past`,
+        code: "PAST_DUE_DATE",
+      };
+    }
+    if (previousDate && dueDate < previousDate) {
+      return {
+        error: `Instalment ${instalmentNumber}: due date cannot be before instalment ${index}`,
+        code: "NON_CHRONOLOGICAL_DATES",
+      };
+    }
+    previousDate = dueDate;
+  }
+
+  return null;
+}
 
 async function requireTmcAccess(req, res, next) {
   try {
@@ -1179,6 +1235,8 @@ router.put(
       if (!Array.isArray(parsed) || parsed.length === 0) {
         return res.status(400).json({ error: "instalmentsJson must be a non-empty array", code: "EMPTY_INSTALMENTS" });
       }
+      const dateValidationError = validateTripPaymentPlanDates(parsed);
+      if (dateValidationError) return res.status(400).json(dateValidationError);
 
       const plan = await prisma.tripPaymentPlan.upsert({
         where: { tripId: trip.id },
@@ -1252,40 +1310,40 @@ router.get(
   async (req, res) => {
     try {
       const trip = await loadTrip(req);
-      // Repair successful landing-page payments whose webhook was processed
-      // before the participant installment allocation ran. This is safe to
-      // repeat because the allocator is idempotent.
-      const successfulPayments = await prisma.payment.findMany({
-        where: { tenantId: req.travelTenant.id, status: { in: ["SUCCESS", "CAPTURED", "PAID"] } },
-        select: { amount: true, metadata: true },
+      // Reconcile all TMC payment kinds before returning the staff ledger.
+      // This covers webhook-delayed Razorpay orders as well as landing-page
+      // registrations that were captured before their participant was linked.
+      const tripPayments = await prisma.payment.findMany({
+        where: { tenantId: req.travelTenant.id },
+        select: { id: true, amount: true, metadata: true, status: true, paidAt: true, gateway: true, gatewayId: true, createdAt: true },
         take: 500,
       });
-      for (const payment of successfulPayments) {
-        let metadata;
-        try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_e) { metadata = {}; }
-        if (metadata.kind !== "landing-page-registration" || Number(metadata.tripId) !== trip.id) continue;
-        let participantId = metadata.participantId;
-        if (!participantId && metadata.draftToken) {
-          const draft = await prisma.pendingTripRegistration.findUnique({
-            where: { draftToken: String(metadata.draftToken) },
-            select: { convertedToParticipantId: true },
-          });
-          participantId = draft?.convertedToParticipantId;
-        }
-        if (!participantId) continue;
+      const relevantPayments = tripPayments.filter((payment) => {
+        const metadata = parseMetadata(payment);
+        return TRIP_PAYMENT_KINDS.has(String(metadata.kind || "")) && Number(metadata.tripId) === trip.id;
+      });
+      const needsGatewayRefresh = relevantPayments.some((payment) =>
+        String(payment.gateway || "").toLowerCase() === "razorpay" && !isSuccessfulPayment(payment),
+      );
+      let gateway = null;
+      if (needsGatewayRefresh) {
         try {
-          await applyLandingPagePaymentToTrip({
+          gateway = await getTenantRazorpayClient(req.travelTenant.id);
+        } catch (gatewayError) {
+          console.warn("[travel-trip-billing] payment refresh skipped:", gatewayError.message);
+        }
+      }
+      for (const payment of relevantPayments) {
+        try {
+          await reconcileTripPaymentRecord({
             db: prisma,
-            tripId: trip.id,
-            participantId,
-            paymentId: payment.id,
-            amountMajor: payment.amount || metadata.amountMajor,
-            mode: metadata.paymentMode === "complete" ? "complete" : "installment",
-            installmentIndex: Number.isFinite(Number(metadata.installmentIndex)) ? Number(metadata.installmentIndex) : 0,
-            capturedAt: new Date(),
+            payment,
+            tenantId: req.travelTenant.id,
+            capturedAt: payment.paidAt || payment.createdAt || new Date(),
+            gateway: String(payment.gateway || "").toLowerCase() === "razorpay" ? gateway : null,
           });
         } catch (repairError) {
-          console.error("[travel-trip-billing] landing payment repair failed:", repairError.message);
+          console.error("[travel-trip-billing] payment reconciliation failed:", repairError.message);
         }
       }
       const where = { tripId: trip.id };

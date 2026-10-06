@@ -249,10 +249,11 @@ describe('composeLayout', () => {
 });
 
 describe('wanderlux render() integration', () => {
-  test('registration template skips public document upload and gates payment on passport validity', () => {
-    expect(TEMPLATE_HTML).toContain("options:['Valid for 6+ months','Applied / in process','Not yet applied']");
+  test('registration template skips public document upload and does not gate payment on passport validity', () => {
+    expect(TEMPLATE_HTML).not.toContain("options:['Valid for 6+ months','Applied / in process','Not yet applied']");
     expect(TEMPLATE_HTML).toContain("baseSteps.concat([{ title:'Step ' + (baseSteps.length + 1) + ': Payment', fields:[] }])");
-    expect(TEMPLATE_HTML).toContain('out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast && passportValid)');
+    expect(TEMPLATE_HTML).toContain('out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast)');
+    expect(TEMPLATE_HTML).toContain("toLowerCase() !== 'passport_status'");
     expect(TEMPLATE_HTML).not.toContain('Step 4: Payment');
     expect(TEMPLATE_HTML).not.toContain('Please upload all three required documents.');
     expect(TEMPLATE_HTML).not.toContain('Please upload all four required documents.');
@@ -274,6 +275,7 @@ describe('wanderlux render() integration', () => {
     expect(TEMPLATE_HTML).toContain('callbackPaymentLinkId');
     expect(TEMPLATE_HTML).toContain('paymentLinkStatus: new URLSearchParams');
     expect(TEMPLATE_HTML).toContain('/payment-status?draftToken=');
+    expect(TEMPLATE_HTML).toContain("if(!r.ok) throw new Error((result && result.error) || 'Could not start payment.')");
     expect(TEMPLATE_HTML).not.toContain('documentsUploaded');
     expect(TEMPLATE_HTML).not.toContain('regDocumentsUploaded');
     expect(TEMPLATE_HTML).toContain("Number.isFinite(Number(params.get('regStep')))");

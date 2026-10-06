@@ -127,17 +127,26 @@ async function resolveViewUrl(item, ttlSec = DEFAULT_VIEW_TTL_SEC) {
 // Read a stored document back as a raw Buffer — used by the post-conversion
 // passport OCR trigger so the file doesn't need to be re-uploaded by the operator.
 // Returns null on any failure; callers must degrade gracefully (e.g. skip OCR).
+// Accept both the canonical { storage, key } descriptor and the database-shaped
+// { attachmentStorage, attachmentKey, attachmentUrl } descriptor used by some
+// parent/staff document routes.
 async function readDocBuffer(descriptor) {
-  if (!descriptor || !descriptor.key) return null;
+  if (!descriptor) return null;
+  const storage = descriptor.storage || descriptor.attachmentStorage || inferStorage(descriptor);
+  const url = descriptor.url || descriptor.attachmentUrl || "";
+  const key = descriptor.key
+    || descriptor.attachmentKey
+    || (storage === "disk" ? path.basename(url) : s3Service.extractKeyFromUrl(url));
+  if (!key) return null;
   try {
-    if (descriptor.storage === "s3" || descriptor.storage === "ocs") {
-      const { stream } = await s3Service.getObjectStream(descriptor.key, { provider: descriptor.storage === "s3" ? "aws" : "oci" });
+    if (storage === "s3" || storage === "ocs") {
+      const { stream } = await s3Service.getObjectStream(key, { provider: storage === "s3" ? "aws" : "oci" });
       if (!stream) return null;
       const chunks = [];
       for await (const chunk of stream) chunks.push(chunk);
       return Buffer.concat(chunks);
     }
-    const filePath = path.join(uploadDir, path.basename(descriptor.key));
+    const filePath = path.join(uploadDir, path.basename(key));
     if (!fs.existsSync(filePath)) return null;
     return fs.readFileSync(filePath);
   } catch (_e) {

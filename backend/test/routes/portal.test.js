@@ -137,6 +137,7 @@ import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
+const landingPayments = requireCJS('../../lib/landingPagePayments');
 
 // Email OTP gate bypass — the route resolves lib/emailOtp at call time, so
 // patching before require() is safe and keeps the public /register path open
@@ -810,6 +811,88 @@ describe('GET /travel/itineraries — parent payment ledger parity', () => {
       where: { id: 801 },
       data: expect.objectContaining({ paidAmount: 5000, status: 'paid' }),
     });
+  });
+
+  test('refreshes a first parent login after payment converts the pending registration', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 42, email: 'parent@example.com' });
+    prisma.tripParticipant.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 701,
+        tripId: trip.id,
+        parentEmail: 'parent@example.com',
+        fullName: 'Kapil Sharma',
+        trip,
+      }]);
+    prisma.pendingTripRegistration.findMany
+      .mockResolvedValueOnce([{
+        id: 901,
+        draftToken: 'draft-new-account',
+        tripId: trip.id,
+        parentEmail: 'parent@example.com',
+        convertedToParticipantId: null,
+        trip,
+      }])
+      .mockResolvedValueOnce([{ draftToken: 'draft-new-account', convertedToParticipantId: null }])
+      .mockResolvedValueOnce([]);
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 9004,
+      tenantId: 3,
+      contactId: null,
+      amount: 5000,
+      gateway: 'razorpay',
+      status: 'SUCCESS',
+      metadata: JSON.stringify({
+        kind: 'landing-page-registration',
+        tripId: trip.id,
+        draftToken: 'draft-new-account',
+        parentEmail: 'parent@example.com',
+        installmentIndex: 0,
+      }),
+    }]);
+    const ensureMock = vi.spyOn(landingPayments, 'ensureLandingPagePaymentRegistration').mockResolvedValue({
+      participantId: 701,
+      payment: { id: 9004, status: 'SUCCESS', amount: 5000 },
+    });
+    const applyMock = vi.spyOn(landingPayments, 'applyLandingPagePaymentToTrip').mockResolvedValue({
+      tripId: trip.id,
+      participantId: 701,
+      allocations: [{ instalmentIndex: 0, status: 'paid' }],
+    });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{
+      id: 801,
+      tripId: trip.id,
+      participantId: 701,
+      instalmentIndex: 0,
+      amount: 5000,
+      paidAmount: 5000,
+      status: 'paid',
+      dueDate: new Date('2026-08-31'),
+      paymentLinkUrl: null,
+    }]);
+
+    try {
+      const res = await request(makeApp())
+        .get('/api/portal/travel/bookings')
+        .set('Authorization', portalBearer({ contactId: 42, tenantId: 3 }));
+
+      expect(res.status).toBe(200);
+      expect(res.body[0]).toMatchObject({
+        tripId: trip.id,
+        advancePaidAmount: 5000,
+        instalments: [{ paidAmount: 5000, status: 'paid' }],
+      });
+      expect(prisma.tripParticipant.findMany).toHaveBeenCalledTimes(2);
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(applyMock).toHaveBeenCalledWith(expect.objectContaining({
+        participantId: 701,
+        paymentId: 9004,
+      }));
+    } finally {
+      ensureMock.mockRestore();
+      applyMock.mockRestore();
+    }
   });
 
   test('treats a paid ledger status as paid even when a legacy row has zero paidAmount', async () => {

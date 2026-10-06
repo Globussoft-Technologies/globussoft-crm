@@ -14,6 +14,12 @@ prisma.tripInstalmentPayment = {
   ...(prisma.tripInstalmentPayment || {}),
   findFirst: vi.fn(),
 };
+prisma.payment = {
+  ...(prisma.payment || {}),
+  findFirst: vi.fn(),
+  findMany: vi.fn(),
+  create: vi.fn(),
+};
 prisma.emailVerificationOtp = {
   ...(prisma.emailVerificationOtp || {}),
   create: vi.fn(),
@@ -25,6 +31,7 @@ import { createRequire } from "node:module";
 
 const requireCJS = createRequire(import.meta.url);
 const paymentPortalRouter = requireCJS("../../routes/travel_payment_portal");
+const { mintPaymentPortalToken } = requireCJS("../../lib/travelPaymentPortalToken");
 
 function makeApp() {
   const app = express();
@@ -58,6 +65,7 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(participant);
   prisma.tripParticipant.findMany.mockReset().mockResolvedValue([participant]);
   prisma.tripInstalmentPayment.findFirst.mockReset().mockResolvedValue({ participantId: participant.id });
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.emailVerificationOtp.create.mockReset().mockResolvedValue({ id: 1 });
 });
 
@@ -102,5 +110,31 @@ describe("travel payment portal email verification", () => {
     expect(prisma.tripParticipant.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tripId: 16, parentEmail: "manik@getairmail.com" },
     }));
+  });
+
+  test("blocks a second Razorpay order when the installment is fully paid by amount", async () => {
+    const token = mintPaymentPortalToken({
+      tenantId: trip.tenantId,
+      tripId: trip.id,
+      participantId: participant.id,
+      email: participant.parentEmail,
+      installmentId: 55,
+    });
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 55,
+      tripId: trip.id,
+      participantId: participant.id,
+      amount: 70000,
+      paidAmount: 70000,
+      status: "partial",
+    });
+
+    const res = await request(makeApp())
+      .post("/api/travel/payment-portal/create-order")
+      .send({ token, installmentId: 55 });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: "ALREADY_PAID" });
+    expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 });

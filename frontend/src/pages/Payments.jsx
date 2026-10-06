@@ -200,10 +200,12 @@ export default function Payments() {
 
   useEffect(() => {
     loadAll();
+    const refreshTimer = window.setInterval(() => loadAll({ silent: true }), 15000);
+    return () => window.clearInterval(refreshTimer);
   }, []);
 
-  async function loadAll() {
-    setLoading(true);
+  async function loadAll({ silent = false } = {}) {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const [list, cfg] = await Promise.all([

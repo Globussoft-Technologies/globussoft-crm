@@ -157,13 +157,30 @@ describe('TMC portal authentication and tenant isolation', () => {
 });
 
 describe('TMC parent trip isolation', () => {
-  test('a parent link grants only its explicit trip, not every trip assigned to the teacher', async () => {
+  test('a parent sees every non-cancelled trip assigned to their linked teacher', async () => {
     prisma.contact.findFirst.mockResolvedValue(contact('PARENT'));
     prisma.tmcParentTrip.findMany.mockResolvedValue([
-      { id: 1, tripId: 501, createdAt: new Date(), teacher: { id: 70 }, trip: { id: 501, landingPage: null } },
+      {
+        id: 1,
+        tripId: 501,
+        createdAt: new Date(),
+        teacher: { id: 70, name: 'Teacher One', email: 'teacher@example.test' },
+        trip: { id: 501, landingPage: null },
+      },
     ]);
     prisma.tmcTrip.findMany.mockResolvedValue([
-      { id: 501, tripCode: 'TMC-501', landingPage: null },
+      {
+        id: 501,
+        tripCode: 'TMC-501',
+        teacher: { id: 70, name: 'Teacher One', email: 'teacher@example.test' },
+        landingPage: null,
+      },
+      {
+        id: 502,
+        tripCode: 'TMC-502',
+        teacher: { id: 70, name: 'Teacher One', email: 'teacher@example.test' },
+        landingPage: { id: 88, slug: 'tmc-502', status: 'PUBLISHED' },
+      },
     ]);
 
     const res = await request(makeApp())
@@ -171,14 +188,18 @@ describe('TMC parent trip isolation', () => {
       .set(bearer());
 
     expect(res.status).toBe(200);
-    expect(res.body.trips.map((trip) => trip.id)).toEqual([501]);
+    expect(res.body.trips.map((trip) => trip.id)).toEqual([501, 502]);
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         tenantId: 7,
-        id: { in: [501] },
+        teacherContactId: { in: [70] },
         status: { not: 'cancelled' },
       },
     }));
+    expect(res.body.trips[1]).toMatchObject({
+      landingUrl: '/trips/88',
+      teacher: { id: 70, name: 'Teacher One' },
+    });
   });
 
   test('parent visa-letter listing is limited to linked trips and sent letters', async () => {

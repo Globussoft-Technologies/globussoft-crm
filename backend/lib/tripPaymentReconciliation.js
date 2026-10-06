@@ -161,6 +161,7 @@ async function reconcileTripPaymentRecord({
   payment,
   gateway,
   capturedAt = new Date(),
+  tenantId = null,
 }) {
   if (!payment) return { payment: null, refreshed: false, instalment: null };
   const metadata = parseMetadata(payment);
@@ -192,13 +193,25 @@ async function reconcileTripPaymentRecord({
   const tripId = numericId(metadata.tripId);
   if (!tripId) return { payment: currentPayment, refreshed, instalment: null };
 
-  const participantId = metadata.kind === "landing-page-registration"
+  let landingRegistration = null;
+  let participantId = metadata.kind === "landing-page-registration"
     ? await resolveLandingParticipantId({ db, metadata })
     : numericId(metadata.participantId);
+  if (metadata.kind === "landing-page-registration") {
+    const { ensureLandingPagePaymentRegistration } = require("./landingPagePayments");
+    landingRegistration = await ensureLandingPagePaymentRegistration({
+      db,
+      payment: currentPayment,
+      metadata,
+      tenantId,
+    });
+    participantId = landingRegistration?.participantId || participantId;
+    if (landingRegistration?.payment) currentPayment = landingRegistration.payment;
+  }
   if (!participantId) {
-    // Landing-page payments can succeed before staff converts the registration
-    // draft. Leave the Payment row successful and retry allocation after the
-    // conversion; marking it reconciled here would lose the allocation.
+    // If the payment did not carry enough registration data to create a
+    // participant, leave it successful and retry allocation on the next
+    // Finance/TMC refresh rather than marking the payment as allocated.
     return { payment: currentPayment, refreshed, instalment: null };
   }
 
@@ -216,7 +229,7 @@ async function reconcileTripPaymentRecord({
         : 0,
       capturedAt: effectiveCapturedAt,
     });
-    return { payment: currentPayment, refreshed, instalment: null };
+    return { payment: currentPayment, refreshed, instalment: null, participantId };
   }
 
   const instalmentId = numericId(metadata.instalmentId);
@@ -234,6 +247,7 @@ async function reconcileTripPaymentRecord({
     instalment,
     amountMajor: capturedAmount,
     capturedAt: effectiveCapturedAt,
+    tenantId,
   });
   return { payment: currentPayment, refreshed, instalment: updatedInstalment };
 }

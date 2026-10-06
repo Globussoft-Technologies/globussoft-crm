@@ -2577,6 +2577,7 @@ router.get(
                 departDate: true,
                 returnDate: true,
                 status: true,
+                teacher: { select: { id: true, name: true, email: true } },
               },
             },
           },
@@ -2603,6 +2604,7 @@ router.get(
                 departDate: true,
                 returnDate: true,
                 status: true,
+                teacher: { select: { id: true, name: true, email: true } },
               },
             },
           },
@@ -2639,17 +2641,21 @@ router.get(
         ...row,
         landingUrl: buildPublishedTripUrl(row.trip?.landingPage),
       }));
-      const linkedTripIds = [
-        ...new Set(parentLinks.map((row) => row.tripId).filter(Boolean)),
+      const teacherIds = [
+        ...new Set([
+          ...parentLinks.map((row) => row.teacher?.id),
+          ...participants.map((row) => row.trip?.teacher?.id),
+          ...registrations.map((row) => row.trip?.teacher?.id),
+        ].map(Number).filter((id) => Number.isInteger(id) && id > 0)),
       ];
-      // A parent link grants access to exactly one trip. Teachers routinely
-      // lead multiple school groups, so teacher ownership must never be used
-      // as a transitive parent authorization grant.
-      const assignedTrips = linkedTripIds.length
+      // A parent link establishes the parent-to-teacher relationship. Once
+      // that relationship exists, the parent can discover every non-cancelled
+      // trip assigned to that teacher, including trips added later.
+      const assignedTrips = teacherIds.length
         ? await prisma.tmcTrip.findMany({
             where: {
               tenantId: Number(req.portal.tenantId),
-              id: { in: linkedTripIds },
+              teacherContactId: { in: teacherIds },
               status: { not: "cancelled" },
             },
             orderBy: [{ departDate: "asc" }, { id: "asc" }],
@@ -2963,9 +2969,10 @@ router.get(
   },
 );
 
-// Parent travel documents. Regular files use the private visa-document store;
-// signed consent images are stored in the database. Both are only exposed
-// through authenticated, owner-scoped routes.
+// Parent travel documents. Every parent-uploaded file uses the private
+// visa-document store, which selects OCI when configured and local disk when
+// cloud storage is unavailable. Legacy database-backed consent images remain
+// readable through the same authenticated, owner-scoped routes.
 router.get(
   "/parent/documents",
   verifyPortalToken,
@@ -3053,23 +3060,12 @@ router.post(
           requiredDocumentTypes,
         });
       }
-      if (documentType === "consent-form" && !["image/jpeg", "image/png"].includes(String(req.file.mimetype || "").toLowerCase())) {
-        return res.status(400).json({
-          error: "Signed consent forms must be uploaded as a JPG or PNG image",
-          code: "CONSENT_IMAGE_REQUIRED",
-        });
-      }
-
       let stored;
-      if (documentType === "consent-form") {
-        stored = { storage: "db", url: null, key: null };
-      } else {
-        try {
-          stored = await visaDocStore.storeDoc(req.file.buffer, req.file.mimetype);
-        } catch (err) {
-          console.error("[tmc-portal][parent/documents:upload] storage error:", err.message);
-          return res.status(502).json({ error: "Couldn't store the uploaded file. Please try again.", code: "STORAGE_FAILED" });
-        }
+      try {
+        stored = await visaDocStore.storeDoc(req.file.buffer, req.file.mimetype);
+      } catch (err) {
+        console.error("[tmc-portal][parent/documents:upload] storage error:", err.message);
+        return res.status(502).json({ error: "Couldn't store the uploaded file. Please try again.", code: "STORAGE_FAILED" });
       }
 
       const document = await prisma.tmcParentDocument.create({
@@ -3080,7 +3076,7 @@ router.post(
           documentType,
           filename: (req.file.originalname || "travel-document").slice(0, 255),
           fileUrl: stored.url,
-          fileBlob: documentType === "consent-form" ? req.file.buffer : null,
+          fileBlob: null,
           fileSize: req.file.size || null,
           mimeType: req.file.mimetype || null,
           storage: stored.storage,
@@ -3132,9 +3128,9 @@ router.get(
       const buffer = document.fileBlob
         ? Buffer.from(document.fileBlob)
         : await visaDocStore.readDocBuffer({
-            attachmentUrl: document.fileUrl,
-            attachmentStorage: document.storage,
-            attachmentKey: document.storageKey,
+            url: document.fileUrl,
+            storage: document.storage,
+            key: document.storageKey,
           });
       if (!buffer) return res.status(404).json({ error: "Document file not found", code: "NOT_FOUND" });
       const filename = String(document.filename || "travel-document").replace(/[\r\n"]/g, "");

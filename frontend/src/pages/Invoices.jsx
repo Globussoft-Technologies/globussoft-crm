@@ -170,6 +170,8 @@ const createInvoiceForm = (subBrand = "") => ({
 
 const INVOICE_TABLE_MIN_WIDTH = 940;
 const WELLNESS_INVOICE_TABLE_MIN_WIDTH = 1540;
+const WELLNESS_INVOICE_PRODUCTS_COLUMN_WIDTH = "250px";
+const WELLNESS_INVOICE_QTY_COLUMN_WIDTH = "130px";
 
 /**
  * Date-range presets for the invoice ledger filter.
@@ -2158,8 +2160,8 @@ export default function Invoices() {
                 <colgroup>
                   <col style={{ width: isWellness ? "180px" : "110px" }} />
                   {isWellness && <col style={{ width: "190px" }} />}
-                  {isWellness && <col style={{ width: "310px" }} />}
-                  {isWellness && <col style={{ width: "70px" }} />}
+                  {isWellness && <col style={{ width: WELLNESS_INVOICE_PRODUCTS_COLUMN_WIDTH }} />}
+                  {isWellness && <col style={{ width: WELLNESS_INVOICE_QTY_COLUMN_WIDTH }} />}
                   <col style={{ width: isWellness ? "105px" : "104px" }} />
                   {isWellness && <col style={{ width: "125px" }} />}
                   <col style={{ width: isWellness ? "100px" : "96px" }} />
@@ -2393,7 +2395,16 @@ export default function Invoices() {
                         </td>
                       )}
                       {isWellness && (
-                        <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
+                        <td
+                          className="invoice-quantity-cell"
+                          style={{
+                            padding: "0.75rem 0.4rem",
+                            color: "var(--text-secondary)",
+                            whiteSpace: "normal",
+                            overflow: "visible",
+                            overflowWrap: "anywhere",
+                          }}
+                        >
                           {wellnessLineItems.length > 0 ? (
                             wellnessLineItems.map((item, index) => (
                               <div key={`${item.type || "item"}-qty-${item.itemId || index}`}>
@@ -3090,6 +3101,11 @@ export default function Invoices() {
           min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+        [data-wellness-invoice="true"] td.invoice-quantity-cell {
+          white-space: normal;
+          overflow: visible;
+          overflow-wrap: anywhere;
         }
         [data-wellness-invoice="true"] .invoice-actions-cell > div {
           display: flex;

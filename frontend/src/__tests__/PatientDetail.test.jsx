@@ -937,11 +937,81 @@ describe('<PatientDetail />', () => {
       expect(screen.getByText(/PRP kit/)).toBeInTheDocument();
       expect(screen.getByRole('columnheader', { name: 'Quantity' })).toHaveStyle({ textAlign: 'left' });
       expect(screen.getByRole('columnheader', { name: 'Product Name' })).toHaveStyle({ textAlign: 'left' });
+      expect(screen.getByRole('columnheader', { name: 'Unit Cost' })).toHaveStyle({ textAlign: 'left' });
       expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveStyle({ textAlign: 'left' });
       expect(screen.getAllByText('No staff assigned').length).toBeGreaterThan(0);
       expect(screen.getAllByText('No product code').length).toBeGreaterThan(0);
       // Total cost row: 2*5000 + 1*2500 = 12,500 — locale formatting tolerates either separator.
       expect(screen.getAllByText(/Total cost/i).length).toBeGreaterThan(0);
+    });
+
+    it('aligns edit controls with their columns and preserves read-only visit/catalog fields', async () => {
+      const item = {
+        id: 9,
+        transactionDate: '2026-04-10T09:00:00Z',
+        bookingId: 11,
+        customerName: 'Ananya Singh',
+        staff: 'Dr. Mehta',
+        serviceName: 'Consultation',
+        productName: 'Botox vial',
+        transactionType: 'Sale',
+        productCode: 'BTX-100',
+        qty: 2,
+        unit: 'unit',
+        quantity: '2 unit',
+        salePrice: 5000,
+        unitCost: 2500,
+        usageValue: 5000,
+      };
+      fetchApi.mockReset();
+      fetchApi.mockImplementation((url, options) => {
+        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
+        if (url === '/api/wellness/services') return Promise.resolve(services);
+        if (url === '/api/staff') return Promise.resolve(staff);
+        if (url.includes('/consumptions')) {
+          if (options?.method === 'PUT') {
+            return Promise.resolve({ ...item, productName: 'Updated vial', qty: 3, unitCost: 2000, usageValue: 6000 });
+          }
+          return Promise.resolve([item]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Inventory used/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Inventory used/i }));
+      await waitFor(() => expect(screen.getByText('Botox vial')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Edit (amend) this item'));
+      const editRow = await screen.findByTestId('inventory-edit-row');
+      const cells = editRow.querySelectorAll('td');
+
+      expect(cells).toHaveLength(13);
+      expect(cells[5].querySelector('input')).toHaveAttribute('aria-label', 'Product name');
+      expect(cells[8].querySelector('input')).toHaveAttribute('aria-label', 'Quantity');
+      expect(cells[10].querySelector('input')).toHaveAttribute('aria-label', 'Unit cost');
+      expect(cells[6]).toHaveTextContent('Sale');
+      expect(cells[7]).toHaveTextContent('BTX-100');
+      expect(cells[9]).toHaveTextContent('₹5,000');
+      expect(cells[11]).toHaveTextContent('₹5,000');
+      expect(cells[6].querySelector('input')).toBeNull();
+      expect(cells[7].querySelector('input')).toBeNull();
+      expect(cells[9].querySelector('input')).toBeNull();
+
+      await user.clear(screen.getByRole('textbox', { name: 'Product name' }));
+      await user.type(screen.getByRole('textbox', { name: 'Product name' }), 'Updated vial');
+      await user.clear(screen.getByRole('spinbutton', { name: 'Quantity' }));
+      await user.type(screen.getByRole('spinbutton', { name: 'Quantity' }), '3');
+      await user.clear(screen.getByRole('spinbutton', { name: 'Unit cost' }));
+      await user.type(screen.getByRole('spinbutton', { name: 'Unit cost' }), '2000');
+      await user.click(screen.getByTitle('Save changes'));
+
+      await waitFor(() => {
+        const putCall = fetchApi.mock.calls.find(([url, options]) => url.endsWith('/consumptions/9') && options?.method === 'PUT');
+        expect(putCall).toBeDefined();
+        expect(JSON.parse(putCall[1].body)).toEqual({ productName: 'Updated vial', qty: 3, unitCost: 2000 });
+      });
     });
 
   });

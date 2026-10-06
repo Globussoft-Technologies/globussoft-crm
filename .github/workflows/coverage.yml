@@ -39,6 +39,11 @@ jobs:
     env:
       DATABASE_URL: "mysql://root:ci_root_pw@127.0.0.1:3306/gbscrm_ci"
       JWT_SECRET: "ci_jwt_secret_for_test_runs_only"
+      SUPER_ADMIN_USERNAME: "ci-super-admin"
+      SUPER_ADMIN_PASSWORD_PLAINTEXT: "ci-super-admin-password-1523"
+      SUPER_ADMIN_JWT_SECRET: "ci_super_admin_jwt_secret_for_tests_only_1523"
+      E2E_SUPER_ADMIN_USERNAME: "ci-super-admin"
+      E2E_SUPER_ADMIN_PASSWORD: "ci-super-admin-password-1523"
       DISABLE_CRONS: "1"
       NODE_ENV: "test"
       PORT: "5000"
@@ -359,6 +364,7 @@ jobs:
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
             tests/landing-form-config-api.spec.js \
+            tests/super-admin-organizations-api.spec.js \
             tests/tour-progress-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/callified-campaign-api.spec.js \

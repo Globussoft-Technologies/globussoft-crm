@@ -62,19 +62,18 @@ async function generateUniqueSlug(base) {
 }
 
 async function provisionFreshTenant(tenantId, vertical, adminUserId) {
-  try {
-    await provisionTenantRbac(tenantId, { vertical });
-    const adminRole = await prisma.role.findFirst({ where: { tenantId, key: "ADMIN" }, select: { id: true } });
-    if (adminRole && adminUserId) {
-      await prisma.userRole.upsert({
-        where: { userId_roleId: { userId: adminUserId, roleId: adminRole.id } },
-        update: {},
-        create: { userId: adminUserId, roleId: adminRole.id },
-      });
-    }
-  } catch (err) {
-    console.error(`[super-admin] RBAC provisioning failed for tenant ${tenantId}:`, err.message);
+  await provisionTenantRbac(tenantId, { vertical });
+  const adminRole = await prisma.role.findFirst({ where: { tenantId, key: "ADMIN" }, select: { id: true } });
+  if (!adminRole) {
+    const err = new Error("ADMIN role was not created for the new organization");
+    err.code = "RBAC_PROVISIONING_FAILED";
+    throw err;
   }
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: adminUserId, roleId: adminRole.id } },
+    update: {},
+    create: { userId: adminUserId, roleId: adminRole.id },
+  });
 }
 
 // ── Cross-tenant overview + detail ──────────────────────────────────────
@@ -100,34 +99,55 @@ router.post("/organizations", async (req, res) => {
     if (existingUser) return res.status(409).json({ error: "This email is already registered. Please use a different email address.", code: "EMAIL_ALREADY_EXISTS" });
     if (await organizationNameTaken(organizationName)) return res.status(409).json({ error: "This organization name is already taken. Please use a different name.", code: "ORGANIZATION_NAME_ALREADY_EXISTS" });
 
-    const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || "15", 10);
+    const configuredTrialDays = Number.parseInt(process.env.FREE_TRIAL_DAYS || "15", 10);
+    const trialDays = Number.isInteger(configuredTrialDays) && configuredTrialDays > 0
+      ? configuredTrialDays
+      : 15;
     const now = new Date();
-    const tenant = await prisma.tenant.create({
-      data: {
-        name: organizationName,
-        organizationNameKey: normalizeOrganizationName(organizationName),
-        slug: await generateUniqueSlug(organizationName),
-        ownerEmail: email,
-        plan: "TRIAL",
-        vertical: selectedVertical,
-        emailVerifiedAt: now,
-      },
+    const slug = await generateUniqueSlug(organizationName);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const { tenant, user } = await prisma.$transaction(async (tx) => {
+      const createdTenant = await tx.tenant.create({
+        data: {
+          name: organizationName,
+          organizationNameKey: normalizeOrganizationName(organizationName),
+          slug,
+          ownerEmail: email,
+          plan: "TRIAL",
+          vertical: selectedVertical,
+          emailVerifiedAt: now,
+        },
+      });
+      const createdUser = await tx.user.create({
+        data: {
+          email,
+          password: passwordHash,
+          name: String(name).trim(),
+          role: "ADMIN",
+          tenantId: createdTenant.id,
+          trialStartDate: now,
+          trialEndsAt: new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000),
+          subscriptionStatus: "TRIAL",
+          themePreference: ["light", "dark", "system"].includes(themePreference) ? themePreference : "system",
+          emailVerifiedAt: now,
+        },
+      });
+      return { tenant: createdTenant, user: createdUser };
     });
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: await bcrypt.hash(password, 10),
-        name: String(name).trim(),
-        role: "ADMIN",
-        tenantId: tenant.id,
-        trialStartDate: now,
-        trialEndsAt: new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000),
-        subscriptionStatus: "TRIAL",
-        themePreference: ["light", "dark", "system"].includes(themePreference) ? themePreference : "system",
-        emailVerifiedAt: now,
-      },
-    });
-    await provisionFreshTenant(tenant.id, selectedVertical, user.id);
+
+    try {
+      await provisionFreshTenant(tenant.id, selectedVertical, user.id);
+    } catch (provisionError) {
+      // RBAC provisioning uses the canonical boot-time provisioner, which
+      // cannot share the transaction above. Compensate by deleting the new
+      // tenant (and its cascading owner/RBAC rows) so callers never receive a
+      // successful but unusable organization.
+      await prisma.tenant.delete({ where: { id: tenant.id } }).catch((cleanupError) => {
+        console.error(`[super-admin] failed to roll back tenant ${tenant.id}:`, cleanupError.message);
+      });
+      provisionError.code = "RBAC_PROVISIONING_FAILED";
+      throw provisionError;
+    }
     res.status(201).json({
       organization: { id: tenant.id, name: tenant.name, slug: tenant.slug, ownerEmail: tenant.ownerEmail, plan: tenant.plan, vertical: tenant.vertical },
       owner: { id: user.id, email: user.email, name: user.name, role: user.role },
@@ -135,6 +155,7 @@ router.post("/organizations", async (req, res) => {
   } catch (err) {
     console.error("[super-admin] organization creation error:", err.message);
     if (err?.code === "P2002") return res.status(409).json({ error: "This email or organization is already registered.", code: "DUPLICATE_ORGANIZATION" });
+    if (err?.code === "RBAC_PROVISIONING_FAILED") return res.status(500).json({ error: "Organization permissions could not be provisioned; no organization was created.", code: "RBAC_PROVISIONING_FAILED" });
     res.status(500).json({ error: "Failed to create organization", code: "ORGANIZATION_CREATE_FAILED" });
   }
 });

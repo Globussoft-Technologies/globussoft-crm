@@ -17,12 +17,14 @@ const {
   mockSuperAdminGrantSubscription,
   mockSuperAdminCancelPlatformSubscription,
   mockGetSuperAdminRevenueSummary,
+  mockProvisionTenantRbac,
 } = vi.hoisted(() => ({
   mockGetSuperAdminTenantsOverview: vi.fn(),
   mockGetSuperAdminTenantDetail: vi.fn(),
   mockSuperAdminGrantSubscription: vi.fn(),
   mockSuperAdminCancelPlatformSubscription: vi.fn(),
   mockGetSuperAdminRevenueSummary: vi.fn(),
+  mockProvisionTenantRbac: vi.fn(),
 }));
 
 const libPath = requireCJS.resolve('../../lib/superAdminTenantManagement');
@@ -38,12 +40,30 @@ require('node:module')._cache[libPath] = {
   children: [], paths: [],
 };
 
+const rbacPath = requireCJS.resolve('../../scripts/ensureRbacOnBoot');
+require('node:module')._cache[rbacPath] = {
+  id: rbacPath, filename: rbacPath, loaded: true,
+  exports: { provisionTenantRbac: mockProvisionTenantRbac },
+  children: [], paths: [],
+};
+
 import prisma from '../../lib/prisma.js';
 prisma.subscriptionPlan = { findMany: vi.fn() };
 prisma.tenant = prisma.tenant || {};
+prisma.user = prisma.user || {};
+prisma.role = prisma.role || {};
+prisma.userRole = prisma.userRole || {};
 prisma.webForm = prisma.webForm || {};
 prisma.tenantSetting = prisma.tenantSetting || {};
 prisma.tenant.findFirst = vi.fn();
+prisma.tenant.findUnique = vi.fn();
+prisma.tenant.create = vi.fn();
+prisma.tenant.delete = vi.fn();
+prisma.user.findFirst = vi.fn();
+prisma.user.create = vi.fn();
+prisma.role.findFirst = vi.fn();
+prisma.userRole.upsert = vi.fn();
+prisma.$transaction = vi.fn();
 prisma.webForm.findFirst = vi.fn();
 prisma.tenantSetting.findFirst = vi.fn();
 prisma.tenantSetting.findUnique = vi.fn();
@@ -71,13 +91,100 @@ beforeEach(() => {
   mockSuperAdminGrantSubscription.mockReset();
   mockSuperAdminCancelPlatformSubscription.mockReset();
   mockGetSuperAdminRevenueSummary.mockReset();
+  mockProvisionTenantRbac.mockReset().mockResolvedValue({});
   prisma.subscriptionPlan.findMany.mockReset();
   prisma.tenant.findFirst.mockReset();
+  prisma.tenant.findUnique.mockReset();
+  prisma.tenant.create.mockReset();
+  prisma.tenant.delete.mockReset().mockResolvedValue({ id: 42 });
+  prisma.user.findFirst.mockReset();
+  prisma.user.create.mockReset();
+  prisma.role.findFirst.mockReset();
+  prisma.userRole.upsert.mockReset();
+  prisma.$transaction.mockReset().mockImplementation((callback) => callback(prisma));
   prisma.webForm.findFirst.mockReset();
   prisma.tenantSetting.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.tenantSetting.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tenantSetting.upsert.mockReset().mockResolvedValue({ id: 1 });
+});
+
+describe('POST /organizations', () => {
+  test('rejects an invalid email address before creating anything', async () => {
+    const res = await request(makeApp()).post('/api/super-admin/tenant-management/organizations').send({
+      organizationName: 'New Org', name: 'Owner', email: 'owner@', password: 'secure123',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('EMAIL_REQUIRED');
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+  });
+
+  test('creates a verified organization without an OTP token', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.tenant.findFirst.mockResolvedValue(null);
+    prisma.tenant.findUnique.mockResolvedValue(null);
+    prisma.tenant.create.mockResolvedValue({ id: 42, name: 'Acme', slug: 'acme', ownerEmail: 'owner@example.com', plan: 'TRIAL', vertical: 'generic' });
+    prisma.user.create.mockResolvedValue({ id: 77, email: 'owner@example.com', name: 'Owner', role: 'ADMIN' });
+    prisma.role.findFirst.mockResolvedValue({ id: 9 });
+    prisma.userRole.upsert.mockResolvedValue({ id: 10 });
+
+    const res = await request(makeApp()).post('/api/super-admin/tenant-management/organizations').send({
+      organizationName: 'Acme', name: 'Owner', email: 'OWNER@example.com', password: 'secure123', vertical: 'generic',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.organization.name).toBe('Acme');
+    expect(prisma.tenant.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ emailVerifiedAt: expect.any(Date) }) }));
+    expect(prisma.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ email: 'owner@example.com', emailVerifiedAt: expect.any(Date) }) }));
+    expect(mockProvisionTenantRbac).toHaveBeenCalledWith(42, { vertical: 'generic' });
+    expect(prisma.userRole.upsert).toHaveBeenCalled();
+  });
+
+  test('rolls back both records when owner creation fails inside the transaction', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.tenant.findFirst.mockResolvedValue(null);
+    prisma.tenant.findUnique.mockResolvedValue(null);
+    prisma.tenant.create.mockResolvedValue({ id: 42 });
+    prisma.user.create.mockRejectedValue(new Error('owner insert failed'));
+
+    const res = await request(makeApp()).post('/api/super-admin/tenant-management/organizations').send({
+      organizationName: 'Atomic Org', name: 'Owner', email: 'atomic@example.com', password: 'secure123',
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('ORGANIZATION_CREATE_FAILED');
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+    expect(mockProvisionTenantRbac).not.toHaveBeenCalled();
+  });
+
+  test('deletes the new tenant and returns failure when RBAC provisioning fails', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.tenant.findFirst.mockResolvedValue(null);
+    prisma.tenant.findUnique.mockResolvedValue(null);
+    prisma.tenant.create.mockResolvedValue({ id: 42, name: 'Acme', slug: 'acme', ownerEmail: 'owner@example.com', plan: 'TRIAL', vertical: 'generic' });
+    prisma.user.create.mockResolvedValue({ id: 77, email: 'owner@example.com', name: 'Owner', role: 'ADMIN' });
+    mockProvisionTenantRbac.mockRejectedValue(new Error('permission seed failed'));
+
+    const res = await request(makeApp()).post('/api/super-admin/tenant-management/organizations').send({
+      organizationName: 'Acme', name: 'Owner', email: 'owner@example.com', password: 'secure123',
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('RBAC_PROVISIONING_FAILED');
+    expect(prisma.tenant.delete).toHaveBeenCalledWith({ where: { id: 42 } });
+  });
+
+  test('rejects an owner email already used in the same CRM vertical', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 1 });
+    const res = await request(makeApp()).post('/api/super-admin/tenant-management/organizations').send({
+      organizationName: 'New Org', name: 'Owner', email: 'owner@example.com', password: 'secure123',
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('EMAIL_ALREADY_EXISTS');
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({ where: { email: 'owner@example.com', tenant: { vertical: 'generic' } }, select: { id: true } });
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('PUT /landing-form', () => {

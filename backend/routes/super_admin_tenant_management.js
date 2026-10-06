@@ -1,4 +1,5 @@
 const express = require("express");
+const bcrypt = require("bcryptjs");
 const router = express.Router();
 
 // requireSuperAdmin is applied at the app.use() mount point in server.js
@@ -12,8 +13,131 @@ const {
   getSuperAdminRevenueSummary,
 } = require("../lib/superAdminTenantManagement");
 const landingFormConfig = require("../lib/landingFormConfig");
+const emailOtp = require("../lib/emailOtp");
+const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
+
+function validatePasswordComplexity(password) {
+  if (!password || typeof password !== "string") return "Password is required";
+  if (password.length < 8) return "Password must be at least 8 characters long";
+  if (!/[A-Za-z]/.test(password)) return "Password must contain at least one letter";
+  if (!/[0-9]/.test(password)) return "Password must contain at least one number";
+  return null;
+}
+
+function normalizeOrganizationName(name) {
+  return String(name || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("en-US");
+}
+
+async function organizationNameTaken(name) {
+  const normalizedName = normalizeOrganizationName(name);
+  if (!normalizedName) return false;
+  const tenant = await prisma.tenant.findFirst({
+    where: {
+      OR: [
+        { organizationNameKey: normalizedName },
+        { name: String(name || "").trim() },
+      ],
+    },
+    select: { id: true },
+  });
+  return Boolean(tenant);
+}
+
+async function generateUniqueSlug(base) {
+  const root = (base || "org")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "org";
+  let slug = root;
+  for (let i = 1; i <= 100; i += 1) {
+    if (!await prisma.tenant.findUnique({ where: { slug } })) return slug;
+    slug = `${root}-${i + 1}`;
+  }
+  return `${root}-${require("crypto").randomUUID().slice(0, 8)}`;
+}
+
+async function provisionFreshTenant(tenantId, vertical, adminUserId) {
+  try {
+    await provisionTenantRbac(tenantId, { vertical });
+    const adminRole = await prisma.role.findFirst({ where: { tenantId, key: "ADMIN" }, select: { id: true } });
+    if (adminRole && adminUserId) {
+      await prisma.userRole.upsert({
+        where: { userId_roleId: { userId: adminUserId, roleId: adminRole.id } },
+        update: {},
+        create: { userId: adminUserId, roleId: adminRole.id },
+      });
+    }
+  } catch (err) {
+    console.error(`[super-admin] RBAC provisioning failed for tenant ${tenantId}:`, err.message);
+  }
+}
 
 // ── Cross-tenant overview + detail ──────────────────────────────────────
+
+// Super Admin organization creation is intentionally separate from public
+// signup. A trusted platform operator does not need customer email OTP;
+// public/customer registration keeps its existing verification rules.
+router.post("/organizations", async (req, res) => {
+  try {
+    const { email: rawEmail, password, name, organizationName: rawOrganizationName, vertical, themePreference } = req.body || {};
+    const email = String(rawEmail || "").trim().toLowerCase();
+    const organizationName = String(rawOrganizationName || "").trim().replace(/\s+/g, " ");
+    const selectedVertical = ["generic", "wellness", "travel"].includes(vertical) ? vertical : "generic";
+    const passwordError = validatePasswordComplexity(password);
+    if (passwordError) return res.status(400).json({ error: passwordError, code: "INVALID_PASSWORD" });
+    if (!emailOtp.isValidEmail(email)) return res.status(400).json({ error: "A valid email address is required", code: "EMAIL_REQUIRED" });
+    if (!organizationName) return res.status(400).json({ error: "Organization name is required", code: "ORGANIZATION_NAME_REQUIRED" });
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Full name is required", code: "NAME_REQUIRED" });
+
+    // Match public signup: the same email may be used in a different CRM
+    // vertical, but cannot be registered twice within the same vertical.
+    const existingUser = await prisma.user.findFirst({ where: { email, tenant: { vertical: selectedVertical } }, select: { id: true } });
+    if (existingUser) return res.status(409).json({ error: "This email is already registered. Please use a different email address.", code: "EMAIL_ALREADY_EXISTS" });
+    if (await organizationNameTaken(organizationName)) return res.status(409).json({ error: "This organization name is already taken. Please use a different name.", code: "ORGANIZATION_NAME_ALREADY_EXISTS" });
+
+    const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || "15", 10);
+    const now = new Date();
+    const tenant = await prisma.tenant.create({
+      data: {
+        name: organizationName,
+        organizationNameKey: normalizeOrganizationName(organizationName),
+        slug: await generateUniqueSlug(organizationName),
+        ownerEmail: email,
+        plan: "TRIAL",
+        vertical: selectedVertical,
+        emailVerifiedAt: now,
+      },
+    });
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password: await bcrypt.hash(password, 10),
+        name: String(name).trim(),
+        role: "ADMIN",
+        tenantId: tenant.id,
+        trialStartDate: now,
+        trialEndsAt: new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000),
+        subscriptionStatus: "TRIAL",
+        themePreference: ["light", "dark", "system"].includes(themePreference) ? themePreference : "system",
+        emailVerifiedAt: now,
+      },
+    });
+    await provisionFreshTenant(tenant.id, selectedVertical, user.id);
+    res.status(201).json({
+      organization: { id: tenant.id, name: tenant.name, slug: tenant.slug, ownerEmail: tenant.ownerEmail, plan: tenant.plan, vertical: tenant.vertical },
+      owner: { id: user.id, email: user.email, name: user.name, role: user.role },
+    });
+  } catch (err) {
+    console.error("[super-admin] organization creation error:", err.message);
+    if (err?.code === "P2002") return res.status(409).json({ error: "This email or organization is already registered.", code: "DUPLICATE_ORGANIZATION" });
+    res.status(500).json({ error: "Failed to create organization", code: "ORGANIZATION_CREATE_FAILED" });
+  }
+});
 
 router.get("/tenants", async (req, res) => {
   try {

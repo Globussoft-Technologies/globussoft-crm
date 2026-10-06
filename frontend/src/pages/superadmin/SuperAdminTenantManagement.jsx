@@ -61,6 +61,8 @@ function TenantListView() {
   const [tenants, setTenants] = useState([]);
   const [summary, setSummary] = useState({ totalTenants: 0, activePlatformSubs: 0, activeAiSubs: 0, totalLifetimeRevenue: 0 });
   const [search, setSearch] = useState(searchParams.get("search") || "");
+  const [creating, setCreating] = useState(false);
+  const [createForm, setCreateForm] = useState({ organizationName: "", name: "", email: "", password: "", vertical: "generic", themePreference: "system" });
 
   const load = async (nextSearch = search) => {
     setLoading(true);
@@ -80,6 +82,25 @@ function TenantListView() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleCreate = async (event) => {
+    event.preventDefault();
+    setCreating(true);
+    setMessage("");
+    try {
+      const result = await superAdminFetch("/tenant-management/organizations", {
+        method: "POST",
+        body: JSON.stringify(createForm),
+      });
+      setMessage(`Organization "${result.organization.name}" created for ${result.owner.email}.`);
+      setCreateForm({ organizationName: "", name: "", email: "", password: "", vertical: "generic", themePreference: "system" });
+      await load();
+    } catch (err) {
+      setMessage(err.message || "Failed to create organization.");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
@@ -105,6 +126,28 @@ function TenantListView() {
         <SummaryCard label="Active AI subs" value={fmtNumber(summary.activeAiSubs)} />
         <SummaryCard label="Total lifetime revenue" value={formatMoney(summary.totalLifetimeRevenue, { currency: "INR" })} />
       </div>
+
+      <form className="card" onSubmit={handleCreate} style={{ padding: "1rem", display: "grid", gap: "0.75rem" }}>
+        <div style={{ fontWeight: 700 }}>Create organization for customer</div>
+        <div style={{ color: "var(--text-secondary)", fontSize: "0.82rem" }}>Super Admin creation does not require customer email OTP. Customer self-registration is unchanged.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
+          <input className="input-field" placeholder="Organization name" required value={createForm.organizationName} onChange={(e) => setCreateForm((p) => ({ ...p, organizationName: e.target.value }))} />
+          <input className="input-field" placeholder="Customer full name" required value={createForm.name} onChange={(e) => setCreateForm((p) => ({ ...p, name: e.target.value }))} />
+          <input className="input-field" type="email" placeholder="Customer email" required value={createForm.email} onChange={(e) => setCreateForm((p) => ({ ...p, email: e.target.value }))} />
+          <input className="input-field" type="password" minLength={8} placeholder="Temporary password" required value={createForm.password} onChange={(e) => setCreateForm((p) => ({ ...p, password: e.target.value }))} />
+          <select className="input-field" value={createForm.vertical} onChange={(e) => setCreateForm((p) => ({ ...p, vertical: e.target.value }))}>
+            <option value="generic">Generic CRM</option>
+            <option value="wellness">Wellness</option>
+            <option value="travel">Travel</option>
+          </select>
+          <select className="input-field" value={createForm.themePreference} onChange={(e) => setCreateForm((p) => ({ ...p, themePreference: e.target.value }))}>
+            <option value="system">System theme</option>
+            <option value="light">Light theme</option>
+            <option value="dark">Dark theme</option>
+          </select>
+        </div>
+        <button className="btn-primary" type="submit" disabled={creating} style={{ width: "fit-content" }}>{creating ? "Creating..." : "Create Organization"}</button>
+      </form>
 
       <div className="card" style={{ padding: "1rem", display: "grid", gap: "0.75rem" }}>
         <div style={{ position: "relative" }}>

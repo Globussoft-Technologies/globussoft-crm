@@ -57,7 +57,14 @@ async function createTrip(request, tripCode, destination, pricePerStudent, dayOf
   return await tripRes.json();
 }
 
+const FUTURE_DATES = [7, 14, 21].map(days => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10));
+const formattedPlanDate = index => new Date(`${FUTURE_DATES[index]}T12:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+
 async function createPaymentPlan(request, tripId, installments, graceDays = 0) {
+  // Future fixtures keep production's past-due-date validation exercised.
+  installments = installments.map((item, index) => ({ ...item,
+    dueDate: FUTURE_DATES[index],
+  }));
   // Route contract: PUT /travel/trips/:tripId/payment-plan with instalmentsJson string.
   const planRes = await request.put(`${API_BASE}/travel/trips/${tripId}/payment-plan`, {
     headers: adminHeaders,
@@ -71,6 +78,9 @@ async function createPaymentPlan(request, tripId, installments, graceDays = 0) {
 }
 
 async function createLandingPage(request, title, slug, content) {
+  const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  title = `${title} ${suffix}`;
+  slug = `${slug.slice(0, 20)}-${suffix}`;
   const pageRes = await request.post(`${API_BASE}/landing-pages`, {
     headers: adminHeaders,
     data: {
@@ -131,7 +141,7 @@ test.describe('landing-pages-investment-sync-api', () => {
     const inst0 = cfg.investment.installments[0];
     expect(inst0.tag).toMatch(/^A\. Instalment/);
     expect(inst0.amount).toMatch(/^₹25,000$/);
-    expect(inst0.date).toMatch(/20 April 2026/);
+    expect(inst0.date).toBe(formattedPlanDate(0));
     expect(inst0.title).toBe('');
     expect(inst0.sub).toBe('');
     expect(inst0.entity).toBe('');
@@ -139,12 +149,12 @@ test.describe('landing-pages-investment-sync-api', () => {
     const inst1 = cfg.investment.installments[1];
     expect(inst1.tag).toMatch(/^B\. Instalment/);
     expect(inst1.amount).toMatch(/^₹35,000$/);
-    expect(inst1.date).toMatch(/15 May 2026/);
+    expect(inst1.date).toBe(formattedPlanDate(1));
 
     const inst2 = cfg.investment.installments[2];
     expect(inst2.tag).toMatch(/^C\. Instalment/);
     expect(inst2.amount).toMatch(/^₹35,000$/);
-    expect(inst2.date).toMatch(/15 June 2026/);
+    expect(inst2.date).toBe(formattedPlanDate(2));
   });
 
   test('POST /landing-pages/:id/sync-investment — regenerate installments from trip', async ({ request }) => {
@@ -180,7 +190,7 @@ test.describe('landing-pages-investment-sync-api', () => {
 
     expect(syncData.installments[0].amount).toMatch(/^₹40,000$/);
     expect(syncData.installments[0].tag).toMatch(/^A\. Instalment/);
-    expect(syncData.installments[0].date).toMatch(/1 May 2026/);
+    expect(syncData.installments[0].date).toBe(formattedPlanDate(0));
   });
 
   test('POST /landing-pages/:id/sync-investment — 404 when page not found', async ({ request }) => {
@@ -208,7 +218,7 @@ test.describe('landing-pages-investment-sync-api', () => {
   });
 
   test('POST /landing-pages/:id/sync-investment — 400 when trip has no payment plan', async ({ request }) => {
-    const trip = await createTrip(request, 'tmc-test-no-plan', 'Kerala', 85000, [70, 80]);
+    const trip = await createTrip(request, uniqueTripCode('tmc-test-no-plan'), 'Kerala', 85000, [70, 80]);
 
     const page = await createLandingPage(request, 'Kerala Page', 'test-kerala-sync', {
       brand: { name: 'Test' },
@@ -226,7 +236,7 @@ test.describe('landing-pages-investment-sync-api', () => {
   });
 
   test('Linking page to trip with existing installments does NOT overwrite', async ({ request }) => {
-    const trip = await createTrip(request, 'tmc-test-preserve', 'Goa', 75000, [90, 100]);
+    const trip = await createTrip(request, uniqueTripCode('tmc-test-preserve'), 'Goa', 75000, [90, 100]);
     await createPaymentPlan(request, trip.id, [
       { dueDate: '2026-08-01', amount: 25000, reminderDays: 7 },
       { dueDate: '2026-09-01', amount: 25000, reminderDays: 7 },

@@ -130,10 +130,7 @@ async function deleteInstalments(request, token, trip, predicate = () => true) {
 // array, valid dueDate, numeric amount).
 function buildPlan() {
   return JSON.stringify([
-    { dueDate: "2026-08-01", amount: 5000, reminderDays: 7 },
-    { dueDate: "2026-09-01", amount: 5000, reminderDays: 7 },
-    { dueDate: "2026-10-01", amount: 5000, reminderDays: 3 },
-    { dueDate: "2026-11-01", amount: 5000, reminderDays: 3 },
+    ...[7, 14, 21, 28].map((days, index) => ({ dueDate: new Date(Date.now() + days * 86400000).toISOString().slice(0, 10), amount: 5000, reminderDays: index < 2 ? 7 : 3 })),
   ]);
 }
 
@@ -169,10 +166,11 @@ test.beforeAll(async ({ request }) => {
     if (p.ok()) participantIds.push((await p.json()).id);
   }
 
-  await put(request, token, `/api/travel/trips/${tripId}/payment-plan`, {
+  const planResponse = await put(request, token, `/api/travel/trips/${tripId}/payment-plan`, {
     instalmentsJson: buildPlan(),
     graceDays: 5,
   });
+  expect(planResponse.ok(), await planResponse.text()).toBeTruthy();
 
   // Saving a plan for an existing roster now creates the instalments
   // automatically. Remove them so this spec can independently exercise the

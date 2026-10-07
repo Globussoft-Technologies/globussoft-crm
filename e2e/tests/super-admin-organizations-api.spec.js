@@ -51,7 +51,7 @@ test.afterAll(() => {
   const cleanup = spawnSync(process.execPath, ['-e', [
     "const { PrismaClient } = require('@prisma/client');",
     'const prisma = new PrismaClient();',
-    `prisma.tenant.delete({ where: { id: ${createdTenantId} } })`,
+    `prisma.$transaction(async (tx) => { await tx.auditLog.deleteMany({ where: { tenantId: ${createdTenantId} } }); return tx.tenant.delete({ where: { id: ${createdTenantId} } }); })`,
     ".catch((error) => { if (error.code !== 'P2025') throw error; })",
     '.finally(() => prisma.$disconnect());',
   ].join(' ')], {

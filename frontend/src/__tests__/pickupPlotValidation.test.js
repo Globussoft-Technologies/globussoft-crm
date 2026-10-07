@@ -22,7 +22,8 @@ describe('pickup and plot form validation', () => {
     expect(validatePhoneNumber('dfgftg223125')).toMatch(/invalid characters/);
     expect(validateTransportPersonForm({ name: 'Ravi Kumar', phone: '123', alternatePhone: '', vehicleType: '', vehicleNumber: '', serviceArea: '', notes: '' })).toMatch(/7 to 15 digits/);
     expect(validateTransportPersonForm({ name: 'Ravi Kumar', phone: '+91 90000 11111', alternatePhone: '', vehicleType: 'Truck', vehicleNumber: 'KA 01 AB 1234', serviceArea: '', notes: '' })).toBeNull();
-    expect(validateTransportPersonForm({ name: 'Ravi Kumar', phone: '9000011111', alternatePhone: '', vehicleType: '', vehicleNumber: '', serviceAreas: [{ area: 'Koramangala', state: '', pincode: '560095' }], notes: '' })).toMatch(/area, state, and PIN code/i);
+    expect(validateTransportPersonForm({ name: 'Ravi Kumar', phone: '9000011111', alternatePhone: '', vehicleType: '', vehicleNumber: '', serviceAreas: [{ area: 'Koramangala', state: '', pincode: '560095' }], notes: '' })).toBeNull();
+    expect(validateTransportPersonForm({ name: 'Ravi Kumar', phone: '9000011111', alternatePhone: '', vehicleType: '', vehicleNumber: '', serviceAreas: [{ area: '', state: 'Karnataka', pincode: '560095' }], notes: '' })).toMatch(/Area could not be resolved/i);
     expect(validateTransportPersonForm({ name: 'Ravi Kumar', phone: '9000011111', alternatePhone: '', vehicleType: '', vehicleNumber: '', serviceAreas: [{ area: 'Koramangala', state: 'Karnataka', pincode: '560095' }], notes: '' })).toBeNull();
     expect(validateBrokerForm({ name: 'Asha Rao', phone: '9000022222', email: 'wrong@address', agency: '', commissionPercent: '2.5', notes: '' })).toMatch(/valid email/);
     expect(validateBrokerForm({ name: 'Asha Rao', phone: '9000022222', email: 'asha@example.com', agency: '', commissionPercent: '101', notes: '' })).toMatch(/too large/);

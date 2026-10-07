@@ -89,6 +89,7 @@ export default function InventoryTab({ patient, onSaved }) {
     if (Number(item.usageValue) > 0) return Number(item.usageValue);
     return (Number(item.qty) || 0) * (Number(item.unitCost) || 0);
   };
+  const editedUsageValue = (Number(editForm.qty) || 0) * (Number(editForm.unitCost) || 0);
   const totalCost = items.reduce((s, i) => s + lineUsageValue(i), 0);
 
   return (
@@ -132,6 +133,7 @@ export default function InventoryTab({ patient, onSaved }) {
                     <th style={{ ...tableHeaderStyle, textAlign: 'left' }}>Product Code</th>
                     <th style={{ ...tableHeaderStyle, textAlign: 'left' }}>Quantity</th>
                     <th style={{ ...tableHeaderStyle, textAlign: 'left' }}>Sale Price</th>
+                    <th style={{ ...tableHeaderStyle, textAlign: 'left' }}>Unit Cost</th>
                     <th style={{ ...tableHeaderStyle, textAlign: 'left' }}>Usage Value</th>
                     <th style={{ ...tableHeaderStyle, textAlign: 'left' }}>Actions</th>
                   </tr>
@@ -139,17 +141,25 @@ export default function InventoryTab({ patient, onSaved }) {
                 <tbody>
                   {items.map((i) => (
                     editingId === i.id ? (
-                      <tr key={i.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.03)' }}>
-                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }} colSpan={6}>
-                          <input value={editForm.productName} onChange={(e) => setEditForm({ ...editForm, productName: e.target.value })} style={inputStyle} />
+                      <tr key={i.id} data-testid="inventory-edit-row" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.03)' }}>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.transactionDate ? formatDate(i.transactionDate) : emptyCell('No transaction date')}</td>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.bookingId != null && i.bookingId !== '' ? `#${i.bookingId}` : emptyCell('No booking ID')}</td>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.customerName || emptyCell('No customer name')}</td>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.staff || emptyCell('No staff assigned')}</td>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.serviceName || emptyCell('No service assigned')}</td>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>
+                          <input aria-label="Product name" value={editForm.productName} onChange={(e) => setEditForm({ ...editForm, productName: e.target.value })} style={inputStyle} />
                         </td>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.transactionType || emptyCell('No transaction type')}</td>
+                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.productCode || emptyCell('No product code')}</td>
                         <td style={{ ...numericCellStyle, padding: '0.4rem 1rem' }}>
-                          <input type="number" min={1} value={editForm.qty} onChange={(e) => setEditForm({ ...editForm, qty: e.target.value === '' ? '' : (parseInt(e.target.value) || 1) })} style={{ ...inputStyle, textAlign: 'left' }} />
+                          <input aria-label="Quantity" type="number" min={1} value={editForm.qty} onChange={(e) => setEditForm({ ...editForm, qty: e.target.value === '' ? '' : (parseInt(e.target.value) || 1) })} style={{ ...inputStyle, textAlign: 'left' }} />
                         </td>
+                        <td style={{ ...numericCellStyle, padding: '0.4rem 1rem' }}>{Number(i.salePrice) > 0 ? `₹${Number(i.salePrice).toLocaleString('en-IN')}` : emptyCell('No sale price')}</td>
                         <td style={{ ...numericCellStyle, padding: '0.4rem 1rem' }}>
-                          <input type="number" min={0} step={0.01} value={editForm.unitCost} onChange={(e) => setEditForm({ ...editForm, unitCost: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })} style={{ ...inputStyle, textAlign: 'left' }} />
+                          <input aria-label="Unit cost" type="number" min={0} step={0.01} value={editForm.unitCost} onChange={(e) => setEditForm({ ...editForm, unitCost: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })} style={{ ...inputStyle, textAlign: 'left' }} />
                         </td>
-                        <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }} colSpan={3}>{emptyCell('Catalog fields stay unchanged')}</td>
+                        <td style={{ ...numericCellStyle, padding: '0.4rem 1rem' }}>{editedUsageValue > 0 ? `₹${editedUsageValue.toLocaleString('en-IN')}` : emptyCell('No usage value')}</td>
                         <td style={{ ...actionCellStyle, padding: '0.4rem 1rem' }}>
                           <button type="button" onClick={() => saveEdit(i)} disabled={savingEdit} title="Save changes" style={{ background: 'transparent', border: 'none', cursor: savingEdit ? 'not-allowed' : 'pointer', color: 'var(--success-color)', padding: '0.25rem', marginRight: '0.25rem' }}><Check size={16} /></button>
                           <button type="button" onClick={cancelEdit} disabled={savingEdit} title="Cancel" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '0.25rem' }}><X size={16} /></button>
@@ -167,6 +177,7 @@ export default function InventoryTab({ patient, onSaved }) {
                         <td style={textCellStyle}>{i.productCode || emptyCell('No product code')}</td>
                         <td style={numericCellStyle}>{i.quantity || (Number(i.qty) > 0 ? `${i.qty} ${i.unit || ''}`.trim() : emptyCell('No quantity'))}</td>
                         <td style={numericCellStyle}>{Number(i.salePrice) > 0 ? `₹${Number(i.salePrice).toLocaleString('en-IN')}` : emptyCell('No sale price')}</td>
+                        <td style={numericCellStyle}>{Number(i.unitCost) > 0 ? `₹${Number(i.unitCost).toLocaleString('en-IN')}` : emptyCell('No unit cost')}</td>
                         <td style={{ ...numericCellStyle, fontWeight: 500 }}>{lineUsageValue(i) > 0 ? `₹${lineUsageValue(i).toLocaleString('en-IN')}` : emptyCell('No usage value')}</td>
                         <td style={actionCellStyle}>
                           <button type="button" onClick={() => startEdit(i)} disabled={!!editingId} title="Edit (amend) this item" style={{ background: 'transparent', border: 'none', cursor: editingId ? 'not-allowed' : 'pointer', color: 'var(--accent-color)', padding: '0.25rem', opacity: editingId ? 0.4 : 1 }}><Pencil size={15} /></button>
@@ -174,10 +185,10 @@ export default function InventoryTab({ patient, onSaved }) {
                       </tr>
                     )
                   ))}
-                  {items.length === 0 && <tr><td colSpan={12} style={{ ...textCellStyle, color: 'var(--text-secondary)' }}>No products logged for this visit.</td></tr>}
+                  {items.length === 0 && <tr><td colSpan={13} style={{ ...textCellStyle, color: 'var(--text-secondary)' }}>No products logged for this visit.</td></tr>}
                   {items.length > 0 && (
                     <tr style={{ borderTop: '2px solid rgba(255,255,255,0.08)' }}>
-                      <td colSpan={10} style={{ ...numericCellStyle, fontWeight: 600 }}>Total cost</td>
+                      <td colSpan={11} style={{ ...numericCellStyle, fontWeight: 600 }}>Total cost</td>
                       <td style={{ ...numericCellStyle, fontWeight: 600 }}>{totalCost > 0 ? `₹${totalCost.toLocaleString('en-IN')}` : emptyCell('No usage data')}</td>
                       <td style={actionCellStyle}>{emptyCell('No actions')}</td>
                     </tr>

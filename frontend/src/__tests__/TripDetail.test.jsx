@@ -992,6 +992,78 @@ describe('<TripDetail /> — Payment plan tab', () => {
     const puts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PUT');
     expect(puts.length).toBe(0);
   });
+
+  it('sets each date input minimum to today and the previous instalment date', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Create payment plan/i });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+
+    const firstDate = await screen.findByLabelText(/Instalment 1 due date/i);
+    expect(firstDate.min).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    fireEvent.change(firstDate, { target: { value: '2099-09-20' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+
+    expect(screen.getByLabelText(/Instalment 2 due date/i).min).toBe('2099-09-20');
+    fireEvent.change(firstDate, { target: { value: '2099-09-25' } });
+    expect(screen.getByLabelText(/Instalment 2 due date/i).min).toBe('2099-09-25');
+  });
+
+  it('rejects a past due date before sending the payment plan', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Create payment plan/i });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+    fireEvent.change(await screen.findByLabelText(/Instalment 1 due date/i), {
+      target: { value: '2000-01-01' },
+    });
+    fireEvent.change(screen.getByLabelText(/Instalment 1 amount/i), {
+      target: { value: '5000' },
+    });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Save payment plan/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/due date cannot be in the past/i),
+      );
+    });
+    expect(fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('rejects a later instalment date before the previous date', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Create payment plan/i });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+    fireEvent.change(await screen.findByLabelText(/Instalment 1 due date/i), {
+      target: { value: '2099-09-20' },
+    });
+    fireEvent.change(screen.getByLabelText(/Instalment 1 amount/i), {
+      target: { value: '5000' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+    fireEvent.change(screen.getByLabelText(/Instalment 2 due date/i), {
+      target: { value: '2099-09-19' },
+    });
+    fireEvent.change(screen.getByLabelText(/Instalment 2 amount/i), {
+      target: { value: '5000' },
+    });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Save payment plan/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/due date cannot be before instalment 1/i),
+      );
+    });
+    expect(fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PUT')).toHaveLength(0);
+  });
 });
 
 describe.skip('<TripDetail /> — Microsite Create flow (legacy UI)', () => {

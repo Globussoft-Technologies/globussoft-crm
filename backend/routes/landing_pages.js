@@ -14,6 +14,7 @@ const { renderPage } = require("../services/landingPageRenderer");
 const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
 const {
   applyLandingPagePaymentToTrip,
+  ensureLandingPagePaymentRegistration,
   getLandingPagePaymentConfig,
   resolveLandingPagePaymentSelection,
 } = require("../lib/landingPagePayments");
@@ -6040,9 +6041,8 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" } });
     const fields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : {};
     if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
-    // Passport status controls whether the public wizard offers payment. It
-    // no longer gates a document-upload step because documents are collected
-    // through the parent portal/admin workflow.
+    // Registration starts here; travel documents are collected later in the
+    // parent portal and are not part of the landing-page payment flow.
     const draftToken = crypto.randomBytes(24).toString("hex");
     const draft = await prisma.pendingTripRegistration.create({
       data: {
@@ -6055,7 +6055,7 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
         parentName: String(fields.parent_name || "").trim(),
         parentEmail: String(fields.parent_email || "").trim(),
         parentPhone: String(fields.parent_phone || "").trim(),
-        extrasJson: JSON.stringify({ landingPage: true, documents: {} }),
+        extrasJson: JSON.stringify({ landingPage: true }),
         status: "DRAFT",
         draftToken,
         draftTokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
@@ -6064,7 +6064,7 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
     return res.status(201).json({ draftToken, draftId: draft.id });
   } catch (err) {
     console.error("[LandingPage] registration draft error:", err);
-    return res.status(500).json({ error: "Could not start document collection", code: "DRAFT_CREATE_FAILED" });
+    return res.status(500).json({ error: "Could not start registration", code: "DRAFT_CREATE_FAILED" });
   }
 });
 
@@ -6094,7 +6094,7 @@ publicRouter.post("/:slug/registration-documents", (req, res, next) => {
           tenantId: page.tenantId || 1, tripId: page.tripId, landingPageId: page.id,
           studentName: String(fields.student_name || "").trim(), studentSchool: fields.school || null, studentClass: fields.grade || null,
           parentName: String(fields.parent_name || "").trim(), parentEmail: String(fields.parent_email || "").trim(), parentPhone: String(fields.parent_phone || "").trim(),
-          extrasJson: JSON.stringify({ landingPage: true, documents: {} }), status: "DRAFT", draftToken,
+          extrasJson: JSON.stringify({ landingPage: true }), status: "DRAFT", draftToken,
           draftTokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
         },
       });
@@ -6155,23 +6155,73 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       return res.status(409).json({ error: "Payment can only be used on trip-linked landing pages", code: "NO_TRIP_LINK" });
     }
 
-    const tripType = await resolveLandingPageTripType(page);
     const paymentFields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : req.body || {};
-    const passportStatus = String(paymentFields.passport_status || paymentFields.passportStatus || "").trim().toLowerCase();
-    const passportValid = !tripRequiresPassport(tripType)
-      || ["valid passport", "valid for 6+ months", "yes, passport is valid for 6+ months"].includes(passportStatus);
-    if (!passportValid) {
-      return res.status(400).json({ error: "Payment requires a passport valid for at least 6 months", code: "PASSPORT_REQUIRED" });
-    }
-
     const selection = resolveLandingPagePaymentSelection(page, req.body || {});
     const tenantId = page.tenantId || 1;
+    const draftToken = String(req.body?.draftToken || "").trim();
+    const paymentDraft = draftToken && prisma.pendingTripRegistration?.findUnique
+      ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken } })
+      : null;
+    if (!paymentDraft) {
+      return res.status(400).json({ error: "A valid registration draft is required before payment", code: "INVALID_DRAFT" });
+    }
+    if (paymentDraft && (Number(paymentDraft.tenantId) !== Number(tenantId)
+      || Number(paymentDraft.tripId) !== Number(page.tripId)
+      || Number(paymentDraft.landingPageId) !== Number(page.id))) {
+      return res.status(400).json({ error: "Registration draft does not belong to this trip", code: "INVALID_DRAFT" });
+    }
+    const existingPayment = await findPaidLandingPageSelection({
+      page,
+      tenantId,
+      selection,
+      draftToken,
+    });
+    if (existingPayment) {
+      return res.status(409).json({
+        error: "This installment is already paid. No second payment is required.",
+        code: "ALREADY_PAID",
+        installmentIndex: selection.installmentIndex,
+      });
+    }
     const rp = await getTenantRazorpayClient(tenantId);
     if (!rp) {
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
 
+    // Claim this draft atomically before creating an external payment link.
+    // Only one concurrent request can move it into PAYMENT_PENDING; every
+    // replay is rejected before it can create a second chargeable link.
+    const paymentClaim = await prisma.pendingTripRegistration.updateMany({
+      where: {
+        id: paymentDraft.id,
+        status: { notIn: ["PAYMENT_PENDING", "CONVERTED", "REJECTED"] },
+      },
+      data: { status: "PAYMENT_PENDING" },
+    });
+    if (paymentClaim.count !== 1) {
+      return res.status(409).json({
+        error: "A payment is already in progress for this registration",
+        code: "PAYMENT_IN_PROGRESS",
+      });
+    }
+
     const receipt = `lp_${page.id}_${selection.mode}_${selection.installmentIndex}_${Date.now()}`;
+    const pickPaymentField = (...keys) => {
+      for (const key of keys) {
+        const value = paymentFields?.[key];
+        if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+      }
+      return "";
+    };
+    const registration = {
+      studentName: String(paymentDraft?.studentName || pickPaymentField("student_name", "studentName", "name", "fullName") || "").trim(),
+      studentSchool: String(paymentDraft?.studentSchool || pickPaymentField("student_school", "studentSchool", "school") || "").trim(),
+      studentClass: String(paymentDraft?.studentClass || pickPaymentField("student_class", "studentClass", "grade") || "").trim(),
+      parentName: String(paymentDraft?.parentName || pickPaymentField("parent_name", "parentName", "name", "fullName") || "").trim(),
+      parentEmail: String(paymentDraft?.parentEmail || pickPaymentField("parent_email", "parentEmail", "email") || "").trim().toLowerCase(),
+      parentPhone: String(paymentDraft?.parentPhone || pickPaymentField("parent_phone", "parentPhone", "phone") || "").trim(),
+      passportNumber: pickPaymentField("passport_number", "passportNumber"),
+    };
     const notes = {
       tenantId: String(tenantId),
       kind: "landing-page-registration",
@@ -6181,7 +6231,11 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       paymentMode: selection.mode,
       installmentIndex: String(selection.installmentIndex),
       installmentIndexes: JSON.stringify(selection.installmentIndexes),
-      draftToken: String(req.body?.draftToken || ""),
+      draftToken,
+      parentEmail: registration.parentEmail,
+      parentPhone: registration.parentPhone,
+      parentName: registration.parentName,
+      studentName: registration.studentName,
     };
 
     const paymentLink = await rp.client.paymentLink.create({
@@ -6190,13 +6244,13 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       accept_partial: false,
       description: `${page.title || "Landing page"} registration payment${selection.mode === "complete" ? " (full)" : ""}`,
       customer: {
-        name: req.body?.name || undefined,
-        email: req.body?.email || undefined,
-        contact: req.body?.phone || undefined,
+        name: registration.parentName || undefined,
+        email: registration.parentEmail || undefined,
+        contact: registration.parentPhone || undefined,
       },
       notify: { sms: false, email: false },
       reminder_enable: false,
-      callback_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/p/${encodeURIComponent(page.slug)}?payment=success&draftToken=${encodeURIComponent(String(req.body?.draftToken || ""))}&regStep=${encodeURIComponent(String(req.body?.regStep || ""))}`,
+      callback_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/p/${encodeURIComponent(page.slug)}?payment=success&draftToken=${encodeURIComponent(draftToken)}&regStep=${encodeURIComponent(String(req.body?.regStep || ""))}`,
       callback_method: "get",
       notes,
     });
@@ -6208,10 +6262,12 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       data: {
         tenantId,
         invoiceId: null,
-        contactId: (await prisma.contact.findFirst({
-          where: { tenantId, email: String(req.body?.email || req.body?.parent_email || req.body?.fields?.email || req.body?.fields?.parent_email || "").trim().toLowerCase() },
-          select: { id: true },
-        }))?.id || null,
+        contactId: registration.parentEmail
+          ? (await prisma.contact.findFirst({
+              where: { tenantId, email: registration.parentEmail, deletedAt: null },
+              select: { id: true },
+            }))?.id || null
+          : null,
         description: `${page.title || "Landing page"} registration payment${selection.mode === "complete" ? " (full)" : ""}`,
         amount: selection.amountMajor,
         currency: selection.currency,
@@ -6236,7 +6292,15 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
           hostedPaymentLink: true,
           hostedPaymentUrl: paymentLink.short_url,
           paymentTitle: selection.paymentTitle,
-          draftToken: String(req.body?.draftToken || ""),
+          draftToken,
+          registration,
+          parentEmail: registration.parentEmail,
+          parentPhone: registration.parentPhone,
+          parentName: registration.parentName,
+          studentName: registration.studentName,
+          studentSchool: registration.studentSchool,
+          studentClass: registration.studentClass,
+          passportNumber: registration.passportNumber || null,
         }),
       },
     });
@@ -6309,7 +6373,15 @@ publicRouter.get("/:slug/payment-status", async (req, res) => {
     const refreshedPayments = await Promise.all(matchingPayments.map(async (payment) => {
       const refreshed = await refreshHostedPaymentStatus(payment, payment.gatewayId, page.tenantId || 1);
       const metadata = safeJsonParse(refreshed.metadata || payment.metadata, {});
-      const participantId = draft.convertedToParticipantId || metadata.participantId;
+      const linked = ["SUCCESS", "CAPTURED", "PAID"].includes(String(refreshed.status || "").toUpperCase())
+        ? await ensureLandingPagePaymentRegistration({
+            db: prisma,
+            payment: refreshed,
+            metadata,
+            tenantId: page.tenantId || 1,
+          })
+        : null;
+      const participantId = linked?.participantId || draft.convertedToParticipantId || metadata.participantId;
       if (participantId && ["SUCCESS", "CAPTURED", "PAID"].includes(String(refreshed.status || "").toUpperCase())) {
         try {
           await applyLandingPagePaymentToTrip({
@@ -6325,7 +6397,7 @@ publicRouter.get("/:slug/payment-status", async (req, res) => {
           console.error("[LandingPage] payment-status trip allocation failed:", allocationError.message);
         }
       }
-      return refreshed;
+      return linked?.payment || refreshed;
     }));
     const paid = refreshedPayments.some((payment) => ["SUCCESS", "CAPTURED", "PAID"].includes(String(payment.status || "").toUpperCase()));
     const extras = safeJsonParse(draft.extrasJson, {});
@@ -7184,6 +7256,106 @@ async function refreshHostedPaymentStatus(paymentRecord, paymentLinkId, tenantId
   return prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
 }
 
+function landingPaymentCoversSelection(metadata, selection) {
+  const indexes = Array.isArray(metadata?.installmentIndexes)
+    ? metadata.installmentIndexes
+    : [metadata?.installmentIndex];
+  const paidIndexes = new Set(indexes.map((index) => Number(index)).filter(Number.isInteger));
+  return selection.installmentIndexes.every((index) => paidIndexes.has(Number(index)));
+}
+
+function isPaidInstallment(row) {
+  const amount = Number(row?.amount);
+  const paidAmount = Number(row?.paidAmount || 0);
+  return String(row?.status || "").toLowerCase() === "paid"
+    || (amount > 0 && paidAmount >= amount);
+}
+
+/**
+ * Check the two persisted sources that can prove a landing-page installment
+ * has already been paid. A landing payment may be captured before staff
+ * converts its draft into a participant, so the Payment row is checked as
+ * well as the participant installment ledger.
+ */
+async function findPaidLandingPageSelection({ page, tenantId, selection, draftToken }) {
+  let participantId = null;
+  if (draftToken && prisma.pendingTripRegistration?.findUnique) {
+    const draft = await prisma.pendingTripRegistration.findUnique({
+      where: { draftToken },
+      select: { convertedToParticipantId: true },
+    });
+    participantId = Number(draft?.convertedToParticipantId) || null;
+  }
+
+  if (participantId && prisma.tripInstalmentPayment?.findMany) {
+    // TripInstalmentPayment has no tenantId; participantId is resolved from
+    // the tenant-owned registration draft above.
+    /* eslint-disable gbscrm/tenant-scope-finder-heuristic */
+    const rows = await prisma.tripInstalmentPayment.findMany({
+      where: { tripId: Number(page.tripId), participantId },
+      select: { instalmentIndex: true, amount: true, paidAmount: true, status: true },
+    }) || [];
+    /* eslint-enable gbscrm/tenant-scope-finder-heuristic */
+    const paidByIndex = new Map(rows.map((row) => [Number(row.instalmentIndex), isPaidInstallment(row)]));
+    if (selection.installmentIndexes.every((index) => paidByIndex.get(Number(index)) === true)) {
+      return { source: "installment-ledger", participantId };
+    }
+  }
+
+  // Without the opaque draft token we cannot safely associate an earlier
+  // registration payment with this checkout: another parent may be paying
+  // the same trip and installment. The participant-ledger check above still
+  // protects converted registrations.
+  if (!draftToken || !prisma.payment?.findMany) return null;
+
+  const payments = await prisma.payment.findMany({
+    where: { tenantId, metadata: { contains: draftToken } },
+    select: { id: true, status: true, amount: true, paidAt: true, gateway: true, gatewayId: true, metadata: true },
+    take: 500,
+  }) || [];
+  for (const payment of payments) {
+    const metadata = safeJsonParse(payment.metadata, {});
+    if (metadata.kind !== "landing-page-registration"
+      || Number(metadata.pageId) !== Number(page.id)
+      || Number(metadata.tripId) !== Number(page.tripId)
+      || String(metadata.draftToken || "") !== draftToken
+      || !landingPaymentCoversSelection(metadata, selection)) {
+      continue;
+    }
+
+    const refreshed = await refreshHostedPaymentStatus(payment, payment.gatewayId, tenantId);
+    if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(refreshed?.status || "").toUpperCase())) continue;
+
+    const linked = ["SUCCESS", "CAPTURED", "PAID"].includes(String(refreshed?.status || "").toUpperCase())
+      ? await ensureLandingPagePaymentRegistration({
+          db: prisma,
+          payment: refreshed,
+          metadata,
+          tenantId,
+        })
+      : null;
+    const resolvedParticipantId = linked?.participantId || participantId || Number(metadata.participantId) || null;
+    if (resolvedParticipantId) {
+      try {
+        await applyLandingPagePaymentToTrip({
+          db: prisma,
+          tripId: page.tripId,
+          participantId: resolvedParticipantId,
+          paymentId: linked?.payment?.id || refreshed.id,
+          amountMajor: refreshed.amount || metadata.amountMajor,
+          mode: metadata.paymentMode === "complete" ? "complete" : "installment",
+          installmentIndex: Number.isFinite(Number(metadata.installmentIndex)) ? Number(metadata.installmentIndex) : 0,
+          capturedAt: refreshed.paidAt || new Date(),
+        });
+      } catch (allocationError) {
+        console.error("[LandingPage] duplicate-payment ledger sync failed:", allocationError.message);
+      }
+    }
+    return { source: "payment", payment: linked?.payment || refreshed, participantId: resolvedParticipantId };
+  }
+  return null;
+}
+
 
 
 // Resolves the registration-mode marker for the form block being
@@ -7298,10 +7470,6 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   const parent = (req.body && typeof req.body.parent === "object" && req.body.parent) ? req.body.parent : {};
 
   const passport = (req.body && typeof req.body.passport === "object" && req.body.passport) ? req.body.passport : {};
-
-  const passportStatus = String(passport.status || flat.passport_status || flat.passportStatus || "").trim().toLowerCase();
-  const passportValid = !requiresPassport
-    || ["valid passport", "valid for 6+ months", "yes, passport is valid for 6+ months"].includes(passportStatus);
 
   const extras = (req.body && typeof req.body.extras === "object" && req.body.extras) ? req.body.extras : null;
 
@@ -7538,17 +7706,6 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   });
 
 
-
-  // A passport that is not valid for at least six months completes the
-  // registration without opening payment or the parent portal.
-  if (requiresPassport && !passportValid) {
-    return res.status(201).json({
-      ok: true,
-      draftId: draft.id,
-      redirect: { type: "thanks" },
-      message: "Thank you — your registration has been received. We'll be in touch shortly.",
-    });
-  }
 
   // Resolve microsite redirect. If the trip has a published microsite,
 

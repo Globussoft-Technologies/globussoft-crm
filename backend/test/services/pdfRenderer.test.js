@@ -16,7 +16,7 @@ import { describe, test, expect, vi } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
 
-const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalWellnessInvoicePdf, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
+const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalWellnessInvoicePdf, fitReferenceInvoiceMetadataFont, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1109,6 +1109,26 @@ describe('renderProfessionalWellnessInvoicePdf', () => {
     expect(text).toContain('Thank you for choosing Dr Enhanced Wellness');
     expect(text).not.toContain('Invalid Date');
     expect(text).not.toContain('...');
+  });
+
+  test('shrinks long invoice metadata values to one line so dates cannot overlap them', () => {
+    let activeFontSize = 0;
+    const doc = {
+      fontSize: vi.fn((size) => {
+        activeFontSize = size;
+        return doc;
+      }),
+      widthOfString: vi.fn((value) => String(value).length * activeFontSize * 0.6),
+    };
+    const fittedSize = fitReferenceInvoiceMetadataFont(
+      doc,
+      'WLV-5185-1789651829448',
+      100,
+    );
+
+    expect(fittedSize).toBeLessThan(9.2);
+    expect(fittedSize).toBeGreaterThanOrEqual(7.2);
+    expect(doc.widthOfString('WLV-5185-1789651829448')).toBeLessThanOrEqual(100);
   });
 });
 

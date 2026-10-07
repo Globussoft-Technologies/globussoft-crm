@@ -153,7 +153,7 @@ describe("TMC parent travel documents", () => {
     expect(prisma.tmcParentDocument.create).not.toHaveBeenCalled();
   });
 
-  test("stores a signed consent image in the database and requires a linked trip", async () => {
+  test("stores a signed consent file through the shared OCI/local document store", async () => {
     const response = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", `Bearer ${portalToken()}`)
@@ -162,13 +162,14 @@ describe("TMC parent travel documents", () => {
       .attach("file", Buffer.from("png image"), { filename: "signed-consent.png", contentType: "image/png" });
 
     expect(response.status).toBe(201);
-    expect(visaDocStore.storeDoc).not.toHaveBeenCalled();
+    expect(visaDocStore.storeDoc).toHaveBeenCalledWith(expect.any(Buffer), "image/png");
     expect(prisma.tmcParentDocument.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         documentType: "consent-form",
-        storage: "db",
-        fileUrl: null,
-        fileBlob: expect.any(Buffer),
+        storage: "disk",
+        fileUrl: "/api/uploads/visa-docs/parent-document.pdf",
+        fileBlob: null,
+        storageKey: "parent-document.pdf",
         mimeType: "image/png",
       }),
     }));
@@ -187,8 +188,14 @@ describe("TMC parent travel documents", () => {
       .field("documentType", "consent-form")
       .field("tripId", "7")
       .attach("file", Buffer.from("%PDF-1.7"), { filename: "signed-consent.pdf", contentType: "application/pdf" });
-    expect(pdf.status).toBe(400);
-    expect(pdf.body.code).toBe("CONSENT_IMAGE_REQUIRED");
+    expect(pdf.status).toBe(201);
+    expect(visaDocStore.storeDoc).toHaveBeenCalledWith(expect.any(Buffer), "application/pdf");
+    expect(prisma.tmcParentDocument.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        documentType: "consent-form",
+        mimeType: "application/pdf",
+      }),
+    }));
   });
 
   test("accepts only the four parent document types", async () => {
@@ -360,6 +367,31 @@ describe("TMC parent travel documents", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toMatch(/image\/png/);
     expect(response.body.toString()).toBe("signed image");
+  });
+
+  test("streams an OCI-backed parent document with the canonical storage descriptor", async () => {
+    prisma.tmcParentDocument.findFirst.mockResolvedValue({
+      id: 11,
+      fileBlob: null,
+      fileUrl: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/parent.pdf",
+      storage: "ocs",
+      storageKey: "visa-docs/parent.pdf",
+      mimeType: "application/pdf",
+      filename: "parent.pdf",
+    });
+    visaDocStore.readDocBuffer.mockResolvedValue(Buffer.from("oci document"));
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/parent/documents/11/file")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.toString()).toBe("oci document");
+    expect(visaDocStore.readDocBuffer).toHaveBeenCalledWith({
+      url: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/parent.pdf",
+      storage: "ocs",
+      key: "visa-docs/parent.pdf",
+    });
   });
 
   test("view-url is owner-scoped and resolves a short-lived private link", async () => {

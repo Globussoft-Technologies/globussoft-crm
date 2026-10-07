@@ -151,6 +151,16 @@ describe("TmcTeacherPortal", () => {
     expect(screen.getByText("Singapore")).toBeInTheDocument();
     expect(screen.getByText("Readiness report #12")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Parent portal links" })).not.toBeInTheDocument();
+    expect(document.querySelector('[data-tmc-teacher-sidebar="true"]')).toHaveStyle({
+      position: "fixed",
+      top: "0px",
+      left: "0px",
+      bottom: "0px",
+      width: "250px",
+      height: "100vh",
+      overflowY: "auto",
+    });
+    expect(document.querySelector('[data-tmc-teacher-shell="true"]')).toHaveStyle({ marginLeft: "250px" });
   });
 
   it("opens the authenticated native diagnostic from a dashboard report", async () => {

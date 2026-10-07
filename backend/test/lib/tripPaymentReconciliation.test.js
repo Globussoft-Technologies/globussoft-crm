@@ -5,6 +5,7 @@ const {
   reconcileTripInstalmentPayment,
   reconcileTripPaymentRecord,
 } = requireCJS("../../lib/tripPaymentReconciliation");
+const landingPayments = requireCJS("../../lib/landingPagePayments");
 
 describe("trip payment reconciliation", () => {
   test("updates the installment cumulatively without itinerary linkage", async () => {
@@ -123,5 +124,52 @@ describe("trip payment reconciliation", () => {
       where: { id: 41 },
       data: expect.objectContaining({ status: "paid", paidAmount: 5000 }),
     });
+  });
+
+  test("links a successful landing registration before applying its payment", async () => {
+    const ensureMock = vi.spyOn(landingPayments, "ensureLandingPagePaymentRegistration").mockResolvedValue({
+      participantId: 77,
+      payment: { id: 90, status: "SUCCESS", amount: 170000, metadata: JSON.stringify({ kind: "landing-page-registration", tripId: 21, participantId: 77 }) },
+    });
+    const applyMock = vi.spyOn(landingPayments, "applyLandingPagePaymentToTrip").mockResolvedValue({
+      tripId: 21,
+      participantId: 77,
+      paidMajor: 170000,
+      allocations: [{ instalmentIndex: 0, status: "paid" }],
+    });
+    try {
+      const db = { payment: { update: vi.fn() } };
+      const result = await reconcileTripPaymentRecord({
+        db,
+        tenantId: 8,
+        payment: {
+          id: 90,
+          amount: 170000,
+          status: "SUCCESS",
+          paidAt: new Date("2026-10-06T10:00:00Z"),
+          metadata: JSON.stringify({
+            kind: "landing-page-registration",
+            tenantId: 8,
+            tripId: 21,
+            pageId: 51,
+            draftToken: "draft-90",
+            paymentMode: "complete",
+          }),
+        },
+      });
+
+      expect(ensureMock).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 8, payment: expect.objectContaining({ id: 90 }) }));
+      expect(applyMock).toHaveBeenCalledWith(expect.objectContaining({
+        tripId: 21,
+        participantId: 77,
+        paymentId: 90,
+        amountMajor: 170000,
+        mode: "complete",
+      }));
+      expect(result.payment).toMatchObject({ id: 90, status: "SUCCESS" });
+    } finally {
+      ensureMock.mockRestore();
+      applyMock.mockRestore();
+    }
   });
 });

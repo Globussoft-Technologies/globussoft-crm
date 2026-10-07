@@ -218,6 +218,16 @@ describe("TmcParentPortal", () => {
     expect(screen.getByRole("button", { name: "Trips" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /My Bookings/ })).toBeInTheDocument();
     expect(screen.getByText("Upcoming trip")).toBeInTheDocument();
+    expect(document.querySelector('[data-tmc-parent-sidebar="true"]')).toHaveStyle({
+      position: "fixed",
+      top: "0px",
+      left: "0px",
+      bottom: "0px",
+      width: "236px",
+      height: "100vh",
+      overflowY: "auto",
+    });
+    expect(document.querySelector('[data-tmc-parent-shell="true"]')).toHaveStyle({ marginLeft: "236px" });
   });
 
   it("shows assigned trips and links parents to the registration landing page", async () => {
@@ -301,8 +311,15 @@ describe("TmcParentPortal", () => {
       "Consent form",
       "Visa documents",
     ]);
+    const acceptedFileTypes = screen.getByLabelText("Accepted file types");
+    expect(acceptedFileTypes).toHaveTextContent(/Passport:\s*JPG, PNG, or PDF/);
+    expect(acceptedFileTypes).not.toHaveTextContent(/Aadhaar card:|Consent form:|Visa documents:/);
+    expect(acceptedFileTypes).toHaveTextContent("Maximum size: 10 MB per file.");
+    expect(document.querySelector('button[title="Passport: JPG, PNG, or PDF"]')).toBeInTheDocument();
 
     fireEvent.change(documentTypeSelect, { target: { value: "consent-form" } });
+    expect(screen.getByLabelText("Accepted file types")).toHaveTextContent(/Consent form:\s*JPG, PNG, or PDF/);
+    expect(screen.getByLabelText("Accepted file types")).not.toHaveTextContent(/Passport:|Aadhaar card:|Visa documents:/);
     expect(await screen.findByRole("heading", { name: "Consent form", level: 3 })).toBeInTheDocument();
     expect(screen.getByText("domestic-terms.pdf")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View terms" }));
@@ -315,8 +332,10 @@ describe("TmcParentPortal", () => {
       "/api/portal/tmc/parent/consent-forms/7/file?download=1",
       expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
     ));
-    fireEvent.change(screen.getByLabelText("Choose signed consent image"), {
-      target: { files: [new File(["png"], "consent-form.png", { type: "image/png" })] },
+    const signedConsentInput = screen.getByLabelText("Choose signed consent file");
+    expect(signedConsentInput).toHaveAttribute("accept", expect.stringContaining("application/pdf"));
+    fireEvent.change(signedConsentInput, {
+      target: { files: [new File(["pdf"], "consent-form.pdf", { type: "application/pdf" })] },
     });
     fireEvent.click(screen.getByRole("button", { name: "Upload signed consent" }));
 
@@ -326,16 +345,17 @@ describe("TmcParentPortal", () => {
       expect(uploadCall[1].body).toBeInstanceOf(FormData);
       expect(uploadCall[1].body.get("documentType")).toBe("consent-form");
       expect(uploadCall[1].body.get("tripId")).toBe("7");
-      expect(uploadCall[1].body.get("file").name).toBe("consent-form.png");
+      expect(uploadCall[1].body.get("file").name).toBe("consent-form.pdf");
     });
     expect(await screen.findByText(/travel team will review/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "View passport-arijit.pdf" }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/portal/tmc/parent/documents/11/file",
+      "/api/portal/tmc/parent/documents/11/view-url",
       expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
     ));
-    await waitFor(() => expect(openSpy).toHaveBeenCalledWith("blob:parent-document", "_blank", "noopener,noreferrer"));
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith("https://files.example.test/parent-document.pdf", "_blank", "noopener,noreferrer"));
+    expect(screen.queryByText(/travel team will review/i)).not.toBeInTheDocument();
     openSpy.mockRestore();
     anchorClick.mockRestore();
   });

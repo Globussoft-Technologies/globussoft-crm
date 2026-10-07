@@ -110,6 +110,25 @@ describe("visaDocStore.readDocBuffer", () => {
     expect(result.toString()).toBe("hello world");
   });
 
+  it("accepts the database-shaped OCI descriptor used by portal document routes", async () => {
+    async function* fakeStream() {
+      yield Buffer.from("oci document");
+    }
+    s3Service.getObjectStream = vi.fn(async () => ({ stream: fakeStream() }));
+
+    const result = await store.readDocBuffer({
+      attachmentStorage: "ocs",
+      attachmentKey: "visa-docs/parent-document.pdf",
+      attachmentUrl: "https://objectstorage.example/parent-document.pdf",
+    });
+
+    expect(s3Service.getObjectStream).toHaveBeenCalledWith(
+      "visa-docs/parent-document.pdf",
+      { provider: "oci" },
+    );
+    expect(result.toString()).toBe("oci document");
+  });
+
   it("returns null when the S3 stream is absent", async () => {
     s3Service.getObjectStream = vi.fn(async () => ({ stream: null }));
 

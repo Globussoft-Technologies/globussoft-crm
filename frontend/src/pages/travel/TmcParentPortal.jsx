@@ -146,10 +146,15 @@ const portalInteractionStyles = `
     [data-tmc-parent-portal="true"] aside {
       position: static !important;
       width: auto !important;
+      height: auto !important;
       min-height: auto !important;
       border-right: 0 !important;
       border-bottom: 1px solid var(--tmc-parent-border) !important;
       padding: 14px !important;
+    }
+
+    [data-tmc-parent-portal="true"] [data-tmc-parent-shell="true"] {
+      margin-left: 0 !important;
     }
 
     [data-tmc-parent-portal="true"] aside nav {
@@ -313,6 +318,20 @@ async function fetchParentDocumentFile(token, documentId, { download = false } =
     throw Object.assign(new Error(data.error || "Unable to open document"), { status: response.status, code: data.code });
   }
   return response.blob();
+}
+
+async function fetchParentDocumentViewUrl(token, documentId) {
+  const response = await fetch(`/api/portal/tmc/parent/documents/${documentId}/view-url`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw Object.assign(new Error(data.error || "Unable to open document"), {
+      status: response.status,
+      code: data.code,
+    });
+  }
+  return data;
 }
 
 async function uploadParentSignedLetter(token, letterId, formData) {
@@ -549,7 +568,7 @@ export default function TmcParentPortal() {
   return (
     <div data-tmc-parent-portal="true" data-theme-mode={themeMode} style={{ ...styles.page, ...parentThemeVars[themeMode] }}>
       <style>{portalInteractionStyles}</style>
-      <aside style={styles.sidebar}>
+      <aside data-tmc-parent-sidebar="true" style={styles.sidebar}>
         <div style={styles.brand}><Plane size={21} /> <strong>Parent Portal</strong></div>
         <div style={styles.profileCard}>
           <div style={styles.avatar}>{(contact?.name || "P").slice(0, 1).toUpperCase()}</div>
@@ -565,7 +584,7 @@ export default function TmcParentPortal() {
         <div style={styles.sidebarFooter}>Use this portal to explore school trips, complete registrations, and keep track of payments.</div>
       </aside>
 
-      <div style={styles.shell}>
+      <div data-tmc-parent-shell="true" style={styles.shell}>
         <header style={styles.header}>
           <div><span style={styles.eyebrow}>Parent workspace</span><h1 style={styles.headerTitle}>{viewTitle}</h1></div>
           <div style={styles.headerActions}>
@@ -724,6 +743,17 @@ const parentDocumentTypes = [
   { value: "visa", label: "Visa documents" },
 ];
 
+const parentDocumentFileRules = {
+  passport: "JPG, PNG, or PDF",
+  aadhaar: "JPG, PNG, or PDF",
+  "consent-form": "JPG, PNG, or PDF",
+  visa: "JPG, PNG, or PDF",
+};
+
+function documentFileRule(value) {
+  return parentDocumentFileRules[value] || "JPG, PNG, or PDF";
+}
+
 const legacyParentDocumentTypeLabels = {
   "birth-certificate": "Birth certificate",
   "school-id": "School ID",
@@ -844,14 +874,10 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
       setFile(null);
       return;
     }
-    const acceptedTypes = documentType === "consent-form"
-      ? ["image/jpeg", "image/png"]
-      : ["application/pdf", "image/jpeg", "image/png"];
+    const acceptedTypes = ["application/pdf", "image/jpeg", "image/png"];
     if (!acceptedTypes.includes(nextFile.type)) {
       setFile(null);
-      setDocumentError(documentType === "consent-form"
-        ? "Only JPG or PNG images are allowed for signed consent forms."
-        : "Only JPG, PNG, or PDF files are allowed.");
+      setDocumentError("Only JPG, PNG, or PDF files are allowed.");
       return;
     }
     if (nextFile.size > 10 * 1024 * 1024) {
@@ -875,9 +901,7 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
       return;
     }
     if (!file) {
-      setDocumentError(documentType === "consent-form"
-        ? "Choose a JPG or PNG image of the signed consent form first."
-        : "Choose a JPG, PNG, or PDF file first.");
+      setDocumentError("Choose a JPG, PNG, or PDF file first.");
       return;
     }
     setSaving(true);
@@ -903,7 +927,17 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
 
   const openDocument = async (documentRecord, download = false) => {
     setDocumentError("");
+    setMessage("");
     try {
+      // Legacy consent images may still be stored in fileBlob. Keep the
+      // authenticated proxy for consent-form rows so those records remain
+      // viewable while new consent uploads use OCI/local storage underneath.
+      if (!download && documentRecord.documentType !== "consent-form") {
+        const view = await fetchParentDocumentViewUrl(token, documentRecord.id);
+        if (!view?.url) throw new Error("Document file not found");
+        window.open(view.url, "_blank", "noopener,noreferrer");
+        return;
+      }
       const blob = await fetchParentDocumentFile(token, documentRecord.id, { download });
       const url = URL.createObjectURL(blob);
       if (download) {
@@ -1025,7 +1059,7 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
         <div style={styles.cardHeader}>
           <div>
             <h2 id="parent-document-upload-heading" style={styles.cardTitle}>Upload a document</h2>
-            <p style={styles.muted}>JPG, PNG, or PDF files up to 10 MB.</p>
+            <p style={styles.muted}>The accepted file type for the selected document is shown below. Files up to 10 MB.</p>
           </div>
           <Upload size={19} color={styles.colors.primary} aria-hidden="true" />
         </div>
@@ -1060,12 +1094,26 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
               <div style={styles.requiredDocumentsHeading}>Required documents for this {selectedTripType === "international" ? "international" : selectedTripType === "day_trip" ? "day" : "domestic"} trip</div>
               <div style={styles.requiredDocumentsList}>
                 {availableDocumentTypes.map((type) => (
-                  <button key={type.value} type="button" onClick={() => { setDocumentType(type.value); setFile(null); setFileInputKey((current) => current + 1); setDocumentError(""); }} style={styles.requiredDocumentItem} aria-pressed={documentType === type.value}>
+                  <button key={type.value} type="button" title={`${type.label}: ${documentFileRule(type.value)}`} onClick={() => { setDocumentType(type.value); setFile(null); setFileInputKey((current) => current + 1); setDocumentError(""); }} style={styles.requiredDocumentItem} aria-pressed={documentType === type.value}>
                     <CheckCircle2 size={15} color={uploadedTypes.has(type.value) ? styles.colors.success : styles.colors.primary} />
                     <span>{type.label}</span>
                     <span style={{ color: uploadedTypes.has(type.value) ? styles.colors.success : styles.colors.muted }}>{uploadedTypes.has(type.value) ? "Uploaded" : "Pending"}</span>
                   </button>
                 ))}
+              </div>
+              <div style={styles.acceptedFileTypes} aria-label="Accepted file types">
+                <div style={styles.acceptedFileTypesHeading}>Accepted file types</div>
+                {documentType ? (
+                  <div style={styles.acceptedFileTypesList}>
+                    <div style={styles.acceptedFileTypeItem}>
+                      <span style={styles.acceptedFileTypeName}>{documentTypeLabel(documentType)}:</span>
+                      <span>{documentFileRule(documentType)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={styles.acceptedFileTypesNote}>Select a document type to see its accepted file type.</div>
+                )}
+                <div style={styles.acceptedFileTypesNote}>Maximum size: 10 MB per file.</div>
               </div>
             </div>
           )}
@@ -1074,7 +1122,7 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
               <div style={styles.cardHeader}>
                 <div>
                   <h3 id="parent-consent-form-heading" style={styles.cardTitle}>Consent form</h3>
-                  <p style={styles.muted}>View the terms for the selected trip, sign them, then upload a clear JPG or PNG image.</p>
+                  <p style={styles.muted}>View the terms for the selected trip, sign them, then upload a clear JPG, PNG, or PDF file.</p>
                 </div>
                 <FileText size={19} color={styles.colors.primary} />
               </div>
@@ -1101,8 +1149,8 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
                     </div>
                   </div>
                   <label htmlFor={`parent-document-file-${fileInputKey}`} style={{ ...styles.label, gap: 8 }}>
-                    Upload signed image
-                    <input key={fileInputKey} id={`parent-document-file-${fileInputKey}`} aria-label="Choose signed consent image" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" onChange={handleFileChange} style={styles.fileInput} />
+                    Upload signed consent file
+                    <input key={fileInputKey} id={`parent-document-file-${fileInputKey}`} aria-label="Choose signed consent file" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={handleFileChange} style={styles.fileInput} />
                   </label>
                   {file && <span style={styles.documentSelectedFile}>{file.name} · {formatFileSize(file.size)}</span>}
                   <div style={styles.documentFormFooter}>
@@ -1677,8 +1725,8 @@ const styles = {
     danger: "var(--tmc-parent-danger)",
     muted: "var(--tmc-parent-muted)",
   },
-  page: { minHeight: "100vh", display: "grid", gridTemplateColumns: "236px minmax(0, 1fr)", background: "var(--tmc-parent-bg)", color: "var(--tmc-parent-text)" },
-  sidebar: { minHeight: "100vh", display: "flex", flexDirection: "column", padding: "18px 8px", boxSizing: "border-box", background: "var(--tmc-parent-surface)", borderRight: "1px solid var(--tmc-parent-border)" },
+  page: { minHeight: "100vh", background: "var(--tmc-parent-bg)", color: "var(--tmc-parent-text)" },
+  sidebar: { position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 20, width: 236, height: "100vh", minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", padding: "18px 8px", boxSizing: "border-box", background: "var(--tmc-parent-surface)", borderRight: "1px solid var(--tmc-parent-border)" },
   brand: { display: "flex", alignItems: "center", gap: 9, padding: "8px 9px 22px", color: "var(--tmc-parent-heading)", fontSize: 16 },
   profileCard: { display: "flex", alignItems: "center", gap: 10, minWidth: 0, padding: "0 8px 22px", borderBottom: "1px solid var(--tmc-parent-border-light)" },
   avatar: { flex: "0 0 auto", width: 38, height: 38, display: "grid", placeItems: "center", borderRadius: "50%", background: "var(--tmc-parent-accent)", color: "var(--tmc-parent-accent-contrast)", fontWeight: 800 },
@@ -1688,7 +1736,7 @@ const styles = {
   navButtonActive: { background: "var(--tmc-parent-accent)", color: "var(--tmc-parent-accent-contrast)" },
   navCount: { minWidth: 19, height: 19, display: "inline-grid", placeItems: "center", marginLeft: "auto", padding: "0 5px", borderRadius: 10, background: "var(--tmc-parent-profile-bg)", fontSize: 11 },
   sidebarFooter: { marginTop: "auto", padding: "16px 10px 4px", borderTop: "1px solid var(--tmc-parent-border-light)", color: "var(--tmc-parent-muted)", fontSize: 11, lineHeight: 1.5 },
-  shell: { minWidth: 0, minHeight: "100vh", display: "flex", flexDirection: "column" },
+  shell: { minWidth: 0, minHeight: "100vh", marginLeft: 236, display: "flex", flexDirection: "column" },
   header: { minHeight: 78, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 30px", background: "var(--tmc-parent-surface)", borderBottom: "1px solid var(--tmc-parent-border)" },
   headerActions: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
   headerName: { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: "var(--tmc-parent-subtle)" },
@@ -1719,6 +1767,12 @@ const styles = {
   requiredDocumentsHeading: { color: "var(--tmc-parent-heading)", fontSize: 12, fontWeight: 750 },
   requiredDocumentsList: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: 7 },
   requiredDocumentItem: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, padding: "8px 9px", border: "1px solid var(--tmc-parent-border)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "pointer", fontSize: 12, textAlign: "left" },
+  acceptedFileTypes: { display: "grid", gap: 6, paddingTop: 8, borderTop: "1px solid var(--tmc-parent-border-light)" },
+  acceptedFileTypesHeading: { color: "var(--tmc-parent-heading)", fontSize: 11, fontWeight: 750 },
+  acceptedFileTypesList: { display: "flex", flexWrap: "wrap", gap: "5px 14px" },
+  acceptedFileTypeItem: { display: "inline-flex", alignItems: "center", gap: 4, color: "var(--tmc-parent-muted)", fontSize: 11 },
+  acceptedFileTypeName: { color: "var(--tmc-parent-subtle)", fontWeight: 700 },
+  acceptedFileTypesNote: { color: "var(--tmc-parent-muted)", fontSize: 11 },
   mutedPanel: { padding: "12px 13px", border: "1px dashed var(--tmc-parent-border-strong)", borderRadius: 9, color: "var(--tmc-parent-muted)", fontSize: 13 },
   requiredLabel: { color: "var(--tmc-parent-danger)" },
   optionalLabel: { color: "var(--tmc-parent-muted)", fontSize: 11, fontWeight: 500 },

@@ -207,6 +207,12 @@ export default function DiagnosticDetail() {
     }
     setLoading(true);
     setLoadError(null);
+    // Clear the editable draft when a new diagnostic load starts.  Do this
+    // before the request rather than from the response hydration effect so a
+    // slow post-render effect cannot overwrite text the reviewer has already
+    // entered into the controlled field.
+    setHumanPickDraft("");
+    setEngineExpanded(false);
     fetchApi(`/api/travel/diagnostics/${diagId}`, { silent: true })
       .then((res) => {
         setDiag(res);
@@ -378,8 +384,6 @@ export default function DiagnosticDetail() {
   useEffect(() => {
     if (diag && typeof diag.humanPick === "string") {
       setHumanPickDraft(diag.humanPick);
-    } else if (diag) {
-      setHumanPickDraft("");
     }
   }, [diag?.humanPick]);
 

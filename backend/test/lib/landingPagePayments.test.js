@@ -15,6 +15,7 @@ const {
   getLandingPagePaymentConfig,
   resolveLandingPagePaymentSelection,
   applyLandingPagePaymentToTrip,
+  ensureLandingPagePaymentRegistration,
 } = requireCJS("../../lib/landingPagePayments");
 
 afterAll(() => {
@@ -148,6 +149,32 @@ describe("landingPagePayments", () => {
     expect(result.allocations[0]).toMatchObject({ paidMajor: 5000, appliedMajor: 0, status: "paid" });
   });
 
+  test("treats a repeated complete payment after all installments are paid as idempotent", async () => {
+    const participantUpdate = vi.fn();
+    const db = {
+      tmcTrip: { findFirst: vi.fn().mockResolvedValue(null) },
+      tripParticipant: { update: participantUpdate },
+      tripInstalmentPayment: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 22, instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: "paid" },
+          { id: 23, instalmentIndex: 1, amount: 5000, paidAmount: 5000, status: "paid" },
+        ]),
+        update: vi.fn(),
+      },
+    };
+
+    const result = await applyLandingPagePaymentToTrip({
+      db, tripId: 7, participantId: 42, amountMajor: 10000, mode: "complete",
+    });
+
+    expect(result.paidMajor).toBe(0);
+    expect(db.tripInstalmentPayment.update).not.toHaveBeenCalled();
+    expect(participantUpdate).toHaveBeenCalledWith({
+      where: { id: 42 },
+      data: { applicationStatus: "approved" },
+    });
+  });
+
   test("matches an installment index serialized by gateway metadata", async () => {
     const rows = [
       { id: 31, instalmentIndex: 0, amount: 5000, paidAmount: 0, status: "pending" },
@@ -167,6 +194,28 @@ describe("landingPagePayments", () => {
     });
 
     expect(db.tripInstalmentPayment.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 32 } }));
+  });
+
+  test("recovers a stale installment index only when the unpaid amount is unambiguous", async () => {
+    const rows = [
+      { id: 33, instalmentIndex: 0, amount: 5000, paidAmount: 0, status: "pending" },
+      { id: 34, instalmentIndex: 1, amount: 7000, paidAmount: 0, status: "pending" },
+    ];
+    const db = {
+      tmcTrip: { findFirst: vi.fn().mockResolvedValue(null) },
+      tripInstalmentPayment: {
+        findMany: vi.fn().mockResolvedValue(rows),
+        update: vi.fn().mockImplementation(async ({ where, data }) => ({ ...rows.find((row) => row.id === where.id), ...data })),
+      },
+    };
+
+    const result = await applyLandingPagePaymentToTrip({
+      db, tripId: 7, participantId: 42, amountMajor: 5000,
+      mode: "installment", installmentIndex: 99,
+    });
+
+    expect(result.installmentIndex).toBe(0);
+    expect(db.tripInstalmentPayment.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 33 } }));
   });
 
   test("stores a travel invoice link in payment metadata without reusing generic invoiceId", async () => {
@@ -212,5 +261,182 @@ describe("landingPagePayments", () => {
       tripId: 7,
       participantId: 42,
     });
+  });
+
+  test("converts a successful hosted registration into a participant and links the lead contact", async () => {
+    const payment = {
+      id: 501,
+      metadata: JSON.stringify({
+        kind: "landing-page-registration",
+        tenantId: 8,
+        tripId: 7,
+        pageTitle: "Singapore 7 Days",
+        draftToken: "draft-501",
+        amountMajor: 170000,
+        paymentMode: "complete",
+      }),
+    };
+    const db = {
+      tmcTrip: {
+        findFirst: vi.fn().mockResolvedValue({ id: 7, tenantId: 8, destination: "Singapore", tripCode: "singapore-2027" }),
+      },
+      pendingTripRegistration: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 91,
+          tenantId: 8,
+          tripId: 7,
+          landingPageId: 51,
+          studentName: "Yamuna Roy",
+          studentSchool: "Modern School",
+          studentClass: "8",
+          parentName: "Ravi Roy",
+          parentEmail: "parent@example.com",
+          parentPhone: "+919876543210",
+          passportNumber: "P1234567",
+          status: "DRAFT",
+          convertedToParticipantId: null,
+        }),
+        update: vi.fn().mockResolvedValue({ id: 91, status: "CONVERTED", convertedToParticipantId: 77 }),
+      },
+      tripParticipant: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({
+          id: 77,
+          tripId: 7,
+          fullName: "Yamuna Roy",
+          parentName: "Ravi Roy",
+          parentEmail: "parent@example.com",
+          parentPhone: "+919876543210",
+        }),
+      },
+      contact: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 88, name: "Ravi Roy", email: "parent@example.com" }),
+      },
+      deal: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 99 }),
+      },
+      payment: {
+        update: vi.fn().mockImplementation(async ({ data }) => ({
+          ...payment,
+          ...data,
+        })),
+      },
+    };
+    db.$queryRawUnsafe = vi.fn().mockResolvedValue([{ id: 91 }]);
+    db.$transaction = vi.fn(async (callback) => callback(db));
+
+    const result = await ensureLandingPagePaymentRegistration({ db, payment, tenantId: 8 });
+
+    expect(result).toMatchObject({ participantId: 77, contactId: 88 });
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
+      "SELECT id FROM `PendingTripRegistration` WHERE id = ? FOR UPDATE",
+      91,
+    );
+    expect(db.tripParticipant.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tripId: 7,
+        fullName: "Yamuna Roy",
+        parentName: "Ravi Roy",
+        parentEmail: "parent@example.com",
+        passportNumber: "P1234567",
+        applicationStatus: "approved",
+      }),
+    }));
+    expect(db.tripParticipant.create.mock.calls[0][0].data).not.toHaveProperty("passportNationality");
+    expect(db.tripParticipant.create.mock.calls[0][0].data).not.toHaveProperty("passportPlaceOfIssue");
+    expect(db.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tenantId: 8,
+        name: "Ravi Roy",
+        email: "parent@example.com",
+        status: "Lead",
+      }),
+    }));
+    expect(db.pendingTripRegistration.update).toHaveBeenCalledWith({
+      where: { id: 91 },
+      data: expect.objectContaining({ status: "CONVERTED", convertedToParticipantId: 77 }),
+    });
+    expect(db.payment.update).toHaveBeenCalledWith({
+      where: { id: 501 },
+      data: expect.objectContaining({ contactId: 88, metadata: expect.any(String) }),
+    });
+    expect(JSON.parse(db.payment.update.mock.calls[0][0].data.metadata)).toMatchObject({
+      participantId: 77,
+      contactId: 88,
+      registrationLinkedAt: expect.any(String),
+    });
+  });
+
+  test("keeps payment reconciliation successful when another draft already owns the participant link", async () => {
+    const payment = {
+      id: 502,
+      metadata: JSON.stringify({
+        kind: "landing-page-registration",
+        tenantId: 8,
+        tripId: 7,
+        draftToken: "duplicate-draft",
+        participantId: 77,
+      }),
+    };
+    const db = {
+      tmcTrip: {
+        findFirst: vi.fn().mockResolvedValue({ id: 7, tenantId: 8, destination: "Singapore", tripCode: "singapore-2027" }),
+      },
+      pendingTripRegistration: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 92,
+          tenantId: 8,
+          tripId: 7,
+          studentName: "Yamuna Roy",
+          parentName: "Ravi Roy",
+          parentEmail: "parent@example.com",
+          parentPhone: "+919876543210",
+          convertedToParticipantId: null,
+        }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: 91,
+          status: "CONVERTED",
+          convertedToParticipantId: 77,
+        }),
+        update: vi.fn().mockResolvedValue({ id: 92, status: "REJECTED" }),
+      },
+      tripParticipant: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 77,
+          tripId: 7,
+          fullName: "Yamuna Roy",
+          parentName: "Ravi Roy",
+          parentEmail: "parent@example.com",
+          parentPhone: "+919876543210",
+          applicationStatus: "approved",
+        }),
+        create: vi.fn(),
+      },
+      contact: {
+        findFirst: vi.fn().mockResolvedValue({ id: 88, name: "Ravi Roy", email: "parent@example.com" }),
+      },
+      deal: {
+        findFirst: vi.fn().mockResolvedValue({ id: 99 }),
+        create: vi.fn(),
+      },
+      payment: {
+        update: vi.fn().mockImplementation(async ({ data }) => ({ ...payment, ...data })),
+      },
+    };
+
+    const result = await ensureLandingPagePaymentRegistration({ db, payment, tenantId: 8 });
+
+    expect(result).toMatchObject({ participantId: 77, contactId: 88 });
+    expect(db.pendingTripRegistration.update).toHaveBeenCalledWith({
+      where: { id: 92 },
+      data: {
+        status: "REJECTED",
+        reviewNotes: "Duplicate registration; participant #77 is already linked to another registration.",
+      },
+    });
+    expect(db.payment.update).toHaveBeenCalled();
   });
 });

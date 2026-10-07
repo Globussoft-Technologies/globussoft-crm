@@ -959,8 +959,7 @@ var DEFAULT_CONFIG = {
         {name:'parent_phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number'}
       ]},
       { title:'Step 3: Confirm', fields:[
-        {name:'participants', label:'Number of Participants', type:'number', required:false, placeholder:'1'},
-        {name:'passport_status', label:'Passport Status', type:'select', required:true, placeholder:'Select status', options:['Valid for 6+ months','Applied / in process','Not yet applied']}
+        {name:'participants', label:'Number of Participants', type:'number', required:false, placeholder:'1'}
       ]}
     ],
     covers:[
@@ -1528,15 +1527,19 @@ class Component extends DCLogic {
     // Older saved pages may contain the former combined documents/payment
     // step. Keep the saved registration fields intact, but normalize that
     // legacy step away so payment gets its own final tab.
-    const baseSteps = (reg.steps || []).filter((step) => {
+    const baseSteps = (reg.steps || []).map((step) => ({
+      ...step,
+      // Passport/document collection is owned by the parent portal. Keep
+      // other registration fields, but never make passport status a payment
+      // prerequisite on an older saved landing page.
+      fields: (step.fields || []).filter((field) => String(field && field.name || '').toLowerCase() !== 'passport_status')
+    })).filter((step) => {
       const title = String(step && step.title || '').toLowerCase();
-      return !title.includes('document') && !title.includes('payment');
+      return !title.includes('document') && !title.includes('payment') && (step.fields || []).length > 0;
     });
-    const normalizedTripType = String(reg.tripType || (cfg.meta && cfg.meta.tripType) || '').toLowerCase().replace(/[- ]/g, '_');
-    const isDomesticTrip = normalizedTripType === 'domestic' || normalizedTripType === 'day_trip';
-    const passportValue = String(this.state.regValues.passport_status || '').trim().toLowerCase();
-    const passportValid = isDomesticTrip || ['valid passport', 'valid for 6+ months', 'yes, passport is valid for 6+ months'].includes(passportValue);
-    const rsteps = passportValid && baseSteps.length
+    // Documents are collected in the parent portal after registration. The
+    // payment tab must not be gated by passport status or document upload.
+    const rsteps = baseSteps.length
       ? baseSteps.concat([{ title:'Step ' + (baseSteps.length + 1) + ': Payment', fields:[] }])
       : baseSteps;
     out.regMultiStep = rsteps.length > 1;
@@ -1551,7 +1554,7 @@ class Component extends DCLogic {
     }));
     out.regShowBack = stepIdx > 0;
     out.regIsLast = stepIdx >= rsteps.length - 1;
-    out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast && passportValid);
+    out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast);
     out.regPaymentAllowComplete = paymentCfg.allowCompletePayment !== false;
     out.regPaymentMode = paymentMode;
     out.regPaymentIsInstallment = paymentMode === 'installment';
@@ -1632,7 +1635,11 @@ class Component extends DCLogic {
         };
         this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
         fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(paymentPayload) })
-          .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
+          .then(async (r) => {
+            const result = await r.json().catch(() => ({}));
+            if(!r.ok) throw new Error((result && result.error) || 'Could not start payment.');
+            return result;
+          })
           .then(async (order) => {
             if(!order || !order.paymentUrl) throw new Error((order && order.error) || 'Could not start payment.');
             this.setState({ regPaymentLoading: false });

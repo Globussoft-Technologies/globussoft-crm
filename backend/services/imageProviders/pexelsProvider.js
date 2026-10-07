@@ -58,6 +58,7 @@ function normalize(item) {
   return {
     url: item.src.large2x || item.src.large || item.src.original || '',
     thumbUrl: item.src.medium || item.src.small || '',
+    alt: item.alt || '',
     width: item.width,
     height: item.height,
     attribution: {

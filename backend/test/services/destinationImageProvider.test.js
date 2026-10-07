@@ -167,6 +167,37 @@ describe('fetchOne — fallback hierarchy behaviour', () => {
     expect(result.attribution.providerId).toBe('pexels');
   });
 
+  test('relevance filtering selects a subject-matching Pexels result', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
+      { url: 'https://pexels.example/generic.jpg', alt: 'doctor holding a clipboard', attribution: { providerId: 'pexels' } },
+      { url: 'https://pexels.example/hair.jpg', alt: 'hair and scalp consultation', attribution: { providerId: 'pexels' } },
+    ]);
+
+    const result = await provider.fetchOne('hair treatment consultation', {
+      excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'],
+      relevanceTerms: ['hair', 'scalp'],
+      requireRelevance: true,
+    });
+
+    expect(result.url).toBe('https://pexels.example/hair.jpg');
+  });
+
+  test('relevance filtering leaves the slot empty instead of applying an unrelated result', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
+      { url: 'https://pexels.example/generic-only.jpg', alt: 'doctor holding a clipboard', attribution: { providerId: 'pexels' } },
+    ]);
+
+    const result = await provider.fetchOne('hair treatment consultation', {
+      excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'],
+      relevanceTerms: ['hair', 'scalp'],
+      requireRelevance: true,
+    });
+
+    expect(result).toBeNull();
+  });
+
   test('Falls through Pexels → Unsplash when Pexels empty', async () => {
     process.env.UNSPLASH_ACCESS_KEY = 'test-key';
     process.env.PEXELS_API_KEY = 'test-key';

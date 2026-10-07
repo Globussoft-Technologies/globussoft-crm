@@ -19,6 +19,8 @@ const SECTORS = {
 
 const WELLNESS_SECTOR_KEYS = new Set(['wellness', 'health', 'hospital', 'fitness']);
 const BASIC_BLOCK_TYPES = new Set(['heading', 'text', 'image', 'button', 'form', 'divider', 'spacer', 'columns']);
+const WELLNESS_COLOR_KEYS = ['bg', 'surface', 'surfaceSoft', 'ink', 'muted', 'primary', 'primaryDeep', 'accent', 'accentSoft', 'border', 'inverse'];
+const WELLNESS_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 function isWellnessSector(sectorKey) {
   return WELLNESS_SECTOR_KEYS.has(String(sectorKey || '').trim().toLowerCase());
@@ -96,7 +98,7 @@ function buildGenericLandingSitePrompt(input = {}) {
     wellnessMode ? `Event location: ${eventLocation || '(not provided)'}` : '',
     '',
     wellnessMode
-      ? 'The form must capture first name, last name, email, phone, service of interest, and a message. Use select for service of interest and textarea for the message. Make the labels, section titles, and microcopy sound like a polished live landing page, not a template.'
+      ? 'The form must capture first name, last name, email, phone, and a message. Use a textarea for the message. Make the labels, section titles, and microcopy sound like a polished live landing page, not a template.'
       : 'The form should capture name, email, phone, and a short message.',
   ].filter(Boolean).join('\n');
 
@@ -118,11 +120,13 @@ function buildWellnessLandingSitePrompt(input = {}) {
   const tone = clean(input.tone, sector.voice, 120);
   const ctaText = clean(input.ctaText, 'Get Started', 40);
   const imageMode = clean(input.imageMode, 'auto', 20).toLowerCase();
+  const wellnessLayout = clean(input.wellnessLayout || input.layoutId, 'editorial', 40).toLowerCase();
 
   const system = [
     'You generate structured content for a wellness landing page builder.',
     'Return exactly one JSON object with no markdown fences and no extra commentary.',
     'The page must feel like a polished, editable landing page for marketing and lead capture.',
+    'Use a full-window website composition with clear visual hierarchy, generous whitespace, and distinct section bands. Do not make it look like a slide deck or a grid of equal cards.',
     'Use the provided inputs as the source of truth. Do not substitute a different campaign theme.',
     'Do not mention blood donation unless the user explicitly provided that campaign theme.',
     'Keep the copy campaign-neutral and professional so the same layout can be reused for hair treatment, skin care, consultations, wellness events, or clinic campaigns.',
@@ -197,7 +201,8 @@ function buildWellnessLandingSitePrompt(input = {}) {
     '    "footerContact": "string",',
     '    "footerCopy": "string",',
     '    "imageQuery": "string",',
-    '    "imageAlt": "string"',
+    '    "imageAlt": "string",',
+    '    "layoutId": "editorial | clinical | immersive | community"',
     '  }',
     '}',
     '',
@@ -214,6 +219,7 @@ function buildWellnessLandingSitePrompt(input = {}) {
     `- tone: ${tone}`,
     `- ctaText: ${ctaText}`,
     `- imageMode: ${imageMode}`,
+    `- requested layout: ${wellnessLayout}`,
     '',
     'Writing rules:',
     '- Keep the layout professional and attractive, with concise hero copy and specific supporting sections.',
@@ -222,6 +228,7 @@ function buildWellnessLandingSitePrompt(input = {}) {
     '- Return professional copy related to the actual campaign, not a generic camp placeholder.',
     '- Never invent prices, phone numbers, email addresses, or partner names.',
     '- If you include an image query, make it relevant to the campaign and suitable for Pexels search.',
+    `- Follow the requested layout direction (${wellnessLayout}) while keeping the page easy to scan on mobile.`,
   ].join('\n');
 
   const user = [
@@ -240,7 +247,17 @@ function buildWellnessLandingSitePrompt(input = {}) {
     'Generate the wellness landing page content now.',
   ].join('\n');
 
-  return { system, user, sectorKey, sectorLabel, campaignName, businessName, campaignGoal, audience, location, tone, ctaText, imageMode, eventDate, eventTime, eventLocation };
+  return { system, user, sectorKey, sectorLabel, campaignName, businessName, campaignGoal, audience, location, tone, ctaText, imageMode, wellnessLayout, eventDate, eventTime, eventLocation };
+}
+
+function normalizeWellnessCustomColors(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const colors = {};
+  WELLNESS_COLOR_KEYS.forEach((key) => {
+    const candidate = String(value[key] || '').trim();
+    if (WELLNESS_HEX.test(candidate)) colors[key] = candidate;
+  });
+  return Object.keys(colors).length ? colors : null;
 }
 function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
   const sectorKey = normalizeSectorKey(input.sectorKey);
@@ -254,7 +271,6 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
   const eventLocation = clean(input.eventLocation || input.location, 'Koramangala, Bengaluru', 160);
   const ctaText = clean(input.ctaText, 'Book Now', 40);
   const heroPrimaryCta = clean(input.heroPrimaryCta, 'Get Started', 40);
-  const topCta = clean(input.topCta, 'Book Now', 40);
   const heroKicker = clean(input.heroKicker, 'VISIT - CALL - WRITE', 40);
   const heroTitleLine1 = clean(input.heroTitleLine1, campaignName, 80);
   const heroTitleLine2 = clean(input.heroTitleLine2, '', 40);
@@ -262,7 +278,6 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
   const heroNote = clean(input.heroNote, 'Every submission is editable, trackable, and routed to the right team instantly.', 160);
   const brandMark = clean(input.brandMark, '+', 10);
   const brandLine = clean(input.brandLine, businessName, 120);
-  const brandSubline = clean(input.brandSubline, sectorLabel, 80);
   const navText = clean(input.navText, 'HOME   SERVICES   ABOUT US   CONTACT', 100);
   const detailDateLabel = clean(input.detailDateLabel, 'Date', 40);
   const detailTimeLabel = clean(input.detailTimeLabel, 'Time', 40);
@@ -285,8 +300,8 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
   const ctaTitle = clean(input.ctaTitle, 'Ready to get started?', 100);
   const ctaCopy = clean(input.ctaCopy, `Invite your visitors to take the next step with a clear, professional experience tailored to ${sectorLabel.toLowerCase()}.`, 220);
   const ctaNote = clean(input.ctaNote, 'Your details will be captured in the CRM and shared with the right team for follow-up.', 180);
-  const formTitle = clean(input.formTitle, 'Request More Information', 100);
-  const formCopy = clean(input.formCopy, 'Share your details and the team will follow up with confirmation and next steps.', 220);
+  const formTitle = clean(input.formTitle, `Register for ${campaignName}`, 100);
+  const formCopy = clean(input.formCopy, 'Fill out the form below and the team will follow up with confirmation and next steps.', 220);
   const formSubmitText = clean(input.formSubmitText, 'Submit Enquiry', 40);
   const formThankYou = clean(input.formThankYou, `Thanks. We have received your enquiry for ${campaignName}.`, 220);
   const footerLinks = clean(input.footerLinks, 'Home | Services | About Us | Contact', 180);
@@ -315,7 +330,10 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
     { id: 'metric-4', value: clean(input.metric4Value, '1', 20), label: clean(input.metric4Label, 'Lead pipeline', 60) },
   ];
 
-  const section = (id, variant, columns, gap = '24px') => ({ id, type: 'columns', props: { gap, variant, columns } });
+  const wellnessTheme = clean(input.wellnessTheme || input.themeId, 'botanical', 40).toLowerCase();
+  const wellnessLayout = clean(input.wellnessLayout || input.layoutId || sourcePayload?.content?.layoutId, 'editorial', 40).toLowerCase();
+  const wellnessCustomColors = normalizeWellnessCustomColors(input.wellnessCustomColors || sourcePayload?.content?.customColors);
+  const section = (id, variant, columns, gap = '24px', extraProps = {}) => ({ id, type: 'columns', props: { gap, variant, columns, ...extraProps } });
   const cardGrid = (id, variant, items, cardBuilder, gap = '18px') => section(id, variant, items.map((item) => ({ components: cardBuilder(item) })), gap);
   const details = [
     { id: 'detail-date', label: detailDateLabel, value: eventDate },
@@ -331,11 +349,9 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
           { components: [
             { id: 'brand-mark', type: 'text', props: { text: brandMark, align: 'center', color: '#b31d15', fontSize: '1.7rem', variant: 'wellness-logo-mark' } },
             { id: 'brand-name', type: 'heading', props: { text: brandLine, level: 'h3', align: 'left', color: '#1f2f2c', variant: 'wellness-logo' } },
-            { id: 'brand-subline', type: 'text', props: { text: brandSubline, align: 'left', color: '#5f6c67', fontSize: '0.82rem', variant: 'wellness-brand-subline' } },
           ] },
           { components: [
             { id: 'top-nav', type: 'text', props: { text: navText, align: 'center', color: '#1f2f2c', fontSize: '0.78rem', variant: 'wellness-nav' } },
-            { id: 'top-cta', type: 'button', props: { text: topCta, url: '#lead-form', bgColor: '#b31d15', color: '#ffffff', align: 'right', size: 'small' } },
           ] },
         ], '24px'),
       ] },
@@ -359,6 +375,13 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
           { id: `${item.id}-label`, type: 'text', props: { text: item.label, align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' } },
           { id: `${item.id}-value`, type: 'heading', props: { text: item.value, level: 'h4', align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' } },
         ]), '18px'),
+      ] },
+      { fullWidth: true, components: [
+        section('wellness-gallery-row', 'wellness-gallery-row', [
+          { components: [{ id: 'gallery-image-1', type: 'image', props: { src: '', alt: `${campaignName} wellness experience`, variant: 'wellness-gallery-image', width: '100%', maxWidth: '100%' } }] },
+          { components: [{ id: 'gallery-image-2', type: 'image', props: { src: '', alt: `${campaignName} care team`, variant: 'wellness-gallery-image', width: '100%', maxWidth: '100%' } }] },
+          { components: [{ id: 'gallery-image-3', type: 'image', props: { src: '', alt: `${campaignName} community`, variant: 'wellness-gallery-image', width: '100%', maxWidth: '100%' } }] },
+        ], '18px'),
       ] },
       { fullWidth: true, components: [
         section('wellness-benefits-row', 'wellness-benefits-row', [
@@ -413,12 +436,13 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
       { fullWidth: true, components: [
         section('wellness-cta-row', 'wellness-cta-row', [
           { components: [
+            { id: 'cta-image', type: 'image', props: { src: '', alt: `${campaignName} wellness experience`, variant: 'wellness-cta-image', width: '100%', maxWidth: '100%' } },
+          ] },
+          { components: [
             { id: 'cta-title', type: 'heading', props: { text: ctaTitle, level: 'h3', align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' } },
             { id: 'cta-copy', type: 'text', props: { text: ctaCopy, align: 'left', color: '#5f6c67', fontSize: '0.96rem', variant: 'wellness-body' } },
             { id: 'cta-note', type: 'text', props: { text: ctaNote, align: 'left', color: '#5f6c67', fontSize: '0.86rem', variant: 'wellness-note' } },
-          ] },
-          { components: [
-            { id: 'cta-button', type: 'button', props: { text: ctaText, url: '#lead-form', bgColor: '#b31d15', color: '#ffffff', align: 'center', size: 'large' } },
+            { id: 'cta-button', type: 'button', props: { text: ctaText, url: '#lead-form', bgColor: '#b31d15', color: '#ffffff', align: 'left', size: 'large' } },
           ] },
         ], '24px'),
       ] },
@@ -426,7 +450,6 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
         section('wellness-form-row', 'wellness-form-row', [
           { components: [
             { id: 'form-kicker', type: 'text', props: { text: 'Lead capture', align: 'left', color: '#b31d15', fontSize: '0.76rem', variant: 'wellness-eyebrow' } },
-            { id: 'form-title-copy', type: 'heading', props: { text: formTitle, level: 'h3', align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' } },
             { id: 'form-copy', type: 'text', props: { text: formCopy, align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-body' } },
             { id: 'lead-form', type: 'form', props: {
               title: formTitle,
@@ -435,7 +458,6 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
                 { label: 'Last Name', name: 'last_name', type: 'text', required: true, placeholder: 'e.g., Doe' },
                 { label: 'Email Address', name: 'email', type: 'email', required: true, placeholder: 'e.g., name@example.com' },
                 { label: 'Phone Number', name: 'phone', type: 'tel', required: true, placeholder: 'e.g., +91 98765 43210' },
-                { label: 'Service of Interest', name: 'service_interest', type: 'select', required: false, options: [sectorLabel, campaignName, 'General Enquiry'] },
                 { label: 'Tell Us More', name: 'message', type: 'textarea', required: false, placeholder: 'Share any questions or concerns...' },
               ],
               submitText: formSubmitText,
@@ -461,7 +483,7 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
           ] },
         ], '24px'),
       ] },
-    ], '24px'),
+    ], '24px', { themeId: wellnessCustomColors ? 'custom' : wellnessTheme, layoutId: wellnessLayout, ...(wellnessCustomColors ? { customColors: wellnessCustomColors, customBaseThemeId: clean(input.wellnessCustomBaseThemeId, wellnessTheme, 40).toLowerCase() } : {}) }),
   ];
 }
 

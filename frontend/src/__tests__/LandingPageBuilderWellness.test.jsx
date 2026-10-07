@@ -9,7 +9,8 @@
  *      not from any hard-coded campaign like blood donation.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
@@ -67,5 +68,47 @@ describe('<LandingPageWellnessEditor /> - wellness bootstrap', () => {
     expect(screen.getByLabelText('Brand line')).toHaveValue('Glow Hair Studio');
     expect(screen.queryByLabelText('Secondary CTA')).not.toBeInTheDocument();
     expect(screen.queryByText(/Blood Donation/i)).not.toBeInTheDocument();
+  });
+
+  it('updates the root theme when another wellness palette is selected', () => {
+    const onChange = vi.fn();
+
+    render(
+      <LandingPageWellnessEditor
+        content={[]}
+        onChange={onChange}
+        page={PAGE}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Coral energy/i }));
+
+    const updatedContent = onChange.mock.calls.at(-1)?.[0];
+    expect(updatedContent?.[0]?.props?.themeId).toBe('coral');
+
+    fireEvent.click(screen.getByRole('button', { name: /Immersive campaign/i }));
+
+    const layoutContent = onChange.mock.calls.at(-1)?.[0];
+    expect(layoutContent?.[0]?.props?.layoutId).toBe('immersive');
+  });
+
+  it('enables custom wellness colors and persists the edited color in the root block', () => {
+    const onChange = vi.fn();
+    function ControlledEditor() {
+      const [content, setContent] = useState([]);
+      return <LandingPageWellnessEditor content={content} onChange={(next) => { onChange(next); setContent(next); }} page={PAGE} />;
+    }
+
+    render(<ControlledEditor />);
+
+    fireEvent.click(screen.getByLabelText('Use custom colors'));
+    const customContent = onChange.mock.calls.at(-1)?.[0];
+    expect(customContent?.[0]?.props?.themeId).toBe('custom');
+    expect(customContent?.[0]?.props?.customColors?.primary).toBe('#2f6b50');
+
+    fireEvent.change(screen.getByLabelText('Page background hex value'), { target: { value: '#fef2f2' } });
+    const editedContent = onChange.mock.calls.at(-1)?.[0];
+    expect(editedContent?.[0]?.props?.themeId).toBe('custom');
+    expect(editedContent?.[0]?.props?.customColors?.bg).toBe('#fef2f2');
   });
 });

@@ -53,6 +53,7 @@ describe('landingSitePrompts wellness sector', () => {
       tone: 'calm and professional',
       ctaText: 'Get Started',
       imageMode: 'auto',
+      wellnessLayout: 'immersive',
     });
 
     expect(prompt.system).toContain('blood donation');
@@ -61,6 +62,8 @@ describe('landingSitePrompts wellness sector', () => {
     expect(prompt.user).toContain('Hair Treatment Consultation');
     expect(prompt.user).toContain('Event date: 12 August 2026');
     expect(prompt.user).toContain('Event location: Main clinic branch');
+    expect(prompt.system).toContain('requested layout: immersive');
+    expect(prompt.wellnessLayout).toBe('immersive');
     expect(prompt.user).toContain('Generate the wellness landing page content now.');
 
   });
@@ -79,5 +82,29 @@ describe('landingSitePrompts wellness sector', () => {
     expect(body).toContain('people looking for hair treatments');
     expect(body).not.toContain('Blood Donation');
     expect(body).not.toContain('Donate Blood');
+    expect(body).not.toContain('Service of Interest');
+    expect(body).not.toContain('service_interest');
+  });
+
+  it('stores the selected wellness layout on the root block', () => {
+    const blocks = buildWellnessRegistrationBlocks({
+      sectorKey: 'wellness',
+      campaignName: 'Community Skin Health Day',
+      wellnessLayout: 'community',
+    });
+
+    expect(blocks[0]?.props?.layoutId).toBe('community');
+  });
+
+  it('stores sanitized wellness custom colors on the root block', () => {
+    const blocks = buildWellnessRegistrationBlocks({
+      sectorKey: 'wellness',
+      campaignName: 'Custom Color Wellness Day',
+      wellnessTheme: 'lagoon',
+      wellnessCustomColors: { bg: '#fef2f2', primary: '#be123c', accent: 'not-a-color' },
+    });
+
+    expect(blocks[0]?.props?.themeId).toBe('custom');
+    expect(blocks[0]?.props?.customColors).toEqual({ bg: '#fef2f2', primary: '#be123c' });
   });
 });

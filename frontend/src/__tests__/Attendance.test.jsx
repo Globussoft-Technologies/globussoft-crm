@@ -503,7 +503,7 @@ describe('<Attendance /> — payroll CSV export (#804)', () => {
     notify.error.mockReset();
   });
 
-  it('renders the Export Payroll CSV button + date inputs for managers', async () => {
+  it('renders one payroll date-range button for managers', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
       if (url.startsWith('/api/attendance/summary')) return Promise.resolve({ byUser: {} });
@@ -514,8 +514,25 @@ describe('<Attendance /> — payroll CSV export (#804)', () => {
 
     await waitFor(() => expect(screen.getByText(/Today — All Staff/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Export Payroll CSV/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Payroll CSV from date/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Payroll CSV to date/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Select payroll date range/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Payroll CSV from date/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Payroll CSV to date/i)).not.toBeInTheDocument();
+  });
+
+  it('opens the two-month date-range calendar from the single range button', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
+      if (url.startsWith('/api/attendance/summary')) return Promise.resolve({ byUser: {} });
+      return Promise.resolve(null);
+    });
+
+    const user = userEvent.setup();
+    renderAttendance({ user: adminUser });
+
+    await user.click(await screen.findByRole('button', { name: /Select payroll date range/i }));
+    expect(screen.getByRole('dialog', { name: /Select date range/i })).toBeInTheDocument();
+    expect(screen.getByText('Select range')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Save/i })).toBeInTheDocument();
   });
 
   it('does NOT show the Export Payroll CSV button to regular users', async () => {

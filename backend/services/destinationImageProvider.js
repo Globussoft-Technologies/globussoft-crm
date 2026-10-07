@@ -101,7 +101,25 @@ const IMAGE_CACHE = createCache();
 function cacheKey(providerId, query, opts = {}) {
   const normQuery = String(query || '').toLowerCase().replace(/\s+/g, ' ').trim();
   const ar = opts.aspectRatio || '';
-  return `img:${providerId}:${ar}:${normQuery}`;
+  const relevance = Array.isArray(opts.relevanceTerms)
+    ? opts.relevanceTerms.map((term) => String(term || '').toLowerCase().trim()).filter(Boolean).sort().join(',')
+    : '';
+  return `img:${providerId}:${ar}:${relevance}:${normQuery}`;
+}
+
+function relevanceScore(result, terms) {
+  if (!terms.length) return 0;
+  const searchable = [
+    result?.alt,
+    result?.title,
+    result?.searchText,
+    result?.attribution?.description,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return terms.reduce((score, term) => {
+    const normalized = String(term || '').toLowerCase().trim();
+    if (!normalized) return score;
+    return score + (searchable.includes(normalized) ? 1 : 0);
+  }, 0);
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -133,13 +151,18 @@ async function fetchOne(query, opts = {}) {
   const excludeProviders = new Set(opts.excludeProviders || []);
   const excludeUrls = opts.excludeUrls instanceof Set ? opts.excludeUrls : new Set();
   const perPage = Number.isFinite(opts.perPage) ? opts.perPage : 5;
+  const relevanceTerms = Array.isArray(opts.relevanceTerms)
+    ? opts.relevanceTerms.map((term) => String(term || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  const requireRelevance = opts.requireRelevance === true && relevanceTerms.length > 0;
   for (const provider of PROVIDERS) {
     if (excludeProviders.has(provider.id)) continue;
     if (typeof provider.isAvailable === 'function' && !provider.isAvailable()) continue;
 
     const ck = cacheKey(provider.id, q, opts);
     const cached = IMAGE_CACHE.get(ck);
-    if (cached && cached.url && !excludeUrls.has(cached.url)) {
+    if (cached && cached.url && !excludeUrls.has(cached.url) &&
+      (!requireRelevance || relevanceScore(cached, relevanceTerms) > 0)) {
       return cached;
     }
     // Cache hit but URL is already used on this page — bypass cache and
@@ -155,7 +178,13 @@ async function fetchOne(query, opts = {}) {
     }
     // Pick the FIRST result whose URL isn't already used. Defeats the
     // "Pexels returns the same top image for two similar queries" duplicate.
-    const pick = (results || []).find((r) => r && r.url && !excludeUrls.has(r.url));
+    const candidates = (results || []).filter((r) => r && r.url && !excludeUrls.has(r.url));
+    const ranked = relevanceTerms.length
+      ? candidates
+        .map((result, index) => ({ result, index, score: relevanceScore(result, relevanceTerms) }))
+        .sort((a, b) => b.score - a.score || a.index - b.index)
+      : candidates.map((result) => ({ result, score: 0 }));
+    const pick = ranked.find((entry) => !requireRelevance || entry.score > 0)?.result;
     if (pick) {
       IMAGE_CACHE.set(ck, pick);
       return pick;

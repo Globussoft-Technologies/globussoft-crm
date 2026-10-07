@@ -51,6 +51,16 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 // Hard cap on the JSON body size — anything larger is 413'd.
 const MAX_CSP_REPORT_BYTES = 4 * 1024; // 4 KiB
 
+// The local development hostname does not identify a tenant. CSP reports
+// from it are expected while the SPA is running on the local API server, but
+// they cannot be safely attributed to any tenant. Drop them quietly instead
+// of querying Prisma and logging the same warning for every browser report.
+function isLocalDevelopmentHost(hostname) {
+  const normalized = String(hostname || "").trim().toLowerCase();
+  return normalized === "localhost" ||
+    normalized.endsWith(".localhost");
+}
+
 // Accept all three content-types browsers + test runners send for CSP
 // reports. `express.json({ type })` matches a function or string; an
 // array of strings tells the underlying body-parser to accept any of
@@ -107,7 +117,12 @@ router.post("/report", (req, res, _next) => {
     })();
 
     const host = req.headers.host || "";
-    const subdomain = host.split(":")[0].split(".")[0];
+    const hostname = req.hostname || host.split(":")[0];
+    if (isLocalDevelopmentHost(hostname)) {
+      return res.status(204).end();
+    }
+
+    const subdomain = hostname.split(".")[0];
     const tenant = await prisma.tenant.findUnique({ where: { slug: subdomain } });
     if (!tenant) {
       // Fail closed: don't attribute the report to the wrong tenant.

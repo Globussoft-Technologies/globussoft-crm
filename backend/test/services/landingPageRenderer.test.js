@@ -8,6 +8,14 @@ import landing from '../../services/landingPageRenderer.js';
 const { renderPage } = landing;
 
 describe('module shape', () => {
+  test('does not turn Generic or Travel campaigns into wellness scaffolds', () => {
+    for (const templateType of ['generic-site-real_estate-v1', 'generic-site-technology-v1', 'generic-site-travel-v1']) {
+      const html = renderPage({ templateType, title: 'Original campaign', content: JSON.stringify([{ type: 'heading', props: { text: 'Original offer' } }]) });
+      expect(html).toContain('Original offer');
+      expect(html).not.toContain('class="lp-container lp-container--wellness"');
+      expect(html).not.toContain('wellness-campaign-page--');
+    }
+  });
   test('exports renderPage', () => {
     expect(typeof renderPage).toBe('function');
   });
@@ -1113,7 +1121,6 @@ describe('safeUrl  percent-encoded / malformed / exotic edge cases', () => {
     expect(safeUrl('data:image/svg+xml,<svg/>', 'image-src')).toBe('data:image/svg+xml,<svg/>');
   });
 });
-
 
 
 

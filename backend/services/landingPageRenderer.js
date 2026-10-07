@@ -1572,8 +1572,7 @@ function renderPage(landingPage, options = {}) {
   // `.map` doesn't crash. Phase D1 dispatcher above handles the
   // common case; this guard is the belt-and-braces for misconfig.
   if (!Array.isArray(components)) components = [];
-  const isWellnessLandingPage = typeof landingPage.templateType === 'string'
-    && landingPage.templateType.startsWith('generic-site-');
+  const isWellnessLandingPage = require('./wellnessLandingThemes').isWellnessLandingPage(landingPage, components);
   if (isWellnessLandingPage && !hasWellnessRoot(components)) {
     components = buildWellnessCampaignPage(landingPage, components);
   }
@@ -1955,7 +1954,6 @@ module.exports = {
   // Test-only: exposed so vitest can hot-reset the cache between tests.
   _resetTravelCssCache: () => { _TRAVEL_CSS_CACHE = null; },
 };
-
 
 
 

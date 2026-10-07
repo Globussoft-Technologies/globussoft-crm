@@ -155,6 +155,10 @@ function resolveWellnessLandingLayout(layoutId) {
 }
 
 module.exports = {
+  isWellnessLandingPage(page = {}, blocks = []) {
+    return /^(?:generic-site-)(?:wellness|health|hospital|fitness|hair-treatment|eye-care|skin|dental|physiotherapy|nutrition|mental-health)(?:-|$)/i.test(page.templateType || '') ||
+      blocks.some(block => block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page');
+  },
   WELLNESS_LANDING_THEMES,
   DEFAULT_WELLNESS_LANDING_THEME,
   resolveWellnessLandingTheme,

@@ -1,6 +1,8 @@
 'use strict';
 
 const destinationImageProvider = require('./destinationImageProvider');
+const crypto = require('crypto');
+const { isWellnessLandingPage } = require('./wellnessLandingThemes');
 const { buildWellnessCampaignPage } = require('./landingPageRenderer');
 const {
   IMAGE_QUERY_VERSION,
@@ -73,9 +75,11 @@ function isStaleGeneratedPexelsImage(block) {
 }
 
 async function hydrateWellnessLandingImages(page, { db, persist = true } = {}) {
-  if (!page || !process.env.PEXELS_API_KEY) return page;
+  // Historical snapshots are rendered exactly as saved, without live image
+  // fetching or joining a mutable draft's in-flight hydration.
+  if (!page || !persist || !process.env.PEXELS_API_KEY) return page;
 
-  const pageKey = String(page.id || page.slug || '');
+  const pageKey = crypto.createHash('sha256').update(JSON.stringify(page)).digest('hex');
   if (inFlight.has(pageKey)) return inFlight.get(pageKey);
 
   const task = (async () => {
@@ -85,6 +89,7 @@ async function hydrateWellnessLandingImages(page, { db, persist = true } = {}) {
         })()
       : page.content;
     const root = findWellnessRoot(parsed);
+    if (!isWellnessLandingPage(page, Array.isArray(parsed) ? parsed : [])) return page;
     const canBuildScaffold = !root
       && typeof page.templateType === 'string'
       && page.templateType.startsWith('generic-site-');
@@ -150,11 +155,20 @@ async function hydrateWellnessLandingImages(page, { db, persist = true } = {}) {
 
     if (!changed) return page;
     const serialized = JSON.stringify(next);
-    if (persist && db?.landingPage?.update && page.id) {
+    if (db?.landingPage?.updateMany && page.id && page.tenantId && typeof page.content === 'string') {
       try {
-        await db.landingPage.update({ where: { id: page.id }, data: { content: serialized } });
+        const saved = await db.landingPage.updateMany({
+          where: { id: page.id, tenantId: page.tenantId, content: page.content,
+            ...(page.updatedAt ? { updatedAt: page.updatedAt } : {}) },
+          data: { content: serialized },
+        });
+        if (saved.count !== 1) {
+          // Do not overwrite a newer edit or return stale hydrated content.
+          return await db.landingPage.findFirst({ where: { id: page.id, tenantId: page.tenantId } }) || page;
+        }
       } catch (err) {
         console.warn(`[wellness-images] Could not persist images for ${page.slug || page.id}:`, err.message || err);
+        return page;
       }
     }
     return { ...page, content: serialized };

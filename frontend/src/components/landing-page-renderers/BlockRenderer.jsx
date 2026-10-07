@@ -27,7 +27,7 @@ import {
   ItineraryTimelineBlock,
   ContactFooterBlock,
 } from '../landing-blocks/TravelBlocks';
-import { DEFAULT_WELLNESS_LANDING_THEME, resolveWellnessLandingTheme } from '../../utils/wellnessLandingThemes';
+import { DEFAULT_WELLNESS_LANDING_THEME, resolveWellnessLandingTheme, isWellnessLandingPage as isWellnessPage } from '../../utils/wellnessLandingThemes';
 
 /**
  * Render a single block based on its type.
@@ -232,11 +232,10 @@ export default function BlockRenderer({ landingPage = {} }) {
   const rawBlocks = Array.isArray(landingPage.content)
     ? landingPage.content
     : [];
-  const blocks = normalizeWellnessCampaignBlocks(rawBlocks);
+  const isWellnessLandingPage = isWellnessPage(landingPage, rawBlocks);
+  const blocks = isWellnessLandingPage ? normalizeWellnessCampaignBlocks(rawBlocks) : rawBlocks;
 
   const slug = landingPage.slug || '';
-  const isWellnessLandingPage = typeof landingPage.templateType === 'string'
-    && landingPage.templateType.startsWith('generic-site-');
   const publicSubmit = !!landingPage.publicSubmit;
   const pageId = publicSubmit ? null : (landingPage.id || null);
   const submitEndpoint = publicSubmit && slug ? `/api/pages/${slug}/submit` : '';

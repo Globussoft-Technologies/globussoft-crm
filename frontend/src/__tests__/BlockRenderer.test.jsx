@@ -52,6 +52,14 @@ const sampleLandingPage = {
 };
 
 describe('<BlockRenderer /> — block rendering and pageId passing', () => {
+  it('preserves non-wellness Generic campaign content without wellness styling', () => {
+    const { container } = render(<MemoryRouter><BlockRenderer landingPage={{
+      templateType: 'generic-site-real_estate-v1',
+      content: [{ type: 'heading', props: { text: 'Original property offer' } }],
+    }} /></MemoryRouter>);
+    expect(screen.getByText('Original property offer')).toBeInTheDocument();
+    expect(container.querySelector('.wellness-page')).toBeNull();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -841,4 +849,3 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(mainElement).toBeInTheDocument();
   });
 });
-

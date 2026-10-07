@@ -110,3 +110,8 @@ export const WELLNESS_LANDING_LAYOUTS = Object.freeze([
 ]);
 
 export const DEFAULT_WELLNESS_LANDING_LAYOUT = 'editorial';
+
+export function isWellnessLandingPage(page = {}, blocks = []) {
+  return /^(?:generic-site-)(?:wellness|health|hospital|fitness|hair-treatment|eye-care|skin|dental|physiotherapy|nutrition|mental-health)(?:-|$)/i.test(page.templateType || '') ||
+    blocks.some(block => block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page');
+}

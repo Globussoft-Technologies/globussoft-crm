@@ -1145,6 +1145,7 @@ export default function Itineraries() {
 
   return (
     <div
+      className="itineraries-page"
       style={{
         padding: 24,
         width: "100%",
@@ -1154,6 +1155,7 @@ export default function Itineraries() {
       }}
     >
       <header
+        className="itineraries-page__header"
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -1184,7 +1186,7 @@ export default function Itineraries() {
             one here or build from a linked Deal in the sales pipeline.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="itineraries-page__header-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {/* Both header CTAs lead to itinerary creation — gate on
               `itineraries.write`. PermissionGate hides the buttons
               entirely when the role lacks the grant. Backend POST
@@ -1280,6 +1282,7 @@ export default function Itineraries() {
           />
           <input
             type="search"
+            className="crm-search-input"
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search destination or name…"
@@ -2064,6 +2067,7 @@ export default function Itineraries() {
                 />
               </label>
               <div
+                className="travel-form-split"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "1fr 1fr",
@@ -2108,6 +2112,7 @@ export default function Itineraries() {
                 </label>
               </div>
               <div
+                className="travel-form-split"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "1fr 2fr",
@@ -2298,6 +2303,7 @@ export default function Itineraries() {
                 )}
               </label>
               <div
+                className="travel-form-split"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "1fr 1fr",
@@ -2343,6 +2349,7 @@ export default function Itineraries() {
                 </label>
               </div>
               <div
+                className="travel-form-split"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "1fr 1fr",
@@ -2710,6 +2717,7 @@ export default function Itineraries() {
                     the operator picks them at commit time without leaving
                     the modal. */}
                 <div
+                  className="travel-form-split"
                   style={{
                     marginTop: 12,
                     display: "grid",

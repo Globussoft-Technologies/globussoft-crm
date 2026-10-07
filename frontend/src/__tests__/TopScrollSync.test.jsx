@@ -56,3 +56,30 @@ describe("TopScrollSync sticky bottom mode", () => {
     );
   });
 });
+
+describe("TopScrollSync detached bottom bar", () => {
+  it("offsets the visible bottom bar and keeps it in sync without moving content", () => {
+    const { container, getByTestId } = render(
+      <TopScrollSync forceScrollbar scrollWidth={1000} hideBottomScrollbar bottomBarLeadingWidth={80}>
+        <div data-testid="wide-content" style={{ width: 1080 }} />
+      </TopScrollSync>,
+    );
+    const top = container.querySelector(".top-scroll-sync__top");
+    const body = container.querySelector(".top-scroll-sync__bottom");
+    const lower = container.querySelector(".top-scroll-sync__detached-bottom");
+    expect(lower.style.marginLeft).toBe("80px");
+    expect(lower.style.width).toBe("calc(100% - 80px)");
+    expect(body).toHaveClass("top-scroll-sync__bottom--hidden-scrollbar");
+
+    lower.scrollLeft = 240;
+    fireEvent.scroll(lower);
+    expect(top.scrollLeft).toBe(240);
+    expect(body.scrollLeft).toBe(240);
+
+    top.scrollLeft = 120;
+    fireEvent.scroll(top);
+    expect(lower.scrollLeft).toBe(120);
+    expect(body.scrollLeft).toBe(120);
+    expect(getByTestId("wide-content").style.left).toBe("");
+  });
+});

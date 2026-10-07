@@ -54,7 +54,7 @@ export default function Loyalty() {
   useEffect(refresh, []);
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="wellness-loyalty-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.25rem' }}>
         <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Award size={24} /> Loyalty + Referrals
@@ -64,7 +64,7 @@ export default function Loyalty() {
         </p>
       </header>
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
+      <div className="wellness-loyalty-tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
         <TabBtn active={tab === 'overview'} onClick={() => setTab('overview')} icon={Trophy} label="Overview" />
         <TabBtn active={tab === 'rules'} onClick={() => setTab('rules')} icon={Settings} label="Rules" />
         <TabBtn active={tab === 'search'} onClick={() => setTab('search')} icon={Search} label="Patient lookup" />

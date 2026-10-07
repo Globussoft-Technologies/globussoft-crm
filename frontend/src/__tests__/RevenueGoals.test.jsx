@@ -171,6 +171,13 @@ function renderPage({ role = 'ADMIN', userId = 99 } = {}) {
   );
 }
 
+function selectStaffById(id) {
+  const member = sampleStaff.find((staffMember) => String(staffMember.id) === String(id));
+  const combobox = screen.getByRole('combobox', { name: 'Staff member' });
+  fireEvent.mouseDown(combobox);
+  fireEvent.click(screen.getByRole('option', { name: new RegExp(member.name) }));
+}
+
 describe('<RevenueGoals /> — admin page surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -319,16 +326,16 @@ describe('<RevenueGoals /> — admin page surface', () => {
     expect(await screen.findByRole('heading', { name: /New revenue goal/i })).toBeInTheDocument();
     // Staff select (data-testid=goal-form-user) renders + carries the staff
     // options populated from /api/staff.
-    const select = screen.getByTestId('goal-form-user');
+    const select = screen.getByRole('combobox', { name: 'Staff member' });
     expect(select).toBeInTheDocument();
+    fireEvent.mouseDown(select);
     // 3 staff options + 1 placeholder "— Select —" → 4 options.
-    expect(select.querySelectorAll('option').length).toBe(1 + sampleStaff.length);
+    const staffList = screen.getByRole('listbox', { name: 'Staff member' });
+    expect(staffList.querySelectorAll('[role="option"]')).toHaveLength(1 + sampleStaff.length);
     // First option is the placeholder (value=""), subsequent are staff ids.
-    expect(select.querySelectorAll('option')[0].value).toBe('');
-    const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.value);
-    expect(optionValues).toContain('1');
-    expect(optionValues).toContain('2');
-    expect(optionValues).toContain('3');
+    expect(screen.getByRole('option', { name: /Alice Rep/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Bob Manager/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Carla Doctor/ })).toBeInTheDocument();
     const dateInputs = document.querySelectorAll('input[type="date"]');
     const { currentMonthStart, maxWindowEnd, defaultMonthEnd } = getGoalWindowBounds();
     expect(dateInputs[0].value).toBe(currentMonthStart);
@@ -365,7 +372,7 @@ describe('<RevenueGoals /> — admin page surface', () => {
     await screen.findByTestId('goal-form-save');
 
     // Pick staff so the userId guard passes.
-    fireEvent.change(screen.getByTestId('goal-form-user'), { target: { value: '1' } });
+    selectStaffById('1');
     // Leave target blank (default = '') and submit.
     fireEvent.click(screen.getByTestId('goal-form-save'));
 
@@ -395,7 +402,7 @@ describe('<RevenueGoals /> — admin page surface', () => {
     await screen.findByTestId('goal-form-save');
 
     // Pick staff + valid target.
-    fireEvent.change(screen.getByTestId('goal-form-user'), { target: { value: '1' } });
+    selectStaffById('1');
     fireEvent.change(screen.getByTestId('goal-form-target'), { target: { value: '50000' } });
 
     // Clear the period inputs (emptyForm pre-fills them with the current
@@ -423,7 +430,7 @@ describe('<RevenueGoals /> — admin page surface', () => {
     fireEvent.click(screen.getByTestId('revenue-goal-new'));
     await screen.findByTestId('goal-form-save');
 
-    fireEvent.change(screen.getByTestId('goal-form-user'), { target: { value: '1' } });
+    selectStaffById('1');
     fireEvent.change(screen.getByTestId('goal-form-target'), { target: { value: '50000' } });
 
     const dateInputs = document.querySelectorAll('input[type="date"]');
@@ -450,7 +457,7 @@ describe('<RevenueGoals /> — admin page surface', () => {
     fireEvent.click(screen.getByTestId('revenue-goal-new'));
     await screen.findByTestId('goal-form-save');
 
-    fireEvent.change(screen.getByTestId('goal-form-user'), { target: { value: '1' } });
+    selectStaffById('1');
     fireEvent.change(screen.getByTestId('goal-form-target'), { target: { value: '50000' } });
 
     const dateInputs = document.querySelectorAll('input[type="date"]');
@@ -490,7 +497,7 @@ describe('<RevenueGoals /> — admin page surface', () => {
 
     // Pick staff #1 + target 75000. periodStart/End are pre-filled by
     // emptyForm() to the current calendar month — fine for create.
-    fireEvent.change(screen.getByTestId('goal-form-user'), { target: { value: '1' } });
+    selectStaffById('1');
     fireEvent.change(screen.getByTestId('goal-form-target'), { target: { value: '75000' } });
 
     fireEvent.click(screen.getByTestId('goal-form-save'));
@@ -529,10 +536,10 @@ describe('<RevenueGoals /> — admin page surface', () => {
     fireEvent.click(screen.getByTestId('goal-edit-100'));
 
     expect(await screen.findByRole('heading', { name: /Edit revenue goal/i })).toBeInTheDocument();
-    const select = screen.getByTestId('goal-form-user');
+    const select = screen.getByRole('combobox', { name: 'Staff member' });
     // Staff <select> is disabled in edit mode (SUT line 318: `disabled={Boolean(editing.id)}`).
     expect(select).toBeDisabled();
-    expect(select.value).toBe('1'); // Alice's id.
+    expect(select.value).toBe('Alice Rep');
     // Target prefilled from the row.
     expect(screen.getByTestId('goal-form-target').value).toBe('100000');
   });

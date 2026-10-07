@@ -48,7 +48,7 @@ export default function TreatmentCard({ treatment, onChanged, onSelect }) {
     <div
       className="glass"
       data-testid={`treatment-card-${treatment.id}`}
-      style={{ padding: '1.25rem', position: 'relative', cursor: 'pointer', transition: 'all 0.3s ease' }}
+      style={{ padding: '1.25rem', minWidth: 0, position: 'relative', cursor: 'pointer', transition: 'all 0.3s ease' }}
       onClick={() => onSelect(treatment)}
     >
       <div

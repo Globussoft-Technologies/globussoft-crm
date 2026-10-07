@@ -786,7 +786,7 @@ export default function ItineraryWorkspace() {
   const unscheduled = itemsByDay.get(null) || [];
 
   return (
-    <div data-vertical="travel" style={S.page}>
+    <div data-vertical="travel" className="itinerary-workspace-page" style={S.page}>
       {/* ── Header ─────────────────────────────────────────────── */}
       <div style={S.header}>
         <div style={S.headerTop}>
@@ -868,8 +868,8 @@ export default function ItineraryWorkspace() {
 
       {/* ── Plan tab ───────────────────────────────────────────── */}
       {tab === "plan" && (
-        <div style={S.planGrid}>
-          <div style={S.planMain}>
+        <div className="itinerary-workspace-plan-grid" style={S.planGrid}>
+          <div className="itinerary-workspace-plan-main" style={S.planMain}>
             <div style={S.planToolbar}>
               <button
                 type="button"
@@ -939,21 +939,21 @@ export default function ItineraryWorkspace() {
             ))}
           </div>
 
-          <aside style={S.rail}>
-            <div style={S.railCard}>
-              <div style={S.railHead}>Route map</div>
+          <aside className="itinerary-workspace-rail" style={S.rail}>
+            <div className="itinerary-workspace-rail-card" style={S.railCard}>
+              <div className="itinerary-workspace-rail-head" style={S.railHead}>Route map</div>
               {mapItems.length > 0 ? (
                 <MapPreview items={mapItems} height={280} showRoute />
               ) : (
-                <div style={S.railEmpty}>
+                <div className="itinerary-workspace-rail-empty" style={S.railEmpty}>
                   No pinned locations yet. Set a location on an item to plot it here.
                 </div>
               )}
             </div>
 
             {itin.moneyEnabled && (
-              <div style={S.railCard}>
-                <div style={S.railHead}>Cost by day</div>
+              <div className="itinerary-workspace-rail-card" style={S.railCard}>
+                <div className="itinerary-workspace-rail-head" style={S.railHead}>Cost by day</div>
                 {dayNumbers.map((d) => {
                   const dayItems = itemsByDay.get(d) || [];
                   const sum = dayItems.reduce((s, it) => s + (Number(it.totalPrice) || 0), 0);
@@ -972,8 +972,8 @@ export default function ItineraryWorkspace() {
               </div>
             )}
 
-            <div style={S.railCard}>
-              <div style={S.railHead}>Publish</div>
+            <div className="itinerary-workspace-rail-card" style={S.railCard}>
+              <div className="itinerary-workspace-rail-head" style={S.railHead}>Publish</div>
               <div style={S.railLabelRow}>
                 <span style={S.railLabelText}>PDF template</span>
                 <span

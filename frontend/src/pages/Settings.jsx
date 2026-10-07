@@ -1770,7 +1770,7 @@ export default function Settings() {
 
           {/* Pipeline Stages Card */}
           <div
-            className="card"
+            className="card settings-pipeline-stages-card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
             <h3
@@ -1790,6 +1790,7 @@ export default function Settings() {
               <p>Loading stages...</p>
             ) : (
               <div
+                className="settings-pipeline-stage-list"
                 style={{
                   display: "flex",
                   flexDirection: "column",
@@ -1811,6 +1812,7 @@ export default function Settings() {
                 {pipelineStages.map((stage, index) => (
                   <div
                     key={stage.id}
+                    className="settings-pipeline-stage-row"
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
@@ -1822,6 +1824,7 @@ export default function Settings() {
                     }}
                   >
                     <div
+                      className="settings-pipeline-stage-details"
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -1839,6 +1842,7 @@ export default function Settings() {
                       />
                       <span style={{ fontWeight: "500" }}>{stage.name}</span>
                       <span
+                        className="settings-pipeline-stage-position"
                         style={{
                           fontSize: "0.75rem",
                           color: "var(--text-secondary)",
@@ -1848,6 +1852,7 @@ export default function Settings() {
                       </span>
                     </div>
                     <div
+                      className="settings-pipeline-stage-actions"
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -1910,6 +1915,7 @@ export default function Settings() {
             {/* #479: flexWrap so the color picker + Add button drop below the
               stage-name input on narrow viewports rather than truncating it. */}
             <form
+              className="settings-pipeline-stage-form"
               onSubmit={handleAddStage}
               style={{
                 display: "flex",
@@ -4105,6 +4111,7 @@ function WellnessRoleTypesCard({ notify }) {
           {rows.map((r) => (
             <div
               key={r.id}
+              className="wellness-role-type-row"
               style={{
                 display: "flex",
                 alignItems: "center",

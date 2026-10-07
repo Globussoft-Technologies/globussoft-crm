@@ -919,6 +919,7 @@ export default function Invoices() {
 
   return (
     <div
+      className="invoices-mobile-page"
       style={{
         padding: "2rem",
         height: "100%",
@@ -944,16 +945,8 @@ export default function Invoices() {
       </header>
 
       {/* Summary Stats */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "0.75rem",
-          marginBottom: "1.75rem",
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="invoice-summary-controls">
+      <div className="invoice-summary-badges">
         <span
           style={{
             padding: "0.4rem 1rem",
@@ -1036,13 +1029,16 @@ export default function Invoices() {
             Report drill-down: {reportInvoiceIds.size} invoice{reportInvoiceIds.size === 1 ? "" : "s"}
           </span>
         )}
+      </div>
 
         {/* Travel vertical — Sub-brand filter for the ledger. Bound to the
             shared active-sub-brand context (same source the sidebar selector
             uses), so picking here filters the ledger AND keeps the whole travel
             vertical in sync. Hidden for generic/wellness. */}
+      <div className="invoice-filters">
         {isTravel && (
           <div
+            className="invoice-filter-pill invoice-subbrand-filter"
             style={{
               marginLeft: "auto",
               display: "flex",
@@ -1112,6 +1108,7 @@ export default function Invoices() {
             /api/billing); the API's default issued-date scope is the only
             date basis exposed by this ledger control. */}
         <div
+          className="invoice-filter-pill invoice-date-filter"
           style={{
             marginLeft: isTravel ? "0.5rem" : "auto",
             display: "flex",
@@ -1202,6 +1199,7 @@ export default function Invoices() {
         </div>
 
         <div
+          className="invoice-filter-pill invoice-status-filter"
           style={{
             marginLeft: "0.5rem",
             display: "flex",
@@ -1303,7 +1301,7 @@ export default function Invoices() {
 
         <button
           type="button"
-          className="btn-primary"
+          className="btn-primary invoice-create-button"
           onClick={() => setIsCreateFormOpen(true)}
           style={{
             display: "flex",
@@ -1321,6 +1319,7 @@ export default function Invoices() {
         >
           <Plus size={16} /> Create Invoice
         </button>
+      </div>
       </div>
 
       {isCreateFormOpen && (

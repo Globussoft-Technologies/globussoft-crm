@@ -604,40 +604,19 @@ export default function EmbassyRulesAdmin() {
           </div>
         ) : (
           <>
-            <table className="stable-table embassy-rules-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <colgroup>
-                <col style={{ width: '88px' }} />
-                <col style={{ width: '150px' }} />
-                <col style={{ width: '120px' }} />
-                <col />
-                <col style={{ width: '110px' }} />
-                <col style={{ width: '90px' }} />
-                {isAdmin && <col style={{ width: '150px' }} />}
-              </colgroup>
-              <thead>
-                <tr>
-                  <th style={th}>Country</th>
-                  <th style={th}>Rule type</th>
-                  <th style={th}>Application type</th>
-                  <th style={th}>Advisor warning</th>
-                  <th style={th}>Severity</th>
-                  <th style={th}>Active</th>
-                  {isAdmin && <th style={th}>Actions</th>}
-                </tr>
-              </thead>
-            </table>
             <div
+              className="embassy-rules-table-scroll"
               ref={listRef}
               onScroll={handleListScroll}
               data-testid="embassy-rules-table-scroll"
               style={{
                 maxHeight: '60vh',
                 overflowY: 'auto',
-                overflowX: 'hidden',
+                overflowX: 'auto',
                 position: 'relative',
               }}
             >
-              <table className="stable-table embassy-rules-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <table className="stable-table embassy-rules-table" style={{ width: '100%', minWidth: isAdmin ? 950 : 800, borderCollapse: 'collapse' }}>
                 <colgroup>
                   <col style={{ width: '88px' }} />
                   <col style={{ width: '150px' }} />
@@ -647,6 +626,17 @@ export default function EmbassyRulesAdmin() {
                   <col style={{ width: '90px' }} />
                   {isAdmin && <col style={{ width: '150px' }} />}
                 </colgroup>
+                <thead>
+                  <tr>
+                    <th style={th}>Country</th>
+                    <th style={th}>Rule type</th>
+                    <th style={th}>Application type</th>
+                    <th style={th}>Advisor warning</th>
+                    <th style={th}>Severity</th>
+                    <th style={th}>Active</th>
+                    {isAdmin && <th style={th}>Actions</th>}
+                  </tr>
+                </thead>
                 <tbody>
                   {rules.map((r) => (
                     <tr key={r.id} style={{ borderTop: '1px solid var(--border-light)' }} data-testid={`embassy-rule-row-${r.id}`}>
@@ -998,6 +988,9 @@ const empty = {
 };
 
 const th = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,

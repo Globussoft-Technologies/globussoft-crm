@@ -1219,6 +1219,7 @@ export default function Staff() {
 
   return (
     <div
+      className={isTravel ? "travel-admin-page travel-staff-page" : isWellness ? "wellness-staff-page" : undefined}
       style={{
         padding: "2rem",
         height: "100%",
@@ -1407,7 +1408,7 @@ export default function Staff() {
       {/* Availability Panel - Only for ADMIN users */}
       {showAvailability && canManageStaff && (
         <div
-          className="card"
+          className="card staff-availability-panel"
           style={{
             padding: "1.5rem",
             marginBottom: "2rem",
@@ -1415,6 +1416,7 @@ export default function Staff() {
           }}
         >
           <div
+            className="staff-availability-header"
             style={{
               display: "flex",
               justifyContent: "space-between",
@@ -1426,9 +1428,11 @@ export default function Staff() {
               Staff Availability
             </h3>
             <div
+              className="staff-availability-date-controls"
               style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
             >
               <button
+                className="staff-availability-prev"
                 onClick={() =>
                   setAvailDate(new Date(availDate.getTime() - 86400000))
                 }
@@ -1444,6 +1448,7 @@ export default function Staff() {
                 ← Prev
               </button>
               <span
+                className="staff-availability-date"
                 style={{
                   fontSize: "0.85rem",
                   fontWeight: "500",
@@ -1458,6 +1463,7 @@ export default function Staff() {
                 })}
               </span>
               <button
+                className="staff-availability-next"
                 onClick={() =>
                   setAvailDate(new Date(availDate.getTime() + 86400000))
                 }
@@ -1473,6 +1479,7 @@ export default function Staff() {
                 Next →
               </button>
               <button
+                className="staff-availability-today"
                 onClick={() => setAvailDate(new Date())}
                 style={{
                   padding: "0.3rem 0.6rem",
@@ -1491,6 +1498,7 @@ export default function Staff() {
           {/* Summary bar */}
           {!availLoading && availability.length > 0 && (
             <div
+              className="staff-availability-summary"
               style={{
                 display: "flex",
                 gap: "2rem",
@@ -1541,6 +1549,7 @@ export default function Staff() {
             </p>
           ) : (
             <div
+              className="staff-availability-cards"
               style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
@@ -1931,6 +1940,7 @@ export default function Staff() {
           </p>
         ) : (
           <div
+            className={isTravel ? "travel-staff-table-scroll" : undefined}
             onScroll={handleStaffTableScroll}
             style={isTravel || isWellness ? {
               width: "100%",

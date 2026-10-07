@@ -446,6 +446,7 @@ export default function Diagnostics() {
 
   return (
     <div
+      className="diagnostics-page"
       style={{
         padding: 24,
         width: "100%",
@@ -465,6 +466,7 @@ export default function Diagnostics() {
         }}
       >
         <h1
+          className="diagnostics-page__title"
           style={{
             display: "flex",
             alignItems: "center",
@@ -476,10 +478,10 @@ export default function Diagnostics() {
             flexWrap: "wrap",
           }}
         >
-          <ClipboardCheck size={28} aria-hidden /> Diagnostics
+          <ClipboardCheck size={28} aria-hidden /> <span>Diagnostics</span>
           <CountBadge count={total} title={`${total.toLocaleString()} diagnostics`} />
         </h1>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="diagnostics-page__actions" style={{ display: "flex", gap: 8 }}>
           <Link
             to="/travel/trip-knowledge"
             state={{ returnTo: diagnosticsListUrl, returnLabel: "Back to diagnostics" }}
@@ -513,6 +515,7 @@ export default function Diagnostics() {
       </p>
 
       <div
+        className="diagnostics-page__filters"
         style={{
           display: "flex",
           gap: 12,
@@ -530,6 +533,7 @@ export default function Diagnostics() {
         }}
       >
         <div
+          className="diagnostics-page__filter-controls"
           style={{
             display: "flex",
             gap: 12,
@@ -539,6 +543,7 @@ export default function Diagnostics() {
           }}
         >
           <Filter
+            className="diagnostics-page__filter-icon"
             size={16}
             aria-hidden
             style={{ color: "var(--text-secondary)" }}
@@ -605,7 +610,7 @@ export default function Diagnostics() {
           </button>
         </div>
         {isAdmin && (
-          <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+          <div className="diagnostics-page__selection-actions" style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
             <button
               type="button"
               onClick={() => {

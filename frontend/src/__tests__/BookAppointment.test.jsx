@@ -84,7 +84,7 @@ const SAMPLE_APPOINTMENT = {
 /**
  * Render the page and return { container, getDateInput, getTimeSelect }.
  * The date input is the only `input[type="date"]` on the page.
- * The time select is the LAST <select> in the form (after doctor/service/membership).
+ * Time is a searchable combobox, addressed by its accessible name.
  */
 function renderPage() {
   const { container } = render(
@@ -96,10 +96,7 @@ function renderPage() {
   );
 
   const getDateInput  = () => container.querySelector('input[type="date"]');
-  const getTimeSelect = () => {
-    const all = container.querySelectorAll('select');
-    return all[all.length - 1]; // Time select is always the last <select>
-  };
+  const getTimeSelect = () => container.querySelector('[aria-label="Appointment time"]');
 
   return { container, getDateInput, getTimeSelect };
 }
@@ -188,9 +185,9 @@ describe('<BookAppointment /> — filterPastSlots: time dropdown for today', () 
 
     await screen.findByRole('heading', { name: /Book an Appointment/i });
 
-    const slotValues = Array.from(getTimeSelect().options)
-      .map(o => o.value)
-      .filter(Boolean);
+    fireEvent.focus(getTimeSelect());
+    await screen.findByRole('option', { name: '11:00' });
+    const slotValues = screen.getAllByRole('option').map((option) => option.textContent.trim());
 
     // Past + buffer slots must be absent.
     expect(slotValues).not.toContain('09:00');
@@ -212,9 +209,8 @@ describe('<BookAppointment /> — filterPastSlots: time dropdown for today', () 
 
     await screen.findByRole('heading', { name: /Book an Appointment/i });
 
-    const nonEmptyOptions = Array.from(getTimeSelect().options).filter(o => o.value !== '');
-    expect(nonEmptyOptions).toHaveLength(0);
-    expect(getTimeSelect().options[0].textContent).toMatch(/No available slots/i);
+    expect(getTimeSelect()).toBeDisabled();
+    expect(getTimeSelect()).toHaveAttribute('placeholder', expect.stringMatching(/No available slots/i));
   });
 
   it('shows all generic slots after date changes to a future date', async () => {
@@ -228,13 +224,11 @@ describe('<BookAppointment /> — filterPastSlots: time dropdown for today', () 
     // Change to tomorrow — filterPastSlots returns all GENERIC_SLOTS because
     // '2026-07-08' !== todayLocalDate() ('2026-07-07').
     fireEvent.change(getDateInput(), { target: { value: '2026-07-08' } });
+    fireEvent.focus(getTimeSelect());
 
-    await waitFor(() => {
-      const slotValues = Array.from(getTimeSelect().options).map(o => o.value).filter(Boolean);
-      expect(slotValues).toContain('09:00');
-      expect(slotValues).toContain('09:30');
-      expect(slotValues).toContain('19:00');
-    });
+    expect(await screen.findByRole('option', { name: '09:00' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '09:30' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '19:00' })).toBeInTheDocument();
   });
 });
 

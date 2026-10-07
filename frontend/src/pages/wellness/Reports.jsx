@@ -93,7 +93,7 @@ const STICKY_TH_STYLE = {
 
 function ReportTableShell({ scrollRef, sentinelRef, loadingMore, hasMore, children }) {
   return (
-    <div className="glass" style={TABLE_CARD_STYLE}>
+    <div className="glass wellness-reports-table-shell" style={TABLE_CARD_STYLE}>
       <div ref={scrollRef} style={TABLE_SCROLL_STYLE}>
         {children}
         <div ref={sentinelRef} aria-hidden="true" style={{ height: '1px' }} />
@@ -348,7 +348,7 @@ export default function Reports() {
   );
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="wellness-reports-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.25rem' }}>
         <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <BarChart3 size={24} /> Reports
@@ -358,7 +358,7 @@ export default function Reports() {
         </p>
       </header>
 
-      <div data-testid="reports-tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="wellness-reports-tabs" data-testid="reports-tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {TABS.map((t) => {
           const Icon = t.icon;
           return (
@@ -377,11 +377,12 @@ export default function Reports() {
       </div>
 
       <div
+        className="wellness-reports-controls"
         data-testid="reports-controls"
         style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: 0, marginBottom: '1.5rem', flexWrap: 'wrap' }}
       >
         <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} className="reports-date-filter" />
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+        <div className="wellness-reports-export-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
           {exportActions}
         </div>
       </div>

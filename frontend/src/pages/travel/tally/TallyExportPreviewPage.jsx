@@ -402,7 +402,7 @@ export default function TallyExportPreviewPage() {
   };
 
   if (loading) return <main style={page}><p>Loading Tally export preview…</p></main>;
-  if (!tripId) return <main style={page}>
+  if (!tripId) return <main className="tally-export-trips-page" style={page}>
     <TallySectionNav showBack />
     <section style={card}>
       <div style={header}>
@@ -452,7 +452,7 @@ export default function TallyExportPreviewPage() {
         </ol>
       </div>
       {showSyncGuidelines && <TallySyncGuidelines onClose={() => setShowSyncGuidelines(false)} />}
-      <div style={filterBar}>
+      <div className="tally-export-trip-filters" style={filterBar}>
         <label htmlFor="tally-trip-search" style={searchControl}>
           <Search size={15} aria-hidden="true" />
           <input
@@ -478,8 +478,8 @@ export default function TallyExportPreviewPage() {
           <option value="FAILED">Failed</option>
         </select>
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <table style={table}>
+      <div className="tally-export-trip-table-scroll" style={{ overflowX: "auto" }}>
+        <table className="tally-export-trip-table" style={table}>
           <thead><tr>{["Trip", "Status", "Tally Sync Status", "Sales", "Purchase", "GST / TCS", "Cash Profit / Loss", "Actions"].map((label) => <th key={label} style={th}>{label}</th>)}</tr></thead>
           <tbody>{visibleRows.length ? paginatedRows.map((row) => <tr key={row.id}>
             <td style={td}><strong>{row.label}</strong><small style={{ display: "block", color: "var(--text-secondary)" }}>Trip #{row.id}</small></td>

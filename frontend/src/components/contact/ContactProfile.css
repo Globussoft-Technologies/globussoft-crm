@@ -332,15 +332,40 @@ a.cp-soc:hover { border-color: currentColor; }
 }
 @media (max-width: 768px) {
   .cp-layout { grid-template-columns: 1fr; }
-  .cp-side { position: static; display: flex; overflow-x: auto; gap: 0.25rem; width: auto; }
+  .cp-side { position: static; display: flex; flex-wrap: wrap; overflow: visible; gap: 0.35rem; width: auto; }
+  .cp-side.expanded { width: auto; margin-right: 0; min-height: 0; }
   .cp-side:hover, .cp-side:focus-within { position: static; width: auto; box-shadow: none; }
-  .cp-nav-item { white-space: nowrap; width: auto; justify-content: flex-start; padding: 0.55rem 0.7rem; }
+  .cp-nav-item { white-space: nowrap; width: auto; flex: 1 1 145px; justify-content: flex-start; padding: 0.55rem 0.7rem; }
   .cp-nav-label { display: inline; }
   .cp-grid { grid-template-columns: 1fr; }
   .cp-info-grid { grid-template-columns: 1fr; }
   .cp-wrap { padding: 0.85rem; }
   .cp-slide-panel { width: 100%; }
   .cp-slide-close { left: auto; right: 12px; top: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+}
+
+@media (max-width: 560px) {
+  .cp-wrap { padding: 0.6rem; }
+  .cp-header {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.75rem;
+    align-items: start;
+  }
+  .cp-avatar { width: 52px; height: 52px; font-size: 1.35rem; }
+  .cp-header-main { grid-column: 2; width: 100%; min-width: 0; }
+  .cp-name { font-size: 1.15rem; line-height: 1.25; overflow-wrap: anywhere; }
+  .cp-sub { white-space: normal; overflow-wrap: anywhere; }
+  .cp-contact-line { flex-direction: column; align-items: flex-start; gap: 0.35rem; min-width: 0; }
+  .cp-contact-line a,
+  .cp-contact-line span { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+  .cp-header-mid,
+  .cp-header-right { grid-column: 1 / -1; min-width: 0; padding: 0; }
+  .cp-header-mid { display: flex; flex-wrap: wrap; gap: 1rem; }
+  .cp-header-right { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .cp-actions-bar { gap: 0.35rem; }
+  .cp-action-btn { min-height: 34px; padding: 0.35rem 0.55rem; }
 }
 
 /* Contact profile surfaces were authored with opaque white cards. Keep the

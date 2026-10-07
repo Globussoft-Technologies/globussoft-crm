@@ -483,7 +483,7 @@ function SeasonsSection() {
         </div>
       </div>
 
-      <div className="finance-page__filters" style={filterRow}>
+      <div className="finance-page__filters pricing-rules-filters" style={filterRow}>
         <Filter size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
         <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ seasonSubBrand: e.target.value }); }} style={selectStyle} aria-label="Filter seasons by sub-brand">
           <option value="all">All sub-brands</option>
@@ -566,13 +566,13 @@ function SeasonsSection() {
         </div>
       )}
 
-      <div className="finance-page__table-card" style={tableWrap} onScroll={handleTableScroll}>
+      <div className="finance-page__table-card pricing-rules-table-scroll pricing-rules-table-scroll--seasons" style={tableWrap} onScroll={handleTableScroll}>
         {loading && seasons.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : seasons.length === 0 ? (
           <div style={empty}>No seasons yet. Add one above.</div>
         ) : (
-          <table style={tableStyle}>
+          <table className="pricing-rules-table pricing-rules-table--seasons" style={{ ...tableStyle, minWidth: 760 }}>
             <colgroup>
               <col style={{ width: "18%" }} />
               <col style={{ width: "32%" }} />
@@ -1011,7 +1011,7 @@ function MarkupRulesSection() {
         </div>
       </div>
 
-      <div className="finance-page__filters" style={filterRow}>
+      <div className="finance-page__filters pricing-rules-filters" style={filterRow}>
         <Filter size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
         <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ subBrand: e.target.value }); }} style={selectStyle} aria-label="Filter rules by sub-brand">
           <option value="all">All sub-brands</option>
@@ -1136,13 +1136,13 @@ function MarkupRulesSection() {
         </div>
       )}
 
-      <div className="finance-page__table-card" style={tableWrap} onScroll={handleTableScroll}>
+      <div className="finance-page__table-card pricing-rules-table-scroll pricing-rules-table-scroll--markup" style={tableWrap} onScroll={handleTableScroll}>
         {loading && rules.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rules.length === 0 ? (
           <div style={empty}>No markup rules yet. Add one above.</div>
         ) : (
-          <table style={tableStyle}>
+          <table className="pricing-rules-table pricing-rules-table--markup" style={{ ...tableStyle, minWidth: 900 }}>
             <colgroup>
               <col style={{ width: "15%" }} />
               <col style={{ width: "12%" }} />
@@ -1235,7 +1235,7 @@ const formBox = {
 };
 const tableWrap = {
   background: "var(--surface-color)", borderRadius: 8,
-  border: "1px solid var(--border-color)", overflowY: "auto", overflowX: "hidden",
+  border: "1px solid var(--border-color)", overflowY: "auto", overflowX: "auto",
   height: "calc((100vh - 360px) / 2)",
   minHeight: 320,
   maxHeight: 460,

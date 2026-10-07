@@ -286,10 +286,10 @@ export default function DocumentTemplates() {
 
       {/* ── Editor Modal ────────────────────────────────────────── */}
       {editor && (
-        <Modal onClose={closeEditor} title={editor.id ? 'Edit Template' : 'New Template'} wide>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: '1rem', minHeight: '440px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <Modal onClose={closeEditor} title={editor.id ? 'Edit Template' : 'New Template'} wide className="document-template-editor-modal">
+          <div className="document-template-editor-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 240px', gap: '1rem', minHeight: '440px' }}>
+            <div className="document-template-editor-main" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div className="document-template-editor-fields" style={{ display: 'flex', gap: '0.75rem' }}>
                 <input
                   className="input"
                   value={editor.name}
@@ -324,7 +324,7 @@ export default function DocumentTemplates() {
                 }}
               />
             </div>
-            <aside style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', overflow: 'auto' }}>
+            <aside className="document-template-editor-vars" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', overflow: 'auto' }}>
               <h4 style={{ fontSize: '0.85rem', margin: 0, marginBottom: '0.5rem' }}>Insert variable</h4>
               {AVAILABLE_VARS.map(v => (
                 <button
@@ -485,7 +485,7 @@ const inputStyle = {
   fontSize: '0.9rem',
 };
 
-function Modal({ title, children, onClose, wide }) {
+function Modal({ title, children, onClose, wide, className }) {
   return (
     <div
       onClick={onClose}
@@ -498,7 +498,7 @@ function Modal({ title, children, onClose, wide }) {
     >
       <div
         onClick={e => e.stopPropagation()}
-        className="card"
+        className={`card ${className || ''}`}
         style={{
           width: '100%',
           maxWidth: wide ? '960px' : '520px',

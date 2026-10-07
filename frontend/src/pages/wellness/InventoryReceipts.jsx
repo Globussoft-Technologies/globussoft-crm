@@ -13,6 +13,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 import PageHeader from '../../components/PageHeader';
 import TopScrollSync from '../../components/TopScrollSync';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 const EMPTY = {
   productId: '', vendorId: '', quantity: '', unitCost: '',
@@ -199,7 +200,7 @@ export default function InventoryReceipts() {
   const totalCost = filtered.reduce((s, r) => s + (r.totalCost || 0), 0);
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="wellness-inventory-receipts-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <PageHeader
         icon={ArrowDownToLine}
         title="Inventory receipts"
@@ -263,20 +264,31 @@ export default function InventoryReceipts() {
               <button type="button" onClick={resetForm} style={{ ...secondaryBtnStyle, padding: '0.25rem 0.6rem' }}>Cancel edit</button>
             </div>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
-            <LockableSelect required value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} locked={unsafeLocked} placeholder="Select product…">
-              {products.map((p) => (<option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ''}</option>))}
-            </LockableSelect>
-            <select disabled={!!editing} value={form.vendorId} onChange={(e) => setForm({ ...form, vendorId: e.target.value })} style={editing ? lockedStyle : inputStyle} title={editing ? 'Vendor is set at creation' : ''}>
-              <option value="">No vendor</option>
-              {vendors.map((v) => (<option key={v.id} value={v.id}>{v.name}</option>))}
-            </select>
+          <div className="wellness-inventory-receipts-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
+            <LockableSelect
+              required
+              value={form.productId}
+              onChange={(v) => setForm({ ...form, productId: v })}
+              locked={unsafeLocked}
+              placeholder="Select product…"
+              options={products.map((product) => ({ value: product.id, label: `${product.name}${product.sku ? ` (${product.sku})` : ''}` }))}
+            />
+            <SearchableSelect
+              value={form.vendorId}
+              onChange={(vendorId) => setForm({ ...form, vendorId })}
+              disabled={!!editing}
+              options={vendors.map((vendor) => ({ value: vendor.id, label: vendor.name }))}
+              placeholder="No vendor"
+              ariaLabel="Vendor"
+              style={editing ? lockedStyle : inputStyle}
+              minPopoverHeight={0}
+            />
             <input placeholder="Supplier invoice # (e.g. LE0155)" value={form.supplierInvoiceNumber} onChange={(e) => setForm({ ...form, supplierInvoiceNumber: e.target.value })} style={inputStyle} />
             <LockableInput type="number" min="0.01" step="0.01" required placeholder="Quantity" value={form.quantity} onChange={(v) => setForm({ ...form, quantity: v })} locked={unsafeLocked} />
             <LockableInput type="number" min="0" step="0.01" required placeholder="Unit cost" value={form.unitCost} onChange={(v) => setForm({ ...form, unitCost: v })} locked={unsafeLocked} />
             <input placeholder="Batch number" value={form.batchNumber} onChange={(e) => setForm({ ...form, batchNumber: e.target.value })} style={inputStyle} />
             <input type="date" placeholder="Expiry date" value={form.expiryDate} onChange={(e) => setForm({ ...form, expiryDate: e.target.value })} style={inputStyle} />
-            <input placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
+            <input className="wellness-inventory-receipts-notes" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
             <button type="submit" disabled={saving} style={{ ...primaryBtnStyle, gridColumn: '1 / -1' }}>
               {saving ? 'Saving…' : editing ? 'Save changes' : 'Record receipt + update stock'}
             </button>
@@ -376,13 +388,20 @@ function LockableInput({ locked, onChange, ...rest }) {
   );
 }
 
-function LockableSelect({ locked, onChange, value, required, placeholder, children }) {
+function LockableSelect({ locked, onChange, value, required, placeholder, options }) {
   return (
     <div style={{ position: 'relative', minWidth: 0 }}>
-      <select required={required} disabled={locked} value={value} onChange={(e) => onChange(e.target.value)} style={locked ? lockedStyle : inputStyle}>
-        <option value="">{placeholder}</option>
-        {children}
-      </select>
+      <SearchableSelect
+        required={required}
+        disabled={locked}
+        value={value}
+        onChange={onChange}
+        options={options}
+        placeholder={placeholder}
+        ariaLabel="Product"
+        style={locked ? lockedStyle : inputStyle}
+        minPopoverHeight={0}
+      />
       {locked && <Lock size={12} style={lockBadgeStyle} />}
     </div>
   );

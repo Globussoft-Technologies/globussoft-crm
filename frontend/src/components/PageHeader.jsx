@@ -44,7 +44,7 @@ const PageHeader = ({
 
   return (
     <header
-      className="glass"
+      className="glass crm-page-header"
       style={{
         marginBottom: '1.5rem',
         padding: '1.25rem 1.5rem',
@@ -63,7 +63,7 @@ const PageHeader = ({
         zIndex: 5,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
+      <div className="crm-page-header__intro" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
         {Icon && (
           <div
             aria-hidden="true"
@@ -131,7 +131,7 @@ const PageHeader = ({
         </div>
       </div>
       {children && (
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="crm-page-header__actions" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {children}
         </div>
       )}

@@ -286,12 +286,10 @@ describe('<Expenses /> — page surface', () => {
     renderExpenses();
     await screen.findByText('Office stationery');
     await openCreateExpenseForm();
-    // The category select is the only <select> on the page; its default
-    // value is `CATEGORY_OPTIONS[0]` which is "Building Rent".
-    const allSelects = screen.getAllByRole('combobox');
-    const categorySel = allSelects.find((s) => s.value === 'Building Rent');
-    expect(categorySel).toBeTruthy();
-    const options = Array.from(categorySel.querySelectorAll('option')).map((o) => o.value);
+    const categoryPicker = screen.getByRole('combobox', { name: 'Category' });
+    expect(categoryPicker).toHaveValue('Building Rent');
+    fireEvent.focus(categoryPicker);
+    const options = (await screen.findAllByRole('option')).map((option) => option.textContent.trim());
     expect(options).toEqual([
       'Building Rent',
       'Business Loan Repayment',

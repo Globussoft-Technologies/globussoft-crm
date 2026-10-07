@@ -20,6 +20,7 @@ import { ROLE_KEY_DESCRIPTION, validateRoleKey } from '../utils/roleKey';
 // RoleHistoryDialog ensures every role's history UI — current and
 // future — renders identically here AND on the Settings page.
 import RoleHistoryDialog from '../components/RoleHistoryDialog';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import { SUB_BRAND_LABEL, subBrandShortLabel } from '../utils/travelSubBrand';
 import { useActiveSubBrand } from '../utils/subBrand';
 
@@ -645,7 +646,7 @@ export default function RolesAdmin() {
   };
 
   return (
-    <div style={{ padding: '1.5rem', width: '100%' }}>
+    <div className={tenantVertical === 'travel' ? 'travel-admin-page travel-roles-page' : undefined} style={{ padding: '1.5rem', width: '100%' }}>
       <div
         style={{
           display: 'flex',
@@ -732,6 +733,7 @@ export default function RolesAdmin() {
       )}
 
       <div
+        className={tenantVertical === 'travel' ? 'travel-roles-table-scroll' : undefined}
         style={{
           border: '1px solid var(--border-color)',
           borderRadius: 12,
@@ -1694,12 +1696,6 @@ function LandingPathField({ value, onChange, disabled, error, roleId }) {
     };
   }, [roleId]);
 
-  // Group by category for a structured dropdown.
-  const byCategory = pages.reduce((acc, p) => {
-    (acc[p.category] = acc[p.category] || []).push(p);
-    return acc;
-  }, {});
-
   // If the currently-saved path isn't in the dropdown list (e.g. perms
   // were revoked since it was set), surface that to the admin instead of
   // silently dropping the value.
@@ -1715,30 +1711,38 @@ function LandingPathField({ value, onChange, disabled, error, roleId }) {
           : "Save the role first to pick from its accessible pages. For now the full catalog is shown."
       }
     >
-      <select
-        className="input-field"
+      <SearchableSelect
         value={value || ''}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={onChange}
+        options={[
+          {
+            value: '',
+            label: `— Use tenant default (${roleId ? '/home' : '/dashboard'}) —`,
+            keywords: 'tenant default',
+          },
+          ...(!valueIsKnown
+            ? [{
+                value,
+                label: `${value} (no longer accessible — pick another or save to clear)`,
+                disabled: true,
+              }]
+            : []),
+          ...pages.map((p) => ({
+            value: p.path,
+            label: `${p.label} — ${p.path}`,
+            hint: p.category || '',
+            keywords: `${p.category || ''} ${p.path}`,
+          })),
+        ]}
+        placeholder="Search pages…"
         disabled={disabled || loadingPages}
+        allowClear={false}
+        ariaLabel="Landing page"
+        minPopoverHeight={0}
+        className="input-field"
         style={{ width: '100%' }}
-        data-testid="role-landing-path-select"
-      >
-        <option value="">— Use tenant default ({roleId ? '/home' : '/dashboard'}) —</option>
-        {!valueIsKnown && (
-          <option value={value} disabled style={{ color: '#dc2626' }}>
-            {value} (no longer accessible — pick another or save to clear)
-          </option>
-        )}
-        {Object.entries(byCategory).map(([category, items]) => (
-          <optgroup key={category} label={category}>
-            {items.map((p) => (
-              <option key={p.path} value={p.path}>
-                {p.label} — {p.path}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+        wrapperStyle={{ width: '100%' }}
+      />
       {loadingPages && (
         <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: 4 }}>
           Loading accessible pages…

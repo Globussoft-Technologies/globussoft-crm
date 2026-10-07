@@ -2,7 +2,7 @@ import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link, useNavigate } from 'react-router-dom';
 
-import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Sparkles, ExternalLink, LayoutGrid, Megaphone } from 'lucide-react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Sparkles, ExternalLink, LayoutGrid, Megaphone, Calendar } from 'lucide-react';
 
 import { fetchApi } from '../utils/api';
 
@@ -441,6 +441,10 @@ export default function LandingSites() {
 
   }, [pages, pinnedPage, rangeStart, rangeEnd]);
 
+  const totalLibraryPages = pages.length + (
+    pinnedPage && !pages.some((page) => page.id === pinnedPage.id) ? 1 : 0
+  );
+
   useEffect(() => {
     if (!hasMore || loading || loadingMore) return;
     const node = sentinelRef.current;
@@ -783,10 +787,15 @@ export default function LandingSites() {
 
           {isWellnessTenant && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-              <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by created date" />
-              {visiblePages.length !== pages.length && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.35rem' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  <Calendar size={14} /> Filter by created date
+                </span>
+                <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} />
+              </div>
+              {visiblePages.length !== totalLibraryPages && (
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  {visiblePages.length} of {pages.length}
+                  {visiblePages.length} of {totalLibraryPages}
                 </span>
               )}
             </div>

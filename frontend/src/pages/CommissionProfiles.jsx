@@ -275,7 +275,7 @@ export default function CommissionProfiles() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
+    <div className="commission-profiles-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
@@ -334,8 +334,8 @@ export default function CommissionProfiles() {
 
       {/* Rules Tab */}
       {activeTab === 'rules' && (
-        <div className="card" onScroll={handleRulesScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 23rem)', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+        <div className="card commission-rules-table-scroll" onScroll={handleRulesScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 23rem)', overflowY: 'auto', overflowX: 'auto', maxWidth: '100%', boxSizing: 'border-box' }}>
+          <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse', fontSize: '0.875rem' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <th style={th}>Name</th>
@@ -394,8 +394,8 @@ export default function CommissionProfiles() {
 
       {/* Data Tab */}
       {activeTab === 'data' && (
-        <div className="card" onScroll={handleDataScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 23rem)', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }}>
+        <div className="card commission-history-table-scroll" onScroll={handleDataScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 23rem)', overflowY: 'auto', overflowX: 'auto', maxWidth: '100%', boxSizing: 'border-box' }}>
+          <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '14%' }} />
               <col style={{ width: '13%' }} />
@@ -455,6 +455,7 @@ export default function CommissionProfiles() {
 
       {editing && (
         <div
+          className="commission-profile-modal-backdrop"
           onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
@@ -462,7 +463,7 @@ export default function CommissionProfiles() {
             zIndex: 1000, padding: '1rem',
           }}
         >
-          <div className="card" style={{ width: '100%', maxWidth: 520, padding: '1.5rem' }}>
+          <div className="card commission-profile-modal" style={{ width: '100%', maxWidth: 520, padding: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
                 {editing.id ? 'Edit commission profile' : 'New commission profile'}
@@ -513,31 +514,31 @@ export default function CommissionProfiles() {
                   ))}
                 </select>
               </Field>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-              <Field label="Period start">
-                <input
-                  type="date"
-                  className="input-field"
-                  min={getCommissionWindowBounds().currentMonthStart}
-                  max={getCommissionWindowBounds().maxWindowEnd}
-                  value={editing.periodStart}
-                  onChange={(e) => setEditing({ ...editing, periodStart: e.target.value })}
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                />
-              </Field>
-              <Field label="Period end">
-                <input
-                  type="date"
-                  className="input-field"
-                  min={editing.periodStart || getCommissionWindowBounds().currentMonthStart}
-                  max={getCommissionWindowBounds().maxWindowEnd}
-                  value={editing.periodEnd}
-                  onChange={(e) => setEditing({ ...editing, periodEnd: e.target.value })}
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                />
-              </Field>
+              <div className="commission-profile-date-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <Field label="Period start">
+                  <input
+                    type="date"
+                    className="input-field"
+                    min={getCommissionWindowBounds().currentMonthStart}
+                    max={getCommissionWindowBounds().maxWindowEnd}
+                    value={editing.periodStart}
+                    onChange={(e) => setEditing({ ...editing, periodStart: e.target.value })}
+                    style={{ width: '100%', marginTop: '0.25rem' }}
+                  />
+                </Field>
+                <Field label="Period end">
+                  <input
+                    type="date"
+                    className="input-field"
+                    min={editing.periodStart || getCommissionWindowBounds().currentMonthStart}
+                    max={getCommissionWindowBounds().maxWindowEnd}
+                    value={editing.periodEnd}
+                    onChange={(e) => setEditing({ ...editing, periodEnd: e.target.value })}
+                    style={{ width: '100%', marginTop: '0.25rem' }}
+                  />
+                </Field>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <div className="commission-profile-amount-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 {editing.basis !== 'FLAT_PER_INVOICE' && <Field label="Percentage (0..100)">
                   <input
                     type="number"

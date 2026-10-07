@@ -78,8 +78,8 @@ describe("Tally GST journal export", () => {
 
   it("creates one trip cost centre master and enables it on posting ledgers", () => {
     const xml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: makeRows() });
-    expect(xml).toContain('<COSTCENTRE NAME="TRIP-1" ACTION="Create">');
-    expect(xml.match(/<COSTCENTRE NAME="TRIP-1"/g)).toHaveLength(1);
+    expect(xml).toContain('<COSTCENTRE NAME="TRIP-1 - Test Trip" ACTION="Create">');
+    expect(xml.match(/<COSTCENTRE NAME="TRIP-1 - Test Trip"/g)).toHaveLength(1);
     expect(xml).toContain("<ISCOSTCENTRESON>Yes</ISCOSTCENTRESON>");
     expect(xml).not.toContain('<LEDGER NAME="TRIP-1"');
   });
@@ -93,10 +93,32 @@ describe("Tally GST journal export", () => {
 
     for (const voucher of [sales, purchase]) {
       expect(voucher).toContain("<CATEGORYALLOCATIONS.LIST>");
-      expect(voucher).toContain("<NAME>TRIP-1</NAME>");
+      expect(voucher).toContain("<NAME>TRIP-1 - Test Trip</NAME>");
     }
     expect(receipt).not.toContain("COSTCENTREALLOCATIONS.LIST");
     expect(payment).not.toContain("COSTCENTREALLOCATIONS.LIST");
+  });
+
+  it("groups TMC sales and purchase details under the same named trip", () => {
+    const rows = buildVoucherRows({
+      accounts: [], commonRows: [], payments: [],
+      customers: [{ reference: "INV-TMC-8", name: "School", invoiceTotal: 185000, tripId: 8, itineraryId: 1 }],
+      payables: [{ reference: "PO-TMC-8", name: "Hotel", amount: 65000, tripId: 8, itineraryId: 1 }],
+      trips: [{ id: "tmc-8", tmcTripId: 8, tripCode: "SCHOOL-8", destination: "Singapore", ledgerType: "tmc" }],
+      tripTaxes: {}, master, selectedSubBrandLabel: "TMC",
+    });
+    const name = "TMC-TRIP-8 - Singapore";
+    const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: rows });
+    const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
+
+    expect(mastersXml).toContain(`<COSTCENTRE NAME="${name}" ACTION="Create">`);
+    for (const [type, amount] of [["Sales", "185000.00"], ["Purchase", "-65000.00"]]) {
+      const voucher = vouchersXml.match(new RegExp(`<VOUCHER VCHTYPE="${type}"[\\s\\S]*?<\\/VOUCHER>`))?.[0] || "";
+      expect(voucher).toContain(`<NAME>${name}</NAME>`);
+      expect(voucher).toContain(`<AMOUNT>${amount}</AMOUNT></COSTCENTREALLOCATIONS.LIST>`);
+    }
+    expect(vouchersXml).toContain("<REFERENCE>INV-TMC-8</REFERENCE>");
+    expect(vouchersXml).toContain("<REFERENCE>PO-TMC-8</REFERENCE>");
   });
 
   it("uses first-of-month dates in Educational Mode and preserves GST accounting", () => {

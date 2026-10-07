@@ -1864,35 +1864,7 @@ export default function BrochureEngine() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [tab, setTab] = useState('generate');
   const [step, setStep] = useState(1);
-  const pageRootRef = useRef(null);
-  const [floatingNavFrame, setFloatingNavFrame] = useState(null);
   const technicalTraceEvents = useMemo(() => traceEvents.filter(isUsefulTechnicalEvent), [traceEvents]);
-  // The action bar is viewport-fixed, but must remain aligned with this page
-  // when the CRM sidebar expands/collapses or the viewport changes width.
-  useEffect(() => {
-    if (tab !== 'generate') return undefined;
-    const root = pageRootRef.current;
-    if (!root) return undefined;
-    const measure = () => {
-      const rect = root.getBoundingClientRect();
-      if (!rect.width) return;
-      const computed = window.getComputedStyle(root);
-      const leftPadding = Number.parseFloat(computed.paddingLeft) || 0;
-      const rightPadding = Number.parseFloat(computed.paddingRight) || 0;
-      setFloatingNavFrame({
-        left: rect.left + leftPadding,
-        width: Math.max(0, rect.width - leftPadding - rightPadding),
-      });
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
-    observer?.observe(root);
-    return () => {
-      window.removeEventListener('resize', measure);
-      observer?.disconnect();
-    };
-  }, [tab]);
   // Every step is long enough to scroll — landing at the bottom of the PREVIOUS
   // step's content after Next/Back (rather than the top of the new step) means
   // re-scrolling up by hand every single time. Scroll back to the step
@@ -2930,10 +2902,7 @@ export default function BrochureEngine() {
 
   return (
     <FormTouchedContext.Provider value={touched}>
-    <div
-      ref={pageRootRef}
-      style={{ padding: 24, paddingBottom: tab === 'generate' ? 104 : 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}
-    >
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div style={pageHeaderRow}>
         <div>
           <h1 style={pageTitle}><Sparkles size={28} aria-hidden /> Brochure Engine</h1>
@@ -3922,12 +3891,7 @@ export default function BrochureEngine() {
 
             <div
               data-testid="brochure-floating-navigation"
-              style={{
-                ...floatingNavBar,
-                ...(floatingNavFrame
-                  ? { left: floatingNavFrame.left, width: floatingNavFrame.width }
-                  : { left: 24, right: 24 }),
-              }}
+              style={floatingNavBar}
             >
               <button type="button" onClick={() => goToStep(step - 1)} style={{ ...secondaryBtn, opacity: step === 1 ? 0.5 : 1 }} disabled={step === 1 || running}>
                 <ArrowLeft size={14} /> Back
@@ -4138,9 +4102,7 @@ const stepIcon = { width: 36, height: 36, borderRadius: 8, background: 'var(--su
 
 const progressBar = { display: 'flex', gap: 4, marginBottom: 16, flexWrap: 'wrap' };
 const floatingNavBar = {
-  position: 'fixed',
-  bottom: 12,
-  zIndex: 80,
+  marginTop: 16,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',

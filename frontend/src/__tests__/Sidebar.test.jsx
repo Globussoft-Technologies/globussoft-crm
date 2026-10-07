@@ -697,6 +697,40 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(sidebar).not.toHaveClass('travel-sidebar-collapsed');
     });
 
+    it('opens the full travel menu on mobile even after desktop rail collapse', () => {
+      const rendered = renderSidebar({ vertical: 'travel', role: 'ADMIN', expandTravelGroups: false });
+      fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+      expect(document.querySelector('#app-sidebar')).toHaveClass('travel-sidebar-collapsed');
+
+      const onMobileClose = vi.fn();
+      const view = (isMobileViewport, mobileOpen) => (
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider value={{
+            user: { name: 'Maya Iyer', email: 'maya@acme.test', role: 'ADMIN' },
+            tenant: { name: 'Travel Stall', vertical: 'travel' },
+            token: 't-abc', setUser: vi.fn(), setToken: vi.fn(), setTenant: vi.fn(),
+          }}>
+            <ActiveSubBrandProvider>
+              <Sidebar isMobileViewport={isMobileViewport} mobileOpen={mobileOpen} onMobileClose={onMobileClose} />
+            </ActiveSubBrandProvider>
+          </AuthContext.Provider>
+        </MemoryRouter>
+      );
+
+      rendered.rerender(view(true, true));
+      const sidebar = document.querySelector('#app-sidebar');
+      expect(sidebar).toHaveAttribute('role', 'dialog');
+      expect(sidebar).not.toHaveClass('travel-sidebar-collapsed');
+      expect(screen.getByRole('button', { name: 'Close navigation menu' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Sales' }));
+      expect(document.querySelector('a[href="/leads"]')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Close navigation menu' }));
+      expect(onMobileClose).toHaveBeenCalled();
+
+      rendered.rerender(view(false, false));
+      expect(sidebar).toHaveClass('travel-sidebar-collapsed');
+    });
+
     it('re-opens the rail and exposes a section when its collapsed icon is clicked', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN', expandTravelGroups: false });
       const sidebar = document.querySelector('#app-sidebar');
@@ -1465,6 +1499,33 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Communication')).toBeTruthy();
       expect(screen.queryByText('Finance')).toBeNull();
       expect(screen.queryByText('Reports')).toBeNull();
+    });
+
+    it('keeps mobile wellness submodules inside the drawer and closes them with it', async () => {
+      currentAccessiblePages = [
+        { category: 'Clinical', path: '/wellness/calendar', label: 'Calendar' },
+      ];
+      currentPermissionSet = permsForRole('ADMIN', 'wellness');
+      const user = { name: 'Maya Iyer', email: 'maya@acme.test', role: 'ADMIN' };
+      const tenant = { name: 'Enhanced Wellness', vertical: 'wellness' };
+      const onMobileClose = vi.fn();
+      const view = (mobileOpen) => (
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider value={{ user, setUser: vi.fn(), token: 't', setToken: vi.fn(), tenant, setTenant: vi.fn() }}>
+            <Sidebar mobileOpen={mobileOpen} isMobileViewport={true} onMobileClose={onMobileClose} />
+          </AuthContext.Provider>
+        </MemoryRouter>
+      );
+
+      const { container, rerender } = render(view(true));
+      const clinical = await screen.findByRole('button', { name: 'Clinical' });
+      fireEvent.click(clinical);
+      const menu = screen.getByRole('menu', { name: 'Clinical submodules' });
+      expect(container.querySelector('#app-sidebar').contains(menu)).toBe(true);
+      expect(menu.style.position).toBe('static');
+
+      rerender(view(false));
+      await waitFor(() => expect(screen.queryByRole('menu', { name: 'Clinical submodules' })).toBeNull());
     });
   });
 

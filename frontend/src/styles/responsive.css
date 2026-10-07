@@ -23,26 +23,53 @@
    Keeping it on desktop added an unused CSS property to the sidebar
    element with no visual effect. ─────────────────────────────────── */
 
-/* Calendar day-grid scrollbar — always visible (not just mobile). With
-   30+ practitioners the inner grid forces horizontal scroll; on Windows
-   the default overlay scrollbar is invisible until the user mouses over,
-   so receptionists couldn't tell they could scroll. The webkit rules
-   give the bar a 10px height + visible thumb; Firefox is handled by the
-   inline `scrollbarColor` on Calendar.jsx. */
-.calendar-scroll::-webkit-scrollbar {
-  height: 10px;
-  width: 10px;
+/* Keep the hour gutter visible while TopScrollSync moves practitioner columns. */
+.calendar-day-grid-card .top-scroll-sync__top {
+  margin-left: var(--calendar-time-column-width);
+  width: calc(100% - var(--calendar-time-column-width));
 }
-.calendar-scroll::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 5px;
+
+/* Wellness appointment/calendar layouts: keep the desktop two-column
+   presentation, but make the narrow-screen controls readable. */
+@media (max-width: 600px) {
+  .wellness-book-appointment-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 1rem !important;
+  }
+
+  .wellness-book-appointment-date-time {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .wellness-attendance-calendar-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .wellness-attendance-calendar-track {
+    min-width: 560px;
+  }
 }
-.calendar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.25);
-  border-radius: 5px;
+.calendar-grid > .calendar-time-cell {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--calendar-gutter-bg, var(--modal-bg, #16181d));
+  box-shadow: 1px 0 0 var(--border-color);
 }
-.calendar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.4);
+.calendar-grid > .calendar-time-cell--header {
+  z-index: 3;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.calendar-day-grid-card .top-scroll-sync__top::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .sidebar-backdrop {
@@ -67,10 +94,180 @@
   justify-content: center;
 }
 
+/* CRM pages use rem sizes throughout, including many inline styles. Scale the
+   rem unit only while the authenticated shell is mounted, so every vertical
+   responds without changing public pages. Keep a narrow-screen floor. */
+@media (max-width: 1199px) {
+  html:has(.app-shell) {
+    font-size: clamp(0.90625rem, calc(0.84375rem + 0.2vw), 1rem);
+  }
+
+  .app-shell {
+    --crm-text-13: clamp(12px, calc(11px + 0.2vw), 13px);
+    --crm-text-14: clamp(12.5px, calc(11.5px + 0.2vw), 14px);
+    --crm-text-15: clamp(13px, calc(12px + 0.2vw), 15px);
+    --crm-text-16: clamp(14px, calc(13px + 0.2vw), 16px);
+    --crm-text-18: clamp(15.5px, calc(14.5px + 0.25vw), 18px);
+    --crm-text-20: clamp(17px, calc(16px + 0.25vw), 20px);
+  }
+
+  /* Many older screens specify pixel font sizes inline. Rem scaling cannot
+     reach them, so preserve each authored size as a fluid step. */
+  .app-shell :is([style*="font-size: 13px"], [style*="font-size:13px"]) {
+    font-size: var(--crm-text-13) !important;
+  }
+
+  .app-shell :is([style*="font-size: 14px"], [style*="font-size:14px"]) {
+    font-size: var(--crm-text-14) !important;
+  }
+
+  .app-shell :is([style*="font-size: 15px"], [style*="font-size:15px"]) {
+    font-size: var(--crm-text-15) !important;
+  }
+
+  .app-shell :is([style*="font-size: 16px"], [style*="font-size:16px"]) {
+    font-size: var(--crm-text-16) !important;
+  }
+
+  .app-shell :is([style*="font-size: 18px"], [style*="font-size:18px"]) {
+    font-size: var(--crm-text-18) !important;
+  }
+
+  .app-shell :is([style*="font-size: 20px"], [style*="font-size:20px"]) {
+    font-size: var(--crm-text-20) !important;
+  }
+}
+
+/* Inherited body copy stays readable even as rem-based headings and labels
+   become a little smaller. Fixed pixel labels already below this size keep
+   their authored value. */
+.app-main > main {
+  font-size: clamp(0.9375rem, calc(0.75rem + 0.5vw), 1rem);
+}
+
+@media (max-width: 1199px) {
+  .app-main > main h1 {
+    font-size: clamp(1.45rem, calc(1rem + 1.2vw), 2rem) !important;
+    line-height: 1.25;
+  }
+
+  .app-main > main h2 {
+    font-size: clamp(1.2rem, calc(0.9rem + 0.8vw), 1.5rem) !important;
+    line-height: 1.3;
+  }
+
+  .app-main > main h3 {
+    font-size: clamp(1rem, calc(0.85rem + 0.5vw), 1.25rem) !important;
+    line-height: 1.35;
+  }
+}
+
+/* Audit Log's legacy full-height scroll region creates a second horizontal
+   scrollbar below the card. Let the app page scroll vertically instead. */
+[data-vertical="travel"] .travel-admin-page.travel-audit-page {
+  height: auto !important;
+  min-height: 100% !important;
+  overflow-x: clip !important;
+  overflow-y: visible !important;
+}
+
 /* ── Mobile / tablet-portrait (<=899px): sidebar becomes off-canvas drawer.
    T2.1 raised the breakpoint from 768px to 899px so iPads in portrait
    (768px) and tablets in landscape get the drawer treatment too. ─── */
 @media (max-width: 899px) {
+  .app-main > main {
+    --crm-card-padding: clamp(0.75rem, 2vw, 1.25rem);
+    --crm-cell-padding-y: clamp(0.375rem, 0.8vw, 0.625rem);
+    --crm-cell-padding-x: clamp(0.5rem, 1vw, 0.75rem);
+  }
+
+  .app-main > main > :is([style*="2rem"], [style*="24px"], [style*="32px"]):not([style*="padding: 0"]):not([style*="padding:0"]) {
+    padding: var(--crm-card-padding) !important;
+  }
+
+  .app-main > main :is(.card, .glass):is([style*="1.5rem"], [style*="2rem"], [style*="24px"], [style*="28px"], [style*="32px"]):not([style*="padding: 0"]):not([style*="padding:0"]) {
+    padding: var(--crm-card-padding) !important;
+  }
+
+  .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, .input-field:not(.crm-search-input)) {
+    padding: clamp(0.4rem, 0.9vw, 0.6rem) clamp(0.6rem, 1.3vw, 1rem) !important;
+    border-radius: clamp(0.5rem, 1vw, 0.625rem) !important;
+  }
+
+  .app-main > main table :is(th, td):not([style*="padding: 0"]) {
+    padding: var(--crm-cell-padding-y) var(--crm-cell-padding-x) !important;
+  }
+
+  .app-main > main :is(button, a.btn-primary, a.btn-secondary, a.btn-danger) > svg {
+    width: clamp(14px, calc(11px + 0.6vw), 18px) !important;
+    height: clamp(14px, calc(11px + 0.6vw), 18px) !important;
+  }
+
+  .app-main > main :is(h1, h2, h3) > svg {
+    width: clamp(18px, calc(15px + 0.8vw), 24px) !important;
+    height: clamp(18px, calc(15px + 0.8vw), 24px) !important;
+  }
+
+  .marketing-page {
+    height: auto !important;
+    min-height: 100%;
+    padding: clamp(0.75rem, 3vw, 1.5rem) !important;
+  }
+
+  .marketing-campaign-grid,
+  .marketing-sms-grid,
+  .marketing-forms-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .marketing-forms-grid {
+    flex: none !important;
+    min-height: auto !important;
+    gap: 1rem !important;
+  }
+
+  .marketing-forms-grid > .card {
+    overflow-y: visible !important;
+  }
+
+  .app-main > main > :not(.travel-content-frame) {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .app-main > main :is(.card, .glass, section, article) {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .app-main > main :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-main > main :is(.card, .glass):has(> table),
+  .app-main > main :is(.table-container, .table-wrapper) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  [data-vertical="travel"] .travel-admin-page {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+  }
+
+  [data-vertical="travel"] .travel-staff-table-scroll,
+  [data-vertical="travel"] .travel-roles-table-scroll {
+    max-height: clamp(320px, 60dvh, 640px) !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    overscroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .app-sidebar {
     position: fixed;
     top: 0;
@@ -178,26 +375,9 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Calendar day-view: doctor columns are inline-styled. Allow the grid
-     to overflow horizontally; reduce min column width to 120px so the
-     timetable fits 2-3 columns at 375px without breaking layout.
-     #514: was previously `[style*="minmax(180px"]` — but the actual
-     Calendar grid renders `minmax(120px, 1fr)`, so the rule never fired.
-     W1-A's `b9927c3` added `.calendar-grid` to Calendar.jsx:195; this
-     rule now targets that class directly so future inline-style edits
-     don't silently break the mobile layout. */
-  .calendar-grid {
-    grid-template-columns: 80px repeat(var(--cal-cols, 6), minmax(120px, 1fr)) !important;
-    min-width: max-content;
-  }
-
-  /* The Calendar grid sits inside an overflow:auto wrapper already (line 178
-     of Calendar.jsx wraps the grid in a div). Help it by forcing horizontal
-     scroll on the immediate parent of any wide grid. */
-  .calendar-scroll, .calendar-scroll > div {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
+  /* CalendarDayGrid supplies the practitioner count and minimum width;
+     TopScrollSync handles horizontal scrolling around that grid. */
+  .calendar-scroll { -webkit-overflow-scrolling: touch; }
 
   /* Reports: Totals strip uses fixed N-col grid — wrap it.
      #523: was previously `main > div > div[style*="repeat("][style*=", 1fr)"]`
@@ -228,19 +408,10 @@
      site explicitly to a class hook rather than chasing a selector tweak. */
   div[style*="minmax(320px"],
   div[style*="minmax(340px"],
-  div[style*="minmax(360px"] {
+  div[style*="minmax(360px"],
+  div[style*="minmax(380px"],
+  div[style*="minmax(420px"] {
     grid-template-columns: 1fr !important;
-  }
-
-  /* Reports / Patients export+filter button rows — wrap. Scope to main
-     content so the app-shell header (which has its own balance) is not
-     affected. Intentionally kept as an attribute selector per #523's
-     "keep selector if no clean replacement" rule — the `display: flex` +
-     `gap` shape applies to ~888 JSX sites; per-site className migration
-     is wildly out of scope. The selector is also broad enough to catch
-     newly-added rows automatically, which is the intent. */
-  main div[style*="display: flex"][style*="gap"] {
-    flex-wrap: wrap;
   }
 
   /* Page-level main padding sanity. */
@@ -320,6 +491,17 @@
 [data-vertical="travel"] .travel-content-frame textarea {
   max-width: 100%;
   min-width: 0;
+}
+
+[data-vertical="travel"] .travel-content-frame :is(section, article, .card, .glass),
+[data-vertical="travel"] .travel-content-frame :is(.card, .glass) > * {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+[data-vertical="travel"] .travel-content-frame .top-scroll-sync {
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Tables retain their readable row shape. When a table is wider than its
@@ -414,15 +596,6 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     padding-right: clamp(0.75rem, 3vw, 1.5rem) !important;
   }
 
-  /* Inline flex toolbars are common across the travel pages. Allow filters,
-     exports and primary actions to form a second row instead of pushing the
-     page wider than the viewport. */
-  [data-vertical="travel"] .travel-content-frame main div[style*="display: flex"],
-  [data-vertical="travel"] .travel-content-frame section div[style*="display: flex"],
-  [data-vertical="travel"] .travel-content-frame header[style*="display: flex"] {
-    flex-wrap: wrap !important;
-  }
-
   /* Keep two-column inline grids usable on tablets and phones. The explicit
      minmax rules handle the older route components that cannot use a shared
      grid utility without a larger JSX refactor. */
@@ -445,17 +618,115 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
      arbitrary word breaks make records harder to scan and caused values such
      as "Accepted" / "TRAVELS TALL" to split across lines. */
   /* Dialogs and drawers must remain usable when opened from a narrow page. */
-  [data-vertical="travel"] [role="dialog"],
-  [data-vertical="travel"] .modal,
+  [data-vertical="travel"] [role="dialog"]:not(.app-sidebar):not(.create-lead-backdrop),
+  [data-vertical="travel"] .modal:not(.app-sidebar),
   [data-vertical="travel"] [class*="modal-content"] {
     width: calc(100vw - 1rem) !important;
     max-width: 600px !important;
     max-height: calc(100vh - 1rem) !important;
+    max-height: calc(100dvh - 1rem) !important;
     overflow-y: auto !important;
+  }
+
+  [data-vertical="travel"] .app-sidebar {
+    height: 100dvh;
+  }
+
+  /* Every CRM header shares the same search and account controls. Keep the
+     search on its own row when those controls no longer fit side by side. */
+  .app-topbar {
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    padding: 6px 8px !important;
+  }
+
+  .app-header-search {
+    order: 10;
+    flex: 1 0 100%;
+    width: 100%;
+    margin-right: 0 !important;
+  }
+
+  .omnibar-root {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .app-tenant-chip {
+    margin-right: auto;
+    max-width: min(180px, 30vw) !important;
+  }
+
+  .app-profile-name,
+  [data-vertical="travel"] .travel-shortcuts-button,
+  .app-tour-label {
+    display: none !important;
+  }
+
+  .app-profile-button {
+    padding-inline: 4px !important;
+  }
+
+  .app-tour-launcher {
+    padding-inline: 5px !important;
+  }
+}
+
+/* Quote Builder has several fixed two-column grids. Keep its summary and
+   pricing controls readable when the sidebar has consumed tablet width. */
+@media (max-width: 1100px) {
+  [data-vertical="travel"] .travel-quote-hero,
+  [data-vertical="travel"] .travel-quote-totals {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 }
 
 @media (max-width: 600px) {
+  .app-topbar::before {
+    content: "";
+    flex-basis: 100%;
+    height: 0;
+    order: 9;
+  }
+
+  .app-header-search {
+    flex: 1 1 0;
+    width: auto;
+    order: 10;
+  }
+
+  .app-theme-toggle {
+    order: 11;
+    flex-shrink: 0;
+  }
+
+  .app-logout-button {
+    order: 12;
+    flex-shrink: 0;
+  }
+
+  .app-tenant-chip {
+    max-width: max-content !important;
+    flex-shrink: 0;
+    padding-right: 4px !important;
+  }
+
+  .app-tenant-name {
+    display: none !important;
+  }
+
+  [data-vertical="travel"] .travel-quote-destination-row {
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+  }
+
+  [data-vertical="travel"] .travel-quote-destination-row > input:first-child {
+    grid-column: 1 / -1;
+  }
+
+  [data-vertical="travel"] .travel-form-split {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
   [data-vertical="travel"] .travel-content-frame > * {
     padding-top: 1rem !important;
     padding-bottom: 1rem !important;
@@ -472,7 +743,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 
   [data-vertical="travel"] .travel-content-frame .card,
   [data-vertical="travel"] .travel-content-frame .glass {
-    padding: 1rem !important;
+    padding: clamp(0.75rem, 2vw, 1rem) !important;
   }
 
   [data-vertical="travel"] .travel-content-frame button,
@@ -492,4 +763,775 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   [data-vertical="travel"] .travel-content-frame table {
     min-width: 560px;
   }
+}
+
+/* Page chrome needs deliberate rows. Blanket wrapping of every flex child
+   makes filters and actions land at unrelated horizontal positions. */
+@media (max-width: 1100px) {
+  .app-main > main .crm-page-header,
+  .app-main > main .contacts-page__header,
+  .app-main > main .travel-audit-page__header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: start !important;
+    gap: 0.75rem !important;
+  }
+
+  .crm-page-header__intro,
+  .contacts-page__header > :first-child,
+  .travel-audit-page__header > :first-child {
+    min-width: 0;
+  }
+
+  .app-main > main .crm-page-header {
+    padding: clamp(0.75rem, 2vw, 1.25rem) !important;
+  }
+
+  .app-main > main .crm-page-header__actions,
+  .app-main > main .contacts-page__header-actions,
+  .app-main > main .travel-audit-page__filters {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    align-items: stretch !important;
+    width: 100%;
+    min-width: 0;
+    gap: 0.5rem !important;
+  }
+
+  .crm-page-header__actions > *,
+  .contacts-page__header-actions > *,
+  .travel-audit-page__filters > * {
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  .crm-page-header__actions > :is(button, a, select),
+  .contacts-page__header-actions > :is(button, a, select),
+  .contacts-page__header-actions > div > button,
+  .travel-audit-page__filters > :is(button, input, select) {
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .app-main > main .travel-audit-page__stats {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem !important;
+  }
+
+  .travel-audit-page__filters > :first-child,
+  .travel-audit-page__filters > input[type="text"] {
+    grid-column: 1 / -1;
+  }
+
+  .invoices-admin-page__reconciliation-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem !important;
+  }
+
+  .invoices-admin-page__reconciliation-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .invoices-admin-page__reconciliation-actions > input {
+    min-width: 0;
+    max-width: 100% !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .role-history-backdrop {
+    padding: 0.75rem !important;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+
+  .role-history-dialog-card {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    flex: 0 0 auto;
+  }
+
+  .role-history-dialog-header {
+    padding: 0 0.75rem !important;
+    gap: 0.5rem !important;
+  }
+
+  .role-history-dialog-header h3 {
+    min-width: 0;
+    font-size: 0.95rem !important;
+  }
+
+  .role-history-dialog-body {
+    padding: 0.75rem !important;
+    overflow-x: hidden;
+  }
+
+  .role-history-dialog-body > p {
+    overflow-wrap: anywhere;
+  }
+
+  .role-history-dialog-footer {
+    padding: 0 0.75rem !important;
+  }
+
+  .role-history-floating-close {
+    display: none !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .document-template-editor-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    box-sizing: border-box;
+    padding: 1rem !important;
+    overflow-x: hidden !important;
+  }
+
+  .document-template-editor-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+    gap: 0.75rem !important;
+  }
+
+  .document-template-editor-main,
+  .document-template-editor-fields {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .document-template-editor-fields {
+    flex-direction: column;
+  }
+
+  .document-template-editor-fields > input,
+  .document-template-editor-fields > select,
+  .document-template-editor-main > textarea {
+    width: 100% !important;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .document-template-editor-main > textarea {
+    min-height: 220px !important;
+  }
+
+  .document-template-editor-vars {
+    max-height: 180px;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .commission-profiles-page {
+    padding: 1rem !important;
+  }
+
+  .commission-profiles-page > header {
+    align-items: flex-start !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .commission-profiles-page > header h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .commission-profiles-page > div[style*="border-bottom"] {
+    gap: 0.25rem !important;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .commission-rules-table-scroll,
+  .commission-history-table-scroll {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .commission-profile-modal-backdrop {
+    align-items: center !important;
+    overflow-y: auto;
+    padding: 0.75rem !important;
+  }
+
+  .commission-profile-modal {
+    max-height: calc(100dvh - 1.5rem);
+    overflow-y: auto;
+    padding: 1rem !important;
+  }
+
+  .commission-profile-date-row,
+  .commission-profile-amount-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.5rem !important;
+  }
+
+  .commission-profile-modal input,
+  .commission-profile-modal select {
+    min-width: 0;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 600px) {
+  .app-main > main .crm-page-header__actions,
+  .app-main > main .contacts-page__header-actions,
+  .app-main > main .travel-audit-page__filters,
+  .invoices-admin-page__reconciliation-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .travel-audit-page__filters > :first-child,
+  .travel-audit-page__filters > input[type="text"] {
+    grid-column: auto;
+  }
+
+  .invoices-admin-page__reconciliation-actions > button {
+    width: 100%;
+  }
+
+  .wellness-reports-page {
+    padding: 1rem !important;
+  }
+
+  .wellness-reports-table-shell > div {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .wellness-reports-table-shell table {
+    min-width: 760px;
+  }
+
+  .wellness-reports-controls {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 0.75rem !important;
+  }
+
+  .wellness-reports-export-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch !important;
+    width: 100%;
+    margin-left: 0 !important;
+  }
+
+  .wellness-reports-export-actions > button {
+    width: 100%;
+    justify-content: center;
+    white-space: nowrap;
+  }
+
+  .wellness-reports-export-actions > [role="alert"] {
+    grid-column: 1 / -1;
+  }
+
+  .wellness-loyalty-page {
+    padding: 1rem !important;
+  }
+
+  .wellness-loyalty-tabs {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.25rem !important;
+  }
+
+  .wellness-loyalty-tabs > button {
+    justify-content: center;
+    min-width: 0;
+    padding: 0.55rem 0.25rem !important;
+    font-size: 0.8rem !important;
+    white-space: nowrap;
+  }
+
+  .wellness-book-appointment-page {
+    padding: 1rem !important;
+  }
+
+  .wellness-book-appointment-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 1rem !important;
+    width: 100%;
+    max-width: 100% !important;
+  }
+
+  .wellness-vendors-page {
+    padding: 1rem !important;
+  }
+
+  .wellness-vendors-form {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-width: 0;
+  }
+
+  .wellness-vendors-form > input:not([type="checkbox"]),
+  .wellness-vendors-form > button {
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .wellness-vendors-form > .wellness-vendors-address {
+    grid-column: 1 / -1 !important;
+  }
+
+  .wellness-inventory-receipts-page {
+    padding: 1rem !important;
+  }
+
+  .wellness-inventory-receipts-form-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-width: 0;
+  }
+
+  .wellness-inventory-receipts-form-grid > input,
+  .wellness-inventory-receipts-form-grid > button,
+  .wellness-inventory-receipts-form-grid > div {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .wellness-inventory-receipts-form-grid > .wellness-inventory-receipts-notes {
+    grid-column: 1 / -1 !important;
+  }
+
+  .wellness-locations-page {
+    padding: 1rem !important;
+  }
+
+  .wellness-location-form {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-width: 0;
+  }
+
+  .wellness-location-form > input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .wellness-location-form > .wellness-location-address {
+    grid-column: 1 / -1 !important;
+  }
+
+  .wellness-location-geofence-wrap {
+    grid-column: 1 / -1 !important;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .wellness-location-geofence-wrap .geofence-picker {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .wellness-location-geofence-wrap .geofence-picker > div:last-child {
+    height: 260px;
+  }
+
+  .wellness-location-geofence-wrap .leaflet-container {
+    height: 100% !important;
+  }
+
+  .wellness-location-form > .wellness-location-save {
+    grid-column: 1 / -1 !important;
+    width: 100%;
+  }
+
+  .wellness-staff-page {
+    padding: 1rem !important;
+    min-width: 0;
+  }
+
+  .staff-availability-panel {
+    padding: 1rem !important;
+    min-width: 0;
+  }
+
+  .staff-availability-header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .staff-availability-header > h3 {
+    margin: 0;
+  }
+
+  .staff-availability-date-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    width: 100%;
+    gap: 0.35rem !important;
+  }
+
+  .staff-availability-date-controls > button {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .staff-availability-date-controls > .staff-availability-prev {
+    justify-self: start;
+  }
+
+  .staff-availability-date-controls > .staff-availability-next {
+    justify-self: end;
+  }
+
+  .staff-availability-date-controls > .staff-availability-today {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  .staff-availability-date {
+    min-width: 0 !important;
+    white-space: nowrap;
+  }
+
+  .staff-availability-summary {
+    flex-wrap: wrap;
+    gap: 0.75rem !important;
+  }
+
+  .staff-availability-cards {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.75rem !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .custom-objects-page {
+    width: 100%;
+    max-width: 100%;
+    padding: 1rem !important;
+    overflow-x: hidden;
+  }
+
+  .custom-objects-page > header {
+    align-items: flex-start !important;
+    gap: 0.75rem !important;
+    margin-bottom: 1.25rem !important;
+  }
+
+  .custom-objects-grid {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .custom-objects-grid > * {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .custom-object-create-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px) !important;
+    padding: 1rem !important;
+    box-sizing: border-box;
+  }
+
+  .custom-object-create-modal h3 {
+    font-size: 1.15rem !important;
+    gap: 0.5rem !important;
+  }
+
+  .custom-object-fields-header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .custom-object-fields-header h4,
+  .custom-object-fields-header button {
+    margin: 0;
+  }
+
+  .custom-object-fields-header button {
+    font-size: 0.78rem !important;
+  }
+
+  .custom-object-field-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 84px 28px;
+    gap: 0.45rem !important;
+    min-width: 0;
+  }
+
+  .custom-object-field-row > input,
+  .custom-object-field-row > select {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .custom-object-field-row > button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .custom-object-modal-actions {
+    flex-wrap: wrap;
+    gap: 0.5rem !important;
+    margin-top: 1rem !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .wellness-role-type-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0.5rem !important;
+    align-items: center !important;
+    min-width: 0;
+    padding: 0.75rem !important;
+  }
+
+  .wellness-role-type-row > div:first-child {
+    grid-column: 1 / -1;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .wellness-role-type-row > div:first-child > div:last-child {
+    overflow-wrap: anywhere;
+  }
+
+  .wellness-role-type-row > button {
+    min-width: 0;
+    white-space: normal;
+    text-align: center;
+    padding: 0.4rem 0.5rem !important;
+  }
+
+  .wellness-role-type-row > button:last-child {
+    justify-self: end;
+  }
+}
+
+@media (max-width: 600px) {
+  .field-permissions-page {
+    padding: 1rem !important;
+    min-width: 0;
+  }
+
+  .field-permissions-page > header {
+    gap: 0.75rem !important;
+  }
+
+  .field-permissions-page > header h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .field-permissions-table-scroll {
+    max-width: 100%;
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .field-permissions-table-scroll table {
+    min-width: 560px;
+  }
+
+  .field-permissions-table-scroll::-webkit-scrollbar {
+    height: 7px;
+  }
+
+  .field-permissions-table-scroll::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--text-secondary, #888);
+  }
+}
+
+@media (max-width: 600px) {
+  .revenue-goals-page {
+    padding: 1rem !important;
+  }
+
+  .revenue-goals-page > header {
+    align-items: flex-start !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .revenue-goals-page > header h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .revenue-goals-table-scroll {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .revenue-goals-table {
+    display: block;
+    min-width: 0 !important;
+  }
+
+  .revenue-goals-table thead {
+    display: none;
+  }
+
+  .revenue-goals-table tbody {
+    display: grid;
+    gap: 0.65rem;
+    padding: 0.65rem;
+  }
+
+  .revenue-goals-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.25rem 0.5rem;
+    padding: 0.55rem;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 0.6rem;
+    background: var(--card-bg, rgba(255, 255, 255, 0.04));
+  }
+
+  .revenue-goals-table tbody tr:has(td[colspan]) {
+    display: block;
+  }
+
+  .revenue-goals-table tbody td:not([colspan]) {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    min-width: 0;
+    padding: 0.45rem !important;
+    overflow-wrap: anywhere;
+  }
+
+  .revenue-goals-table tbody td:not([colspan])::before {
+    content: attr(data-label);
+    color: var(--text-secondary);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .revenue-goals-table tbody td[colspan] {
+    padding: 1rem !important;
+  }
+
+  .revenue-goal-modal-backdrop {
+    align-items: center !important;
+    overflow-y: auto;
+    padding: 0.75rem !important;
+  }
+
+  .revenue-goal-modal {
+    max-height: calc(100dvh - 1.5rem);
+    overflow-y: auto;
+    padding: 1rem !important;
+  }
+
+  .revenue-goal-modal input,
+  .revenue-goal-modal select,
+  .revenue-goal-modal textarea {
+    min-width: 0;
+    box-sizing: border-box;
+  }
+}
+
+/* Extra-small phones (<375px): apply a light density reduction across the
+   authenticated shell so narrow devices get a little more usable width
+   without making controls too small to tap. Keep this after the other mobile
+   rules so it can tighten their fluid values only at the smallest viewport. */
+@media (max-width: 380px) {
+  html:has(.app-shell) {
+    font-size: 0.825rem;
+  }
+
+  .app-shell {
+    --crm-text-13: 12px;
+    --crm-text-14: 13px;
+    --crm-text-15: 14px;
+    --crm-text-16: 15px;
+    --crm-text-18: 17px;
+    --crm-text-20: 19px;
+  }
+
+  .app-topbar {
+    padding-inline: 12px !important;
+    gap: 8px !important;
+  }
+
+  .app-main > main {
+    font-size: 0.86rem;
+  }
+
+  .app-main > main :is(.card, .glass) {
+    padding: 8px !important;
+    border-radius: 9px;
+  }
+
+  .app-main > main :is(input, select, textarea) {
+    padding-block: 5px !important;
+  }
+
+  .app-main > main button:not([style*="padding: 0"]):not([style*="padding:0"]):not(.contacts-pagination-icon):not([class*="icon-button"]):not([class*="icon-btn"]) {
+    padding-block: 5px !important;
+    padding-inline: 7px !important;
+  }
+
+  .app-main > main table :is(th, td):not([style*="padding: 0"]) {
+    padding-block: 3px !important;
+    padding-inline: 5px !important;
+  }
+}
+
+/* Dashboard panels need to stack before the 2fr/1fr desktop split makes the
+   Recent Deals card unreadably narrow on phones. */
+@media (max-width: 600px) {
+  .dashboard-page {
+    padding: 0.75rem !important;
+  }
+
+  .dashboard-page > header {
+    align-items: flex-start !important;
+    margin-bottom: 1rem !important;
+    gap: 0.75rem;
+  }
+
+  .dashboard-page > header > button {
+    flex-shrink: 0;
+  }
+
+  .dashboard-kpis {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.75rem !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .dashboard-kpis .card,
+  .dashboard-pipeline-card,
+  .dashboard-recent-card {
+    padding: 1rem !important;
+    min-width: 0;
+  }
+
+  .dashboard-panels {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.75rem !important;
+  }
+
+  .dashboard-pipeline-chart {
+    height: 220px !important;
+  }
+
 }

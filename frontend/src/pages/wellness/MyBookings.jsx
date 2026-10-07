@@ -167,10 +167,11 @@ export default function MyBookings({
     }
   }, [effectiveFetcher]);
 
-  // Load the initially selected bucket only. Other buckets load when opened.
+  // Load every bucket on entry so all four summary counts are available
+  // immediately. Switching tabs still refreshes that bucket on demand.
   useEffect(() => {
     if (noPatientProfile) return;
-    loadBucket('upcoming');
+    BUCKETS.forEach(({ key }) => loadBucket(key));
   }, [loadBucket, noPatientProfile]);
 
   const handleBucketChange = (bucket) => {

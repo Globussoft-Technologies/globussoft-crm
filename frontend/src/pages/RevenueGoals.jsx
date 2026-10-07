@@ -25,6 +25,7 @@ import { Plus, Pencil, Trash2, Target, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
+import SearchableSelect from '../components/ui/SearchableSelect';
 
 const REVENUE_GOALS_PAGE_SIZE = 12;
 
@@ -134,6 +135,10 @@ export default function RevenueGoals() {
       setVisibleGoalCount((count) => Math.min(count + REVENUE_GOALS_PAGE_SIZE, rows.length));
     }
   };
+  const handleGoalsPageScroll = (event) => {
+    if (window.innerWidth > 600 || event.target !== event.currentTarget) return;
+    handleGoalsTableScroll(event);
+  };
 
   const openCreate = () => setEditing(emptyForm());
   const openEdit = (row) => setEditing({
@@ -239,7 +244,7 @@ export default function RevenueGoals() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
+    <div className="revenue-goals-page" onScroll={handleGoalsPageScroll} style={{ padding: '2rem', height: '100%', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
@@ -289,8 +294,8 @@ export default function RevenueGoals() {
         </div>
       )}
 
-      <div className="card" onScroll={handleGoalsTableScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 26rem)', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+      <div className="card revenue-goals-table-scroll" onScroll={handleGoalsTableScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 26rem)', overflowY: 'auto', overflowX: 'auto', maxWidth: '100%', boxSizing: 'border-box' }}>
+        <table className="revenue-goals-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
           <thead>
             <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
               <th style={th}>Staff</th>
@@ -313,18 +318,18 @@ export default function RevenueGoals() {
               const pct = Math.min(100, (Number(row.achievedAmount || 0) / Math.max(1, Number(row.targetAmount || 1))) * 100);
               return (
                 <tr key={row.id} style={{ borderTop: '1px solid var(--border-color)' }} data-testid={`goal-row-${row.id}`}>
-                  <td style={{ ...td, fontWeight: 600 }}>{row.user?.name || `User #${row.userId}`}</td>
-                  <td style={td}>{row.period}</td>
-                  <td style={{ ...td, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  <td data-label="Staff" style={{ ...td, fontWeight: 600 }}>{row.user?.name || `User #${row.userId}`}</td>
+                  <td data-label="Period" style={td}>{row.period}</td>
+                  <td data-label="Window" style={{ ...td, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                     {new Date(row.periodStart).toLocaleDateString()} → {new Date(row.periodEnd).toLocaleDateString()}
                   </td>
-                  <td style={td}>{Number(row.targetAmount || 0).toLocaleString()}</td>
-                  <td style={{ ...td, color: progressColor(pct), fontWeight: 600 }}>
+                  <td data-label="Target" style={td}>{Number(row.targetAmount || 0).toLocaleString()}</td>
+                  <td data-label="Achieved" style={{ ...td, color: progressColor(pct), fontWeight: 600 }}>
                     {Number(row.achievedAmount || 0).toLocaleString()} ({pct.toFixed(0)}%)
                   </td>
-                  <td style={td}>{row.scope}{row.scopeFilter ? ` / ${row.scopeFilter}` : ''}</td>
+                  <td data-label="Scope" style={td}>{row.scope}{row.scopeFilter ? ` / ${row.scopeFilter}` : ''}</td>
                   {isAdmin && (
-                    <td style={td}>
+                    <td data-label="Actions" style={td}>
                       <div style={{ display: 'flex', gap: '0.4rem' }}>
                         <button onClick={() => openEdit(row)} title="Edit" data-testid={`goal-edit-${row.id}`} style={iconBtn('var(--text-primary)')}>
                           <Pencil size={14} />
@@ -344,6 +349,7 @@ export default function RevenueGoals() {
 
       {editing && (
         <div
+          className="revenue-goal-modal-backdrop"
           onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
@@ -351,7 +357,7 @@ export default function RevenueGoals() {
             zIndex: 1000, padding: '1rem',
           }}
         >
-          <div className="card" style={{ width: '100%', maxWidth: 540, padding: '1.5rem' }}>
+          <div className="card revenue-goal-modal" style={{ width: '100%', maxWidth: 540, padding: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
                 {editing.id ? 'Edit revenue goal' : 'New revenue goal'}
@@ -375,19 +381,27 @@ export default function RevenueGoals() {
                 needs min-width: 0 at every nesting level"). */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <Field label="Staff member">
-                <select
-                  className="input-field"
+                <SearchableSelect
                   value={editing.userId}
-                  onChange={(e) => setEditing({ ...editing, userId: e.target.value })}
-                  data-testid="goal-form-user"
-                  style={{ width: '100%', marginTop: '0.25rem' }}
+                  onChange={(userId) => setEditing({ ...editing, userId })}
+                  options={[
+                    { value: '', label: '— Select —', keywords: 'select staff member' },
+                    ...staff.map((member) => ({
+                      value: String(member.id),
+                      label: member.name || member.email,
+                      hint: member.name ? member.email : '',
+                      keywords: `${member.name || ''} ${member.email || ''}`,
+                    })),
+                  ]}
+                  placeholder="Search staff…"
+                  ariaLabel="Staff member"
                   disabled={Boolean(editing.id)}
-                >
-                  <option value="">— Select —</option>
-                  {staff.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name || s.email}</option>
-                  ))}
-                </select>
+                  allowClear={false}
+                  minPopoverHeight={0}
+                  className="input-field"
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                  wrapperStyle={{ width: '100%' }}
+                />
               </Field>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.75rem' }}>
                 <Field label="Period">

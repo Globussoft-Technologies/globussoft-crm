@@ -354,7 +354,7 @@ function IssueModal({ onDone, onCancel }) {
         </label>
         <label style={lbl}>
           <span>Validity</span>
-          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
+          <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
             Period of time the gift card is valid after purchase
           </span>
           <select
@@ -384,7 +384,7 @@ function IssueModal({ onDone, onCancel }) {
         </label>
         <label style={lbl}>
           <span><span style={{ color: 'var(--danger-color, #ef4444)' }}>* </span>Gift value</span>
-          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
+          <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
             The amount your gift recipient can use
           </span>
           <input
@@ -400,7 +400,7 @@ function IssueModal({ onDone, onCancel }) {
         </label>
         <label style={lbl}>
           <span><span style={{ color: 'var(--danger-color, #ef4444)' }}>* </span>Price</span>
-          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
+          <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
             What you'll pay to buy this gift card
           </span>
           <input

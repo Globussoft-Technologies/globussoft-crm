@@ -787,7 +787,7 @@ export default function Drugs() {
               border: '1px solid rgba(128, 128, 128, 0.22)',
               borderRadius: '12px',
               boxShadow: '0 4px 16px rgba(0, 0, 0, 0.06)',
-              overflowX: 'hidden',
+              overflowX: 'auto',
             }}
           >
             <div

@@ -162,8 +162,8 @@ export default function Developer() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="developer-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="developer-page__header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Developer Ecosystem</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>REST Extensibility, Bearer API Keys, and Outbound Webhook Streams.</p>
@@ -176,10 +176,10 @@ export default function Developer() {
           logged anything (most users will see this).
           See .claude/skills/reporting-agent-progress/SKILL.md for the
           contract agents follow when posting entries. */}
-      <div className="card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
-        <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <div className="card developer-activity-card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+        <h3 className="developer-activity-card__title" style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Activity size={18} color="var(--accent-color)" /> Live agent activity
-          <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'normal' }}>
+          <span className="developer-activity-card__polling" style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'normal' }}>
             polling every 3s · {agentActivity.length} {agentActivity.length === 1 ? 'entry' : 'entries'}
           </span>
         </h3>
@@ -243,14 +243,14 @@ export default function Developer() {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+      <div className="developer-api-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
 
         {/* API Keys */}
-        <div className="card" style={{ padding: '2rem' }}>
+        <div className="card developer-api-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Key size={20} color="var(--accent-color)" /> API Credentials
           </h3>
-          <form onSubmit={generateKey} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
+          <form className="developer-api-key-form" onSubmit={generateKey} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
             {/* #720: required attribute triggers the browser-native validity
                 tooltip on submit + disables the Generate Key button via the
                 form's :invalid state, so an empty-name submission never even
@@ -325,7 +325,7 @@ export default function Developer() {
         </div>
 
         {/* Webhooks */}
-        <div className="card" style={{ padding: '2rem' }}>
+        <div className="card developer-api-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Globe size={20} color="var(--success-color)" /> Webhooks
           </h3>
@@ -334,7 +334,7 @@ export default function Developer() {
           </p>
 
           <form onSubmit={registerWebhook} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', gap: '1rem' }}>
+            <div className="developer-webhook-fields" style={{ display: 'flex', gap: '1rem' }}>
               {/* #899 — webhook event catalogue expanded from the original 3
                   to include the 5 lifecycle events added in ticks #36-#41 +
                   #47 (Invoice Created, Payment Collected, Quote Sent,

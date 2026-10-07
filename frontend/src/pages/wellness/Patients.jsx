@@ -849,7 +849,7 @@ export default function Patients() {
         <div className="glass" style={{ padding: 0, overflow: "visible" }}>
           <TopScrollSync>
             <table
-              className="stable-table"
+              className="stable-table wellness-patients-table"
               style={{ borderCollapse: "collapse" }}
             >
               <thead>

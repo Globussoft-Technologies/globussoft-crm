@@ -90,7 +90,7 @@ export default function TallyCompanySetupPage() {
           </p>
         )}
         {message && <p style={{ color: "#10b981", fontWeight: 700 }}>{message}</p>}
-        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
           {editing && <><TallyWriteGate><button type="button" onClick={save} style={buttonStyle}>Save Company Setup</button></TallyWriteGate>{isConfigured && <button type="button" onClick={() => { cancelEdit(); setEditing(false); setError(""); setMessage(""); }} style={secondaryButtonStyle}>Cancel Edit</button>}</>}
           <button
             type="button"

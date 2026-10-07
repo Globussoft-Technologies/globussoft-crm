@@ -5,6 +5,7 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import { AuthContext } from '../App';
 
 const STATUS_STYLES = {
@@ -534,20 +535,15 @@ useEffect(() => {
 
         {/* Signer */}
         <Field label="Signer">
-          <select
-            required
-            className="input-field"
+          <SearchableSelect
             value={form.patientId}
-            onChange={(e) => handlePatientChange(e.target.value)}
-          >
-            <option value="">-- Select Patient --</option>
-
-            {patients.map(patient => (
-              <option key={patient.id} value={patient.id}>
-                {patient.name}
-              </option>
-            ))}
-          </select>
+            onChange={handlePatientChange}
+            options={patients.map((patient) => ({ value: patient.id, label: patient.name }))}
+            placeholder="Search patients..."
+            emptyLabel="No matching patients"
+            ariaLabel="Signer"
+            boundarySelector=".sig-modal-card"
+          />
         </Field>
         {selectedPatient && !selectedPatient.email && (
           <Field label="Signer Email">
@@ -1188,13 +1184,14 @@ function Modal({ onClose, title, icon, children }) {
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', overflowY: 'auto',
+        overscrollBehavior: 'contain', zIndex: 1000, padding: '1rem',
       }}
     >
       <div
         onClick={e => e.stopPropagation()}
         className="card sig-modal-card"
-        style={{ padding: '2rem', width: '100%', maxWidth: '520px', maxHeight: '90vh', overflowY: 'auto' }}
+        style={{ padding: '2rem', width: '100%', maxWidth: '520px', height: 'auto', minHeight: 0, flex: 'none', margin: 'auto 0', overflow: 'visible' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

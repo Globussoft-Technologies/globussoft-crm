@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import './styles/finance.css'
 import './styles/responsive.css'
+import './styles/travel-responsive-pages.css'
+import './styles/crm-responsive-density.css'
 import './styles/print.css'
 import App from './App.jsx'
 

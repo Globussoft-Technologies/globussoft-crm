@@ -251,8 +251,12 @@ export default function GmailInbox() {
     setSelected({ id });
     try {
       const full = await fetchApi(`/api/gmail/messages/${id}`, { silent: true });
+      await fetchApi(`/api/gmail/messages/${id}/read`, {
+        method: 'POST',
+        silent: true,
+      });
       setSelected(full);
-      // Optimistically clear the unread emphasis in the list.
+      // Clear the unread emphasis after Gmail has persisted the read state.
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, unread: false } : m)));
     } catch (e) {
       setToast(e.message || 'Failed to open message');

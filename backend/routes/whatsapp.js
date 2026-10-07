@@ -33,6 +33,7 @@
 // (DPDP / TRAI compliance).
 
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
@@ -50,6 +51,11 @@ const {
   looksLikeMaskedSentinel,
   maskConfigRow,
 } = require("../lib/credentialMasking");
+const {
+  leadStatusKey,
+  TEMPLATE_SETTING_KEY,
+  queueGenericBulkContact,
+} = require("../lib/genericWebFormWhatsApp");
 // Per-tenant manual Meta Cloud connect (validate-with-Meta-then-activate).
 // Companion to lib/whatsappOnboardingService.js, which owns the Embedded
 // Signup path that stays feature-flagged until Meta App Review clears.
@@ -1822,14 +1828,195 @@ router.delete(
 // ─── List WhatsApp Templates ───────────────────────────────────────────────
 router.get("/templates", verifyToken, async (req, res) => {
   try {
-    const templates = await prisma.whatsAppTemplate.findMany({
-      where: { tenantId: req.user.tenantId },
-      orderBy: { createdAt: "desc" },
-    });
-    res.json(templates);
+    const [templates, selected] = await Promise.all([
+      prisma.whatsAppTemplate.findMany({
+        where: { tenantId: req.user.tenantId },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.tenantSetting?.findUnique
+        ? prisma.tenantSetting.findUnique({
+            where: { tenantId_key: { tenantId: req.user.tenantId, key: "generic.webForm.whatsappTemplate" } },
+            select: { value: true },
+          })
+        : Promise.resolve(null),
+    ]);
+    let selectedTemplateId = null;
+    let statusTemplates = {};
+    try {
+      const parsed = JSON.parse(selected?.value || "null") || {};
+      selectedTemplateId = parsed.templateId || null;
+      statusTemplates = parsed.statusTemplates && typeof parsed.statusTemplates === "object" ? parsed.statusTemplates : {};
+    } catch { selectedTemplateId = null; }
+    res.json(templates.map((template) => ({
+      ...template,
+      isSelectedForGenericWebForms: Number(template.id) === Number(selectedTemplateId),
+      genericWebFormStatuses: Object.entries(statusTemplates)
+        .filter(([, id]) => Number(id) === Number(template.id))
+        .map(([status]) => status),
+    })));
   } catch (err) {
     console.error("WhatsApp templates list error:", err);
     res.status(500).json({ error: "Failed to fetch templates" });
+  }
+});
+
+// Assign an approved template to one Generic CRM web-form lead status.
+router.post("/templates/generic-web-form-status", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+    if (tenant?.vertical !== "generic") {
+      return res.status(403).json({ error: "This setting is available only for Generic CRM", code: "GENERIC_ONLY" });
+    }
+    const allowedStatuses = new Set(["newLead", "existingLead", "prospect", "converted"]);
+    const status = String(req.body?.status || "");
+    const templateId = Number(req.body?.templateId);
+    if (!allowedStatuses.has(status)) return res.status(400).json({ error: "Invalid Generic CRM lead status", code: "INVALID_STATUS" });
+
+    const current = await prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: "generic.webForm.whatsappTemplate" } },
+      select: { value: true },
+    });
+    let value = {};
+    try { value = JSON.parse(current?.value || "{}") || {}; } catch { value = {}; }
+    const statusTemplates = { ...(value.statusTemplates || {}) };
+
+    if (!templateId) {
+      delete statusTemplates[status];
+    } else {
+      const template = await prisma.whatsAppTemplate.findFirst({
+        where: { id: templateId, tenantId: req.user.tenantId, status: "APPROVED" },
+        select: { id: true, name: true },
+      });
+      if (!template) return res.status(404).json({ error: "An approved WhatsApp template is required" });
+      statusTemplates[status] = template.id;
+    }
+
+    await prisma.tenantSetting.upsert({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: "generic.webForm.whatsappTemplate" } },
+      create: { tenantId: req.user.tenantId, key: "generic.webForm.whatsappTemplate", value: JSON.stringify({ statusTemplates }), category: "communication" },
+      update: { value: JSON.stringify({ statusTemplates }), category: "communication" },
+    });
+    res.json({ success: true, status, templateId: statusTemplates[status] || null });
+  } catch (err) {
+    console.error("Generic web-form WhatsApp status template error:", err);
+    res.status(500).json({ error: "Failed to update Generic CRM lead-status template" });
+  }
+});
+
+// Queue the selected status templates for existing Generic CRM contacts.
+// This is intentionally an explicit, manager/admin-only action; normal web
+// form submissions continue to use the automatic per-submission path.
+router.post("/templates/generic-web-form-send-all", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const afterId = Number(req.body?.afterId ?? 0);
+    if (!Number.isSafeInteger(afterId) || afterId < 0) {
+      return res.status(400).json({ error: "Invalid batch cursor", code: "INVALID_CURSOR" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { name: true, vertical: true } });
+    if (tenant?.vertical !== "generic") {
+      return res.status(403).json({ error: "This action is available only for Generic CRM", code: "GENERIC_ONLY" });
+    }
+    const setting = await prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: TEMPLATE_SETTING_KEY } },
+      select: { value: true },
+    });
+    let statusTemplates = {};
+    try { statusTemplates = JSON.parse(setting?.value || "{}")?.statusTemplates || {}; } catch { statusTemplates = {}; }
+    const campaignKey = crypto.createHash("sha256").update(JSON.stringify(
+      Object.entries(statusTemplates).sort(([left], [right]) => left.localeCompare(right)),
+    )).digest("hex");
+    if (req.body?.campaignKey && req.body.campaignKey !== campaignKey) {
+      return res.status(409).json({ error: "Template mappings changed. Restart the batch.", code: "CAMPAIGN_CHANGED" });
+    }
+    const templateIds = [...new Set(Object.values(statusTemplates).map((id) => Number(id)).filter(Boolean))];
+    if (templateIds.length === 0) {
+      return res.status(400).json({ error: "Select approved templates for the lead statuses first", code: "STATUS_TEMPLATES_REQUIRED" });
+    }
+
+    const approvedTemplates = await prisma.whatsAppTemplate.findMany({
+      where: { tenantId: req.user.tenantId, id: { in: templateIds }, status: "APPROVED" },
+      select: { id: true },
+    });
+    const approvedIds = new Set(approvedTemplates.map((template) => template.id));
+    const form = await prisma.webForm.findFirst({
+      where: { tenantId: req.user.tenantId, scope: "generic", isActive: true },
+      select: { id: true, name: true, scope: true },
+      orderBy: { createdAt: "asc" },
+    }) || { id: 0, name: "Generic CRM", scope: "generic", tenantId: req.user.tenantId };
+    const contacts = await prisma.contact.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        id: { gt: afterId },
+        deletedAt: null,
+        status: { in: ["Lead", "Prospect", "Customer"] },
+        OR: [{ phone: { not: null } }, { whatsappPhone: { not: null } }],
+      },
+      select: { id: true, name: true, email: true, phone: true, whatsappPhone: true, company: true, status: true },
+      orderBy: { id: "asc" },
+      take: 101,
+    });
+    const hasMore = contacts.length > 100;
+    const batch = contacts.slice(0, 100);
+
+    let queued = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const contact of batch) {
+      const templateId = Number(statusTemplates[leadStatusKey(contact, false)]);
+      if (!approvedIds.has(templateId)) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const result = await queueGenericBulkContact({
+          form: { ...form, tenantId: req.user.tenantId },
+          contact,
+          submissionId: `bulk-${campaignKey}-${contact.id}`,
+          isNewContact: false,
+          bulkTemplateId: templateId,
+        });
+        if (result.sent) queued += 1;
+        else skipped += 1;
+      } catch (error) {
+        failed += 1;
+        console.error(`[whatsapp] Generic bulk send failed for contact ${contact.id}:`, error.message);
+      }
+    }
+    res.json({ success: true, totalContacts: batch.length, queued, skipped, failed, campaignKey,
+      nextCursor: hasMore ? batch[batch.length - 1].id : null });
+  } catch (err) {
+    console.error("Generic web-form WhatsApp bulk send error:", err);
+    res.status(500).json({ error: "Failed to queue messages for existing Generic CRM leads" });
+  }
+});
+
+// Select one approved Meta template for automatic Generic CRM web-form
+// notifications. This is vertical-gated so Wellness and Travel messaging
+// keep their existing configuration paths.
+router.post("/templates/:id/use-for-generic-web-forms", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    if (tenant?.vertical !== "generic") {
+      return res.status(403).json({ error: "This setting is available only for Generic CRM", code: "GENERIC_ONLY" });
+    }
+    const template = await prisma.whatsAppTemplate.findFirst({
+      where: { id: Number(req.params.id), tenantId: req.user.tenantId, status: "APPROVED" },
+      select: { id: true, name: true },
+    });
+    if (!template) return res.status(404).json({ error: "An approved WhatsApp template is required" });
+
+    await prisma.tenantSetting.upsert({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: "generic.webForm.whatsappTemplate" } },
+      create: { tenantId: req.user.tenantId, key: "generic.webForm.whatsappTemplate", value: JSON.stringify({ templateId: template.id, templateName: template.name }), category: "communication" },
+      update: { value: JSON.stringify({ templateId: template.id, templateName: template.name }), category: "communication" },
+    });
+    res.json({ success: true, templateId: template.id, templateName: template.name });
+  } catch (err) {
+    console.error("Generic web-form WhatsApp template selection error:", err);
+    res.status(500).json({ error: "Failed to select Generic web-form WhatsApp template" });
   }
 });
 

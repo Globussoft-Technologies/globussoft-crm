@@ -20,7 +20,6 @@
  *   5. Auth-loading / corrupted-session → render nothing (no panel flash).
  *   6. feature/roles vs message vs neither → correct lock-panel copy.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -107,20 +106,14 @@ describe('<RoleGuard /> — #768 canonical denial: lock panel, no toast, no redi
 
   it('denied role: does NOT fire a denial toast', () => {
     renderGuard({ role: 'USER', message: 'Audit Log requires admin access.' });
-    // Drift: component still emits notify.error on denial regardless of
-    // mode; #768's "no toast" contract is documentation, not shipped. Don't
-    // assert the absence here — the lock-panel + no-redirect pins are the
-    // load-bearing contract.
+    expect(notifyError).not.toHaveBeenCalled();
   });
 
   it('MANAGER on an ADMIN-only route: also locked (frontend stricter than backend)', () => {
     renderGuard({ role: 'MANAGER', message: 'Audit Log requires admin access.' });
     expect(screen.getByTestId('role-guard-locked-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
-    // Drift: component still emits notify.error on denial regardless of
-    // mode; #768's "no toast" contract is documentation, not shipped. Don't
-    // assert the absence here — the lock-panel + no-redirect pins are the
-    // load-bearing contract.
+    expect(notifyError).not.toHaveBeenCalled();
   });
 
   it('allowed role: renders the protected page normally with all chrome', () => {
@@ -129,10 +122,7 @@ describe('<RoleGuard /> — #768 canonical denial: lock panel, no toast, no redi
     expect(screen.getByTestId('kpi-card-total')).toBeInTheDocument();
     expect(screen.getByTestId('filter-entity')).toBeInTheDocument();
     expect(screen.queryByTestId('role-guard-locked-panel')).not.toBeInTheDocument();
-    // Drift: component still emits notify.error on denial regardless of
-    // mode; #768's "no toast" contract is documentation, not shipped. Don't
-    // assert the absence here — the lock-panel + no-redirect pins are the
-    // load-bearing contract.
+    expect(notifyError).not.toHaveBeenCalled();
   });
 });
 
@@ -157,10 +147,8 @@ describe('<RoleGuard /> — lock-panel copy precedence', () => {
   });
 
   it('message only (legacy escape hatch): generic heading + role-based body', () => {
-    // Drift: the lock panel doesn't surface the `message` prop verbatim —
-    // it always derives its body from feature/rolesText. The legacy escape
-    // hatch survives only as a toast (still emitted by useEffect). Pin
-    // the panel's actual copy here.
+    // The legacy message prop is retained at call sites for compatibility;
+    // the panel continues to derive its copy from feature/rolesText.
     renderGuard({ role: 'USER', message: 'Audit Log requires admin access.' });
     const panel = screen.getByTestId('role-guard-locked-panel');
     expect(panel.textContent).toMatch(/This page is restricted/);
@@ -184,20 +172,14 @@ describe('<RoleGuard /> — auth-loading safety (#721)', () => {
     renderGuard({ role: null, loading: true, feature: 'Gift Cards', roles: 'manager (or admin)', path: '/wellness/giftcards', vertical: 'wellness' });
     expect(screen.queryByTestId('role-guard-locked-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
-    // Drift: component still emits notify.error on denial regardless of
-    // mode; #768's "no toast" contract is documentation, not shipped. Don't
-    // assert the absence here — the lock-panel + no-redirect pins are the
-    // load-bearing contract.
+    expect(notifyError).not.toHaveBeenCalled();
   });
 
   it('user=null with token but loading=false: renders nothing (corrupted-session edge — Layout handles /login)', () => {
     renderGuard({ role: null, loading: false, feature: 'Gift Cards', roles: 'manager (or admin)', path: '/wellness/giftcards', vertical: 'wellness' });
     expect(screen.queryByTestId('role-guard-locked-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
-    // Drift: component still emits notify.error on denial regardless of
-    // mode; #768's "no toast" contract is documentation, not shipped. Don't
-    // assert the absence here — the lock-panel + no-redirect pins are the
-    // load-bearing contract.
+    expect(notifyError).not.toHaveBeenCalled();
   });
 });
 

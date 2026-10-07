@@ -804,6 +804,48 @@ describe('POST /api/auth/register', () => {
 // ── POST /api/auth/customer/register ─────────────────────────────────
 
 describe('POST /api/auth/customer/register', () => {
+  test('generic registration adds the customer to the tenant contact directory', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'generic', name: 'NovaCrest', slug: 'novacrest' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    prisma.patient.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 101,
+      email: 'customer@example.com',
+      name: 'Priya Sharma',
+      phone: '+919000066666',
+      tenantId: 45,
+      userType: 'CUSTOMER',
+      role: 'CUSTOMER',
+      sessionVersion: 0,
+      tenant: { id: 45, name: 'NovaCrest', slug: 'novacrest', vertical: 'generic' },
+    });
+    prisma.contact.create.mockResolvedValue({ id: 501 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/customer/register')
+      .send({
+        email: 'customer@example.com',
+        phone: '9000066666',
+        password: 'Secret123',
+        name: 'Priya Sharma',
+        registrationTenantId: 45,
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'Priya Sharma',
+        email: 'customer@example.com',
+        status: 'Customer',
+        source: 'Customer Registration',
+        tenantId: 45,
+      }),
+    });
+  });
+
   test('existing non-lead contact email in the selected tenant → 409 before OTP or create', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness' });
     prisma.user.count.mockResolvedValue(0);

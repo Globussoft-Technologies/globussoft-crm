@@ -57,6 +57,20 @@ describe('GmailInbox — connected', () => {
     expect(urls.some((u) => u.includes('/gmail/messages'))).toBe(true);
   });
 
+  test('persists a message as read when it is opened', async () => {
+    mockConnected([
+      { id: 'm1', from: 'Client <c@example.com>', subject: 'Goa trip', snippet: 'See attached', date: '2026-06-16T10:00:00Z', unread: true },
+    ]);
+    render(<GmailInbox />);
+    fireEvent.click(await screen.findByText('Goa trip'));
+
+    await waitFor(() => {
+      const readCall = fetchApi.mock.calls.find(([url]) => url.endsWith('/gmail/messages/m1/read'));
+      expect(readCall).toBeTruthy();
+      expect(readCall[1].method).toBe('POST');
+    });
+  });
+
   test('opening the composer and submitting empty shows a validation toast (no send call)', async () => {
     mockConnected([]);
     render(<GmailInbox />);

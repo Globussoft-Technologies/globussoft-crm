@@ -1878,6 +1878,15 @@ const Leads = () => {
   const [autoCampaignRulesLoading, setAutoCampaignRulesLoading] =
     useState(false);
   const [autoCampaignRulesSaving, setAutoCampaignRulesSaving] = useState(false);
+  const activeAutoCampaignRuleCount = autoCampaignRules.filter(
+    (rule) =>
+      rule.enabled &&
+      rule.column &&
+      String(rule.value || "").trim() &&
+      Number(rule.campaignId) > 0,
+  ).length;
+  const autoCampaignAssignmentActive =
+    autoCampaignRulesEnabled && activeAutoCampaignRuleCount > 0;
   // #892  Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
@@ -6498,11 +6507,18 @@ const Leads = () => {
                 </span>
                 {autoCampaignRulesEnabled && (
                   <span
+                    aria-label={
+                      autoCampaignAssignmentActive
+                        ? `${activeAutoCampaignRuleCount} active auto-assign rule${activeAutoCampaignRuleCount === 1 ? "" : "s"}`
+                        : "Auto-assign enabled with no active rules"
+                    }
                     style={{
                       width: 8,
                       height: 8,
                       borderRadius: "50%",
-                      background: "var(--success-color, #22c55e)",
+                      background: autoCampaignAssignmentActive
+                        ? "var(--success-color, #22c55e)"
+                        : "var(--warning-color, #f59e0b)",
                       marginLeft: "0.25rem",
                     }}
                   />
@@ -6590,6 +6606,25 @@ const Leads = () => {
                       the chosen campaign. Values match ignoring case, spaces,
                       and punctuation.
                     </div>
+
+                    {autoCampaignRulesEnabled &&
+                      activeAutoCampaignRuleCount === 0 && (
+                        <div
+                          role="status"
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "var(--warning-color, #b45309)",
+                            background: "rgba(245, 158, 11, 0.1)",
+                            border: "1px solid rgba(245, 158, 11, 0.35)",
+                            borderRadius: 6,
+                            padding: "0.5rem 0.6rem",
+                            marginBottom: "0.75rem",
+                          }}
+                        >
+                          Auto-assign is on, but no rule is active. Turn on at
+                          least one completed rule and save it.
+                        </div>
+                      )}
 
                     {autoCampaignRulesEnabled && (
                       <div

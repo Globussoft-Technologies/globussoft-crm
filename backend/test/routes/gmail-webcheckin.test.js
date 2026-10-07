@@ -48,6 +48,7 @@ const oauth2State = {
 const gmailState = {
   messages: {
     get: vi.fn(),
+    modify: vi.fn(),
   },
   attachments: {
     get: vi.fn(),
@@ -66,6 +67,7 @@ googleapis.google.gmail = function fakeGmail() {
     users: {
       messages: {
         get: (...args) => gmailState.messages.get(...args),
+        modify: (...args) => gmailState.messages.modify(...args),
         attachments: {
           get: (...args) => gmailState.attachments.get(...args),
         },
@@ -139,6 +141,7 @@ beforeEach(() => {
   oauth2State.setCredentials.mockReset();
   oauth2State.on.mockReset();
   gmailState.messages.get.mockReset();
+  gmailState.messages.modify.mockReset();
   gmailState.attachments.get.mockReset();
 
   prisma.gmailIntegration.findUnique.mockReset();
@@ -156,6 +159,22 @@ beforeEach(() => {
   });
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: 'travel', name: 'Acme Travel', slug: 'acme' });
   gmailState.messages.get.mockResolvedValue({ data: gmailMessagePayload() });
+  gmailState.messages.modify.mockResolvedValue({ data: {} });
+});
+
+describe('POST /messages/:messageId/read', () => {
+  test('removes Gmail UNREAD label for the connected user', async () => {
+    const res = await request(makeApp({ tenantId: 3, userId: 9 }))
+      .post('/api/gmail/messages/msg-1/read');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ id: 'msg-1', read: true });
+    expect(gmailState.messages.modify).toHaveBeenCalledWith({
+      userId: 'me',
+      id: 'msg-1',
+      requestBody: { removeLabelIds: ['UNREAD'] },
+    });
+  });
 });
 
 const VALID_EXTRACTION = {

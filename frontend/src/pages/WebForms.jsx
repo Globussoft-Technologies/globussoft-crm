@@ -19873,6 +19873,9 @@ function WebFormsContent({ scope = "generic" }) {
                       {scope === "generic" ? <div className="wf-settings-block">
                         <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>Send an automatic message to all leads</div>
                         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>Choose each channel independently. Messages are sent automatically to all leads using the contact details submitted with the form.</div>
+                        {selectedForm.scope === "generic" ? (
+                          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 6 }}>Generic CRM WhatsApp uses the approved template selected on the WhatsApp Templates page for every lead, regardless of lead status.</div>
+                        ) : null}
                         <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
                           {[['email', 'Send email automatically to all leads'], ['sms', 'Send SMS automatically to all leads'], ['whatsapp', 'Send WhatsApp automatically to all leads']].map(([channel, label]) => (
                             <label key={channel} className="wf-settings-toggle">

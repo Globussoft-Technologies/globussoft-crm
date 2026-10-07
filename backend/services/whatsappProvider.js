@@ -69,7 +69,10 @@ function sendTemplate({ to, templateName, language, parameters, phoneNumberId, a
       type: "body",
       parameters: parameters.map((p) => ({
         type: "text",
-        text: String(p),
+        // Generic web-form automation stores Meta-shaped parameter objects,
+        // while older callers pass plain strings. Normalize both shapes so
+        // object parameters do not become the literal "[object Object]".
+        text: String(p && typeof p === "object" ? p.text ?? "" : p),
       })),
     });
   }

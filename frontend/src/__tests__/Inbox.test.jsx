@@ -157,10 +157,10 @@ function defaultFetch(url, opts) {
   return Promise.resolve([]);
 }
 
-function renderInbox({ user = adminUser } = {}) {
+function renderInbox({ user = adminUser, tenant = { vertical: "generic" } } = {}) {
   return render(
     <MemoryRouter>
-      <AuthContext.Provider value={{ user }}>
+      <AuthContext.Provider value={{ user, tenant }}>
         <Inbox />
       </AuthContext.Provider>
     </MemoryRouter>,
@@ -526,6 +526,22 @@ describe("<Inbox />", () => {
       expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'sidebar:counts-changed' }));
     });
     dispatchSpy.mockRestore();
+  });
+
+  it.each(["wellness", "travel"])('shows the full inbox toolbar for %s tenants', async (vertical) => {
+    const user = userEvent.setup();
+    renderInbox({ tenant: { vertical } });
+
+    expect(await screen.findByRole('searchbox', { name: 'Search mail' })).toBeInTheDocument();
+    expect(screen.getByLabelText('From date')).toBeInTheDocument();
+    expect(screen.getByLabelText('To date')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh inbox' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More inbox actions' })).toBeInTheDocument();
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search mail' }), 'client');
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) => typeof url === 'string' && url.includes('q=client'))).toBe(true);
+    });
   });
 
   it('closes the inbox actions menu when clicking outside it', async () => {

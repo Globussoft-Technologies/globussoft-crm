@@ -26,6 +26,9 @@ const {
 } = require("../utils/deduplication");
 const { notify } = require("../lib/notificationService");
 const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
+const {
+  sendGenericWebFormWhatsApp,
+} = require("../lib/genericWebFormWhatsApp");
 const { getSetting, setSetting, KEYS } = require("../lib/tenantSettings");
 const {
   evaluateAutoCampaignRules,
@@ -2498,6 +2501,31 @@ router.post("/", async (req, res) => {
       req.user.tenantId,
       customFields,
     );
+
+    // Generic CRM: enqueue the Create Lead WhatsApp acknowledgement as soon
+    // as the contact exists. The helper checks the tenant vertical itself, so
+    // Wellness and Travel tenants return NOT_GENERIC without sending anything.
+    // Keep this best-effort so WhatsApp/Meta failures never roll back a lead.
+    try {
+      await sendGenericWebFormWhatsApp({
+        form: {
+          id: 0,
+          tenantId: req.user.tenantId,
+          scope: "generic",
+          name: "Create Lead",
+        },
+        contact,
+        submissionId: `create-lead-${contact.id}-${Date.now()}`,
+        isNewContact: true,
+        source: "create_lead",
+      });
+    } catch (whatsappError) {
+      console.error(
+        "[contacts] Generic Create Lead WhatsApp automation failed:",
+        whatsappError?.message || whatsappError,
+      );
+    }
+
     try {
       const { emitEvent } = require("../lib/eventBus");
       await emitEvent(

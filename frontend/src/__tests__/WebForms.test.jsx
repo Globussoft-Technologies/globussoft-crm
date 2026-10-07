@@ -94,7 +94,7 @@ describe('public web form embed footer', () => {
     expect(html).toContain("&& pickerAllowedCountries.length > 0");
     expect(html).toContain("trigger.inputMode = 'numeric'");
     expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
-    expect(html).toContain("fd.set('phone', internationalPhone)");
+    expect(html).toContain("fd.set('phone', nationalDigits)");
     expect(html).toContain("if (advanced && fd.get('phone') && fd.get('phoneCountry'))");
   });
 

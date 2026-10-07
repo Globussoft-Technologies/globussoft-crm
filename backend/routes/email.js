@@ -85,7 +85,12 @@ async function sendSendGrid(to, subject, body, provider = null) {
 router.get('/', verifyToken, async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
-    if (req.query.unread === '1') where.read = false;
+    if (req.query.unread === '1') {
+      where.read = false;
+      // This endpoint backs the Communication > Inbox badge. Keep sent mail
+      // out of that badge so bulk "mark all as read" can bring it to zero.
+      if (!req.query.folder) where.direction = 'INBOUND';
+    }
     if (req.query.folder === 'inbox') where.direction = 'INBOUND';
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
     const total = await prisma.emailMessage.count({ where });

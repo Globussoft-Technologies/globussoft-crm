@@ -46,6 +46,15 @@ const makeRows = () => buildVoucherRows({
 });
 
 describe("Tally GST journal export", () => {
+  it("keeps existing cost-centre identity when a destination is renamed", () => {
+    const exported = destination => buildVoucherRows({ accounts: [], commonRows: [], payments: [],
+      customers: [{ reference: 'INV-1', name: 'School', invoiceTotal: 1000, itineraryId: 1, tripName: destination }],
+      payables: [], trips: [{ id: 1, destination }], tripTaxes: {}, master, selectedSubBrandLabel: 'Travel' });
+    const before = buildTallyMastersXml({ companyName: master.companyName, voucherRows: exported('Singapore') });
+    const after = buildTallyMastersXml({ companyName: master.companyName, voucherRows: exported('New destination') });
+    expect(after).toBe(before);
+    expect(after).toContain('<COSTCENTRE NAME="TRIP-1" ACTION="Create">');
+  });
   it("posts Sales Ledger Dr to GST Payable Cr without bill allocation", () => {
     const rows = makeRows();
     const xml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
@@ -78,8 +87,8 @@ describe("Tally GST journal export", () => {
 
   it("creates one trip cost centre master and enables it on posting ledgers", () => {
     const xml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: makeRows() });
-    expect(xml).toContain('<COSTCENTRE NAME="TRIP-1 - Test Trip" ACTION="Create">');
-    expect(xml.match(/<COSTCENTRE NAME="TRIP-1 - Test Trip"/g)).toHaveLength(1);
+    expect(xml).toContain('<COSTCENTRE NAME="TRIP-1" ACTION="Create">');
+    expect(xml.match(/<COSTCENTRE NAME="TRIP-1"/g)).toHaveLength(1);
     expect(xml).toContain("<ISCOSTCENTRESON>Yes</ISCOSTCENTRESON>");
     expect(xml).not.toContain('<LEDGER NAME="TRIP-1"');
   });
@@ -93,7 +102,7 @@ describe("Tally GST journal export", () => {
 
     for (const voucher of [sales, purchase]) {
       expect(voucher).toContain("<CATEGORYALLOCATIONS.LIST>");
-      expect(voucher).toContain("<NAME>TRIP-1 - Test Trip</NAME>");
+      expect(voucher).toContain("<NAME>TRIP-1</NAME>");
     }
     expect(receipt).not.toContain("COSTCENTREALLOCATIONS.LIST");
     expect(payment).not.toContain("COSTCENTREALLOCATIONS.LIST");
@@ -107,7 +116,7 @@ describe("Tally GST journal export", () => {
       trips: [{ id: "tmc-8", tmcTripId: 8, tripCode: "SCHOOL-8", destination: "Singapore", ledgerType: "tmc" }],
       tripTaxes: {}, master, selectedSubBrandLabel: "TMC",
     });
-    const name = "TMC-TRIP-8 - Singapore";
+    const name = "TMC-TRIP-8";
     const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: rows });
     const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
 

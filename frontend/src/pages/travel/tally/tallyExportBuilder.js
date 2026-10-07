@@ -104,10 +104,8 @@ const tripRowCostCentreCode = (trip = {}) => {
   return tripCostCentreCode({ itineraryId: trip.id });
 };
 
-const costCentreName = (code, label) => {
-  const name = String(label || "").trim();
-  return name && name !== "Unassigned" && name !== code ? `${code} - ${name}` : code;
-};
+// Tally NAME is an accounting identity, not a display label. Keep the
+// established ID-based name across destination edits and repeated exports.
 
 const shouldAllocateCostCentre = (sourceTag) =>
   !/customer receipt|supplier payment/i.test(String(sourceTag || ""));
@@ -326,25 +324,9 @@ export const buildVoucherRows = ({
   voucherTypes = [],
 }) => {
   const ledgerName = createLedgerResolver({ ledgerRows, ledgerMappings });
-  // Tally uses the cost centre name as both the report label and the voucher
-  // allocation key. Resolve it once so Sales and Purchase drill into the same
-  // trip even when one transaction has no tripName of its own.
-  const tripNames = new Map(trips.map((trip) => [
-    tripRowCostCentreCode(trip),
-    trip.destination || trip.tripName || trip.tripCode || trip.name,
-  ]));
-  [...customers, ...payables, ...commonRows].forEach((row) => {
-    const code = tripCostCentreCode(row);
-    if (code && !tripNames.get(code) && row.tripName && row.tripName !== "Unassigned") {
-      tripNames.set(code, row.tripName);
-    }
-  });
-  const tripCostCentreName = (row) => {
-    const code = tripCostCentreCode(row);
-    return code ? costCentreName(code, tripNames.get(code) || row.tripName) : "";
-  };
+  const tripCostCentreName = tripCostCentreCode;
   const fallbackTripCostCentreName = master.tripId
-    ? costCentreName(`TRIP-${master.tripId}`, tripNames.get(`TRIP-${master.tripId}`))
+    ? `TRIP-${master.tripId}`
     : "";
   const rows = [
     [
@@ -578,7 +560,7 @@ export const buildVoucherRows = ({
         date: dateOnly(master.to || master.from),
         ledger,
         party: counterLedger,
-        trip: costCentreName(tripRowCostCentreCode(trip), tripNames.get(tripRowCostCentreCode(trip))),
+        trip: tripRowCostCentreCode(trip),
         reference: `${ledger.toUpperCase().replace(/\s+/g, "-")}-${trip.id}`,
         debit: amount.toFixed(2),
         narration: `${ledger} for ${trip.label}`,

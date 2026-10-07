@@ -136,7 +136,7 @@ test('admin creates a transport person with pickup, plot, and structured service
   const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/transport-persons`, {
     headers: headers(adminToken),
     data: {
-      name: `${RUN_TAG} Driver`, phone: '9000011111', vehicleType: 'Mini truck', vehicleNumber: 'KA 01 AB 1234',
+      name: `Test Driver ${RUN_TAG.replace(/[^a-z]/gi, 'a')}`, phone: '9000011111', vehicleType: 'Mini truck', vehicleNumber: 'KA 01 AB 1234',
       pickupLocationIds: [locationId], plotSiteIds: [plotId],
       serviceAreas: [{ area: 'Koramangala', state: 'Karnataka', pincode: '560095' }],
     },
@@ -147,13 +147,13 @@ test('admin creates a transport person with pickup, plot, and structured service
   expect(body.pickupLocationId).toBe(locationId);
   expect(body.pickupLocationIds).toEqual([locationId]);
   expect(body.plotSiteIds).toEqual([plotId]);
-  expect(body.serviceAreas).toEqual([{ area: 'Koramangala', state: 'Karnataka', pincode: '560095' }]);
+  expect(body.serviceAreas).toEqual([{ plotSiteId: null, area: 'Koramangala', state: 'Karnataka', pincode: '560095' }]);
 });
 
 test('admin creates a broker assigned to a plot', async ({ request }) => {
   const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/brokers`, {
     headers: headers(adminToken),
-    data: { name: `${RUN_TAG} Broker`, phone: '9000022222', agency: 'E2E Realty', commissionPercent: 2.5, plotSiteId: plotId },
+    data: { name: `Test Broker ${RUN_TAG.replace(/[^a-z]/gi, 'a')}`, phone: '9000022222', agency: 'E2E Realty', commissionPercent: 2.5, plotSiteId: plotId },
   });
   expect(response.status()).toBe(201);
   const body = await response.json();

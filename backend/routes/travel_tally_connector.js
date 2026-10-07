@@ -16,6 +16,13 @@ const connectorBinaryPath = path.resolve(
   process.env.TALLY_CONNECTOR_EXE_PATH
     || path.join(__dirname, "..", "..", "tally-connector", "dist", "TallyConnector.exe"),
 );
+const connectorDeploymentDirectory = path.join(__dirname, "..", "..", "tally-connector");
+const connectorDeploymentFiles = [
+  "run-hidden.vbs",
+  "install-startup.ps1",
+  "uninstall-startup.ps1",
+  "README.md",
+];
 
 function safeCredentials(raw) {
   if (!raw) return null;
@@ -387,6 +394,23 @@ router.get("/binary", ...guards, requirePermission("tally", "read"), (req, res) 
       });
     }
   });
+});
+
+router.get("/deployment-files", ...guards, requirePermission("tally", "read"), async (req, res) => {
+  try {
+    const files = await Promise.all(connectorDeploymentFiles.map(async (name) => ({
+      name,
+      data: await fs.promises.readFile(path.join(connectorDeploymentDirectory, name), "utf8"),
+    })));
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json({ files });
+  } catch (error) {
+    console.error("[tally-connector] deployment files unavailable:", error.message);
+    res.status(503).json({
+      error: "The Tally connector deployment files are not available on this server.",
+      code: "TALLY_CONNECTOR_DEPLOYMENT_FILES_UNAVAILABLE",
+    });
+  }
 });
 
 router.post("/push", ...guards, requirePermission("tally", "export"), async (req, res) => {

@@ -194,6 +194,24 @@ describe("travel Tally connector routes", () => {
     }
   });
 
+  test("serves the deployment files needed by the downloaded ZIP", async () => {
+    const unauthenticated = await request(makeApp()).get("/api/travel/tally/connector/deployment-files");
+    expect(unauthenticated.status).toBeGreaterThanOrEqual(401);
+
+    const response = await request(makeApp())
+      .get("/api/travel/tally/connector/deployment-files")
+      .set(auth());
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.body.files.map((file) => file.name)).toEqual([
+      "run-hidden.vbs",
+      "install-startup.ps1",
+      "uninstall-startup.ps1",
+      "README.md",
+    ]);
+    expect(response.body.files.find((file) => file.name === "uninstall-startup.ps1").data).toContain("Stop-Process");
+  });
+
   test("generates a one-time token and stores only its hash", async () => {
     const response = await request(makeApp()).post("/api/travel/tally/connector/credentials").set(auth()).send({});
     expect(response.status).toBe(201);

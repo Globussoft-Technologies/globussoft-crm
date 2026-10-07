@@ -394,11 +394,11 @@ export default function Inbox() {
     (() => {
       const params = new URLSearchParams();
       if (emailFolder !== "all") params.set("folder", emailFolder);
-      if (isGeneric && debouncedInboxSearch.trim()) {
+      if (debouncedInboxSearch.trim()) {
         params.set("q", debouncedInboxSearch.trim());
       }
-      if (isGeneric && inboxDateFrom) params.set("dateFrom", inboxDateFrom);
-      if (isGeneric && inboxDateTo) params.set("dateTo", inboxDateTo);
+      if (inboxDateFrom) params.set("dateFrom", inboxDateFrom);
+      if (inboxDateTo) params.set("dateTo", inboxDateTo);
       const query = params.toString();
       return `/api/communications/inbox${query ? `?${query}` : ""}`;
     })();
@@ -579,11 +579,16 @@ export default function Inbox() {
   const visibleInboxEmails = emails;
 
   const markAllInboxEmailsRead = async () => {
-    if (!isGeneric || markingAllRead) return;
+    if (markingAllRead) return;
     setMarkingAllRead(true);
     try {
       await fetchApi("/api/communications/inbox/mark-all-read", { method: "POST" });
       setEmails((prev) => prev.map((email) => ({ ...email, read: true })));
+      pendingReadIdsRef.current.clear();
+      await loadEmailsPage({
+        page: emailPaginationRef.current.page || 1,
+        reset: true,
+      });
       if (typeof window !== "undefined") {
         // The endpoint updates every unread email in the tenant, not just
         // the current page. Re-fetch the sidebar count instead of applying a
@@ -600,11 +605,20 @@ export default function Inbox() {
   };
 
   const markAllInboxEmailsUnread = async () => {
-    if (!isGeneric || markingAllRead) return;
+    if (markingAllRead) return;
     setMarkingAllRead(true);
     try {
       await fetchApi("/api/communications/inbox/mark-all-unread", { method: "POST" });
-      setEmails((prev) => prev.map((email) => ({ ...email, read: false })));
+      setEmails((prev) => prev.map((email) => (
+        email.direction === "INBOUND" ? { ...email, read: false } : email
+      )));
+      pendingReadIdsRef.current.clear();
+      // Re-read the current page after the bulk update so the UI is aligned
+      // with the persisted database state before the user can refresh again.
+      await loadEmailsPage({
+        page: emailPaginationRef.current.page || 1,
+        reset: true,
+      });
       if (typeof window !== "undefined") {
         // This bulk action affects all tenant emails, so let Sidebar read the
         // authoritative unread count from the server.
@@ -1141,7 +1155,7 @@ export default function Inbox() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
             <div style={{ position: "sticky", top: "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: "-1.25rem 0 0", padding: "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
-              {isGeneric && (
+              <>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
                   <Search size={18} color="var(--text-secondary)" />
                   <input
@@ -1153,8 +1167,7 @@ export default function Inbox() {
                     style={{ width: "min(100%, 460px)", border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: "0.9rem" }}
                   />
                 </div>
-              )}
-              {isGeneric && !showMeet && (
+              {!showMeet && (
                 <div aria-label="Filter mail by date" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flex: "0 1 auto", order: 2, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
                   <span>From</span>
                   <input
@@ -1211,9 +1224,8 @@ export default function Inbox() {
                 </button>
               ))}
               </div>
-              {isGeneric && (
-                <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
-                  <button type="button" aria-label="Refresh inbox" onClick={() => loadEmailsPage({ page: 1, reset: true })} title="Refresh" style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><RefreshCw size={17} /></button>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
+                  <button type="button" aria-label="Refresh inbox" onClick={() => loadEmailsPage({ page: 1, reset: true })} disabled={markingAllRead} title="Refresh" style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: markingAllRead ? "not-allowed" : "pointer", opacity: markingAllRead ? 0.5 : 1, padding: "0.45rem" }}><RefreshCw size={17} /></button>
                   <div ref={inboxActionsRef} style={{ position: "relative" }}>
                     <button type="button" aria-label="More inbox actions" title="More" onClick={() => setShowInboxActions((visible) => !visible)} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><MoreVertical size={17} /></button>
                     {showInboxActions && (
@@ -1228,8 +1240,8 @@ export default function Inbox() {
                     <button type="button" aria-label="Previous page" disabled={emailPagination.page <= 1} onClick={() => loadEmailsPage({ page: emailPagination.page - 1, reset: true })} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: emailPagination.page <= 1 ? "not-allowed" : "pointer", opacity: emailPagination.page <= 1 ? 0.4 : 1, padding: "0.25rem" }}><ChevronLeft size={21} strokeWidth={2.2} /></button>
                     <button type="button" aria-label="Next page" disabled={!emailPagination.hasMore} onClick={() => loadEmailsPage({ page: emailPagination.page + 1, reset: true })} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: !emailPagination.hasMore ? "not-allowed" : "pointer", opacity: !emailPagination.hasMore ? 0.4 : 1, padding: "0.25rem" }}><ChevronRight size={21} strokeWidth={2.2} /></button>
                   </>}
-                </div>
-              )}
+              </div>
+              </>
             </div>
 
             {emails.length === 0 ? (

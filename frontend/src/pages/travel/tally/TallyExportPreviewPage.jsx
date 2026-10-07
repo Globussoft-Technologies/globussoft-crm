@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, History, Search, UploadCloud } from "lucide-react";
+import { BookOpen, Download, History, Search, UploadCloud, X } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PermissionGate from "../../../components/PermissionGate";
 import { fetchApi } from "../../../utils/api";
@@ -8,7 +8,7 @@ import { useNotify } from "../../../utils/notify";
 import { getTripLedgerRows, rowMatchesTrip } from "./tallyMath";
 import { buildTallyMastersXml, buildTallyXml, buildVoucherRows } from "./tallyExportBuilder";
 import { useTravelTallyMaster } from "./useTravelTallyMaster";
-import { downloadTallyConnectorPackage, fetchTallyConnectorBinary } from "./tallyConnectorConfig";
+import { downloadTallyConnectorPackage, fetchTallyConnectorBinary, fetchTallyConnectorDeploymentFiles } from "./tallyConnectorConfig";
 import TallySectionNav from "./TallySectionNav";
 import tallyIcon from "../../../assets/tally-icon.png";
 
@@ -84,6 +84,7 @@ export default function TallyExportPreviewPage() {
   const [tallyPreviewSelection, setTallyPreviewSelection] = useState("voucher:0");
   const [connectorStatus, setConnectorStatus] = useState(null);
   const [generatingCredentials, setGeneratingCredentials] = useState(false);
+  const [showSyncGuidelines, setShowSyncGuidelines] = useState(false);
   const [educationalMode, setEducationalMode] = useState(() => {
     try { return window.localStorage.getItem("travel-tally-educational-mode") === "true"; } catch (_) { return false; }
   });
@@ -354,10 +355,11 @@ export default function TallyExportPreviewPage() {
     setGeneratingCredentials(true);
     try {
       const executable = await fetchTallyConnectorBinary();
+      const deploymentFiles = await fetchTallyConnectorDeploymentFiles();
       const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
-      downloadTallyConnectorPackage(credentials, executable);
+      downloadTallyConnectorPackage(credentials, executable, deploymentFiles);
       await refreshConnectorStatus();
-      notify.success("Tally Connector ZIP downloaded. Extract it and run the executable beside config.json.");
+      notify.success("Tally Connector ZIP downloaded. Extract it, then run install-startup.ps1 from PowerShell.");
     } catch (error) {
       notify.error(error.message || "Could not download the Tally Connector ZIP.");
     } finally {
@@ -409,7 +411,16 @@ export default function TallyExportPreviewPage() {
           <h1>All Trips</h1>
           <p style={muted}>Paid Sales and Cash Profit use customer payments received. Unpaid invoice value remains outstanding.</p>
         </div>
-        <button type="button" onClick={() => navigate("/travel/tally/sync-history")} style={button}><History size={15} /> Sync history</button>
+        <div style={headerActions}>
+          <button
+            type="button"
+            onClick={() => setShowSyncGuidelines(true)}
+            aria-expanded={showSyncGuidelines}
+            aria-controls="tally-sync-guidelines"
+            style={button}
+          ><BookOpen size={15} /> Guidelines</button>
+          <button type="button" onClick={() => navigate("/travel/tally/sync-history")} style={button}><History size={15} /> Sync history</button>
+        </div>
       </div>
       <div style={{ ...connectorPanel, borderColor: connectorStatus?.online ? "#10b981" : undefined }}>
         <div style={connectorHeader}>
@@ -421,14 +432,26 @@ export default function TallyExportPreviewPage() {
           </div>
           <div style={connectorButtons}>
             <button type="button" onClick={refreshConnectorStatus} style={smallButton}>Refresh status</button>
-            <PermissionGate module="tally" action="update">
-              <button type="button" onClick={downloadConnector} disabled={generatingCredentials} style={{ ...smallButton, background: "#f4512c", borderColor: "#f4512c", color: "#fff" }}><Download size={14} /> {generatingCredentials ? "Preparing ZIP…" : "Download Tally Connector"}</button>
-            </PermissionGate>
+            {!connectorStatus?.online && (
+              <PermissionGate module="tally" action="update">
+                <button type="button" onClick={downloadConnector} disabled={generatingCredentials} style={{ ...smallButton, background: "#f4512c", borderColor: "#f4512c", color: "#fff" }}><Download size={14} /> {generatingCredentials ? "Preparing ZIP…" : "Download Tally Connector"}</button>
+              </PermissionGate>
+            )}
           </div>
         </div>
         <small style={muted}>Run the connector on the Windows computer where Tally is open on localhost port 9000.</small>
       </div>
-      <TallySyncGuidelines />
+      <div role="note" aria-label="First-time Tally connector setup" style={connectorSetup}>
+        <strong>First-time setup</strong>
+        <ol style={connectorSetupSteps}>
+          <li>Click <b>Download Tally Connector</b> and extract the ZIP on the Windows computer that runs Tally.</li>
+          <li>Open the company in Tally and enable its HTTP/XML service on localhost port 9000.</li>
+          <li>In the extracted folder, open PowerShell, run <code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code>, then run <code>.\install-startup.ps1</code>. This allows the installer in this PowerShell window only.</li>
+          <li>Check <code>logs\connector.log</code> in that folder for connection status.</li>
+          <li>To disconnect later, open PowerShell in the same folder, run <code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code>, then run <code>.\uninstall-startup.ps1</code>.</li>
+        </ol>
+      </div>
+      {showSyncGuidelines && <TallySyncGuidelines onClose={() => setShowSyncGuidelines(false)} />}
       <div style={filterBar}>
         <label htmlFor="tally-trip-search" style={searchControl}>
           <Search size={15} aria-hidden="true" />
@@ -577,9 +600,14 @@ function SyncStatusBadge({ status }) {
   const label = normalized === "NOT_CONNECTED" ? "Not connected" : normalized === "NEW_VOUCHERS" ? "New vouchers pending" : normalized.charAt(0) + normalized.slice(1).toLowerCase();
   return <span style={{ ...syncStatusBadge, ...palette }}><span aria-hidden="true" style={{ ...syncStatusDot, background: palette.dot }} />{label}</span>;
 }
-function TallySyncGuidelines() {
-  return <aside style={guidelinesPanel} aria-labelledby="tally-sync-guidelines-title">
-    <strong id="tally-sync-guidelines-title" style={{ color: "#f59e0b" }}>Tally Sync Guidelines</strong>
+function TallySyncGuidelines({ onClose }) {
+  return <aside id="tally-sync-guidelines" style={guidelinesPanel} aria-labelledby="tally-sync-guidelines-title">
+    <div style={guidelinesHeader}>
+      <strong id="tally-sync-guidelines-title" style={{ color: "#f59e0b" }}>Tally Sync Guidelines</strong>
+      <button type="button" onClick={onClose} aria-label="Close Tally Sync Guidelines" style={guidelinesCloseButton}>
+        <X size={15} aria-hidden="true" /> Close
+      </button>
+    </div>
     <ul style={guidelinesList}>
       <li>Push a trip to Tally <strong>only after it is completed</strong>.</li>
       <li>Sales vouchers carry the <strong>full invoice amount</strong>, even when the customer has paid only part or none of it. Recorded payments are exported as separate receipt vouchers.</li>
@@ -640,6 +668,11 @@ const downloadButton = { ...button, background: "#f97316", borderColor: "#f97316
 const connectorPanel = { marginTop: 18, padding: 14, border: "1px solid var(--border-color, rgba(148,163,184,.2))", borderRadius: 10, background: "var(--card-bg, rgba(255,255,255,.04))" };
 const connectorHeader = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" };
 const connectorButtons = { display: "flex", gap: 8, flexWrap: "wrap" };
+const headerActions = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
+const guidelinesHeader = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 };
+const guidelinesCloseButton = { display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 8px", border: "1px solid var(--border-color, rgba(148,163,184,.25))", borderRadius: 7, background: "transparent", color: "var(--text-primary)", fontSize: 12, fontWeight: 600, cursor: "pointer" };
+const connectorSetup = { marginTop: 10, padding: "10px 14px", border: "1px solid rgba(99,102,241,.24)", borderRadius: 10, background: "rgba(99,102,241,.045)", color: "var(--text-secondary)", fontSize: 12.5, lineHeight: 1.55 };
+const connectorSetupSteps = { margin: "5px 0 0", paddingLeft: 20 };
 const smallButton = { ...button, minHeight: 34, padding: "6px 10px", fontSize: 12 };
 const guidelinesPanel = { margin: "12px 0", padding: 14, border: "1px solid rgba(245,158,11,.45)", borderRadius: 10, background: "rgba(245,158,11,.08)", fontSize: 13 };
 const guidelinesList = { margin: "8px 0 0", paddingLeft: 20, color: "var(--text-secondary)", lineHeight: 1.6 };

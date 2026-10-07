@@ -14,12 +14,19 @@
  */
 
 const prisma = require('./prisma');
-const { isValidPermission } = require('./permissionCatalog');
+const { getCatalogForVertical, isValidPermission } = require('./permissionCatalog');
+const { resolveTenantVertical } = require('./tenantVertical');
 
 const CACHE = new Map();
 const CACHE_TTL_MS = 30_000;
 
-async function loadCustomerRolePermissions(tenantId) {
+async function loadCustomerRolePermissions(tenantId, resolvedVertical = null) {
+  // Patient-portal grants are active permissions too. Resolve the tenant
+  // vertical before reading the CUSTOMER role so stale cross-vertical rows
+  // cannot be exposed by /portal/me/permissions or used by the middleware.
+  const vertical = resolvedVertical || (await resolveTenantVertical(tenantId));
+  if (!vertical) return new Set();
+
   const role = await prisma.role.findFirst({
     where: { tenantId, key: 'CUSTOMER' },
     select: {
@@ -28,18 +35,34 @@ async function loadCustomerRolePermissions(tenantId) {
     },
   });
   if (!role) return new Set();
+  const catalog = getCatalogForVertical(vertical);
   const set = new Set();
-  for (const p of role.permissions) set.add(`${p.module}.${p.action}`);
+  for (const p of role.permissions) {
+    const actions = catalog[p.module];
+    if (actions && actions.includes(p.action)) {
+      set.add(`${p.module}.${p.action}`);
+    }
+  }
   return set;
 }
 
 async function getCustomerRolePermissions(tenantId) {
+  const vertical = await resolveTenantVertical(tenantId);
   const cached = CACHE.get(tenantId);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+  if (
+    cached &&
+    cached.vertical === vertical &&
+    Date.now() - cached.timestamp < CACHE_TTL_MS
+  ) {
     return cached.permissions;
   }
-  const permissions = await loadCustomerRolePermissions(tenantId);
-  CACHE.set(tenantId, { permissions, timestamp: Date.now() });
+  if (!vertical) {
+    const permissions = new Set();
+    CACHE.set(tenantId, { permissions, timestamp: Date.now(), vertical: null });
+    return permissions;
+  }
+  const permissions = await loadCustomerRolePermissions(tenantId, vertical);
+  CACHE.set(tenantId, { permissions, timestamp: Date.now(), vertical });
   return permissions;
 }
 

@@ -570,11 +570,35 @@ describe('<Invoices /> — page surface', () => {
 
     const columns = screen.getByRole('table').querySelectorAll('col');
     expect(columns[0].style.width).toBe('180px');
-    expect(columns[2].style.width).toBe('310px');
+    expect(columns[2].style.width).toBe('250px');
+    expect(columns[3].style.width).toBe('130px');
     expect(columns[9].style.width).toBe('250px');
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveStyle({ textAlign: 'left' });
     expect(screen.getByRole('button', { name: /View invoice INV-001/i }).closest('td'))
       .toHaveStyle({ textAlign: 'left' });
+  });
+
+  it('keeps the missing-quantity message fully visible in the wider quantity column', async () => {
+    const invoiceWithoutQuantity = {
+      ...sampleWellnessInvoices[0],
+      id: 99,
+      invoiceNum: 'INV-MISSING-QTY',
+      lineItemsJson: JSON.stringify([
+        { type: 'service', itemId: 21, name: 'Consultation', unitPrice: 1000, amount: 1000 },
+      ]),
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([invoiceWithoutQuantity]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+
+    await waitFor(() => expect(screen.getByText('INV-MISSING-QTY')).toBeInTheDocument());
+    const quantityCell = screen.getByText('No quantity recorded').closest('td');
+    expect(quantityCell).toHaveClass('invoice-quantity-cell');
+    expect(quantityCell).toHaveStyle({ whiteSpace: 'normal', overflow: 'visible' });
   });
 
   it('status filter narrows the ledger to a single status', async () => {

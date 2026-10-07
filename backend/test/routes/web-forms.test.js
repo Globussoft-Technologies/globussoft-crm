@@ -1027,6 +1027,21 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
   });
 
+  test('accepts a complete E.164 Generic phone together with its selected country', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'International Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '+918975678933');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ phone: '+918975678933' }),
+    }));
+  });
+
   test('copies the Generic phone into whatsappPhone when the same-number checkbox is selected', async () => {
     mockGenericPhoneForm();
 
@@ -1167,6 +1182,22 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(response.status).toBe(201);
     expect(response.body.contactNotifications).toEqual({});
     expect(emailSender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  test('accepts a formatted WhatsApp number pasted with its country code', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Formatted WhatsApp Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhone', '+91 91234-56789');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ whatsappPhone: '+919123456789' }),
+    }));
   });
 
   test('rejects non-numeric characters in a separate Generic WhatsApp number', async () => {

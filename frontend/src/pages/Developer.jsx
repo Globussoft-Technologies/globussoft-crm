@@ -128,7 +128,7 @@ export default function Developer() {
       const body = { name: trimmed };
       if (isTravelTenant && newKeySubBrand) body.subBrand = newKeySubBrand;
       const { rawKey } = await fetchApi('/api/developer/apikeys', { method: 'POST', body: JSON.stringify(body) });
-      notify.success(`ATTENTION: This is the ONLY time this key will be displayed.\n\nSave this in a secure vault immediately:\n\n${rawKey}`, { ttl: 30000 });
+      notify.success(`API key created. Save it securely — it won't be shown again.\n\n${rawKey}`, { ttl: 30000 });
       setNewKeyName('');
       setNewKeySubBrand('');
       loadDevData();

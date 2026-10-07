@@ -726,6 +726,50 @@ router.get("/messages/:messageId", verifyToken, async (req, res) => {
   }
 });
 
+// POST /messages/:messageId/read — remove Gmail's UNREAD label.
+// The UI may clear the unread styling optimistically, but Gmail remains the
+// source of truth for this integration, so the label must be changed remotely
+// or it will return after the next list/refresh request.
+router.post("/messages/:messageId/read", verifyToken, async (req, res) => {
+  try {
+    const { client } = await getAuthorizedClientForUser(
+      req.user.userId,
+      req.user.tenantId,
+    );
+    const gmail = google.gmail({ version: "v1", auth: client });
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: req.params.messageId,
+      requestBody: { removeLabelIds: ["UNREAD"] },
+    });
+    return res.json({ id: req.params.messageId, read: true });
+  } catch (err) {
+    if (isReauthError(err)) {
+      return res.status(401).json({
+        error: "Your Gmail connection has expired. Please reconnect.",
+        code: "RECONNECT_REQUIRED",
+      });
+    }
+    if (isGmailNotEnabledError(err)) {
+      return res
+        .status(400)
+        .json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
+    }
+    if (err.code === 404 || (err.response && err.response.status === 404)) {
+      return res
+        .status(404)
+        .json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" });
+    }
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    console.error("[gmail] POST /messages/:messageId/read error:", err);
+    return res
+      .status(500)
+      .json({ error: "Couldn't mark that message as read right now." });
+  }
+});
+
 // POST /send — send an email via the user's Gmail + log it as an OUTBOUND
 // EmailMessage (threaded to a Contact when one matches the recipient).
 // Accepts either application/json (no attachments) or multipart/form-data

@@ -179,7 +179,14 @@ export default function TravelPaymentPortal() {
       });
       await loadSession(sessionToken);
     } catch (e) {
-      if (e.message !== "__cancelled__") setError(e.message || "Payment could not be completed");
+      if (e.message !== "__cancelled__") {
+        if (e.code === "ALREADY_PAID") {
+          await loadSession(sessionToken);
+          setError("This installment is already paid.");
+        } else {
+          setError(e.message || "Payment could not be completed");
+        }
+      }
     } finally {
       setPayingId(null);
     }

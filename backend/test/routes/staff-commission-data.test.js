@@ -12,9 +12,11 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
 prisma.staffRevenueGoal = { findMany: vi.fn() };
+prisma.user = { findMany: vi.fn() };
 prisma.sale = { findMany: vi.fn() };
 prisma.invoice = { findMany: vi.fn() };
-prisma.payment = { aggregate: vi.fn() };
+prisma.payment = { aggregate: vi.fn(), findMany: vi.fn() };
+prisma.service = { findMany: vi.fn() };
 
 import express from 'express';
 import request from 'supertest';
@@ -36,12 +38,141 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   prisma.staffRevenueGoal.findMany.mockReset();
+  prisma.user.findMany.mockReset();
+  prisma.user.findMany.mockResolvedValue([]);
   prisma.sale.findMany.mockReset();
   prisma.invoice.findMany.mockReset();
   prisma.payment.aggregate.mockReset();
+  prisma.payment.findMany.mockReset();
+  prisma.service.findMany.mockReset();
 });
 
 describe('GET /api/staff/commission-data — historical data aggregation', () => {
+  function currentProfile(overrides = {}) {
+    const now = new Date();
+    return {
+      id: 31,
+      tenantId: 1,
+      name: 'Standard commission',
+      basis: 'REVENUE_PERCENT',
+      percentage: '10',
+      flatAmount: null,
+      period: 'MONTHLY',
+      periodStart: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
+      periodEnd: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)),
+      isActive: true,
+      ...overrides,
+    };
+  }
+
+  test('calculates assigned percentage commission without a revenue goal', async () => {
+    prisma.staffRevenueGoal.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 5, name: 'Anita Das', email: 'anita@example.com', commissionProfile: currentProfile() },
+    ]);
+    prisma.sale.findMany.mockResolvedValue([{
+      id: 101, discountTotal: 100,
+      lineItems: [{ lineType: 'SERVICE', lineTotal: 1000, quantity: 1 }],
+    }]);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/staff/commission-data');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      employeeName: 'Anita Das', netSales: 900,
+      commissionProfile: { name: 'Standard commission', basis: 'REVENUE_PERCENT' },
+      commissionableAmount: 900, commission: 90,
+    });
+    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 1 }),
+    }));
+  });
+
+  test('applies a flat product rule only to the selected product quantity', async () => {
+    prisma.staffRevenueGoal.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([{ id: 5, name: 'Anita Das', commissionProfile: currentProfile({
+      basis: 'PER_PRODUCT', percentage: null, flatAmount: '50', appliesToProduct: 'Serum',
+    }) }]);
+    prisma.sale.findMany.mockResolvedValue([{
+      id: 102, discountTotal: 0,
+      lineItems: [
+        { lineType: 'PRODUCT', name: 'Serum', lineTotal: 400, quantity: 2 },
+        { lineType: 'PRODUCT', name: 'Cream', lineTotal: 100, quantity: 1 },
+      ],
+    }]);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/staff/commission-data');
+    expect(res.status).toBe(200);
+    expect(res.body[0].productRevenue).toBe(500);
+    expect(res.body[0].commissionableAmount).toBe(400);
+    expect(res.body[0].commission).toBe(100);
+  });
+
+  test('uses category-filtered service revenue and avoids double-counting line discounts', async () => {
+    prisma.staffRevenueGoal.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([{ id: 5, name: 'Anita Das', commissionProfile: currentProfile({
+      basis: 'PER_SERVICE', percentage: '10', appliesToCategory: 'Skin',
+    }) }]);
+    prisma.sale.findMany.mockResolvedValue([{
+      id: 103, discountTotal: 150,
+      lineItems: [
+        { lineType: 'SERVICE', refId: 21, lineTotal: 900, lineDiscount: 100, quantity: 1 },
+        { lineType: 'SERVICE', refId: 22, lineTotal: 100, lineDiscount: 0, quantity: 1 },
+      ],
+    }]);
+    prisma.service.findMany.mockResolvedValue([{ id: 21, category: 'Skin' }, { id: 22, category: 'Hair' }]);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/staff/commission-data');
+    expect(res.status).toBe(200);
+    expect(res.body[0].netSales).toBe(950);
+    expect(res.body[0].commissionableAmount).toBe(855); // 900 minus 90% of the order discount
+    expect(res.body[0].commission).toBe(85.5);
+  });
+
+  test('does not report zero commission when a category lookup fails', async () => {
+    prisma.staffRevenueGoal.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([{ id: 5, name: 'Anita Das', commissionProfile: currentProfile({
+      basis: 'PER_SERVICE', percentage: '10', appliesToCategory: 'Skin',
+    }) }]);
+    prisma.sale.findMany.mockResolvedValue([{
+      id: 103, discountTotal: 0,
+      lineItems: [{ lineType: 'SERVICE', refId: 21, lineTotal: 100, quantity: 1 }],
+    }]);
+    prisma.service.findMany.mockRejectedValue(new Error('Catalogue unavailable'));
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(makeApp()).get('/api/staff/commission-data');
+      expect(res.status).toBe(200);
+      expect(res.body[0].commission).toBeNull();
+      expect(res.body[0].commissionProfile.name).toBe('Standard commission');
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test('counts each paid invoice once for a flat per invoice rule', async () => {
+    prisma.staffRevenueGoal.findMany.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([{ id: 5, name: 'Anita Das', commissionProfile: currentProfile({
+      basis: 'FLAT_PER_INVOICE', percentage: null, flatAmount: '75',
+    }) }]);
+    prisma.sale.findMany.mockResolvedValue([
+      { id: 101, discountTotal: 0, lineItems: [{ lineType: 'SERVICE', lineTotal: 100 }] },
+      { id: 102, discountTotal: 0, lineItems: [{ lineType: 'PRODUCT', lineTotal: 100 }] },
+    ]);
+    prisma.invoice.findMany.mockResolvedValue([{ id: 501 }]);
+    prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 100 } });
+    prisma.payment.findMany.mockResolvedValue([{ invoiceId: 501 }]);
+
+    const res = await request(makeApp()).get('/api/staff/commission-data');
+    expect(res.status).toBe(200);
+    expect(res.body[0].commission).toBe(225);
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({ distinct: ['invoiceId'] }));
+  });
+
   test('returns live breakdown from POS line items and visit-linked payments', async () => {
     const periodStart = new Date('2026-07-01');
     const periodEnd = new Date('2026-08-01');
@@ -88,6 +219,7 @@ describe('GET /api/staff/commission-data — historical data aggregation', () =>
     expect(row.totalSales).toBe(2200);
     expect(row.discount).toBe(50);
     expect(row.netSales).toBe(2150);
+    expect(row.commission).toBeNull();
 
     expect(prisma.sale.findMany).toHaveBeenCalledWith({
       where: {

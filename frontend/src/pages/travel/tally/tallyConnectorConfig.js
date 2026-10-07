@@ -101,16 +101,19 @@ export function buildTallyConnectorConfig(credentials) {
   };
 }
 
-export async function fetchTallyConnectorBinary() {
+function connectorRequestHeaders() {
   const token = getAuthToken();
   const activeTenantId = getActiveTenantId();
   const headers = {};
   if (token) headers.Authorization = `Bearer ${token}`;
   if (activeTenantId != null) headers["X-Active-Tenant"] = String(activeTenantId);
+  return headers;
+}
 
+export async function fetchTallyConnectorBinary() {
   const response = await fetch("/api/travel/tally/connector/binary", {
     credentials: "include",
-    headers,
+    headers: connectorRequestHeaders(),
   });
   if (!response.ok) {
     const details = await response.json().catch(() => ({}));
@@ -120,13 +123,35 @@ export async function fetchTallyConnectorBinary() {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-export function downloadTallyConnectorPackage(credentials, executable) {
+const deploymentFileNames = ["run-hidden.vbs", "install-startup.ps1", "uninstall-startup.ps1", "README.md"];
+
+export async function fetchTallyConnectorDeploymentFiles() {
+  const response = await fetch("/api/travel/tally/connector/deployment-files", {
+    credentials: "include",
+    headers: connectorRequestHeaders(),
+  });
+  const details = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(details.error || "Could not download the Tally connector deployment files.");
+  }
+  const files = details.files;
+  if (!Array.isArray(files) || deploymentFileNames.some((name) => !files.some((file) => file.name === name && typeof file.data === "string" && file.data.length > 0))) {
+    throw new Error("The Tally connector deployment files are incomplete.");
+  }
+  return deploymentFileNames.map((name) => files.find((file) => file.name === name));
+}
+
+export function downloadTallyConnectorPackage(credentials, executable, deploymentFiles) {
   if (!(executable instanceof Uint8Array) || executable.length === 0) {
     throw new Error("The Tally connector executable is empty.");
+  }
+  if (!Array.isArray(deploymentFiles) || deploymentFileNames.some((name) => !deploymentFiles.some((file) => file.name === name && typeof file.data === "string" && file.data.length > 0))) {
+    throw new Error("The Tally connector deployment files are incomplete.");
   }
   const packageBlob = createStoredZip([
     { name: "TallyConnector.exe", data: executable },
     { name: "config.json", data: JSON.stringify(buildTallyConnectorConfig(credentials), null, 2) },
+    ...deploymentFileNames.map((name) => deploymentFiles.find((file) => file.name === name)),
   ]);
   const packageUrl = URL.createObjectURL(packageBlob);
   const anchor = document.createElement("a");

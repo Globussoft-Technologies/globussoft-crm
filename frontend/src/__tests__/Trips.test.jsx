@@ -424,6 +424,16 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
     expect(link2).toHaveAttribute('href', '/travel/trips/102');
   });
 
+  it('renders the date range with a dash separator', async () => {
+    renderPage();
+    const row1 = (await screen.findByText('TMC-AND-2026-MUMBAI-G7')).closest('tr');
+    const departDate = new Date(TRIPS_DEFAULT[0].departDate).toLocaleDateString();
+    const returnDate = new Date(TRIPS_DEFAULT[0].returnDate).toLocaleDateString();
+
+    expect(row1.textContent).toContain(`${departDate} – ${returnDate}`);
+    expect(row1.textContent).not.toContain(`${departDate} ? ${returnDate}`);
+  });
+
   it('renders participants count per row from t._count.participants', async () => {
     renderPage();
     const row1 = (await screen.findByText('TMC-AND-2026-MUMBAI-G7')).closest('tr');

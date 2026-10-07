@@ -331,6 +331,47 @@ async function reconcilePaidInstalment({ trip, _participant, instalment, payment
   });
 }
 
+async function findExistingPaidPortalPayment({ trip, participant, instalment }) {
+  if (!prisma.payment?.findMany) return null;
+  const installmentId = Number(instalment.id);
+  const payments = await prisma.payment.findMany({
+    where: {
+      tenantId: trip.tenantId,
+      OR: [
+        { metadata: { contains: `"instalmentId":${installmentId}` } },
+        { metadata: { contains: `"instalmentId":"${installmentId}"` } },
+      ],
+    },
+  }) || [];
+  const relevantPayments = payments.filter((payment) => {
+    const metadata = parseMetadata(payment);
+    return TRIP_PAYMENT_KINDS.has(String(metadata.kind || ""))
+      && Number(metadata.tripId) === Number(trip.id)
+      && Number(metadata.participantId) === Number(participant.id)
+      && Number(metadata.instalmentId) === installmentId;
+  });
+  if (!relevantPayments.length) return null;
+
+  const needsGatewayRefresh = relevantPayments.some((payment) =>
+    String(payment.gateway || "").toLowerCase() === "razorpay" && !isSuccessfulPayment(payment),
+  );
+  let gateway = null;
+  if (needsGatewayRefresh) {
+    try { gateway = await getTenantRazorpayClient(trip.tenantId); } catch (_err) { gateway = null; }
+  }
+  for (const payment of relevantPayments) {
+    const result = await reconcileTripPaymentRecord({
+      db: prisma,
+      payment,
+      tenantId: trip.tenantId,
+      gateway: String(payment.gateway || "").toLowerCase() === "razorpay" ? gateway : null,
+      capturedAt: payment.paidAt || payment.createdAt || new Date(),
+    });
+    if (isSuccessfulPayment(result?.payment)) return result.payment;
+  }
+  return null;
+}
+
 router.get("/payment-portal/session/:token", async (req, res) => {
   try {
     const claims = verifyPaymentPortalToken(req.params.token);
@@ -450,16 +491,40 @@ router.post("/payment-portal/create-order", async (req, res) => {
     if (!instalment) {
       return res.status(404).json({ error: "Instalment not found", code: "NOT_FOUND" });
     }
-    if (instalment.status === "paid") {
+    const existingPaidPayment = await findExistingPaidPortalPayment({ trip, participant, instalment });
+    if (existingPaidPayment) {
       return res.status(409).json({ error: "This instalment is already paid", code: "ALREADY_PAID" });
     }
-    const amountDue = Math.max(0, Number(instalment.amount) - Number(instalment.paidAmount || 0));
+    const installmentAmount = Number(instalment.amount);
+    const installmentPaidAmount = Number(instalment.paidAmount || 0);
+    if (instalment.status === "paid" || (installmentAmount > 0 && installmentPaidAmount >= installmentAmount)) {
+      return res.status(409).json({ error: "This instalment is already paid", code: "ALREADY_PAID" });
+    }
+    const amountDue = Math.max(0, installmentAmount - installmentPaidAmount);
     if (!amountDue || amountDue <= 0) {
       return res.status(400).json({ error: "Instalment amount must be greater than zero", code: "INVALID_AMOUNT" });
     }
     const rp = await getTenantRazorpayClient(trip.tenantId);
     if (!rp) {
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    }
+    const portalPaymentUrl = `/pay/trip/${trip.id}/installment/${instalment.id}`;
+    const paymentClaim = await prisma.tripInstalmentPayment.updateMany({
+      where: {
+        id: instalment.id,
+        status: { not: "paid" },
+        paymentLinkUrl: null,
+      },
+      // Reserving the installment and storing its stable portal URL in one
+      // statement prevents concurrent requests from creating two orders. The
+      // value remains a usable link if the provider call later fails.
+      data: { paymentLinkUrl: portalPaymentUrl },
+    });
+    if (paymentClaim.count !== 1) {
+      return res.status(409).json({
+        error: "A payment is already in progress for this instalment",
+        code: "PAYMENT_IN_PROGRESS",
+      });
     }
     const receipt = `trip_${trip.id}_p_${participant.id}_i_${instalment.id}_${Date.now()}`;
     const notes = {
@@ -550,11 +615,15 @@ router.post("/payment-portal/submit-bank-transfer", async (req, res) => {
       where: { id: installmentId, tripId: trip.id, participantId: participant.id },
     });
     if (!instalment) return res.status(404).json({ error: "Instalment not found", code: "NOT_FOUND" });
-    if (instalment.status === "paid") return res.status(409).json({ error: "This instalment is already paid", code: "ALREADY_PAID" });
+    const installmentAmount = Number(instalment.amount);
+    const installmentPaidAmount = Number(instalment.paidAmount || 0);
+    if (instalment.status === "paid" || (installmentAmount > 0 && installmentPaidAmount >= installmentAmount)) {
+      return res.status(409).json({ error: "This instalment is already paid", code: "ALREADY_PAID" });
+    }
     if (instalment.status === "pending_verification") {
       return res.status(409).json({ error: "Bank transfer proof is already pending verification", code: "PENDING_VERIFICATION" });
     }
-    const amountDue = Math.max(0, Number(instalment.amount) - Number(instalment.paidAmount || 0));
+    const amountDue = Math.max(0, installmentAmount - installmentPaidAmount);
     const contactId = await findParentContactId(trip.tenantId, participant.parentEmail);
     const payment = await prisma.payment.create({
       data: {

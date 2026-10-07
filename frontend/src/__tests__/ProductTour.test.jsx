@@ -108,14 +108,18 @@ describe("generic product tours", () => {
   });
 
   it("registers every generic sidebar destination, including hard-coded omissions", () => {
-    expect(GENERIC_FEATURE_TOURS).toHaveLength(91);
+    expect(GENERIC_FEATURE_TOURS).toHaveLength(96);
     expect(GENERIC_FEATURE_TOURS.map((tour) => tour.id)).toEqual(
-      expect.arrayContaining(["adsgpt", "callified", "whatsapp", "lead-reports", "workflows"]),
+      expect.arrayContaining([
+        "adsgpt", "callified", "whatsapp", "lead-reports", "workflows",
+        "pickup-plot-inventory", "transport-persons", "plot-brokers",
+        "billing-persons", "pickup-customers",
+      ]),
     );
   });
 
   it("has a detailed capability profile for every module beyond the four hand-authored tours", () => {
-    expect(GENERIC_TOUR_PROFILE_IDS).toHaveLength(71);
+    expect(GENERIC_TOUR_PROFILE_IDS).toHaveLength(76);
     const detailedTours = GENERIC_FEATURE_TOURS.filter(
       (tour) => !tour.secondary && !["dashboard", "contacts", "leads", "pipeline"].includes(tour.id),
     );

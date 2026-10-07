@@ -588,7 +588,7 @@ router.get(["/travel/bookings", "/travel/itineraries"], verifyPortalToken, requi
     // registrations, not advisor itineraries. Include those booked trips in
     // the portal so a newly-created customer can see the trip immediately.
     const portalContact = await prisma.contact.findFirst({ where: { id: req.portal.contactId, tenantId: req.portal.tenantId }, select: { email: true } });
-    const [participants, pending] = await Promise.all([
+    const loadRegistrationRows = () => Promise.all([
       prisma.tripParticipant.findMany({
         where: { trip: { tenantId: req.portal.tenantId } },
         include: { trip: { include: { paymentPlan: true } } },
@@ -598,25 +598,34 @@ router.get(["/travel/bookings", "/travel/itineraries"], verifyPortalToken, requi
         include: { trip: { include: { paymentPlan: true } }, convertedToParticipant: true },
       }),
     ]);
+    let [participants, pending] = await loadRegistrationRows();
     const contactEmail = String(portalContact?.email || "").trim().toLowerCase();
     const belongsToPortalContact = (row) => {
       const participantEmail = String(row.parentEmail || "").trim().toLowerCase();
       return Boolean(contactEmail && participantEmail === contactEmail);
     };
-    const ownedParticipants = participants.filter(belongsToPortalContact);
-    const ownedPending = pending.filter(belongsToPortalContact);
-    const ownedTripIds = [...new Set([
-      ...ownedParticipants.map((row) => row.tripId),
-      ...ownedPending.map((row) => row.tripId),
-    ])];
-    // A pending registration has no safe participant identity until staff
-    // converts it. Never fall back to another child's rows from the same trip;
-    // that was the source of cross-parent totals on group trips.
-    const participantIds = [...new Set([
-      ...ownedParticipants.map((row) => row.id),
-      ...ownedPending.map((row) => row.convertedToParticipantId).filter(Boolean),
-    ])];
-    const ownedDraftTokens = new Set(ownedPending.map((row) => String(row.draftToken || "")).filter(Boolean));
+    let ownedParticipants;
+    let ownedPending;
+    let ownedTripIds;
+    let participantIds;
+    let ownedDraftTokens;
+    const rebuildOwnership = () => {
+      ownedParticipants = participants.filter(belongsToPortalContact);
+      ownedPending = pending.filter(belongsToPortalContact);
+      ownedTripIds = [...new Set([
+        ...ownedParticipants.map((row) => row.tripId),
+        ...ownedPending.map((row) => row.tripId),
+      ])];
+      // A pending registration has no safe participant identity until staff
+      // converts it. Never fall back to another child's rows from the same trip;
+      // that was the source of cross-parent totals on group trips.
+      participantIds = [...new Set([
+        ...ownedParticipants.map((row) => row.id),
+        ...ownedPending.map((row) => row.convertedToParticipantId).filter(Boolean),
+      ])];
+      ownedDraftTokens = new Set(ownedPending.map((row) => String(row.draftToken || "")).filter(Boolean));
+    };
+    rebuildOwnership();
 
     // Reconcile the same Payment -> TripInstalmentPayment ledger used by the
     // staff TMC screen before serialising the parent response. This also
@@ -677,6 +686,7 @@ router.get(["/travel/bookings", "/travel/itineraries"], verifyPortalToken, requi
       console.warn("[Portal][travel/bookings] gateway refresh skipped:", err.message);
       }
     }
+    let registrationOwnershipChanged = false;
     for (const payment of paymentRows) {
       const metadata = parseMetadata(payment);
       if (!TRIP_PAYMENT_KINDS.has(String(metadata.kind || ""))) continue;
@@ -687,23 +697,46 @@ router.get(["/travel/bookings", "/travel/itineraries"], verifyPortalToken, requi
       const participantOwned = Number.isInteger(participantId) && ownedParticipantIds.has(participantId);
       const tripOwned = Number.isInteger(tripId) && ownedTripIdSet.has(tripId);
       const contactOwned = Number(payment.contactId) === Number(req.portal.contactId);
+      const paymentParentEmail = String(
+        metadata.parentEmail
+          || metadata.registration?.parentEmail
+          || metadata.registrationFields?.parentEmail
+          || "",
+      ).trim().toLowerCase();
+      const payerEmailOwned = Boolean(paymentParentEmail && contactEmail && paymentParentEmail === contactEmail);
       const draftOwned = metadata.kind === "landing-page-registration" &&
         ownedDraftTokens.has(String(metadata.draftToken || ""));
-      const unassignedPaymentOwned = tripOwned && !Number.isInteger(participantId) && (contactOwned || draftOwned);
+      const unassignedPaymentOwned = tripOwned && !Number.isInteger(participantId) &&
+        (contactOwned || draftOwned || payerEmailOwned);
       if (!participantOwned && !unassignedPaymentOwned) continue;
       try {
-        await reconcileTripPaymentRecord({
+        const reconciliation = await reconcileTripPaymentRecord({
           db: prisma,
           payment,
           tenantId: req.portal.tenantId,
           gateway: String(payment.gateway || "").toLowerCase() === "razorpay" ? gateway : null,
         });
+        // A landing-page payment can create/convert the participant during
+        // this read. Refresh the ownership snapshot before serialising the
+        // response, otherwise the first parent login still receives the old
+        // pending registration and plan fallback instead of the paid ledger.
+        if (
+          metadata.kind === "landing-page-registration"
+          && Number.isInteger(Number(reconciliation?.participantId))
+          && !ownedParticipantIds.has(Number(reconciliation.participantId))
+        ) {
+          registrationOwnershipChanged = true;
+        }
       } catch (err) {
         // A stale/malformed payment row must never hide an email-owned TMC
         // booking. The ledger read below falls back to the trip payment plan;
         // the payment can be retried by the normal webhook/reconciliation path.
         console.warn("[Portal][travel/bookings] payment reconciliation skipped:", err.message);
       }
+    }
+    if (registrationOwnershipChanged) {
+      [participants, pending] = await loadRegistrationRows();
+      rebuildOwnership();
     }
     const instalments = participantIds.length
       ? await prisma.tripInstalmentPayment.findMany({

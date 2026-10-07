@@ -12,7 +12,11 @@ const prisma = require("../lib/prisma");
 const emailOtp = require("../lib/emailOtp");
 const { sendEmail: sendTenantEmail } = require("../lib/emailSender");
 const phoneOtp = require("../lib/phoneOtp");
-const { registerLimiter, otpRequestLimiter, otpVerifyLimiter } = require("../middleware/apiRateLimiters");
+const {
+  registerLimiter,
+  otpRequestLimiter,
+  otpVerifyLimiter,
+} = require("../middleware/apiRateLimiters");
 const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
@@ -20,8 +24,11 @@ const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
 // Canonicalises a self-entered phone to E.164 so downstream dialer / SMS /
 // WhatsApp keys all see the same shape.
 const { toE164 } = require("../utils/deduplication");
-// Pushes a saved account change onto the caller's linked wellness Patient row.
-const { syncPatientFromUser } = require("../lib/selfBookingPatient");
+// Keeps customer accounts and their linked wellness Patient rows in sync.
+// Use the module object so tests and future callers can replace either helper
+// without capturing a stale destructured reference.
+const selfBookingPatient = require("../lib/selfBookingPatient");
+const { ensurePatientContact } = require("../lib/patientContactLink");
 // Module-object require so vi.mock-style replacement of the exports at
 // test time is observable here (the destructured form captures function
 // references at require-time and bypasses any later patching).
@@ -81,12 +88,14 @@ async function provisionRbacForFreshTenant(tenantId, vertical, adminUserId) {
     // up failure-mode visible (any error bubbles up to the caller).
     if (adminUserId) {
       const adminRole = await prisma.role.findFirst({
-        where: { tenantId, key: 'ADMIN' },
+        where: { tenantId, key: "ADMIN" },
         select: { id: true },
       });
       if (adminRole) {
         const existing = await prisma.userRole.findUnique({
-          where: { userId_roleId: { userId: adminUserId, roleId: adminRole.id } },
+          where: {
+            userId_roleId: { userId: adminUserId, roleId: adminRole.id },
+          },
         });
         if (!existing) {
           await prisma.userRole.create({
@@ -129,10 +138,14 @@ async function storeResetToken(token, userId, expiresAt) {
   try {
     await prisma.$executeRawUnsafe(
       "INSERT INTO `PasswordResetToken` (`token`, `userId`, `expiresAt`) VALUES (?, ?, ?)",
-      token, userId, expiresAt,
+      token,
+      userId,
+      expiresAt,
     );
   } catch (e) {
-    console.warn(`[auth] reset-token DB persist failed, using in-memory fallback: ${e.message}`);
+    console.warn(
+      `[auth] reset-token DB persist failed, using in-memory fallback: ${e.message}`,
+    );
     resetTokens.set(token, { userId, expiresAt: expiresAt.getTime() });
   }
 }
@@ -147,16 +160,29 @@ async function consumeResetToken(token) {
       token,
     );
     row = Array.isArray(rows) && rows.length ? rows[0] : null;
-  } catch { row = null; }
+  } catch {
+    row = null;
+  }
   if (row) {
     if (row.usedAt) return { error: "Reset link has already been used" };
-    if (Date.now() > new Date(row.expiresAt).getTime()) return { error: "Reset token has expired" };
-    try { await prisma.$executeRawUnsafe("UPDATE `PasswordResetToken` SET `usedAt` = NOW(3) WHERE `token` = ?", token); } catch { /* best-effort */ }
+    if (Date.now() > new Date(row.expiresAt).getTime())
+      return { error: "Reset token has expired" };
+    try {
+      await prisma.$executeRawUnsafe(
+        "UPDATE `PasswordResetToken` SET `usedAt` = NOW(3) WHERE `token` = ?",
+        token,
+      );
+    } catch {
+      /* best-effort */
+    }
     return { userId: Number(row.userId) };
   }
   const entry = resetTokens.get(token);
   if (!entry) return null;
-  if (Date.now() > entry.expiresAt) { resetTokens.delete(token); return { error: "Reset token has expired" }; }
+  if (Date.now() > entry.expiresAt) {
+    resetTokens.delete(token);
+    return { error: "Reset token has expired" };
+  }
   resetTokens.delete(token);
   return { userId: entry.userId };
 }
@@ -173,7 +199,7 @@ router.get("/public/tenants", async (req, res) => {
       // `vertical` lets the customer-register page route a travel-org signup
       // to the Travel Customer Portal API instead of the staff User registration.
       select: { id: true, name: true, slug: true, vertical: true },
-      orderBy: { name: 'asc' },
+      orderBy: { name: "asc" },
     });
     res.json(tenants);
   } catch (err) {
@@ -187,22 +213,34 @@ router.get("/public/tenants", async (req, res) => {
 router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
   try {
     const name = String(req.body?.name || "").trim();
-    const email = String(req.body?.email || "").trim().toLowerCase();
+    const email = String(req.body?.email || "")
+      .trim()
+      .toLowerCase();
     const phone = String(req.body?.phone || "").trim();
     const company = String(req.body?.company || "").trim();
     const companySize = String(req.body?.companySize || "").trim();
     if (!name || !email || !phone || !company) {
-      return res.status(400).json({ error: "Name, email, phone, and company are required" });
+      return res
+        .status(400)
+        .json({ error: "Name, email, phone, and company are required" });
     }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.includes("..")) {
       return res.status(400).json({ error: "Enter a valid email address" });
     }
     const normalizedPhone = phone.replace(/[\s().-]/g, "");
     if (!/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
-      return res.status(400).json({ error: "Enter a valid international phone number with country code, for example +919876543210", code: "INVALID_PHONE" });
+      return res.status(400).json({
+        error:
+          "Enter a valid international phone number with country code, for example +919876543210",
+        code: "INVALID_PHONE",
+      });
     }
 
-    const configuredTenantSlug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim().toLowerCase();
+    const configuredTenantSlug = String(
+      process.env.PUBLIC_LEAD_TENANT_SLUG || "",
+    )
+      .trim()
+      .toLowerCase();
     if (!configuredTenantSlug) {
       return res.status(503).json({ error: "Lead capture is not configured" });
     }
@@ -215,7 +253,8 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       },
       select: { id: true },
     });
-    if (!tenant) return res.status(503).json({ error: "Lead capture is not configured" });
+    if (!tenant)
+      return res.status(503).json({ error: "Lead capture is not configured" });
 
     // Use the same WebForm relation as configurable public forms so every
     // landing inquiry can be surfaced in the Leads table. Include the resolved
@@ -235,7 +274,11 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
           { sourceKey: "email", fieldType: "email", sourceKind: "contact" },
           { sourceKey: "phone", fieldType: "tel", sourceKind: "contact" },
           { sourceKey: "company", fieldType: "text", sourceKind: "contact" },
-          { sourceKey: "companySize", fieldType: "number", sourceKind: "contact" },
+          {
+            sourceKey: "companySize",
+            fieldType: "number",
+            sourceKind: "contact",
+          },
         ]),
         styleJson: "{}",
         settingsJson: "{}",
@@ -243,11 +286,19 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       },
     });
     if (landingForm.tenantId !== tenant.id) {
-      console.error("[auth/public/lead-inquiry] landing form belongs to a different tenant");
+      console.error(
+        "[auth/public/lead-inquiry] landing form belongs to a different tenant",
+      );
       return res.status(503).json({ error: "Lead capture is not configured" });
     }
 
-    const submissionPayload = JSON.stringify({ name, email, phone: normalizedPhone, company, companySize });
+    const submissionPayload = JSON.stringify({
+      name,
+      email,
+      phone: normalizedPhone,
+      company,
+      companySize,
+    });
     const existing = await prisma.contact.findFirst({
       where: { tenantId: tenant.id, email, deletedAt: null },
       select: { id: true },
@@ -330,20 +381,23 @@ async function customerRegistrationEmailExists(email, tenantId) {
     }),
   ]);
 
-  const existingContactIdentity = contact && (
-    contact.status !== "Lead" || !!contact.portalPasswordHash
-  );
+  const existingContactIdentity =
+    contact && (contact.status !== "Lead" || !!contact.portalPasswordHash);
   return userCount > 0 || !!existingContactIdentity || !!patient;
 }
 
 router.post("/check-email", async (req, res) => {
   try {
     const rawEmail = req.body?.email;
-    const email = typeof rawEmail === "string" ? rawEmail.toLowerCase().trim() : "";
+    const email =
+      typeof rawEmail === "string" ? rawEmail.toLowerCase().trim() : "";
     const rawTenantId = req.body?.registrationTenantId;
     const tenantId = Number(rawTenantId);
-    const scopedTenantId = Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null;
-    const registrationVertical = ["generic", "wellness", "travel"].includes(req.body?.registrationVertical)
+    const scopedTenantId =
+      Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null;
+    const registrationVertical = ["generic", "wellness", "travel"].includes(
+      req.body?.registrationVertical,
+    )
       ? req.body.registrationVertical
       : null;
 
@@ -358,7 +412,11 @@ router.post("/check-email", async (req, res) => {
         exists = await customerRegistrationEmailExists(email, scopedTenantId);
       } else if (registrationVertical) {
         exists = !!(await prisma.user.findFirst({
-          where: { email, deactivatedAt: null, tenant: { vertical: registrationVertical } },
+          where: {
+            email,
+            deactivatedAt: null,
+            tenant: { vertical: registrationVertical },
+          },
           select: { id: true },
         }));
       } else {
@@ -389,7 +447,7 @@ router.post("/check-email", async (req, res) => {
 router.post("/check-organization-name", registerLimiter, async (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-    const exists = name.length > 0 && await organizationNameTaken(name);
+    const exists = name.length > 0 && (await organizationNameTaken(name));
     res.json({ exists });
   } catch (err) {
     console.error("[auth/check-organization-name] error:", err.message);
@@ -409,9 +467,16 @@ router.post("/check-organization-name", registerLimiter, async (req, res) => {
 // HTTP response goes out before the SendGrid round-trip even completes,
 // so timing is also identical. On dev/local with no API key, the link
 // is logged to stdout so QA can still complete the flow.
-async function sendPasswordResetEmail(toEmail, token, frontendBase, brandName = "Globussoft CRM", options = {}) {
+async function sendPasswordResetEmail(
+  toEmail,
+  token,
+  frontendBase,
+  brandName = "Globussoft CRM",
+  options = {},
+) {
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
-  const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+  const FROM_EMAIL =
+    process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
   const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
   const subject = `Reset your ${brandName} password`;
   const text = `Click this link to reset your ${brandName} password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.`;
@@ -429,12 +494,20 @@ async function sendPasswordResetEmail(toEmail, token, frontendBase, brandName = 
     }
   }
   if (String(vertical || "").toLowerCase() === "travel") {
-    await sendTenantEmail({ tenantId: options.tenantId, to: toEmail, subject, text, html });
+    await sendTenantEmail({
+      tenantId: options.tenantId,
+      to: toEmail,
+      subject,
+      text,
+      html,
+    });
     return;
   }
 
   if (!SENDGRID_API_KEY) {
-    console.log(`[auth/forgot-password] SendGrid not configured — reset link for ${toEmail}: ${resetUrl}`);
+    console.log(
+      `[auth/forgot-password] SendGrid not configured — reset link for ${toEmail}: ${resetUrl}`,
+    );
     return;
   }
 
@@ -445,20 +518,22 @@ async function sendPasswordResetEmail(toEmail, token, frontendBase, brandName = 
       subject,
       content: [
         { type: "text/plain", value: text },
-        { type: "text/html", value: html }
-      ]
+        { type: "text/html", value: html },
+      ],
     };
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+        Authorization: `Bearer ${SENDGRID_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      console.error(`[auth/forgot-password] SendGrid error ${response.status}: ${text}`);
+      console.error(
+        `[auth/forgot-password] SendGrid error ${response.status}: ${text}`,
+      );
     }
   } catch (err) {
     console.error("[auth/forgot-password] SendGrid send failed:", err.message);
@@ -476,7 +551,9 @@ function newJti() {
 // with frontend storage. The jti claim is what verifyToken consults against
 // the RevokedToken table on every request.
 function signSessionToken(payload) {
-  return jwt.sign({ ...payload, jti: newJti() }, JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign({ ...payload, jti: newJti() }, JWT_SECRET, {
+    expiresIn: "7d",
+  });
 }
 
 // True when the request carries a valid session token — i.e. an authenticated
@@ -497,11 +574,12 @@ function isAuthenticatedCaller(req) {
 
 // Helper: build a unique slug for a tenant
 async function generateUniqueSlug(base) {
-  const root = (base || "org")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "org";
+  const root =
+    (base || "org")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "org";
   let slug = root;
   let i = 1;
   const MAX_ATTEMPTS = 100;
@@ -544,15 +622,19 @@ async function organizationNameTaken(name) {
 
 function isOrganizationNameConflict(error) {
   if (error?.code !== "P2002") return false;
-  return JSON.stringify(error?.meta?.target || "").includes("organizationNameKey");
+  return JSON.stringify(error?.meta?.target || "").includes(
+    "organizationNameKey",
+  );
 }
 
 // Password complexity: minimum 8 chars, must contain at least one letter AND one number
 function validatePasswordComplexity(password) {
   if (!password || typeof password !== "string") return "Password is required";
   if (password.length < 8) return "Password must be at least 8 characters long";
-  if (!/[A-Za-z]/.test(password)) return "Password must contain at least one letter";
-  if (!/[0-9]/.test(password)) return "Password must contain at least one number";
+  if (!/[A-Za-z]/.test(password))
+    return "Password must contain at least one letter";
+  if (!/[0-9]/.test(password))
+    return "Password must contain at least one number";
   return null;
 }
 
@@ -569,32 +651,56 @@ function validatePasswordComplexity(password) {
 // POST /api/auth/email-otp/request  { email, purpose }
 router.post("/email-otp/request", otpRequestLimiter, async (req, res) => {
   try {
-    const email = String((req.body || {}).email || "").trim().toLowerCase();
+    const email = String((req.body || {}).email || "")
+      .trim()
+      .toLowerCase();
     const purpose = String((req.body || {}).purpose || "");
     if (!emailOtp.isValidEmail(email)) {
-      return res.status(400).json({ error: "A valid email address is required", code: "INVALID_EMAIL" });
+      return res.status(400).json({
+        error: "A valid email address is required",
+        code: "INVALID_EMAIL",
+      });
     }
     if (!emailOtp.VALID_PURPOSES.includes(purpose)) {
-      return res.status(400).json({ error: "Invalid verification purpose", code: "INVALID_PURPOSE" });
+      return res.status(400).json({
+        error: "Invalid verification purpose",
+        code: "INVALID_PURPOSE",
+      });
     }
     // Light rate-limit: at most one code per (email, purpose) per 60s.
     const recent = await prisma.emailVerificationOtp.findFirst({
-      where: { email, purpose, createdAt: { gt: new Date(Date.now() - 60_000) } },
+      where: {
+        email,
+        purpose,
+        createdAt: { gt: new Date(Date.now() - 60_000) },
+      },
     });
     if (recent) {
-      return res.status(429).json({ error: "Please wait a moment before requesting another code", code: "OTP_RATE_LIMIT" });
+      return res.status(429).json({
+        error: "Please wait a moment before requesting another code",
+        code: "OTP_RATE_LIMIT",
+      });
     }
     const code = emailOtp.generateOtpCode();
     const otpHash = await bcrypt.hash(code, 10);
     await prisma.emailVerificationOtp.create({
-      data: { email, purpose, otpHash, expiresAt: new Date(Date.now() + emailOtp.OTP_TTL_MS) },
+      data: {
+        email,
+        purpose,
+        otpHash,
+        expiresAt: new Date(Date.now() + emailOtp.OTP_TTL_MS),
+      },
     });
     const result = await emailOtp.sendOtpEmail(email, code, purpose);
     // Only expose devCode when SendGrid is genuinely absent (no key configured
     // at all). A real send failure must never leak the code to the HTTP response.
     const devCode =
-      result.reason === "no_api_key" && process.env.NODE_ENV !== "production" ? code : undefined;
-    return res.status(201).json({ sent: !!result.sent, ...(devCode ? { devCode } : {}) });
+      result.reason === "no_api_key" && process.env.NODE_ENV !== "production"
+        ? code
+        : undefined;
+    return res
+      .status(201)
+      .json({ sent: !!result.sent, ...(devCode ? { devCode } : {}) });
   } catch (error) {
     console.error("[auth] email-otp/request error:", error.message);
     return res.status(500).json({ error: "Failed to send verification code" });
@@ -604,28 +710,47 @@ router.post("/email-otp/request", otpRequestLimiter, async (req, res) => {
 // POST /api/auth/email-otp/verify  { email, purpose, code }
 router.post("/email-otp/verify", otpVerifyLimiter, async (req, res) => {
   try {
-    const email = String((req.body || {}).email || "").trim().toLowerCase();
+    const email = String((req.body || {}).email || "")
+      .trim()
+      .toLowerCase();
     const purpose = String((req.body || {}).purpose || "");
     const code = String((req.body || {}).code || "").trim();
     if (!email || !purpose || !code) {
-      return res.status(400).json({ error: "email, purpose and code are required", code: "MISSING_FIELDS" });
+      return res.status(400).json({
+        error: "email, purpose and code are required",
+        code: "MISSING_FIELDS",
+      });
     }
     const otp = await prisma.emailVerificationOtp.findFirst({
       where: { email, purpose, usedAt: null, expiresAt: { gt: new Date() } },
       orderBy: { createdAt: "desc" },
     });
     if (!otp) {
-      return res.status(400).json({ error: "Code expired or not found — request a new one", code: "OTP_INVALID" });
+      return res.status(400).json({
+        error: "Code expired or not found — request a new one",
+        code: "OTP_INVALID",
+      });
     }
     if (otp.attempts >= 5) {
-      return res.status(429).json({ error: "Too many attempts — request a new code", code: "OTP_LOCKED" });
+      return res.status(429).json({
+        error: "Too many attempts — request a new code",
+        code: "OTP_LOCKED",
+      });
     }
     const match = await bcrypt.compare(code, otp.otpHash);
     if (!match) {
-      await prisma.emailVerificationOtp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
-      return res.status(400).json({ error: "Incorrect code", code: "OTP_INVALID" });
+      await prisma.emailVerificationOtp.update({
+        where: { id: otp.id },
+        data: { attempts: { increment: 1 } },
+      });
+      return res
+        .status(400)
+        .json({ error: "Incorrect code", code: "OTP_INVALID" });
     }
-    await prisma.emailVerificationOtp.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+    await prisma.emailVerificationOtp.update({
+      where: { id: otp.id },
+      data: { usedAt: new Date() },
+    });
     const verificationToken = emailOtp.issueVerificationToken(email, purpose);
     return res.json({ verified: true, verificationToken });
   } catch (error) {
@@ -646,23 +771,41 @@ router.post("/phone-otp/request", otpRequestLimiter, async (req, res) => {
     const phone = String((req.body || {}).phone || "").trim();
     const purpose = String((req.body || {}).purpose || "");
     if (!phoneOtp.isValidPhone(phone)) {
-      return res.status(400).json({ error: "A valid phone number is required (10 digits or E.164 format)", code: "INVALID_PHONE" });
+      return res.status(400).json({
+        error: "A valid phone number is required (10 digits or E.164 format)",
+        code: "INVALID_PHONE",
+      });
     }
     if (!phoneOtp.VALID_PURPOSES.includes(purpose)) {
-      return res.status(400).json({ error: "Invalid verification purpose", code: "INVALID_PURPOSE" });
+      return res.status(400).json({
+        error: "Invalid verification purpose",
+        code: "INVALID_PURPOSE",
+      });
     }
     // Light rate-limit: at most one code per (phone, purpose) per 60s.
     const normalizedPhone = phoneOtp.normalizePhone(phone);
     const recent = await prisma.phoneVerificationOtp.findFirst({
-      where: { phone: normalizedPhone, purpose, createdAt: { gt: new Date(Date.now() - 60_000) } },
+      where: {
+        phone: normalizedPhone,
+        purpose,
+        createdAt: { gt: new Date(Date.now() - 60_000) },
+      },
     });
     if (recent) {
-      return res.status(429).json({ error: "Please wait a moment before requesting another code", code: "OTP_RATE_LIMIT" });
+      return res.status(429).json({
+        error: "Please wait a moment before requesting another code",
+        code: "OTP_RATE_LIMIT",
+      });
     }
     const code = phoneOtp.generateOtpCode();
     const otpHash = await bcrypt.hash(code, 10);
     await prisma.phoneVerificationOtp.create({
-      data: { phone: normalizedPhone, purpose, otpHash, expiresAt: new Date(Date.now() + phoneOtp.OTP_TTL_MS) },
+      data: {
+        phone: normalizedPhone,
+        purpose,
+        otpHash,
+        expiresAt: new Date(Date.now() + phoneOtp.OTP_TTL_MS),
+      },
     });
     const result = await phoneOtp.sendOtpSms(normalizedPhone, code, purpose);
     // NEVER return the code to the HTTP response — not even in dev/CI.
@@ -681,26 +824,51 @@ router.post("/phone-otp/verify", otpVerifyLimiter, async (req, res) => {
     const purpose = String((req.body || {}).purpose || "");
     const code = String((req.body || {}).code || "").trim();
     if (!phone || !purpose || !code) {
-      return res.status(400).json({ error: "phone, purpose and code are required", code: "MISSING_FIELDS" });
+      return res.status(400).json({
+        error: "phone, purpose and code are required",
+        code: "MISSING_FIELDS",
+      });
     }
     const normalizedPhone = phoneOtp.normalizePhone(phone);
     const otp = await prisma.phoneVerificationOtp.findFirst({
-      where: { phone: normalizedPhone, purpose, usedAt: null, expiresAt: { gt: new Date() } },
+      where: {
+        phone: normalizedPhone,
+        purpose,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
       orderBy: { createdAt: "desc" },
     });
     if (!otp) {
-      return res.status(400).json({ error: "Code expired or not found — request a new one", code: "OTP_INVALID" });
+      return res.status(400).json({
+        error: "Code expired or not found — request a new one",
+        code: "OTP_INVALID",
+      });
     }
     if (otp.attempts >= 5) {
-      return res.status(429).json({ error: "Too many attempts — request a new code", code: "OTP_LOCKED" });
+      return res.status(429).json({
+        error: "Too many attempts — request a new code",
+        code: "OTP_LOCKED",
+      });
     }
     const match = await bcrypt.compare(code, otp.otpHash);
     if (!match) {
-      await prisma.phoneVerificationOtp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
-      return res.status(400).json({ error: "Incorrect code", code: "OTP_INVALID" });
+      await prisma.phoneVerificationOtp.update({
+        where: { id: otp.id },
+        data: { attempts: { increment: 1 } },
+      });
+      return res
+        .status(400)
+        .json({ error: "Incorrect code", code: "OTP_INVALID" });
     }
-    await prisma.phoneVerificationOtp.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
-    const verificationToken = phoneOtp.issueVerifiedPhoneToken(normalizedPhone, purpose);
+    await prisma.phoneVerificationOtp.update({
+      where: { id: otp.id },
+      data: { usedAt: new Date() },
+    });
+    const verificationToken = phoneOtp.issueVerifiedPhoneToken(
+      normalizedPhone,
+      purpose,
+    );
     return res.json({ verified: true, verificationToken });
   } catch (error) {
     console.error("[auth] phone-otp/verify error:", error.message);
@@ -710,13 +878,25 @@ router.post("/phone-otp/verify", otpVerifyLimiter, async (req, res) => {
 
 router.post("/register", registerLimiter, async (req, res) => {
   try {
-    const { email, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const {
+      email,
+      phone,
+      password,
+      name,
+      organizationName,
+      vertical,
+      themePreference,
+      verificationToken,
+    } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
-      return res.status(400).json({ error: "A valid email address is required", code: "EMAIL_REQUIRED" });
+      return res.status(400).json({
+        error: "A valid email address is required",
+        code: "EMAIL_REQUIRED",
+      });
     }
 
     // Verification gate for anonymous (public) self-signup.
@@ -727,7 +907,10 @@ router.post("/register", registerLimiter, async (req, res) => {
     // exempt from the gate entirely.
     let emailVerifiedAt = null;
     if (!isAuthenticatedCaller(req)) {
-      const tokenProvided = verificationToken !== undefined && verificationToken !== null && verificationToken !== "";
+      const tokenProvided =
+        verificationToken !== undefined &&
+        verificationToken !== null &&
+        verificationToken !== "";
       if (tokenProvided) {
         // Detect token kind without fully verifying first, then re-verify with
         // the correct contact to prevent cross-contact token reuse.
@@ -735,28 +918,59 @@ router.post("/register", registerLimiter, async (req, res) => {
         try {
           const decoded = jwt.decode(verificationToken);
           decodedKind = decoded && decoded.kind;
-        } catch { decodedKind = null; }
+        } catch {
+          decodedKind = null;
+        }
 
         if (decodedKind === "phone-verified") {
-          const phoneValue = phone && typeof phone === "string" ? phone.trim() : "";
+          const phoneValue =
+            phone && typeof phone === "string" ? phone.trim() : "";
           if (!phoneOtp.isValidPhone(phoneValue)) {
-            return res.status(400).json({ error: "A valid phone number is required to match the phone verification token", code: "PHONE_REQUIRED" });
+            return res.status(400).json({
+              error:
+                "A valid phone number is required to match the phone verification token",
+              code: "PHONE_REQUIRED",
+            });
           }
-          if (!phoneOtp.checkVerifiedPhoneToken(verificationToken, phoneValue, "signup")) {
-            return res.status(403).json({ error: "Phone verification failed — please verify your phone again", code: "PHONE_NOT_VERIFIED" });
+          if (
+            !phoneOtp.checkVerifiedPhoneToken(
+              verificationToken,
+              phoneValue,
+              "signup",
+            )
+          ) {
+            return res.status(403).json({
+              error:
+                "Phone verification failed — please verify your phone again",
+              code: "PHONE_NOT_VERIFIED",
+            });
           }
           // Phone verified; emailVerifiedAt stays null (no email OTP was done)
         } else {
           // Treat as email-verified token (the original path)
-          const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
-          if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+          const otpGate = emailOtp.enforceRegistrationOtp(
+            verificationToken,
+            email,
+            "signup",
+          );
+          if (!otpGate.ok)
+            return res
+              .status(otpGate.status)
+              .json({ error: otpGate.error, code: otpGate.code });
           emailVerifiedAt = otpGate.emailVerifiedAt;
         }
       } else {
         // No token: fall through to the standard email-OTP enforcement check
         // (enforceRegistrationOtp handles the REQUIRE_EMAIL_OTP env gate)
-        const otpGate = emailOtp.enforceRegistrationOtp(undefined, email, "signup");
-        if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+        const otpGate = emailOtp.enforceRegistrationOtp(
+          undefined,
+          email,
+          "signup",
+        );
+        if (!otpGate.ok)
+          return res
+            .status(otpGate.status)
+            .json({ error: otpGate.error, code: otpGate.code });
         emailVerifiedAt = otpGate.emailVerifiedAt;
       }
     }
@@ -766,8 +980,10 @@ router.post("/register", registerLimiter, async (req, res) => {
     // email is allowed to own/belong to multiple orgs, so there is no global
     // "already exists" pre-check here.
 
-    const validVerticals = ['generic', 'wellness', 'travel'];
-    const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
+    const validVerticals = ["generic", "wellness", "travel"];
+    const selectedVertical = validVerticals.includes(vertical)
+      ? vertical
+      : "generic";
 
     const existingSameVerticalUser = await prisma.user.findFirst({
       where: {
@@ -784,16 +1000,24 @@ router.post("/register", registerLimiter, async (req, res) => {
       });
     }
 
-    const validThemes = ['light', 'dark', 'system'];
-    const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
+    const validThemes = ["light", "dark", "system"];
+    const selectedTheme = validThemes.includes(themePreference)
+      ? themePreference
+      : "system";
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const orgName = String(organizationName || (name ? `${name}'s Organization` : "My Organization")).trim().replace(/\s+/g, " ");
-    const existingSameVerticalOrganization = await organizationNameTaken(orgName);
+    const orgName = String(
+      organizationName || (name ? `${name}'s Organization` : "My Organization"),
+    )
+      .trim()
+      .replace(/\s+/g, " ");
+    const existingSameVerticalOrganization =
+      await organizationNameTaken(orgName);
     if (existingSameVerticalOrganization) {
       return res.status(409).json({
-        error: "This organization name is already taken. Please use a different name.",
+        error:
+          "This organization name is already taken. Please use a different name.",
         code: "ORGANIZATION_NAME_ALREADY_EXISTS",
       });
     }
@@ -813,10 +1037,13 @@ router.post("/register", registerLimiter, async (req, res) => {
         },
       });
     } catch (error) {
-      if (isOrganizationNameConflict(error)
-        || (error?.code === "P2002" && await organizationNameTaken(orgName))) {
+      if (
+        isOrganizationNameConflict(error) ||
+        (error?.code === "P2002" && (await organizationNameTaken(orgName)))
+      ) {
         return res.status(409).json({
-          error: "This organization name is already taken. Please use a different name.",
+          error:
+            "This organization name is already taken. Please use a different name.",
           code: "ORGANIZATION_NAME_ALREADY_EXISTS",
         });
       }
@@ -838,8 +1065,8 @@ router.post("/register", registerLimiter, async (req, res) => {
         trialEndsAt: trialEnd,
         subscriptionStatus: "TRIAL",
         themePreference: selectedTheme,
-        emailVerifiedAt
-      }
+        emailVerifiedAt,
+      },
     });
 
     // Provision the canonical RBAC role set for the fresh tenant + assign
@@ -847,18 +1074,47 @@ router.post("/register", registerLimiter, async (req, res) => {
     // admin has no RolePermission grants and the catalog-driven sidebar
     // sections collapse on first login (the "sidebar is almost empty"
     // signup bug). Awaited so the user lands on a fully-RBAC'd session.
-    await provisionRbacForFreshTenant(tenant.id, selectedVertical || 'generic', user.id);
+    await provisionRbacForFreshTenant(
+      tenant.id,
+      selectedVertical || "generic",
+      user.id,
+    );
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic", sessionVersion: user.sessionVersion || 0 });
+    const token = signSessionToken({
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole || null,
+      tenantId: tenant.id,
+      vertical: tenant.vertical || "generic",
+      sessionVersion: user.sessionVersion || 0,
+    });
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor, themeColor: tenant.themeColor }
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+        themePreference: user.themePreference || "system",
+      },
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        plan: tenant.plan,
+        vertical: tenant.vertical || "generic",
+        country: tenant.country || "US",
+        defaultCurrency: tenant.defaultCurrency || "USD",
+        locale: tenant.locale || "en-US",
+        logoUrl: tenant.logoUrl,
+        brandColor: tenant.brandColor,
+        themeColor: tenant.themeColor,
+      },
     });
-
   } catch (error) {
     console.error("[auth] register error:", error);
     res.status(500).json({ error: "Server registration error" });
@@ -868,13 +1124,25 @@ router.post("/register", registerLimiter, async (req, res) => {
 // Signup alias (matches signup page) — same behavior as register
 router.post("/signup", registerLimiter, async (req, res) => {
   try {
-    const { email, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const {
+      email,
+      phone,
+      password,
+      name,
+      organizationName,
+      vertical,
+      themePreference,
+      verificationToken,
+    } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
-      return res.status(400).json({ error: "A valid email address is required", code: "EMAIL_REQUIRED" });
+      return res.status(400).json({
+        error: "A valid email address is required",
+        code: "EMAIL_REQUIRED",
+      });
     }
 
     // Email OTP gate (same posture as /register — this is its alias). Auth'd
@@ -882,30 +1150,64 @@ router.post("/signup", registerLimiter, async (req, res) => {
     // Handles both email-verified and phone-verified tokens — same logic as /register.
     let emailVerifiedAt = null;
     if (!isAuthenticatedCaller(req)) {
-      const tokenProvided = verificationToken !== undefined && verificationToken !== null && verificationToken !== "";
+      const tokenProvided =
+        verificationToken !== undefined &&
+        verificationToken !== null &&
+        verificationToken !== "";
       if (tokenProvided) {
         let decodedKind;
         try {
           const decoded = jwt.decode(verificationToken);
           decodedKind = decoded && decoded.kind;
-        } catch { decodedKind = null; }
+        } catch {
+          decodedKind = null;
+        }
 
         if (decodedKind === "phone-verified") {
-          const phoneValue = phone && typeof phone === "string" ? phone.trim() : "";
+          const phoneValue =
+            phone && typeof phone === "string" ? phone.trim() : "";
           if (!phoneOtp.isValidPhone(phoneValue)) {
-            return res.status(400).json({ error: "A valid phone number is required to match the phone verification token", code: "PHONE_REQUIRED" });
+            return res.status(400).json({
+              error:
+                "A valid phone number is required to match the phone verification token",
+              code: "PHONE_REQUIRED",
+            });
           }
-          if (!phoneOtp.checkVerifiedPhoneToken(verificationToken, phoneValue, "signup")) {
-            return res.status(403).json({ error: "Phone verification failed — please verify your phone again", code: "PHONE_NOT_VERIFIED" });
+          if (
+            !phoneOtp.checkVerifiedPhoneToken(
+              verificationToken,
+              phoneValue,
+              "signup",
+            )
+          ) {
+            return res.status(403).json({
+              error:
+                "Phone verification failed — please verify your phone again",
+              code: "PHONE_NOT_VERIFIED",
+            });
           }
         } else {
-          const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
-          if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+          const otpGate = emailOtp.enforceRegistrationOtp(
+            verificationToken,
+            email,
+            "signup",
+          );
+          if (!otpGate.ok)
+            return res
+              .status(otpGate.status)
+              .json({ error: otpGate.error, code: otpGate.code });
           emailVerifiedAt = otpGate.emailVerifiedAt;
         }
       } else {
-        const otpGate = emailOtp.enforceRegistrationOtp(undefined, email, "signup");
-        if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+        const otpGate = emailOtp.enforceRegistrationOtp(
+          undefined,
+          email,
+          "signup",
+        );
+        if (!otpGate.ok)
+          return res
+            .status(otpGate.status)
+            .json({ error: otpGate.error, code: otpGate.code });
         emailVerifiedAt = otpGate.emailVerifiedAt;
       }
     }
@@ -915,8 +1217,10 @@ router.post("/signup", registerLimiter, async (req, res) => {
     // email is allowed to own/belong to multiple orgs, so there is no global
     // "already exists" pre-check here.
 
-    const validVerticals = ['generic', 'wellness', 'travel'];
-    const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
+    const validVerticals = ["generic", "wellness", "travel"];
+    const selectedVertical = validVerticals.includes(vertical)
+      ? vertical
+      : "generic";
 
     const existingSameVerticalUser = await prisma.user.findFirst({
       where: {
@@ -933,16 +1237,24 @@ router.post("/signup", registerLimiter, async (req, res) => {
       });
     }
 
-    const validThemes = ['light', 'dark', 'system'];
-    const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
+    const validThemes = ["light", "dark", "system"];
+    const selectedTheme = validThemes.includes(themePreference)
+      ? themePreference
+      : "system";
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const orgName = String(organizationName || (name ? `${name}'s Organization` : "My Organization")).trim().replace(/\s+/g, " ");
-    const existingSameVerticalOrganization = await organizationNameTaken(orgName);
+    const orgName = String(
+      organizationName || (name ? `${name}'s Organization` : "My Organization"),
+    )
+      .trim()
+      .replace(/\s+/g, " ");
+    const existingSameVerticalOrganization =
+      await organizationNameTaken(orgName);
     if (existingSameVerticalOrganization) {
       return res.status(409).json({
-        error: "This organization name is already taken. Please use a different name.",
+        error:
+          "This organization name is already taken. Please use a different name.",
         code: "ORGANIZATION_NAME_ALREADY_EXISTS",
       });
     }
@@ -962,10 +1274,13 @@ router.post("/signup", registerLimiter, async (req, res) => {
         },
       });
     } catch (error) {
-      if (isOrganizationNameConflict(error)
-        || (error?.code === "P2002" && await organizationNameTaken(orgName))) {
+      if (
+        isOrganizationNameConflict(error) ||
+        (error?.code === "P2002" && (await organizationNameTaken(orgName)))
+      ) {
         return res.status(409).json({
-          error: "This organization name is already taken. Please use a different name.",
+          error:
+            "This organization name is already taken. Please use a different name.",
           code: "ORGANIZATION_NAME_ALREADY_EXISTS",
         });
       }
@@ -987,25 +1302,54 @@ router.post("/signup", registerLimiter, async (req, res) => {
         trialEndsAt: trialEnd,
         subscriptionStatus: "TRIAL",
         themePreference: selectedTheme,
-        emailVerifiedAt
-      }
+        emailVerifiedAt,
+      },
     });
 
     // Provision the canonical RBAC role set for the fresh tenant + assign
     // the new admin user to the ADMIN role row. See /register for the
     // longer comment — same bug, same fix.
-    await provisionRbacForFreshTenant(tenant.id, selectedVertical || 'generic', user.id);
+    await provisionRbacForFreshTenant(
+      tenant.id,
+      selectedVertical || "generic",
+      user.id,
+    );
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic", sessionVersion: user.sessionVersion || 0 });
+    const token = signSessionToken({
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole || null,
+      tenantId: tenant.id,
+      vertical: tenant.vertical || "generic",
+      sessionVersion: user.sessionVersion || 0,
+    });
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor, themeColor: tenant.themeColor }
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+        themePreference: user.themePreference || "system",
+      },
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        plan: tenant.plan,
+        vertical: tenant.vertical || "generic",
+        country: tenant.country || "US",
+        defaultCurrency: tenant.defaultCurrency || "USD",
+        locale: tenant.locale || "en-US",
+        logoUrl: tenant.logoUrl,
+        brandColor: tenant.brandColor,
+        themeColor: tenant.themeColor,
+      },
     });
-
   } catch (error) {
     console.error("[auth] signup error:", error);
     res.status(500).json({ error: "Signup failed" });
@@ -1043,19 +1387,37 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // standing rules), so a `tenantId` field would always arrive undefined
     // and registration would 400. `registrationTenantId` is not on the strip
     // list, so it passes through intact.
-    const { email: rawEmail, phone, password, name, registrationTenantId, verificationToken } = req.body || {};
-    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+    const {
+      email: rawEmail,
+      phone,
+      password,
+      name,
+      registrationTenantId,
+      verificationToken,
+    } = req.body || {};
+    const email =
+      typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 
     // Input validation — email is always required (it's the login credential and a required DB field)
-    if (!email || typeof email !== "string" || !email.includes("@") || !password || typeof password !== "string") {
-      return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
+    if (
+      !email ||
+      typeof email !== "string" ||
+      !email.includes("@") ||
+      !password ||
+      typeof password !== "string"
+    ) {
+      return res.status(400).json({
+        error: "email, password, and registrationTenantId are required",
+      });
     }
 
     // Coerce to a number — JSON sends it numeric, but accept a numeric string
     // defensively. Reject anything that isn't a positive integer.
     const tenantId = Number(registrationTenantId);
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
-      return res.status(400).json({ error: "registrationTenantId must be a valid number" });
+      return res
+        .status(400)
+        .json({ error: "registrationTenantId must be a valid number" });
     }
 
     // Check tenant exists
@@ -1068,7 +1430,10 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // belongs to any live identity in this tenant. This keeps the UX aligned
     // with the preflight check and prevents an unnecessary verification loop
     // for people who are already in the CRM.
-    const existingPerson = await customerRegistrationEmailExists(email, tenantId);
+    const existingPerson = await customerRegistrationEmailExists(
+      email,
+      tenantId,
+    );
     if (existingPerson) {
       return res.status(409).json({
         error: "This email already exists. Sign in to your account.",
@@ -1079,31 +1444,64 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // Verification gate — token may be email-verified or phone-verified.
     // Detect kind and validate against the correct contact field.
     let emailVerifiedAt = null;
-    const tokenProvided = verificationToken !== undefined && verificationToken !== null && verificationToken !== "";
+    const tokenProvided =
+      verificationToken !== undefined &&
+      verificationToken !== null &&
+      verificationToken !== "";
     if (tokenProvided) {
       let decodedKind;
       try {
         const decoded = jwt.decode(verificationToken);
         decodedKind = decoded && decoded.kind;
-      } catch { decodedKind = null; }
+      } catch {
+        decodedKind = null;
+      }
 
       if (decodedKind === "phone-verified") {
-        const phoneValue = phone && typeof phone === "string" ? phone.trim() : "";
+        const phoneValue =
+          phone && typeof phone === "string" ? phone.trim() : "";
         if (!phoneOtp.isValidPhone(phoneValue)) {
-          return res.status(400).json({ error: "A valid phone number is required to match the phone verification token", code: "PHONE_REQUIRED" });
+          return res.status(400).json({
+            error:
+              "A valid phone number is required to match the phone verification token",
+            code: "PHONE_REQUIRED",
+          });
         }
-        if (!phoneOtp.checkVerifiedPhoneToken(verificationToken, phoneValue, "customer-register")) {
-          return res.status(403).json({ error: "Phone verification failed — please verify your phone again", code: "PHONE_NOT_VERIFIED" });
+        if (
+          !phoneOtp.checkVerifiedPhoneToken(
+            verificationToken,
+            phoneValue,
+            "customer-register",
+          )
+        ) {
+          return res.status(403).json({
+            error: "Phone verification failed — please verify your phone again",
+            code: "PHONE_NOT_VERIFIED",
+          });
         }
         // Phone verified; emailVerifiedAt stays null
       } else {
-        const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "customer-register");
-        if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+        const otpGate = emailOtp.enforceRegistrationOtp(
+          verificationToken,
+          email,
+          "customer-register",
+        );
+        if (!otpGate.ok)
+          return res
+            .status(otpGate.status)
+            .json({ error: otpGate.error, code: otpGate.code });
         emailVerifiedAt = otpGate.emailVerifiedAt;
       }
     } else {
-      const otpGate = emailOtp.enforceRegistrationOtp(undefined, email, "customer-register");
-      if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+      const otpGate = emailOtp.enforceRegistrationOtp(
+        undefined,
+        email,
+        "customer-register",
+      );
+      if (!otpGate.ok)
+        return res
+          .status(otpGate.status)
+          .json({ error: otpGate.error, code: otpGate.code });
       emailVerifiedAt = otpGate.emailVerifiedAt;
     }
 
@@ -1128,41 +1526,99 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
       data: {
         email,
         password: hashedPassword,
-        name: name || email.split('@')[0],
+        name: name || email.split("@")[0],
         phone: registrationPhone,
-        userType: 'CUSTOMER',
-        role: 'CUSTOMER', // Legacy field for backward compat
+        userType: "CUSTOMER",
+        role: "CUSTOMER", // Legacy field for backward compat
         tenantId,
         emailVerifiedAt,
       },
-      include: { tenant: true }
+      include: { tenant: true },
     });
+
+    // A wellness CUSTOMER is also a clinic patient. Create/link that Patient
+    // row during account creation so the clinical Patients list contains the
+    // new customer immediately. Best-effort is intentional: account creation
+    // must not leave a valid login unusable if a transient Patient write fails;
+    // the customer-login self-heal below retries it on the next sign-in.
+    if ((user.tenant?.vertical || tenant.vertical) === "wellness") {
+      try {
+        const patient = await selfBookingPatient.resolveSelfBookingPatient({
+          userId: user.id,
+          tenantId,
+        });
+        await ensurePatientContact(patient, tenantId);
+      } catch (patientErr) {
+        console.error(
+          "[auth] customer/register patient/contact bridge failed (non-fatal):",
+          patientErr && patientErr.message ? patientErr.message : patientErr,
+        );
+      }
+    }
 
     // Assign CUSTOMER role via UserRole junction
     // Find the tenant's CUSTOMER system role
     const customerRole = await prisma.role.findFirst({
       where: {
         tenantId: tenantId,
-        key: 'CUSTOMER',
-        isSystem: true
-      }
+        key: "CUSTOMER",
+        isSystem: true,
+      },
     });
 
     if (customerRole) {
       await prisma.userRole.create({
         data: {
           userId: user.id,
-          roleId: customerRole.id
-        }
+          roleId: customerRole.id,
+        },
       });
     }
 
+    // Generic CRM transport-person and plot-broker assignment lists are
+    // backed by Contact rows, while customer self-registration creates a User
+    // identity. Keep the two directories connected by materialising a
+    // Customer contact for this tenant. A matching Lead/Prospect is preserved
+    // as its own lifecycle record; Contact email is intentionally non-unique
+    // within a tenant for this product-specific identity split.
+    if ((user.tenant?.vertical || tenant.vertical) === "generic") {
+      try {
+        const existingCustomerContact = await prisma.contact.findFirst({
+          where: { email, tenantId, status: "Customer", deletedAt: null },
+          select: { id: true },
+        });
+        if (!existingCustomerContact) {
+          await prisma.contact.create({
+            data: {
+              name: name || email.split("@")[0],
+              email,
+              phone: registrationPhone,
+              status: "Customer",
+              source: "Customer Registration",
+              tenantId,
+            },
+          });
+        }
+      } catch (e) {
+        // The User account is already committed at this point. Keep
+        // registration available and surface the bridge failure to operators.
+        console.error(`[auth] customer/register generic-contact bridge failed (non-fatal): ${e.message}`);
+      }
+    }
+
     // Emit audit log for customer registration
-    await writeAudit('User', 'CUSTOMER_REGISTRATION', user.id, user.id, tenantId, {
-      email: user.email,
-      name: user.name,
-      tenantId: tenantId
-    });
+    await writeAudit(
+      "User",
+      "CUSTOMER_REGISTRATION",
+      user.id,
+      user.id,
+      tenantId,
+      {
+        email: user.email,
+        name: user.name,
+        tenantId: tenantId,
+      },
+    );
 
     // Bridge travel customers into the Customer Portal identity store. The
     // portal (POST /api/portal/login) authenticates against
@@ -1201,29 +1657,45 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
           });
         }
       } catch (e) {
-        console.error(`[auth] customer/register portal-contact bridge failed (non-fatal): ${e.message}`);
+        console.error(
+          `[auth] customer/register portal-contact bridge failed (non-fatal): ${e.message}`,
+        );
       }
     }
 
     // Issue JWT
     const jwtPayload = {
       userId: user.id,
-      role: 'CUSTOMER',
+      role: "CUSTOMER",
       wellnessRole: null,
       tenantId: tenantId,
       vertical: user.tenant?.vertical || "generic",
-      userType: 'CUSTOMER',
+      userType: "CUSTOMER",
       isOwner: false,
       sessionVersion: user.sessionVersion || 0,
     };
-    const token = signSessionToken({ ...jwtPayload, sessionVersion: user.sessionVersion || 0 });
+    const token = signSessionToken({
+      ...jwtPayload,
+      sessionVersion: user.sessionVersion || 0,
+    });
 
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, userType: 'CUSTOMER' },
-      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, vertical: user.tenant.vertical || "generic" } : null
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        userType: "CUSTOMER",
+      },
+      tenant: user.tenant
+        ? {
+            id: user.tenant.id,
+            name: user.tenant.name,
+            slug: user.tenant.slug,
+            vertical: user.tenant.vertical || "generic",
+          }
+        : null,
     });
-
   } catch (error) {
     console.error("[auth] customer/register error:", error);
     res.status(500).json({ error: "Customer registration failed" });
@@ -1236,7 +1708,8 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email: rawEmail, password, loginTenantId } = req.body || {};
-    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+    const email =
+      typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 
     // Input validation — without this, an empty body crashes findFirst with
     // PrismaClientValidationError (email: undefined). Return 400 instead.
@@ -1253,7 +1726,8 @@ router.post("/login", async (req, res) => {
     // composite identity directly. Legacy clients without it remain supported
     // by checking every active candidate and accepting only one password match.
     const scopedTenantId = Number(loginTenantId);
-    const hasTenantScope = Number.isInteger(scopedTenantId) && scopedTenantId > 0;
+    const hasTenantScope =
+      Number.isInteger(scopedTenantId) && scopedTenantId > 0;
     let user = null;
     let passwordAlreadyVerified = false;
     let passwordCheckPerformed = false;
@@ -1281,7 +1755,8 @@ router.post("/login", async (req, res) => {
       const matches = [];
       for (const candidate of candidates) {
         passwordCheckPerformed = true;
-        if (await bcrypt.compare(password, candidate.password)) matches.push(candidate);
+        if (await bcrypt.compare(password, candidate.password))
+          matches.push(candidate);
       }
 
       if (matches.length === 1) {
@@ -1293,7 +1768,8 @@ router.post("/login", async (req, res) => {
           code: "TENANT_SELECTION_REQUIRED",
           tenants: matches.map((candidate) => ({
             id: candidate.tenantId,
-            name: candidate.tenant?.name || `Organization ${candidate.tenantId}`,
+            name:
+              candidate.tenant?.name || `Organization ${candidate.tenantId}`,
             slug: candidate.tenant?.slug || null,
           })),
         });
@@ -1307,15 +1783,41 @@ router.post("/login", async (req, res) => {
     if (!user || user.deactivatedAt || user.tenant?.isActive === false) {
       // 2b$10 hash of "_no_user_dummy_" — never matches a real password.
       if (!passwordCheckPerformed) {
-        await bcrypt.compare(password, "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC");
+        await bcrypt.compare(
+          password,
+          "$2b$10$CwTycUXWue0Thq9StjUM0uJ8jSxR0rfP3hXqDB0SEovQbYdcKqGVC",
+        );
       }
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    const isMatch = passwordAlreadyVerified || await bcrypt.compare(password, user.password);
+    const isMatch =
+      passwordAlreadyVerified ||
+      (await bcrypt.compare(password, user.password));
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     const tenantId = user.tenantId || 1;
+
+    // Older wellness customer accounts were created without a Patient row.
+    // Repair that missing link on login so those accounts appear in Clinical
+    // without requiring a booking or a separate portal visit first.
+    if (
+      (user.userType === "CUSTOMER" || user.role === "CUSTOMER") &&
+      (user.tenant?.vertical || "generic") === "wellness"
+    ) {
+      try {
+        const patient = await selfBookingPatient.resolveSelfBookingPatient({
+          userId: user.id,
+          tenantId,
+        });
+        await ensurePatientContact(patient, tenantId);
+      } catch (patientErr) {
+        console.error(
+          "[auth/login] customer patient/contact bridge failed (non-fatal):",
+          patientErr && patientErr.message ? patientErr.message : patientErr,
+        );
+      }
+    }
 
     // Self-heal for signups created BEFORE provisionRbacForFreshTenant
     // was wired into /register + /signup. Those flows persisted the
@@ -1329,17 +1831,19 @@ router.post("/login", async (req, res) => {
     // (find-first-then-create) so a healthy session does a single
     // userRole.count and exits early. Wrapped so a failure during
     // self-heal can never block a legitimate login.
-    if (user.userType !== 'OWNER' && user.tenantId) {
+    if (user.userType !== "OWNER" && user.tenantId) {
       try {
-        const isLegacyAdmin = String(user.role || '').toUpperCase() === 'ADMIN';
-        const userRoleCount = await prisma.userRole.count({ where: { userId: user.id } });
+        const isLegacyAdmin = String(user.role || "").toUpperCase() === "ADMIN";
+        const userRoleCount = await prisma.userRole.count({
+          where: { userId: user.id },
+        });
         if (isLegacyAdmin && userRoleCount === 0) {
-          const vertical = user.tenant?.vertical || 'generic';
+          const vertical = user.tenant?.vertical || "generic";
           await provisionRbacForFreshTenant(user.tenantId, vertical, user.id);
         }
       } catch (healErr) {
         console.warn(
-          '[auth/login] RBAC self-heal failed (non-fatal):',
+          "[auth/login] RBAC self-heal failed (non-fatal):",
           healErr && healErr.message ? healErr.message : healErr,
         );
       }
@@ -1349,9 +1853,13 @@ router.post("/login", async (req, res) => {
     // Frontend must POST /api/auth/2fa/verify with { tempToken, code } to complete login.
     if (user.twoFactorEnabled) {
       const tempToken = jwt.sign(
-        { userId: user.id, awaiting2FA: true, sessionVersion: user.sessionVersion || 0 },
+        {
+          userId: user.id,
+          awaiting2FA: true,
+          sessionVersion: user.sessionVersion || 0,
+        },
         JWT_SECRET,
-        { expiresIn: '5m' }
+        { expiresIn: "5m" },
       );
       return res.json({ requires2FA: true, tempToken });
     }
@@ -1368,26 +1876,29 @@ router.post("/login", async (req, res) => {
       wellnessRole: user.wellnessRole || null,
       tenantId,
       vertical: user.tenant?.vertical || "generic",
-      userType: user.userType || 'STAFF',
-      isOwner: user.userType === 'OWNER',
+      userType: user.userType || "STAFF",
+      isOwner: user.userType === "OWNER",
       sessionVersion: user.sessionVersion || 0,
     };
     const token = signSessionToken(jwtPayload);
 
     // #555: Audit tenant session selection (Option C - single tenant per session)
-    await writeAudit('Auth', 'LOGIN', user.id, user.id, tenantId, {
+    await writeAudit("Auth", "LOGIN", user.id, user.id, tenantId, {
       email: user.email,
-      tenantName: user.tenant?.name || 'Unknown',
-      action: 'Tenant session locked',
-      sessionInfo: 'Single tenant per session enforced'
+      tenantName: user.tenant?.name || "Unknown",
+      action: "Tenant session locked",
+      sessionInfo: "Single tenant per session enforced",
     });
 
     // Resolve the user's primary RBAC role so the frontend can route to
     // its configured landingPath on login. Falls back gracefully through
     // UserRole join → legacy User.role string → null (vertical default).
-    const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId });
+    const primaryRole = await resolvePrimaryRole({
+      id: user.id,
+      role: user.role,
+      tenantId,
+    });
     const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
-
 
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.json({
@@ -1399,14 +1910,15 @@ router.post("/login", async (req, res) => {
         role: user.role,
         // userType lets the frontend route self-service customers to the
         // customer portal instead of the staff dashboard.
-        userType: user.userType || 'STAFF',
+        userType: user.userType || "STAFF",
         wellnessRole: user.wellnessRole || null,
-        themePreference: user.themePreference || 'system',
+        themePreference: user.themePreference || "system",
         // Sub-brand access scope (travel vertical). Lets the sidebar switcher
         // render only the brands this user may activate; the authoritative gate
         // stays server-side (travelGuards.getSubBrandAccessSet). Null = full
         // access (admins / unset). Harmless extra field for non-travel clients.
-        subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
+        subBrandAccess:
+          roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
         // #1123 — include profilePicture so the header avatar matches the
         // /me payload after re-login. Without this the frontend persists a
         // user object missing profilePicture, falls back to initials, and
@@ -1415,7 +1927,21 @@ router.post("/login", async (req, res) => {
         primaryRole, // { id, key, name, landingPath } | null
         landingPath: primaryRole?.landingPath || null,
       },
-      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor, themeColor: user.tenant.themeColor } : null
+      tenant: user.tenant
+        ? {
+            id: user.tenant.id,
+            name: user.tenant.name,
+            slug: user.tenant.slug,
+            plan: user.tenant.plan,
+            vertical: user.tenant.vertical || "generic",
+            country: user.tenant.country || "US",
+            defaultCurrency: user.tenant.defaultCurrency || "USD",
+            locale: user.tenant.locale || "en-US",
+            logoUrl: user.tenant.logoUrl,
+            brandColor: user.tenant.brandColor,
+            themeColor: user.tenant.themeColor,
+          }
+        : null,
     });
   } catch (error) {
     console.error("[auth] login error:", error);
@@ -1424,62 +1950,110 @@ router.post("/login", async (req, res) => {
 });
 
 // Admin User Management — scoped to current tenant
-router.get("/users", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const users = await prisma.user.findMany({
-      where: { tenantId: req.user.tenantId },
-      select: { id: true, email: true, name: true, role: true, createdAt: true }
-    });
-    res.json(users);
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to fetch directory" });
-  }
-});
-
-router.put("/users/:id/role", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const { role } = req.body;
-    // Ensure target user is in same tenant
-    const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-    if (!target) return res.status(404).json({ error: "User not found in your organization" });
-    const user = await prisma.user.update({ where: { id: target.id }, data: { role } });
-    // #179: audit role changes — these are privilege escalations / demotions
-    // and are the most important security events to record. Skip a no-op
-    // re-assignment of the same role.
-    if (target.role !== user.role) {
-      await writeAudit('User', 'UPDATE_USER_ROLE', user.id, req.user.userId, req.user.tenantId, {
-        targetUserId: user.id,
-        targetEmail: user.email,
-        oldRole: target.role,
-        newRole: user.role,
+router.get(
+  "/users",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const users = await prisma.user.findMany({
+        where: { tenantId: req.user.tenantId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          createdAt: true,
+        },
       });
+      res.json(users);
+    } catch (_err) {
+      res.status(500).json({ error: "Failed to fetch directory" });
     }
-    res.json(user);
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to update role" });
-  }
-});
+  },
+);
 
-router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const target = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-    if (!target) return res.status(404).json({ error: "User not found in your organization" });
-    // #179: write audit BEFORE the destructive delete so the row exists even
-    // if the cascade fails. User model has no deletedAt column (verified in
-    // schema.prisma) so this is a hard delete — the audit row is the only
-    // post-mortem trail of the deleted account's metadata.
-    await writeAudit('User', 'DELETE_USER', target.id, req.user.userId, req.user.tenantId, {
-      targetUserId: target.id,
-      targetEmail: target.email,
-      targetName: target.name,
-      targetRole: target.role,
-    });
-    await prisma.user.delete({ where: { id: target.id } });
-    res.json({ success: true });
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to obliterate user" });
-  }
-});
+router.put(
+  "/users/:id/role",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const { role } = req.body;
+      // Ensure target user is in same tenant
+      const target = await prisma.user.findFirst({
+        where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      });
+      if (!target)
+        return res
+          .status(404)
+          .json({ error: "User not found in your organization" });
+      const user = await prisma.user.update({
+        where: { id: target.id },
+        data: { role },
+      });
+      // #179: audit role changes — these are privilege escalations / demotions
+      // and are the most important security events to record. Skip a no-op
+      // re-assignment of the same role.
+      if (target.role !== user.role) {
+        await writeAudit(
+          "User",
+          "UPDATE_USER_ROLE",
+          user.id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            targetUserId: user.id,
+            targetEmail: user.email,
+            oldRole: target.role,
+            newRole: user.role,
+          },
+        );
+      }
+      res.json(user);
+    } catch (_err) {
+      res.status(500).json({ error: "Failed to update role" });
+    }
+  },
+);
+
+router.delete(
+  "/users/:id",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const target = await prisma.user.findFirst({
+        where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      });
+      if (!target)
+        return res
+          .status(404)
+          .json({ error: "User not found in your organization" });
+      // #179: write audit BEFORE the destructive delete so the row exists even
+      // if the cascade fails. User model has no deletedAt column (verified in
+      // schema.prisma) so this is a hard delete — the audit row is the only
+      // post-mortem trail of the deleted account's metadata.
+      await writeAudit(
+        "User",
+        "DELETE_USER",
+        target.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          targetUserId: target.id,
+          targetEmail: target.email,
+          targetName: target.name,
+          targetRole: target.role,
+        },
+      );
+      await prisma.user.delete({ where: { id: target.id } });
+      res.json({ success: true });
+    } catch (_err) {
+      res.status(500).json({ error: "Failed to obliterate user" });
+    }
+  },
+);
 
 // Forgot Password — generate reset token + email it via SendGrid
 //
@@ -1495,14 +2069,16 @@ router.delete("/users/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res)
 router.post("/forgot-password", async (req, res) => {
   try {
     const { email: rawEmail, resetTenantId } = req.body || {};
-    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+    const email =
+      typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
     if (!email) return res.status(400).json({ error: "Email is required" });
 
     // Never reset an arbitrary tenant's account. Use the selected tenant when
     // supplied; otherwise send only when the normalized email resolves to one
     // active account. The public response remains identical for all outcomes.
     const parsedTenantId = Number(resetTenantId);
-    const hasTenantScope = Number.isInteger(parsedTenantId) && parsedTenantId > 0;
+    const hasTenantScope =
+      Number.isInteger(parsedTenantId) && parsedTenantId > 0;
     let user = null;
     if (hasTenantScope) {
       user = await prisma.user.findUnique({
@@ -1531,7 +2107,9 @@ router.post("/forgot-password", async (req, res) => {
       const token = crypto.randomBytes(32).toString("hex");
       // Persist (DB, memory-fallback) — fire-and-forget to preserve the
       // anti-enumeration timing (response goes out before any round-trip).
-      storeResetToken(token, user.id, new Date(Date.now() + 3600000)).catch(() => {}); // 1 hour
+      storeResetToken(token, user.id, new Date(Date.now() + 3600000)).catch(
+        () => {},
+      ); // 1 hour
       // Fire-and-forget. The .catch is just so an unhandled-rejection log
       // doesn't fire — sendPasswordResetEmail already swallows + logs all
       // errors internally.
@@ -1548,9 +2126,12 @@ router.post("/forgot-password", async (req, res) => {
         "http://tmc.localhost:5173",
       ]);
       const isTmcOrigin = tmcOrigins.has(requestOrigin);
-      const frontendBase = (isTmcOrigin
-        ? requestOrigin
-        : process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`)
+      const frontendBase = (
+        isTmcOrigin
+          ? requestOrigin
+          : process.env.FRONTEND_URL ||
+            `https://${req.headers.host || "crm.globusdemos.com"}`
+      )
         .replace(/\/+$/, "")
         .replace(/\/api$/i, "");
       sendPasswordResetEmail(
@@ -1559,7 +2140,7 @@ router.post("/forgot-password", async (req, res) => {
         frontendBase,
         isTmcOrigin ? "The Modern Classroom" : "Globussoft CRM",
         { tenantId: user.tenantId, vertical: user.tenant?.vertical },
-      ).catch(() => { });
+      ).catch(() => {});
     }
 
     // Identical body for known + unknown emails (anti-enumeration). Token
@@ -1574,23 +2155,28 @@ router.post("/forgot-password", async (req, res) => {
 router.post("/reset-password", async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    if (!token || !newPassword) return res.status(400).json({ error: "Token and new password are required" });
+    if (!token || !newPassword)
+      return res
+        .status(400)
+        .json({ error: "Token and new password are required" });
 
     // #711 (HIGH): apply the same complexity policy to password-reset that
     // /register and PUT /auth/me enforce — otherwise an attacker who phishes
     // a reset link could set a 1-char password and the user would never see
     // an error from the client UI.
     const pwErr = validatePasswordComplexity(newPassword);
-    if (pwErr) return res.status(400).json({ error: pwErr, code: 'WEAK_PASSWORD' });
-    if (typeof newPassword !== 'string' || newPassword.length > 72) {
+    if (pwErr)
+      return res.status(400).json({ error: pwErr, code: "WEAK_PASSWORD" });
+    if (typeof newPassword !== "string" || newPassword.length > 72) {
       return res.status(400).json({
-        error: 'Password must be 72 characters or fewer',
-        code: 'PASSWORD_TOO_LONG',
+        error: "Password must be 72 characters or fewer",
+        code: "PASSWORD_TOO_LONG",
       });
     }
 
     const entry = await consumeResetToken(token);
-    if (!entry) return res.status(400).json({ error: "Invalid or expired reset token" });
+    if (!entry)
+      return res.status(400).json({ error: "Invalid or expired reset token" });
     if (entry.error) return res.status(400).json({ error: entry.error });
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -1605,11 +2191,18 @@ router.post("/reset-password", async (req, res) => {
     // unauthenticated (the token IS the auth), so userId on the audit row is
     // the target user themselves, not an actor. CRITICAL: never include the
     // password value (or its hash) in the details blob.
-    await writeAudit('User', 'PASSWORD_RESET_COMPLETED', targetUser.id, targetUser.id, targetUser.tenantId, {
-      targetUserId: targetUser.id,
-      targetEmail: targetUser.email,
-      via: 'reset-token',
-    });
+    await writeAudit(
+      "User",
+      "PASSWORD_RESET_COMPLETED",
+      targetUser.id,
+      targetUser.id,
+      targetUser.tenantId,
+      {
+        targetUserId: targetUser.id,
+        targetEmail: targetUser.email,
+        via: "reset-token",
+      },
+    );
 
     res.json({ status: "ok", code: "PASSWORD_RESET_OK" }); // #550
   } catch (_error) {
@@ -1625,7 +2218,34 @@ router.get("/me", verifyToken, async (req, res) => {
       // ssoProvider + twoFactorEnabled are additive (no consumer strips the
       // envelope) — the Profile danger zone uses them to decide whether the
       // delete-account flow asks for a current password and/or a TOTP code.
-      select: { id: true, name: true, email: true, phone: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, ssoProvider: true, twoFactorEnabled: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        role: true,
+        wellnessRole: true,
+        subBrandAccess: true,
+        profilePicture: true,
+        tenantId: true,
+        createdAt: true,
+        ssoProvider: true,
+        twoFactorEnabled: true,
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            plan: true,
+            vertical: true,
+            country: true,
+            defaultCurrency: true,
+            locale: true,
+            logoUrl: true,
+            brandColor: true,
+          },
+        },
+      },
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -1661,12 +2281,17 @@ router.get("/me", verifyToken, async (req, res) => {
 
     // Carry primaryRole + landingPath on /me so a page-refresh restores the
     // same routing context the login response gave us.
-    const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId: user.tenantId });
+    const primaryRole = await resolvePrimaryRole({
+      id: user.id,
+      role: user.role,
+      tenantId: user.tenantId,
+    });
     const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
 
     res.json({
       ...user,
-      subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
+      subBrandAccess:
+        roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
       tenantId: undefined, // hide raw FK; client should use user.tenant.id
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
@@ -1687,9 +2312,9 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
       where: { id: req.user.userId },
       include: {
         userRoles: {
-          include: { role: true }
-        }
-      }
+          include: { role: true },
+        },
+      },
     });
 
     if (!user) {
@@ -1700,8 +2325,8 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
     if (req.user.isOwner) {
       return res.json({
         isOwner: true,
-        userType: 'OWNER',
-        roles: ['OWNER'],
+        userType: "OWNER",
+        roles: ["OWNER"],
         permissions: [], // OWNER bypasses all checks at middleware level
         primaryRole: null,
         landingPath: null,
@@ -1709,11 +2334,16 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
     }
 
     // Load merged permissions for non-OWNER users
-    const permissions = await getUserPermissions(req.user.tenantId, req.user.userId);
-    const permissionArray = Array.from(permissions).sort((a, b) => a.localeCompare(b));
+    const permissions = await getUserPermissions(
+      req.user.tenantId,
+      req.user.userId,
+    );
+    const permissionArray = Array.from(permissions).sort((a, b) =>
+      a.localeCompare(b),
+    );
 
     // Extract role names from userRoles
-    const roleNames = user.userRoles.map(ur => ur.role.key);
+    const roleNames = user.userRoles.map((ur) => ur.role.key);
 
     // Single-role-per-user: surface the primary role + its landing path so
     // the frontend doesn't need a second round-trip to figure out where to
@@ -1726,15 +2356,15 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
     });
     const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
 
-
     res.json({
       isOwner: false,
-      userType: user.userType || 'STAFF',
+      userType: user.userType || "STAFF",
       roles: roleNames,
       permissions: permissionArray,
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
-      subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
+      subBrandAccess:
+        roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
     });
   } catch (_error) {
     console.error("[auth/me/permissions] error:", _error);
@@ -1775,16 +2405,23 @@ router.put("/me", verifyToken, async (req, res) => {
     if (email) {
       // Email is unique per-tenant — only block if another account IN THE
       // SAME tenant already uses it.
-      const existing = await prisma.user.findFirst({ where: { email, tenantId: req.user.tenantId } });
+      const existing = await prisma.user.findFirst({
+        where: { email, tenantId: req.user.tenantId },
+      });
       if (existing && existing.id !== req.user.userId) {
-        return res.status(400).json({ error: "Email already in use by another account" });
+        return res
+          .status(400)
+          .json({ error: "Email already in use by another account" });
       }
       updateData.email = email;
     }
 
     // Password change requires current password verification
     if (newPassword) {
-      if (!currentPassword) return res.status(400).json({ error: "Current password is required to set a new password" });
+      if (!currentPassword)
+        return res.status(400).json({
+          error: "Current password is required to set a new password",
+        });
 
       // #711 (HIGH): enforce the same password-complexity policy used by
       // /register, /signup, /reset-password on PUT /auth/me as well. Pre-fix
@@ -1792,22 +2429,26 @@ router.put("/me", verifyToken, async (req, res) => {
       // all-letters password was a regression of the #526 / #531 auth-
       // hardening work. Reuses validatePasswordComplexity() defined above.
       const pwErr = validatePasswordComplexity(newPassword);
-      if (pwErr) return res.status(400).json({ error: pwErr, code: 'WEAK_PASSWORD' });
+      if (pwErr)
+        return res.status(400).json({ error: pwErr, code: "WEAK_PASSWORD" });
 
       // #711 (HIGH): bcrypt silently truncates inputs > 72 bytes, which
       // means any password longer than 72 chars matches its first-72-bytes
       // prefix forever — a real footgun, not a theoretical one. Reject
       // before hashing so the caller gets a clean error message.
-      if (typeof newPassword !== 'string' || newPassword.length > 72) {
+      if (typeof newPassword !== "string" || newPassword.length > 72) {
         return res.status(400).json({
-          error: 'Password must be 72 characters or fewer',
-          code: 'PASSWORD_TOO_LONG',
+          error: "Password must be 72 characters or fewer",
+          code: "PASSWORD_TOO_LONG",
         });
       }
 
-      const user = await prisma.user.findUnique({ where: { id: req.user.userId } });
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+      });
       const isMatch = await bcrypt.compare(currentPassword, user.password);
-      if (!isMatch) return res.status(400).json({ error: "Current password is incorrect" });
+      if (!isMatch)
+        return res.status(400).json({ error: "Current password is incorrect" });
 
       updateData.password = await bcrypt.hash(newPassword, 10);
       updateData.sessionVersion = { increment: 1 };
@@ -1816,7 +2457,16 @@ router.put("/me", verifyToken, async (req, res) => {
     const updatedUser = await prisma.user.update({
       where: { id: req.user.userId },
       data: updateData,
-      select: { id: true, name: true, email: true, phone: true, role: true, profilePicture: true, createdAt: true, sessionVersion: true }
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        role: true,
+        profilePicture: true,
+        createdAt: true,
+        sessionVersion: true,
+      },
     });
 
     // Mirror self-service contact details onto the caller's own wellness
@@ -1828,7 +2478,7 @@ router.put("/me", verifyToken, async (req, res) => {
     // not fail the profile save the user already sees as successful.
     if (updateData.phone !== undefined || updateData.name || updateData.email) {
       try {
-        await syncPatientFromUser({
+        await selfBookingPatient.syncPatientFromUser({
           userId: req.user.userId,
           tenantId: req.user.tenantId,
         });
@@ -1844,19 +2494,33 @@ router.put("/me", verifyToken, async (req, res) => {
     // (or its hash) in the details blob — log only that a password change
     // happened, with a separate PASSWORD_CHANGE action so it shows up cleanly
     // in the audit-log filter UI.
-    const changedKeys = Object.keys(updateData).filter((k) => k !== 'password');
+    const changedKeys = Object.keys(updateData).filter((k) => k !== "password");
     if (changedKeys.length > 0) {
       const safeChanges = {};
       for (const k of changedKeys) safeChanges[k] = updateData[k];
-      await writeAudit('User', 'UPDATE_PROFILE', updatedUser.id, req.user.userId, req.user.tenantId, {
-        changedFields: safeChanges,
-      });
+      await writeAudit(
+        "User",
+        "UPDATE_PROFILE",
+        updatedUser.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          changedFields: safeChanges,
+        },
+      );
     }
     if (updateData.password !== undefined) {
-      await writeAudit('User', 'PASSWORD_CHANGE', updatedUser.id, req.user.userId, req.user.tenantId, {
-        // No password / hash anywhere — only the fact and timestamp.
-        via: 'self-service',
-      });
+      await writeAudit(
+        "User",
+        "PASSWORD_CHANGE",
+        updatedUser.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          // No password / hash anywhere — only the fact and timestamp.
+          via: "self-service",
+        },
+      );
     }
 
     res.json(updatedUser);
@@ -1878,7 +2542,9 @@ router.post(
   async (req, res) => {
     try {
       if (!req.file || !req.file.buffer) {
-        return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
+        return res
+          .status(400)
+          .json({ error: "No file uploaded", code: "NO_FILE" });
       }
 
       const existing = await prisma.user.findUnique({
@@ -1916,7 +2582,13 @@ router.post(
       const updated = await prisma.user.update({
         where: { id: req.user.userId },
         data: { profilePicture: newUrl },
-        select: { id: true, name: true, email: true, role: true, profilePicture: true },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          profilePicture: true,
+        },
       });
 
       // Best-effort delete of the previous S3 object so we don't leak
@@ -1947,7 +2619,10 @@ router.post(
 
       res.json(updated);
     } catch (err) {
-      console.error("[auth/me/profile-picture] upload error:", err && err.message);
+      console.error(
+        "[auth/me/profile-picture] upload error:",
+        err && err.message,
+      );
       res.status(500).json({ error: "Failed to upload profile picture" });
     }
   },
@@ -1984,7 +2659,13 @@ router.delete("/me/profile-picture", verifyToken, async (req, res) => {
     const updated = await prisma.user.update({
       where: { id: req.user.userId },
       data: { profilePicture: null },
-      select: { id: true, name: true, email: true, role: true, profilePicture: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        profilePicture: true,
+      },
     });
 
     if (existing.profilePicture) {
@@ -2000,7 +2681,10 @@ router.delete("/me/profile-picture", verifyToken, async (req, res) => {
 
     res.json(updated);
   } catch (err) {
-    console.error("[auth/me/profile-picture] delete error:", err && err.message);
+    console.error(
+      "[auth/me/profile-picture] delete error:",
+      err && err.message,
+    );
     res.status(500).json({ error: "Failed to remove profile picture" });
   }
 });
@@ -2105,13 +2789,20 @@ router.delete("/me/account", verifyToken, async (req, res) => {
     // mid-cascade failure still leaves a trail. For tenant-scope deletions
     // the audit row itself is cascaded away with the tenant — full erasure
     // is the intent there, so that is correct, not a gap.
-    await writeAudit("User", "DELETE_ACCOUNT_SELF", user.id, user.id, req.user.tenantId, {
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      scope: deleteScope,
-      ssoProvider: user.ssoProvider || null,
-    });
+    await writeAudit(
+      "User",
+      "DELETE_ACCOUNT_SELF",
+      user.id,
+      user.id,
+      req.user.tenantId,
+      {
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        scope: deleteScope,
+        ssoProvider: user.ssoProvider || null,
+      },
+    );
 
     if (deleteScope === "tenant") {
       await prisma.tenant.delete({ where: { id: req.user.tenantId } });
@@ -2141,7 +2832,10 @@ router.delete("/me/account", verifyToken, async (req, res) => {
         // this insert can fail — the tenant (and all its data) is already
         // gone, so the orphaned-but-signed JWT can only reach empty scopes
         // until its natural expiry. Non-fatal by design.
-        console.warn("[auth/me/account] post-delete jti revoke failed:", revokeErr.message);
+        console.warn(
+          "[auth/me/account] post-delete jti revoke failed:",
+          revokeErr.message,
+        );
       }
     }
 
@@ -2183,9 +2877,19 @@ router.get("/tenants", verifyToken, async (req, res) => {
   try {
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
-      select: { id: true, name: true, slug: true, vertical: true, plan: true, defaultCurrency: true, locale: true, country: true },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        vertical: true,
+        plan: true,
+        defaultCurrency: true,
+        locale: true,
+        country: true,
+      },
     });
-    if (!tenant) return res.json({ tenants: [], activeTenantId: req.user.tenantId });
+    if (!tenant)
+      return res.json({ tenants: [], activeTenantId: req.user.tenantId });
     return res.json({ tenants: [tenant], activeTenantId: req.user.tenantId });
   } catch (_e) {
     return res.status(500).json({ error: "Failed to load tenants" });
@@ -2199,7 +2903,8 @@ router.get("/tenants", verifyToken, async (req, res) => {
 // and the JWT's tenantId is fixed for the rest of the session.
 router.post("/tenant-switch", verifyToken, async (req, res) => {
   return res.status(410).json({
-    error: "Tenant switching is disabled. Log out and log in again to access a different tenant.",
+    error:
+      "Tenant switching is disabled. Log out and log in again to access a different tenant.",
     code: "TENANT_SWITCH_DISABLED",
     hint: "POST /api/auth/logout, then /api/auth/login with the destination tenant's credentials.",
   });
@@ -2240,7 +2945,11 @@ router.post("/logout", verifyToken, async (req, res) => {
     if (!req.user || !req.user.jti) {
       // Old token (no jti). The client should still clear local storage; we
       // can't add it to the blacklist because we have no stable identifier.
-      return res.json({ ok: true, revoked: false, reason: "legacy_token_no_jti" });
+      return res.json({
+        ok: true,
+        revoked: false,
+        reason: "legacy_token_no_jti",
+      });
     }
     await prisma.revokedToken.upsert({
       where: { jti: req.user.jti },
@@ -2260,11 +2969,18 @@ router.post("/logout", verifyToken, async (req, res) => {
     // security-critical primitive; audit-log failure must not break the
     // response.
     try {
-      await writeAudit('User', 'LOGOUT', req.user.userId, req.user.userId, req.user.tenantId, {
-        jti: req.user.jti || null,
-      });
+      await writeAudit(
+        "User",
+        "LOGOUT",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          jti: req.user.jti || null,
+        },
+      );
     } catch (auditErr) {
-      console.warn('[auth/logout] audit failed:', auditErr.message);
+      console.warn("[auth/logout] audit failed:", auditErr.message);
     }
 
     res.json({ ok: true });
@@ -2337,7 +3053,8 @@ router.delete("/sessions/:jti", verifyToken, async (req, res) => {
         tenantId: req.user.tenantId,
         // We don't know the target token's exp, so use 7d window for cleanup.
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        reason: jti === req.user.jti ? "user_logout" : "session_revoked_by_user",
+        reason:
+          jti === req.user.jti ? "user_logout" : "session_revoked_by_user",
       },
     });
     res.json({ ok: true, jti });

@@ -315,27 +315,51 @@ async function applyPrescriptionStock({ tenantId, drugs, io }) {
   }
 
   for (const [drugId, units] of wanted) {
-    const before = index.byId.get(drugId);
     try {
-      const updated = await prisma.drug.update({
-        where: { id: drugId },
-        // `decrement` so two prescriptions saved at once both land, rather
-        // than the second overwriting the first's read-modify-write.
-        data: { quantity: { decrement: units } },
-        select: { id: true, name: true, quantity: true, lowStockThreshold: true },
-      });
+      // Optimistic compare-and-swap: include the quantity we read in the
+      // UPDATE predicate. If another prescription wins first, retry from its
+      // new value. The returned before/dispensed/after values therefore
+      // describe the update that actually committed, not a stale snapshot.
+      let deduction = null;
+      for (let attempt = 0; attempt < 5 && !deduction; attempt += 1) {
+        const current = await prisma.drug.findFirst({
+          where: { id: drugId, tenantId },
+          select: { id: true, name: true, quantity: true, lowStockThreshold: true },
+        });
+        if (!current) break;
+        const quantityBefore = Math.max(0, Number(current.quantity) || 0);
+        const dispensedUnits = Math.min(units, quantityBefore);
+        if (dispensedUnits === 0) {
+          deduction = { updated: current, quantityBefore, dispensedUnits };
+          break;
+        }
+        const quantityAfter = quantityBefore - dispensedUnits;
+        const changed = await prisma.drug.updateMany({
+          where: { id: drugId, tenantId, quantity: current.quantity },
+          data: { quantity: quantityAfter },
+        });
+        if (changed.count === 1) {
+          deduction = {
+            updated: { ...current, quantity: quantityAfter },
+            quantityBefore,
+            dispensedUnits,
+          };
+        }
+      }
+      if (!deduction) throw new Error('Stock changed repeatedly; retry the prescription');
+      const { updated, quantityBefore, dispensedUnits } = deduction;
       result.adjusted.push({
         drugId,
         name: updated.name,
-        units,
-        quantityBefore: before?.quantity ?? null,
+        units: dispensedUnits,
+        quantityBefore,
         quantityAfter: updated.quantity,
       });
 
       // Alert on the CROSSING, not on the state — otherwise every subsequent
       // prescription for an already-low drug re-alerts. `notifyMany` dedupes
       // over 24h too, but crossing-only keeps the signal meaningful.
-      const wasAbove = (before?.quantity ?? 0) > (updated.lowStockThreshold ?? 0);
+      const wasAbove = quantityBefore > (updated.lowStockThreshold ?? 0);
       const nowAtOrBelow = updated.quantity <= (updated.lowStockThreshold ?? 0);
       const tracked = (updated.lowStockThreshold ?? 0) > 0;
       if ((tracked && wasAbove && nowAtOrBelow) || updated.quantity <= 0) {

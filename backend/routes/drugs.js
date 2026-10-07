@@ -63,6 +63,11 @@ function parseStockNumber(raw) {
   return n;
 }
 
+function parseCreateStockNumber(raw) {
+  if (raw === "" || raw === null || raw === undefined) return 0;
+  return parseStockNumber(raw);
+}
+
 // ── Drug CRUD + typeahead ─────────────────────────────────────────
 
 router.get("/", readGate, async (req, res) => {
@@ -243,6 +248,14 @@ router.post("/", writeGate, async (req, res) => {
         code: "INVALID_DOSAGE_FORM",
       });
     }
+    const quantity = parseCreateStockNumber(req.body.quantity);
+    const lowStockThreshold = parseCreateStockNumber(req.body.lowStockThreshold);
+    if (quantity === null || lowStockThreshold === null) {
+      return res.status(400).json({
+        error: "quantity and lowStockThreshold must be whole numbers of 0 or more",
+        code: "INVALID_STOCK_VALUE",
+      });
+    }
     const strength = normaliseStrength(strengthValue, strengthUnit);
     if (!strength.ok) {
       return res.status(400).json({ error: strength.error, code: strength.code });
@@ -266,8 +279,8 @@ router.post("/", writeGate, async (req, res) => {
         defaultDuration: defaultDuration ? String(defaultDuration).trim() : null,
         notes: notes || null,
         isActive: isActive !== false,
-        quantity: parseStockNumber(req.body.quantity) ?? 0,
-        lowStockThreshold: parseStockNumber(req.body.lowStockThreshold) ?? 0,
+        quantity,
+        lowStockThreshold,
         tenantId: req.user.tenantId,
       },
     });

@@ -362,6 +362,59 @@ describe('POST /api/auth/login', () => {
     expect(loginAudit[0].data.entity).toBe('Auth');
   });
 
+  test('wellness CUSTOMER login creates the missing Patient profile', async () => {
+    const hashed = await bcrypt.hash('password123', 10);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 88,
+      email: 'mickey@example.com',
+      name: 'Mickey',
+      password: hashed,
+      role: 'CUSTOMER',
+      userType: 'CUSTOMER',
+      wellnessRole: null,
+      twoFactorEnabled: false,
+      tenantId: 45,
+      tenant: {
+        id: 45,
+        name: 'Enhanced Wellness',
+        slug: 'enhanced-wellness',
+        isActive: true,
+        vertical: 'wellness',
+      },
+    });
+    prisma.patient.create.mockResolvedValue({
+      id: 501,
+      userId: 88,
+      name: 'Mickey',
+      email: 'mickey@example.com',
+      phone: null,
+    });
+    prisma.contact.create.mockResolvedValue({ id: 601 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/login')
+      .send({ email: 'mickey@example.com', password: 'password123', loginTenantId: 45 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.patient.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Mickey',
+        email: 'mickey@example.com',
+        source: 'self-booking',
+        tenant: { connect: { id: 45 } },
+        user: { connect: { id: 88 } },
+      }),
+    }));
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Mickey',
+        email: 'mickey@example.com',
+        status: 'Lead',
+        tenantId: 45,
+      }),
+    }));
+  });
+
   test('wrong password → 401 Invalid credentials (no body token)', async () => {
     const hashed = await bcrypt.hash('password123', 10);
     prisma.user.findUnique.mockResolvedValue({
@@ -751,6 +804,48 @@ describe('POST /api/auth/register', () => {
 // ── POST /api/auth/customer/register ─────────────────────────────────
 
 describe('POST /api/auth/customer/register', () => {
+  test('generic registration adds the customer to the tenant contact directory', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'generic', name: 'NovaCrest', slug: 'novacrest' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    prisma.patient.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 101,
+      email: 'customer@example.com',
+      name: 'Priya Sharma',
+      phone: '+919000066666',
+      tenantId: 45,
+      userType: 'CUSTOMER',
+      role: 'CUSTOMER',
+      sessionVersion: 0,
+      tenant: { id: 45, name: 'NovaCrest', slug: 'novacrest', vertical: 'generic' },
+    });
+    prisma.contact.create.mockResolvedValue({ id: 501 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/customer/register')
+      .send({
+        email: 'customer@example.com',
+        phone: '9000066666',
+        password: 'Secret123',
+        name: 'Priya Sharma',
+        registrationTenantId: 45,
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'Priya Sharma',
+        email: 'customer@example.com',
+        status: 'Customer',
+        source: 'Customer Registration',
+        tenantId: 45,
+      }),
+    });
+  });
+
   test('existing non-lead contact email in the selected tenant → 409 before OTP or create', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness' });
     prisma.user.count.mockResolvedValue(0);
@@ -796,7 +891,14 @@ describe('POST /api/auth/customer/register', () => {
   test('lead contact without portal credentials → creates customer profile and preserves the lead', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness', name: 'Wellness', slug: 'wellness' });
     prisma.user.count.mockResolvedValue(0);
-    prisma.contact.findFirst.mockResolvedValue({ id: 77, status: 'Lead', portalPasswordHash: null });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 77,
+      name: 'Lead Person',
+      email: 'lead@example.com',
+      phone: null,
+      status: 'Lead',
+      portalPasswordHash: null,
+    });
     prisma.patient.findFirst.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({
       id: 101,
@@ -807,6 +909,19 @@ describe('POST /api/auth/customer/register', () => {
       role: 'CUSTOMER',
       sessionVersion: 0,
       tenant: { id: 45, name: 'Wellness', slug: 'wellness', vertical: 'wellness' },
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      name: 'Lead Person',
+      email: 'lead@example.com',
+      phone: null,
+      deactivatedAt: null,
+    });
+    prisma.patient.create.mockResolvedValue({
+      id: 501,
+      userId: 101,
+      name: 'Lead Person',
+      email: 'lead@example.com',
+      phone: null,
     });
 
     const res = await request(makeApp())
@@ -819,6 +934,19 @@ describe('POST /api/auth/customer/register', () => {
       where: expect.objectContaining({ email: 'lead@example.com', tenantId: 45 }),
     }));
     expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.patient.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Lead Person',
+        email: 'lead@example.com',
+        source: 'self-booking',
+        tenant: { connect: { id: 45 } },
+        user: { connect: { id: 101 } },
+      }),
+    }));
+    expect(prisma.patient.update).toHaveBeenCalledWith({
+      where: { id: 501 },
+      data: { contactId: 77 },
+    });
   });
 
   test('travel bridge never replaces a portal password selected by a teacher or parent', async () => {

@@ -8,7 +8,8 @@ vi.mock("../utils/api", () => ({
   getAuthToken: () => "test-token",
 }));
 
-vi.mock("../utils/callified", () => ({
+vi.mock("../utils/callified", async (importOriginal) => ({
+  ...(await importOriginal()),
   crmRecordingUrl: (url) => url,
 }));
 
@@ -54,5 +55,30 @@ describe("CallifiedCallDetailsDrawer", () => {
 
     expect(await screen.findByText("Pending")).toBeInTheDocument();
     expect(screen.queryByText("No appointment")).not.toBeInTheDocument();
+  });
+
+  it("does not show manual pickup-location controls in the transcript drawer", async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === "/api/callified/calls/lead/11/latest") return Promise.resolve({ callifiedLeadId: "456" });
+      if (url === "/api/callified/calls/456/details") return Promise.resolve({
+        transcripts: [{
+          id: 789,
+          created_at: "2026-09-28T09:06:00.000Z",
+          transcript: [
+            { role: "AI", text: "Where should our driver pick you up?" },
+            { role: "User", text: "My pickup location is 42 Lake View Road, Bengaluru." },
+          ],
+        }],
+        reviews: [],
+      });
+      if (url === "/api/callified/calls/lead/11/attempts") return Promise.resolve({ attempts: [] });
+      return Promise.resolve({});
+    });
+
+    render(<CallifiedCallDetailsDrawer lead={{ id: 11, name: "Alice Smith" }} onClose={() => {}} />);
+
+    expect(await screen.findByText("My pickup location is 42 Lake View Road, Bengaluru.")).toBeInTheDocument();
+    expect(screen.queryByText("Pickup location from transcript")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Save pickup/i })).not.toBeInTheDocument();
   });
 });

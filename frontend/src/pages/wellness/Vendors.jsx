@@ -1,7 +1,7 @@
 // Wave 11 Agent HH — Inventory Vendor admin page.
 // Lets admins/managers maintain the supplier master used by InventoryReceipt.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Truck, Plus, Pencil, Trash2, Archive, ArchiveRestore, Search } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -17,6 +17,18 @@ const FILTERS = [
   { key: 'all', label: 'All' },
 ];
 
+function matchesStatus(vendor, filter) {
+  if (filter === 'active') return vendor.isActive !== false;
+  if (filter === 'archived') return vendor.isActive === false;
+  return true;
+}
+
+function vendorsUrl(filter) {
+  if (filter === 'active') return '/api/wellness/vendors?isActive=true';
+  if (filter === 'archived') return '/api/wellness/vendors?isActive=false';
+  return '/api/wellness/vendors?isActive=all';
+}
+
 export default function Vendors() {
   const notify = useNotify();
   const [vendors, setVendors] = useState([]);
@@ -27,15 +39,31 @@ export default function Vendors() {
   const [saving, setSaving] = useState(false);
   const [statusFilter, setStatusFilter] = useState('active');
   const [searchQuery, setSearchQuery] = useState('');
+  const [allVendors, setAllVendors] = useState([]);
 
-  const load = () => {
+  // The API supports server-side status filters. Keep the full response in
+  // allVendors so the badges remain accurate, but always fetch the selected
+  // status when the user changes tabs. This avoids showing a client-side
+  // slice of whatever dataset happened to be loaded on mount.
+  const load = useCallback((filter = 'all', displayFilter = filter) => {
     setLoading(true);
-    fetchApi('/api/wellness/vendors')
-      .then((data) => setVendors(Array.isArray(data) ? data : []))
-      .catch(() => setVendors([]))
+    fetchApi(vendorsUrl(filter))
+      .then((data) => {
+        const rows = Array.isArray(data) ? data : [];
+        if (filter === 'all') {
+          setAllVendors(rows);
+          setVendors(rows.filter((vendor) => matchesStatus(vendor, displayFilter)));
+        } else {
+          setVendors(rows);
+        }
+      })
+      .catch(() => {
+        setVendors([]);
+        if (filter === 'all') setAllVendors([]);
+      })
       .finally(() => setLoading(false));
-  };
-  useEffect(load, []);
+  }, []);
+  useEffect(() => { load('all', 'active'); }, [load]);
 
   const reset = () => { setForm(EMPTY); setEditingId(null); setShowForm(false); };
   const startEdit = (v) => {
@@ -69,7 +97,7 @@ export default function Vendors() {
         notify.success(`Created "${form.name}"`);
       }
       reset();
-      load();
+      load('all', statusFilter);
     } catch (_err) { /* toasted */ }
     setSaving(false);
   };
@@ -89,7 +117,7 @@ export default function Vendors() {
         body: JSON.stringify({ isActive: !archived }),
       });
       notify.success(archived ? `Archived "${v.name}"` : `Restored "${v.name}"`);
-      load();
+      load('all', statusFilter);
     } catch (_err) { /* toasted */ }
   };
 
@@ -104,15 +132,14 @@ export default function Vendors() {
     try {
       await fetchApi(`/api/wellness/vendors/${v.id}`, { method: 'DELETE' });
       notify.success(`Removed "${v.name}"`);
-      load();
+      load('all', statusFilter);
     } catch (_err) { /* toasted */ }
   };
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return vendors.filter((v) => {
-      if (statusFilter === 'active' && v.isActive === false) return false;
-      if (statusFilter === 'archived' && v.isActive !== false) return false;
+      if (!matchesStatus(v, statusFilter)) return false;
       if (!q) return true;
       return [v.name, v.contactPerson, v.phone, v.email, v.gstin]
         .some((f) => f && String(f).toLowerCase().includes(q));
@@ -120,10 +147,10 @@ export default function Vendors() {
   }, [vendors, statusFilter, searchQuery]);
 
   const counts = useMemo(() => ({
-    active: vendors.filter((v) => v.isActive !== false).length,
-    archived: vendors.filter((v) => v.isActive === false).length,
-    all: vendors.length,
-  }), [vendors]);
+    active: allVendors.filter((v) => v.isActive !== false).length,
+    archived: allVendors.filter((v) => v.isActive === false).length,
+    all: allVendors.length,
+  }), [allVendors]);
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
@@ -181,7 +208,10 @@ export default function Vendors() {
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                onClick={() => setStatusFilter(f.key)}
+                onClick={() => {
+                  setStatusFilter(f.key);
+                  load(f.key, f.key);
+                }}
                 style={selected ? pillActiveStyle : pillStyle}
               >
                 {f.label} <span style={{ opacity: 0.7, marginLeft: 4, fontSize: '0.78rem' }}>{counts[f.key]}</span>

@@ -19,6 +19,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { tripRequiresPassport } from "../../utils/travelDocumentPolicy";
+import { TRAVEL_PAYMENT_SYNC_CHANNEL, TRAVEL_PAYMENT_SYNC_EVENT } from "../../utils/travelPaymentSync";
 import TripFinancialSummary from "./TripFinancialSummary";
 import { AuthContext } from "../../App";
 
@@ -98,6 +99,13 @@ function toDateInput(d) {
   const mm = String(dt.getMonth() + 1).padStart(2, "0");
   const dd = String(dt.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function getPaymentPlanDateMinimum(index, instalments) {
+  const today = toDateInput(new Date());
+  if (index === 0) return today;
+  const previousDate = toDateInput(instalments[index - 1]?.dueDate);
+  return previousDate > today ? previousDate : today;
 }
 
 export default function TripDetail() {
@@ -2228,6 +2236,40 @@ function PaymentTab({ trip, notify }) {
 
   useEffect(load, [load]);
 
+  // Keep the staff payment-plan ledger current while a parent completes a
+  // payment in another tab. The API reconciliation remains authoritative;
+  // this only controls when the view asks for the latest rows.
+  useEffect(() => {
+    const refreshForTrip = (message) => {
+      if (message?.tripId != null && Number(message.tripId) !== Number(trip.id)) return;
+      load();
+    };
+    const handleMessage = (event) => {
+      if (event.origin !== window.location.origin || event.data?.type !== TRAVEL_PAYMENT_SYNC_EVENT) return;
+      refreshForTrip(event.data);
+    };
+    const handleChannelMessage = (event) => {
+      if (event.data?.type === TRAVEL_PAYMENT_SYNC_EVENT) refreshForTrip(event.data);
+    };
+    let channel = null;
+    try {
+      if (typeof window.BroadcastChannel === "function") {
+        channel = new window.BroadcastChannel(TRAVEL_PAYMENT_SYNC_CHANNEL);
+        channel.addEventListener("message", handleChannelMessage);
+      }
+    } catch (_err) {
+      channel = null;
+    }
+    const interval = window.setInterval(() => load(), 15000);
+    window.addEventListener("message", handleMessage);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("message", handleMessage);
+      channel?.removeEventListener("message", handleChannelMessage);
+      channel?.close();
+    };
+  }, [load, trip.id]);
+
 
   const buildInstalmentPortalUrl = (instalmentId) => {
     const id = Number(instalmentId);
@@ -2269,16 +2311,28 @@ function PaymentTab({ trip, notify }) {
       notify.error("Add at least one instalment");
       return;
     }
+    const today = toDateInput(new Date());
+    let previousDueDate = "";
     for (let i = 0; i < editInstalments.length; i++) {
       const ins = editInstalments[i];
-      if (!ins.dueDate) {
+      const dueDate = toDateInput(ins.dueDate);
+      if (!dueDate) {
         notify.error(`Instalment ${i + 1}: due date is required`);
+        return;
+      }
+      if (dueDate < today) {
+        notify.error(`Instalment ${i + 1}: due date cannot be in the past`);
+        return;
+      }
+      if (previousDueDate && dueDate < previousDueDate) {
+        notify.error(`Instalment ${i + 1}: due date cannot be before instalment ${i}`);
         return;
       }
       if (!ins.amount || Number(ins.amount) <= 0) {
         notify.error(`Instalment ${i + 1}: amount must be > 0`);
         return;
       }
+      previousDueDate = dueDate;
     }
     setSaving(true);
     try {
@@ -2432,6 +2486,7 @@ function PaymentTab({ trip, notify }) {
                   <input
                     type="date"
                     value={toDateInput(ins.dueDate)}
+                    min={getPaymentPlanDateMinimum(idx, editInstalments)}
                     onChange={(e) => updateInstalment(idx, { dueDate: e.target.value })}
                     style={{ ...input, width: "100%", boxSizing: "border-box" }}
                     aria-label={`Instalment ${idx + 1} due date`}

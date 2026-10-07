@@ -1335,10 +1335,27 @@ router.post("/inventory/adjustments", canWriteInventory, async (req, res) => {
       // debits 1 unit (clinically the bottle is gone) and +0.5 still credits
       // 1 (clinically the bottle is back).
       const stockDelta = delta > 0 ? Math.ceil(delta) : Math.floor(delta);
-      await tx.product.update({
-        where: { id: product.id },
-        data: { currentStock: { increment: stockDelta } },
-      });
+      if (stockDelta < 0) {
+        // Keep the non-negative stock invariant under concurrent adjustments:
+        // the conditional update succeeds only while enough stock remains.
+        const updated = await tx.product.updateMany({
+          where: tenantWhere(req, {
+            id: product.id,
+            currentStock: { gte: Math.abs(stockDelta) },
+          }),
+          data: { currentStock: { increment: stockDelta } },
+        });
+        if (updated.count !== 1) {
+          const error = new Error("Adjustment would make stock negative");
+          error.code = "INSUFFICIENT_STOCK";
+          throw error;
+        }
+      } else {
+        await tx.product.update({
+          where: { id: product.id },
+          data: { currentStock: { increment: stockDelta } },
+        });
+      }
       return a;
     });
 
@@ -1350,6 +1367,12 @@ router.post("/inventory/adjustments", canWriteInventory, async (req, res) => {
 
     res.status(201).json(adjustment);
   } catch (e) {
+    if (e.code === "INSUFFICIENT_STOCK") {
+      return res.status(400).json({
+        error: "Adjustment would make stock negative",
+        code: "INSUFFICIENT_STOCK",
+      });
+    }
     console.error("[inventory] create adjustment error:", e.message);
     res.status(500).json({ error: "Failed to create inventory adjustment" });
   }

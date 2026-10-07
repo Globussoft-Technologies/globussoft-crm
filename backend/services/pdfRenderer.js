@@ -6025,6 +6025,16 @@ function professionalInvoiceLineAmount(line) {
   return (Number(line?.quantity) || 1) * (Number(line?.unitPrice) || 0);
 }
 
+function fitReferenceInvoiceMetadataFont(doc, value, maxWidth, initialSize = 9.2, minimumSize = 7.2) {
+  let fontSize = initialSize;
+  doc.fontSize(fontSize);
+  while (fontSize > minimumSize && doc.widthOfString(value) > maxWidth) {
+    fontSize = Math.max(minimumSize, Number((fontSize - 0.2).toFixed(2)));
+    doc.fontSize(fontSize);
+  }
+  return fontSize;
+}
+
 async function renderProfessionalWellnessInvoicePdf(invoice, contact, clinic, options = {}) {
   const opts = options || {};
   const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
@@ -6408,9 +6418,13 @@ async function renderReferenceWellnessInvoicePdf(invoice, contact, clinic, optio
   };
   const drawMetadataRow = (label, value, y, panelX, panelWidth) => {
     doc.font("Helvetica-Bold").fontSize(7.8).fillColor(navy).text(label.toUpperCase(), panelX + 14, y, { width: 88 });
-    doc.font("Helvetica-Bold").fontSize(9.2).fillColor("#1E2C3D").text(value || "-", panelX + 100, y, {
-      width: panelWidth - 114,
+    const metadataValue = String(value || "-");
+    const valueWidth = panelWidth - 114;
+    const valueFontSize = fitReferenceInvoiceMetadataFont(doc, metadataValue, valueWidth);
+    doc.font("Helvetica-Bold").fontSize(valueFontSize).fillColor("#1E2C3D").text(metadataValue, panelX + 100, y, {
+      width: valueWidth,
       align: "right",
+      lineBreak: false,
     });
   };
 
@@ -6721,6 +6735,7 @@ module.exports = {
   renderBrandedInvoicePdf,
   renderProfessionalWellnessInvoicePdf: renderReferenceWellnessInvoicePdf,
   renderLegacyWellnessInvoicePdf: renderProfessionalWellnessInvoicePdf,
+  fitReferenceInvoiceMetadataFont,
   resolveProfessionalInvoiceLogo,
   renderPatientSummaryPdf,
   generatePosReceiptPdf,

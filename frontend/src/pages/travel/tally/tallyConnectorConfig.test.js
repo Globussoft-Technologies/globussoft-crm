@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchTallyConnectorBinary, getDynamicTallyConnectorUrl } from "./tallyConnectorConfig";
+import {
+  downloadTallyConnectorPackage,
+  fetchTallyConnectorBinary,
+  fetchTallyConnectorDeploymentFiles,
+  getDynamicTallyConnectorUrl,
+} from "./tallyConnectorConfig";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -48,5 +53,53 @@ describe("getDynamicTallyConnectorUrl", () => {
     }));
 
     await expect(fetchTallyConnectorBinary()).rejects.toThrow("Connector binary is unavailable");
+  });
+
+  it("rejects incomplete deployment files before creating the ZIP", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ files: [{ name: "run-hidden.vbs", data: "test" }] }),
+    }));
+
+    await expect(fetchTallyConnectorDeploymentFiles()).rejects.toThrow("incomplete");
+  });
+
+  it("includes the install, uninstall, launcher, and instructions in the downloaded ZIP", async () => {
+    const files = ["run-hidden.vbs", "install-startup.ps1", "uninstall-startup.ps1", "README.md"]
+      .map((name) => ({ name, data: `contents of ${name}` }));
+    const createObjectURL = vi.fn(() => "blob:tally-connector");
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = vi.fn();
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    try {
+      downloadTallyConnectorPackage({
+        connectorUrl: "wss://crm.example.test/ws/tally-connector",
+        customerId: 1,
+        connectorId: "tally-test",
+        token: "test-token",
+      }, new Uint8Array([1, 2, 3]), files);
+
+      const blob = createObjectURL.mock.calls[0][0];
+      const bytes = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(new Uint8Array(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(blob);
+      });
+      const names = [];
+      const view = new DataView(bytes.buffer);
+      const decoder = new TextDecoder();
+      for (let offset = 0; view.getUint32(offset, true) === 0x04034b50;) {
+        const nameLength = view.getUint16(offset + 26, true);
+        const size = view.getUint32(offset + 18, true);
+        names.push(decoder.decode(bytes.subarray(offset + 30, offset + 30 + nameLength)));
+        offset += 30 + nameLength + size;
+      }
+      expect(names).toEqual(["TallyConnector.exe", "config.json", ...files.map((file) => file.name)]);
+    } finally {
+      click.mockRestore();
+    }
   });
 });

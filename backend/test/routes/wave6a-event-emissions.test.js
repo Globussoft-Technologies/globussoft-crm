@@ -57,7 +57,9 @@ prisma.webhook.findMany = vi.fn().mockResolvedValue([]);
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tenant = prisma.tenant || {};
-prisma.tenant.findUnique = vi.fn().mockResolvedValue({ defaultCurrency: 'INR', locale: 'en-IN' });
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({
+  defaultCurrency: 'INR', locale: 'en-IN', vertical: 'generic',
+});
 
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.create = vi.fn();
@@ -263,7 +265,7 @@ beforeEach(() => {
   // override with mockResolvedValueOnce to swap vertical='travel' in).
   prisma.tenant.findUnique
     .mockReset()
-    .mockResolvedValue({ defaultCurrency: 'INR', locale: 'en-IN' });
+    .mockResolvedValue({ defaultCurrency: 'INR', locale: 'en-IN', vertical: 'generic' });
 });
 
 // ─── billing.js — invoice.created ───────────────────────────────────────

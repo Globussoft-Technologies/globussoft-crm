@@ -40,6 +40,7 @@
     {
       "pattern": "index-*.js",
       "maxKB": 315,
+      "//2026-10-05-pickup-plot-pages": "The two admin-only lazy routes add only route declarations to the main shell. No dependency was added.",
       "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 300→315 on 2026-10-01: PR #1514 added tenant-wide subscription access resolution and richer notification-bell behavior to the always-loaded app shell, bringing the entry chunk to 308.8 KB. No runtime dependency was added and the cap retains about 6 KB headroom. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap. Bumped 260→270 on 2026-08-12: PR #1319 added the Omnibar global search component and sidebarSearch utility to the header, pushing the index chunk to 262.1 KB. Bumped 270→285 on 2026-08-21: concurrent uncommitted feature work (super-admin AI provider/managed-key management, multi-provider embeddings, travel diagnostic public-form + embed pages) pushed the chunk to 278.5 KB. Bumped 285→290 on 2026-09-04: PR #1401 added travel CRM sidebar collapsible sections and theme support (CSS in index.css), pushing the chunk to 285.4 KB. Bumped 290→295 on 2026-09-17: PR #1456 consolidated generic navigation access checks in the always-loaded sidebar and Omnibar, bringing the entry chunk to 291.3 KB. Bumped 295→300 on 2026-09-28: PR #1493 added session-bound permission-cache invalidation to the always-loaded App shell, bringing the entry chunk to 296.0 KB; no dependency was added and the cap retains 4.0 KB headroom."
     },
     {
@@ -60,8 +61,13 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 8800,
+    "all-js-maxKB": 9000,
+    "//pr1524-total-bump": "8800→9000 on 2026-10-07: Generic Pickup/Plot, transport, broker, billing and customer pickup workflows add lazy route chunks. Merged CI total is 8865 KB; retain 135 KB headroom. Individual entry/vendor budgets remain unchanged.",
     "//latest-total-bump": "8650→8800 on 2026-10-01: PR #1514 expands wellness booking, invoices, services, notifications, and tenant-wide subscription access, bringing total JS to 8721.0 KB. No runtime dependency was added and the cap retains about 79 KB headroom.",
+    "//pickup-plot-total-bump-callified-customer-pickups": "8750 to 8775 on 2026-10-06: Callified pickup-address confirmation plus the lazy Customer Status route add 10.0 KB, bringing total JS to 8753.2 KB.",
+    "//pickup-plot-total-bump-driver-workspace": "8700 to 8750 on 2026-10-06: the transport-person assignment workspace adds trip cards, sequential status controls, route links, responsive styling, and focused tests.",
+    "//pickup-plot-total-bump-transport-brokers": "8675 to 8700 on 2026-10-05: Transport Persons and Plot Brokers add one shared lazy-loaded directory chunk.",
+    "//pickup-plot-total-bump-inventory": "8650→8675 on 2026-10-05: the Generic CRM pickup and plot inventory adds one lazy-loaded page chunk.",
     "//previous-total-bump-9": "8525→8650 on 2026-09-28: PR #1492 adds the lazy-loaded Travel Meeting Forms screen and expands diagnostic builder/detail/embed workflows, bringing total JS to 8573.3 KB. No runtime dependency was added, the main entry and every per-chunk budget remain green, and the cap retains about 76.7 KB headroom.",
     "//previous-total-bump-8": "8450→8525 on 2026-09-24: PR #1485 adds Generic CRM conditional and multi-page web-form builder/runtime behavior, lead-attribution columns, and guided import refinements, bringing total JS to 8479.2 KB. No runtime dependency was added; per-chunk budgets remain green and the cap retains about 46 KB headroom.",
     "//previous-total-bump-7": "8400→8450 on 2026-09-21: PR #1473 adds the Generic CRM staff administration fields and guided CSV/XLSX lead-import mapping UI, bringing total JS to 8408.0 KB. No runtime dependency was added; per-chunk budgets remain green and the cap retains 42 KB headroom.",

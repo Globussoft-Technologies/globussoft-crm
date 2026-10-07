@@ -95,6 +95,45 @@ const portalInteractionStyles = `
       transition: none;
     }
   }
+
+  @media (max-width: 820px) {
+    [data-tmc-teacher-portal="true"] {
+      display: block !important;
+    }
+
+    [data-tmc-teacher-portal="true"] aside {
+      position: static !important;
+      width: auto !important;
+      height: auto !important;
+      min-height: auto !important;
+      border-right: 0 !important;
+      border-bottom: 1px solid var(--tmc-border) !important;
+      padding: 14px !important;
+    }
+
+    [data-tmc-teacher-portal="true"] aside nav {
+      display: flex !important;
+      overflow-x: auto;
+    }
+
+    [data-tmc-teacher-portal="true"] aside nav button {
+      white-space: nowrap;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] {
+      height: auto !important;
+      min-height: 100vh !important;
+      margin-left: 0 !important;
+      display: flex !important;
+      overflow: visible !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] main,
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] main > div {
+      height: auto !important;
+      overflow: visible !important;
+    }
+  }
 `;
 
 const portalThemeVars = {
@@ -377,7 +416,7 @@ export default function TmcTeacherPortal() {
       style={{ ...styles.page, ...portalThemeVars[themeMode] }}
     >
       <style>{portalInteractionStyles}</style>
-      <aside style={styles.sidebar}>
+      <aside data-tmc-teacher-sidebar="true" style={styles.sidebar}>
         <div style={styles.sidebarBrand}><Plane size={20} /> <strong>TMC Teacher Portal</strong></div>
         <div style={styles.profileCard}>
           <div style={styles.avatar}>{(contact?.name || "T").slice(0, 1).toUpperCase()}</div>
@@ -392,7 +431,7 @@ export default function TmcTeacherPortal() {
         <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, view assigned trips, submit trip reports, and review trip landing pages.</div>
       </aside>
 
-      <div style={styles.shell}>
+      <div data-tmc-teacher-shell="true" style={styles.shell}>
         <header style={styles.header}>
           <div><span style={styles.eyebrow}>Teacher workspace</span><h1 style={styles.headerTitle}>{viewTitle}</h1></div>
           <div style={styles.headerActions}>
@@ -947,8 +986,8 @@ function formatDate(value) {
 }
 
 const styles = {
-  page: { height: "100vh", minHeight: 0, display: "grid", gridTemplateColumns: "250px minmax(0, 1fr)", overflow: "hidden", background: "var(--tmc-bg)", color: "var(--tmc-text)" },
-  sidebar: { height: "100vh", minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", overscrollBehavior: "contain", padding: "24px 16px", boxSizing: "border-box", background: "var(--tmc-surface)", borderRight: "1px solid var(--tmc-border)" },
+  page: { height: "100vh", minHeight: 0, display: "block", overflow: "hidden", background: "var(--tmc-bg)", color: "var(--tmc-text)" },
+  sidebar: { position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 20, width: 250, height: "100vh", minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", overscrollBehavior: "contain", padding: "24px 16px", boxSizing: "border-box", background: "var(--tmc-surface)", borderRight: "1px solid var(--tmc-border)" },
   sidebarBrand: { display: "flex", alignItems: "center", gap: 9, padding: "0 9px", color: "var(--tmc-heading)", fontSize: 16 },
   profileCard: { display: "flex", alignItems: "center", gap: 10, margin: "32px 8px 24px", padding: "12px 10px", borderRadius: 10, background: "var(--tmc-profile-bg)" },
   avatar: { display: "grid", placeItems: "center", width: 38, height: 38, borderRadius: "50%", background: "var(--tmc-primary)", color: "var(--tmc-primary-contrast)", fontWeight: 700 },
@@ -957,7 +996,7 @@ const styles = {
   navButton: { display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "12px 11px", border: 0, borderRadius: 9, background: "transparent", color: "var(--tmc-subtle-text)", cursor: "pointer", textAlign: "left", fontSize: 14, fontWeight: 600 },
   navButtonActive: { background: "var(--tmc-primary)", color: "var(--tmc-primary-contrast)" },
   sidebarFooter: { marginTop: "auto", padding: "16px 9px 0", borderTop: "1px solid var(--tmc-border-light)", color: "var(--tmc-muted)", fontSize: 11, lineHeight: 1.5 },
-  shell: { minWidth: 0, minHeight: 0, height: "100vh", display: "grid", gridTemplateRows: "78px minmax(0, 1fr)", overflow: "hidden" },
+  shell: { minWidth: 0, minHeight: 0, height: "100vh", marginLeft: 250, display: "grid", gridTemplateRows: "78px minmax(0, 1fr)", overflow: "hidden" },
   header: { minHeight: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 32px", background: "var(--tmc-surface)", borderBottom: "1px solid var(--tmc-border)", zIndex: 2 },
   headerActions: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 9, minWidth: 0 },
   eyebrow: { display: "block", marginBottom: 3, color: "var(--tmc-muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em" },

@@ -147,6 +147,7 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
     expect(keys).toContain('MANAGER');
     expect(keys).toContain('USER');
     expect(keys).toContain('CUSTOMER');
+    expect(keys).toContain('BILLING');
 
     for (const cliniKey of WELLNESS_CLINICAL_KEYS) {
       expect(

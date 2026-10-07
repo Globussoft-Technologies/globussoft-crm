@@ -16,13 +16,13 @@
 const prisma = require("./prisma");
 
 /**
- * @param {{ messageId: number, tenantId: number, runAt?: Date }} opts
+ * @param {{ messageId: number, tenantId: number, runAt?: Date, db?: object }} opts
  */
 async function enqueueSend(opts) {
   if (!opts || typeof opts.messageId !== "number" || typeof opts.tenantId !== "number") {
     throw new Error("enqueueSend requires { messageId, tenantId }");
   }
-  const job = await prisma.waOutboundJob.create({
+  const job = await (opts.db || prisma).waOutboundJob.create({
     data: {
       messageId: opts.messageId,
       tenantId: opts.tenantId,

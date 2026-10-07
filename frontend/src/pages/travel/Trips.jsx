@@ -655,7 +655,7 @@ export default function Trips() {
                             }}
                           >
                             <CalendarIcon size={12} aria-hidden />
-                            {fmt(t.departDate)} ? {fmt(t.returnDate)}
+                            {fmt(t.departDate)} – {fmt(t.returnDate)}
                           </span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>

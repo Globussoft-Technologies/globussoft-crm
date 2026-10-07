@@ -1383,8 +1383,8 @@ router.post(
 router.post(
   "/webcheckins/:id/deliver",
   verifyToken,
-  requirePermission("web_checkins", "update"),
   requireTravelTenant,
+  requirePermission("web_checkins", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);

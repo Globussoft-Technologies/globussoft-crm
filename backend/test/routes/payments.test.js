@@ -129,6 +129,8 @@ prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
 prisma.tripInstalmentPayment.update = vi.fn().mockResolvedValue({});
 prisma.tripParticipant = prisma.tripParticipant || {};
 prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
+prisma.contact = prisma.contact || {};
+prisma.contact.findMany = vi.fn().mockResolvedValue([]);
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
 prisma.itinerary.update = vi.fn().mockResolvedValue({});
@@ -197,6 +199,7 @@ beforeEach(() => {
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
   prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
   prisma.travelQuote.findFirst.mockReset().mockResolvedValue(null);
@@ -270,7 +273,8 @@ describe('GET / — list payments under tenant scope', () => {
     expect(res.body[1].metadata).toEqual({}); // null → {} fallback
     expect(prisma.payment.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 200,
     });
   });
 
@@ -287,7 +291,48 @@ describe('GET / — list payments under tenant scope', () => {
         gateway: 'stripe',       // lowercased
         invoiceId: 42,           // parsed int
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 200,
+    });
+  });
+
+  test('bounds list work and clamps an excessive requested limit', async () => {
+    prisma.payment.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/payments?limit=50000');
+
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      take: 500,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    }));
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  test('shows the landing-page payer when an older payment has no contactId', async () => {
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 901,
+      invoiceId: null,
+      amount: 70000,
+      currency: 'INR',
+      gateway: 'razorpay',
+      status: 'SUCCESS',
+      tenantId: 1,
+      metadata: JSON.stringify({
+        kind: 'landing-page-registration',
+        tripId: 16,
+        parentName: 'Sahil Parent',
+        parentEmail: 'sahil@example.com',
+        studentName: 'Sahil',
+      }),
+      createdAt: new Date('2026-10-06'),
+    }]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].contact).toMatchObject({
+      name: 'Sahil Parent',
+      email: 'sahil@example.com',
     });
   });
 

@@ -292,6 +292,11 @@ const CommissionData = lazy(() => import("./pages/CommissionData"));
 const RevenueGoals = lazy(() => import("./pages/RevenueGoals"));
 const LeadRouting = lazy(() => import("./pages/LeadRouting"));
 const Territories = lazy(() => import("./pages/Territories"));
+const PickupPlotInventory = lazy(() => import("./pages/PickupPlotInventory"));
+const TransportPersons = lazy(() => import("./pages/TransportPersons"));
+const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
+const BillingPersons = lazy(() => import("./pages/BillingPersons"));
+const PickupCustomers = lazy(() => import("./pages/PickupCustomers"));
 const Quotas = lazy(() => import("./pages/Quotas"));
 const WinLoss = lazy(() => import("./pages/WinLoss"));
 const AbTests = lazy(() => import("./pages/AbTests"));
@@ -3077,6 +3082,56 @@ export default function App() {
                       />
                       <Route path="lead-routing" element={<LeadRouting />} />
                       <Route path="territories" element={<Territories />} />
+                      <Route
+                        path="pickup-plot-inventory"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN"]} message="Pickup and plot inventory requires admin access.">
+                              <PickupPlotInventory />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="transport-persons"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN"]} message="Transport persons requires admin access.">
+                              <TransportPersons />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="plot-brokers"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN"]} message="Plot brokers requires admin access.">
+                              <PlotBrokers />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="billing-persons"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN"]} message="Billing persons requires admin access.">
+                              <BillingPersons />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="pickup-customers"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN"]} message="Customer pickup status requires admin access.">
+                              <PickupCustomers />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
                       <Route
                         path="quotas"
                         element={

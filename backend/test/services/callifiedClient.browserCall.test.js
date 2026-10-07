@@ -42,9 +42,16 @@ beforeEach(() => {
 
   prisma.contact = prisma.contact || {};
   prisma.contact.findUnique = vi.fn().mockResolvedValue({ ...CONTACT });
+  prisma.contact.findFirst = vi.fn().mockResolvedValue({ id: CONTACT.id });
+  prisma.contact.update = vi.fn().mockResolvedValue({ ...CONTACT });
+  prisma.tenant = prisma.tenant || {};
+  prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
+  prisma.customerPickup = prisma.customerPickup || {};
+  prisma.customerPickup.upsert = vi.fn();
   prisma.callLog = prisma.callLog || {};
   prisma.callLog.create = vi.fn().mockImplementation(({ data }) => ({ id: 501, ...data }));
   prisma.callLog.findFirst = vi.fn().mockResolvedValue(null);
+  prisma.callLog.update = vi.fn();
   prisma.integration = prisma.integration || {};
   prisma.integration.findUnique = vi.fn().mockResolvedValue(null);
   prisma.integration.update = vi.fn().mockResolvedValue({});
@@ -243,5 +250,71 @@ describe('resolveAgentSocketUrl', () => {
     await expect(client.resolveAgentSocketUrl(1, '/ws/agent?call_sid=abc')).resolves.toBe(
       'ws://localhost:8000/ws/agent?call_sid=abc',
     );
+  });
+});
+
+describe('fetchAndStoreCallDetails pickup extraction', () => {
+  test('automatically stores a confirmed transcript pickup for a generic CRM contact', async () => {
+    stub('getCallDetails', async () => ({
+      transcripts: [{
+        id: 789,
+        created_at: '2026-10-06T11:38:00.000Z',
+        call_duration_s: 101,
+        transcript: [{
+          role: 'AI',
+          text: 'I recorded that your pickup location is eighth block Koramangala near Lavis Pharma, SLS Ladies PG.',
+        }],
+      }],
+      reviews: [{
+        transcript_id: 789,
+        summary: 'The pickup location is eighth block Koramangala near Lavis Pharma, SLS Ladies PG.',
+      }],
+    }));
+    prisma.customerPickup.upsert.mockResolvedValue({
+      id: 91,
+      pickupAddress: 'eighth block Koramangala near Lavis Pharma, SLS Ladies PG',
+      sourceTranscriptId: '789',
+    });
+
+    const result = await client.fetchAndStoreCallDetails({
+      tenantId: 1,
+      callifiedLeadId: '900',
+      contactId: 11,
+      updateScore: false,
+    });
+
+    expect(prisma.customerPickup.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_contactId: { tenantId: 1, contactId: 11 } },
+      create: expect.objectContaining({
+        pickupAddress: 'eighth block Koramangala near Lavis Pharma, SLS Ladies PG',
+        sourceTranscriptId: '789',
+      }),
+    }));
+    expect(result.capturedPickup).toMatchObject({ id: 91, sourceTranscriptId: '789' });
+  });
+
+  test('keeps Callified details available when pickup saving fails', async () => {
+    stub('getCallDetails', async () => ({
+      transcripts: [{
+        id: 790,
+        created_at: '2026-10-06T11:40:00.000Z',
+        transcript: [{ role: 'AI', text: 'Your confirmed pickup location is 8th Block Koramangala.' }],
+      }],
+      reviews: [],
+    }));
+    prisma.customerPickup.upsert.mockRejectedValue(new Error('pickup table unavailable'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(client.fetchAndStoreCallDetails({
+      tenantId: 1,
+      callifiedLeadId: '901',
+      contactId: 11,
+      updateScore: false,
+    })).resolves.toMatchObject({
+      callStatus: expect.any(String),
+      capturedPickup: null,
+      latestTranscript: { id: 790 },
+    });
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('pickup capture failed (non-fatal)'));
   });
 });

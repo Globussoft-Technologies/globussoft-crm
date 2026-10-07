@@ -2088,6 +2088,43 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(within(listbox).getByRole('option', { name: /RFU Umrah follow-up/i }));
   });
 
+  it('keeps the original Callified campaign, status, and settings controls editable', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    expect(screen.getByLabelText(/Assign Callified campaign for Alice Smith/i)).toBeEnabled();
+    expect(screen.getByLabelText(/Call status for Alice Smith/i)).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Call settings/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeEnabled();
+  });
+
+  it('warns when auto-assign is enabled but every saved rule is inactive', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/callified/auto-campaign-rules' && !opts) {
+        return Promise.resolve({
+          enabled: true,
+          rules: [{
+            id: 'inactive-rule',
+            enabled: false,
+            column: 'source',
+            value: 'website-form',
+            campaignId: 101,
+          }],
+        });
+      }
+      return callifiedFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    expect(screen.getByLabelText('Auto-assign enabled with no active rules')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Auto-assign Callified Campaigns rules/i }));
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Auto-assign is on, but no rule is active',
+    );
+  });
+
   it('offers only create-time fields in auto-campaign assignment rules', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/table-column-prefs/leads') {

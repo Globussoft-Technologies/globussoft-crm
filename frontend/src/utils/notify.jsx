@@ -216,7 +216,7 @@ function ToastStack({ toasts, onDismiss }) {
                 flexShrink: 0, marginTop: 1,
               }}
             >{c.icon}</span>
-            <span style={{ flex: 1, whiteSpace: 'pre-wrap' }}>{t.message}</span>
+            <span style={{ flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.message}</span>
             <button
               type="button"
               onClick={() => onDismiss(t.id)}

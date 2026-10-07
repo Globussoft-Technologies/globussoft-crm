@@ -792,6 +792,7 @@ const emailSchedulingRoutes = require("./routes/email_scheduling");
 // Tier 2
 const leadRoutingRoutes = require("./routes/lead_routing");
 const territoriesRoutes = require("./routes/territories");
+const pickupPlotInventoryRoutes = require("./routes/pickup_plot_inventory");
 const quotasRoutes = require("./routes/quotas");
 const winLossRoutes = require("./routes/win_loss");
 const attributionRoutes = require("./routes/attribution");
@@ -1391,6 +1392,7 @@ app.use("/api/email-scheduling", emailSchedulingRoutes);
 // Tier 2
 app.use("/api/lead-routing", leadRoutingRoutes);
 app.use("/api/territories", territoriesRoutes);
+app.use("/api/pickup-plot-inventory", pickupPlotInventoryRoutes);
 app.use("/api/quotas", quotasRoutes);
 app.use("/api/win-loss", winLossRoutes);
 app.use("/api/attribution", attributionRoutes);

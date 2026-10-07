@@ -13,18 +13,23 @@ export default function GenericAccessGuard({ path, children, message }) {
   if (!path && tenant?.vertical && tenant.vertical !== "generic") return children;
   const resolvedPath = path || getGenericAccessForLocation(location.pathname)?.path;
   const guard = genericRoleGuardProps(resolvedPath);
+  // /dashboard itself requires reports.read. RoleGuard's general fallback is
+  // also /dashboard, which traps users without that grant on the denied URL
+  // with an empty page. /home is the permission-aware landing surface for
+  // those users, so use it only for this route.
+  const redirectTo = resolvedPath === "/dashboard" ? "/home" : undefined;
   if (!guard.allow && !guard.requiredPermission) return children;
   if (guard.allow && guard.requiredPermission) {
     return (
-      <RoleGuard allow={guard.allow} message={message}>
-        <RoleGuard requiredPermission={guard.requiredPermission} message={message}>
+      <RoleGuard allow={guard.allow} message={message} redirectTo={redirectTo}>
+        <RoleGuard requiredPermission={guard.requiredPermission} message={message} redirectTo={redirectTo}>
           {children}
         </RoleGuard>
       </RoleGuard>
     );
   }
   return (
-    <RoleGuard {...guard} message={message}>
+    <RoleGuard {...guard} message={message} redirectTo={redirectTo}>
       {children}
     </RoleGuard>
   );

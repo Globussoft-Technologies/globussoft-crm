@@ -981,6 +981,49 @@ describe('POST /api/contacts — create', () => {
     }));
   });
 
+  test('active source rule assigns its Callified campaign to a new website-form Lead', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify({
+        enabled: true,
+        rules: [{
+          id: 'website-rule',
+          enabled: true,
+          column: 'source',
+          value: 'Website-form',
+          campaignId: 966,
+        }],
+      }),
+    });
+    const created = {
+      id: 12346,
+      name: 'Website Lead',
+      email: 'website-lead@example.com',
+      phone: null,
+      tenantId: TENANT_ID,
+      assignedToId: null,
+      status: 'Lead',
+      source: 'website-form',
+      callifiedCampaignId: 966,
+    };
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Website Lead',
+        email: 'website-lead@example.com',
+        status: 'Lead',
+        source: 'website-form',
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create.mock.calls[0][0].data).toMatchObject({
+      status: 'Lead',
+      source: 'website-form',
+      callifiedCampaignId: 966,
+    });
+  });
+
   test('new Lead with callifiedCampaignId + phone is auto-dial enqueued', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
     const created = {

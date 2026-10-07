@@ -1,6 +1,5 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
@@ -892,7 +891,7 @@ describe('<PatientDetail />', () => {
   });
 
   describe('Inventory used tab', () => {
-    it('renders empty-state when the selected visit has no consumptions', async () => {
+    it('renders empty-state without manual product-entry controls', async () => {
       // /consumptions endpoint returns []
       fetchApi.mockReset();
       fetchApi.mockImplementation((url) => {
@@ -909,10 +908,9 @@ describe('<PatientDetail />', () => {
       await user.click(screen.getByRole('button', { name: /Inventory used/i }));
 
       await waitFor(() => expect(screen.getByText(/No products logged for this visit/i)).toBeInTheDocument());
-      // Form fields visible
-      expect(screen.getByPlaceholderText(/Product name/i)).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/Qty/i)).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/Unit cost/i)).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(/Product name/i)).toBeNull();
+      expect(screen.queryByPlaceholderText(/Qty/i)).toBeNull();
+      expect(screen.queryByPlaceholderText(/Unit cost/i)).toBeNull();
     });
 
     it('renders existing consumption rows with totals', async () => {
@@ -939,6 +937,7 @@ describe('<PatientDetail />', () => {
       expect(screen.getByText(/PRP kit/)).toBeInTheDocument();
       expect(screen.getByRole('columnheader', { name: 'Quantity' })).toHaveStyle({ textAlign: 'left' });
       expect(screen.getByRole('columnheader', { name: 'Product Name' })).toHaveStyle({ textAlign: 'left' });
+      expect(screen.getByRole('columnheader', { name: 'Unit Cost' })).toHaveStyle({ textAlign: 'left' });
       expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveStyle({ textAlign: 'left' });
       expect(screen.getAllByText('No staff assigned').length).toBeGreaterThan(0);
       expect(screen.getAllByText('No product code').length).toBeGreaterThan(0);
@@ -946,13 +945,35 @@ describe('<PatientDetail />', () => {
       expect(screen.getAllByText(/Total cost/i).length).toBeGreaterThan(0);
     });
 
-    it('Add button is disabled until product name + positive qty present (#338)', async () => {
+    it('aligns edit controls with their columns and preserves read-only visit/catalog fields', async () => {
+      const item = {
+        id: 9,
+        transactionDate: '2026-04-10T09:00:00Z',
+        bookingId: 11,
+        customerName: 'Ananya Singh',
+        staff: 'Dr. Mehta',
+        serviceName: 'Consultation',
+        productName: 'Botox vial',
+        transactionType: 'Sale',
+        productCode: 'BTX-100',
+        qty: 2,
+        unit: 'unit',
+        quantity: '2 unit',
+        salePrice: 5000,
+        unitCost: 2500,
+        usageValue: 5000,
+      };
       fetchApi.mockReset();
-      fetchApi.mockImplementation((url) => {
+      fetchApi.mockImplementation((url, options) => {
         if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
         if (url === '/api/wellness/services') return Promise.resolve(services);
         if (url === '/api/staff') return Promise.resolve(staff);
-        if (url.includes('/consumptions')) return Promise.resolve([]);
+        if (url.includes('/consumptions')) {
+          if (options?.method === 'PUT') {
+            return Promise.resolve({ ...item, productName: 'Updated vial', qty: 3, unitCost: 2000, usageValue: 6000 });
+          }
+          return Promise.resolve([item]);
+        }
         return Promise.resolve([]);
       });
 
@@ -960,18 +981,39 @@ describe('<PatientDetail />', () => {
       renderPage();
       await waitFor(() => expect(screen.getByRole('button', { name: /Inventory used/i })).toBeInTheDocument());
       await user.click(screen.getByRole('button', { name: /Inventory used/i }));
+      await waitFor(() => expect(screen.getByText('Botox vial')).toBeInTheDocument());
 
-      await waitFor(() => expect(screen.getByPlaceholderText(/Product name/i)).toBeInTheDocument());
-      // Scope to the Add row's form (the table-row Add button, NOT a New-prescription Add)
-      const productInput = screen.getByPlaceholderText(/Product name/i);
-      const addBtn = productInput.closest('form').querySelector('button[type="submit"]');
-      expect(addBtn).toBeDisabled();
-      expect(addBtn).toHaveAttribute('title', expect.stringMatching(/product name/i));
+      await user.click(screen.getByTitle('Edit (amend) this item'));
+      const editRow = await screen.findByTestId('inventory-edit-row');
+      const cells = editRow.querySelectorAll('td');
 
-      // Type a product name — should enable since qty default is 1
-      await user.type(productInput, 'Numbing cream');
-      await waitFor(() => expect(addBtn).not.toBeDisabled());
+      expect(cells).toHaveLength(13);
+      expect(cells[5].querySelector('input')).toHaveAttribute('aria-label', 'Product name');
+      expect(cells[8].querySelector('input')).toHaveAttribute('aria-label', 'Quantity');
+      expect(cells[10].querySelector('input')).toHaveAttribute('aria-label', 'Unit cost');
+      expect(cells[6]).toHaveTextContent('Sale');
+      expect(cells[7]).toHaveTextContent('BTX-100');
+      expect(cells[9]).toHaveTextContent('₹5,000');
+      expect(cells[11]).toHaveTextContent('₹5,000');
+      expect(cells[6].querySelector('input')).toBeNull();
+      expect(cells[7].querySelector('input')).toBeNull();
+      expect(cells[9].querySelector('input')).toBeNull();
+
+      await user.clear(screen.getByRole('textbox', { name: 'Product name' }));
+      await user.type(screen.getByRole('textbox', { name: 'Product name' }), 'Updated vial');
+      await user.clear(screen.getByRole('spinbutton', { name: 'Quantity' }));
+      await user.type(screen.getByRole('spinbutton', { name: 'Quantity' }), '3');
+      await user.clear(screen.getByRole('spinbutton', { name: 'Unit cost' }));
+      await user.type(screen.getByRole('spinbutton', { name: 'Unit cost' }), '2000');
+      await user.click(screen.getByTitle('Save changes'));
+
+      await waitFor(() => {
+        const putCall = fetchApi.mock.calls.find(([url, options]) => url.endsWith('/consumptions/9') && options?.method === 'PUT');
+        expect(putCall).toBeDefined();
+        expect(JSON.parse(putCall[1].body)).toEqual({ productName: 'Updated vial', qty: 3, unitCost: 2000 });
+      });
     });
+
   });
 
   describe('Telehealth tab', () => {
@@ -2001,50 +2043,6 @@ describe('<PatientDetail />', () => {
       await waitFor(() => {
         expect(document.querySelector('iframe[title="Telehealth video consult"]')).toBeNull();
       });
-    });
-  });
-
-  describe('Inventory tab — negative qty validation (#125)', () => {
-    it('submitting form with qty=-1 fires notify.error and does NOT POST', async () => {
-      const calls = [];
-      fetchApi.mockReset();
-      fetchApi.mockImplementation((url, opts) => {
-        calls.push({ url, method: opts && opts.method });
-        if (url.startsWith('/api/wellness/patients/')) return Promise.resolve(patient);
-        if (url === '/api/wellness/services') return Promise.resolve(services);
-        if (url === '/api/staff') return Promise.resolve(staff);
-        if (url.includes('/consumptions')) return Promise.resolve([]);
-        return Promise.resolve([]);
-      });
-
-      const user = userEvent.setup();
-      renderPage();
-      await waitFor(() => expect(screen.getByRole('button', { name: /Inventory used/i })).toBeInTheDocument());
-      await user.click(screen.getByRole('button', { name: /Inventory used/i }));
-
-      await waitFor(() => expect(screen.getByPlaceholderText(/Product name/i)).toBeInTheDocument());
-      const productInput = screen.getByPlaceholderText(/Product name/i);
-      await user.type(productInput, 'Numbing cream');
-      // Set qty to -1. parseInt('-1') is -1 (truthy), so the SUT's
-      // `parseInt(e.target.value) || 1` keeps the -1. That triggers the
-      // qty<=0 guard branch inside `submit()`.
-      const qtyInput = screen.getByPlaceholderText(/^Qty/i);
-      await user.clear(qtyInput);
-      await user.type(qtyInput, '-1');
-
-      // The button enables on (productName !== '' && qty>=1) per #338 — qty=-1
-      // leaves it disabled, so we trigger form-submit directly to reach the
-      // runtime qty<=0 branch in `submit()`.
-      const form = productInput.closest('form');
-      await act(async () => { fireEvent.submit(form); });
-
-      await waitFor(() => {
-        const errCalls = notifyObj.error.mock.calls.filter((c) => /Quantity must be at least 1/i.test(c[0]));
-        expect(errCalls.length).toBeGreaterThanOrEqual(1);
-      });
-      // No POST was issued — only the GET /consumptions on tab mount.
-      const posts = calls.filter((c) => c.method === 'POST');
-      expect(posts.length).toBe(0);
     });
   });
 

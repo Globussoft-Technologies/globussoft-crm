@@ -107,6 +107,10 @@ prisma.itinerary = {
   findFirst: vi.fn(),
   update: vi.fn(),
 };
+prisma.travelInvoice = {
+  findFirst: vi.fn(),
+  update: vi.fn(),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -157,6 +161,9 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.payment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelInvoice.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelInvoice.update.mockReset();
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
 });
@@ -562,7 +569,10 @@ describe('POST /api/travel/trips/:tripId/instalments/from-plan', () => {
 
 describe('PUT /api/travel/trips/:tripId/payment-plan', () => {
   test('happy upsert returns 200 with persisted plan', async () => {
-    const instalmentsJson = JSON.stringify([{ pct: 50, dueAt: '2026-06-01' }, { pct: 50, dueAt: '2026-07-01' }]);
+    const instalmentsJson = JSON.stringify([
+      { dueDate: '2099-06-01', amount: 5000 },
+      { dueDate: '2099-07-01', amount: 5000 },
+    ]);
     prisma.tripPaymentPlan.upsert.mockResolvedValue({
       id: 8, tripId: 100, instalmentsJson, graceDays: 7,
     });
@@ -579,6 +589,31 @@ describe('PUT /api/travel/trips/:tripId/payment-plan', () => {
         update: expect.objectContaining({ graceDays: 7 }),
       }),
     );
+  });
+
+  test('past due date returns 400 PAST_DUE_DATE without upserting', async () => {
+    const instalmentsJson = JSON.stringify([{ dueDate: '2000-01-01', amount: 5000 }]);
+    const res = await request(makeApp())
+      .put('/api/travel/trips/100/payment-plan')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ instalmentsJson });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'PAST_DUE_DATE' });
+    expect(prisma.tripPaymentPlan.upsert).not.toHaveBeenCalled();
+  });
+
+  test('out-of-order due dates return 400 NON_CHRONOLOGICAL_DATES without upserting', async () => {
+    const instalmentsJson = JSON.stringify([
+      { dueDate: '2099-07-01', amount: 5000 },
+      { dueDate: '2099-06-01', amount: 5000 },
+    ]);
+    const res = await request(makeApp())
+      .put('/api/travel/trips/100/payment-plan')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ instalmentsJson });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'NON_CHRONOLOGICAL_DATES' });
+    expect(prisma.tripPaymentPlan.upsert).not.toHaveBeenCalled();
   });
 
   test('missing instalmentsJson returns 400 MISSING_FIELDS', async () => {
@@ -691,6 +726,43 @@ describe('GET /api/travel/trips/:tripId/instalments', () => {
       participantId: 5,
       status: 'paid',
     });
+  });
+
+  test('reconciles a successful parent installment payment before returning the staff ledger', async () => {
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 900,
+      amount: 5000,
+      status: 'SUCCESS',
+      gateway: 'razorpay',
+      metadata: JSON.stringify({
+        kind: 'travel-trip-installment',
+        tripId: 100,
+        participantId: 5,
+        instalmentId: 1,
+      }),
+    }]);
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 1,
+      tripId: 100,
+      participantId: 5,
+      amount: 5000,
+      paidAmount: 0,
+      status: 'pending',
+    });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { id: 1, tripId: 100, participantId: 5, instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: 'paid' },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/instalments')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 1 },
+      data: expect.objectContaining({ status: 'paid', paidAmount: 5000 }),
+    }));
+    expect(res.body.instalments[0]).toMatchObject({ id: 1, status: 'paid', paidAmount: 5000 });
   });
 
   test('invalid ?status returns 400 INVALID_STATUS', async () => {

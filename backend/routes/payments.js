@@ -18,8 +18,13 @@ const {
   NOT_CONFIGURED_MESSAGE,
 } = require("../lib/tenantPaymentGateway");
 const { fulfillSubscriptionOrder } = require("../lib/subscriptionFulfillment");
-const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
-const { reconcileTripInstalmentPayment, reconcileTripPaymentRecord } = require("../lib/tripPaymentReconciliation");
+const {
+  applyLandingPagePaymentToTrip,
+  ensureLandingPagePaymentRegistration,
+} = require("../lib/landingPagePayments");
+const {
+  reconcileTripInstalmentPayment,
+} = require("../lib/tripPaymentReconciliation");
 const { enqueueTransaction } = require("../lib/travelTallyMasters");
 
 const router = express.Router();
@@ -1028,19 +1033,30 @@ router.post(
               emitPaymentCollected(updated);
             }
 
-            const paymentMeta = (() => {
-              try { return JSON.parse(payment.metadata || "{}"); } catch (_err) { return {}; }
-            })();
-            if (paymentMeta.kind === "landing-page-registration" && paymentMeta.draftToken) {
-              const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken: paymentMeta.draftToken } });
-              const participantId = draft?.convertedToParticipantId || null;
+            const paymentMeta = safeJsonParse(updated.metadata || payment.metadata, {});
+            if (paymentMeta.kind === "landing-page-registration") {
+              const draft = paymentMeta.draftToken
+                ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken: paymentMeta.draftToken } })
+                : null;
+              let linked = null;
+              try {
+                linked = await ensureLandingPagePaymentRegistration({
+                  db: prisma,
+                  payment: updated,
+                  metadata: paymentMeta,
+                  tenantId: payment.tenantId,
+                });
+              } catch (linkError) {
+                console.error('[Payments] landing registration link failed:', linkError.message);
+              }
+              const participantId = linked?.participantId || draft?.convertedToParticipantId || paymentMeta.participantId || null;
               if (participantId && paymentMeta.tripId) {
                 try {
                   await applyLandingPagePaymentToTrip({
                     db: prisma,
                     tripId: paymentMeta.tripId,
                     participantId,
-                    paymentId: payment.id,
+                    paymentId: linked?.payment?.id || payment.id,
                     amountMajor: payment.amount,
                     mode: paymentMeta.paymentMode === "complete" ? "complete" : "installment",
                     installmentIndex: Number.isFinite(Number(paymentMeta.installmentIndex)) ? Number(paymentMeta.installmentIndex) : 0,
@@ -1109,6 +1125,10 @@ router.get("/", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
     const { status, gateway, invoiceId, from, to } = req.query;
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.min(500, Math.max(1, requestedLimit))
+      : 200;
 
     const where = { tenantId };
     if (status) where.status = String(status).toUpperCase();
@@ -1139,81 +1159,9 @@ router.get("/", async (req, res) => {
 
     const payments = await prisma.payment.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit,
     });
-
-    // Webhooks are a notification mechanism, not the source of truth for the
-    // Payments Received screen. Refresh pending Razorpay hosted links directly
-    // so a delayed/missing webhook cannot leave a completed payment displayed
-    // as pending. Metadata then drives the same participant reconciliation for
-    // every trip and payer.
-    const pendingHostedPayments = payments.filter((payment) => {
-      if (String(payment.gateway || "").toLowerCase() !== "razorpay") return false;
-      if (["SUCCESS", "PAID", "CAPTURED"].includes(String(payment.status || "").toUpperCase())) return false;
-      try {
-        const metadata = JSON.parse(payment.metadata || "{}");
-        return Boolean(metadata.plinkId || String(payment.gatewayId || "").startsWith("plink_"));
-      } catch (_err) { return String(payment.gatewayId || "").startsWith("plink_"); }
-    });
-    if (pendingHostedPayments.length) {
-      try {
-        const razorpay = await getTenantRazorpayClient(tenantId);
-        if (razorpay?.client?.paymentLink?.fetch) {
-          for (const payment of pendingHostedPayments) {
-            let metadata = {};
-            try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_err) {}
-            const linkId = metadata.plinkId || payment.gatewayId;
-            let remote;
-            try { remote = await razorpay.client.paymentLink.fetch(linkId); } catch (_err) { continue; }
-            const remoteStatus = String(remote?.status || "").toUpperCase();
-            if (!["PAID", "PARTIALLY_PAID"].includes(remoteStatus)) continue;
-            const paidAt = remote?.updated_at ? new Date(remote.updated_at * 1000) : new Date();
-            const updatedPayment = await prisma.payment.update({
-              where: { id: payment.id },
-              data: { status: "SUCCESS", paidAt },
-            });
-            const index = payments.findIndex((row) => row.id === payment.id);
-            if (index >= 0) payments[index] = updatedPayment;
-            const participantId = Number(metadata.participantId);
-            const instalmentId = Number(metadata.instalmentId);
-            if (metadata.kind === "tmc-instalment" && Number.isFinite(participantId) && Number.isFinite(instalmentId)) {
-              const instalment = await prisma.tripInstalmentPayment.findFirst({
-                where: { id: instalmentId, participantId },
-              });
-              await reconcileTripInstalmentPayment({
-                db: prisma,
-                instalment,
-                amountMajor: updatedPayment.amount,
-                capturedAt: paidAt,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        console.warn("[Payments] hosted Razorpay status refresh skipped:", err.message);
-      }
-    }
-
-    // Older landing-page payments may already be successful but still carry
-    // only a draft token. Once that draft has been converted, reconcile it so
-    // the Payment row points to the participant invoice and uses the same
-    // source as invoice payment history.
-    for (const payment of payments) {
-      if (!['SUCCESS', 'PAID', 'CAPTURED'].includes(String(payment.status || '').toUpperCase())) continue;
-      let metadata = {};
-      try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_err) {}
-      if (metadata.kind !== "landing-page-registration" || metadata.participantId) continue;
-      if (!metadata.draftToken) continue;
-      try {
-        const result = await reconcileTripPaymentRecord({ db: prisma, payment, capturedAt: payment.paidAt || payment.createdAt });
-        if (result?.payment) {
-          const index = payments.findIndex((row) => row.id === payment.id);
-          if (index >= 0) payments[index] = result.payment;
-        }
-      } catch (err) {
-        console.warn("[Payments] converted landing payment reconciliation skipped:", err.message);
-      }
-    }
 
     // Batch-fetch contact names for all contactIds in this result set.
     const contactIds = [...new Set(payments.map((p) => p.contactId).filter(Boolean))];
@@ -1233,6 +1181,38 @@ router.get("/", async (req, res) => {
       let meta = {};
       try { meta = JSON.parse(p.metadata || "{}"); } catch (_) {}
       parsedMetaMap[p.id] = meta;
+    }
+
+    // Some landing-page payments were created before the registration draft
+    // was converted, so contactId may still be null even though the payment
+    // metadata contains the payer email. Resolve those contacts in the same
+    // tenant and keep a metadata fallback for legacy rows that do not have a
+    // matching Contact yet.
+    const landingParentEmails = [...new Set(payments
+      .map((payment) => {
+        const metadata = parsedMetaMap[payment.id] || {};
+        if (metadata.kind !== "landing-page-registration") return "";
+        const registration = metadata.registration && typeof metadata.registration === "object"
+          ? metadata.registration
+          : {};
+        return String(
+          registration.parentEmail
+            || registration.parent_email
+            || metadata.parentEmail
+            || metadata.parent_email
+            || "",
+        ).trim().toLowerCase();
+      })
+      .filter(Boolean))];
+    const landingParentContactMap = {};
+    if (landingParentEmails.length > 0 && prisma.contact?.findMany) {
+      const landingParentContacts = await prisma.contact.findMany({
+        where: { tenantId, email: { in: landingParentEmails } },
+        select: { id: true, name: true, email: true, phone: true },
+      });
+      landingParentContacts.forEach((contact) => {
+        landingParentContactMap[String(contact.email || "").trim().toLowerCase()] = contact;
+      });
     }
 
     // TMC installment payments predate the generic Contact relation and some
@@ -1476,6 +1456,45 @@ router.get("/", async (req, res) => {
       }
       if (!contact) {
         contact = registrationDraftMap[parsedMetaMap[p.id]?.draftToken] || null;
+      }
+      if (!contact && parsedMetaMap[p.id]?.kind === "landing-page-registration") {
+        const meta = parsedMetaMap[p.id];
+        const registration = meta.registration && typeof meta.registration === "object"
+          ? meta.registration
+          : {};
+        const parentEmail = String(
+          registration.parentEmail
+            || registration.parent_email
+            || meta.parentEmail
+            || meta.parent_email
+            || "",
+        ).trim().toLowerCase();
+        contact = landingParentContactMap[parentEmail] || null;
+        if (!contact) {
+          const parentName = String(
+            registration.parentName
+              || registration.parent_name
+              || meta.parentName
+              || meta.parent_name
+              || meta.studentName
+              || "",
+          ).trim();
+          const parentPhone = String(
+            registration.parentPhone
+              || registration.parent_phone
+              || meta.parentPhone
+              || meta.parent_phone
+              || "",
+          ).trim();
+          if (parentName || parentEmail || parentPhone) {
+            contact = {
+              id: null,
+              name: parentName || parentEmail || parentPhone,
+              email: parentEmail || null,
+              phone: parentPhone || null,
+            };
+          }
+        }
       }
       // Also pick up itineraryId stored directly in payment metadata (advance/quote flows)
       if (!itineraryId && parsedMetaMap[p.id] && parsedMetaMap[p.id].itineraryId) {

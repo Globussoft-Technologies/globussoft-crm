@@ -246,12 +246,11 @@ function renderContactNotification(template, contact, form) {
     .replace(/\{\{\s*(name|email|phone|company|form)\s*\}\}/g, (_, key) => values[key]);
 }
 
-async function sendContactNotifications({ form, settings, contact, submissionId }) {
+async function sendContactNotifications({ form, settings, contact, submissionId, isNewContact }) {
   // Contact acknowledgement controls belong to Generic CRM. Travel forms have
   // their own submission workflows and provider configuration, so never let a
   // shared settings payload trigger Generic notifications for that scope.
   if (form.scope !== "generic") return {};
-
   const channels = Array.isArray(settings.contactNotificationChannels)
     ? settings.contactNotificationChannels
     : ["whatsapp"];
@@ -306,7 +305,12 @@ async function sendContactNotifications({ form, settings, contact, submissionId 
 
   if (channels.includes("whatsapp") && form.scope === "generic") {
     try {
-      result.whatsapp = await sendGenericWebFormWhatsApp({ form, contact, submissionId });
+      result.whatsapp = await sendGenericWebFormWhatsApp({
+        form,
+        contact,
+        submissionId,
+        isNewContact,
+      });
     } catch (error) {
       console.error("[web_forms] generic WhatsApp automation failed:", error.message);
       result.whatsapp = { sent: false, code: "WHATSAPP_SEND_FAILED" };
@@ -403,7 +407,11 @@ const GENERIC_PHONE_RULES = {
 function genericPhoneLengthError(phone, phoneCountry) {
   const countryCode = String(phoneCountry || "").trim();
   if (!countryCode) return null;
-  const digits = String(phone || "").replace(/\D/g, "");
+  let digits = String(phone || "").replace(/\D/g, "");
+  const countryDigits = countryCode.replace(/\D/g, "");
+  if (String(phone || "").trim().startsWith("+") && countryDigits && digits.startsWith(countryDigits)) {
+    digits = digits.slice(countryDigits.length);
+  }
   const rule = GENERIC_PHONE_RULES[countryCode] || [7, 15];
   if (digits.length >= rule[0] && digits.length <= rule[1]) return null;
   const range = rule[0] === rule[1] ? `${rule[0]}` : `${rule[0]}-${rule[1]}`;
@@ -1703,7 +1711,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       if (whatsappSameAsPhone && contactData.phone) {
         contactData.whatsappPhone = contactData.phone;
       } else if (whatsappPhoneValue) {
-        if (!/^\d+$/.test(whatsappPhoneValue)) {
+        if (!/^[+\d\s().-]+$/.test(whatsappPhoneValue)) {
           fieldErrors.whatsappPhone = "Only numbers are allowed.";
         } else {
           const whatsappLengthError = genericPhoneLengthError(whatsappPhoneValue, body.phoneCountry);
@@ -2024,8 +2032,9 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     response.contactNotifications = await sendContactNotifications({
       form,
       settings,
-      contact,
-      submissionId: submission.id,
+    contact,
+    submissionId: submission.id,
+    isNewContact: createdNewContact,
     });
     if (response.contactNotifications.whatsapp) {
       response.whatsapp = response.contactNotifications.whatsapp;

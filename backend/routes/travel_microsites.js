@@ -366,8 +366,8 @@ async function loadTrip(req) {
 router.post(
   "/trips/:tripId/microsite",
   verifyToken,
-  requirePermission("microsites", "write"),
   requireTravelTenant,
+  requirePermission("microsites", "write"),
   requireTmcAccess,
   async (req, res) => {
     try {
@@ -418,8 +418,8 @@ router.post(
 router.get(
   "/trips/:tripId/microsite",
   verifyToken,
-  requirePermission("microsites", "read"),
   requireTravelTenant,
+  requirePermission("microsites", "read"),
   requireTmcAccess,
   async (req, res) => {
     try {
@@ -441,8 +441,8 @@ router.get(
 router.patch(
   "/trips/:tripId/microsite",
   verifyToken,
-  requirePermission("microsites", "update"),
   requireTravelTenant,
+  requirePermission("microsites", "update"),
   requireTmcAccess,
   async (req, res) => {
     try {
@@ -488,8 +488,8 @@ router.patch(
 router.post(
   "/trips/:tripId/microsite/upload",
   verifyToken,
-  requirePermission("microsites", "update"),
   requireTravelTenant,
+  requirePermission("microsites", "update"),
   requireTmcAccess,
   uploadImageOrReject,
   async (req, res) => {
@@ -518,8 +518,8 @@ router.post(
 router.delete(
   "/trips/:tripId/microsite",
   verifyToken,
-  requirePermission("microsites", "delete"),
   requireTravelTenant,
+  requirePermission("microsites", "delete"),
   requireTmcAccess,
   async (req, res) => {
     try {

@@ -148,6 +148,23 @@ describe('whatsappProvider — sendTemplate', () => {
     expect(body.template.components).toBeUndefined();
   });
 
+  test('normalizes Meta-shaped parameters from Generic web-form automation', async () => {
+    respondNext(200, { messages: [{ id: 'wamid.object_params' }] });
+    await sendTemplate({
+      to: '919876543210',
+      templateName: 'new_lead',
+      language: 'en_US',
+      parameters: [{ type: 'text', text: 'Jane' }, { type: 'text', text: 'Acme' }],
+      phoneNumberId: 'PNID',
+      accessToken: 'TOK',
+    });
+    const body = JSON.parse(httpsState.lastRequest.payload);
+    expect(body.template.components[0].parameters).toEqual([
+      { type: 'text', text: 'Jane' },
+      { type: 'text', text: 'Acme' },
+    ]);
+  });
+
   test('omits components when parameters is empty array', async () => {
     respondNext(200, { messages: [{ id: 'wamid.empty' }] });
     await sendTemplate({

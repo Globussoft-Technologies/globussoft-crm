@@ -79,6 +79,7 @@ import {
   // Wave 11 Agent HH  Inventory backbone admin entries
   Layers,
   Truck,
+  Handshake,
   ArrowDownToLine,
   Recycle,
   Package,
@@ -94,6 +95,7 @@ import {
   Compass,
   ClipboardCheck,
   Map as MapIcon,
+  MapPin,
   Luggage,
   Plane,
   Key,
@@ -238,6 +240,7 @@ const Sidebar = ({
     isReady: permissionsReady,
     error: permissionsError,
     permissions,
+    roles,
     refresh: refreshPermissions,
   } = usePermissions();
   const isWellness = tenant?.vertical === "wellness";
@@ -1267,6 +1270,7 @@ const Sidebar = ({
                 isManager,
                 hasPermission,
                 permissionsReady,
+                roles,
                 counts,
                 user,
                 isMobileViewport,
@@ -1459,6 +1463,7 @@ const WELLNESS_CATEGORY_ICON = {
   "Documents & Delivery": FileText,
   "Analytics & Reports": BarChart3,
   "Team & Access": UsersRound,
+  "Pickup & Plot": MapIcon,
   Administration: Shield,
   Platform: Database,
 };
@@ -2585,11 +2590,33 @@ function renderGenericNav({
   isManager,
   hasPermission = () => false,
   permissionsReady = false,
+  roles = [],
   counts = {},
   isMobileViewport = false,
   openGenericGroup = null,
   onOpenGenericGroup = () => { },
 }) {
+  const isTransportPerson = roles.some((value) => {
+    const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return token === 'transportperson' || token === 'transport';
+  });
+  if (isTransportPerson && !isAdmin) {
+    return <Link to="/home" end icon={Truck} label="My Trips" />;
+  }
+  const isBroker = roles.some((value) => {
+    const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return ['broker', 'brooker', 'plotbroker', 'plotbrooker'].includes(token);
+  });
+  if (isBroker && !isAdmin) {
+    return <Link to="/home" end icon={Handshake} label="My Customers" />;
+  }
+  const isBilling = roles.some((value) => {
+    const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return token === 'billing' || token === 'billingdepartment';
+  });
+  if (isBilling && !isAdmin) {
+    return <Link to="/home" end icon={Receipt} label="Billing Queue" />;
+  }
   const canRenderLink = (props) => {
     const canonical = getGenericAccessByPath(props.to);
     const adminOnly = canonical ? Boolean(canonical.adminOnly) : props.adminOnly;
@@ -2737,6 +2764,14 @@ function renderGenericNav({
         <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
         <Link to="/territories" icon={Network} label="Territories" managerOnly />
         <Link to="/field-permissions" icon={Shield} label="Field Permissions" adminOnly />
+      </>)}
+
+      {renderGroup("Pickup & Plot", <>
+        <Link to="/pickup-plot-inventory" icon={MapIcon} label="Inventory" adminOnly />
+        <Link to="/transport-persons" icon={Truck} label="Transport Persons" adminOnly />
+        <Link to="/plot-brokers" icon={Handshake} label="Plot Brokers" adminOnly />
+        <Link to="/billing-persons" icon={Receipt} label="Billing Persons" adminOnly />
+        <Link to="/pickup-customers" icon={MapPin} label="Customer Status" adminOnly />
       </>)}
 
       {renderGroup("Administration", <>

@@ -424,12 +424,20 @@ describe('GET /inbox — #624 folder filter', () => {
     expect(res.body.pagination.total).toBe(27);
   });
 
-  test('does not apply the Generic search contract to Travel CRM', async () => {
+  test('applies the same tenant-scoped search contract to Travel CRM', async () => {
     const app = makeApp({ vertical: 'travel' });
     const res = await request(app).get('/api/communications/inbox?q=quarterly');
 
     expect(res.status).toBe(200);
-    expect(prisma.emailMessage.findMany.mock.calls[0][0].where.OR).toBeUndefined();
+    expect(prisma.emailMessage.findMany.mock.calls[0][0].where).toEqual({
+      tenantId: 1,
+      OR: [
+        { from: { contains: 'quarterly' } },
+        { to: { contains: 'quarterly' } },
+        { subject: { contains: 'quarterly' } },
+        { body: { contains: 'quarterly' } },
+      ],
+    });
   });
 
   test('?folder=sent filters where direction=OUTBOUND', async () => {
@@ -535,13 +543,17 @@ describe('POST /inbox/mark-all-* — Generic bulk inbox actions', () => {
     });
   });
 
-  test('rejects bulk inbox actions outside Generic CRM', async () => {
+  test('supports bulk inbox actions for wellness and travel tenants', async () => {
+    prisma.emailMessage.updateMany.mockResolvedValue({ count: 25000 });
     const res = await request(makeApp({ vertical: 'travel' }))
       .post('/api/communications/inbox/mark-all-read');
 
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe('VERTICAL_NOT_SUPPORTED');
-    expect(prisma.emailMessage.updateMany).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: 25000, read: true });
+    expect(prisma.emailMessage.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, direction: 'INBOUND', read: false },
+      data: { read: true },
+    });
   });
 });
 

@@ -35,7 +35,7 @@
  *  15. Failed POST surfaces notify.error AND does NOT clear the form.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -234,7 +234,6 @@ describe('<Expenses /> — page surface', () => {
   it('renders one row per expense with title, $-formatted amount, category, status, user-or-em-dash, date', async () => {
     renderExpenses();
     expect(await screen.findByText('Office stationery')).toBeInTheDocument();
-    await openCreateExpenseForm();
     expect(screen.getByText('Figma seat')).toBeInTheDocument();
     expect(screen.getByText('Electricity bill')).toBeInTheDocument();
     expect(screen.getByText('AdWords March')).toBeInTheDocument();
@@ -247,12 +246,13 @@ describe('<Expenses /> — page surface', () => {
     expect(screen.getByText('$42.75')).toBeInTheDocument();
     expect(screen.getByText('$1000.00')).toBeInTheDocument();
 
-    // Category badges in the rows — each value also appears once as an
-    // <option> in the form's category select, so length should be ≥ 2.
-    expect(screen.getAllByText('Stationery').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Software/Tech Expenses').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Electricity Bill').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Marketing Expenses').length).toBeGreaterThanOrEqual(2);
+    // Category badges are rendered in the table. SearchableSelect options are
+    // portal-rendered only while the picker is open, so they are not present
+    // in this table-only assertion.
+    expect(screen.getByText('Stationery')).toBeInTheDocument();
+    expect(screen.getByText('Software/Tech Expenses')).toBeInTheDocument();
+    expect(screen.getByText('Electricity Bill')).toBeInTheDocument();
+    expect(screen.getByText('Marketing Expenses')).toBeInTheDocument();
 
     // Status badges.
     expect(screen.getByText('Draft')).toBeInTheDocument();
@@ -289,7 +289,10 @@ describe('<Expenses /> — page surface', () => {
     const categoryPicker = screen.getByRole('combobox', { name: 'Category' });
     expect(categoryPicker).toHaveValue('Building Rent');
     fireEvent.focus(categoryPicker);
-    const options = (await screen.findAllByRole('option')).map((option) => option.textContent.trim());
+    const categoryListbox = await screen.findByRole('listbox', { name: 'Category' });
+    const options = within(categoryListbox)
+      .getAllByRole('option')
+      .map((option) => option.textContent.trim());
     expect(options).toEqual([
       'Building Rent',
       'Business Loan Repayment',

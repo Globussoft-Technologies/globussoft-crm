@@ -87,7 +87,7 @@ const MARKETING_TABS = [
   { key: 'campaigns', label: 'Email Campaigns', color: 'var(--primary-color)' },
   { key: 'sms', label: 'SMS Campaigns', color: '#10b981', hidden: true },
   { key: 'push', label: 'Push Campaigns', color: '#8b5cf6', hidden: true },
-  // { key: 'forms', label: 'Embedded Forms', color: 'var(--primary-color)' },
+  { key: 'forms', label: 'Embedded Forms', color: 'var(--primary-color)' },
 ];
 
 export default function Marketing() {

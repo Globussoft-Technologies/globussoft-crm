@@ -294,7 +294,8 @@ describe('<BookAppointment /> — past date+time guard', () => {
     );
 
     // Select 15:00 — clock is 10:00 so this is well in the future.
-    fireEvent.change(getTimeSelect(), { target: { value: '15:00' } });
+    fireEvent.focus(getTimeSelect());
+    fireEvent.click(await screen.findByRole('option', { name: '15:00' }));
 
     // Submit.
     fireEvent.click(screen.getByRole('button', { name: /Confirm Appointment/i }));
@@ -569,17 +570,18 @@ describe('<BookAppointment /> — searchable doctor + service comboboxes', () =>
       String(url).includes('serviceId=21'),
     )).toBe(true));
 
+    fireEvent.focus(getTimeSelect());
     resolveServiceSlots({ available: true, slots: ['15:00'] });
     await waitFor(() => {
-      const values = Array.from(getTimeSelect().options).map((option) => option.value);
-      expect(values).toContain('15:00');
+      const timeListbox = screen.getByRole('listbox', { name: 'Appointment time' });
+      expect(within(timeListbox).getByRole('option', { name: '15:00' })).toBeInTheDocument();
     });
 
     resolveUnscopedSlots({ available: true, slots: ['11:00'] });
     await waitFor(() => {
-      const values = Array.from(getTimeSelect().options).map((option) => option.value);
-      expect(values).toContain('15:00');
-      expect(values).not.toContain('11:00');
+      const timeListbox = screen.getByRole('listbox', { name: 'Appointment time' });
+      expect(within(timeListbox).getByRole('option', { name: '15:00' })).toBeInTheDocument();
+      expect(within(timeListbox).queryByRole('option', { name: '11:00' })).toBeNull();
     });
   });
 

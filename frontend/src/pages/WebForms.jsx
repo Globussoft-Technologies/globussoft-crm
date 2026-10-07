@@ -12185,6 +12185,10 @@ function WebFormsContent({ scope = "generic" }) {
         gap: 10px !important;
       }
 
+      .web-form-builder-travel .wf-field-grid {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+
       .web-form-builder-travel .wf-field-card,
       .web-form-builder-travel .wf-field-grid,
       .web-form-builder-travel .wf-generic-field-controls {
@@ -12218,6 +12222,13 @@ function WebFormsContent({ scope = "generic" }) {
         justify-content: flex-start !important;
       }
 
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-email-validation-controls),
+      .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions:has(.wf-phone-country-controls) {
+        height: auto;
+        min-height: 0;
+        pointer-events: auto;
+      }
+
       .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-email-validation-controls,
       .web-form-builder-travel .wf-generic-field-editor-grid > .wf-field-editor-actions > .wf-phone-country-controls {
         position: static !important;
@@ -12231,6 +12242,16 @@ function WebFormsContent({ scope = "generic" }) {
       .web-form-builder-travel .wf-phone-country-controls select,
       .web-form-builder-travel .wf-email-validation-controls select {
         max-width: 100%;
+      }
+
+      .web-form-builder-travel .wf-email-validation-controls > label {
+        flex-wrap: wrap;
+        min-width: 0;
+        width: 100%;
+      }
+
+      .web-form-builder-travel .wf-email-validation-controls select {
+        width: 100% !important;
       }
     }
 

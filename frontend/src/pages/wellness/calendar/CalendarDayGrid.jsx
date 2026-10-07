@@ -14,6 +14,8 @@ import {
 } from './constants';
 
 const COLUMN_MIN_WIDTH = 160;
+const TIME_COLUMN_WIDTH = 80;
+const GRID_GAP = 4;
 
 export default function CalendarDayGrid({
   columns,
@@ -25,12 +27,13 @@ export default function CalendarDayGrid({
   onEmptyCellClick,
   onAssignClick,
 }) {
-  const gridMinWidth = 80 + columns.length * COLUMN_MIN_WIDTH;
+  const gridMinWidth = TIME_COLUMN_WIDTH + columns.length * (COLUMN_MIN_WIDTH + GRID_GAP);
 
   return (
     <div
-      className="glass"
+      className="glass calendar-day-grid-card"
       style={{
+        '--calendar-time-column-width': `${TIME_COLUMN_WIDTH}px`,
         padding: '1rem',
         width: '100%',
         minWidth: 0,
@@ -38,29 +41,36 @@ export default function CalendarDayGrid({
         boxSizing: 'border-box',
       }}
     >
-      <TopScrollSync forceScrollbar scrollWidth={gridMinWidth} >
+      <TopScrollSync
+        forceScrollbar
+        scrollWidth={gridMinWidth - TIME_COLUMN_WIDTH}
+        hideBottomScrollbar
+        bottomBarLeadingWidth={TIME_COLUMN_WIDTH}
+      >
         <div
           className="calendar-scroll"
           style={{
             width: `${gridMinWidth}px`,
             minWidth: '100%',
             boxSizing: 'border-box',
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'rgba(255,255,255,0.3) transparent',
+            overflow: 'visible',
           }}
         >
           <div
             className="calendar-grid"
             style={{
               display: 'grid',
-              gridTemplateColumns: `80px repeat(${columns.length}, minmax(${COLUMN_MIN_WIDTH}px, 1fr))`,
-              gap: '4px',
+              gridTemplateColumns: `${TIME_COLUMN_WIDTH}px repeat(${columns.length}, minmax(${COLUMN_MIN_WIDTH}px, 1fr))`,
+              gap: `${GRID_GAP}px`,
               minWidth: `${gridMinWidth}px`,
             }}
           >
-            <div style={{ ...colHead, background: 'transparent' }}></div>
+            <div
+              className="calendar-time-cell calendar-time-cell--header"
+              style={{ ...colHead, textAlign: 'right', background: 'var(--calendar-gutter-bg, var(--modal-bg, #16181d))' }}
+            >
+              Time
+            </div>
             {columns.map((c) => (
               <div
                 key={c.id}
@@ -102,7 +112,7 @@ export default function CalendarDayGrid({
 
             {HOURS.map((h) => (
               <React.Fragment key={h}>
-                <div style={hourLabel}>{fmtHour(h)}</div>
+                <div className="calendar-time-cell" style={hourLabel}>{fmtHour(h)}</div>
                 {columns.map((c) => {
                   const cell = grid[c.id]?.[h] || [];
                   const isCreatable = !c.isUnassigned && cell.length === 0;

@@ -19,6 +19,9 @@ import { useEffect, useRef, useState } from "react";
 // an explicit `scrollWidth` only if you already compute it for other reasons
 // (e.g. it also drives the table's own minWidth) and want to skip the extra
 // measurement.
+// `bottomBarLeadingWidth` adds a separate bottom scrollbar after a fixed
+// leading column. Pair it with `hideBottomScrollbar` and pass the scrollable
+// columns' width as `scrollWidth`.
 const TopScrollSync = ({
   scrollWidth,
   children,
@@ -31,6 +34,7 @@ const TopScrollSync = ({
   verticalOverflow = "visible",
   stickyBottom = false,
   topBarLeadingWidth = 0,
+  bottomBarLeadingWidth = 0,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
@@ -38,6 +42,7 @@ const TopScrollSync = ({
   const syncingFrom = useRef(null);
   const [measuredWidth, setMeasuredWidth] = useState(0);
   const [clientWidth, setClientWidth] = useState(0);
+  const detachedBottomBar = bottomBarLeadingWidth > 0 && !stickyBottom;
 
   useEffect(() => {
     const top = topRef.current;
@@ -71,8 +76,11 @@ const TopScrollSync = ({
         return;
       }
       bottom.scrollLeft = position;
+      if (detachedBottomBar && stickyBottomElement) {
+        stickyBottomElement.scrollLeft = bottom.scrollLeft;
+      }
     };
-    if (stickyBottom) {
+    if (stickyBottom || detachedBottomBar) {
       setHorizontalPosition(stickyBottomElement?.scrollLeft || 0);
     }
 
@@ -114,7 +122,7 @@ const TopScrollSync = ({
         content.style.transform = originalContentStyle.transform;
       }
     };
-  }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar, stickyBottom]);
+  }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar, stickyBottom, detachedBottomBar]);
 
   useEffect(() => {
     if (scrollWidth !== undefined) return undefined;
@@ -217,20 +225,22 @@ const TopScrollSync = ({
       >
         {children}
       </div>
-      {stickyBottom && (forceScrollbar || hasHorizontalOverflow) ? (
+      {(stickyBottom || detachedBottomBar) && (forceScrollbar || hasHorizontalOverflow) ? (
         <div
           ref={stickyBottomRef}
-          className="top-scroll-sync__sticky-bottom"
+          className={`top-scroll-sync__sticky-bottom${detachedBottomBar ? " top-scroll-sync__detached-bottom" : ""}`}
           style={{
             overflowX: forceScrollbar ? "scroll" : "auto",
             overflowY: "hidden",
             height: "16px",
+            marginLeft: detachedBottomBar ? bottomBarLeadingWidth : undefined,
+            width: detachedBottomBar ? `calc(100% - ${bottomBarLeadingWidth}px)` : undefined,
             minWidth: 0,
             maxWidth: "100%",
-            position: "sticky",
-            bottom: 0,
-            zIndex: 6,
-            background: "var(--surface-color)",
+            position: stickyBottom ? "sticky" : "static",
+            bottom: stickyBottom ? 0 : undefined,
+            zIndex: stickyBottom ? 6 : undefined,
+            background: stickyBottom ? "var(--surface-color)" : "transparent",
           }}
         >
           <div style={{ width: spacerWidth, height: "1px" }} />

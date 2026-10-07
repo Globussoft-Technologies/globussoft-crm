@@ -153,7 +153,7 @@ export default function Vendors() {
   }), [allVendors]);
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="wellness-vendors-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <PageHeader
         icon={Truck}
         title="Vendors"
@@ -165,7 +165,7 @@ export default function Vendors() {
       </PageHeader>
 
       {showForm && (
-        <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
+        <form onSubmit={submit} className="glass wellness-vendors-form" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
           <input placeholder="Name — e.g. Sterile Supplies Pvt Ltd" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
           <input placeholder="Contact person" value={form.contactPerson} onChange={(e) => setForm({ ...form, contactPerson: e.target.value })} style={inputStyle} />
           <input
@@ -177,7 +177,7 @@ export default function Vendors() {
           />
           <input placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
           <input placeholder="GSTIN (15 chars)" maxLength={15} value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })} style={inputStyle} />
-          <input placeholder="Address" value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
+          <input className="wellness-vendors-address" placeholder="Address" value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem' }}>
             <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
             Active

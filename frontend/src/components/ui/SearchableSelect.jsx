@@ -57,12 +57,15 @@ export default function SearchableSelect({
   placeholder = "Select…",
   emptyLabel = "No matches",
   disabled = false,
+  required = false,
   allowClear = true,
   ariaLabel,
   id,
   className = "input-field",
   style,
   wrapperStyle,
+  boundarySelector,
+  minPopoverHeight = 120,
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -96,13 +99,17 @@ export default function SearchableSelect({
     const el = wrapRef.current;
     if (!el) return null;
     const rect = el.getBoundingClientRect();
-    const below = window.innerHeight - rect.bottom - 8;
-    const above = rect.top - 8;
+    const boundary = boundarySelector ? el.closest(boundarySelector) : null;
+    const boundaryRect = boundary?.getBoundingClientRect();
+    const topLimit = Math.max(8, boundaryRect?.top ?? 8);
+    const bottomLimit = Math.min(window.innerHeight - 8, boundaryRect?.bottom ?? window.innerHeight - 8);
+    const below = bottomLimit - rect.bottom - 4;
+    const above = rect.top - topLimit - 4;
     const flipUp = below < Math.min(MAX_POPOVER_HEIGHT, 180) && above > below;
-    const maxHeight = Math.max(
-      120,
-      Math.min(MAX_POPOVER_HEIGHT, flipUp ? above : below),
-    );
+    const availableHeight = Math.max(0, flipUp ? above : below);
+    const maxHeight = boundary
+      ? Math.min(MAX_POPOVER_HEIGHT, availableHeight)
+      : Math.max(minPopoverHeight, Math.min(MAX_POPOVER_HEIGHT, availableHeight));
     return {
       left: rect.left,
       width: rect.width,
@@ -224,6 +231,7 @@ export default function SearchableSelect({
         aria-label={ariaLabel}
         autoComplete="off"
         disabled={disabled}
+        required={required}
         className={className}
         value={displayValue}
         placeholder={displayPlaceholder}

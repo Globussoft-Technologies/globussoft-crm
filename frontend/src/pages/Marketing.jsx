@@ -511,7 +511,7 @@ ${fields.map(f => {
 
   // ───── Render ─────
   return (
-    <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="marketing-page" style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Marketing</h1>
@@ -578,7 +578,7 @@ ${fields.map(f => {
             </button>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
+          <div className="marketing-campaign-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
             {visibleCampaigns.map(camp => (
               // #495: card is now a button so click + keyboard (Enter/Space)
               // both open the editor. role=button + tabIndex make it
@@ -777,7 +777,7 @@ ${fields.map(f => {
 
       {/* ─── SMS Campaigns Tab (#493 + #502) ─── */}
       {activeTab === 'sms' && (
-        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '1.5rem', alignContent: 'start' }}>
+        <div className="marketing-sms-grid" style={{ flex: 1, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '1.5rem', alignContent: 'start' }}>
           {/* Blast Composer */}
           <form onSubmit={handleSendSmsBlast} className="card" style={{ padding: '1.5rem' }}>
             <h3 style={{ fontSize: '1.125rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -877,7 +877,7 @@ ${fields.map(f => {
 
       {/* ─── Embedded Forms Tab (#499 / #500 / #504) ─── */}
       {activeTab === 'forms' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', flex: 1, minHeight: 0 }}>
+        <div className="marketing-forms-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', flex: 1, minHeight: 0 }}>
           {/* Builder View */}
           <div className="card" style={{ padding: '2rem', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>

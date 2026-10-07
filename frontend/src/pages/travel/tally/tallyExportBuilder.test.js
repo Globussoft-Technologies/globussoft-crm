@@ -46,6 +46,15 @@ const makeRows = () => buildVoucherRows({
 });
 
 describe("Tally GST journal export", () => {
+  it("keeps existing cost-centre identity when a destination is renamed", () => {
+    const exported = destination => buildVoucherRows({ accounts: [], commonRows: [], payments: [],
+      customers: [{ reference: 'INV-1', name: 'School', invoiceTotal: 1000, itineraryId: 1, tripName: destination }],
+      payables: [], trips: [{ id: 1, destination }], tripTaxes: {}, master, selectedSubBrandLabel: 'Travel' });
+    const before = buildTallyMastersXml({ companyName: master.companyName, voucherRows: exported('Singapore') });
+    const after = buildTallyMastersXml({ companyName: master.companyName, voucherRows: exported('New destination') });
+    expect(after).toBe(before);
+    expect(after).toContain('<COSTCENTRE NAME="TRIP-1" ACTION="Create">');
+  });
   it("posts Sales Ledger Dr to GST Payable Cr without bill allocation", () => {
     const rows = makeRows();
     const xml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
@@ -97,6 +106,28 @@ describe("Tally GST journal export", () => {
     }
     expect(receipt).not.toContain("COSTCENTREALLOCATIONS.LIST");
     expect(payment).not.toContain("COSTCENTREALLOCATIONS.LIST");
+  });
+
+  it("groups TMC sales and purchase details under the same named trip", () => {
+    const rows = buildVoucherRows({
+      accounts: [], commonRows: [], payments: [],
+      customers: [{ reference: "INV-TMC-8", name: "School", invoiceTotal: 185000, tripId: 8, itineraryId: 1 }],
+      payables: [{ reference: "PO-TMC-8", name: "Hotel", amount: 65000, tripId: 8, itineraryId: 1 }],
+      trips: [{ id: "tmc-8", tmcTripId: 8, tripCode: "SCHOOL-8", destination: "Singapore", ledgerType: "tmc" }],
+      tripTaxes: {}, master, selectedSubBrandLabel: "TMC",
+    });
+    const name = "TMC-TRIP-8";
+    const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: rows });
+    const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows: rows });
+
+    expect(mastersXml).toContain(`<COSTCENTRE NAME="${name}" ACTION="Create">`);
+    for (const [type, amount] of [["Sales", "185000.00"], ["Purchase", "-65000.00"]]) {
+      const voucher = vouchersXml.match(new RegExp(`<VOUCHER VCHTYPE="${type}"[\\s\\S]*?<\\/VOUCHER>`))?.[0] || "";
+      expect(voucher).toContain(`<NAME>${name}</NAME>`);
+      expect(voucher).toContain(`<AMOUNT>${amount}</AMOUNT></COSTCENTREALLOCATIONS.LIST>`);
+    }
+    expect(vouchersXml).toContain("<REFERENCE>INV-TMC-8</REFERENCE>");
+    expect(vouchersXml).toContain("<REFERENCE>PO-TMC-8</REFERENCE>");
   });
 
   it("uses first-of-month dates in Educational Mode and preserves GST accounting", () => {

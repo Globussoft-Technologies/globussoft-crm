@@ -338,7 +338,10 @@ describe('<BrandKits /> — page surface', () => {
 
     fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
     // Modal renders with role=dialog.
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement.parentElement).toBe(document.body);
+    expect(dialog.style.background).toBe('var(--modal-bg, #fff)');
 
     // Submit the form via the "Create Brand Kit" button. Default sub-brand
     // when the filter is "__all__" is "__none__" → backend receives null.

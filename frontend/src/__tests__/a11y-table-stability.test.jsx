@@ -294,7 +294,8 @@ describe("#633 — canonical tables adopt .stable-table className", () => {
     },
     {
       file: ["pages", "wellness", "Patients.jsx"],
-      pattern: /className="stable-table"/,
+      // Patients adds a page-specific class after the shared utility class.
+      pattern: /className="[^\"]*\bstable-table\b[^\"]*"/s,
     },
   ];
   for (const { file, pattern } of TABLES) {

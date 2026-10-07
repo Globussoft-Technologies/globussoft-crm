@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import {
   baseCurrencyOptions,
   openingBalanceModeOptions,
@@ -71,6 +72,64 @@ function SelectField({ title, value, onChange, options, required = false }) {
   );
 }
 
+function CalendarField({ title, value, pickerValue, onChange, placeholder }) {
+  const pickerRef = useRef(null);
+  const openPicker = () => {
+    const picker = pickerRef.current;
+    if (!picker) return;
+    if (typeof picker.showPicker === "function") {
+      picker.showPicker();
+    } else {
+      picker.focus();
+      picker.click();
+    }
+  };
+
+  return (
+    <label style={{ ...label, position: "relative" }}>
+      {title} *
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        readOnly
+        onClick={openPicker}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openPicker();
+          }
+        }}
+        style={{ ...input, cursor: "pointer" }}
+      />
+      <input
+        ref={pickerRef}
+        type="date"
+        value={pickerValue}
+        onChange={(event) => onChange(event.target.value)}
+        tabIndex={-1}
+        aria-hidden="true"
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+      />
+    </label>
+  );
+}
+
+const financialYearPickerValue = (value) => {
+  const match = /^(\d{4})-\d{4}$/.exec(value);
+  return match ? `${match[1]}-04-01` : "";
+};
+
+const financialYearToPickerValue = (value) => {
+  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : "";
+};
+
+const displayIsoDate = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : "";
+};
+
 export default function TallyMasterSection({
   master,
   updateMaster,
@@ -82,6 +141,7 @@ export default function TallyMasterSection({
         Set up the company and accounting details first.
       </p>
       <div
+        className="tally-master-grid"
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
@@ -124,25 +184,36 @@ export default function TallyMasterSection({
         <Field title="PIN code" value={master.pinCode} onChange={updateMaster("pinCode")} placeholder="560001" />
         <Field title="Contact number" value={master.contactNumber} onChange={updateMaster("contactNumber")} placeholder="Contact number" />
         <Field title="Email" value={master.email} onChange={updateMaster("email")} placeholder="accounts@example.com" type="email" />
-        <Field
+        <CalendarField
           title="Financial year"
           value={master.financialYear}
-          onChange={updateMaster("financialYear")}
+          pickerValue={financialYearPickerValue(master.financialYear)}
+          onChange={(date) => {
+            if (!date) return;
+            const [year, month] = date.split("-").map(Number);
+            const startYear = month >= 4 ? year : year - 1;
+            updateMaster("financialYear")(`${startYear}-${startYear + 1}`);
+          }}
           placeholder="2026-2027"
-          required
         />
-        <Field title="Financial year to" value={master.financialYearTo} onChange={updateMaster("financialYearTo")} placeholder="31-03-2027" required />
-        <label style={label}>
-          Books beginning from *
-          <input
-            type="date"
-            value={master.booksBeginningFrom}
-            onChange={(event) =>
-              updateMaster("booksBeginningFrom")(event.target.value)
-            }
-            style={input}
-          />
-        </label>
+        <CalendarField
+          title="Financial year to"
+          value={master.financialYearTo}
+          pickerValue={financialYearToPickerValue(master.financialYearTo)}
+          onChange={(date) => {
+            if (!date) return;
+            const [year, month, day] = date.split("-");
+            updateMaster("financialYearTo")(`${day}-${month}-${year}`);
+          }}
+          placeholder="31-03-2027"
+        />
+        <CalendarField
+          title="Books beginning from"
+          value={displayIsoDate(master.booksBeginningFrom)}
+          pickerValue={master.booksBeginningFrom}
+          onChange={updateMaster("booksBeginningFrom")}
+          placeholder="01-04-2026"
+        />
         <SelectField
           title="Voucher numbering"
           value={master.voucherNumbering}
@@ -161,7 +232,7 @@ export default function TallyMasterSection({
           onChange={updateMaster("openingBalanceMode")}
           options={openingBalanceModeOptions}
         />
-        <label style={{ ...label, gridColumn: "span 2" }}>
+        <label className="tally-master-address" style={{ ...label, gridColumn: "span 2" }}>
           Registered address
           <textarea
             value={master.address}

@@ -881,6 +881,7 @@ export default function Omnibar() {
 
   return (
     <div
+      className="omnibar-root"
       ref={containerRef}
       data-testid="omnibar-root"
       data-tour="welcome-global-search"

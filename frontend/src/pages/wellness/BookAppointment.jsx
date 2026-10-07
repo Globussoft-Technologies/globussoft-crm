@@ -628,7 +628,7 @@ export default function BookAppointment() {
   }
 
   return (
-    <div ref={pageRef} style={{ padding: "2rem", animation: "fadeIn 0.5s ease-out" }}>
+    <div ref={pageRef} className="wellness-book-appointment-page" style={{ padding: "2rem", animation: "fadeIn 0.5s ease-out" }}>
       <PageHeader
         icon={Calendar}
         title="Book an Appointment"
@@ -636,6 +636,7 @@ export default function BookAppointment() {
       />
 
       <div
+        className="wellness-book-appointment-layout"
         style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
@@ -720,6 +721,7 @@ export default function BookAppointment() {
                 placeholder="Search doctors, or leave blank for no preference"
                 emptyLabel={doctorsLoading ? "Loading doctors…" : "No doctor matches that search"}
                 ariaLabel="Preferred doctor"
+                minPopoverHeight={0}
               />
               {!doctorsLoading && doctors.length > 0 && doctors.every((doctor) => !doctor.available) && (
                 <div style={INFO_CALLOUT_STYLE}>No doctors have available slots on this date. Choose another date or leave the doctor unselected.</div>
@@ -758,6 +760,7 @@ export default function BookAppointment() {
                 placeholder="Search services by name…"
                 emptyLabel="No service matches that search"
                 ariaLabel="Service"
+                minPopoverHeight={0}
               />
             </div>
 
@@ -823,6 +826,7 @@ export default function BookAppointment() {
 
             {/* Date & Time */}
             <div
+              className="wellness-book-appointment-date-time"
               style={{
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
@@ -866,33 +870,16 @@ export default function BookAppointment() {
                     </span>
                   )}
                 </label>
-                <select
+                <SearchableSelect
                   value={formData.appointmentTime}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      appointmentTime: e.target.value,
-                    })
-                  }
+                  onChange={(appointmentTime) => setFormData({ ...formData, appointmentTime })}
                   disabled={availableSlots.length === 0}
-                  style={{
-                    ...FIELD_STYLE,
-                    opacity: availableSlots.length === 0 ? 0.6 : 1,
-                    cursor:
-                      availableSlots.length === 0 ? "not-allowed" : "pointer",
-                  }}
-                >
-                  <option value="">
-                    {availableSlots.length === 0
-                      ? "— No available slots —"
-                      : "— Select a time —"}
-                  </option>
-                  {availableSlots.map((slot) => (
-                    <option key={slot} value={slot}>
-                      {slot}
-                    </option>
-                  ))}
-                </select>
+                  options={availableSlots.map((slot) => ({ value: slot, label: slot }))}
+                  placeholder={availableSlots.length === 0 ? "— No available slots —" : "— Select a time —"}
+                  ariaLabel="Appointment time"
+                  style={{ ...FIELD_STYLE, opacity: availableSlots.length === 0 ? 0.6 : 1 }}
+                  minPopoverHeight={0}
+                />
               </div>
             </div>
 

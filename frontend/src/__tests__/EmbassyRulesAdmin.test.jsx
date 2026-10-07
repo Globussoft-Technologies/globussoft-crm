@@ -236,6 +236,15 @@ describe('<EmbassyRulesAdmin /> — page chrome + RBAC', () => {
 });
 
 describe('<EmbassyRulesAdmin /> — list + filter lifecycle', () => {
+  it('keeps the header and rows in the same horizontally scrollable viewport', async () => {
+    renderPage();
+    const viewport = await screen.findByTestId('embassy-rules-table-scroll');
+    await screen.findByTestId('embassy-rule-row-401');
+    expect(viewport.querySelectorAll('table')).toHaveLength(1);
+    expect(viewport.querySelector('thead')).toHaveTextContent('Advisor warning');
+    expect(viewport).toHaveStyle({ overflowX: 'auto' });
+  });
+
   it('shows "Loading…" before first GET resolves', async () => {
     let resolveList;
     fetchApiMock.mockImplementation((url) => {

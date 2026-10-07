@@ -184,11 +184,12 @@ describe('BrochureEngine page (wizard)', () => {
     expect(screen.getByTestId('step-5')).toBeInTheDocument();
   });
 
-  it('keeps the Back/Next action bar fixed in the visible workspace', () => {
+  it('keeps the Back/Next action bar in the form flow', () => {
     renderPage();
     const navigation = screen.getByTestId('brochure-floating-navigation');
 
-    expect(navigation).toHaveStyle({ position: 'fixed', bottom: '12px' });
+    expect(navigation).toHaveStyle({ marginTop: '16px' });
+    expect(navigation.style.position).toBe('');
     expect(navigation).toContainElement(screen.getByRole('button', { name: /Back/i }));
     expect(navigation).toContainElement(screen.getByTestId('next-step'));
   });

@@ -1,0 +1,354 @@
+/* Shared density for authenticated CRM pages at tablet and phone widths.
+   Layout rules decide where content goes; these values make the controls,
+   table rows, icons, and cards shrink together while retaining readable floors. */
+@media (max-width: 1199px) {
+  .app-main > main {
+    --crm-control-font: clamp(12px, calc(11px + 0.35vw), 15px);
+    --crm-table-font: clamp(11px, calc(10px + 0.35vw), 14px);
+    --crm-icon-size: clamp(14px, calc(12px + 0.3vw), 18px);
+  }
+
+  .app-main > main :is(button, input, select, textarea) {
+    font-size: var(--crm-control-font) !important;
+  }
+
+  .app-main > main table :is(th, td) {
+    font-size: var(--crm-table-font) !important;
+    line-height: 1.35;
+  }
+
+  .app-main > main :is(button, a, h1, h2, h3, [role="button"]) > svg {
+    width: var(--crm-icon-size) !important;
+    height: var(--crm-icon-size) !important;
+    flex-shrink: 0;
+  }
+
+  .app-main > main :is(.card, .glass) {
+    border-radius: clamp(10px, 1.2vw, 16px);
+  }
+}
+
+@media (max-width: 899px) {
+  .app-main > main :is(.card, .glass) {
+    padding: clamp(12px, 1.8vw, 18px) !important;
+  }
+
+  .app-main > main :is(input, select, textarea) {
+    padding-block: clamp(7px, 0.9vw, 10px) !important;
+  }
+
+  .app-main > main .crm-search-input {
+    padding-left: clamp(2rem, 10vw, 2.5rem) !important;
+    padding-right: 2rem !important;
+  }
+
+  .app-main > main button:not([style*="padding: 0"]):not([style*="padding:0"]):not(.contacts-pagination-icon):not([class*="icon-button"]):not([class*="icon-btn"]) {
+    padding-block: clamp(7px, 0.9vw, 10px) !important;
+    padding-inline: clamp(8px, 1.25vw, 12px) !important;
+  }
+
+  .app-main > main table :is(th, td):not([style*="padding: 0"]) {
+    padding-block: clamp(5px, 0.8vw, 9px) !important;
+    padding-inline: clamp(7px, 1vw, 11px) !important;
+  }
+}
+
+@media (max-width: 600px) {
+  h1:has(> .crm-count-badge) {
+    flex-wrap: nowrap !important;
+    min-width: 0;
+    gap: clamp(6px, 1.8vw, 10px) !important;
+    font-size: clamp(19px, 5.4vw, 24px) !important;
+  }
+
+  h1 > .crm-count-badge {
+    flex: 0 0 auto;
+    min-width: 0 !important;
+    min-height: clamp(24px, 7vw, 26px) !important;
+    padding: 0.22rem clamp(0.4rem, 1.4vw, 0.5rem) !important;
+    gap: 0.25rem !important;
+    font-size: clamp(10px, 2.8vw, 11.2px) !important;
+  }
+
+  h1 > .crm-count-badge > span:last-child {
+    font-size: clamp(9.5px, 2.6vw, 10.4px) !important;
+  }
+
+  .settings-pipeline-stages-card {
+    min-width: 0;
+  }
+
+  .settings-pipeline-stage-list {
+    gap: 8px !important;
+  }
+
+  .settings-pipeline-stage-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center !important;
+    gap: 8px;
+    padding: 10px 12px !important;
+  }
+
+  .settings-pipeline-stage-details {
+    display: grid !important;
+    grid-template-columns: 20px minmax(0, 1fr);
+    column-gap: 8px !important;
+    row-gap: 2px;
+    min-width: 0;
+  }
+
+  .settings-pipeline-stage-details > :first-child {
+    grid-row: 1 / span 2;
+  }
+
+  .settings-pipeline-stage-details > :nth-child(2) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+  }
+
+  .settings-pipeline-stage-position {
+    grid-column: 2;
+    font-size: 11px !important;
+  }
+
+  .settings-pipeline-stage-actions {
+    gap: 2px !important;
+  }
+
+  .settings-pipeline-stage-actions > button {
+    display: inline-flex;
+    width: 32px;
+    height: 32px;
+    padding: 0 !important;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .settings-pipeline-stage-form {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 40px;
+    gap: 8px !important;
+  }
+
+  .settings-pipeline-stage-form > input:first-child {
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .settings-pipeline-stage-form > button {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .developer-page {
+    padding: 12px !important;
+    min-width: 0;
+  }
+
+  .developer-page__header {
+    align-items: flex-start !important;
+    margin-bottom: 20px !important;
+  }
+
+  .developer-page__header h1 {
+    font-size: clamp(20px, 5.2vw, 24px) !important;
+    line-height: 1.2;
+  }
+
+  .developer-activity-card,
+  .developer-api-card {
+    min-width: 0;
+    padding: 12px !important;
+  }
+
+  .developer-activity-card__title {
+    flex-wrap: wrap;
+    align-items: flex-start !important;
+    font-size: 14px !important;
+  }
+
+  .developer-activity-card__polling {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+
+  .developer-api-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 12px !important;
+  }
+
+  .developer-api-card h3 {
+    font-size: 16px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .developer-api-key-form {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px !important;
+    margin-bottom: 16px !important;
+  }
+
+  .developer-api-key-form > :is(input, select, button) {
+    width: 100%;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .developer-webhook-fields {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px !important;
+  }
+
+  .developer-webhook-fields > :is(input, select) {
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .wellness-patients-table {
+    width: max(100%, 920px) !important;
+    min-width: 920px !important;
+    table-layout: fixed !important;
+  }
+
+  .wellness-visits-detail-table,
+  .wellness-visits-summary-table {
+    width: max(100%, 760px) !important;
+    min-width: 760px !important;
+    table-layout: fixed !important;
+  }
+
+  .contacts-page-card > .contacts-filters-bar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+    gap: 8px !important;
+  }
+
+  .contacts-filters-bar > :first-child {
+    grid-column: 1 / -1;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0;
+  }
+
+  .contacts-filters-bar > :is(select, button, [role="combobox"]) {
+    width: 100% !important;
+    max-width: 100%;
+    min-width: 0 !important;
+  }
+
+  .contacts-filters-bar > * {
+    min-width: 0;
+  }
+}
+
+/* Keep controls and portal-rendered searchable dropdowns compact on the
+   smallest phones. The dropdown list is mounted under <body>, so it cannot
+   inherit the .app-main rules above. */
+@media (max-width: 380px) {
+  .app-main > main :is(button, select, input, textarea) {
+    font-size: 12px !important;
+  }
+
+  .app-main > main :is(button, select, input, textarea) {
+    min-height: 0;
+  }
+
+  .app-main > main :is(button, select) {
+    max-width: 96%;
+  }
+
+  .app-main > main :is(button, select):not([style*="width"]):not([class*="full-width"]) {
+    width: auto;
+  }
+
+  [role="listbox"] {
+    border-radius: 7px !important;
+    padding-block: 2px !important;
+    max-width: calc(100vw - 16px) !important;
+  }
+
+  [role="listbox"] > [role="option"] {
+    min-height: 32px !important;
+    padding: 0.4rem 0.6rem !important;
+    font-size: 12px !important;
+  }
+
+  [data-testid$="-pager"] {
+    gap: 0.5rem !important;
+    padding: 0.6rem 0.75rem !important;
+    font-size: 0.75rem !important;
+  }
+
+  [data-testid$="-pager"] > :last-child {
+    gap: 0.35rem !important;
+  }
+
+  [data-testid$="-pager"] button {
+    min-width: 28px !important;
+    width: auto !important;
+    height: 28px !important;
+    padding: 0 0.35rem !important;
+    font-size: 0.75rem !important;
+  }
+
+  [data-testid$="-pager"] button[aria-haspopup="menu"] {
+    min-width: 60px !important;
+  }
+
+  [data-testid$="-pager"] [role="menu"] {
+    min-width: 90px !important;
+    padding: 3px !important;
+  }
+
+  [data-testid$="-pager"] [role="menuitem"] {
+    min-width: 0 !important;
+    height: auto !important;
+    padding: 0.35rem 0.5rem !important;
+    text-align: left !important;
+  }
+
+  /* Other pages use class-based pagers or the shared Pagination component. */
+  .app-main > main :is([class*="pagination"], [class*="pager"], nav[aria-label="Pagination"]) {
+    gap: 0.5rem !important;
+    padding: 0.6rem 0.75rem !important;
+    margin-inline: 0.5rem !important;
+    font-size: 0.75rem !important;
+  }
+
+  .app-main > main :is([class*="pagination"], [class*="pager"], nav[aria-label="Pagination"]) button {
+    min-width: 28px !important;
+    width: auto !important;
+    height: 28px !important;
+    padding: 0 0.35rem !important;
+    font-size: 0.75rem !important;
+  }
+
+  .app-main > main :is([class*="pagination"], [class*="pager"], nav[aria-label="Pagination"]) select,
+  .app-main > main :is([class*="pagination"], [class*="pager"], nav[aria-label="Pagination"]) input {
+    height: 28px !important;
+    min-width: 0 !important;
+    padding: 0.25rem 0.35rem !important;
+    font-size: 0.75rem !important;
+  }
+
+  .app-main > main :is([class*="pagination"], [class*="pager"], nav[aria-label="Pagination"]) [aria-haspopup="menu"] {
+    min-width: 60px !important;
+  }
+}
+
+@media (max-width: 380px) {
+  h1 > .crm-count-badge > span:last-child {
+    display: none !important;
+  }
+
+  h1 > .crm-count-badge {
+    gap: 0 !important;
+  }
+}

@@ -8,7 +8,7 @@
  *
  *   1. Page renders the heading "My Bookings" + four bucket tabs
  *      (Upcoming / Pending / Completed / Cancelled).
- *   2. Mount fetches only the upcoming bucket; other buckets load on selection.
+ *   2. Mount fetches all four buckets; selecting a bucket refreshes it.
  *   3. Upcoming bucket renders one card per appointment with service
  *      name, doctor name, date+time, and a status pill.
  *   4. Pending bucket cards render the "Pending assignment" doctor label
@@ -132,16 +132,17 @@ describe('MyBookings — page shell', () => {
     expect(screen.getByTestId('my-bookings-tab-cancelled')).toBeInTheDocument();
   });
 
-  it('fetches only the active bucket on mount', async () => {
+  it('fetches all four buckets on mount', async () => {
     renderPage();
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
-    expect(fetchApiMock.mock.calls[0][0]).toContain('bucket=upcoming');
-    expect(screen.getByTestId('my-bookings-tab-pending')).toHaveTextContent('—');
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(4));
+    const requestedBuckets = fetchApiMock.mock.calls.map(([url]) => new URL(url, 'http://localhost').searchParams.get('bucket'));
+    expect(requestedBuckets).toEqual(expect.arrayContaining(['upcoming', 'pending', 'completed', 'cancelled']));
+    expect(screen.getByTestId('my-bookings-tab-pending')).toHaveTextContent('1 appointment');
   });
 
-  it('refetches only the selected bucket when switching tabs and updates its count', async () => {
+  it('refetches the selected bucket when switching tabs and updates its count', async () => {
     renderPage();
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(4));
 
     fetchApiMock.mockImplementation(async (url) => {
       const bucket = new URL(url, 'http://localhost').searchParams.get('bucket');
@@ -150,13 +151,13 @@ describe('MyBookings — page shell', () => {
     });
 
     fireEvent.click(screen.getByTestId('my-bookings-tab-pending'));
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(5));
     await waitFor(() => expect(screen.getByTestId('my-bookings-tab-pending')).toHaveTextContent('0 appointments'));
-    expect(fetchApiMock.mock.calls[1][0]).toContain('bucket=pending');
+    expect(fetchApiMock.mock.calls[4][0]).toContain('bucket=pending');
 
     fireEvent.click(screen.getByTestId('my-bookings-tab-completed'));
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(3));
-    expect(fetchApiMock.mock.calls[2][0]).toContain('bucket=completed');
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(6));
+    expect(fetchApiMock.mock.calls[5][0]).toContain('bucket=completed');
     await waitFor(() => expect(screen.getByTestId('my-bookings-tab-completed')).toHaveTextContent('1 appointment'));
   });
 });

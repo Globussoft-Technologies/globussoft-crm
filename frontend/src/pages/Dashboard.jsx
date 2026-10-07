@@ -180,7 +180,7 @@ export default function Dashboard() {
   const shortcutKey = isMac ? 'Cmd' : 'Ctrl';
 
   return (
-    <div style={{ padding: '2rem', width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="dashboard-page" style={{ padding: '2rem', width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header data-tour="dashboard-header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', background: 'linear-gradient(to right, var(--text-primary), var(--text-secondary))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
@@ -194,7 +194,7 @@ export default function Dashboard() {
         <button className="btn-primary" onClick={() => navigate(ctaPath)}>{ctaLabel}</button>
       </header>
 
-      <div data-tour="dashboard-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
+      <div className="dashboard-kpis" data-tour="dashboard-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
         {tiles.map((stat, i) => (
           <Link key={i}
             to={stat.path}
@@ -216,12 +216,12 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
-        <div className="card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minHeight: '350px' }}>
+      <div className="dashboard-panels" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
+        <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minHeight: '350px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
           </div>
-          <div style={{ width: '100%', height: '260px' }}>
+          <div className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
@@ -243,7 +243,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="card" style={{ padding: '2rem' }}>
+        <div className="card dashboard-recent-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '500', marginBottom: '1.5rem' }}>
             {isUser ? 'My Pending Tasks' : 'Recent Deals'}
           </h3>

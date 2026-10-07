@@ -135,7 +135,7 @@ export default function Visits() {
 
         <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
           <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+          <table className="wellness-visits-detail-table" style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '15%' }} />
               <col style={{ width: '20%' }} />
@@ -287,7 +287,7 @@ export default function Visits() {
 
           <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
             <TopScrollSync>
-            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <table className="wellness-visits-summary-table" style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '25%' }} />
                 <col style={{ width: '20%' }} />
@@ -313,7 +313,7 @@ export default function Visits() {
                     onMouseEnter={(e) => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                     onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
-                    <td style={{ ...tdStyle, textAlign: 'left', color: 'var(--primary-color, var(--accent-color))', fontWeight: 600 }}>
+                    <td style={{ ...tdStyle, textAlign: 'left', color: 'var(--text-primary)', fontWeight: 600 }}>
                       {patient.name}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'left' }}>

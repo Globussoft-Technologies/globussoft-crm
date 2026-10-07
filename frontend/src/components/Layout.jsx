@@ -51,6 +51,7 @@ function TenantChip({ tenant }) {
   return (
     <div
       data-testid="tenant-chip"
+      className="app-tenant-chip"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -105,6 +106,7 @@ function TenantChip({ tenant }) {
       </span>
 
       <span
+        className="app-tenant-name"
         style={{
           whiteSpace: "nowrap",
           overflow: "hidden",
@@ -370,6 +372,7 @@ const Layout = () => {
         }}
       >
         <header
+          className="app-topbar"
           style={{
             display: "flex",
             justifyContent: "flex-end",
@@ -417,6 +420,7 @@ const Layout = () => {
               consuming the available header width. Ctrl/Cmd+K focuses it
               and a dropdown panel surfaces beneath as the user types. */}
           <div
+            className="app-header-search"
             style={{
               display: "flex",
               alignItems: "center",
@@ -428,6 +432,7 @@ const Layout = () => {
             <Omnibar />
             {isTravelShortcutPath && (
             <button
+              className="travel-shortcuts-button"
               type="button"
               onClick={() => {
                 window.dispatchEvent(new Event(TRAVEL_KEYBOARD_SHORTCUTS_EVENT));
@@ -464,6 +469,7 @@ const Layout = () => {
           <NotificationBell />
           {toursAvailable && toursEnabled && currentFeature && (
             <button
+              className="app-tour-launcher"
               type="button"
               onClick={startCurrentTour}
               title={`Tour ${currentFeature.label}`}
@@ -485,11 +491,13 @@ const Layout = () => {
               }}
             >
               <CircleHelp size={17} />
-              <span>Tour this page</span>
+              <span className="app-tour-label">Tour this page</span>
             </button>
           )}
           <button
+            className="app-profile-button"
             onClick={() => navigate("/profile")}
+            aria-label="Open profile"
             style={{
               display: "flex",
               alignItems: "center",
@@ -518,7 +526,7 @@ const Layout = () => {
               roleBadge={user?.role || undefined}
               imageUrl={user?.profilePicture || undefined}
             />
-            <span>{user?.name || user?.email || "User"}</span>
+            <span className="app-profile-name">{user?.name || user?.email || "User"}</span>
           </button>
           {/* #862 — discoverable theme toggle button. Cycles
               light → dark → system and surfaces the active mode via icon
@@ -528,6 +536,7 @@ const Layout = () => {
           {toggleTheme && (
             <button
               type="button"
+              className="app-theme-toggle"
               onClick={toggleTheme}
               title={`Theme: ${theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System"} — click to cycle`}
               aria-label={`Switch theme (currently ${theme || "system"})`}
@@ -561,6 +570,7 @@ const Layout = () => {
             </button>
           )}
           <button
+            className="app-logout-button"
             onClick={handleLogout}
             title="Logout"
             aria-label="Log out of your account"

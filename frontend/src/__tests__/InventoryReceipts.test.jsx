@@ -238,11 +238,10 @@ describe('<InventoryReceipts /> — mount fetch + list render', () => {
       expect(screen.getByText('RCP-2026-00042')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: /Record receipt/i }));
-    const options = Array.from(document.querySelectorAll('select option')).map(
-      (o) => o.textContent,
-    );
-    expect(options).toContain('Sterile Supplies Pvt Ltd');
-    expect(options).not.toContain('Legacy Pharma Distributors');
+    const vendorInput = screen.getByRole('combobox', { name: 'Vendor' });
+    fireEvent.focus(vendorInput);
+    expect(await screen.findByRole('option', { name: 'Sterile Supplies Pvt Ltd' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Legacy Pharma Distributors' })).not.toBeInTheDocument();
   });
 });
 
@@ -301,8 +300,7 @@ describe('<InventoryReceipts /> — form open/close + required fields', () => {
       expect(screen.getByText('RCP-2026-00042')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: /Record receipt/i }));
-    const productSelects = document.querySelectorAll('select[required]');
-    expect(productSelects.length).toBe(1);
+    expect(screen.getByRole('combobox', { name: 'Product' })).toBeRequired();
     expect(screen.getByPlaceholderText(/^Quantity$/)).toBeRequired();
     expect(screen.getByPlaceholderText(/^Unit cost$/)).toBeRequired();
     expect(screen.getByPlaceholderText(/^Batch number$/)).not.toBeRequired();
@@ -319,8 +317,9 @@ describe('<InventoryReceipts /> — create POST', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Record receipt/i }));
 
-    const productSelect = document.querySelector('select[required]');
-    fireEvent.change(productSelect, { target: { value: '501' } });
+    const productSelect = screen.getByRole('combobox', { name: 'Product' });
+    fireEvent.focus(productSelect);
+    fireEvent.click(await screen.findByRole('option', { name: 'Derma Filler 1ml (DF-1ML)' }));
 
     fireEvent.change(screen.getByPlaceholderText(/^Quantity$/), {
       target: { value: '5' },

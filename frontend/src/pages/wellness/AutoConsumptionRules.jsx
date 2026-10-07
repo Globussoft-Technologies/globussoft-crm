@@ -10,6 +10,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 import TopScrollSync from '../../components/TopScrollSync';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 
 const UNIT_OPTIONS = ['ml', 'gm', 'kg', 'piece', 'unit', 'bottle', 'tube', 'pack', 'ltr'];
 const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', unit: '', isActive: true };
@@ -59,6 +60,10 @@ export default function AutoConsumptionRules() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (!form.serviceId || !form.productId) {
+      notify.error('Select a service and product.');
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -138,23 +143,42 @@ export default function AutoConsumptionRules() {
 
       {showForm && canManage && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
-          <select required disabled={!!editingId} value={form.serviceId} onChange={(e) => setForm({ ...form, serviceId: e.target.value })} style={inputStyle}>
-            <option value="">Service…</option>
-            {services.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
-          </select>
-          <select required disabled={!!editingId} value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })} style={inputStyle}>
-            <option value="">Product…</option>
-            {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
-          </select>
+          <SearchableSelect
+            required
+            disabled={!!editingId}
+            value={form.serviceId}
+            onChange={(serviceId) => setForm({ ...form, serviceId })}
+            options={services.map((service) => ({ value: service.id, label: service.name }))}
+            placeholder="Service…"
+            ariaLabel="Service"
+            style={inputStyle}
+            minPopoverHeight={0}
+          />
+          <SearchableSelect
+            required
+            disabled={!!editingId}
+            value={form.productId}
+            onChange={(productId) => setForm({ ...form, productId })}
+            options={products.map((product) => ({ value: product.id, label: product.name }))}
+            placeholder="Product…"
+            ariaLabel="Product"
+            style={inputStyle}
+            minPopoverHeight={0}
+          />
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
             <input type="number" min="0.01" step="0.01" required placeholder="e.g., 15" value={form.quantityPerVisit} onChange={(e) => setForm({ ...form, quantityPerVisit: e.target.value })} style={inputStyle} title="Quantity consumed per completed treatment" />
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Consumed per completed treatment</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-            <select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={inputStyle} title="Unit the quantity above is expressed in">
-              <option value="">Unit (default: product&apos;s){productForId(form.productId)?.unit ? ` — ${productForId(form.productId).unit}` : ''}</option>
-              {UNIT_OPTIONS.map((u) => (<option key={u} value={u}>{u}</option>))}
-            </select>
+            <SearchableSelect
+              value={form.unit}
+              onChange={(unit) => setForm({ ...form, unit })}
+              options={UNIT_OPTIONS.map((unit) => ({ value: unit, label: unit }))}
+              placeholder={`Unit (default: product's)${productForId(form.productId)?.unit ? ` — ${productForId(form.productId).unit}` : ''}`}
+              ariaLabel="Unit"
+              style={inputStyle}
+              minPopoverHeight={0}
+            />
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
               {productForId(form.productId)?.unit
                 ? `Product stocked in ${productForId(form.productId).unit}. ml↔ltr and gm↔kg auto-convert.`

@@ -670,8 +670,8 @@ export default function AuditLog() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{
+    <div className="travel-admin-page travel-audit-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="travel-audit-page__header" style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
@@ -697,7 +697,7 @@ export default function AuditLog() {
       </header>
 
       {/* Stats row */}
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+      <div className="travel-audit-page__stats" style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
         <StatCard label="Total events (30d)" value={stats?.total ?? 0} color="var(--accent-color)" />
         <StatCard label="CREATEs" value={stats?.byAction?.CREATE ?? 0} color={ACTION_COLOR.CREATE} />
         <StatCard label="UPDATEs" value={stats?.byAction?.UPDATE ?? 0} color={ACTION_COLOR.UPDATE} />
@@ -706,7 +706,7 @@ export default function AuditLog() {
 
       {/* Filters */}
       <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="travel-audit-page__filters" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
             <Filter size={16} /> Filter
           </div>

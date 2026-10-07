@@ -272,6 +272,7 @@ function ModalSlot({ modal, close }) {
       onClick={() => close(modal.dismissible ? false : cancelValue)}
       style={{
         position: 'fixed', inset: 0, zIndex: 10001,
+        boxSizing: 'border-box', maxWidth: 'none', maxHeight: 'none',
         background: 'rgba(0,0,0,0.55)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: '1rem',
@@ -285,7 +286,8 @@ function ModalSlot({ modal, close }) {
           color: 'var(--text-primary, #1f2937)',
           padding: '1.5rem',
           borderRadius: 12,
-          minWidth: 360,
+          boxSizing: 'border-box',
+          minWidth: 0,
           maxWidth: 480,
           maxHeight: '85vh',
           width: '100%',

@@ -123,7 +123,7 @@ export default function ServiceCard({ service, onChanged, onOpen, editRequested,
   return (
     <div
       className="glass"
-      style={{ padding: '1.25rem', position: 'relative', cursor: onOpen ? 'pointer' : 'default' }}
+      style={{ padding: '1.25rem', minWidth: 0, position: 'relative', cursor: onOpen ? 'pointer' : 'default' }}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
       onClick={() => onOpen && onOpen(service)}

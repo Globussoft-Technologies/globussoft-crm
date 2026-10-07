@@ -1414,7 +1414,7 @@ const Contacts = () => {
       <ReturnToBanner />
       {/* #488: flex-wrap + gap so the action group wraps cleanly below the title
           on narrow viewports instead of stacking awkwardly over the description. */}
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: isGeneric ? 'flex-start' : 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+      <header className="contacts-page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: isGeneric ? 'flex-start' : 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div style={{ minWidth: 0, flex: '1 1 240px', display: isGeneric ? 'flex' : undefined, flexDirection: isGeneric ? 'column' : undefined, alignItems: isGeneric ? 'flex-start' : undefined, gap: isGeneric ? '0.75rem' : undefined }}>
           {isGeneric && <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--surface-color)', color: 'var(--text-primary)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}><ArrowLeft size={16} /> Back</button>}
           <div>
@@ -1426,7 +1426,7 @@ const Contacts = () => {
           </p>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div className="contacts-page__header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           {/* Generic + Travel "Customize table" column picker — personal
               per-user preference, matches the Freshsales reference UI. */}
           {supportsColumnCustomization && (
@@ -1634,7 +1634,7 @@ const Contacts = () => {
             <input
               data-tour="contacts-search"
               type="text"
-              className="input-field"
+              className="input-field crm-search-input"
               placeholder="Search contacts..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
@@ -1907,59 +1907,63 @@ const Contacts = () => {
               Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total.toLocaleString()}
             </span>
             <div className="contacts-pagination-controls">
-              <label htmlFor="contacts-page-size">Rows</label>
-              <select
-                id="contacts-page-size"
-                className="input-field"
-                aria-label="Contacts per page"
-                value={pageSize}
-                onChange={e => {
-                  setPageSize(parseInt(e.target.value, 10) || 10);
-                  setPage(1);
-                }}
-              >
-                {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-              <button
-                type="button"
-                className="contacts-pagination-icon"
-                aria-label="Previous page"
-                title="Previous page"
-                disabled={page <= 1}
-                onClick={() => setPage(p => Math.max(p - 1, 1))}
-              >
-                <ChevronLeft size={16} aria-hidden />
-              </button>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  goToContactsPage();
-                }}
-                className="contacts-pagination-page-form"
-              >
-                <label htmlFor="contacts-page-number">Page</label>
-                <input
-                  id="contacts-page-number"
-                  type="number"
-                  min="1"
-                  max={totalPages}
-                  value={pageInput}
-                  onChange={e => setPageInput(e.target.value)}
-                  onBlur={goToContactsPage}
-                  aria-label="Page number"
-                />
-                <span>of {totalPages}</span>
-              </form>
-              <button
-                type="button"
-                className="contacts-pagination-icon"
-                aria-label="Next page"
-                title="Next page"
-                disabled={page >= totalPages}
-                onClick={() => setPage(p => Math.min(p + 1, totalPages))}
-              >
-                <ChevronRight size={16} aria-hidden />
-              </button>
+              <div className="contacts-pagination-page-size">
+                <label htmlFor="contacts-page-size">Rows</label>
+                <select
+                  id="contacts-page-size"
+                  className="input-field"
+                  aria-label="Contacts per page"
+                  value={pageSize}
+                  onChange={e => {
+                    setPageSize(parseInt(e.target.value, 10) || 10);
+                    setPage(1);
+                  }}
+                >
+                  {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div className="contacts-pagination-navigation">
+                <button
+                  type="button"
+                  className="contacts-pagination-icon"
+                  aria-label="Previous page"
+                  title="Previous page"
+                  disabled={page <= 1}
+                  onClick={() => setPage(p => Math.max(p - 1, 1))}
+                >
+                  <ChevronLeft size={16} aria-hidden />
+                </button>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    goToContactsPage();
+                  }}
+                  className="contacts-pagination-page-form"
+                >
+                  <label htmlFor="contacts-page-number">Page</label>
+                  <input
+                    id="contacts-page-number"
+                    type="number"
+                    min="1"
+                    max={totalPages}
+                    value={pageInput}
+                    onChange={e => setPageInput(e.target.value)}
+                    onBlur={goToContactsPage}
+                    aria-label="Page number"
+                  />
+                  <span>of {totalPages}</span>
+                </form>
+                <button
+                  type="button"
+                  className="contacts-pagination-icon"
+                  aria-label="Next page"
+                  title="Next page"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage(p => Math.min(p + 1, totalPages))}
+                >
+                  <ChevronRight size={16} aria-hidden />
+                </button>
+              </div>
             </div>
           </div>
         )}

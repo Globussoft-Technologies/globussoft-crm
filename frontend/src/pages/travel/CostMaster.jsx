@@ -761,7 +761,7 @@ export default function CostMaster() {
       </div>
 
       {/* Filters */}
-      <div className="finance-page__filters" style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", background: "var(--surface-color)", padding: 16, borderRadius: 12, border: "1px solid var(--border-color)", marginBottom: 20 }}>
+      <div className="finance-page__filters cost-master-filters" style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", background: "var(--surface-color)", padding: 16, borderRadius: 12, border: "1px solid var(--border-color)", marginBottom: 20 }}>
         <Filter size={15} aria-hidden style={{ color: "var(--text-secondary)" }} />
         <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ subBrand: e.target.value || "all" }); }} style={selectStyle} aria-label="Sub-brand">
           {ALL_SUBBRAND_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -928,6 +928,7 @@ export default function CostMaster() {
           <div
             ref={listRef}
             data-testid="cost-master-table-scroll"
+            className="cost-master-table-scroll"
             onScroll={handleListScroll}
             style={{
               maxHeight: "calc(100vh - 475px)",
@@ -935,7 +936,7 @@ export default function CostMaster() {
               overflowX: "hidden",
             }}
           >
-          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+          <table className="cost-master-table" style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
             <colgroup>
               <col style={{ width: "10%" }} />
               <col style={{ width: "10%" }} />

@@ -249,8 +249,9 @@ export default function AttendanceCalendar() {
         )}
       </div>
 
+      <div className="wellness-attendance-calendar-scroll">
       {/* Weekday headers */}
-      <div style={{
+      <div className="wellness-attendance-calendar-track" style={{
         display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
         gap: 4, marginBottom: 4,
       }}>
@@ -282,7 +283,7 @@ export default function AttendanceCalendar() {
           {error}
         </div>
       ) : (
-        <div style={{
+        <div className="wellness-attendance-calendar-track" style={{
           display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
           gap: 4,
         }}>
@@ -370,6 +371,7 @@ export default function AttendanceCalendar() {
           })}
         </div>
       )}
+      </div>
 
       {/* Legend */}
       <div style={{

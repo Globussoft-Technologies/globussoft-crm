@@ -411,7 +411,7 @@ export default function SchoolTermCalendar() {
       </header>
 
       <div
-        className="glass"
+        className="glass school-term-check"
         style={{
           padding: 12,
           marginBottom: 16,
@@ -443,7 +443,7 @@ export default function SchoolTermCalendar() {
           onChange={(e) => setCheckSchool(e.target.value)}
           style={{ ...inp, flex: "1 1 240px", minWidth: 180 }}
         />
-        <button type="button" onClick={runCheck} style={{ ...btn, flex: "0 0 auto" }}>Check date</button>
+        <button type="button" className="school-term-check-button" onClick={runCheck} style={{ ...btn, flex: "0 0 auto" }}>Check date</button>
         {checkResult && (() => {
           // Three outcomes, not two — see the /check route. A date with no
           // window on file used to render the same green "OK to schedule"
@@ -464,6 +464,7 @@ export default function SchoolTermCalendar() {
           }
           return (
             <span
+              className="school-term-check-result"
               title={checkResult.status === "unknown"
                 ? "No term, holiday or exam window on file covers this date, so this is not a confirmation - add the school's windows below to get a definite answer."
                 : undefined}
@@ -594,14 +595,13 @@ export default function SchoolTermCalendar() {
         ) : sortedRows.length === 0 ? (
           <div style={empty}>No term windows match the selected filters.</div>
         ) : (
-          <TopScrollSync>
-            <div
-              ref={listRef}
-              data-testid="school-terms-table-scroll"
-              onScroll={handleRowsScroll}
-              style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
-            >
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div
+            ref={listRef}
+            data-testid="school-terms-table-scroll"
+            onScroll={handleRowsScroll}
+            style={{ maxHeight: "60vh", overflow: "auto", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}
+          >
+            <table style={{ width: "100%", minWidth: 850, borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
                     <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>School</th>
@@ -635,14 +635,13 @@ export default function SchoolTermCalendar() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+            </table>
               {loadingMore && (
                 <div style={{ padding: 12, textAlign: "center", color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
                   Loading more...
                 </div>
               )}
-            </div>
-          </TopScrollSync>
+          </div>
         )}
       </div>
 
@@ -653,7 +652,7 @@ export default function SchoolTermCalendar() {
           <div style={empty}>No uploaded school calendars yet.</div>
         ) : (
           <TopScrollSync>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: 750, borderCollapse: "collapse" }}>
               <thead><tr>
                 <th style={th}>School</th><th style={th}>Board</th><th style={th}>Label</th><th style={th}>File</th><th style={th}>Uploaded</th><th style={th}></th>
               </tr></thead>

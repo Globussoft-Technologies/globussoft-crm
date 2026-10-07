@@ -352,10 +352,12 @@ describe('<AutoConsumptionRules /> — create POST', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /New rule/i }));
 
-    // Form has 2 selects in DOM order: service (index 0), product (index 1).
-    const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[0], { target: { value: '502' } }); // Laser service
-    fireEvent.change(selects[1], { target: { value: '902' } }); // Gel product
+    const serviceInput = screen.getByRole('combobox', { name: 'Service' });
+    fireEvent.focus(serviceInput);
+    fireEvent.click(await screen.findByRole('option', { name: 'Laser Hair Reduction' }));
+    const productInput = screen.getByRole('combobox', { name: 'Product' });
+    fireEvent.focus(productInput);
+    fireEvent.click(await screen.findByRole('option', { name: 'Ultrasound Gel 250ml' }));
     fireEvent.change(document.querySelector('input[type="number"][min="0.01"]'), {
       target: { value: '2.5' },
     });

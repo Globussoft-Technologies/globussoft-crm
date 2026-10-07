@@ -2987,7 +2987,7 @@ table.stable-table td {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   }
   /* Modal dialogs: shrink to viewport-minus-padding instead of overflowing. */
-  [role="dialog"] {
+  [role="dialog"]:not(.create-lead-backdrop) {
     max-width: calc(100vw - 1rem);
     max-height: calc(100vh - 1rem);
   }
@@ -3708,15 +3708,13 @@ table.leads-table thead th {
   background-color: var(--modal-bg);
 }
 
-/* Generic CRM Leads: keep the column headings pinned while the rows move,
-   and use the compact neutral scrollbars from the table reference layout. */
+/* Let the generic table grow with the selected page size. Its inner
+   TopScrollSync owns horizontal scrolling; the Leads page owns vertical
+   scrolling so all rows on the current page remain in normal document flow. */
 .leads-split-table--no-topbar {
-  max-height: calc(100vh - 24rem) !important;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
-  scrollbar-width: auto;
-  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
-  scrollbar-gutter: stable;
+  max-height: none !important;
+  overflow-x: clip !important;
+  overflow-y: visible !important;
 }
 
 .leads-page-root--generic {
@@ -3729,7 +3727,7 @@ table.leads-table thead th {
 }
 
 .leads-page-root--generic .leads-content-shell {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
 }
 
@@ -3738,9 +3736,210 @@ table.leads-table thead th {
 }
 
 .leads-page-root--generic .leads-split-table--no-topbar {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  height: auto;
   min-height: 0;
   max-height: none !important;
+  box-sizing: border-box;
+}
+
+.leads-page-root--generic .leads-table-scroll-pane {
+  min-height: 0;
+}
+
+.leads-page-root--generic .leads-table-scroll-pane > .top-scroll-sync,
+.leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__bottom {
+  min-height: 0;
+}
+
+/* Allow direct touch, trackpad and mouse scrolling on the table itself.
+   The top bar remains synchronized through TopScrollSync. */
+.leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__bottom {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.leads-page-root--generic .leads-pagination-footer {
+  box-sizing: border-box;
+}
+
+@media (max-width: 899px) {
+  /* The generic page has an authored 2rem padding. Reduce it at the same
+     breakpoint where the app shell becomes a drawer so the page width is
+     based on the actual tablet/phone viewport, not desktop gutters. */
+  .leads-page-root--generic {
+    padding: var(--crm-card-padding, 0.75rem) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .leads-page-root--generic .leads-page-header__actions {
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-page-header__actions > button {
+    flex: 1 1 10rem;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar {
+    align-items: stretch;
+    gap: 0.5rem;
+    padding: 0.65rem !important;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar > button,
+  .leads-page-root--generic .leads-actions-toolbar > span[aria-hidden="true"] {
+    flex: 0 0 auto;
+  }
+
+  .leads-page-root--generic .leads-content-shell {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell {
+    align-items: stretch !important;
+    padding: 0.75rem !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child,
+  .leads-page-root--generic .leads-toolbar-shell > div:last-child {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > div:first-child {
+    flex: 1 1 12rem;
+    width: auto !important;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell .crm-search-input {
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:last-child {
+    justify-content: flex-start;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:last-child > button,
+  .leads-page-root--generic .leads-toolbar-shell > div:last-child > :is(.column-picker, [data-testid*="column"]),
+  .leads-page-root--generic .leads-toolbar-shell > div:last-child > .btn-secondary {
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-pagination-footer {
+    padding: 0.75rem !important;
+    align-items: flex-start;
+  }
+
+  .leads-page-root--generic .leads-pagination-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 600px) {
+  .leads-page-root--generic .leads-page-header {
+    gap: 0.6rem !important;
+  }
+
+  .leads-page-root--generic .leads-page-header > div:first-child {
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-page-header > div:first-child > div:last-child {
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-page-header__actions {
+    gap: 0.4rem !important;
+  }
+
+  .leads-page-root--generic .leads-page-header__actions > button {
+    flex-basis: 0;
+    padding-inline: 0.55rem !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 0.45rem !important;
+    flex: 0 0 auto !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell {
+    gap: 0.5rem !important;
+    padding: 0.65rem !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > div:first-child,
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > button {
+    width: 100% !important;
+    flex: 1 1 auto;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:last-child {
+    gap: 0.4rem;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:last-child > * {
+    flex: 1 1 auto;
+  }
+
+  .leads-page-root--generic .leads-pagination-controls {
+    display: contents !important;
+  }
+
+  .app-main > main .leads-page-root--generic .leads-pagination-footer {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center !important;
+    column-gap: 0.35rem !important;
+    row-gap: 0.5rem !important;
+    /* The global softphone floats over the bottom-right of generic CRM.
+       Keep the pager's interactive controls clear of its 56px button. */
+    padding: 0.65rem 4.75rem 0.65rem 0.65rem !important;
+    margin-inline: 0 !important;
+  }
+
+  /* The shared <=380px pager rule also matches these nested class names and
+     adds card padding/margins to each group. Keep only the outer card padded. */
+  .app-main > main .leads-page-root--generic :is(
+    .leads-pagination-controls,
+    .leads-pagination-page-size,
+    .leads-pagination-navigation
+  ) {
+    padding: 0 !important;
+    margin-inline: 0 !important;
+  }
+
+  .leads-page-root--generic .leads-pagination-footer > span {
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-pagination-page-size {
+    justify-content: flex-end;
+    width: auto;
+  }
+
+  .leads-page-root--generic .leads-pagination-navigation {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    width: 100%;
+    gap: 0.35rem !important;
+  }
+
+  .leads-page-root--generic .leads-pagination-navigation form {
+    min-width: 0;
+    gap: 0.25rem !important;
+  }
 }
 
 .leads-split-table--no-topbar::-webkit-scrollbar {
@@ -3943,6 +4142,14 @@ body[data-vertical="generic"] .contacts-page-card > .contacts-split-table--gener
   flex-wrap: wrap;
 }
 
+.contacts-pagination-page-size,
+.contacts-pagination-navigation {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
 .contacts-pagination-controls > label,
 .contacts-pagination-page-form > label,
 .contacts-pagination-page-form > span {
@@ -4024,11 +4231,35 @@ body[data-vertical="generic"] .contacts-page-card > .contacts-split-table--gener
   .contacts-pagination-controls {
     justify-content: flex-start;
   }
+
+  .contacts-pagination-navigation {
+    margin-left: auto;
+  }
 }
 
 @media (max-width: 480px) {
   .contacts-page-card > .contacts-split-table {
     min-height: 280px;
+  }
+
+  /* Free more of the handset viewport for horizontally-scrollable contact
+     fields; the desktop-sized frozen Name column otherwise leaves only a
+     narrow sliver for Email and the remaining columns. */
+  .contacts-table-frozen-pane {
+    width: 184px !important;
+  }
+
+  .contacts-table-frozen-pane > table {
+    width: 184px !important;
+    min-width: 184px !important;
+  }
+
+  .contacts-table-frozen-pane col:nth-child(1) {
+    width: 48px !important;
+  }
+
+  .contacts-table-frozen-pane col:nth-child(2) {
+    width: 136px !important;
   }
 
   .contacts-pagination-controls {

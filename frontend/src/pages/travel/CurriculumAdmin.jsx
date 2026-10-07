@@ -149,6 +149,7 @@ function InfoHint({ text, width = 260 }) {
   const [open, setOpen] = useState(false);
   return (
     <span
+      className="curriculum-admin__hint-anchor"
       role="button"
       tabIndex={0}
       aria-label={text}
@@ -161,6 +162,7 @@ function InfoHint({ text, width = 260 }) {
       <Info size={13} aria-hidden style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
       {open && (
         <span
+          className="curriculum-admin__hint-popover"
           style={{
             position: 'absolute',
             bottom: '130%',
@@ -639,7 +641,7 @@ export default function CurriculumAdmin() {
   };
 
   return (
-    <div style={{ padding: 'clamp(12px, 3vw, 24px)', width: "100%", maxWidth: 1480, minWidth: 0, margin: '0 auto', boxSizing: 'border-box', overflowX: 'hidden' }}>
+    <div className="curriculum-admin-page" style={{ padding: 'clamp(12px, 3vw, 24px)', width: "100%", maxWidth: 1480, minWidth: 0, margin: '0 auto', boxSizing: 'border-box', overflowX: 'hidden' }}>
       {/* Inline style block for the fit-score badge classes. Keeps the
           theme-friendly color values in one place + avoids spraying
           hex codes through inline styles (per Itineraries.jsx pattern). */}
@@ -668,6 +670,7 @@ export default function CurriculumAdmin() {
       `}</style>
 
       <header
+        className="curriculum-admin__header"
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -696,7 +699,7 @@ export default function CurriculumAdmin() {
             This is a TMC-only feature.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="curriculum-admin__actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {isAdmin && (
             <>
               <button
@@ -709,7 +712,7 @@ export default function CurriculumAdmin() {
               >
                 <Plus size={14} /> Add Manual Mapping
               </button>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span className="curriculum-admin__ai-action" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <button
                   type="button"
                   onClick={() => setDocumentsPanelOpen((open) => !open)}

@@ -625,13 +625,40 @@ describe('<Signatures /> — page surface', () => {
     await screen.findByPlaceholderText(/Enter document name/i);
   }
 
+  async function choosePatient() {
+    const signer = screen.getByRole('combobox', { name: 'Signer' });
+    fireEvent.focus(signer);
+    fireEvent.change(signer, { target: { value: 'Asha' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Asha Nair' }));
+    return signer;
+  }
+
+  it('Patient tab: signer results stay inside the dialog and scroll', async () => {
+    fetchApiMock.mockImplementation(patientTabFixtures(sampleVisits));
+    await openPatientTab();
+
+    const signer = screen.getByRole('combobox', { name: 'Signer' });
+    const card = signer.closest('.sig-modal-card');
+    const cardRect = vi.spyOn(card, 'getBoundingClientRect').mockReturnValue({ top: 20, bottom: 300 });
+    const fieldRect = vi.spyOn(signer.parentElement, 'getBoundingClientRect').mockReturnValue({
+      top: 100, bottom: 140, left: 70, width: 380,
+    });
+
+    try {
+      fireEvent.focus(signer);
+      const results = await screen.findByRole('listbox', { name: 'Signer' });
+      expect(results).toHaveStyle({ top: '144px', maxHeight: '156px', overflowY: 'auto' });
+    } finally {
+      cardRect.mockRestore();
+      fieldRect.mockRestore();
+    }
+  });
+
   it('Patient tab: picking a patient loads visits and catalog services', async () => {
     fetchApiMock.mockImplementation(patientTabFixtures(sampleVisits));
     await openPatientTab();
 
-    // Signer is the first combobox in the Patient form.
-    const signerSelect = screen.getAllByRole('combobox')[0];
-    fireEvent.change(signerSelect, { target: { value: '7' } });
+    await choosePatient();
 
     // Visits endpoint hit for the picked patient…
     await waitFor(() => {
@@ -659,8 +686,7 @@ describe('<Signatures /> — page surface', () => {
     fireEvent.change(screen.getByPlaceholderText(/Enter document name/i), {
       target: { value: 'Consent Pack' },
     });
-    const signerSelect = screen.getAllByRole('combobox')[0];
-    fireEvent.change(signerSelect, { target: { value: '7' } });
+    await choosePatient();
     await screen.findByRole('option', { name: '2026-05-01 — Hair Transplant' });
 
     fetchApiMock.mockClear();
@@ -685,8 +711,7 @@ describe('<Signatures /> — page surface', () => {
     fireEvent.change(screen.getByPlaceholderText(/Enter document name/i), {
       target: { value: 'Consent Pack' },
     });
-    const signerSelect = screen.getAllByRole('combobox')[0];
-    fireEvent.change(signerSelect, { target: { value: '7' } });
+    const signerSelect = await choosePatient();
     await screen.findByRole('option', { name: '2026-05-01 — Hair Transplant' });
 
     // Pick the visit — its service pre-selects into Services.
@@ -724,8 +749,7 @@ describe('<Signatures /> — page surface', () => {
     fireEvent.change(screen.getByPlaceholderText(/Enter document name/i), {
       target: { value: 'Combo Pack' },
     });
-    const signerSelect = screen.getAllByRole('combobox')[0];
-    fireEvent.change(signerSelect, { target: { value: '7' } });
+    const signerSelect = await choosePatient();
     await screen.findByRole('option', { name: '2026-05-01 — Hair Transplant' });
 
     // Pick the visit — auto-preselects its service (Hair Transplant).

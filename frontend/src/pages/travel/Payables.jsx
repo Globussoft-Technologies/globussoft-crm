@@ -360,7 +360,7 @@ export default function Payables() {
       {/* Filter chrome — status chips + sub-brand + category + supplier
           search + date range. */}
       <div
-        className="glass finance-page__filters"
+        className="glass finance-page__filters payables-filters"
         style={{
           padding: 12,
           marginBottom: 16,
@@ -370,7 +370,7 @@ export default function Payables() {
           flexWrap: "wrap",
         }}
       >
-        <div role="group" aria-label="Status filter chips" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div className="payables-status-filters" role="group" aria-label="Status filter chips" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {STATUS_CHIPS.map((c) => {
             const active = status === c.value;
             return (
@@ -415,7 +415,7 @@ export default function Payables() {
           ))}
         </select>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div className="payables-supplier-search" style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <Search size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
           <input
             type="text"
@@ -482,13 +482,13 @@ export default function Payables() {
       </div>
 
       {/* Table */}
-      <div className="glass finance-page__table-card" onScroll={handleTableScroll} style={tableFrame}>
+      <div className="glass finance-page__table-card payables-table-scroll" onScroll={handleTableScroll} style={tableFrame}>
         {loading && payables.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : filtered.length === 0 ? (
           <div style={empty}>No payables found</div>
         ) : (
-          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+          <table className="payables-table" style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={{ ...th, width: "24%" }}>{sortHeader("Supplier", "supplierName")}</th>

@@ -2456,7 +2456,7 @@ export default function QuoteBuilder() {
 
       <HotelOfferImageGenerator />
 
-      <section style={heroPanel} aria-label="Quote builder summary">
+      <section className="travel-quote-hero" style={heroPanel} aria-label="Quote builder summary">
         <div>
           <div style={eyebrowStyle}>Travel quote workspace</div>
           <h2
@@ -3013,6 +3013,7 @@ export default function QuoteBuilder() {
         </div>
         {destinations.map((d, i) => (
           <div
+            className="travel-quote-destination-row"
             key={i}
             style={{
               display: "grid",
@@ -3853,7 +3854,7 @@ export default function QuoteBuilder() {
       </section>
 
       <section
-        className="glass"
+        className="glass travel-quote-totals"
         aria-label="Totals"
         style={{
           padding: 18,

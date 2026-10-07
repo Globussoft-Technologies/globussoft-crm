@@ -29,6 +29,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Palette,
   Plus,
@@ -771,7 +772,7 @@ export default function BrandKits() {
       )}
 
       {/* New / Edit modal */}
-      {showModal && (
+      {showModal && createPortal(
         <div style={modalOverlay} onClick={closeModal}>
           <div
             style={modalBody}
@@ -1105,7 +1106,8 @@ export default function BrandKits() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* W4.A G099 — Version history modal */}
@@ -1690,7 +1692,7 @@ const modalOverlay = {
   overflowY: "auto",
 };
 const modalBody = {
-  background: "var(--surface-color, #1a1f2e)",
+  background: "var(--modal-bg, #fff)",
   borderRadius: 10,
   border: "1px solid var(--border-color)",
   padding: 20,

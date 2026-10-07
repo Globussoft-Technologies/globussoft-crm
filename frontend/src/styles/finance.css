@@ -87,6 +87,26 @@
   line-height: 1.5;
 }
 
+.invoices-mobile-page .invoice-summary-controls {
+  margin-bottom: 1.75rem;
+}
+
+.invoices-mobile-page .invoice-summary-badges {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.invoices-mobile-page .invoice-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .finance-page__header-actions,
 .finance-page__section-actions {
   display: flex !important;
@@ -132,7 +152,7 @@
 .finance-page__primary-action {
   min-height: 36px;
   border-radius: 8px !important;
-  font-size: 13px !important;
+  font-size: var(--crm-text-13, 13px) !important;
   font-weight: 600 !important;
   line-height: 1 !important;
 }
@@ -179,7 +199,7 @@
   border-bottom: 1px solid var(--border-color) !important;
   background: var(--modal-bg, var(--bg-color)) !important;
   color: var(--text-secondary) !important;
-  font-size: 12px !important;
+  font-size: clamp(11.5px, calc(10.5px + 0.2vw), 12px) !important;
   font-weight: 600 !important;
   line-height: 1.25;
   text-transform: uppercase;
@@ -190,7 +210,7 @@
 .finance-page__section-card table tbody td {
   padding: 11px 12px !important;
   border-bottom: 1px solid var(--border-light, var(--border-color));
-  font-size: 13px;
+  font-size: var(--crm-text-13, 13px);
   line-height: 1.45;
 }
 
@@ -240,8 +260,73 @@
     padding: 16px !important;
   }
 
+  /* Finance headers and filters can exceed a phone viewport. Let the page
+     own vertical scrolling and keep wide tables horizontally scrollable. */
+  .travel-content-frame:has(> .invoices-admin-page) {
+    display: block;
+    height: auto;
+    min-height: 100%;
+  }
+
+  .invoices-admin-page {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+  }
+
+  .invoices-admin-page > .finance-page__table-card {
+    flex: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+
+  .invoices-admin-page > .finance-page__table-card > .finance-page__table-scroll {
+    flex: none !important;
+    height: auto !important;
+    max-height: none !important;
+    overscroll-behavior: auto !important;
+  }
+
+  .finance-page:not(.invoices-admin-page) .finance-page__table-card {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overscroll-behavior: auto !important;
+  }
+
+  .finance-page [data-testid="cost-master-table-scroll"] {
+    max-height: none !important;
+    overflow-y: auto !important;
+  }
+
+  .finance-page .cost-master-table-scroll {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .finance-page .cost-master-table {
+    width: max(100%, 920px) !important;
+    min-width: 920px !important;
+    table-layout: fixed !important;
+  }
+
   .finance-page__title {
     font-size: 1.5rem !important;
+  }
+
+  .payables-table-scroll {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .payables-table {
+    width: max(100%, 980px) !important;
+    min-width: 980px !important;
+    table-layout: fixed !important;
   }
 
   .finance-page__header-actions,
@@ -253,5 +338,149 @@
   .finance-page__filters > input:not([type="checkbox"]),
   .finance-page__filters > select {
     flex: 1 1 180px;
+  }
+}
+
+@media (max-width: 600px) {
+  .finance-page .finance-page__filters.cost-master-filters {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .finance-page .finance-page__filters.cost-master-filters > svg {
+    display: none;
+  }
+
+  .finance-page .finance-page__filters.cost-master-filters > select,
+  .finance-page .finance-page__filters.cost-master-filters > button {
+    width: 100%;
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  .invoices-admin-page .finance-page__header-actions,
+  .invoices-admin-page .finance-page__filters {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .invoices-admin-page .finance-page__header-actions > button,
+  .invoices-admin-page .finance-page__filters > :is(button, select, input) {
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .invoices-admin-page .finance-page__filters > input:not([type="checkbox"]) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 380px) {
+  .invoices-admin-page .finance-page__filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .invoices-admin-page .finance-page__filters > input:not([type="checkbox"]) {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 1100px) {
+  .finance-page .finance-page__header,
+  .finance-page .finance-page__section-header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start !important;
+  }
+
+  .finance-page .finance-page__header-actions,
+  .finance-page .finance-page__section-actions,
+  .finance-page .finance-page__filters {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+    align-items: stretch !important;
+    width: 100%;
+  }
+
+  .finance-page .finance-page__header-actions > *,
+  .finance-page .finance-page__section-actions > *,
+  .finance-page .finance-page__filters > * {
+    min-width: 0 !important;
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .finance-page .finance-page__filters.payables-filters {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    align-items: start !important;
+    gap: 8px !important;
+  }
+
+  .finance-page .payables-status-filters,
+  .finance-page .payables-supplier-search {
+    grid-column: 1 / -1;
+  }
+
+  .finance-page .payables-filters > :is(select, input, button) {
+    width: 100%;
+    min-width: 0 !important;
+    max-width: 100%;
+    align-self: start;
+  }
+
+  .finance-page .payables-filters .payables-supplier-search input {
+    width: 100%;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 600px) {
+  .invoices-mobile-page {
+    padding: 1rem !important;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges > span {
+    box-sizing: border-box;
+    max-width: 100%;
+  }
+
+  .invoices-mobile-page .invoice-filters {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .invoices-mobile-page .invoice-filters > .invoice-filter-pill {
+    box-sizing: border-box;
+    width: 100%;
+    margin-left: 0 !important;
+    justify-content: space-between;
+  }
+
+  .invoices-mobile-page .invoice-filters > .invoice-create-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .finance-page .finance-page__header-actions,
+  .finance-page .finance-page__section-actions,
+  .finance-page .finance-page__filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .invoices-admin-page .finance-page__filters > input:not([type="checkbox"]) {
+    grid-column: auto;
   }
 }

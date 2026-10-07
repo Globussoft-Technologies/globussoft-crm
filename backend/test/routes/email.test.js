@@ -26,7 +26,8 @@
  *   1. GET /              — soft-fail to { total: 0 } on Prisma error
  *                           (sidebar must never blow up the page).
  *   2. GET /              — happy path: { total: <N> } from emailMessage.count.
- *   3. GET /?unread=1     — passes read:false into the where clause.
+ *   3. GET /?unread=1     — passes read:false and direction:INBOUND into the
+ *                           inbox badge where clause.
  *   4. GET /?folder=inbox — passes direction:'INBOUND' into the where clause.
  *   5. GET /?folder=sent  — passes direction:'OUTBOUND' into the where clause.
  *   6. GET /threads       — groups by threadId; falls back to `single-<id>`
@@ -173,6 +174,7 @@ describe('GET / — inbox counter (#402)', () => {
     expect(res.body).toEqual({ total: 3 });
     const args = prisma.emailMessage.count.mock.calls[0][0];
     expect(args.where.read).toBe(false);
+    expect(args.where.direction).toBe('INBOUND');
   });
 
   test('?folder=inbox adds direction:INBOUND', async () => {

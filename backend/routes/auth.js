@@ -1575,6 +1575,37 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
       });
     }
 
+    // Generic CRM transport-person and plot-broker assignment lists are
+    // backed by Contact rows, while customer self-registration creates a User
+    // identity. Keep the two directories connected by materialising a
+    // Customer contact for this tenant. A matching Lead/Prospect is preserved
+    // as its own lifecycle record; Contact email is intentionally non-unique
+    // within a tenant for this product-specific identity split.
+    if ((user.tenant?.vertical || tenant.vertical) === "generic") {
+      try {
+        const existingCustomerContact = await prisma.contact.findFirst({
+          where: { email, tenantId, status: "Customer", deletedAt: null },
+          select: { id: true },
+        });
+        if (!existingCustomerContact) {
+          await prisma.contact.create({
+            data: {
+              name: name || email.split("@")[0],
+              email,
+              phone: registrationPhone,
+              status: "Customer",
+              source: "Customer Registration",
+              tenantId,
+            },
+          });
+        }
+      } catch (e) {
+        // The User account is already committed at this point. Keep
+        // registration available and surface the bridge failure to operators.
+        console.error(`[auth] customer/register generic-contact bridge failed (non-fatal): ${e.message}`);
+      }
+    }
+
     // Emit audit log for customer registration
     await writeAudit(
       "User",

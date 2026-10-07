@@ -264,10 +264,9 @@ router.get("/inbox", async (req, res) => {
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
     else if (req.query.folder === 'inbox') where.direction = 'INBOUND';
 
-    // Generic CRM inbox search is evaluated before pagination so matches on
-    // later pages are not silently omitted. Other verticals keep their
-    // established inbox query contract unchanged.
-    if ((req.user.vertical || "generic") === "generic" && req.query.q !== undefined) {
+    // Inbox search is evaluated before pagination so matches on later pages
+    // are not silently omitted. The same contract applies to every vertical.
+    if (req.query.q !== undefined) {
       const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
       if (!q || q.length > 200) {
         return res.status(400).json({
@@ -342,10 +341,11 @@ router.get("/inbox", async (req, res) => {
 // hence this single-id endpoint. Tenant-scoped via updateMany; 404 when
 // the id isn't in this tenant.
 router.post("/inbox/mark-all-read", async (req, res) => {
-  if ((req.user.vertical || "generic") !== "generic") {
-    return res.status(403).json({ error: "Bulk inbox actions are only available in Generic CRM", code: "VERTICAL_NOT_SUPPORTED" });
-  }
-  const canAccess = await hasModuleAction(req.user, "Communications", "WRITE");
+  // Reading/clearing an inbox flag is a mailbox action, not composing or
+  // editing a CRM record. Users who can view Communications must be able to
+  // clear their inbox in bulk; requiring WRITE made the visible menu action
+  // silently fail for read-only staff accounts.
+  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
   if (!canAccess) {
     return res.status(403).json({ error: "You don't have permission to access Communications" });
   }
@@ -361,10 +361,7 @@ router.post("/inbox/mark-all-read", async (req, res) => {
 });
 
 router.post("/inbox/mark-all-unread", async (req, res) => {
-  if ((req.user.vertical || "generic") !== "generic") {
-    return res.status(403).json({ error: "Bulk inbox actions are only available in Generic CRM", code: "VERTICAL_NOT_SUPPORTED" });
-  }
-  const canAccess = await hasModuleAction(req.user, "Communications", "WRITE");
+  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
   if (!canAccess) {
     return res.status(403).json({ error: "You don't have permission to access Communications" });
   }

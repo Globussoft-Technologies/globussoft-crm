@@ -341,13 +341,24 @@
             if (bareCode) { country.value = bareCode; raw = raw.substring(bareCode.length - 1); applyRule(); }
           }
           input.value = raw;
+          // The message may belong to the previous value. Always remove it
+          // while the visitor edits; submit validation will recreate it if
+          // the final value is actually invalid.
+          var error = input.closest('.field') && input.closest('.field').querySelector('.field-error');
+          if (error) error.remove();
         });
         country.addEventListener('change', function(){
           if (!phoneState.applyingDetectedCountry) phoneState.userSelectedCountry = true;
           applyRule();
+          var error = input.closest('.field') && input.closest('.field').querySelector('.field-error');
+          if (error) error.remove();
         });
         applyRule();
-        detectGenericCountryFromLocationOrIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
+        // Do not let a background IP/geolocation lookup silently replace the
+        // form's explicit default (+91). It is opt-in for forms that need it.
+        if (phoneSettings.phoneAutoDetectCountry === true) {
+          detectGenericCountryFromLocationOrIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);
+        }
       }
       window.addEventListener('message', function(event){ if(event.data && event.data.source === 'gbs-web-form-host' && event.data.type === 'context'){ hostContext = { pageUrl: String(event.data.pageUrl || ''), pageTitle: String(event.data.pageTitle || '') }; } });
       window.addEventListener('message', function(event){
@@ -659,9 +670,17 @@
         }
         function keepWhatsappNumeric(value){
           var raw = String(value || '');
-          var invalid = /[^0-9]/.test(raw);
-          if (invalid) showWhatsappError(true);
-          whatsappInput.value = raw.replace(/[^0-9]/g, '');
+          // Accept harmless formatting that users commonly paste into phone
+          // fields. Submit-time validation still enforces the selected
+          // country's length and E.164 format.
+          var invalid = /[^0-9+().\s-]/.test(raw);
+          var digits = raw.replace(/\D/g, '');
+          var countryDigits = String(phoneCountry && phoneCountry.value || '').replace(/\D/g, '');
+          if (raw.trim().charAt(0) === '+' && countryDigits && digits.indexOf(countryDigits) === 0) {
+            digits = digits.slice(countryDigits.length);
+          }
+          showWhatsappError(invalid);
+          whatsappInput.value = digits;
         }
         function syncWhatsappField(){
           var same = Boolean(sameCheckbox.checked);
@@ -673,7 +692,7 @@
         sameCheckbox.addEventListener('change', syncWhatsappField);
         phoneInput.addEventListener('input', syncWhatsappField);
         whatsappInput.addEventListener('beforeinput', function(event){
-          if (event.data && /[^0-9]/.test(event.data)) {
+          if (event.data && /[^0-9+().\s-]/.test(event.data)) {
             event.preventDefault();
             showWhatsappError(true);
           }
@@ -1262,6 +1281,13 @@
             var phoneInput = String(fd.get('phone')).trim();
             var nationalDigits = phoneInput.replace(/\D/g, '');
             var countryCode = String(fd.get('phoneCountry') || '+91').trim();
+            var countryDigits = countryCode.replace(/\D/g, '');
+            // A browser/autofill may provide the complete +91... value even
+            // though the country code is selected separately. Do not count
+            // the prefix as part of the national number or add it twice.
+            if (phoneInput.charAt(0) === '+' && countryDigits && nationalDigits.indexOf(countryDigits) === 0) {
+              nationalDigits = nationalDigits.slice(countryDigits.length);
+            }
             var phoneRule = phoneRules[countryCode] || [7, 15];
             if (nationalDigits.length < phoneRule[0] || nationalDigits.length > phoneRule[phoneRule.length - 1]) {
               showBusy(false);
@@ -1274,7 +1300,10 @@
               showFieldErrors({ phone: 'Enter a valid international phone number.' });
               return;
             }
-            fd.set('phone', internationalPhone);
+            // Keep the country code separate in the multipart payload. The
+            // API owns canonical E.164 assembly; sending +91... here made
+            // older backend workers count the country prefix twice.
+            fd.set('phone', nationalDigits);
           }
 
           if (fd.get('whatsappPhone') && fd.get('phoneCountry')) {
@@ -1292,7 +1321,7 @@
               showFieldErrors({ whatsappPhone: 'Enter a valid international WhatsApp number.' });
               return;
             }
-            fd.set('whatsappPhone', internationalWhatsapp);
+            fd.set('whatsappPhone', whatsappDigits);
           }
 
         try {

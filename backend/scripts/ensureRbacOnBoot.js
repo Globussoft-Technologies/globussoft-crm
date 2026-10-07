@@ -730,6 +730,21 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       await grantPermissionList(stats, userRole.id, USER_PERMISSIONS);
     }
 
+    // Generic pickup/plot workflow role. Billing staff use a dedicated
+    // /home workspace and the route itself verifies this role, so no broad
+    // CRM permissions are granted here.
+    if (vertical === 'generic') {
+      await ensureRole(stats, {
+        tenantId,
+        key: 'BILLING',
+        name: 'Billing Department',
+        description: 'Handles interested plot customers from invoice preparation through payment completion',
+        isSystem: false,
+        userType: 'STAFF',
+        landingPath: '/home',
+      });
+    }
+
     // Wellness-vertical custom roles. Auto-provisioned only for wellness
     // tenants so a generic CRM tenant doesn't end up with empty Doctor /
     // Nurse roles cluttering its Roles & Permissions matrix. Admins can

@@ -19,6 +19,9 @@ import { fetchApi } from '../utils/api';
 import { usePermissions } from '../hooks/usePermissions';
 import { getWidgetComponent } from '../components/home/widgets/index.js';
 import WidgetCard from '../components/home/WidgetCard.jsx';
+import TransportDriverWorkspace from '../components/TransportDriverWorkspace.jsx';
+import BrokerCustomerWorkspace from '../components/BrokerCustomerWorkspace.jsx';
+import BillingWorkspace from '../components/BillingWorkspace.jsx';
 
 /**
  * Role-aware home dashboard. Fetches /api/widgets/me which returns the
@@ -142,6 +145,17 @@ export default function Home() {
   const firstName = user?.name?.split(' ')[0] || '';
   const roleLabel = role?.name || user?.role || '';
   const clinicLabel = tenant?.name || '';
+  const normalizedRole = `${role?.key || ''} ${role?.name || ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  if (!loading && (normalizedRole.includes('transportperson') || normalizedRole === 'transport')) {
+    return <TransportDriverWorkspace />;
+  }
+  if (!loading && ['broker', 'brooker', 'plotbroker', 'plotbrooker'].some((token) => normalizedRole.includes(token))) {
+    return <BrokerCustomerWorkspace />;
+  }
+  if (!loading && normalizedRole.includes('billing')) {
+    return <BillingWorkspace />;
+  }
 
   return (
     <div style={pageStyle}>

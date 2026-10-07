@@ -19,6 +19,7 @@
 
 const prisma = require('../lib/prisma');
 const { getBudgetCap, getSetting, evaluateCap, KEYS } = require('../lib/tenantSettings');
+const { extractPickupLocationFromCallifiedDetails } = require('../lib/callifiedPickup');
 
 const INTEGRATION = 'ai_calling';
 const FEATURE_FLAG_KEY = 'featureFlag_ai_calling_enabled';
@@ -1754,7 +1755,40 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
     }
   }
 
-  return { ...details, latestTranscript, latestReview, updatedScore, callStatus: inferredStatus };
+  let capturedPickup = null;
+  const pickupMatch = contactId ? extractPickupLocationFromCallifiedDetails(details) : null;
+  if (pickupMatch) {
+    try {
+      const [tenant, contact] = await Promise.all([
+        prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }),
+        prisma.contact.findFirst({ where: { id: Number(contactId), tenantId, deletedAt: null }, select: { id: true } }),
+      ]);
+      if (tenant?.vertical === 'generic' && contact) {
+        capturedPickup = await prisma.customerPickup.upsert({
+          where: { tenantId_contactId: { tenantId, contactId: Number(contactId) } },
+          create: {
+            tenantId,
+            contactId: Number(contactId),
+            pickupAddress: pickupMatch.pickupAddress,
+            sourceTranscriptId: pickupMatch.sourceTranscriptId || null,
+            sourceExcerpt: pickupMatch.sourceExcerpt || null,
+          },
+          update: {
+            pickupAddress: pickupMatch.pickupAddress,
+            sourceTranscriptId: pickupMatch.sourceTranscriptId || null,
+            sourceExcerpt: pickupMatch.sourceExcerpt || null,
+          },
+          select: { id: true, pickupAddress: true, sourceTranscriptId: true, updatedAt: true },
+        });
+      }
+    } catch (pickupError) {
+      // Pickup extraction is an additive plot-management workflow. It must
+      // never break transcripts, call status, campaign editing, or dialing.
+      console.error(`[callifiedClient] pickup capture failed (non-fatal): ${pickupError.message}`);
+    }
+  }
+
+  return { ...details, latestTranscript, latestReview, updatedScore, capturedPickup, callStatus: inferredStatus };
 }
 
 /**

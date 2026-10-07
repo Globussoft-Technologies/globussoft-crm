@@ -25,6 +25,7 @@ export default function ScrollableSelect({
   width = 170,
   ariaLabel,
   disabled = false,
+  compact = false,
 }) {
   const [open, setOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState(null);
@@ -77,7 +78,7 @@ export default function ScrollableSelect({
   };
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
+    <div ref={wrapRef} style={{ position: "relative", display: "inline-block", minWidth: 0, maxWidth: "100%" }}>
       <button
         ref={triggerRef}
         type="button"
@@ -96,6 +97,13 @@ export default function ScrollableSelect({
           textAlign: "left",
           opacity: disabled ? 0.7 : 1,
           cursor: disabled ? "not-allowed" : "pointer",
+          ...(compact ? {
+            minHeight: 26,
+            height: 26,
+            padding: "0.2rem 0.35rem",
+            borderRadius: 6,
+            fontSize: "0.7rem",
+          } : {}),
         }}
       >
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

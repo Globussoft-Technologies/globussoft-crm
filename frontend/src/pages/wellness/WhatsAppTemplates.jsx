@@ -55,6 +55,13 @@ const CATEGORIES = [
   { value: 'AUTHENTICATION', label: 'Authentication', desc: 'OTP / verification codes' },
 ];
 
+const GENERIC_LEAD_STATUSES = [
+  { value: 'newLead', label: 'New lead' },
+  { value: 'existingLead', label: 'Existing lead' },
+  { value: 'prospect', label: 'Prospect' },
+  { value: 'converted', label: 'Converted lead' },
+];
+
 function StatusBadge({ status }) {
   const cfg = STATUS_BADGES[status] || STATUS_BADGES.PENDING;
   const Icon = cfg.icon;
@@ -80,6 +87,9 @@ export default function WhatsAppTemplates() {
   const inboxPath = pathname.startsWith('/wellness/') ? '/wellness/whatsapp' : '/whatsapp';
 
   const [templates, setTemplates] = useState([]);
+  const [statusTemplateIds, setStatusTemplateIds] = useState({});
+  const [statusTemplateDirty, setStatusTemplateDirty] = useState(false);
+  const [bulkSending, setBulkSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -100,6 +110,11 @@ export default function WhatsAppTemplates() {
       const data = await fetchApi('/api/whatsapp/templates');
       const list = Array.isArray(data) ? data : Array.isArray(data?.templates) ? data.templates : [];
       setTemplates(list);
+      const statusMap = {};
+      list.forEach((template) => (template.genericWebFormStatuses || []).forEach((status) => {
+        statusMap[status] = String(template.id);
+      }));
+      setStatusTemplateIds(statusMap);
     } catch (err) {
       notify.error(err.message || 'Failed to load templates.');
       setTemplates([]);
@@ -179,6 +194,43 @@ export default function WhatsAppTemplates() {
     }
   };
 
+  const handleStatusTemplateChange = async (status, value) => {
+    try {
+      await fetchApi('/api/whatsapp/templates/generic-web-form-status', {
+        method: 'POST',
+        body: JSON.stringify({ status, templateId: value ? Number(value) : null }),
+      });
+      setStatusTemplateIds((current) => ({ ...current, ...(value ? { [status]: value } : (() => {
+        const next = { ...current };
+        delete next[status];
+        return next;
+      })()) }));
+      setStatusTemplateDirty(true);
+      notify.info(value ? 'Generic CRM status template updated.' : 'Generic CRM status template cleared.');
+    } catch (err) {
+      notify.error(err.message || 'Failed to update status template.');
+    }
+  };
+
+  const sendToExistingLeads = async () => {
+    const ok = await notify.confirm({
+      title: 'Send WhatsApp to existing leads?',
+      message: 'This will queue the selected status template for existing Generic CRM Leads, Prospects, and Customers with a phone or WhatsApp number.',
+      confirmText: 'Send to existing leads',
+      destructive: false,
+    });
+    if (!ok) return;
+    setBulkSending(true);
+    try {
+      const result = await fetchApi('/api/whatsapp/templates/generic-web-form-send-all', { method: 'POST', body: JSON.stringify({}) });
+      notify.info(`Queued ${result?.queued || 0} message(s). Skipped ${result?.skipped || 0}.`);
+      setStatusTemplateDirty(false);
+    } catch (err) {
+      notify.error(err.message || 'Failed to queue messages for existing leads.');
+    }
+    setBulkSending(false);
+  };
+
   return (
     <div style={{ padding: '1.5rem', animation: 'fadeIn 0.4s ease-out', maxWidth: 1100, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: '1.5rem', flexWrap: 'wrap' }}>
@@ -240,6 +292,41 @@ export default function WhatsAppTemplates() {
         </span>
       </div>
 
+      {!pathname.startsWith('/wellness/') && (
+        <div className="glass-card" style={{ padding: '1rem 1.25rem', borderRadius: 10, border: '1px solid var(--border-color)', marginBottom: '1rem' }}>
+          <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: 4 }}>Generic CRM web-form messages by lead status</div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: 12 }}>
+            Select an approved template for each status. New web-form submissions use the matching template automatically. Existing leads are sent a message only after you change a mapping and click the button below.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+            {GENERIC_LEAD_STATUSES.map((status) => (
+              <label key={status.value} style={{ display: 'grid', gap: 5, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                <span>{status.label}</span>
+                <select
+                  className="input-field"
+                  value={statusTemplateIds[status.value] || ''}
+                  onChange={(event) => handleStatusTemplateChange(status.value, event.target.value)}
+                >
+                  <option value="">No template selected</option>
+                  {templates.filter((template) => template.status === 'APPROVED').map((template) => (
+                    <option key={template.id} value={template.id}>{template.name}</option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={sendToExistingLeads}
+            disabled={bulkSending || !statusTemplateDirty}
+            style={{ marginTop: 14, fontSize: '0.8rem', padding: '0.5rem 0.8rem' }}
+          >
+            {bulkSending ? 'Queuing messages…' : statusTemplateDirty ? 'Send changed templates to existing leads' : 'Templates saved — no existing-lead send pending'}
+          </button>
+        </div>
+      )}
+
       {/* Templates list */}
       {loading ? (
         <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading…</div>
@@ -263,14 +350,16 @@ export default function WhatsAppTemplates() {
                     {t.category} · {t.language}
                   </span>
                 </div>
-                <button
-                  onClick={() => deleteTemplate(t)}
-                  className="btn-secondary"
-                  style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}
-                  title="Delete from CRM (does not unsubmit from Meta)"
-                >
-                  <Trash2 size={12} />
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button
+                    onClick={() => deleteTemplate(t)}
+                    className="btn-secondary"
+                    style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}
+                    title="Delete from CRM (does not unsubmit from Meta)"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               </div>
               {t.headerContent && (
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>

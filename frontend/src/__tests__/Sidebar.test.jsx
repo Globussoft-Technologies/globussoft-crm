@@ -80,6 +80,7 @@ vi.mock('socket.io-client', () => ({ io: () => socketObj }));
 // agnostic travel entries hidden for USER). Per-test overrides via
 // renderSidebar({ permissions: [...] }) take precedence.
 let currentPermissionSet = new Set();
+let currentRoleKeys = [];
 vi.mock('../hooks/usePermissions', () => ({
   usePermissions: () => ({
     hasPermission: (module, action) => currentPermissionSet.has(`${module}.${action}`),
@@ -90,7 +91,7 @@ vi.mock('../hooks/usePermissions', () => ({
     isLoading: false,
     isReady: true,
     permissions: Array.from(currentPermissionSet),
-    roles: [],
+    roles: currentRoleKeys,
     isOwner: false,
     userType: 'STAFF',
     refresh: vi.fn(() => Promise.resolve()),
@@ -215,6 +216,7 @@ function renderSidebar({
   subBrandAccess = null,
   legacySubBrandAccessString = false,
   activeSubBrand = null,
+  roleKeys = null,
   accessiblePages = null, // null → empty catalog (back-compat default)
   permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
   userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
@@ -229,6 +231,7 @@ function renderSidebar({
   // usePermissions().hasPermission. Capture the per-render permission
   // set so the closure-backed mock returns role-appropriate grants.
   currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role, vertical);
+  currentRoleKeys = roleKeys || [];
   if (activeSubBrand == null) window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   else window.sessionStorage.setItem(ACTIVE_SUB_BRAND_STORAGE_KEY, activeSubBrand);
 
@@ -344,6 +347,51 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/forms');
     });
 
+    it('shows Pickup & Plot as its own module only to generic CRM admins', () => {
+      const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
+      const link = screen.getByText('Inventory').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/pickup-plot-inventory');
+      expect(screen.getByText('Transport Persons').closest('a').getAttribute('href')).toBe('/transport-persons');
+      expect(screen.getByText('Plot Brokers').closest('a').getAttribute('href')).toBe('/plot-brokers');
+      expect(screen.getByText('Billing Persons').closest('a').getAttribute('href')).toBe('/billing-persons');
+      expect(screen.getByText('Customer Status').closest('a').getAttribute('href')).toBe('/pickup-customers');
+      generic.unmount();
+
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      expect(screen.queryByRole('button', { name: 'Pickup & Plot' })).toBeNull();
+    });
+
+    it('shows only My Trips to a transport person', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['transport_person'] });
+      expect(screen.getByText('My Trips').closest('a')).toHaveAttribute('href', '/home');
+      expect(screen.queryByText('Dashboard')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
+    });
+
+    it('shows only My Customers to a broker with the legacy BROOKER spelling', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['BROOKER'] });
+      expect(screen.getByText('My Customers').closest('a')).toHaveAttribute('href', '/home');
+      expect(screen.queryByText('Dashboard')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
+    });
+
+    it('shows only the Billing Queue to billing department staff', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['BILLING'] });
+      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/home');
+      expect(screen.queryByText('Dashboard')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
+    });
+
+    it('does not expose Pickup & Plot in wellness or travel navigation', () => {
+      const wellness = renderSidebar({ vertical: 'wellness', role: 'ADMIN' });
+      expect(screen.queryByRole('button', { name: 'Pickup & Plot' })).toBeNull();
+      wellness.unmount();
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      expect(screen.queryByRole('button', { name: 'Pickup & Plot' })).toBeNull();
+    });
+
     it('renders 40+ links for ADMIN under generic vertical (full enterprise nav)', () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       // Submenu links render through a body portal, just like Wellness. Count
@@ -370,6 +418,7 @@ describe('Sidebar — load-bearing render surface', () => {
         'Finance',
         'Analytics & Reports',
         'Team & Access',
+        'Pickup & Plot',
         'Administration',
         'Platform',
       ]);

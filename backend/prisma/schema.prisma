@@ -377,6 +377,12 @@ model Tenant {
   winLossReasons       WinLossReason[]
   leadRoutingRules     LeadRoutingRule[]
   territories          Territory[]
+  pickupLocations      PickupLocation[]
+  plotSites            PlotSite[]
+  transportPersons     TransportPerson[]
+  plotBrokers          PlotBroker[]
+  billingPersons       BillingPerson[]
+  customerPickups      CustomerPickup[]
   kbCategories         KbCategory[]
   kbArticles           KbArticle[]
   slaPolicies          SlaPolicy[]
@@ -650,7 +656,10 @@ model User {
   subscriptionStatus String    @default("TRIAL") // TRIAL | ACTIVE | EXPIRED | CANCELLED
 
   // RBAC — multi-role via UserRole junction table
-  userRoles UserRole[]
+  userRoles       UserRole[]
+  transportPerson TransportPerson?
+  plotBroker      PlotBroker?
+  billingPerson   BillingPerson?
   // RBAC Hardening Phase 4 — back-reference for permission-history
   // attribution. SetNull on delete preserves the version row even if
   // the changer's account is later removed (audit trail integrity).
@@ -1060,6 +1069,7 @@ model Contact {
   tmcParentTrips            TmcParentTrip[]            @relation("TmcParentTripParent")
   tmcTeacherParentTrips     TmcParentTrip[]            @relation("TmcParentTripTeacher")
   tmcTeacherReviews         TmcTripTeacherReview[]     @relation("TmcTripTeacherReviewTeacher")
+  customerPickups           CustomerPickup[]
 
   /// [GP-CRM integration] One Contact per externalId-per-tenant. NULL != NULL in
   /// MySQL unique indexes, so the many contacts with no externalId never collide;
@@ -3447,10 +3457,152 @@ model Territory {
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
-
 }
 
 // ── Approval Workflows ───────────────────────────────────────────
+
+// Generic CRM pickup points and the plot/site inventory served by them.
+// These deliberately do not reuse the wellness Location model: that model
+// owns clinic, patient, attendance and resource relations which do not apply
+// to generic CRM inventory.
+model PickupLocation {
+  id               Int               @id @default(autoincrement())
+  name             String
+  address          String            @db.Text
+  googleMapsLink   String?           @db.Text
+  notes            String?           @db.Text
+  isActive         Boolean           @default(true)
+  tenantId         Int               @default(1)
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plots            PlotSite[]
+  transportPersons TransportPerson[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, name])
+}
+
+model PlotSite {
+  id               Int             @id @default(autoincrement())
+  name             String
+  address          String?         @db.Text
+  referenceCode    String?
+  area             String?
+  boundaryJson     String?         @db.Text
+  boundaryAreaSqFt Float?
+  price            Decimal?        @db.Decimal(15, 2)
+  availability     String          @default("AVAILABLE") // AVAILABLE, RESERVED, SOLD
+  notes            String?         @db.Text
+  isActive         Boolean         @default(true)
+  pickupLocationId Int?
+  pickupLocation   PickupLocation? @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
+  tenantId         Int             @default(1)
+  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  brokers          PlotBroker[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([tenantId, availability, isActive])
+  @@index([tenantId, pickupLocationId])
+  @@index([tenantId, referenceCode])
+}
+
+model TransportPerson {
+  id                    Int             @id @default(autoincrement())
+  name                  String
+  phone                 String
+  alternatePhone        String?
+  vehicleType           String?
+  vehicleNumber         String?
+  serviceArea           String?         @db.Text
+  pickupLocationIdsJson String?         @db.Text
+  plotSiteIdsJson       String?         @db.Text
+  serviceAreasJson      String?         @db.Text
+  customerIdsJson       String?         @db.Text
+  assignmentStatusJson  String?         @db.Text
+  notes                 String?         @db.Text
+  isActive              Boolean         @default(true)
+  userId                Int?            @unique
+  user                  User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  pickupLocationId      Int?
+  pickupLocation        PickupLocation? @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
+  tenantId              Int             @default(1)
+  tenant                Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, name])
+  @@index([tenantId, pickupLocationId])
+}
+
+model PlotBroker {
+  id                Int       @id @default(autoincrement())
+  name              String
+  phone             String
+  email             String?
+  agency            String?
+  commissionPercent Decimal?  @db.Decimal(5, 2)
+  customerIdsJson   String?   @db.Text
+  workflowStatusJson String?  @db.Text
+  notes             String?   @db.Text
+  isActive          Boolean   @default(true)
+  userId            Int?      @unique
+  user              User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  plotSiteId        Int?
+  plotSiteIdsJson   String?   @db.Text
+  plotSite          PlotSite? @relation(fields: [plotSiteId], references: [id], onDelete: SetNull)
+  tenantId          Int       @default(1)
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, name])
+  @@index([tenantId, plotSiteId])
+}
+
+model BillingPerson {
+  id              Int      @id @default(autoincrement())
+  name            String
+  phone           String
+  email           String?
+  customerIdsJson String?  @db.Text
+  plotSiteIdsJson String?  @db.Text
+  notes           String?  @db.Text
+  isActive        Boolean  @default(true)
+  userId          Int?     @unique
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenantId        Int      @default(1)
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, name])
+}
+
+// Pickup address captured from a customer's Callified transcript. The trip
+// status is derived from TransportPerson.assignmentStatusJson so this record
+// remains the address source of truth without duplicating workflow state.
+model CustomerPickup {
+  id                 Int      @id @default(autoincrement())
+  contactId          Int
+  contact            Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  pickupAddress      String   @db.Text
+  sourceTranscriptId String?
+  sourceExcerpt      String?  @db.Text
+  capturedByUserId   Int?
+  tenantId           Int      @default(1)
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([tenantId, contactId])
+  @@index([tenantId, updatedAt])
+  @@index([contactId])
+}
 
 model ApprovalRequest {
   id          Int       @id @default(autoincrement())
@@ -5082,9 +5234,9 @@ model ServiceConsumption {
 
   createdAt DateTime @default(now())
 
+  @@unique([tenantId, prescriptionId, prescriptionLine])
   @@index([visitId])
   @@index([tenantId, createdAt])
-  @@unique([tenantId, prescriptionId, prescriptionLine])
   @@index([tenantId, drugId])
 }
 
@@ -11134,7 +11286,7 @@ model ServicePackage {
   /// so 3 + 4 is 4 visits. "separate" = one service per visit, so 3 + 4 is 7.
   /// `sessions` is the resulting visit count, because that is what the
   /// treatment plan counts down.
-  sessionMode     String  @db.VarChar(255) @default("combined")
+  sessionMode     String  @default("combined") @db.VarChar(255)
   /// How many times the WHOLE bundle repeats.
   sessions        Int     @default(6)
   discountPercent Int     @default(0)

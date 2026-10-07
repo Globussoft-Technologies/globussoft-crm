@@ -369,6 +369,7 @@ jobs:
             tests/sequence-engine-api.spec.js \
             tests/expenses-api.spec.js \
             tests/projects-api.spec.js \
+            tests/pickup-plot-inventory-api.spec.js \
             tests/ai-scoring-api.spec.js \
             tests/contracts-api.spec.js \
             tests/custom-objects-api.spec.js \

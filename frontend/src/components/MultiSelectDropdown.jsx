@@ -29,7 +29,7 @@ const modalInputStyle = {
 //   2. The popover auto-flips upward when there's not enough room
 //      below the trigger — so the last filter in the modal can show
 //      its full list without forcing the modal to scroll at all.
-export default function MultiSelectDropdown({ options, selected, onChange, placeholder, searchable = false, chipColours = false }) {
+export default function MultiSelectDropdown({ options, selected, onChange, placeholder, ariaLabel, searchable = false, chipColours = false }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [popoverPos, setPopoverPos] = useState(null);
@@ -142,6 +142,7 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         style={{

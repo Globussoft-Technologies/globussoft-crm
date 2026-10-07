@@ -132,6 +132,8 @@ prisma.payment = {
 prisma.paymentGatewayConfig = {
   findFirst: vi.fn().mockResolvedValue(null),
 };
+prisma.$queryRawUnsafe = vi.fn().mockResolvedValue([]);
+prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 
 import express from 'express';
 import request from 'supertest';
@@ -200,6 +202,8 @@ beforeEach(() => {
   prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.update.mockReset().mockResolvedValue({});
   prisma.paymentGatewayConfig.findFirst.mockReset().mockResolvedValue(null);
+  prisma.$queryRawUnsafe.mockReset().mockResolvedValue([]);
+  prisma.$transaction.mockClear();
 });
 
 // ── POST /api/portal/login ─────────────────────────────────────────────
@@ -746,7 +750,7 @@ describe('GET /travel/itineraries — parent payment ledger parity', () => {
     prisma.pendingTripRegistration.findMany
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ draftToken: 'draft-701', convertedToParticipantId: 701 }]);
-    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ convertedToParticipantId: 701 });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 77, convertedToParticipantId: 701 });
     prisma.payment.findMany.mockResolvedValue([{
       id: 9003,
       tenantId: 3,

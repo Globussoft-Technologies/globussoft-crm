@@ -6162,6 +6162,9 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
     const paymentDraft = draftToken && prisma.pendingTripRegistration?.findUnique
       ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken } })
       : null;
+    if (!paymentDraft) {
+      return res.status(400).json({ error: "A valid registration draft is required before payment", code: "INVALID_DRAFT" });
+    }
     if (paymentDraft && (Number(paymentDraft.tenantId) !== Number(tenantId)
       || Number(paymentDraft.tripId) !== Number(page.tripId)
       || Number(paymentDraft.landingPageId) !== Number(page.id))) {
@@ -6183,6 +6186,23 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
     const rp = await getTenantRazorpayClient(tenantId);
     if (!rp) {
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    }
+
+    // Claim this draft atomically before creating an external payment link.
+    // Only one concurrent request can move it into PAYMENT_PENDING; every
+    // replay is rejected before it can create a second chargeable link.
+    const paymentClaim = await prisma.pendingTripRegistration.updateMany({
+      where: {
+        id: paymentDraft.id,
+        status: { notIn: ["PAYMENT_PENDING", "CONVERTED", "REJECTED"] },
+      },
+      data: { status: "PAYMENT_PENDING" },
+    });
+    if (paymentClaim.count !== 1) {
+      return res.status(409).json({
+        error: "A payment is already in progress for this registration",
+        code: "PAYMENT_IN_PROGRESS",
+      });
     }
 
     const receipt = `lp_${page.id}_${selection.mode}_${selection.installmentIndex}_${Date.now()}`;

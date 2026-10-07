@@ -171,7 +171,7 @@ function registrationValuesFromPayment({ draft, metadata }) {
  * the public callback, gateway webhook, Finance, and the TMC payment-plan
  * read path all use the same idempotent conversion/linkage behavior.
  */
-async function ensureLandingPagePaymentRegistration({
+async function ensureLandingPagePaymentRegistrationInternal({
   db = prisma,
   payment,
   metadata = parseJsonObject(payment?.metadata),
@@ -224,6 +224,11 @@ async function ensureLandingPagePaymentRegistration({
       where: { id: linkedParticipantId, tripId },
     });
   }
+
+  // Creating a participant from free-form payment metadata is safe only when
+  // an opaque, tenant/trip-scoped draft anchors the operation. Legacy rows
+  // without a draft must already carry a participant id.
+  if (!draft && !participant) return null;
 
   // Older payment rows may already carry participantId but predate the
   // contact linkage fields. Use the participant as the authoritative source
@@ -364,6 +369,27 @@ async function ensureLandingPagePaymentRegistration({
     draft,
     metadata: parseJsonObject(linkedPayment?.metadata || payment.metadata),
   };
+}
+
+async function ensureLandingPagePaymentRegistration(args = {}) {
+  const db = args.db || prisma;
+  const metadata = args.metadata || parseJsonObject(args.payment?.metadata);
+  const draftToken = cleanRegistrationValue(metadata.draftToken);
+  if (!draftToken || typeof db?.$transaction !== "function") {
+    return ensureLandingPagePaymentRegistrationInternal({ ...args, db, metadata });
+  }
+  return db.$transaction(async (tx) => {
+    const draft = await tx.pendingTripRegistration.findUnique({
+      where: { draftToken },
+      select: { id: true },
+    });
+    if (!draft) return ensureLandingPagePaymentRegistrationInternal({ ...args, db: tx, metadata });
+    await tx.$queryRawUnsafe(
+      "SELECT id FROM `PendingTripRegistration` WHERE id = ? FOR UPDATE",
+      draft.id,
+    );
+    return ensureLandingPagePaymentRegistrationInternal({ ...args, db: tx, metadata });
+  }, { timeout: 20000 });
 }
 
 function normaliseInstallment(entry, index) {

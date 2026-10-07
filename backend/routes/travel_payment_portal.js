@@ -508,6 +508,24 @@ router.post("/payment-portal/create-order", async (req, res) => {
     if (!rp) {
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
+    const portalPaymentUrl = `/pay/trip/${trip.id}/installment/${instalment.id}`;
+    const paymentClaim = await prisma.tripInstalmentPayment.updateMany({
+      where: {
+        id: instalment.id,
+        status: { not: "paid" },
+        paymentLinkUrl: null,
+      },
+      // Reserving the installment and storing its stable portal URL in one
+      // statement prevents concurrent requests from creating two orders. The
+      // value remains a usable link if the provider call later fails.
+      data: { paymentLinkUrl: portalPaymentUrl },
+    });
+    if (paymentClaim.count !== 1) {
+      return res.status(409).json({
+        error: "A payment is already in progress for this instalment",
+        code: "PAYMENT_IN_PROGRESS",
+      });
+    }
     const receipt = `trip_${trip.id}_p_${participant.id}_i_${instalment.id}_${Date.now()}`;
     const notes = {
       tenantId: String(trip.tenantId),

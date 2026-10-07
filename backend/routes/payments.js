@@ -23,10 +23,7 @@ const {
   ensureLandingPagePaymentRegistration,
 } = require("../lib/landingPagePayments");
 const {
-  TRIP_PAYMENT_KINDS,
-  isSuccessfulPayment,
   reconcileTripInstalmentPayment,
-  reconcileTripPaymentRecord,
 } = require("../lib/tripPaymentReconciliation");
 const { enqueueTransaction } = require("../lib/travelTallyMasters");
 
@@ -1128,6 +1125,10 @@ router.get("/", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
     const { status, gateway, invoiceId, from, to } = req.query;
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.min(500, Math.max(1, requestedLimit))
+      : 200;
 
     const where = { tenantId };
     if (status) where.status = String(status).toUpperCase();
@@ -1158,65 +1159,9 @@ router.get("/", async (req, res) => {
 
     const payments = await prisma.payment.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit,
     });
-
-    // Webhooks are a notification mechanism, not the source of truth for the
-    // Payments Received screen. Reconcile every TMC payment kind here so a
-    // delayed/missing webhook cannot leave Finance showing pending after the
-    // parent has already paid an installment. The shared reconciler handles
-    // hosted payment links and normal Razorpay orders, then updates the same
-    // TripInstalmentPayment and TravelInvoice rows used by the other screens.
-    const tripPayments = payments.filter((payment) => TRIP_PAYMENT_KINDS.has(String(safeJsonParse(payment.metadata, {}).kind || "")));
-    const needsGatewayRefresh = tripPayments.some((payment) =>
-      String(payment.gateway || "").toLowerCase() === "razorpay" && !isSuccessfulPayment(payment),
-    );
-    let tripGateway = null;
-    if (needsGatewayRefresh) {
-      try {
-        tripGateway = await getTenantRazorpayClient(tenantId);
-      } catch (err) {
-        console.warn("[Payments] hosted Razorpay status refresh skipped:", err.message);
-      }
-    }
-    for (const payment of tripPayments) {
-      try {
-        const result = await reconcileTripPaymentRecord({
-          db: prisma,
-          payment,
-          tenantId,
-          capturedAt: payment.paidAt || payment.createdAt || new Date(),
-          gateway: String(payment.gateway || "").toLowerCase() === "razorpay" ? tripGateway : null,
-        });
-        if (result?.payment) {
-          const index = payments.findIndex((row) => row.id === payment.id);
-          if (index >= 0) payments[index] = result.payment;
-        }
-      } catch (err) {
-        console.warn("[Payments] travel payment reconciliation skipped:", err.message);
-      }
-    }
-
-    // Older landing-page payments may already be successful but still carry
-    // only a draft token. Once that draft has been converted, reconcile it so
-    // the Payment row points to the participant invoice and uses the same
-    // source as invoice payment history.
-    for (const payment of payments) {
-      if (!['SUCCESS', 'PAID', 'CAPTURED'].includes(String(payment.status || '').toUpperCase())) continue;
-      let metadata = {};
-      try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_err) {}
-      if (metadata.kind !== "landing-page-registration" || metadata.participantId) continue;
-      if (!metadata.draftToken) continue;
-      try {
-        const result = await reconcileTripPaymentRecord({ db: prisma, payment, capturedAt: payment.paidAt || payment.createdAt });
-        if (result?.payment) {
-          const index = payments.findIndex((row) => row.id === payment.id);
-          if (index >= 0) payments[index] = result.payment;
-        }
-      } catch (err) {
-        console.warn("[Payments] converted landing payment reconciliation skipped:", err.message);
-      }
-    }
 
     // Batch-fetch contact names for all contactIds in this result set.
     const contactIds = [...new Set(payments.map((p) => p.contactId).filter(Boolean))];

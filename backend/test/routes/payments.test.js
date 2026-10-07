@@ -273,7 +273,8 @@ describe('GET / — list payments under tenant scope', () => {
     expect(res.body[1].metadata).toEqual({}); // null → {} fallback
     expect(prisma.payment.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 200,
     });
   });
 
@@ -290,8 +291,21 @@ describe('GET / — list payments under tenant scope', () => {
         gateway: 'stripe',       // lowercased
         invoiceId: 42,           // parsed int
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 200,
     });
+  });
+
+  test('bounds list work and clamps an excessive requested limit', async () => {
+    prisma.payment.findMany.mockResolvedValue([]);
+
+    await request(makeApp()).get('/api/payments?limit=50000');
+
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      take: 500,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    }));
+    expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
   test('shows the landing-page payer when an older payment has no contactId', async () => {

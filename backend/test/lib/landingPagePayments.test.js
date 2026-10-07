@@ -324,10 +324,17 @@ describe("landingPagePayments", () => {
         })),
       },
     };
+    db.$queryRawUnsafe = vi.fn().mockResolvedValue([{ id: 91 }]);
+    db.$transaction = vi.fn(async (callback) => callback(db));
 
     const result = await ensureLandingPagePaymentRegistration({ db, payment, tenantId: 8 });
 
     expect(result).toMatchObject({ participantId: 77, contactId: 88 });
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
+      "SELECT id FROM `PendingTripRegistration` WHERE id = ? FOR UPDATE",
+      91,
+    );
     expect(db.tripParticipant.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         tripId: 7,

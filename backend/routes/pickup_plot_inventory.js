@@ -125,6 +125,20 @@ function parseStoredObject(value) {
   }
 }
 
+function billingOwnsAssignment(profile, customerId, plotId) {
+  const customers = parseStoredArray(profile.customerIdsJson).map(Number);
+  const plots = parseStoredArray(profile.plotSiteIdsJson).map(Number);
+  return customers.includes(customerId) && (!plots.length || plots.includes(plotId));
+}
+
+async function saveWorkflow(model, record, field, statuses, tenantId) {
+  const result = await model.updateMany({
+    where: { id: record.id, tenantId, [field]: record[field] ?? null, updatedAt: record.updatedAt },
+    data: { [field]: sanitizeJsonForStringColumn(statuses) },
+  });
+  return result.count === 1;
+}
+
 function completedTransportTrips(transportPeople) {
   const completedTrips = new Map();
   for (const person of transportPeople) {
@@ -601,10 +615,9 @@ router.patch("/transport-persons/me/assignments/:assignmentKey/status", async (r
     const now = new Date().toISOString();
     const statuses = parseStoredObject(person.assignmentStatusJson);
     statuses[assignment.assignmentKey] = { status: nextStatus, updatedAt: now };
-    await prisma.transportPerson.update({
-      where: { id: person.id },
-      data: { assignmentStatusJson: sanitizeJsonForStringColumn(statuses) },
-    });
+    if (!await saveWorkflow(prisma.transportPerson, person, "assignmentStatusJson", statuses, tenantId)) {
+      return res.status(409).json({ error: "Assignments changed. Refresh and retry.", code: "WORKFLOW_CONFLICT" });
+    }
     return res.json({ assignmentKey: assignment.assignmentKey, status: nextStatus, statusUpdatedAt: now });
   } catch (error) {
     console.error("pickup-plot-inventory PATCH /transport-persons/me/assignments/:assignmentKey/status error:", error);
@@ -735,10 +748,9 @@ router.patch("/brokers/me/customers/:customerId/workflow", async (req, res) => {
     }
     const now = new Date().toISOString();
     statuses[key] = { ...statuses[key], status: requestedStatus, updatedAt: now };
-    await prisma.plotBroker.update({
-      where: { id: broker.id },
-      data: { workflowStatusJson: sanitizeJsonForStringColumn(statuses) },
-    });
+    if (!await saveWorkflow(prisma.plotBroker, broker, "workflowStatusJson", statuses, tenantId)) {
+      return res.status(409).json({ error: "Assignments changed. Refresh and retry.", code: "WORKFLOW_CONFLICT" });
+    }
     let messageDelivery = null;
     if (requestedStatus === "NOT_INTERESTED") {
       const customer = await prisma.contact.findFirst({ where: { id: customerId, tenantId } });
@@ -772,11 +784,13 @@ router.get("/billing/me", async (req, res) => {
       customerIds.forEach((customerId, index) => {
         const saved = statuses[`customer-${customerId}`];
         if (normalizeBrokerWorkflowStatus(saved) !== "INTEREST_CONFIRMED") return;
+        const plotId = plotIds[index] || plotIds[0] || null;
+        if (!billingOwnsAssignment(billingUser.billingPerson, customerId, plotId)) return;
         queue.push({
           brokerId: broker.id,
           brokerName: broker.name,
           customerId,
-          plotId: plotIds[index] || plotIds[0] || null,
+          plotId,
           billingStatus: normalizeBillingWorkflowStatus(saved),
           billingUpdatedAt: saved?.billingUpdatedAt || null,
         });
@@ -831,6 +845,12 @@ router.patch("/billing/me/assignments/:assignmentKey/status", async (req, res) =
     if (!broker || !parseStoredArray(broker.customerIdsJson).map(Number).includes(customerId)) {
       return res.status(404).json({ error: "Billing assignment not found", code: "BILLING_ASSIGNMENT_NOT_FOUND" });
     }
+    const customerIndex = parseStoredArray(broker.customerIdsJson).map(Number).indexOf(customerId);
+    const plotIds = parseStoredArray(broker.plotSiteIdsJson).map(Number);
+    const plotId = plotIds[customerIndex] || plotIds[0] || broker.plotSiteId || null;
+    if (!billingOwnsAssignment(billingUser.billingPerson, customerId, plotId)) {
+      return res.status(404).json({ error: "Billing assignment not found", code: "BILLING_ASSIGNMENT_NOT_FOUND" });
+    }
     const key = `customer-${customerId}`;
     const statuses = parseStoredObject(broker.workflowStatusJson);
     if (normalizeBrokerWorkflowStatus(statuses[key]) !== "INTEREST_CONFIRMED") {
@@ -848,10 +868,9 @@ router.patch("/billing/me/assignments/:assignmentKey/status", async (req, res) =
     }
     const now = new Date().toISOString();
     statuses[key] = { ...statuses[key], billingStatus: nextStatus, billingUpdatedAt: now };
-    await prisma.plotBroker.update({
-      where: { id: broker.id },
-      data: { workflowStatusJson: sanitizeJsonForStringColumn(statuses) },
-    });
+    if (!await saveWorkflow(prisma.plotBroker, broker, "workflowStatusJson", statuses, req.user.tenantId)) {
+      return res.status(409).json({ error: "Assignments changed. Refresh and retry.", code: "WORKFLOW_CONFLICT" });
+    }
     return res.json({ assignmentKey: req.params.assignmentKey, status: nextStatus, statusUpdatedAt: now });
   } catch (error) {
     console.error("pickup-plot-inventory PATCH /billing/me/assignments/:assignmentKey/status error:", error);

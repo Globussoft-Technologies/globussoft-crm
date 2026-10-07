@@ -87,6 +87,12 @@ describe('getQueue() driver selection', () => {
 });
 
 describe('DB driver — enqueueSend', () => {
+  test('uses the provided transaction instead of creating a job outside it', async () => {
+    const db = { waOutboundJob: { create: vi.fn().mockResolvedValue({ id: 9, status: 'PENDING' }) } };
+    await loadFresh({ WHATSAPP_QUEUE_DRIVER: 'db' }).getQueue().enqueueSend({ messageId: 41, tenantId: 11, db });
+    expect(db.waOutboundJob.create).toHaveBeenCalled();
+    expect(prisma.waOutboundJob.create).not.toHaveBeenCalled();
+  });
   test('creates a PENDING WaOutboundJob with runAt defaulting to now', async () => {
     prisma.waOutboundJob.create.mockResolvedValue({ id: 42, status: 'PENDING' });
     const { getQueue } = loadFresh({ WHATSAPP_QUEUE_DRIVER: 'db' });

@@ -12,12 +12,13 @@ prisma.whatsAppTemplate.findFirst = vi.fn();
 prisma.whatsAppMessage.findFirst = vi.fn();
 prisma.whatsAppMessage.create = vi.fn();
 prisma.whatsAppThread.upsert = vi.fn();
+prisma.$transaction = vi.fn();
 
 const queue = require('../../lib/whatsappQueue');
 const enqueueSend = vi.fn();
 vi.spyOn(queue, 'getQueue').mockReturnValue({ enqueueSend });
 
-const { sendGenericWebFormWhatsApp } = require('../../lib/genericWebFormWhatsApp');
+const { sendGenericWebFormWhatsApp, queueGenericBulkContact } = require('../../lib/genericWebFormWhatsApp');
 
 const form = { id: 8, tenantId: 11, scope: 'generic', name: 'Contact us' };
 const contact = { id: 21, name: 'Jane Doe', phone: '+919876543210', email: 'jane@example.com' };
@@ -45,6 +46,24 @@ beforeEach(() => {
 });
 
 describe('generic web-form WhatsApp acknowledgement', () => {
+  test('bulk recipients are locked and messages/jobs use the same transaction', async () => {
+    const db = { $queryRawUnsafe: vi.fn().mockResolvedValue([{ id: 21 }]) };
+    for (const model of ['tenant', 'whatsAppConfig', 'tenantSetting', 'whatsAppTemplate', 'whatsAppMessage', 'whatsAppThread']) db[model] = prisma[model];
+    const transaction = vi.spyOn(prisma, '$transaction').mockImplementation(callback => callback(db));
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({ id: 77, name: 'welcome', body: 'Hello {{1}}' });
+    try {
+      await queueGenericBulkContact({ form, contact, submissionId: 'bulk-campaign-21', bulkTemplateId: 77 });
+      expect(db.$queryRawUnsafe).toHaveBeenCalledWith(expect.stringContaining('FOR UPDATE'), 21, 11);
+      expect(enqueueSend).toHaveBeenCalledWith({ messageId: 41, tenantId: 11, db });
+      expect(prisma.whatsAppMessage.findFirst.mock.calls[0][0].where.interactiveJson).toEqual({ contains: '{"submissionId":"bulk-campaign-21"' });
+    } finally { transaction.mockRestore(); }
+  });
+
+  test('bulk send never falls back to plain text when the approved template disappears', async () => {
+    await expect(sendGenericWebFormWhatsApp({ form, contact, submissionId: 'bulk-21', bulkTemplateId: 77 }))
+      .resolves.toEqual({ sent: false, code: 'TEMPLATE_UNAVAILABLE' });
+    expect(enqueueSend).not.toHaveBeenCalled();
+  });
   test('queues a configured Generic acknowledgement without requiring an admin phone', async () => {
     const result = await sendGenericWebFormWhatsApp({ form, contact, submissionId: 1001 });
 

@@ -222,8 +222,18 @@ export default function WhatsAppTemplates() {
     if (!ok) return;
     setBulkSending(true);
     try {
-      const result = await fetchApi('/api/whatsapp/templates/generic-web-form-send-all', { method: 'POST', body: JSON.stringify({}) });
-      notify.info(`Queued ${result?.queued || 0} message(s). Skipped ${result?.skipped || 0}.`);
+      let afterId = 0;
+      let campaignKey;
+      const totals = { queued: 0, skipped: 0, failed: 0 };
+      do {
+        const result = await fetchApi('/api/whatsapp/templates/generic-web-form-send-all', {
+          method: 'POST', body: JSON.stringify({ afterId, campaignKey }),
+        });
+        for (const key of Object.keys(totals)) totals[key] += result?.[key] || 0;
+        campaignKey = result.campaignKey;
+        afterId = result.nextCursor;
+      } while (afterId);
+      notify.info(`Queued ${totals.queued} message(s). Skipped ${totals.skipped}. Failed ${totals.failed}.`);
       setStatusTemplateDirty(false);
     } catch (err) {
       notify.error(err.message || 'Failed to queue messages for existing leads.');

@@ -44,9 +44,11 @@ prisma.userRole.create = vi.fn();
 prisma.transportPerson.findMany = vi.fn();
 prisma.transportPerson.create = vi.fn();
 prisma.transportPerson.update = vi.fn();
+prisma.transportPerson.updateMany = vi.fn();
 prisma.plotBroker.findMany = vi.fn();
 prisma.plotBroker.create = vi.fn();
 prisma.plotBroker.update = vi.fn();
+prisma.plotBroker.updateMany = vi.fn();
 prisma.billingPerson.findMany = vi.fn();
 prisma.billingPerson.create = vi.fn();
 prisma.billingPerson.update = vi.fn();
@@ -77,6 +79,8 @@ function makeApp({ tenantId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prisma.transportPerson.updateMany.mockResolvedValue({ count: 1 });
+  prisma.plotBroker.updateMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findFirst.mockResolvedValue({ vertical: 'generic' });
   prisma.pickupLocation.findMany.mockResolvedValue([]);
   prisma.plotSite.findMany.mockResolvedValue([]);
@@ -100,6 +104,51 @@ beforeEach(() => {
 });
 
 describe('transport person mutations', () => {
+  test('rejects a stale driver update without overwriting another assignment', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, tenantId: 7, customerIdsJson: '[61]', assignmentStatusJson: null,
+      updatedAt: new Date('2026-10-07T00:00:00Z'),
+    });
+    prisma.transportPerson.updateMany.mockResolvedValueOnce({ count: 0 });
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61/status')
+      .send({ status: 'ACCEPTED' });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('WORKFLOW_CONFLICT');
+    expect(prisma.transportPerson.updateMany.mock.calls[0][0].where).toMatchObject({
+      id: 41, tenantId: 7, assignmentStatusJson: null, updatedAt: expect.any(Date),
+    });
+  });
+
+  test('hides unassigned billing customers and rejects changes to their workflow', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 3, userRoles: [{ role: { key: 'BILLING' } }] });
+    prisma.billingPerson.findFirst.mockResolvedValue({ id: 71, customerIdsJson: '[62]', plotSiteIdsJson: '[31]' });
+    const broker = { id: 51, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      workflowStatusJson: '{"customer-61":{"status":"INTEREST_CONFIRMED"}}' };
+    prisma.plotBroker.findMany.mockResolvedValue([broker]);
+    prisma.plotBroker.findFirst.mockResolvedValue(broker);
+    const app = makeApp({ role: 'USER' });
+    const list = await request(app).get('/api/pickup-plot-inventory/billing/me');
+    expect(list.status).toBe(200);
+    expect(list.body.assignments).toEqual([]);
+    const mutation = await request(app).patch('/api/pickup-plot-inventory/billing/me/assignments/51-61/status')
+      .send({ status: 'DETAILS_VERIFIED' });
+    expect(mutation.status).toBe(404);
+    expect(prisma.plotBroker.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('rejects stale broker decisions before sending the thank-you message', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({ id: 51, customerIdsJson: '[61]',
+      workflowStatusJson: '{"customer-61":{"status":"EXPLANATION_COMPLETED"}}' });
+    prisma.transportPerson.findMany.mockResolvedValue([{ customerIdsJson: '[61]',
+      assignmentStatusJson: '{"customer-61":{"status":"COMPLETED"}}' }]);
+    prisma.plotBroker.updateMany.mockResolvedValueOnce({ count: 0 });
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/brokers/me/customers/61/workflow').send({ status: 'NOT_INTERESTED' });
+    expect(response.status).toBe(409);
+    expect(emailSender.sendEmail).not.toHaveBeenCalled();
+  });
+
   test('returns only the signed-in transport person assignments', async () => {
     prisma.transportPerson.findFirst.mockResolvedValue({
       id: 41, userId: 3, tenantId: 7, name: 'Sant', phone: '9000011111',
@@ -141,8 +190,8 @@ describe('transport person mutations', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ assignmentKey: 'customer-61', status: 'HEADING_TO_PICKUP' });
-    const update = prisma.transportPerson.update.mock.calls[0][0];
-    expect(update.where).toEqual({ id: 41 });
+    const update = prisma.transportPerson.updateMany.mock.calls[0][0];
+    expect(update.where).toMatchObject({ id: 41, tenantId: 7 });
     expect(JSON.parse(update.data.assignmentStatusJson)['customer-61'].status).toBe('HEADING_TO_PICKUP');
   });
 
@@ -409,8 +458,8 @@ describe('plot broker mutations', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ customerId: 61, status: 'EXPLANATION_COMPLETED' });
-    const update = prisma.plotBroker.update.mock.calls[0][0];
-    expect(update.where).toEqual({ id: 51 });
+    const update = prisma.plotBroker.updateMany.mock.calls[0][0];
+    expect(update.where).toMatchObject({ id: 51, tenantId: 7 });
     expect(JSON.parse(update.data.workflowStatusJson)['customer-61'].status).toBe('EXPLANATION_COMPLETED');
   });
 
@@ -476,7 +525,7 @@ describe('plot broker mutations', () => {
       id: 3, name: 'Bina', email: 'billing@example.com',
       userRoles: [{ role: { key: 'BILLING', name: 'Billing Department' } }],
     });
-    prisma.billingPerson.findFirst.mockResolvedValue({ id: 71, userId: 3, name: 'Bina', isActive: true });
+    prisma.billingPerson.findFirst.mockResolvedValue({ id: 71, userId: 3, name: 'Bina', isActive: true, customerIdsJson: '[61]', plotSiteIdsJson: '[30]' });
     prisma.plotBroker.findMany.mockResolvedValue([{
       id: 51, tenantId: 7, name: 'Sanjeev', customerIdsJson: '[61,62]', plotSiteIdsJson: '[30,31]',
       workflowStatusJson: '{"customer-61":{"status":"INTEREST_CONFIRMED","billingStatus":"INVOICE_PREPARED"},"customer-62":{"status":"NOT_INTERESTED"}}',
@@ -499,7 +548,7 @@ describe('plot broker mutations', () => {
     prisma.user.findFirst.mockResolvedValue({
       id: 3, userRoles: [{ role: { key: 'BILLING' } }],
     });
-    prisma.billingPerson.findFirst.mockResolvedValue({ id: 71, userId: 3, name: 'Bina', isActive: true });
+    prisma.billingPerson.findFirst.mockResolvedValue({ id: 71, userId: 3, name: 'Bina', isActive: true, customerIdsJson: '[61]' });
     prisma.plotBroker.findFirst.mockResolvedValue({
       id: 51, tenantId: 7, customerIdsJson: '[61]',
       workflowStatusJson: '{"customer-61":{"status":"INTEREST_CONFIRMED","billingStatus":"DETAILS_VERIFIED"}}',
@@ -513,7 +562,7 @@ describe('plot broker mutations', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ assignmentKey: '51-61', status: 'INVOICE_PREPARED' });
-    const saved = JSON.parse(prisma.plotBroker.update.mock.calls[0][0].data.workflowStatusJson)['customer-61'];
+    const saved = JSON.parse(prisma.plotBroker.updateMany.mock.calls[0][0].data.workflowStatusJson)['customer-61'];
     expect(saved).toMatchObject({ status: 'INTEREST_CONFIRMED', billingStatus: 'INVOICE_PREPARED' });
   });
 

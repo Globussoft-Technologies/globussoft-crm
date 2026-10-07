@@ -11,6 +11,7 @@ const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 
 const { renderPage } = require("../services/landingPageRenderer");
+const { hydrateWellnessLandingImages } = require("../services/wellnessLandingImages");
 const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
 const {
   applyLandingPagePaymentToTrip,
@@ -1394,7 +1395,7 @@ router.get("/public/featured", async (req, res) => {
 
     }
 
-    res.json(page);
+    res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
 
   } catch (err) {
 
@@ -3220,7 +3221,7 @@ router.get("/:id", verifyToken, async (req, res) => {
 
     if (!page) return res.status(404).json({ error: "Page not found" });
 
-    res.json(page);
+    res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
 
   } catch (_err) { res.status(500).json({ error: "Failed to fetch page" }); }
 
@@ -5054,7 +5055,14 @@ router.get("/:id/preview", async (req, res) => {
 
 
 
-    const html = renderPage(rendered, { preview: true });
+    const hydratedRendered = await hydrateWellnessLandingImages(rendered, {
+      db: prisma,
+      // Historical previews must remain immutable. Live draft previews may
+      // persist the fetched Pexels URLs so the public page uses the same
+      // distinct image set after publishing.
+      persist: versionForLog == null,
+    });
+    const html = renderPage(hydratedRendered, { preview: true });
 
     res.set({
 
@@ -7192,13 +7200,14 @@ function removePassportFromLandingConfig(config, tripType) {
 }
 
 async function preparePublicLandingPage(page) {
+  const hydrated = await hydrateWellnessLandingImages(page, { db: prisma, persist: true });
   const tripType = await resolveLandingPageTripType(page);
-  const parsed = typeof page?.content === "string" ? safeJsonParse(page.content, null) : page?.content;
+  const parsed = typeof hydrated?.content === "string" ? safeJsonParse(hydrated.content, null) : hydrated?.content;
   const content = removePassportFromLandingConfig(parsed, tripType);
   return {
-    ...page,
+    ...hydrated,
     tripType,
-    content: content && content !== parsed ? JSON.stringify(content) : page.content,
+    content: content && content !== parsed ? JSON.stringify(content) : hydrated.content,
   };
 }
 
@@ -8357,7 +8366,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 
 
-    // The generated wellness form posts first_name / last_name / service_interest;
+    // Legacy saved pages and custom forms may still send service_interest;
 
     // travel templates may post nested `fields` or parent/student aliases.
 

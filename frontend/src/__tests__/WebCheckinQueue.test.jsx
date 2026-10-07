@@ -252,15 +252,34 @@ describe('WebCheckinQueue â€” operator queue (PRD Â§4.6)', () => {
     });
   });
 
-  it('keeps a stable minimum table width so zoomed layouts still overflow horizontally', async () => {
+  it('uses content-driven table sizing while preserving a full-width baseline', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('ABC123');
 
     const table = document.querySelector('table.webcheckins-table');
     expect(table).toBeTruthy();
-    expect(table.style.width).toBe('100%');
-    expect(table.style.minWidth).toBe('1680px');
+    expect(table.style.width).toBe('max-content');
+    expect(table.style.minWidth).toBe('100%');
+    expect(table.style.tableLayout).toBe('auto');
+  });
+  it('keeps table columns aligned and expands long values instead of clipping them', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
+    renderPage();
+    await screen.findByText('ABC123');
+
+    const table = document.querySelector('table.webcheckins-table');
+    expect([...table.querySelectorAll('col')].map((column) => column.style.width)).toEqual([
+      '190px', '100px', '90px', '90px', '190px', '180px', '160px', '140px', '340px',
+    ]);
+
+    const windowSortButton = screen.getByRole('button', { name: 'Sort Window opens' });
+    expect(windowSortButton.style.padding).toBe('0px');
+    expect(windowSortButton.style.boxSizing).toBe('border-box');
+    expect(windowSortButton.style.justifyContent).toBe('flex-start');
+    expect(windowSortButton.style.width).toBe('auto');
+    expect(screen.getByText('ABC123').closest('td')).toHaveAttribute('title', 'ABC123');
+    expect(screen.getByText('ABC123').closest('td')).toHaveStyle({ overflow: 'visible', textOverflow: 'clip' });
   });
   it('renders a visible horizontal scrollbar shell for macOS and zoomed layouts', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));

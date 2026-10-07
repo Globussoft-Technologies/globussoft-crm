@@ -8,6 +8,14 @@ import landing from '../../services/landingPageRenderer.js';
 const { renderPage } = landing;
 
 describe('module shape', () => {
+  test('does not turn Generic or Travel campaigns into wellness scaffolds', () => {
+    for (const templateType of ['generic-site-real_estate-v1', 'generic-site-technology-v1', 'generic-site-travel-v1']) {
+      const html = renderPage({ templateType, title: 'Original campaign', content: JSON.stringify([{ type: 'heading', props: { text: 'Original offer' } }]) });
+      expect(html).toContain('Original offer');
+      expect(html).not.toContain('class="lp-container lp-container--wellness"');
+      expect(html).not.toContain('wellness-campaign-page--');
+    }
+  });
   test('exports renderPage', () => {
     expect(typeof renderPage).toBe('function');
   });
@@ -116,14 +124,130 @@ describe('renderPage  top-level document', () => {
     expect(html).toContain('flex-wrap:nowrap;justify-content:space-between;align-items:flex-start;width:100%;');
     expect(html).not.toContain('width:1180px');
     expect(html).not.toContain('max-width:1180px');
-    expect(html).toContain('padding:22px 20px;min-height:112px;background:#fffdf7;border:1px solid #e5ded0;border-radius:12px');
-    expect(html).toContain('WHAT HAPPENS NEXT');
-    expect(html).toContain('padding:24px;background:#fffdf7;border:1px solid #d8d2c3;border-radius:14px');
-    expect(html).toContain('background:linear-gradient(180deg,rgba(88,11,7,0.96),rgba(140,22,15,0.92));border:1px solid rgba(255,255,255,0.36)');
+    expect(html).toContain('padding:30px 34px;min-height:154px;background:transparent;border:0;border-radius:0;box-shadow:none');
+    expect(html).not.toContain('WHAT HAPPENS NEXT');
+    expect(html).toContain('padding:24px;background:var(--wellness-surface, #ffffff);border:1px solid var(--wellness-border, #cfe3d9);border-radius:14px');
+    expect(html).toContain('background:linear-gradient(120deg,var(--wellness-primary-deep,#126052),var(--wellness-primary,#1f8a70)) !important; color:var(--wellness-inverse,#fff) !important; overflow:hidden !important');
+    expect(html).toContain('min-width:0 !important; width:100% !important; min-height:170px !important');
+    expect(html).toContain('.landing-text--wellness-band-copy');
+    expect(html).toContain('class="wellness-media wellness-media--gallery"');
+    expect(html).toContain('wellness-campaign--editorial');
+    expect(html).toContain('wellness-layout--wellness-hero-row');
+    expect(html).toContain('--wellness-primary:#2f6b50');
+    expect(html).toContain('@keyframes wellness-float-in');
     expect(html).toContain('href="#lead-form"');
     expect(html).toContain('id="lead-form"');
     expect(html).not.toContain('href="#event-details"');
   });
+
+  test('normalizes legacy wellness headers and duplicate hero CTAs', () => {
+    const html = renderPage({
+      title: 'Legacy wellness campaign',
+      slug: 'legacy-wellness-campaign',
+      templateType: 'generic-site-eye-care',
+      content: JSON.stringify([{
+        id: 'wellness-page',
+        type: 'columns',
+        props: {
+          variant: 'wellness-campaign-page',
+          columns: [{
+            fullWidth: true,
+            components: [
+              {
+                id: 'wellness-header-row',
+                type: 'columns',
+                props: {
+                  variant: 'wellness-header-row',
+                  columns: [
+                    { components: [
+                      { id: 'brand-name', type: 'heading', props: { text: 'Enhance Wellness' } },
+                      { id: 'brand-subline', type: 'text', props: { text: 'Wellness' } },
+                    ] },
+                    { components: [] },
+                  ],
+                },
+              },
+              {
+                id: 'wellness-hero-row',
+                type: 'columns',
+                props: {
+                  variant: 'wellness-hero-row',
+                  columns: [{ components: [
+                    { id: 'hero-primary-cta', type: 'button', props: { text: 'Register Now', url: '#lead-form' } },
+                    { id: 'contact-cta', type: 'button', props: { text: 'Contact Us', url: '#lead-form' } },
+                  ] }],
+                },
+              },
+            ],
+          }],
+        },
+      }]),
+    });
+
+    expect(html).toContain('Enhance Wellness');
+    expect(html).not.toContain('>Wellness<');
+    expect(html).toContain('>Register Now<');
+    expect(html).not.toContain('>Contact Us<');
+  });
+
+  test('centers legacy wellness registration forms and removes the duplicate form heading', () => {
+    const html = renderPage({
+      title: 'Eye Checkup',
+      slug: 'eye-checkup',
+      templateType: 'generic-site-eye-care',
+      content: JSON.stringify([{
+        id: 'wellness-page',
+        type: 'columns',
+        props: {
+          variant: 'wellness-campaign-page',
+          columns: [{
+            fullWidth: true,
+            components: [{
+              id: 'legacy-registration',
+              type: 'columns',
+              props: {
+                variant: 'wellness-registration-row',
+                columns: [
+                  { components: [
+                    { id: 'form-title-copy', type: 'heading', props: { text: 'Register for Eye Checkup' } },
+                    { id: 'lead-form', type: 'form', props: { title: 'Register for Eye Checkup', fields: [] } },
+                  ] },
+                  { components: [] },
+                ],
+              },
+            }],
+          }],
+        },
+      }]),
+    });
+
+    expect((html.match(/Register for Eye Checkup/g) || []).length).toBe(1);
+    expect(html).toContain('wellness-layout--wellness-registration-row');
+    expect(html).toContain('wellness-layout--wellness-registration-row > div:only-child');
+  });
+
+  test('applies wellness custom colors without changing the campaign structure', () => {
+    const html = renderPage({
+      title: 'Custom wellness campaign',
+      slug: 'custom-wellness-campaign',
+      templateType: 'generic-site-eye-care',
+      content: JSON.stringify([{
+        id: 'wellness-page',
+        type: 'columns',
+        props: {
+          variant: 'wellness-campaign-page',
+          themeId: 'custom',
+          customColors: { bg: '#fef2f2', primary: '#be123c', accent: '#f59e0b' },
+          columns: [],
+        },
+      }]),
+    });
+
+    expect(html).toContain('--wellness-bg:#fef2f2');
+    expect(html).toContain('--wellness-primary:#be123c');
+    expect(html).toContain('--wellness-accent:#f59e0b');
+  });
+
   test('parses JSON-string content', () => {
     const html = renderPage({
       title: 't',
@@ -319,6 +443,28 @@ describe('component: button', () => {
 });
 
 describe('component: form', () => {
+  test('omits service of interest from wellness consultation forms', () => {
+    const html = renderPage({
+      slug: 'wellness-form-fields',
+      content: [{
+        type: 'form',
+        props: {
+          variant: 'wellness-consultation',
+          fields: [
+            { name: 'first_name', label: 'First Name' },
+            { name: 'service_interest', label: 'Service of Interest', type: 'select', options: ['Wellness'] },
+            { name: 'message', label: 'Tell Us More', type: 'textarea' },
+          ],
+        },
+      }],
+    });
+
+    expect(html).toContain('name="first_name"');
+    expect(html).toContain('name="message"');
+    expect(html).not.toContain('Service of Interest');
+    expect(html).not.toContain('name="service_interest"');
+  });
+
   test('renders form with declared fields', () => {
     const html = renderPage({
       slug: 'contact',
@@ -457,6 +603,17 @@ describe('component: columns (recursive render)', () => {
     });
     expect(html).toContain('display:flex');
   });
+
+  test('adds wellness section anchors for navigation targets', () => {
+    const rows = ['wellness-campaign-page', 'wellness-benefits-row', 'wellness-process-row', 'wellness-form-row']
+      .map((variant) => ({ type: 'columns', props: { variant, columns: [] } }));
+    const html = renderPage({ content: rows });
+
+    expect(html).toContain('id="wellness-home"');
+    expect(html).toContain('id="wellness-services"');
+    expect(html).toContain('id="wellness-about"');
+    expect(html).toContain('id="wellness-contact"');
+  });
 });
 
 describe('component: unknown type', () => {
@@ -490,6 +647,39 @@ describe('component: unknown type', () => {
 // the contract.
 
 const { safeUrl, renderComponent } = landing;
+
+describe('renderComponent  wellness icon migration', () => {
+  test('replaces legacy placeholder symbols with semantic SVG icons', () => {
+    const legacyEye = renderComponent({ type: 'text', props: { variant: 'wellness-badge', text: '+' } }, 'wellness-icons');
+    const legacyPeople = renderComponent({ type: 'text', props: { variant: 'wellness-badge', text: ':)' } }, 'wellness-icons');
+    const detailDate = renderComponent({ type: 'text', props: { variant: 'wellness-detail-label', text: 'Date' } }, 'wellness-icons');
+    const legacyDetailLocation = renderComponent({ type: 'text', props: { variant: 'wellness-detail-label', text: 'Event Location' } }, 'wellness-icons');
+    const legacyDetailAudience = renderComponent({ type: 'text', props: { variant: 'wellness-detail-label', text: 'Who Should Attend?' } }, 'wellness-icons');
+
+    expect(legacyEye).toContain('landing-text--wellness-badge');
+    expect(legacyEye).toContain('<svg');
+    expect(legacyEye).toContain('M2 12s3.5-6');
+    expect(legacyPeople).toContain('M16 21v-2');
+    expect(legacyPeople).not.toContain(':)');
+    expect(detailDate).toContain('wellness-detail-icon');
+    expect(detailDate).toContain('M16 2v4');
+    expect(legacyDetailLocation).toContain('M20 10c0 5');
+    expect(legacyDetailAudience).toContain('M16 21v-2');
+  });
+
+  test('renders wellness navigation as independent section links', () => {
+    const nav = renderComponent({
+      type: 'text',
+      props: { variant: 'wellness-nav', text: 'HOME   SERVICES   ABOUT US   CONTACT' },
+    }, 'wellness-navigation');
+
+    expect(nav).toContain('href="#wellness-home"');
+    expect(nav).toContain('href="#wellness-services"');
+    expect(nav).toContain('href="#wellness-about"');
+    expect(nav).toContain('href="#wellness-contact"');
+    expect(nav).not.toContain('word-spacing');
+  });
+});
 
 describe('safeUrl  image-src allowlist (#447)', () => {
   test.each([
@@ -931,7 +1121,6 @@ describe('safeUrl  percent-encoded / malformed / exotic edge cases', () => {
     expect(safeUrl('data:image/svg+xml,<svg/>', 'image-src')).toBe('data:image/svg+xml,<svg/>');
   });
 });
-
 
 
 

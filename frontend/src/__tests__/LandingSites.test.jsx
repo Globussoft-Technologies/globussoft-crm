@@ -131,6 +131,7 @@ describe('<LandingSites /> wellness generate modal', () => {
     notifyError.mockReset();
     notifySuccess.mockReset();
     notifyInfo.mockReset();
+    notifyObj.confirm.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -170,6 +171,7 @@ describe('<LandingSites /> wellness generate modal', () => {
       expect(body.sectorKey).toBe('wellness');
       expect(body.campaignName).toBe('Rooted Wellness Camp');
       expect(navigateMock).toHaveBeenCalledWith('/landing-sites/builder/99?ai=1');
+      expect(notifySuccess).toHaveBeenCalledWith('Landing site generated successfully. Opening the builder.');
     });
   });
 
@@ -251,6 +253,7 @@ describe('<LandingSites /> wellness generate modal', () => {
     // Proper in-modal message — not a toast, not a silent stub draft.
     await waitFor(() => expect(screen.getByText(/AI is not configured for this workspace/i)).toBeInTheDocument());
     expect(navigateMock).not.toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/AI is not configured for this workspace/i));
     // Modal stays open: the Generate button is still rendered.
     expect(screen.getByRole('button', { name: /^Generate$/i })).toBeInTheDocument();
   });
@@ -327,6 +330,31 @@ describe('<LandingSites /> wellness generate modal', () => {
     });
 
     await waitFor(() => expect(screen.getByText('Weekend Wellness Reset')).toBeInTheDocument());
+  });
+
+  it('removes a deleted landing site without requiring a page refresh', async () => {
+    let deleted = false;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (String(url).startsWith('/api/landing-sites') && method === 'GET') {
+        return Promise.resolve(makeLandingSitesResponse(deleted ? [] : [LANDING_SITE_FIXTURE[1]], null, false));
+      }
+      if (url === `/api/landing-pages/${LANDING_SITE_FIXTURE[1].id}` && method === 'DELETE') {
+        deleted = true;
+        return Promise.resolve({});
+      }
+      if (url === '/api/landing-sites/templates/list' && method === 'GET') return Promise.resolve([]);
+      return defaultFetchMock(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderPage('wellness');
+
+    await waitFor(() => expect(screen.getByText('Hair Consultation Draft')).toBeInTheDocument());
+    await user.click(screen.getByTitle('Delete'));
+
+    await waitFor(() => expect(screen.queryByText('Hair Consultation Draft')).not.toBeInTheDocument());
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/landing-pages/11', { method: 'DELETE' });
   });
 });
 

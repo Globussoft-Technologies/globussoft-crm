@@ -3,6 +3,7 @@ const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
 const { snapshotSafe, VERSION_SOURCES } = require('../lib/landingPageVersions');
 const { generateLandingSiteContent } = require('../services/landingSiteGeneratorLLM');
+const { hydrateWellnessLandingImages } = require('../services/wellnessLandingImages');
 const { normalizeSectorKey, SECTORS } = require('../services/landingSitePrompts');
 
 const router = express.Router();
@@ -160,7 +161,7 @@ router.get('/sectors', verifyToken, async (_req, res) => {
 
 router.post('/generate', verifyToken, async (req, res) => {
   try {
-    const { sectorKey, sectorLabel, campaignName, campaignGoal, businessName, audience, location, eventDate, eventTime, eventLocation, tone, ctaText, imageMode, autoCreate = true } = req.body || {};
+    const { sectorKey, sectorLabel, campaignName, campaignGoal, businessName, audience, location, eventDate, eventTime, eventLocation, tone, ctaText, imageMode, wellnessTheme, wellnessCustomColors, wellnessCustomBaseThemeId, wellnessLayout, autoCreate = true } = req.body || {};
     const normalizedSector = normalizeSectorKey(sectorKey);
     const result = await generateLandingSiteContent({
       tenantId: req.user.tenantId,
@@ -178,6 +179,10 @@ router.post('/generate', verifyToken, async (req, res) => {
       tone,
       ctaText,
       imageMode,
+      wellnessTheme,
+      wellnessCustomColors,
+      wellnessCustomBaseThemeId,
+      wellnessLayout,
     }, { tenantId: req.user.tenantId });
 
     // AI access blocked (no BYOK key + no funded subscription, or credits
@@ -243,7 +248,7 @@ router.get('/public/:slug', async (req, res) => {
     if (!slug) return res.status(400).json({ error: 'Slug is required' });
     const page = await prisma.landingPage.findFirst({ where: { slug, status: 'PUBLISHED', ...landingSiteVerticalWhere(req.query.vertical) } });
     if (!page) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
-    res.json(page);
+    res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
   } catch (err) {
     console.error('[landing-sites] public fetch failed:', err);
     res.status(500).json({ error: 'Failed to load landing site' });

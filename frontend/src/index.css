@@ -3271,6 +3271,17 @@ html[data-theme="dark"] .travel-flight-details-box {
   overflow: visible !important;
 }
 
+/* Web Check-ins uses TopScrollSync for the horizontal viewport. Keep the
+   table itself in normal table layout at narrow widths so the synced bars do
+   not compete with a second overflow container. Its inline auto layout lets
+   long values grow their columns and keeps the table scrollable. */
+.webcheckins-table {
+  display: table;
+  width: max-content !important;
+  min-width: 100% !important;
+  overflow: visible !important;
+}
+
 .top-scroll-sync__bottom--hidden-scrollbar::-webkit-scrollbar {
   display: none;
   height: 0;

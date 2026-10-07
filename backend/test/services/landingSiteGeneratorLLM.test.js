@@ -172,6 +172,14 @@ describe("generateLandingSiteContent", () => {
     expect(body).not.toContain("Contact Us");
     expect(body).toContain("people exploring hair treatment options");
     expect(body).not.toContain("Blood Donation");
+    const imageCalls = destinationImageProvider.fetchOne.mock.calls;
+    expect(imageCalls.length).toBeGreaterThan(0);
+    expect(imageCalls.every(([, opts]) => (
+      opts.excludeProviders?.includes('unsplash')
+      && opts.excludeProviders.includes('pixabay')
+      && opts.excludeProviders.includes('ai-fallback')
+    ))).toBe(true);
+    expect(imageCalls.some(([query]) => query.includes('professional consultation care team'))).toBe(true);
   });
 
   test("builds a wellness scaffold from Groq content fields when other keys are unavailable", async () => {

@@ -86,7 +86,10 @@ const STATUS_COLORS = {
   failed: { bg: "rgba(168,50,63,0.18)", color: "#A8323F" },
 };
 
-const TABLE_MIN_WIDTH = 1680;
+// These are starting widths only. The table uses auto layout so a long PNR,
+// passenger name, or action label can expand its column instead of being
+// squeezed into a hard-coded width.
+const TABLE_COLUMN_START_WIDTHS = [190, 100, 90, 90, 190, 180, 160, 140, 340];
 
 const empty = {
   padding: 32,
@@ -560,25 +563,20 @@ export default function WebCheckinQueue() {
             minWidth: 0,
           }}
         >
-          <TopScrollSync forceScrollbar scrollWidth={`${TABLE_MIN_WIDTH}px`}>
+          <TopScrollSync forceScrollbar>
             <table
               className="stable-table webcheckins-table"
               style={{
-                width: "100%",
-                minWidth: `${TABLE_MIN_WIDTH}px`,
+                width: "max-content",
+                minWidth: "100%",
+                tableLayout: "auto",
                 borderCollapse: "collapse",
               }}
             >
               <colgroup>
-                <col style={{ width: "116px" }} />
-                <col style={{ width: "88px" }} />
-                <col style={{ width: "90px" }} />
-                <col style={{ width: "110px" }} />
-                <col style={{ width: "178px" }} />
-                <col style={{ width: "170px" }} />
-                <col style={{ width: "150px" }} />
-                <col style={{ width: "140px" }} />
-                <col style={{ width: "330px" }} />
+                {TABLE_COLUMN_START_WIDTHS.map((width, index) => (
+                  <col key={`webcheckin-column-${index}`} style={{ width }} />
+                ))}
               </colgroup>
               <thead>
                 <tr>
@@ -604,7 +602,7 @@ export default function WebCheckinQueue() {
                       key={r.id}
                       style={{ borderTop: "1px solid var(--border-light)" }}
                     >
-                      <td style={td}>
+                      <td style={td} title={fmtDateTime(r.windowOpenAt)}>
                         <span
                           style={{
                             display: "inline-flex",
@@ -616,13 +614,13 @@ export default function WebCheckinQueue() {
                           {fmtDateTime(r.windowOpenAt)}
                         </span>
                       </td>
-                      <td style={td}>
+                      <td style={td} title={r.pnr || ""}>
                         <code>{r.pnr}</code>
                       </td>
-                      <td style={td}>{r.flightNumber}</td>
-                      <td style={td}>{r.airlineCode}</td>
-                      <td style={td}>{fmtDateTime(r.departureAt)}</td>
-                      <td style={td}>{r.passengerName}</td>
+                      <td style={td} title={r.flightNumber || ""}>{r.flightNumber}</td>
+                      <td style={td} title={r.airlineCode || ""}>{r.airlineCode}</td>
+                      <td style={td} title={fmtDateTime(r.departureAt)}>{fmtDateTime(r.departureAt)}</td>
+                      <td style={td} title={r.passengerName || ""}>{r.passengerName}</td>
                       <td style={td}>
                         <span
                           data-testid={`status-badge-${r.id}`}
@@ -817,6 +815,7 @@ export default function WebCheckinQueue() {
 }
 
 const th = {
+  boxSizing: "border-box",
   padding: "10px 12px",
   textAlign: "left",
   fontSize: 12,
@@ -829,11 +828,15 @@ const th = {
   top: 0,
   zIndex: 2,
   background: "var(--modal-bg, var(--bg-color))",
+  verticalAlign: "middle",
+  whiteSpace: "nowrap",
+  overflow: "visible",
+  textOverflow: "clip",
 };
 
 const sortButtonStyle = {
-  display: "inline-flex", alignItems: "center", justifyContent: "space-between",
-  gap: 6, width: "100%", padding: "4px 8px", border: "none",
+  display: "inline-flex", alignItems: "center", justifyContent: "flex-start",
+  gap: 6, width: "auto", minWidth: 0, padding: 0, boxSizing: "border-box", border: "none",
   borderRadius: 999, background: "transparent", color: "inherit", font: "inherit",
   textTransform: "inherit", letterSpacing: "inherit", cursor: "pointer", textAlign: "left",
   transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease",
@@ -841,11 +844,15 @@ const sortButtonStyle = {
 const sortButtonActiveStyle = { color: "var(--primary-color)" };
 
 const td = {
+  boxSizing: "border-box",
   padding: "10px 12px",
   verticalAlign: "top",
   fontSize: 13,
   color: "var(--text-primary)",
   minWidth: 0,
+  whiteSpace: "nowrap",
+  overflow: "visible",
+  textOverflow: "clip",
 };
 const backLinkStyle = {
   display: "inline-flex",

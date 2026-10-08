@@ -1154,6 +1154,45 @@ class Component extends DCLogic {
     }catch(_err){ /* ignore malformed or unavailable browser storage */ }
   }
 
+  ensureRegistrationDraft(paymentOrderEndpoint){
+    const endpoint = String(paymentOrderEndpoint || '').trim();
+    const draftEndpoint = endpoint.replace(/\/payment-order\/?$/, '/registration-draft');
+    if(!draftEndpoint || draftEndpoint === endpoint || draftEndpoint === '#'){
+      return Promise.reject(new Error('Could not start registration.'));
+    }
+    if(this._registrationDraftPromise) return this._registrationDraftPromise;
+
+    const currentDraftToken = String(this.state.regDraftToken || '').trim();
+    const fields = this.state.regValues && typeof this.state.regValues === 'object'
+      ? this.state.regValues
+      : {};
+    this._registrationDraftPromise = fetch(draftEndpoint, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ fields, draftToken: currentDraftToken })
+    })
+      .then(async (r) => {
+        const result = await r.json().catch(() => ({}));
+        if(!r.ok) throw new Error((result && result.error) || 'Could not start registration.');
+        return result;
+      })
+      .then((result) => {
+        const draftToken = String(result && result.draftToken || '').trim();
+        if(!draftToken) throw new Error('Could not start registration.');
+        this.setState({ regDraftToken: draftToken });
+        this.saveRegistrationDraft({
+          regStep: this.state.regStep,
+          regValues: this.state.regValues,
+          regDraftToken: draftToken,
+          regPaymentMode: this.state.regPaymentMode,
+          regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex
+        });
+        return draftToken;
+      })
+      .finally(() => { this._registrationDraftPromise = null; });
+    return this._registrationDraftPromise;
+  }
+
   _startAutoplay(){
     const tryPlay = () => {
       const vids = document.querySelectorAll('video[autoplay]');
@@ -1633,8 +1672,12 @@ class Component extends DCLogic {
           draftToken: this.state.regDraftToken || '',
           regStep: idx,
         };
-        this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
-        fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(paymentPayload) })
+        this.ensureRegistrationDraft(paymentOrderEndpoint)
+          .then((draftToken) => {
+            const payload = Object.assign({}, paymentPayload, { draftToken });
+            this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: draftToken, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
+            return fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+          })
           .then(async (r) => {
             const result = await r.json().catch(() => ({}));
             if(!r.ok) throw new Error((result && result.error) || 'Could not start payment.');

@@ -218,6 +218,11 @@ describe('<Invoices /> — page surface', () => {
     });
     expect(screen.queryByRole('heading', { name: /Create Invoice/i })).toBeNull();
     expect(screen.getByText(/Invoice Ledger/i)).toBeInTheDocument();
+    const invoicePage = document.querySelector('.invoices-mobile-page');
+    const summaryControls = document.querySelector('.invoice-summary-controls');
+    expect(invoicePage).toHaveClass('invoices-generic-page');
+    expect(summaryControls.querySelector('.invoice-summary-badges')).toBeInTheDocument();
+    expect(summaryControls.querySelector('.invoice-filters')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /^Contact$/i })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: /Products \/ Services/i })).toBeNull();
     expect(screen.queryByRole('columnheader', { name: /Payment Mode/i })).toBeNull();
@@ -624,6 +629,52 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText('INV-003')).toBeInTheDocument();
   });
 
+  it('paginates invoice rows with a custom page size and keeps page bounds', async () => {
+    const pagedInvoices = Array.from({ length: 12 }, (_, index) => ({
+      ...sampleInvoices[0],
+      id: index + 1,
+      invoiceNum: `INV-${String(index + 1).padStart(3, '0')}`,
+      status: index % 2 === 0 ? 'PAID' : 'UNPAID',
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing') return Promise.resolve(pagedInvoices);
+      return defaultFetchMock(url, opts);
+    });
+
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    const table = screen.getByRole('table', { name: 'Invoices table' });
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(10);
+    expect(screen.getByLabelText('Showing 1-10 of 12')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous invoice page' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next invoice page' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next invoice page' }));
+    expect(screen.queryByText('INV-001')).toBeNull();
+    expect(screen.getByText('INV-011')).toBeInTheDocument();
+    expect(screen.getByLabelText('Showing 11-12 of 12')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next invoice page' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Invoices per page'), {
+      target: { value: 'custom' },
+    });
+    const customPageSize = screen.getByLabelText('Custom invoices per page');
+    expect(customPageSize).toHaveValue(10);
+    fireEvent.change(customPageSize, { target: { value: '3' } });
+    expect(screen.getByLabelText('Showing 1-3 of 12')).toBeInTheDocument();
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(3);
+
+    fireEvent.change(screen.getByLabelText('Invoices per page'), {
+      target: { value: '25' },
+    });
+    expect(screen.getByLabelText('Showing 1-12 of 12')).toBeInTheDocument();
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
+    expect(screen.getByText('INV-012')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous invoice page' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next invoice page' })).toBeDisabled();
+  });
+
   it('filter "no matches" state renders the dashed-card message', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/billing') return Promise.resolve([sampleInvoices[0]]);
@@ -977,6 +1028,12 @@ describe('<Invoices /> — wellness customer invoice form', () => {
   it('shows the wellness-only customer details and catalog sections without travel controls', async () => {
     renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
     await waitFor(() => expect(screen.getByText('Invoice Ledger')).toBeInTheDocument());
+    const wellnessInvoicePage = document.querySelector('.invoices-mobile-page');
+    const wellnessSummaryControls = document.querySelector('.invoice-summary-controls');
+    expect(wellnessInvoicePage).toHaveClass('invoices-wellness-page');
+    expect(wellnessInvoicePage).not.toHaveClass('invoices-generic-page');
+    expect(wellnessSummaryControls.querySelector('.invoice-summary-badges')).toBeInTheDocument();
+    expect(wellnessSummaryControls.querySelector('.invoice-filters')).toBeInTheDocument();
     await openCreateInvoiceForm();
 
     expect(screen.getByRole('heading', { name: /Customer Details/i })).toBeInTheDocument();

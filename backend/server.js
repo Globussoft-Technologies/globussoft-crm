@@ -1099,7 +1099,8 @@ app.use("/api", (req, res, next) => {
     "/terms-and-conditions",
     "/legal",
     "/landing-pages/public",
-    "/explore",
+    // Explore public API intentionally disabled.
+    // "/explore",
     "/landing-sites/public",
     "/landing-pages/wanderlux-static",
     "/brochure-assets",
@@ -1590,7 +1591,9 @@ app.use(
   travelPersonalisedDestinationsRoutes,
 );
 app.use("/api/travel-tmc-catalogue", require("./routes/travel_tmc_catalogue"));
-app.use("/api/explore", require("./routes/explore_public"));
+// Explore public API intentionally disabled. The route module is retained for
+// possible future restoration, but it must not be mounted or make Pexels calls.
+// app.use("/api/explore", require("./routes/explore_public"));
 app.use(
   "/api/travel/engine-weights",
   require("./routes/travel_engine_weights"),

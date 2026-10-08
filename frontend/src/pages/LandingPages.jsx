@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Star, Sparkles, AlertCircle, ExternalLink, Search, X } from 'lucide-react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Star, Sparkles, AlertCircle, ExternalLink, Search, X, LoaderCircle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { getLandingPageSharePath, getLandingPageShareUrl, isTravelLandingPage } from '../utils/landingPageUtils';
@@ -274,7 +274,6 @@ export default function LandingPages() {
   const pageReturnState = location.state?.returnTo ? location.state : null;
   const tripLandingPageContext = pageReturnState?.tripContext || null;
   const [pages, setPages] = useState([]);
-  const [explorePageId, setExplorePageId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   // PR-B — AI Generate modal state.
@@ -391,7 +390,10 @@ export default function LandingPages() {
   };
   const summaryAndVisiblePages = useMemo(() => {
     const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
-    const counts = pages.reduce((acc, page) => {
+    // Explore is intentionally disabled. Preserve its database row but keep it
+    // out of the manager, counters, search results, and operator actions.
+    const managedPages = pages.filter((page) => !isExploreMarketingPage(page));
+    const counts = managedPages.reduce((acc, page) => {
       acc.total += 1;
       if (page.status === 'PUBLISHED') acc.published += 1;
       else if (page.status === 'DRAFT') acc.draft += 1;
@@ -400,7 +402,7 @@ export default function LandingPages() {
     }, { total: 0, published: 0, draft: 0, archived: 0 });
 
     const term = searchQuery.trim().toLowerCase();
-    const filtered = pages.filter((page) => {
+    const filtered = managedPages.filter((page) => {
       if (rangeStart && rangeEnd) {
         const ts = new Date(page.createdAt).getTime();
         if (ts < rangeStart.getTime() || ts > rangeEnd.getTime()) return false;
@@ -424,9 +426,6 @@ export default function LandingPages() {
   }, [dateFilter, pages, searchQuery, statusFilter]);
   const { counts, visiblePages: filteredPages } = summaryAndVisiblePages;
   const visiblePages = filteredPages;
-  const explorePage = pages.find((page) => isExploreMarketingPage(page) && page.status !== 'ARCHIVED')
-    || pages.find((page) => !page.tripId && page.templateType === 'wanderlux-v1' && page.status !== 'ARCHIVED');
-  const resolvedExplorePageId = explorePage?.id || explorePageId;
   const builderNavigationState = pageReturnState || undefined;
   const statusFilterOptions = [
     { value: 'ALL', label: 'All', count: counts.total },
@@ -442,9 +441,6 @@ export default function LandingPages() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-    fetchApi('/api/explore')
-      .then((exploreData) => setExplorePageId(exploreData?.explorePageId || null))
-      .catch(() => setExplorePageId(null));
   };
 
   useEffect(() => {
@@ -709,22 +705,10 @@ export default function LandingPages() {
         </div>
       </header>
 
-      <section aria-labelledby="explore-page-bar-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', padding: '0.85rem 1rem', marginBottom: '1.25rem', border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--card-bg, rgba(255,255,255,0.45))' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
-            <strong id="explore-page-bar-title">Explore marketing page</strong>
-          </div>
-          <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>One editable page for pre-trip discovery. Published content is live at <strong>/explore</strong>.</p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-          <button type="button" onClick={() => navigator.clipboard.writeText(`${window.location.origin}/explore`).then(() => { setCopiedId('explore'); setTimeout(() => setCopiedId(null), 2000); })} style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem' }}><Copy size={13} /> {copiedId === 'explore' ? 'Copied!' : 'Copy URL'}</button>
-          <a href="/explore" target="_blank" rel="noreferrer" style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', textDecoration: 'none' }}><ExternalLink size={13} /> Open live</a>
-          {resolvedExplorePageId && <Link to={`/landing-pages/explore-builder/${resolvedExplorePageId}`} className="btn-primary" style={{ padding: '0.5rem 0.8rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}><FileEdit size={13} /> Edit</Link>}
-        </div>
-      </section>
+      {/* Explore management UI intentionally disabled. */}
 
 
-      {pages.length > 0 && (
+      {counts.total > 0 && (
         <>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: '1 1 560px', minWidth: 0 }}>
@@ -801,7 +785,7 @@ export default function LandingPages() {
         </>
       )}
 
-      {loading ? <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading...</p> : pages.length === 0 ? (
+      {loading ? <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading...</p> : counts.total === 0 ? (
         <div className="card" style={{ ...cardSurfaceStyle, padding: '4rem', textAlign: 'center' }}>
           <PanelTop size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
           <h3 style={{ marginBottom: '0.5rem' }}>No landing pages yet</h3>
@@ -1230,9 +1214,17 @@ export default function LandingPages() {
                 type="button"
                 onClick={handleGenerate}
                 disabled={generating}
-                style={{ padding: '0.55rem 1.1rem', borderRadius: 6, border: 'none', background: '#b8893b', color: '#fff', cursor: generating ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.9rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                aria-busy={generating}
+                style={{ minWidth: 154, padding: '0.55rem 1.1rem', borderRadius: 6, border: 'none', background: '#b8893b', color: '#fff', cursor: generating ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.9rem', display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: '0.45rem' }}
               >
-                <Sparkles size={14} /> {generating ? 'Generating…' : 'Generate Draft'}
+                {generating
+                  ? (
+                    <span role="status" aria-label="Generating landing page" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                      <LoaderCircle size={17} aria-hidden="true" style={{ animation: 'spin 0.8s linear infinite', flexShrink: 0 }} />
+                    </span>
+                  )
+                  : <Sparkles size={14} />}
+                {generating ? 'Generating page…' : 'Generate Draft'}
               </button>
             </div>
           </div>

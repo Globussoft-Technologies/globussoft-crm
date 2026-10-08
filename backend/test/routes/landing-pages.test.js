@@ -451,7 +451,15 @@ describe('POST /api/landing-pages/generate-from-destination', () => {
         __surface: 'landing-pages-generate',
       }),
     );
-    expect(destinationImageProvider.fetchStrategy).toHaveBeenCalled();
+    expect(destinationImageProvider.fetchStrategy).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        tenantId: 1,
+        __userId: 7,
+        __surface: 'landing-pages-generate-wanderlux',
+        excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'],
+      }),
+    );
     const createArgs = prisma.landingPage.create.mock.calls[0][0];
     const persistedContent = JSON.parse(createArgs.data.content);
     expect(createArgs.data.templateType).toBe('wanderlux-v1');

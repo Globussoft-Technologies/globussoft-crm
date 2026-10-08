@@ -8,6 +8,7 @@ const unsplashProvider = require('../../services/imageProviders/unsplashProvider
 const pexelsProvider = require('../../services/imageProviders/pexelsProvider');
 const pixabayProvider = require('../../services/imageProviders/pixabayProvider');
 const aiImageFallbackProvider = require('../../services/imageProviders/aiImageFallbackProvider');
+const marketingFlyerImageLLM = require('../../services/marketingFlyerImageLLM');
 
 beforeEach(() => {
   provider._resetForTests();
@@ -53,6 +54,28 @@ describe('provider hierarchy + fallback', () => {
 
   test('AI fallback isAvailable() is ALWAYS true (budget-gated internally)', () => {
     expect(aiImageFallbackProvider.isAvailable()).toBe(true);
+  });
+});
+
+describe('AI fallback adapter contract', () => {
+  test('passes the image query as marketingFlyerImageLLM destination', async () => {
+    const generateSpy = vi.spyOn(marketingFlyerImageLLM, 'generateFlyerImage').mockResolvedValue({
+      imageUrl: 'https://openai.example/munich.png',
+      model: 'dall-e-3',
+    });
+
+    const results = await aiImageFallbackProvider.search('Munich, Germany', {
+      tenantId: 73,
+      aspectRatio: '4:3',
+    });
+
+    expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      destination: 'Munich, Germany',
+      tenantId: 73,
+      aspectRatio: '4:3',
+    }));
+    expect(generateSpy.mock.calls[0][0]).not.toHaveProperty('prompt');
+    expect(results[0].url).toBe('https://openai.example/munich.png');
   });
 });
 

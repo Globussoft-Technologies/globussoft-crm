@@ -8,7 +8,14 @@ const { inferProvider } = require("./apiPricing");
 const aiCreditLedger = require("./aiCreditLedger");
 const { pdfBufferToImageParts } = require("./pdfToImages");
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
+// Google limits Gemini 2.5 access for newly-active projects. Use the current
+// Flash-Lite generation for new configurations while retaining 2.5 as a
+// caller-selectable legacy model.
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
+const DEFAULT_GEMINI_FALLBACK_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+];
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-latest";
 
@@ -558,8 +565,26 @@ async function callGemini(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
+    let providerDetail = "";
+    try {
+      const raw = typeof res.text === "function" ? await res.text() : "";
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          providerDetail = parsed?.error?.message || parsed?.message || raw;
+        } catch (_parseError) {
+          providerDetail = raw;
+        }
+      }
+    } catch (_readError) {
+      providerDetail = "";
+    }
+    providerDetail = String(providerDetail || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 500);
     const err = new Error(
-      `gemini generateContent failed with status ${res.status}`,
+      `gemini generateContent failed with status ${res.status}${providerDetail ? `: ${providerDetail}` : ""}`,
     );
     err.status = res.status;
     err.provider = "gemini";
@@ -699,6 +724,41 @@ async function generateChatCompletion(config, payload, fetchImpl) {
 function defaultModelForProvider(providerId) {
   const meta = getProviderMeta(providerId);
   return meta ? meta.defaultModel : DEFAULT_OPENAI_MODEL;
+}
+
+function withGeminiModelFallbacks(config, existingFallbacks = []) {
+  if (!config || config.family !== "gemini") {
+    return { ...config, fallbacks: existingFallbacks };
+  }
+
+  const configuredFallbacks = String(
+    process.env.AI_CRM_GEMINI_FALLBACK_MODELS || "",
+  )
+    .split(",")
+    .map((model) => model.trim().replace(/^models\//, ""))
+    .filter(Boolean);
+  const modelCandidates = configuredFallbacks.length
+    ? configuredFallbacks
+    : DEFAULT_GEMINI_FALLBACK_MODELS;
+  const candidates = [
+    ...modelCandidates
+      .filter((model) => model !== config.model)
+      .map((model) => ({
+        ...config,
+        model,
+        fallbacks: undefined,
+      })),
+    ...existingFallbacks,
+  ];
+  const seen = new Set([`${config.providerId}:${config.model}`]);
+  const fallbacks = candidates.filter((candidate) => {
+    if (!candidate) return false;
+    const key = `${candidate.providerId}:${candidate.model}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { ...config, fallbacks };
 }
 
 async function readByokConfig(tenantId) {
@@ -860,7 +920,7 @@ async function resolveProviderConfig(
   const byok = await readByokConfig(tenantId);
   if (byok && byok.apiKey) {
     const providerMeta = getProviderMeta(byok.providerId);
-    return {
+    return withGeminiModelFallbacks({
       providerId: providerMeta.id,
       providerLabel: providerMeta.label,
       family: providerMeta.family,
@@ -871,7 +931,7 @@ async function resolveProviderConfig(
       }),
       source: "byok",
       accessType: "byok",
-    };
+    });
   }
 
   const gate = await aiCreditLedger.canUseManagedAi(tenantId);
@@ -888,12 +948,11 @@ async function resolveProviderConfig(
     const fallbacks = managed.all.filter(
       (candidate) => candidate.providerId !== primary.providerId || candidate.model !== primary.model,
     );
-    return {
+    return withGeminiModelFallbacks({
       ...primary,
       source: "internal",
       accessType: "crm-managed",
-      fallbacks: fallbacks.map((candidate) => ({ ...candidate, accessType: "crm-managed" })),
-    };
+    }, fallbacks.map((candidate) => ({ ...candidate, accessType: "crm-managed" })));
   }
 
   // Legacy env-var fallback for plans without attached keys.
@@ -906,18 +965,17 @@ async function resolveProviderConfig(
   if (!primary && fallbacks.length === 0) return null;
 
   const config = primary || fallbacks[0];
-  return {
+  return withGeminiModelFallbacks({
     ...config,
     source: "internal",
     accessType: "crm-managed",
-    fallbacks: fallbacks
+  }, fallbacks
       .filter(
         (candidate) =>
           candidate.providerId !== config.providerId ||
           candidate.model !== config.model,
       )
-      .map((candidate) => ({ ...candidate, accessType: "crm-managed" })),
-  };
+      .map((candidate) => ({ ...candidate, accessType: "crm-managed" })));
 }
 
 async function getTenantAiState(tenantId) {
@@ -1779,6 +1837,7 @@ module.exports = {
   CRM_STATUS,
   PROVIDER_CATALOG,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_FALLBACK_MODELS,
   maskApiKey,
   validateProviderBaseUrl,
   normalizeOpenAIResponse,
@@ -1799,4 +1858,5 @@ module.exports = {
   testProviderConnection,
   discoverModels,
   requestedFamilyForLabel,
+  withGeminiModelFallbacks,
 };

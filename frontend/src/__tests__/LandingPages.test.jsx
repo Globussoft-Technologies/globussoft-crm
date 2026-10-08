@@ -395,7 +395,7 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
-  it('restores Copy URL and Edit for the existing explore page without an explore create option', async () => {
+  it('hides the disabled explore page and all of its management actions', async () => {
     const explorePage = {
       id: 99,
       title: 'Explore destinations',
@@ -409,21 +409,23 @@ describe('<LandingPages /> — index page surface', () => {
       if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
         return Promise.resolve([explorePage]);
       }
-      if (url === '/api/explore') return Promise.resolve({ explorePageId: 99 });
       return Promise.resolve(null);
     });
 
     renderPage();
-    await waitFor(() => expect(screen.getByText('Explore destinations')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No landing pages yet')).toBeInTheDocument());
 
-    const exploreBar = screen.getByText('Explore marketing page').closest('section');
-    expect(exploreBar).toBeTruthy();
-    expect(exploreBar.querySelector('a[href="/landing-pages/explore-builder/99"]')).toBeTruthy();
-    const copyButton = exploreBar.querySelector('button');
-    expect(copyButton).toHaveTextContent(/Copy URL/i);
-    fireEvent.click(copyButton);
-    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith(`${window.location.origin}/explore`));
-    expect(exploreBar).not.toHaveTextContent(/Create/i);
+    expect(screen.queryByText('Explore destinations')).not.toBeInTheDocument();
+    expect(screen.queryByText('Explore marketing page')).not.toBeInTheDocument();
+    expect(document.querySelector('a[href="/explore"]')).toBeNull();
+    expect(document.querySelector('a[href^="/landing-pages/explore-builder/"]')).toBeNull();
+  });
+
+  it('does not load the Pexels-enriched explore catalogue from the landing-page manager', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/explore');
   });
 
   it('clicking Unpublish fires POST /api/landing-pages/:id/unpublish', async () => {

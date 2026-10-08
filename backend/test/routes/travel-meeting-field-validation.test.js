@@ -1,6 +1,39 @@
 const { _internal } = require("../../routes/travel_meeting_forms");
 
 describe("Travel Meeting Form field validation", () => {
+  const linkPayload = { firstName: "Priya", lastName: "Sharma", email: "priya@school.edu.in",
+    selectedStartTime: "2026-10-09T10:00:00+05:30", zoomEventId: "meeting-123" };
+  const linkForm = { id: 7, tenantId: 3, durationMins: 30, timezone: "Asia/Kolkata" };
+  test.each([
+    "https://zoom.us/j/123?pwd=secret&omn=456",
+    "https://us02web.zoom.us/j/123?pwd=secret",
+    "https://company.zoom.us/my/expert",
+    "https://zoom.com/j/123",
+    "https://agency.zoomgov.com/j/123",
+  ])("preserves valid Zoom join links: %s", (url) => {
+    for (const field of ["zoomJoinUrl", "meetingUrl"]) {
+      expect(_internal.externalBookingData(linkForm, { ...linkPayload, [field]: url }).data.meetingUrl).toBe(url);
+    }
+  });
+  test.each([
+    "javascript:alert(1)", "data:text/html,test", "http://zoom.us/j/123",
+    "https://zoom.us.evil.test/j/123", "https://evilzoom.us/j/123",
+    "https://zoom.us@evil.test/j/123", "https://user:password@zoom.us/j/123",
+    "https://zoom.us:8443/j/123", "//zoom.us/j/123", "not-a-url",
+  ])("rejects unsafe meeting links before booking persistence: %s", (url) => {
+    for (const field of ["zoomJoinUrl", "meetingUrl"]) {
+      try {
+        _internal.externalBookingData(linkForm, { ...linkPayload, [field]: url });
+        throw new Error("Expected rejection");
+      } catch (error) {
+        expect(error).toMatchObject({ status: 400, code: "INVALID_MEETING_URL" });
+      }
+    }
+  });
+  test("keeps an absent or empty meeting link optional", () => {
+    expect(_internal.externalBookingData(linkForm, linkPayload).data.meetingUrl).toBeNull();
+    expect(_internal.externalBookingData(linkForm, { ...linkPayload, zoomJoinUrl: " " }).data.meetingUrl).toBeNull();
+  });
   test("accepts, normalizes, and deduplicates confirmation email CC recipients", () => {
     expect(_internal.normalizeEmailCc([" PERSON@EXAMPLE.COM ", "person@example.com", "host@example.com", ""])).toEqual([
       "person@example.com",

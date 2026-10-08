@@ -563,6 +563,28 @@ function authorizeConsumer(form, req) {
   });
 }
 
+function normalizeZoomMeetingUrl(raw) {
+  if (raw == null || raw === "") return null;
+  const value = String(raw).trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    const allowedHost = ["zoom.us", "zoom.com", "zoomgov.com"].some((domain) =>
+      url.hostname === domain || url.hostname.endsWith(`.${domain}`));
+    if (value.length > 2000 || value.includes("\\")
+      || [...value].some((character) => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)
+      || url.protocol !== "https:" || !allowedHost || url.username || url.password
+      || (url.port && url.port !== "443")) throw new Error("Invalid Zoom link");
+    // Preserve the original join path and password/query parameters.
+    return value;
+  } catch {
+    const error = new Error("Meeting URL must be an HTTPS Zoom link");
+    error.status = 400;
+    error.code = "INVALID_MEETING_URL";
+    throw error;
+  }
+}
+
 function externalBookingData(form, body = {}, idempotencyHeader = "") {
   const normalized = normalizeBookingPayload(body);
   const values = normalized.values;
@@ -602,7 +624,7 @@ function externalBookingData(form, body = {}, idempotencyHeader = "") {
     throw error;
   }
   const idempotencyKey = String(idempotencyHeader || body.idempotencyKey || `zoom:${zoomEventId}`).trim().slice(0, 191);
-  const meetingUrl = sanitizeText(String(body.zoomJoinUrl || body.meetingUrl || "")).trim().slice(0, 2000) || null;
+  const meetingUrl = normalizeZoomMeetingUrl(body.zoomJoinUrl) || normalizeZoomMeetingUrl(body.meetingUrl);
   const calendarEventId = sanitizeText(String(body.calendarEventId || "")).trim().slice(0, 191) || null;
   const endsAt = new Date(scheduledAt.getTime() + duration * 60_000);
   const payload = { ...body, ingestionMode: "EXTERNAL_CONFIRMED_BOOKING" };

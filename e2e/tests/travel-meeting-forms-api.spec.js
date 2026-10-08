@@ -165,6 +165,16 @@ test('External scheduler can store a confirmed booking without CRM providers', a
     expect(createResponse.status()).toBe(201);
     created = await createResponse.json();
 
+    for (const url of ['javascript:alert(1)', 'https://zoom.us.evil.test/j/123']) {
+      const invalid = await request.post(`${BASE_URL}/api/travel/meeting-forms/public/${created.publicKey}/external-bookings`, {
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `invalid-${marker}-${url.length}` },
+        data: { firstName: 'Priya', lastName: 'Sharma', email: 'priya@school.edu.in',
+          selectedStartTime: '2099-10-09T10:00:00+05:30', zoomJoinUrl: url },
+      });
+      expect(invalid.status()).toBe(400);
+      expect((await invalid.json()).code).toBe('INVALID_MEETING_URL');
+    }
+
     const bookingResponse = await request.post(`${BASE_URL}/api/travel/meeting-forms/public/${created.publicKey}/external-bookings`, {
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `external-${marker}` },
       data: {

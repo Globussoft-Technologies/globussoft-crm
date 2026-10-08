@@ -383,6 +383,23 @@ describe('GET /api/landing-pages (list)', () => {
 // ─── GET /:id ─────────────────────────────────────────────────────────
 
 describe('POST /api/landing-pages/generate-from-destination', () => {
+  test('reports a configured-provider failure instead of mislabeling it as missing configuration', async () => {
+    landingPageGeneratorLLM.generateLandingPageContent.mockResolvedValue({
+      stub: true,
+      realModeError: 'Gemini generateContent failed with status 401',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/generate-from-destination')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ destination: 'Bali', durationDays: 7, tripType: 'international', autoCreate: true });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ code: 'AI_PROVIDER_ERROR' });
+    expect(res.body.error).toMatch(/configured AI provider could not generate/i);
+    expect(prisma.landingPage.create).not.toHaveBeenCalled();
+  });
+
   test('autoCreate persists the chosen palette inside the Wanderlux config', async () => {
     landingPageGeneratorLLM.generateLandingPageContent.mockResolvedValue({
       suggestedSlug: 'andaman-7d',
@@ -1970,6 +1987,122 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
       where: { id: 51 },
       data: { submissions: { increment: 1 } },
     });
+  });
+});
+
+describe('POST /p/:slug/registration-draft', () => {
+  test('creates a payment draft from the registration wizard field names', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 51,
+      slug: 'australia-2026',
+      status: 'PUBLISHED',
+      tenantId: 1,
+      tripId: 7,
+    });
+    prisma.pendingTripRegistration.create.mockResolvedValue({ id: 701, draftToken: 'new-draft-token' });
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/registration-draft')
+      .send({
+        fields: {
+          student_name: 'Student Iyer',
+          student_grade: '8th Grade',
+          student_school: 'DPS North',
+          name: 'Ravi Iyer',
+          email: 'Parent@Example.com',
+          phone: '+919876543210',
+        },
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.draftId).toBe(701);
+    expect(res.body.draftToken).toMatch(/^[0-9a-f]{48}$/);
+    expect(prisma.pendingTripRegistration.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: 1,
+        tripId: 7,
+        landingPageId: 51,
+        studentName: 'Student Iyer',
+        studentSchool: 'DPS North',
+        studentClass: '8th Grade',
+        parentName: 'Ravi Iyer',
+        parentEmail: 'parent@example.com',
+        parentPhone: '+919876543210',
+        status: 'DRAFT',
+      }),
+    });
+    expect(res.body.draftToken).toBe(prisma.pendingTripRegistration.create.mock.calls[0][0].data.draftToken);
+  });
+
+  test('updates an unfinished draft when the browser resumes with its token', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 51,
+      slug: 'australia-2026',
+      status: 'PUBLISHED',
+      tenantId: 1,
+      tripId: 7,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 702,
+      tenantId: 1,
+      tripId: 7,
+      landingPageId: 51,
+      status: 'DRAFT',
+      draftToken: 'resume-draft-token',
+      draftTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({ id: 702 });
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/registration-draft')
+      .send({
+        draftToken: 'resume-draft-token',
+        fields: { name: 'Updated Parent', email: 'updated@example.com', phone: '+919876543211' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ draftToken: 'resume-draft-token', draftId: 702 });
+    expect(prisma.pendingTripRegistration.update).toHaveBeenCalledWith({
+      where: { id: 702 },
+      data: expect.objectContaining({
+        parentName: 'Updated Parent',
+        parentEmail: 'updated@example.com',
+        parentPhone: '+919876543211',
+      }),
+    });
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+  });
+
+  test('keeps a payment-pending token so the payment route can reject duplicate charges', async () => {
+    prisma.pendingTripRegistration.update.mockReset().mockResolvedValue({ id: 703 });
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 51,
+      slug: 'australia-2026',
+      status: 'PUBLISHED',
+      tenantId: 1,
+      tripId: 7,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 703,
+      tenantId: 1,
+      tripId: 7,
+      landingPageId: 51,
+      status: 'PAYMENT_PENDING',
+      draftToken: 'payment-pending-token',
+      draftTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/registration-draft')
+      .send({
+        draftToken: 'payment-pending-token',
+        fields: { name: 'Changed Parent', email: 'changed@example.com', phone: '+919876543212' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ draftToken: 'payment-pending-token', draftId: 703 });
+    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
   });
 });
 

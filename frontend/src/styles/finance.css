@@ -107,6 +107,59 @@
   flex-wrap: wrap;
 }
 
+/* Generic invoices keeps the KPI chips and filters in one compact toolbar.
+   This selector must remain generic-only; Wellness and Travel retain the
+   existing shared invoice layout above. */
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-summary-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-summary-badges {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  margin-bottom: 0;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-summary-badges > span {
+  flex-shrink: 0;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-filters {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+/* Wellness uses the same compact invoice toolbar composition as the approved
+   invoice layout, but remains explicitly scoped to the Wellness vertical. */
+html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-badges {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  margin-bottom: 0;
+}
+
+html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-badges > span {
+  flex-shrink: 0;
+}
+
+html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-filters {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
 .finance-page__header-actions,
 .finance-page__section-actions {
   display: flex !important;
@@ -472,6 +525,36 @@
   .invoices-mobile-page .invoice-filters > .invoice-create-button {
     width: 100%;
     justify-content: center;
+  }
+
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-summary-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-summary-badges,
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-filters {
+    width: 100%;
+  }
+
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-filters {
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+
+  html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-badges,
+  html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-filters {
+    width: 100%;
+  }
+
+  html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-filters {
+    flex-wrap: wrap;
+    margin-left: 0;
   }
 
   .finance-page .finance-page__header-actions,

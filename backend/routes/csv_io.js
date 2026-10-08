@@ -243,12 +243,15 @@ function matchesContactExportFilter(contact, req) {
 }
 
 router.get("/contacts", async (req, res) => {
+  const isGeneric = req.user.vertical === "generic";
   res.json({
     entity: "contacts",
     headers: CONTACT_IMPORT_COLS.map((c) => c.header),
-    // Generic CRM contact imports require only email; all other columns are
-    // optional and receive the existing importer defaults when omitted.
-    optionalHeaders: CONTACT_IMPORT_COLS.map((c) => c.header).filter((header) => header !== "email"),
+    // Generic CRM imports require the lead name; email and phone are optional.
+    // The shared Wellness contact importer retains its email requirement.
+    optionalHeaders: CONTACT_IMPORT_COLS.map((c) => c.header).filter((header) => (
+      isGeneric ? header !== "name" : header !== "email"
+    )),
     sample: CONTACT_TEMPLATE_SAMPLE,
     thresholds: { rows: MAX_IMPORT_ROWS, bytes: 5 * 1024 * 1024 },
   });
@@ -300,6 +303,7 @@ router.get("/contacts/template.csv", async (req, res) => {
 
 router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
   try {
+    const isGeneric = req.user.vertical === "generic";
     const parsed = readUploadedContactRows(req);
     if (!parsed) return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
 
@@ -337,12 +341,12 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           (allowedStatus) =>
             allowedStatus.toLowerCase() === rawStatus.toLowerCase(),
         );
-        if (!email) {
+        if (!isGeneric && !email) {
           errors.push({ rowNumber, reason: "missing email" });
           skipped++;
           continue;
         }
-        if (!CONTACT_EMAIL_RE.test(email)) {
+        if (email && !CONTACT_EMAIL_RE.test(email)) {
           errors.push({ rowNumber, reason: `invalid email (${email})` });
           skipped++;
           continue;
@@ -356,15 +360,19 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         const phone = normalizePhoneValue(
           getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "sms_number", "smsNumber"]),
         );
+        if (isGeneric && !name) {
+          errors.push({ rowNumber, reason: "missing name" });
+          skipped++;
+          continue;
+        }
         const company = String(getSpreadsheetValue(row, ["company", "Company"])).trim();
         const title = String(getSpreadsheetValue(row, ["title", "Title"])).trim();
         const source = String(getSpreadsheetValue(row, ["source", "Source", "lead_source", "leadSource", "Lead Source"])).trim();
         const createData = {
-          // Contact.name is required in the database, while email is the only
-          // required import column. Use the email local-part as a safe label
-          // when the source file has no name column/value.
+          // Contact.name is required in the database. Wellness keeps its
+          // legacy email-local-part fallback; Generic requires name itself.
           name: sanitizeCellForExport(name || email.split("@")[0]),
-          email,
+          email: email || null,
           phone: phone || null,
           company: sanitizeCellForExport(company),
           title,
@@ -380,7 +388,8 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
             customFields[definition.fieldKey] = row[definition.fieldKey];
           }
         }
-        const updateData = { email };
+        const updateData = {};
+        if (email) updateData.email = email;
         if (name) updateData.name = sanitizeCellForExport(name);
         if (phone) updateData.phone = phone;
         if (company) updateData.company = sanitizeCellForExport(company);
@@ -388,10 +397,21 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         if (rawStatus) updateData.status = status;
         if (source) updateData.source = source;
 
-        let existing = await prisma.contact.findFirst({
-          where: { email, tenantId: req.user.tenantId },
-          select: { id: true, deletedAt: true },
-        });
+        let existing = null;
+        if (email) {
+          existing = await prisma.contact.findFirst({
+            where: { email, tenantId: req.user.tenantId },
+            select: { id: true, deletedAt: true },
+          });
+        } else if (isGeneric && phone) {
+          // Email-less imports can still update an existing contact when the
+          // row has a phone number. Phone is not unique, so this remains a
+          // best-effort tenant-scoped match rather than a new constraint.
+          existing = await prisma.contact.findFirst({
+            where: { phone, tenantId: req.user.tenantId },
+            select: { id: true, deletedAt: true },
+          });
+        }
         if (existing?.deletedAt) {
           await hardDeleteContact(prisma, existing.id);
           existing = null;

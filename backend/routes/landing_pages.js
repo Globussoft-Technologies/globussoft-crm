@@ -2234,6 +2234,13 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
     }
 
     if (result.stub) {
+      if (result.realModeError) {
+        console.error("[LandingPages] configured AI provider failed:", result.realModeError);
+        return res.status(502).json({
+          error: "The configured AI provider could not generate this landing page. Check the API key, selected model, Base URL, and provider quota.",
+          code: "AI_PROVIDER_ERROR",
+        });
+      }
       return res.status(503).json({ error: "AI provider is not configured. Configure an AI provider to generate this landing page.", code: "AI_NOT_CONFIGURED" });
     }
 
@@ -6051,18 +6058,54 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
     if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
     // Registration starts here; travel documents are collected later in the
     // parent portal and are not part of the landing-page payment flow.
+    const studentName = String(fields.student_name || fields.studentName || fields.student || fields.name || fields.fullName || "").trim();
+    const studentSchool = fields.student_school || fields.school || null;
+    const studentClass = fields.student_class || fields.student_grade || fields.grade || null;
+    const parentName = String(fields.parent_name || fields.parentName || fields.name || fields.fullName || "").trim();
+    const parentEmail = String(fields.parent_email || fields.parentEmail || fields.email || "").trim().toLowerCase();
+    const parentPhone = String(fields.parent_phone || fields.parentPhone || fields.phone || "").trim();
+    const requestedToken = String(req.body?.draftToken || "").trim();
+    const existing = requestedToken && prisma.pendingTripRegistration?.findUnique
+      ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken: requestedToken } })
+      : null;
+    const existingBelongsToPage = existing
+      && Number(existing.tenantId) === Number(page.tenantId || 1)
+      && Number(existing.tripId) === Number(page.tripId)
+      && Number(existing.landingPageId) === Number(page.id);
+    const existingStatus = String(existing?.status || "DRAFT");
+    const existingIsResumable = existingBelongsToPage
+      && existing.draftTokenExpiresAt
+      && new Date(existing.draftTokenExpiresAt) > new Date()
+      && ["DRAFT", "PAYMENT_PENDING"].includes(existingStatus);
+    if (existingIsResumable && existingStatus === "DRAFT") {
+      const draft = await prisma.pendingTripRegistration.update({
+        where: { id: existing.id },
+        data: {
+          studentName,
+          studentSchool,
+          studentClass,
+          parentName,
+          parentEmail,
+          parentPhone,
+        },
+      });
+      return res.status(200).json({ draftToken: existing.draftToken, draftId: draft?.id || existing.id });
+    }
+    if (existingIsResumable) {
+      return res.status(200).json({ draftToken: existing.draftToken, draftId: existing.id });
+    }
     const draftToken = crypto.randomBytes(24).toString("hex");
     const draft = await prisma.pendingTripRegistration.create({
       data: {
         tenantId: page.tenantId || 1,
         tripId: page.tripId,
         landingPageId: page.id,
-        studentName: String(fields.student_name || "").trim(),
-        studentSchool: fields.school || null,
-        studentClass: fields.grade || null,
-        parentName: String(fields.parent_name || "").trim(),
-        parentEmail: String(fields.parent_email || "").trim(),
-        parentPhone: String(fields.parent_phone || "").trim(),
+        studentName,
+        studentSchool,
+        studentClass,
+        parentName,
+        parentEmail,
+        parentPhone,
         extrasJson: JSON.stringify({ landingPage: true }),
         status: "DRAFT",
         draftToken,

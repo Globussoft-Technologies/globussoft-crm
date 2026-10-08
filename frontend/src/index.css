@@ -2955,6 +2955,49 @@ table.stable-table td {
   text-overflow: ellipsis;
 }
 
+/* Sales Teams is a six-column directory, not a free-width data grid. Keep
+   the desktop table inside its card so long names/member lists cannot create
+   an empty horizontal scroll tail after the last action column. Narrow
+   screens opt back into a bounded 760px table viewport below. */
+.sales-teams-table {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden !important;
+}
+
+.sales-teams-table > table {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  table-layout: fixed !important;
+}
+
+.sales-teams-table th,
+.sales-teams-table td {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.sales-teams-table td > button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .sales-teams-table {
+    overflow-x: auto !important;
+  }
+
+  .sales-teams-table > table {
+    width: 760px !important;
+    min-width: 760px !important;
+    max-width: none !important;
+  }
+}
+
 /* ── #697 — Mobile / responsive defaults ──────────────────────────────
  *
  * Pre-fix, every page assumed a desktop viewport (≥1024px). Below 768px,

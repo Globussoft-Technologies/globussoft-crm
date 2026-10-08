@@ -261,6 +261,31 @@ describe('GET /api/csv/contacts/export.csv', () => {
   });
 
 });
+
+describe('GET /api/csv/contacts', () => {
+  test('advertises email and phone as optional while keeping name required', async () => {
+    const res = await request(makeApp()).get('/api/csv/contacts');
+
+    expect(res.status).toBe(200);
+    expect(res.body.optionalHeaders).toEqual([
+      'email',
+      'phone',
+      'company',
+      'title',
+      'status',
+      'source',
+    ]);
+  });
+
+  test('keeps email required for the shared Wellness contact importer', async () => {
+    const res = await request(makeApp({ vertical: 'wellness' })).get('/api/csv/contacts');
+
+    expect(res.status).toBe(200);
+    expect(res.body.optionalHeaders).not.toContain('email');
+    expect(res.body.optionalHeaders).toContain('phone');
+  });
+});
+
 describe('GET /api/csv/contacts/export.csv?format=xlsx', () => {
   test('exports contacts as XLSX with spreadsheet content headers', async () => {
     prisma.contact.findMany.mockResolvedValue([
@@ -307,6 +332,45 @@ describe('GET /api/csv/contacts/template.csv?format=xlsx', () => {
 });
 
 describe('POST /api/csv/contacts/import.csv with XLSX', () => {
+  test('imports a lead with a name and phone but no email', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 103 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,phone\nPhone Only Lead,+919876543210\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { phone: '+919876543210', tenantId: 1 },
+      select: { id: true, deletedAt: true },
+    });
+    expect(prisma.contact.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          name: 'Phone Only Lead',
+          email: null,
+          phone: '+919876543210',
+          tenantId: 1,
+        }),
+      }),
+    );
+  });
+
+  test('rejects a row without a name even when phone is present', async () => {
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('phone\n+919876543210\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 0, updated: 0, skipped: 1 });
+    expect(res.body.errors).toEqual([{ rowNumber: 2, reason: 'missing name' }]);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
   test('maps and persists Generic lead custom fields using cf_ field keys', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 99 });
@@ -315,14 +379,15 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     ]);
 
     const workbook = toXlsxBuffer(
-      ['Customer Email', 'Industry'],
-      [{ 'Customer Email': 'mapped@example.com', Industry: 'Technology' }],
+      ['Customer Name', 'Customer Email', 'Industry'],
+      [{ 'Customer Name': 'Mapped Lead', 'Customer Email': 'mapped@example.com', Industry: 'Technology' }],
       'Contacts Import',
     );
 
     const res = await request(makeApp())
       .post('/api/csv/contacts/import.csv')
       .field('mapping', JSON.stringify({
+        'Customer Name': 'name',
         'Customer Email': 'email',
         Industry: 'cf_industry',
       }))

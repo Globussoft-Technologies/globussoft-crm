@@ -266,6 +266,10 @@ describe('wanderlux render() integration', () => {
     expect(TEMPLATE_HTML).toContain('registrationDraftStorageKeys()');
     expect(TEMPLATE_HTML).toContain("injected.meta && injected.meta.slug");
     expect(TEMPLATE_HTML).toContain("window.localStorage.setItem(this.registrationDraftKey()");
+    expect(TEMPLATE_HTML).toContain('ensureRegistrationDraft(paymentOrderEndpoint)');
+    expect(TEMPLATE_HTML).toContain("replace(/\\/payment-order\\/?$/, '/registration-draft')");
+    expect(TEMPLATE_HTML).toContain('draftToken: currentDraftToken');
+    expect(TEMPLATE_HTML).toContain('Object.assign({}, paymentPayload, { draftToken })');
     expect(TEMPLATE_HTML).toContain("params.get('payment') === 'success'");
     expect(TEMPLATE_HTML).toContain("razorpay_payment_link_status");
     expect(TEMPLATE_HTML).toContain("document.getElementById('register')");

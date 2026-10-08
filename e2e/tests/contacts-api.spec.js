@@ -1077,8 +1077,8 @@ test.describe('Contacts API — GET /duplicates/find', () => {
     // has something to detect downstream.
     const a = await createContact(request, { label: 'phone-dup-A', phone: sharedPhone });
     const b = await createContact(request, { label: 'phone-dup-B', phone: sharedPhone, force: true });
-    expect(a.phone).toBe(sharedPhone);
-    expect(b.phone).toBe(sharedPhone);
+      expect(a.phone).toBe(sharedPhone.replace(/\s/g, ''));
+      expect(b.phone).toBe(sharedPhone.replace(/\s/g, ''));
 
     const { token } = await getAdmin(request);
     const res = await get(request, token, '/api/contacts/duplicates/find');

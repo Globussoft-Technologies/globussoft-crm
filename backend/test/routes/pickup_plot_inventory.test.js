@@ -79,6 +79,8 @@ function makeApp({ tenantId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
+  prisma.customerPickup.findUnique = vi.fn().mockResolvedValue(null);
   prisma.transportPerson.updateMany.mockResolvedValue({ count: 1 });
   prisma.plotBroker.updateMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findFirst.mockResolvedValue({ vertical: 'generic' });

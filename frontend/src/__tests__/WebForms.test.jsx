@@ -176,11 +176,11 @@ describe('public web form embed footer', () => {
     expect(html).not.toContain("if (!captchaToken) { setMessage('error'");
   });
 
-  test('disables the Generic and Travel submit buttons until required fields are complete', () => {
+  test('keeps submit clickable so required-field validation can explain incomplete fields', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain('function updateGenericSubmitState(fields)');
-    expect(html).toContain('button.disabled = !complete;');
+    expect(html).toContain('button.disabled = false;');
     expect(html).toContain('updateGenericSubmitState(fields);');
     expect(html).toContain("if (!flag && advanced) updateGenericSubmitState(formData.fields || []);");
   });

@@ -12,10 +12,17 @@
  * fan-out + enrollRecipientsInSequence idempotency) is pinned in
  * backend/test/routes/marketing-campaign-sequence.test.js (12 cases).
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { AuthContext } from '../App';
+
+// Legacy non-Generic editor contract. Generic linkage is covered in Marketing.test.jsx.
+const WellnessRouter = ({ children }) => (
+  <AuthContext.Provider value={{ user: { role: 'ADMIN', tenant: { vertical: 'wellness' } }, tenant: { vertical: 'wellness' } }}>
+    <MemoryRouter>{children}</MemoryRouter>
+  </AuthContext.Provider>
+);
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -85,7 +92,7 @@ function wireFetch(campaigns) {
   });
 }
 
-describe('#932 Marketing — Campaign → Sequence linkage UI (NOT YET WIRED — absence pins)', () => {
+describe('#932 Wellness Marketing — legacy editor without Generic sequence linkage', () => {
   // The #932 sequence-link UI is scoped but not yet wired into the live
   // Marketing.jsx surface: there's no GET /api/sequences, no "Link to
   // Sequence" select in the editor, no PUT body sequenceId, and no
@@ -98,9 +105,9 @@ describe('#932 Marketing — Campaign → Sequence linkage UI (NOT YET WIRED —
     const Marketing = (await import('../pages/Marketing')).default;
 
     render(
-      <MemoryRouter>
+      <WellnessRouter>
         <Marketing />
-      </MemoryRouter>,
+      </WellnessRouter>,
     );
 
     await waitFor(() => {
@@ -124,9 +131,9 @@ describe('#932 Marketing — Campaign → Sequence linkage UI (NOT YET WIRED —
     const Marketing = (await import('../pages/Marketing')).default;
 
     render(
-      <MemoryRouter>
+      <WellnessRouter>
         <Marketing />
-      </MemoryRouter>,
+      </WellnessRouter>,
     );
 
     await waitFor(() => {
@@ -163,9 +170,9 @@ describe('#932 Marketing — Campaign → Sequence linkage UI (NOT YET WIRED —
     const Marketing = (await import('../pages/Marketing')).default;
 
     render(
-      <MemoryRouter>
+      <WellnessRouter>
         <Marketing />
-      </MemoryRouter>,
+      </WellnessRouter>,
     );
 
     await waitFor(() => {
@@ -185,9 +192,9 @@ describe('#932 Marketing — Campaign → Sequence linkage UI (NOT YET WIRED —
     const Marketing = (await import('../pages/Marketing')).default;
 
     render(
-      <MemoryRouter>
+      <WellnessRouter>
         <Marketing />
-      </MemoryRouter>,
+      </WellnessRouter>,
     );
 
     await waitFor(() => {

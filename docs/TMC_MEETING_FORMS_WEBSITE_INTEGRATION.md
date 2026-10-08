@@ -4,19 +4,22 @@ This document is the implementation handoff for a website team integrating the T
 
 ## 1. What the integration provides
 
-The Meeting Forms service supplies one scheduling engine for both integration styles:
+The Meeting Forms service supports three integration styles:
 
 1. **Option A — APIs:** the website renders its own interface and calls the public configuration, availability, validation, booking, and confirmation endpoints.
 2. **Option B — Embed:** TMC renders the complete form, calendar, time slots, validation, loading states, and confirmation screen.
+3. **Option C — Store an external booking:** the website or Zoom Scheduler completes scheduling, then sends the confirmed payload to the generated `POST /external-bookings` URL for display in CRM. Travel CRM can optionally add a host calendar event and send a confirmation email.
 
-Both options use the same CRM configuration and availability rules. A successful booking:
+Options A and B use the CRM configuration and availability rules. A successful CRM-managed booking:
 
 - atomically reserves the selected slot;
 - creates the Zoom meeting;
-- creates the host's Google Calendar appointment;
+- creates the host's Google Calendar appointment when **Add to host calendar** is enabled;
 - creates or updates the CRM contact;
 - records the contact journey and meeting activity; and
-- attempts to send the configured branded confirmation email.
+- attempts to send the configured branded confirmation email when enabled.
+
+Option C stores the booking in the CRM. It also creates a host Google Calendar event when **Add to host calendar** is enabled and sends a CRM confirmation email when **Send confirmation email** is enabled. It does not create a Zoom meeting or CRM contact. If the external scheduler already emails the customer, turn off CRM email to avoid two confirmations.
 
 ## 2. What the website team receives
 
@@ -50,11 +53,12 @@ Before the website team starts acceptance testing, the CRM administrator must co
 - Configure and order all public form fields.
 - Confirm that **Designation** is configured as a Select field. New and legacy forms use these default choices: Principal, Vice Principal, Head of School, Academic Coordinator, Teacher / Faculty, School Management, and Other.
 - Configure the confirmation email subject, body, placeholders, and optional footer logo.
+- Optionally add confirmation email CC recipients for team members who should receive the customer's meeting confirmation and link.
 - Review the Travel CRM SendGrid status under **CRM Settings**:
   - when customer-managed SendGrid (BYOK) is configured, its API key and verified sender are used; or
   - when BYOK is not configured, the CRM-managed backend SendGrid account is used automatically.
 - Add the website's exact HTTPS origin under **CRM Settings → Embed Allowlist**.
-- Enable **Create Zoom meeting** and **Active/published**.
+- For CRM-managed booking, enable **Create Zoom meeting** and choose whether to add the host calendar event and send a confirmation email. For external booking, turn off CRM Zoom; choose independently whether the CRM should add a host calendar event or send an email. Then enable **Active/published**.
 - Save changes and copy the current embed/API details.
 
 Recipient mailboxes do not need to be synced to the CRM. Only the sending channel must be connected and operational.
@@ -73,8 +77,15 @@ The CRM administrator only needs to add the website's origin under **CRM Setting
 | `GET` | Copy the **availability** URL | Read live dates and slots; replace `YYYY-MM-DD` |
 | `POST` | Copy the **validate-slot** URL | Revalidate a chosen slot immediately before booking |
 | `POST` | Copy the **book** URL | Atomically reserve and confirm the appointment |
+| `POST` | Copy the **external-bookings** URL | Store an appointment already confirmed by the website or Zoom Scheduler |
 | `GET` | Copy the **booking details** URL | After booking, replace `{confirmationToken}` in code with `payload.booking.confirmationToken` |
 | `GET` | Add `/calendar.ics` to the booking-details URL | Download an add-to-calendar file |
+
+### External scheduler flow
+
+After the website confirms an appointment, call the generated `POST /external-bookings` endpoint. Send the contact fields, confirmed `selectedStartTime`, `duration`, and `timezone`. Zoom event ID, join URL, and external calendar event ID may be included when available. The record appears in the Meeting Form's **Bookings** tab, including the retained submitted payload. If the form's host calendar option is enabled, the CRM adds an event to that connected Google Calendar. The API returns a warning and still stores the booking if calendar creation fails.
+
+Use a stable `Idempotency-Key` for every confirmed booking. When no header is provided, the CRM uses `zoomEventId` as the duplicate-prevention key; bookings without a Zoom ID require the header. Turn off **Create Zoom meeting** on external forms. The CRM calendar and email options are independent; disable CRM email if the external scheduler sends the confirmation.
 
 ## 5. Option B — Embed
 

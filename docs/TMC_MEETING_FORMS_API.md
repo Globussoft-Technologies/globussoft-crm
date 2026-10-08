@@ -20,7 +20,7 @@ Each Travel CRM tenant connects its own Zoom Server-to-Server OAuth app under **
 
 The browser receives masked Account/Client identifiers and a boolean indicating that a secret exists; stored credentials are never returned by the API. Disconnecting Zoom permanently deletes that tenant's credential row after confirming there are no published Meeting Forms using it.
 
-Required Zoom granular scopes are `meeting:write:meeting:admin` and `meeting:delete:meeting:admin`. Classic apps may use `meeting:write:admin`. A tenant cannot publish a Zoom Meeting Form without a verified connection, and cannot disconnect Zoom while a Meeting Form is published.
+Required Zoom granular scopes are `meeting:write:meeting:admin` and `meeting:delete:meeting:admin`. Classic apps may use `meeting:write:admin`. A tenant cannot publish a CRM-managed Zoom Meeting Form without a verified connection, and cannot disconnect Zoom while a published Meeting Form has **Create Zoom meeting** enabled. External-only forms do not require CRM Zoom credentials.
 
 Zoom Account ID, Client ID, and Client Secret are encrypted at rest with
 AES-256-GCM. Configure `TRAVEL_MEETING_CREDENTIAL_KEY` as exactly 64 hexadecimal
@@ -48,10 +48,21 @@ For a custom UI, call:
 | `GET` | `/api/travel/meeting-forms/public/:publicKey/availability?start=YYYY-MM-DD&days=31` | Live available slots |
 | `POST` | `/api/travel/meeting-forms/public/:publicKey/validate-slot` | Revalidate immediately before submit |
 | `POST` | `/api/travel/meeting-forms/public/:publicKey/book` | Atomically reserve and confirm |
+| `POST` | `/api/travel/meeting-forms/public/:publicKey/external-bookings` | Store a booking already confirmed by an external scheduler |
 | `GET` | `/api/travel/meeting-forms/public/:publicKey/bookings/:token` | Confirmed booking details |
 | `GET` | `/api/travel/meeting-forms/public/:publicKey/bookings/:token/calendar.ics` | Add-to-calendar file |
 
 Browser integrations must use an origin configured for the tenant under **CRM Settings → Embed Allowlist**. Server-to-server calls use the same generated public URLs without an API-key header. Booking requests use a stable `Idempotency-Key` generated automatically by the calling application so retries cannot create duplicates.
+
+### Externally confirmed bookings
+
+When the website or Zoom Scheduler has confirmed a booking, send the result to `POST /external-bookings`. It stores the booking in the selected form's Bookings tab. When **Add to host calendar** is enabled, it also creates an event on the selected host's connected Google Calendar. When **Send confirmation email** is enabled, Travel CRM sends its configured confirmation email to the customer and CC recipients. It does not create a Zoom meeting or CRM contact.
+
+Send the contact payload, confirmed `selectedStartTime`, `duration`, and `timezone`. `zoomEventId`, `zoomJoinUrl`, and `calendarEventId` are optional. Supply a stable `Idempotency-Key`; if it is omitted, the endpoint derives one from `zoomEventId`, so at least one of those identifiers is required. The submitted fields are stored in the booking columns and the full sanitized payload is visible under View in Bookings. Calendar creation failure leaves the confirmed booking stored and returns a warning; inspect its calendar status in Bookings.
+
+For an external form, turn off **Create Zoom meeting**. Choose **Send confirmation email** only if Travel CRM should send an additional confirmation; leave it off when the external scheduler already handles email. Enable **Add to host calendar** only if the CRM should create a Google Calendar event; the selected host must have a connected calendar. Then publish the form. Existing forms keep their previous calendar behavior until their settings are saved again.
+
+The authenticated Bookings tab loads `GET /api/travel/meeting-forms/:id/bookings?page=1&pageSize=10`. The response contains `items`, `total`, `page`, `pageSize`, and `totalPages`; page sizes from 1 to 100 are accepted. Calls without pagination parameters keep the legacy array response for existing integrations.
 
 The public configuration response is the UI contract. Customer websites should render `apiFields`, arrange them using `bookingFlow.steps`, and follow `bookingSubmission` rather than maintaining a separate field list. The current three-step flow is:
 
@@ -93,7 +104,9 @@ Optional attribution values can accompany either contract:
 }
 ```
 
-`201` means the slot, Zoom meeting, calendar appointment, and CRM record are confirmed. A `409 SLOT_UNAVAILABLE` response includes refreshed slots and must return the visitor to time selection. Confirmation-email failure is returned as a warning because the appointment itself remains confirmed; admins can resend it from Meeting Forms. Travel CRM sends through the tenant's customer-managed SendGrid configuration when BYOK is configured; otherwise it uses the CRM-managed backend SendGrid account. Connected Gmail accounts are not used for Meeting Form confirmations. Successful sends are stored as outbound Unified Inbox messages.
+`201` from `/book` means the slot, Zoom meeting, and CRM record are confirmed, along with a host calendar appointment when enabled. A `409 SLOT_UNAVAILABLE` response includes refreshed slots and must return the visitor to time selection. Confirmation-email failure is returned as a warning because the appointment itself remains confirmed; admins can resend it from Meeting Forms. Travel CRM sends through the tenant's customer-managed SendGrid configuration when BYOK is configured; otherwise it uses the CRM-managed backend SendGrid account. Connected Gmail accounts are not used for Meeting Form confirmations. Successful sends are stored as outbound Unified Inbox messages.
+
+When **Send confirmation email** is enabled, the CRM administrator may configure CC addresses on the Meeting Form by selecting people from the Travel CRM staff list or typing other email addresses. The customer remains the primary recipient and each configured team member receives the same confirmation content and meeting link. Duplicate addresses and the customer's own address are removed automatically. The same rule applies to external POST bookings when CRM email is enabled; otherwise their scheduler owns email delivery.
 
 The successful response contains `booking.confirmationToken`. The website must read that value and substitute it into the generated booking-details URL when a later lookup is needed. No confirmation token is entered manually or hardcoded before booking.
 

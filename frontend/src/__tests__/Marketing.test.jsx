@@ -104,8 +104,16 @@ const SAMPLE_CAMPAIGNS = [
 ];
 
 function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], forms = [], sequences = [] } = {}) {
-  fetchApiMock.mockImplementation((url) => {
+  fetchApiMock.mockImplementation((url, options = {}) => {
     if (typeof url !== 'string') return Promise.resolve(null);
+    if (url === '/api/marketing/campaigns' && options.method === 'POST') {
+      return Promise.resolve({ id: 999, name: 'New Campaign', channel: 'EMAIL', status: 'Draft' });
+    }
+    if (url.includes('/schedule') || url.includes('/pause')) return Promise.resolve({});
+    if (/^\/api\/marketing\/campaigns\/\d+$/.test(url)) {
+      return Promise.resolve(campaigns.find(campaign => campaign.id === Number(url.split('/').at(-1))) || null);
+    }
+    if (url === '/api/marketing/campaigns') return Promise.resolve(campaigns);
     if (url.startsWith('/api/marketing/campaigns?channel=EMAIL')) {
       return Promise.resolve(campaigns);
     }
@@ -122,7 +130,11 @@ function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], forms = [], sequenc
   });
 }
 
-function renderMarketing(user = GENERIC_USER) {
+// The legacy modal/form builder remains available for Wellness and Travel;
+// Generic now has its own workflow wizard (covered separately below).
+const WELLNESS_USER = { ...GENERIC_USER, tenant: { id: 2, vertical: 'wellness' } };
+
+function renderMarketing(user = WELLNESS_USER) {
   return render(
     <MemoryRouter>
       <AuthContext.Provider value={{ user, token: 'tk', tenant: user.tenant, loading: false }}>
@@ -139,7 +151,76 @@ beforeEach(() => {
   notifyObj.success.mockReset();
 });
 
-describe('<Marketing /> — broad page surface', () => {
+describe('<Marketing /> — Generic campaign workflow', () => {
+  const workflow = {
+    ...SAMPLE_CAMPAIGNS[0],
+    sequenceId: 12,
+    scheduleFilters: JSON.stringify({
+      trigger: [{ field: 'contact.status', op: 'eq', value: 'Lead' }],
+      sequenceName: 'Welcome sequence',
+      timezone: 'UTC', startHour: 9, endHour: 17, businessDaysOnly: true,
+      steps: [{ id: 20, name: 'Welcome email', kind: 'email', emailTemplateId: 4, delayMinutes: 120 }],
+    }),
+  };
+
+  it('shows Generic channel tabs and keeps legacy forms and push hidden', async () => {
+    wireFetch();
+    renderMarketing(GENERIC_USER);
+    expect(await screen.findByRole('heading', { name: 'Marketing Campaign' })).toBeInTheDocument();
+    for (const name of ['Email Campaigns', 'SMS Campaigns', 'WhatsApp Campaigns']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole('button', { name: 'Embedded Forms' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Push Campaigns' })).not.toBeInTheDocument();
+  });
+
+  it('renders percentage-based engagement and running status in Generic cards', async () => {
+    wireFetch({ campaigns: [{ ...workflow, status: 'Active' }] });
+    renderMarketing(GENERIC_USER);
+    expect(await screen.findByText('Running')).toBeInTheDocument();
+    expect(screen.getByText('14%')).toBeInTheDocument();
+    expect(screen.getByText('4.8%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pause campaign Q4 Holiday Promo/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Delete campaign Q4 Holiday Promo/ })).toBeInTheDocument();
+  });
+
+  it('opens the Generic wizard and rejects advancing or saving an unnamed campaign', async () => {
+    wireFetch({ campaigns: [] });
+    renderMarketing(GENERIC_USER);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create Campaign' }));
+    const wizard = await screen.findByRole('main', { name: 'Create campaign' });
+    expect(screen.queryByRole('dialog', { name: 'Create campaign' })).not.toBeInTheDocument();
+    fireEvent.click(within(wizard).getByRole('button', { name: /^Next/ }));
+    expect(notifyObj.error).toHaveBeenCalledWith('Campaign name is required');
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Save Draft' }));
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+    fireEvent.click(within(wizard).getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('heading', { name: 'Marketing Campaign' })).toBeInTheDocument();
+  });
+
+  it.each([false, true])('persists Generic steps, delay and send window (activate=%s)', async activate => {
+    wireFetch({ campaigns: [workflow] });
+    renderMarketing(GENERIC_USER);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Campaign' }));
+    const wizard = await screen.findByRole('main', { name: 'Edit campaign' });
+    expect(screen.queryByText(/Sub-brand audience/i)).not.toBeInTheDocument();
+    if (activate) {
+      for (let index = 0; index < 4; index++) fireEvent.click(within(wizard).getByRole('button', { name: /^Next/ }));
+      expect(within(wizard).getByText(/After 2 hours/)).toBeInTheDocument();
+    }
+    fireEvent.click(within(wizard).getByRole('button', { name: activate ? 'Activate Campaign' : 'Save Draft' }));
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith(activate ? 'Campaign activated' : 'Campaign draft saved'));
+    const stepCall = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/sequences/steps/20' && options?.method === 'PUT');
+    expect(JSON.parse(stepCall[1].body)).toMatchObject({ kind: 'email', name: 'Welcome email', delayMinutes: 120, emailTemplateId: 4 });
+    const scheduleCall = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/marketing/campaigns/100/schedule' && options?.method === 'POST');
+    expect(JSON.parse(scheduleCall[1].body).filters).toMatchObject({ timezone: 'UTC', startHour: 9, endHour: 17, businessDaysOnly: true });
+    const activation = fetchApiMock.mock.calls.find(([url]) => url === '/api/sequences/12/toggle');
+    if (activate) expect(JSON.parse(activation[1].body)).toEqual({ isActive: true });
+    else expect(activation).toBeUndefined();
+  });
+});
+
+describe('<Marketing /> — preserved Wellness campaign and form surface', () => {
   it('renders the page heading + description copy', async () => {
     wireFetch();
     renderMarketing();
@@ -426,7 +507,7 @@ describe('<Marketing /> — broad page surface', () => {
 
   // ───── NEW CASES (extension wave) ─────
 
-  it('Email-tab GET initially fires for ?channel=EMAIL on mount', async () => {
+  it('campaign list GET initially fires on mount', async () => {
     // Pins that the Campaigns useEffect loads campaigns on initial mount.
     // The #932 sequence-link UI was scoped but not yet wired into
     // Marketing.jsx — the page does NOT fetch /api/sequences today.
@@ -434,10 +515,10 @@ describe('<Marketing /> — broad page surface', () => {
     wireFetch({ sequences: [{ id: 7, name: 'Welcome Drip' }] });
     renderMarketing();
     await waitFor(() => {
-      const emailCall = fetchApiMock.mock.calls.find(([u]) =>
-        typeof u === 'string' && u.startsWith('/api/marketing/campaigns?channel=EMAIL'),
+      const campaignsCall = fetchApiMock.mock.calls.find(([u]) =>
+        u === '/api/marketing/campaigns?channel=EMAIL',
       );
-      expect(emailCall).toBeTruthy();
+      expect(campaignsCall).toBeTruthy();
     });
     // /api/sequences is NOT fetched by the current SUT.
     const seqCall = fetchApiMock.mock.calls.find(([u]) => u === '/api/sequences');
@@ -471,7 +552,7 @@ describe('<Marketing /> — broad page surface', () => {
       expect(body.channel).toBe('EMAIL');
       expect(body.budget).toBe(0);
     });
-    expect(notifyObj.success).toHaveBeenCalledWith('Campaign created');
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith('Campaign created'));
   });
 
   it('Edit-Campaign dialog exposes Subject, Preheader, Body, Audience Status filter, Schedule', async () => {
@@ -496,18 +577,16 @@ describe('<Marketing /> — broad page surface', () => {
     expect(
       screen.getByPlaceholderText(/The first line your recipients see in their inbox/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText(/Optional preview text shown next to the subject/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText(/Hello \{\{contact\.firstName\}\}/i),
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Optional preview text shown next to the subject/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Hello \{\{contact\.firstName\}\}/i)).toBeInTheDocument();
 
     // Audience Status filter — first option is "All contacts with email".
     expect(screen.getByDisplayValue('All contacts with email')).toBeInTheDocument();
 
     // Schedule datetime-local input (type attribute pin).
     const dialog = screen.getByRole('dialog', { name: /Edit campaign/i });
+    expect(dialog.querySelector('input[type="datetime-local"]')).toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue('Draft'), { target: { value: 'Scheduled' } });
     expect(dialog.querySelector('input[type="datetime-local"]')).toBeInTheDocument();
 
     // Sequence-link select (#932) is NOT yet rendered by Marketing.jsx —
@@ -746,11 +825,11 @@ describe('<Marketing /> — broad page surface', () => {
     ).toBeNull();
   });
 
-  it('Generic tenant: editor does NOT render the Sub-brand audience filter (gated on travel)', async () => {
+  it('Wellness tenant: editor does NOT render the Sub-brand audience filter', async () => {
     // Negative-pin of the #898 isTravelTenant gate — generic vertical hides
     // the Sub-brand dropdown.
     wireFetch();
-    renderMarketing(); // default GENERIC_USER
+    renderMarketing(WELLNESS_USER);
     await waitFor(() => {
       expect(screen.getByLabelText(/Edit campaign Q4 Holiday Promo/i)).toBeInTheDocument();
     });

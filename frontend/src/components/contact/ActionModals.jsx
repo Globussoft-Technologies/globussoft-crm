@@ -43,6 +43,9 @@ export function EmailModal({ contact, onClose, onDone }) {
   const [showCc, setShowCc] = useState(false);
   const [showBcc, setShowBcc] = useState(false);
   const [subject, setSubject] = useState('');
+  const [emailTemplates, setEmailTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateLoading, setTemplateLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [files, setFiles] = useState([]);
   const [draftNote, setDraftNote] = useState('');
@@ -60,6 +63,35 @@ export function EmailModal({ contact, onClose, onDone }) {
     resourceId: contact?.id ?? 'new',
   });
   const FONT_PX_TO_CMD = { 10: '1', 12: '2', 14: '3', 16: '4', 18: '5', 20: '6', 24: '6', 28: '7', 32: '7' };
+
+  useEffect(() => {
+    if (tenantVertical !== 'generic') return undefined;
+    let active = true;
+    fetchApi('/api/email-templates?fields=summary', { silent: true })
+      .then((rows) => { if (active) setEmailTemplates(Array.isArray(rows) ? rows : []); })
+      .catch(() => { if (active) setEmailTemplates([]); });
+    return () => { active = false; };
+  }, [tenantVertical]);
+
+  const applyEmailTemplate = async (templateId) => {
+    setSelectedTemplateId(templateId);
+    if (!templateId) return;
+    setTemplateLoading(true);
+    try {
+      const template = await fetchApi(`/api/email-templates/${templateId}`, { silent: true });
+      const rendered = await fetchApi('/api/email-templates/preview', {
+        method: 'POST',
+        silent: true,
+        body: JSON.stringify({ subject: template.subject || '', body: template.body || '', contactId: contact?.id || null }),
+      });
+      setSubject(rendered.subject || template.subject || '');
+      if (editorRef.current) editorRef.current.innerHTML = rendered.body || template.body || '';
+    } catch (error) {
+      notify.error(error?.message || 'Failed to load email template.');
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
   const commitMails = (raw, list, setList) => {
     const parts = String(raw).split(/[,\n;]/).map((s) => s.trim()).filter(Boolean);
     if (!parts.length) return;
@@ -232,6 +264,13 @@ export function EmailModal({ contact, onClose, onDone }) {
       <aside className="cp-meeting-drawer" style={{ width: '72vw', maxWidth: 1100 }} onClick={(e) => e.stopPropagation()}>
         <header className="cp-task-head"><h3>New mail</h3><button type="button" className="cp-icon-btn" onClick={onClose} aria-label="Close"><X size={18} /></button></header>
         <div className={`cp-meeting-body${tenantVertical === 'generic' ? ' cp-generic-mail-body' : ''}`} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', minHeight: 0, flexShrink: 1, padding: '0.75rem 1.25rem', overflowY: tenantVertical === 'generic' ? 'hidden' : 'auto' }}>
+          {tenantVertical === 'generic' && <div>
+            <label htmlFor="generic-email-template" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Email template</label>
+            <select id="generic-email-template" className="cp-input" value={selectedTemplateId} onChange={(event) => applyEmailTemplate(event.target.value)} disabled={templateLoading} aria-label="Select email template">
+              <option value="">Write custom email</option>
+              {emailTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+            </select>
+          </div>}
           <div className={tenantVertical === 'generic' ? 'cp-generic-mail-recipients' : undefined} style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', flex: tenantVertical === 'generic' ? '0 0 auto' : undefined }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: 24 }}>To</span><div style={{ flex: 1 }}>{mailRow(toList, setToList, toText, setToText, contact?.name || 'Recipients')}</div></div>

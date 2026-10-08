@@ -16,6 +16,7 @@ const { getSetting, KEYS } = require("../lib/tenantSettings");
 const s3Service = require("../services/s3Service");
 const { sendGenericWebFormWhatsApp } = require("../lib/genericWebFormWhatsApp");
 const { resolveProviderConfig, sendSms } = require("../services/smsProvider");
+const { normalizeGenericCrmPhone, normalizeGenericCrmPhone: normalizeGenericPhone } = require("../lib/phoneFormatting");
 const axios = require("axios");
 const { DEFAULT_PERSONAL_DOMAINS, cleanDomains, validateEmail } = require("../lib/webFormEmailValidation");
 
@@ -374,26 +375,11 @@ function textOr(raw, fallback = "") {
   return value || fallback;
 }
 
-function normalizeGenericPhone(phone, phoneCountry) {
-  const rawPhone = String(phone || "").trim();
+function isValidGenericPhone(phone, phoneCountry) {
+  const normalized = normalizeGenericCrmPhone(phone, phoneCountry);
   const countryDigits = String(phoneCountry || "").replace(/\D/g, "");
-  let normalized = rawPhone.replace(/[\s().-]/g, "");
-
-  if (countryDigits) {
-    if (!/^[1-9]\d{0,2}$/.test(countryDigits)) return null;
-    const countryPrefix = `+${countryDigits}`;
-    if (!normalized.startsWith("+")) {
-      const nationalDigits = normalized.replace(/\D/g, "");
-      normalized = `${countryPrefix}${nationalDigits}`;
-    } else {
-      if (!normalized.startsWith(countryPrefix)) return null;
-    }
-  }
-
-  // Preserve the public endpoint's existing E.164-compatible contract:
-  // callers may submit a complete international number without the optional
-  // phoneCountry field. The embedded Generic form supplies phoneCountry and
-  // is additionally checked for a matching prefix above.
+  if (countryDigits && !/^[1-9]\d{0,2}$/.test(countryDigits)) return false;
+  if (countryDigits && String(phone || "").trim().startsWith("+") && !normalized.startsWith(`+${countryDigits}`)) return false;
   return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : null;
 }
 
@@ -1694,7 +1680,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       if (!settings.phoneAllowAllCountries && settings.phoneAllowedCountries.length && !settings.phoneAllowedCountries.includes(submittedPhoneCountry)) {
         fieldErrors.phone = "Please select an allowed country code";
       }
-      const normalizedGenericPhone = normalizeGenericPhone(
+      const normalizedGenericPhone = isValidGenericPhone(
         phoneValue,
         req.body.phoneCountry,
       );
@@ -1959,6 +1945,23 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         tenantId: form.tenantId,
       },
     });
+
+    // Generic campaigns enrol through the shared contact.created event. A
+    // public form creates the same Contact record as the Leads page, so emit
+    // it once only for a genuinely new Generic contact; re-submissions keep
+    // their existing contact and must never start another campaign run.
+    if (createdNewContact && formScope === "generic") {
+      try {
+        await require("../lib/eventBus").emitEvent(
+          "contact.created",
+          { contactId: contact.id, userId: null },
+          form.tenantId,
+          req.io,
+        );
+      } catch (eventError) {
+        console.error("[web_forms] Generic contact.created event failed:", eventError.message);
+      }
+    }
 
     submitStage = "send_notification";
 

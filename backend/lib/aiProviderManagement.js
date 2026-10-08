@@ -199,7 +199,7 @@ function validateProviderBaseUrl(
     const allowed =
       builtinHosts.has(hostname) || configuredProviderHosts().has(hostname);
     const isAzure = /^[a-z0-9-]+\.openai\.azure\.com$/i.test(hostname);
-    if (
+  if (
       parsed.protocol !== "https:" ||
       parsed.username ||
       parsed.password ||
@@ -213,6 +213,15 @@ function validateProviderBaseUrl(
       err.code = "INVALID_PROVIDER_BASE_URL";
       throw err;
     }
+  }
+
+  // Gemini's public endpoint is a service root.  Some providers/documentation
+  // examples include the version segment (for example `/v1beta`), while this
+  // adapter appends that segment when it calls `models/:model:generateContent`.
+  // Normalise either accepted form here so a saved provider URL cannot become
+  // `/v1beta/v1beta/...` and fail with a misleading 404.
+  if (meta.family === "gemini") {
+    parsed.pathname = parsed.pathname.replace(/\/v1(?:alpha|beta)?\/?$/i, "/");
   }
 
   return parsed.toString().replace(/\/$/, "");

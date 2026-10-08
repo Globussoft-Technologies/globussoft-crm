@@ -936,6 +936,11 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
     });
     if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
 
+    const existingPickup = await prisma.customerPickup.findUnique({
+      where: { tenantId_contactId: { tenantId, contactId } },
+      select: { id: true },
+    });
+
     const pickupAddress = text(req.body.pickupAddress, 2000);
     const sourceTranscriptId = text(req.body.sourceTranscriptId, 191);
     const sourceExcerpt = text(req.body.sourceExcerpt, 4000);
@@ -951,6 +956,19 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
       },
       include: { contact: { select: { id: true, name: true, phone: true, email: true, company: true } } },
     });
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }).catch(() => null);
+    if (tenant?.vertical === "generic") {
+      require("../lib/eventBus").emitEvent(
+        existingPickup ? "pickup_point.updated" : "pickup_point.created",
+        {
+          pickupPointId: pickup.id,
+          contactId: pickup.contactId,
+          pickup: pickup,
+        },
+        tenantId,
+        req.io,
+      ).catch((error) => console.error("[GenericCampaign] pickup point event failed:", error.message));
+    }
     return res.json({ ...pickup, status: "PICKUP_LOCATION_CAPTURED" });
   } catch (error) {
     console.error("pickup-plot-inventory PUT /customer-pickups/:contactId error:", error);

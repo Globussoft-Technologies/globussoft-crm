@@ -15,6 +15,51 @@ const { sendEmail } = require("./emailSender");
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
 
+// Generic CRM campaign entry trigger. The listener is intentionally fail-soft
+// and the handler checks tenant.vertical before doing any campaign work, so
+// Travel and Wellness events retain their existing behavior.
+bus.on("contact.created", ({ payload, tenantId }) => {
+  if (!payload?.contactId) return;
+  require("./genericCampaignAutomation")
+    .processContactCreated(payload.contactId, tenantId)
+    .catch((error) => console.error("[GenericCampaign] contact.created failed:", error.message));
+});
+
+// Generic CRM derives the first successful payment event from the existing
+// payment.collected event. This keeps every payment provider on the existing
+// event path while giving Generic workflows a precise, configurable trigger.
+bus.on("payment.collected", async ({ payload, tenantId, io }) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (tenant?.vertical !== "generic" || !payload?.paymentId) return;
+    const paymentId = Number(payload.paymentId);
+    if (!Number.isInteger(paymentId) || paymentId <= 0) return;
+    const payment = await prisma.payment.findFirst({ where: { id: paymentId, tenantId } });
+    if (!payment || payment.status !== "SUCCESS") return;
+
+    let contactId = payment.contactId || null;
+    if (!contactId && payment.invoiceId) {
+      const invoice = await prisma.invoice.findFirst({ where: { id: payment.invoiceId, tenantId }, select: { contactId: true } });
+      contactId = invoice?.contactId || null;
+    }
+    const firstPaymentWhere = { tenantId, status: "SUCCESS" };
+    if (contactId) firstPaymentWhere.contactId = contactId;
+    else if (payment.invoiceId) firstPaymentWhere.invoiceId = payment.invoiceId;
+    else return;
+    const successfulPayments = await prisma.payment.count({ where: firstPaymentWhere });
+    if (successfulPayments !== 1) return;
+
+    await module.exports.emitEvent(
+      "payment.initial_raised",
+      { ...payload, paymentId: payment.id, contactId, amount: payment.amount, paidAt: payment.paidAt, status: payment.status },
+      tenantId,
+      io,
+    );
+  } catch (error) {
+    console.error("[GenericCampaign] initial payment event failed:", error.message);
+  }
+});
+
 // Defensive guard rails for misconfigured automation rules that would otherwise
 // emit events in a tight cascade and exhaust memory / CPU. Both are opt-out via
 // env (set to 0 to disable).
@@ -121,7 +166,7 @@ async function sendSendGrid(to, subject, body, options = {}) {
     } catch (_error) {
       // Preserve the existing backend-managed path if tenant lookup is unavailable.
     }
-    if (String(tenant?.vertical || "").toLowerCase() === "travel") {
+    if (["generic", "travel"].includes(String(tenant?.vertical || "").toLowerCase())) {
       return sendEmail({
         tenantId: options.tenantId,
         to,
@@ -130,6 +175,7 @@ async function sendSendGrid(to, subject, body, options = {}) {
         subject,
         text: body,
         html: String(body).replace(/\n/g, "<br>"),
+        fromName: options.fromName || null,
       });
     }
   }
@@ -697,6 +743,14 @@ async function emitEvent(eventName, payload, tenantId, io, depth = 0) {
 
   // Use provided io or fall back to global io reference
   const ioInstance = io || getIO();
+  if (["pickup_point.created", "pickup_point.updated", "plot.visited", "task.completed", "invoice.created", "invoice.paid", "invoice.completed", "invoice.voided", "invoice.refunded", "payment.collected", "payment.initial_raised"].includes(eventName)) {
+    try {
+      const { hydrateGenericEventPayload } = require("./genericCampaignAutomation");
+      payload = await hydrateGenericEventPayload(eventName, payload, tenantId);
+    } catch (error) {
+      console.error(`[WorkflowEngine] Generic ${eventName} payload hydration failed:`, error.message);
+    }
+  }
   bus.emit(eventName, { payload, tenantId, io: ioInstance });
 
   // 1. Find matching automation rules

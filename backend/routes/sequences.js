@@ -486,6 +486,11 @@ router.delete("/enrollments/:id", verifyToken, async (req, res) => {
 
 const ALLOWED_KINDS = ["email", "sms", "wait", "condition"];
 
+async function isGenericSequence(sequence) {
+  const tenant = await prisma.tenant.findUnique({ where: { id: sequence.tenantId }, select: { vertical: true } }).catch(() => null);
+  return tenant?.vertical === "generic";
+}
+
 // All step routes are admin-only — drips touch real inboxes and are
 // inherently destructive if mis-edited.
 const stepGuard = [verifyToken, verifyRole(["ADMIN"])];
@@ -635,12 +640,12 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
     if (!seq) return res.status(404).json({ error: "Sequence not found" });
 
     const {
-      kind, emailTemplateId, smsBody, delayMinutes,
+      kind, name, emailTemplateId, smsBody, delayMinutes,
       conditionJson, trueNextPosition, falseNextPosition,
       pauseOnReply, position, attachmentRefsJson,
     } = req.body || {};
 
-    if (!ALLOWED_KINDS.includes(kind)) {
+    if (!ALLOWED_KINDS.includes(kind) && !(kind === "stop" && await isGenericSequence(seq))) {
       return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
     }
 
@@ -707,6 +712,7 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
         sequenceId: seq.id,
         position: target,
         kind,
+        name: name != null ? sanitizeText(name) : null,
         emailTemplateId: emailTemplateId != null ? parseInt(emailTemplateId, 10) : null,
         smsBody: cleanSmsBody || null,
         delayMinutes: delayMinutes != null ? parseInt(delayMinutes, 10) : null,
@@ -736,12 +742,13 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Step not found" });
 
     const {
-      kind, emailTemplateId, smsBody, delayMinutes,
+      kind, name, emailTemplateId, smsBody, delayMinutes,
       conditionJson, trueNextPosition, falseNextPosition,
       pauseOnReply, attachmentRefsJson,
     } = req.body || {};
 
-    if (kind != null && !ALLOWED_KINDS.includes(kind)) {
+    const parentSequence = kind === "stop" ? await prisma.sequence.findUnique({ where: { id: existing.sequenceId }, select: { tenantId: true } }) : null;
+    if (kind != null && !ALLOWED_KINDS.includes(kind) && !(kind === "stop" && parentSequence && await isGenericSequence(parentSequence))) {
       return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
     }
 
@@ -776,6 +783,7 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
       where: { id: existing.id },
       data: {
         ...(kind !== undefined && { kind }),
+        ...(name !== undefined && { name: name == null ? null : sanitizeText(name) }),
         ...(emailTemplateId !== undefined && {
           emailTemplateId: emailTemplateId == null ? null : parseInt(emailTemplateId, 10),
         }),

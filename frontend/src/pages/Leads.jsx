@@ -3441,7 +3441,7 @@ const Leads = () => {
       const phoneOut = isWellness
         ? phone
         : newLead.phone
-          ? `${newLead.countryCode} ${isGeneric ? phone : newLead.phone}`
+          ? `${newLead.countryCode}${isGeneric ? "" : " "}${newLead.phone}`
           : "";
       await fetchApi("/api/contacts", {
         method: "POST",

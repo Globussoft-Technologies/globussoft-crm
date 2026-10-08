@@ -77,6 +77,11 @@ const TASK_ROUTING = {
   "talking-points": { primary: "gemini-flash", fallback: "gpt-4" },
   "form-vs-call": { primary: "gemini-flash", fallback: "gpt-4" },
   "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
+  // Generic CRM campaign template drafting. The caller supplies only a
+  // marketer-authored subject; the model returns the editable email body.
+  // This is intentionally a text task so it uses the shared tenant AI gate,
+  // provider routing, budget cap, and audit log.
+  "email-template-draft": { primary: "gemini-flash", fallback: "gpt-4" },
   "call-summary": { primary: "gemini-flash", fallback: null },
   // Callified AI call transcript classification for CRM leads (2026-07-31).
   // Reads the latest call transcript + review and decides whether the lead
@@ -791,6 +796,7 @@ function buildPrompt(task, payload) {
     "transfer-search": "You are a ground-transfer assistant for a travel agency. Given a pickup, drop-off, date and pax, return realistic road-transfer options (airport↔hotel or inter-city) as STRICT JSON only — no markdown, no prose. Shape: {\"transfers\":[{\"mode\":\"road\",\"vehicle\":\"Private Sedan\",\"from\":\"...\",\"to\":\"...\",\"durationMinutes\":75,\"price\":2200,\"pax\":2,\"note\":\"Up to 3 pax\"}]}. price is the TOTAL in the requested currency for the vehicle (or per-person for shared coach — say so in note). Return 2-4 options (private + shared). Return ONLY the JSON object.",
     "quote-template-generate": "You are a travel quote builder. Given a natural-language description of a travel package, generate a JSON array of line items. Each item must be a JSON object with: lineType (one of: flight, hotel, transport, transfer, visa, service, other), description (string), quantity (number), unitPrice (number, in the provided currency), currency (3-letter ISO code). Return ONLY a valid JSON array — no markdown, no code fences, no explanation, no text outside the JSON. Example: [{\"lineType\":\"flight\",\"description\":\"Air India DEL-JED (Economy)\",\"quantity\":2,\"unitPrice\":18500,\"currency\":\"INR\"}]",
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
+    "email-template-draft": "You write concise, professional B2B CRM email template bodies. Use the supplied subject as the intent. Return only the editable HTML email body, with no markdown fences, no subject line, and no explanatory text. Do not invent company names, offers, dates, prices, or facts. You may use only the existing Generic CRM merge tags {{contact.first_name}}, {{contact.name}}, {{contact.company}}, {{contact.title}}, {{contact.email}}, and {{contact.phone}} when useful.",
     "call-summary":
       "You summarise a sales/advisory call in a few sentences. Plain text.",
     "callified-lead-status":

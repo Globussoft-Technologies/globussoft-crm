@@ -142,13 +142,23 @@ import {
   processStepListEnrollment,
   processInboundReplies,
   tickSequenceEngine,
+  receiverConditionMatches,
+  classifyGenericEmailOpen,
+  isLikelyHumanGenericEmailOpen,
 } from '../../cron/sequenceEngine.js';
 
 beforeAll(() => {
+  prisma.activity = { create: vi.fn() };
+  prisma.payment = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.emailMessage = {
     create: vi.fn(),
     findMany: vi.fn(),
+    findFirst: vi.fn(),
     update: vi.fn(),
+  };
+  prisma.emailTracking = {
+    findMany: vi.fn(),
+    create: vi.fn().mockResolvedValue({}),
   };
   prisma.smsMessage = {
     create: vi.fn(),
@@ -178,13 +188,22 @@ beforeAll(() => {
   prisma.tenant = {
     findUnique: vi.fn(),
   };
+  prisma.transportPerson = {
+    findMany: vi.fn(),
+  };
+  prisma.task = {
+    findFirst: vi.fn(),
+  };
 });
 
 let originalSendgridKey;
 beforeEach(() => {
+  prisma.activity.create.mockReset().mockResolvedValue({});
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
+  prisma.emailMessage.findFirst.mockReset();
   prisma.emailMessage.update.mockReset();
+  prisma.emailTracking.findMany.mockReset();
   prisma.smsMessage.create.mockReset();
   prisma.whatsAppMessage.create.mockReset();
   prisma.sequenceEnrollment.findMany.mockReset();
@@ -195,7 +214,9 @@ beforeEach(() => {
 
   prisma.emailMessage.create.mockResolvedValue({ id: 'em-1' });
   prisma.emailMessage.findMany.mockResolvedValue([]);
+  prisma.emailMessage.findFirst.mockResolvedValue(null);
   prisma.emailMessage.update.mockResolvedValue({});
+  prisma.emailTracking.findMany.mockResolvedValue([]);
   prisma.smsMessage.create.mockResolvedValue({ id: 'sms-1' });
   prisma.whatsAppMessage.create.mockResolvedValue({ id: 'wa-1' });
   prisma.sequenceEnrollment.findMany.mockResolvedValue([]);
@@ -205,7 +226,9 @@ beforeEach(() => {
   prisma.sequenceStep.findFirst.mockResolvedValue(null);
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
-  resolveSendGridConfig.mockReset();
+  prisma.transportPerson.findMany.mockReset().mockResolvedValue([]);
+  prisma.task.findFirst.mockReset().mockResolvedValue(null);
+  resolveSendGridConfig.mockReset().mockResolvedValue({ apiKey: '', fromEmail: 'platform@example.com' });
 
   // The engine reads SENDGRID_API_KEY at module top and triggers a
   // best-effort fire-and-forget fetch when an email step fires. We
@@ -218,6 +241,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   if (originalSendgridKey === undefined) {
     delete process.env.SENDGRID_API_KEY;
   } else {
@@ -266,6 +290,70 @@ function stepWith(overrides = {}) {
   };
 }
 
+describe('cron/sequenceEngine — Generic CRM open classification', () => {
+  test('counts a normal browser user-agent as likely human', () => {
+    const tracking = { userAgent: 'Mozilla/5.0 AppleWebKit/537.36 Chrome/124.0 Safari/537.36', ipAddress: '203.0.113.10' };
+    expect(classifyGenericEmailOpen(tracking)).toBe('likely_human');
+    expect(isLikelyHumanGenericEmailOpen(tracking)).toBe(true);
+  });
+
+  test('ignores an obvious scanner user-agent', () => {
+    const tracking = { userAgent: 'GoogleImageProxy', ipAddress: '203.0.113.11' };
+    expect(classifyGenericEmailOpen(tracking)).toBe('automated');
+    expect(isLikelyHumanGenericEmailOpen(tracking)).toBe(false);
+  });
+
+  test('does not count missing or ambiguous user-agent as a human open', () => {
+    expect(classifyGenericEmailOpen({ userAgent: null })).toBe('unknown');
+    expect(isLikelyHumanGenericEmailOpen({ userAgent: 'EmailSecurityGateway/1.0' })).toBe(false);
+  });
+
+});
+
+describe('cron/sequenceEngine — Generic pickup and site-visit receiver conditions', () => {
+  const genericEnrollment = {
+    id: 90,
+    tenantId: 12,
+    contactId: 44,
+    sequence: { tenant: { vertical: 'generic' } },
+  };
+
+  test('matches only a persisted pickup booking assignment status', async () => {
+    prisma.transportPerson.findMany.mockResolvedValueOnce([
+      {
+        customerIdsJson: JSON.stringify([44]),
+        assignmentStatusJson: JSON.stringify({
+          'customer-44': { status: 'CONFIRMED', updatedAt: '2026-10-08T10:00:00.000Z' },
+        }),
+        updatedAt: new Date('2026-10-08T10:00:00.000Z'),
+      },
+    ]);
+
+    await expect(receiverConditionMatches({ type: 'pickup_booking_status', value: 'CONFIRMED' }, genericEnrollment)).resolves.toBe(true);
+
+    prisma.transportPerson.findMany.mockResolvedValueOnce([]);
+    await expect(receiverConditionMatches({ type: 'pickup_booking_status', value: 'ASSIGNED' }, genericEnrollment)).resolves.toBe(false);
+  });
+
+  test('matches the latest persisted Site Visit task status', async () => {
+    prisma.task.findFirst.mockResolvedValueOnce({ status: 'Completed' });
+
+    await expect(receiverConditionMatches({ type: 'site_visit_status', value: 'Completed' }, genericEnrollment)).resolves.toBe(true);
+    expect(prisma.task.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 12, contactId: 44, type: 'Site Visit', deletedAt: null }),
+    }));
+  });
+
+  test('does not evaluate these Generic-only categories for another vertical', async () => {
+    const travelEnrollment = { ...genericEnrollment, sequence: { tenant: { vertical: 'travel' } } };
+
+    await expect(receiverConditionMatches({ type: 'pickup_booking_status', value: 'CONFIRMED' }, travelEnrollment)).resolves.toBe(false);
+    await expect(receiverConditionMatches({ type: 'site_visit_status', value: 'Completed' }, travelEnrollment)).resolves.toBe(false);
+    expect(prisma.transportPerson.findMany).not.toHaveBeenCalled();
+    expect(prisma.task.findFirst).not.toHaveBeenCalled();
+  });
+});
+
 // ─── processStep — email branch ────────────────────────────────────────────
 
 describe('cron/sequenceEngine — processStep email', () => {
@@ -288,7 +376,8 @@ describe('cron/sequenceEngine — processStep email', () => {
       resolveSendGridConfig.mockClear();
       prisma.tenant.findUnique.mockResolvedValue({ vertical });
       await processStep(stepWith(), enrollmentWith({ tenantId: 81 }));
-      expect(resolveSendGridConfig).not.toHaveBeenCalled();
+      if (vertical === 'generic') expect(resolveSendGridConfig).toHaveBeenCalledWith(81);
+      else expect(resolveSendGridConfig).not.toHaveBeenCalled();
       expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toMatch(/@/);
       expect(prisma.emailMessage.create.mock.calls[0][0].data.from).not.toContain('travel.test');
     }
@@ -477,6 +566,32 @@ describe('cron/sequenceEngine — processStep unknown kind', () => {
 // ─── processStepListEnrollment ─────────────────────────────────────────────
 
 describe('cron/sequenceEngine — processStepListEnrollment', () => {
+  test('delays each Generic email once, resumes when due, and schedules later email delays', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T10:00:00Z'));
+    const sequence = { tenant: { vertical: 'generic' } };
+    const enrollment = enrollmentWith({ sequence });
+    const steps = [stepWith({ position: 0, delayMinutes: 60 }), stepWith({ position: 1, delayMinutes: 30 })];
+    await processStepListEnrollment(enrollment, steps);
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    const scheduled = prisma.sequenceEnrollment.update.mock.calls.at(-1)[0].data;
+    expect(scheduled).toMatchObject({ currentStep: 0, emailDelayStep: 0, nextRun: new Date('2026-10-08T11:00:00Z') });
+    await processStepListEnrollment({ ...enrollment, ...scheduled }, steps);
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date('2026-10-08T11:00:00Z'));
+    await processStepListEnrollment({ ...enrollment, ...scheduled }, steps);
+    expect(prisma.emailMessage.create).toHaveBeenCalledTimes(1);
+    expect(prisma.sequenceEnrollment.update.mock.calls.at(-1)[0].data).toMatchObject({ currentStep: 1, emailDelayStep: 1, nextRun: new Date('2026-10-08T11:30:00Z') });
+  });
+
+  test('a preceding wait does not consume the email-specific delay', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T10:00:00Z'));
+    await processStepListEnrollment(enrollmentWith({ sequence: { tenant: { vertical: 'generic' } }, currentStep: 1, nextRun: new Date('2026-10-08T10:00:00Z') }), [stepWith({ position: 1, delayMinutes: 15 })]);
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    expect(prisma.sequenceEnrollment.update.mock.calls.at(-1)[0].data.nextRun).toEqual(new Date('2026-10-08T10:15:00Z'));
+  });
+
   test('happy walk: multi-step no-wait flow completes the enrollment', async () => {
     const enrollment = enrollmentWith({ currentStep: 0 });
     const steps = [
@@ -752,9 +867,31 @@ describe('cron/sequenceEngine — tickSequenceEngine', () => {
 
     // Second call — claimed re-fetch carries the include graph.
     const refetchArg = prisma.sequenceEnrollment.findMany.mock.calls[1][0];
-    expect(refetchArg.include.contact).toBe(true);
+    expect(refetchArg.include.contact.include.leadCustomFieldValues).toBeDefined();
     expect(refetchArg.include.sequence.include.steps.include.emailTemplate).toBe(true);
     expect(refetchArg.include.sequence.include.steps.orderBy).toEqual({ position: 'asc' });
+  });
+
+  test.each([
+    ['2026-10-08T02:00:00Z', false],
+    ['2026-10-10T10:00:00Z', true],
+  ])('initial Generic sends respect scheduling at %s', async (date, businessDaysOnly) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(date));
+    prisma.sequenceEnrollment.findMany.mockResolvedValueOnce([{ id: 100 }]).mockResolvedValueOnce([
+      enrollmentWith({ sequence: { isActive: true, tenant: { vertical: 'generic' }, campaigns: [{ status: 'Active', scheduleFilters: JSON.stringify({ timezone: 'UTC', startHour: 9, endHour: 17, businessDaysOnly }) }], steps: [stepWith()] } }),
+    ]);
+    await tickSequenceEngine();
+    expect(prisma.sequenceEnrollment.updateMany).toHaveBeenCalled();
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    expect(prisma.sequenceEnrollment.update).toHaveBeenCalledWith({ where: { id: 100 }, data: { lockedAt: null, lockedBy: null } });
+  });
+
+  test('does not send when another worker owns the initial enrollment', async () => {
+    prisma.sequenceEnrollment.findMany.mockResolvedValueOnce([{ id: 100 }]).mockResolvedValueOnce([]);
+    prisma.sequenceEnrollment.updateMany.mockResolvedValue({ count: 0 });
+    await tickSequenceEngine();
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
   });
 
   test('skips enrollment whose sequence.isActive=false', async () => {

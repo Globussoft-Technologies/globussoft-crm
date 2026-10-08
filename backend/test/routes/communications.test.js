@@ -93,6 +93,8 @@ prisma.sequenceEnrollment = {
 prisma.campaign = {
   updateMany: vi.fn(),
 };
+prisma.$transaction = vi.fn(async callback => callback(prisma));
+prisma.$queryRaw = vi.fn().mockResolvedValue([{ id: 55 }]);
 // #611: send-email reads tenant.emailRetention to decide whether to persist.
 // Stub the surface so the route doesn't try to hit a real DB.
 prisma.tenant = prisma.tenant || {};
@@ -133,6 +135,8 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', vertical = 'generic
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  prisma.$transaction.mockReset().mockImplementation(callback => callback(prisma));
+  prisma.$queryRaw.mockReset().mockResolvedValue([{ id: 55 }]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ emailRetention: true, vertical: 'generic' });
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
@@ -643,6 +647,28 @@ describe('Generic campaign email tracking', () => {
       where: { id: 31, tenantId: 1, sequenceId: 12 },
       data: { opened: { increment: 1 } },
     });
+  });
+
+  test('serializes concurrent clicks on different links of the same email', async () => {
+    prisma.emailTracking.findUnique.mockImplementation(async ({ where }) => ({ trackingId: where.trackingId, emailId: 55, tenantId: 1 }));
+    let queue = Promise.resolve();
+    // Model the database's email-row mutex. Assert the SQL lock itself too.
+    prisma.$transaction.mockImplementation(callback => {
+      const result = queue.then(() => callback(prisma));
+      queue = result.catch(() => {});
+      return result;
+    });
+    let clicked = false;
+    prisma.emailTracking.findFirst.mockImplementation(async () => clicked ? { id: 1 } : null);
+    prisma.emailTracking.updateMany.mockImplementation(async () => { clicked = true; return { count: 1 }; });
+    prisma.emailMessage.findFirst.mockImplementation(async () => ({ id: 55, threadId: 'seq-22' }));
+    prisma.sequenceEnrollment.findFirst.mockResolvedValue(campaignEnrollment);
+    prisma.campaign.updateMany.mockResolvedValue({ count: 1 });
+    await Promise.all(['link-a', 'link-b'].map(id => request(makeApp()).get(`/api/communications/track/${id}/click`).query({ url: 'https://example.com' })));
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(prisma.$queryRaw.mock.calls[0][0].join('')).toContain('FOR UPDATE');
+    expect(prisma.$queryRaw.mock.calls[0].slice(1)).toEqual([55, 1]);
+    expect(prisma.campaign.updateMany).toHaveBeenCalledTimes(1);
   });
 
   test('increments the Generic campaign click count once for the first clicked link', async () => {

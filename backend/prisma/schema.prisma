@@ -1930,6 +1930,7 @@ model SequenceEnrollment {
   // #9 — step-list cursor. Position within Sequence.steps (0-based). Null
   // before first tick → engine starts at position 0.
   currentStep Int?      @default(0)
+  emailDelayStep Int? // cursor whose pre-send delay has already been scheduled
   nextRun     DateTime?
   status      String    @default("Active") // Active, Completed, Paused, Unenrolled
   // Pessimistic locking — mirrors waOutboundJob lockedAt/lockedBy pattern.

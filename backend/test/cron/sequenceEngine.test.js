@@ -148,6 +148,8 @@ import {
 } from '../../cron/sequenceEngine.js';
 
 beforeAll(() => {
+  prisma.activity = { create: vi.fn() };
+  prisma.payment = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.emailMessage = {
     create: vi.fn(),
     findMany: vi.fn(),
@@ -156,6 +158,7 @@ beforeAll(() => {
   };
   prisma.emailTracking = {
     findMany: vi.fn(),
+    create: vi.fn().mockResolvedValue({}),
   };
   prisma.smsMessage = {
     create: vi.fn(),
@@ -195,6 +198,7 @@ beforeAll(() => {
 
 let originalSendgridKey;
 beforeEach(() => {
+  prisma.activity.create.mockReset().mockResolvedValue({});
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
   prisma.emailMessage.findFirst.mockReset();
@@ -224,7 +228,7 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.transportPerson.findMany.mockReset().mockResolvedValue([]);
   prisma.task.findFirst.mockReset().mockResolvedValue(null);
-  resolveSendGridConfig.mockReset();
+  resolveSendGridConfig.mockReset().mockResolvedValue({ apiKey: '', fromEmail: 'platform@example.com' });
 
   // The engine reads SENDGRID_API_KEY at module top and triggers a
   // best-effort fire-and-forget fetch when an email step fires. We
@@ -237,6 +241,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   if (originalSendgridKey === undefined) {
     delete process.env.SENDGRID_API_KEY;
   } else {
@@ -371,7 +376,8 @@ describe('cron/sequenceEngine — processStep email', () => {
       resolveSendGridConfig.mockClear();
       prisma.tenant.findUnique.mockResolvedValue({ vertical });
       await processStep(stepWith(), enrollmentWith({ tenantId: 81 }));
-      expect(resolveSendGridConfig).not.toHaveBeenCalled();
+      if (vertical === 'generic') expect(resolveSendGridConfig).toHaveBeenCalledWith(81);
+      else expect(resolveSendGridConfig).not.toHaveBeenCalled();
       expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toMatch(/@/);
       expect(prisma.emailMessage.create.mock.calls[0][0].data.from).not.toContain('travel.test');
     }
@@ -560,6 +566,32 @@ describe('cron/sequenceEngine — processStep unknown kind', () => {
 // ─── processStepListEnrollment ─────────────────────────────────────────────
 
 describe('cron/sequenceEngine — processStepListEnrollment', () => {
+  test('delays each Generic email once, resumes when due, and schedules later email delays', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T10:00:00Z'));
+    const sequence = { tenant: { vertical: 'generic' } };
+    const enrollment = enrollmentWith({ sequence });
+    const steps = [stepWith({ position: 0, delayMinutes: 60 }), stepWith({ position: 1, delayMinutes: 30 })];
+    await processStepListEnrollment(enrollment, steps);
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    const scheduled = prisma.sequenceEnrollment.update.mock.calls.at(-1)[0].data;
+    expect(scheduled).toMatchObject({ currentStep: 0, emailDelayStep: 0, nextRun: new Date('2026-10-08T11:00:00Z') });
+    await processStepListEnrollment({ ...enrollment, ...scheduled }, steps);
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date('2026-10-08T11:00:00Z'));
+    await processStepListEnrollment({ ...enrollment, ...scheduled }, steps);
+    expect(prisma.emailMessage.create).toHaveBeenCalledTimes(1);
+    expect(prisma.sequenceEnrollment.update.mock.calls.at(-1)[0].data).toMatchObject({ currentStep: 1, emailDelayStep: 1, nextRun: new Date('2026-10-08T11:30:00Z') });
+  });
+
+  test('a preceding wait does not consume the email-specific delay', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-08T10:00:00Z'));
+    await processStepListEnrollment(enrollmentWith({ sequence: { tenant: { vertical: 'generic' } }, currentStep: 1, nextRun: new Date('2026-10-08T10:00:00Z') }), [stepWith({ position: 1, delayMinutes: 15 })]);
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    expect(prisma.sequenceEnrollment.update.mock.calls.at(-1)[0].data.nextRun).toEqual(new Date('2026-10-08T10:15:00Z'));
+  });
+
   test('happy walk: multi-step no-wait flow completes the enrollment', async () => {
     const enrollment = enrollmentWith({ currentStep: 0 });
     const steps = [
@@ -835,9 +867,31 @@ describe('cron/sequenceEngine — tickSequenceEngine', () => {
 
     // Second call — claimed re-fetch carries the include graph.
     const refetchArg = prisma.sequenceEnrollment.findMany.mock.calls[1][0];
-    expect(refetchArg.include.contact).toBe(true);
+    expect(refetchArg.include.contact.include.leadCustomFieldValues).toBeDefined();
     expect(refetchArg.include.sequence.include.steps.include.emailTemplate).toBe(true);
     expect(refetchArg.include.sequence.include.steps.orderBy).toEqual({ position: 'asc' });
+  });
+
+  test.each([
+    ['2026-10-08T02:00:00Z', false],
+    ['2026-10-10T10:00:00Z', true],
+  ])('initial Generic sends respect scheduling at %s', async (date, businessDaysOnly) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(date));
+    prisma.sequenceEnrollment.findMany.mockResolvedValueOnce([{ id: 100 }]).mockResolvedValueOnce([
+      enrollmentWith({ sequence: { isActive: true, tenant: { vertical: 'generic' }, campaigns: [{ status: 'Active', scheduleFilters: JSON.stringify({ timezone: 'UTC', startHour: 9, endHour: 17, businessDaysOnly }) }], steps: [stepWith()] } }),
+    ]);
+    await tickSequenceEngine();
+    expect(prisma.sequenceEnrollment.updateMany).toHaveBeenCalled();
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+    expect(prisma.sequenceEnrollment.update).toHaveBeenCalledWith({ where: { id: 100 }, data: { lockedAt: null, lockedBy: null } });
+  });
+
+  test('does not send when another worker owns the initial enrollment', async () => {
+    prisma.sequenceEnrollment.findMany.mockResolvedValueOnce([{ id: 100 }]).mockResolvedValueOnce([]);
+    prisma.sequenceEnrollment.updateMany.mockResolvedValue({ count: 0 });
+    await tickSequenceEngine();
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
   });
 
   test('skips enrollment whose sequence.isActive=false', async () => {

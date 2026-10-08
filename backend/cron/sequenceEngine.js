@@ -957,6 +957,22 @@ async function processStepListEnrollment(enrollment, steps) {
       return;
     }
 
+    // Email delays apply BEFORE dispatch, not after delivery. A persisted
+    // nextRun for this cursor marks an already-scheduled delay, so resuming
+    // the due enrollment does not schedule the same delay forever.
+    if (enrollment.sequence?.tenant?.vertical === 'generic' && step.kind === 'email') {
+      const minutes = Math.max(Number(step.delayMinutes) || 0, 0);
+      const resumed = enrollment.emailDelayStep === cursor && enrollment.nextRun;
+      if (resumed && new Date(enrollment.nextRun) > new Date()) return;
+      if (minutes > 0 && !resumed) {
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: { currentStep: cursor, emailDelayStep: cursor, nextRun: new Date(Date.now() + minutes * 60_000) },
+        });
+        return;
+      }
+    }
+
     const result = await processStep(step, enrollment);
 
     if (result.stop) {
@@ -1355,6 +1371,8 @@ const WORKER_ID = `seq-worker-${process.pid}-${Date.now()}`;
 
 // ── Main tick ─────────────────────────────────────────────────────────
 const tickSequenceEngine = async () => {
+  // Distinct claims even when two ticks overlap inside the same process.
+  const claimId = `${WORKER_ID}-${crypto.randomUUID()}`;
   try {
     // 1. Detect inbound replies first so any pause kicks in BEFORE we
     //    advance an enrollment that just got a reply.
@@ -1378,13 +1396,13 @@ const tickSequenceEngine = async () => {
     //    across concurrent workers (PM2 clusters, horizontal pods, etc.).
     const ids = candidates.map((c) => c.id);
     await prisma.sequenceEnrollment.updateMany({
-      where: { id: { in: ids }, lockedAt: null },
-      data: { lockedAt: new Date(), lockedBy: WORKER_ID },
+      where: { id: { in: ids }, lockedAt: null, status: 'Active', OR: [{ nextRun: null }, { nextRun: { lte: now } }] },
+      data: { lockedAt: new Date(), lockedBy: claimId },
     });
 
     // 4. Re-fetch only the rows this worker actually claimed.
     const enrollments = await prisma.sequenceEnrollment.findMany({
-      where: { id: { in: ids }, lockedBy: WORKER_ID },
+      where: { id: { in: ids }, lockedBy: claimId },
       include: {
         sequence: { include: { tenant: { select: { vertical: true } }, campaigns: { select: { id: true, status: true, scheduleFilters: true, sequenceId: true }, orderBy: { createdAt: 'desc' } }, steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
         contact: { include: {

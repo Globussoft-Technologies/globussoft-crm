@@ -146,7 +146,8 @@ async function processContactCreated(contactId, tenantId) {
 
   let enrolled = 0;
   for (const campaign of campaigns) {
-    if (parseFilters(campaign.scheduleFilters).enrollmentMode === "manual") continue;
+    const filters = parseFilters(campaign.scheduleFilters);
+    if (!filters || filters.enrollmentMode === "manual") continue;
     if (!campaign.sequence || !matchesCampaign(campaign, contact)) continue;
 
     let sequence;
@@ -162,7 +163,7 @@ async function processContactCreated(contactId, tenantId) {
     });
     if (existing) continue;
 
-    const enrollment = await prisma.sequenceEnrollment.create({
+    await prisma.sequenceEnrollment.create({
       data: { sequenceId: sequence.id, contactId, status: "Active", tenantId },
       include: {
         contact: { include: { customerPickups: { orderBy: { updatedAt: "desc" }, take: 1 } } },
@@ -171,18 +172,8 @@ async function processContactCreated(contactId, tenantId) {
     });
     enrolled++;
 
-    // Execute the first due step immediately. Delays and later steps remain
-    // under the existing sequence cron engine.
-    try {
-      const engine = require("../cron/sequenceEngine");
-      if (enrollment.sequence.steps?.length) {
-        await engine.processStepListEnrollment(enrollment, enrollment.sequence.steps);
-      } else if (enrollment.sequence.nodes) {
-        await engine.processNodeLegacy(enrollment);
-      }
-    } catch (error) {
-      console.error(`[GenericCampaign] Initial sequence step failed for contact ${contactId}:`, error.message);
-    }
+    // Queue only. The next cron tick applies activation/business-hour checks
+    // and claims the enrollment lock before ANY delivery, including step 0.
   }
   return { enrolled };
 }

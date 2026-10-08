@@ -76,17 +76,17 @@ function isValidEmail(email) {
 // Tracking is public (the recipient's email client calls it), so resolve the
 // tenant and campaign entirely from the already-persisted tracking/email rows
 // rather than trusting any request input.
-async function recordGenericCampaignEngagement(track, metric) {
+async function recordGenericCampaignEngagement(track, metric, db = prisma) {
   if (!track?.emailId || !track?.tenantId || !["opened", "clicked"].includes(metric)) return;
 
-  const email = await prisma.emailMessage.findFirst({
+  const email = await db.emailMessage.findFirst({
     where: { id: track.emailId, tenantId: track.tenantId },
     select: { id: true, threadId: true },
   });
   const match = /^seq-(\d+)$/.exec(String(email?.threadId || ""));
   if (!match) return;
 
-  const enrollment = await prisma.sequenceEnrollment.findFirst({
+  const enrollment = await db.sequenceEnrollment.findFirst({
     where: { id: Number(match[1]), tenantId: track.tenantId },
     include: {
       contact: true,
@@ -103,7 +103,7 @@ async function recordGenericCampaignEngagement(track, metric) {
   // Campaign `sent` represents the first delivered sequence email for each
   // enrollment. Count engagement from that same email so a multi-step
   // sequence cannot make its open/click rate exceed 100%.
-  const firstEmail = await prisma.emailMessage.findFirst({
+  const firstEmail = await db.emailMessage.findFirst({
     where: {
       tenantId: track.tenantId,
       threadId: email.threadId,
@@ -122,7 +122,7 @@ async function recordGenericCampaignEngagement(track, metric) {
     || (campaigns.length === 1 ? campaigns[0] : null);
   if (!campaign?.id) return;
 
-  await prisma.campaign.updateMany({
+  await db.campaign.updateMany({
     where: {
       id: campaign.id,
       tenantId: track.tenantId,
@@ -832,20 +832,26 @@ router.get("/track/:trackingId/click", async (req, res) => {
     // A template can contain several links. The card reports unique
     // recipients who clicked, so only the first clicked link for an email is
     // eligible to increment the campaign's click counter.
-    const alreadyClicked = track
-      ? await prisma.emailTracking.findFirst({
+    const firstClick = track && await prisma.$transaction(async (tx) => {
+      // Serialize every link for the same email, not just this tracking ID.
+      // Tracking state and the campaign increment commit/rollback together.
+      const locked = await tx.$queryRaw`SELECT id FROM EmailMessage WHERE id = ${track.emailId} AND tenantId = ${track.tenantId} FOR UPDATE`;
+      if (!locked.length) return;
+      const alreadyClicked = await tx.emailTracking.findFirst({
         where: { emailId: track.emailId, tenantId: track.tenantId, clickedAt: { not: null } },
         select: { id: true },
-      })
-      : null;
-    const result = await prisma.emailTracking.updateMany({
-      where: { trackingId: req.params.trackingId, clickedAt: null },
-      data: { clickedAt: new Date(), type: "click", url: url || null },
+      });
+      const result = await tx.emailTracking.updateMany({
+        where: { trackingId: req.params.trackingId, tenantId: track.tenantId, clickedAt: null },
+        data: { clickedAt: new Date(), type: "click", url: url || null },
+      });
+      if (!alreadyClicked && result.count > 0) {
+        await recordGenericCampaignEngagement(track, "clicked", tx);
+        return true;
+      }
+      return false;
     });
-    if (track && !alreadyClicked && result.count > 0) {
-      await recordGenericCampaignEngagement(track, "clicked").catch(() => {});
-      if (req.io) req.io.emit("email_clicked", { trackingId: req.params.trackingId, url });
-    }
+    if (firstClick && req.io) req.io.to(`tenant:${track.tenantId}`).emit("email_clicked", { trackingId: req.params.trackingId, url });
   } catch (_err) { /* silent */ }
   res.redirect(req.query.url || "/");
 });

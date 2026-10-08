@@ -2749,11 +2749,10 @@ function renderGenericNav({
         <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
         <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
       </>)}
-
       {renderGroup("Marketing & Automation", <>
         <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
         <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
-        <Link to="/marketing" icon={Send} label="Marketing" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/marketing" icon={Send} label="Marketing Campaign" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "sequences", action: "read" }} />
         <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} />
         <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />

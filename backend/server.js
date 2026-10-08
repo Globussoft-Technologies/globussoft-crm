@@ -1326,6 +1326,9 @@ app.use("/api/report-schedules", reportSchedulesRoutes);
 app.use("/api/pipeline_stages", pipelineStagesRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/email_templates", emailTemplatesRoutes);
+// Compatibility alias used by the Generic CRM campaign template picker.
+// Keep the underscore route above unchanged for existing callers.
+app.use("/api/email-templates", emailTemplatesRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/marketplace-leads", marketplaceLeadsRoutes);

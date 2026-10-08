@@ -1166,7 +1166,7 @@ describe('POST /api/contacts — create', () => {
     // Core fields should be preserved unchanged.
     expect(data.name).toBe('Murali');
     expect(data.email).toBe('bva@gmail.com');
-    expect(data.phone).toBe('+91 9176955432');
+    expect(data.phone).toBe('+919176955432');
     expect(data.company).toBe('Globus');
     expect(data.title).toBe('Software');
     expect(data.source).toBe('Organic');

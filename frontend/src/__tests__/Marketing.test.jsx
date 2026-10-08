@@ -104,8 +104,13 @@ const SAMPLE_CAMPAIGNS = [
 ];
 
 function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], forms = [], sequences = [] } = {}) {
-  fetchApiMock.mockImplementation((url) => {
+  fetchApiMock.mockImplementation((url, options = {}) => {
     if (typeof url !== 'string') return Promise.resolve(null);
+    if (url === '/api/marketing/campaigns' && options.method === 'POST') {
+      return Promise.resolve({ id: 999, name: 'New Campaign', channel: 'EMAIL', status: 'Draft' });
+    }
+    if (url.includes('/schedule') || url.includes('/pause')) return Promise.resolve({});
+    if (url === '/api/marketing/campaigns') return Promise.resolve(campaigns);
     if (url.startsWith('/api/marketing/campaigns?channel=EMAIL')) {
       return Promise.resolve(campaigns);
     }
@@ -144,7 +149,7 @@ describe('<Marketing /> — broad page surface', () => {
     wireFetch();
     renderMarketing();
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /^Marketing$/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /^Marketing Campaign$/i })).toBeInTheDocument();
     });
     expect(
       screen.getByText(/Manage outbound campaigns and inbound lead capture forms/i),
@@ -426,7 +431,7 @@ describe('<Marketing /> — broad page surface', () => {
 
   // ───── NEW CASES (extension wave) ─────
 
-  it('Email-tab GET initially fires for ?channel=EMAIL on mount', async () => {
+  it('Generic campaign list GET initially fires on mount', async () => {
     // Pins that the Campaigns useEffect loads campaigns on initial mount.
     // The #932 sequence-link UI was scoped but not yet wired into
     // Marketing.jsx — the page does NOT fetch /api/sequences today.
@@ -434,10 +439,10 @@ describe('<Marketing /> — broad page surface', () => {
     wireFetch({ sequences: [{ id: 7, name: 'Welcome Drip' }] });
     renderMarketing();
     await waitFor(() => {
-      const emailCall = fetchApiMock.mock.calls.find(([u]) =>
-        typeof u === 'string' && u.startsWith('/api/marketing/campaigns?channel=EMAIL'),
+      const campaignsCall = fetchApiMock.mock.calls.find(([u]) =>
+        u === '/api/marketing/campaigns',
       );
-      expect(emailCall).toBeTruthy();
+      expect(campaignsCall).toBeTruthy();
     });
     // /api/sequences is NOT fetched by the current SUT.
     const seqCall = fetchApiMock.mock.calls.find(([u]) => u === '/api/sequences');
@@ -471,7 +476,7 @@ describe('<Marketing /> — broad page surface', () => {
       expect(body.channel).toBe('EMAIL');
       expect(body.budget).toBe(0);
     });
-    expect(notifyObj.success).toHaveBeenCalledWith('Campaign created');
+    expect(notifyObj.success).toHaveBeenCalledWith('Campaign saved');
   });
 
   it('Edit-Campaign dialog exposes Subject, Preheader, Body, Audience Status filter, Schedule', async () => {
@@ -496,18 +501,16 @@ describe('<Marketing /> — broad page surface', () => {
     expect(
       screen.getByPlaceholderText(/The first line your recipients see in their inbox/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText(/Optional preview text shown next to the subject/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText(/Hello \{\{contact\.firstName\}\}/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Optional preview text shown next to the subject/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/Hello \{\{contact\.firstName\}\}/i)).toBeNull();
 
     // Audience Status filter — first option is "All contacts with email".
     expect(screen.getByDisplayValue('All contacts with email')).toBeInTheDocument();
 
     // Schedule datetime-local input (type attribute pin).
     const dialog = screen.getByRole('dialog', { name: /Edit campaign/i });
+    expect(dialog.querySelector('input[type="datetime-local"]')).toBeNull();
+    fireEvent.change(screen.getByDisplayValue('Draft'), { target: { value: 'Scheduled' } });
     expect(dialog.querySelector('input[type="datetime-local"]')).toBeInTheDocument();
 
     // Sequence-link select (#932) is NOT yet rendered by Marketing.jsx —
@@ -775,7 +778,7 @@ describe('<Marketing /> — broad page surface', () => {
     });
     renderMarketing();
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /^Marketing$/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /^Marketing Campaign$/i })).toBeInTheDocument();
     });
     // Page still renders + empty-state shows (campaigns stays []).
     await waitFor(() => {

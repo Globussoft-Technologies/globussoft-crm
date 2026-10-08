@@ -32,7 +32,28 @@ function normalizePhoneValue(value) {
   return SCI_NOTATION_RE.test(trimmed) ? expandScientificNotation(trimmed) : trimmed;
 }
 
+/**
+ * Canonicalize Generic CRM phone values without changing Wellness or Travel
+ * phone behavior. A country code may be supplied separately by web forms.
+ */
+function normalizeGenericCrmPhone(value, phoneCountry = "") {
+  const raw = normalizePhoneValue(value);
+  if (!raw) return "";
+
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return raw;
+
+  const countryDigits = String(phoneCountry || "").replace(/\D/g, "");
+  if (raw.trim().startsWith("+")) return `+${digits}`;
+  if (countryDigits) return `+${countryDigits}${digits}`;
+
+  // Do not guess a country for a local number. Remove formatting while
+  // preserving the existing validation contract and any known digits.
+  return digits;
+}
+
 module.exports = {
   expandScientificNotation,
   normalizePhoneValue,
+  normalizeGenericCrmPhone,
 };

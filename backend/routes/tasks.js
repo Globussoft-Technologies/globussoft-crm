@@ -11,6 +11,7 @@ const { notify, notifyMany } = require("../lib/notificationService");
 const { sendEmail } = require("../lib/emailSender");
 const { isSendGridConfigured } = require("../services/travelSendGrid");
 const { toE164 } = require("../utils/deduplication");
+const { isVisitTask } = require("../lib/leadReportMetrics");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
@@ -35,6 +36,27 @@ function parseTenantDateInput(input) {
     return parseDateTimeLocalInTZ(input, TASKS_TZ);
   }
   return new Date(input);
+}
+
+function emitGenericPlotVisited(task, tenantId, io) {
+  if (!isVisitTask(task) || !task?.contactId) return;
+  prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }).then((tenant) => {
+    if (tenant?.vertical !== "generic") return;
+    return require("../lib/eventBus").emitEvent(
+      "plot.visited",
+      {
+        taskId: task.id,
+        contactId: task.contactId,
+        type: task.type,
+        title: task.title,
+        outcome: task.outcome,
+        dueDate: task.dueDate,
+        completedAt: task.updatedAt,
+      },
+      tenantId,
+      io,
+    );
+  }).catch((error) => console.error("[GenericCampaign] plot visited event failed:", error.message));
 }
 // #163: enums used elsewhere in the app — surfaced as strict checks instead of
 // silent coercion to "Pending".
@@ -674,6 +696,7 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
           req.user.tenantId,
           req.io
         );
+        emitGenericPlotVisited(task, req.user.tenantId, req.io);
       }
     } catch (_e) {}
 
@@ -757,6 +780,7 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
           req.user.tenantId,
           req.io
         );
+        emitGenericPlotVisited(task, req.user.tenantId, req.io);
       }
     } catch (_e) {}
 

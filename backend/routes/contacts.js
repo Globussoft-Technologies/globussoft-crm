@@ -39,7 +39,7 @@ const {
   normalizeLeadStatus,
 } = require("../lib/callifiedLeadStatus");
 const { sanitizeText } = require("../lib/sanitizeJson");
-const { normalizePhoneValue } = require("../lib/phoneFormatting");
+const { normalizePhoneValue, normalizeGenericCrmPhone } = require("../lib/phoneFormatting");
 const {
   deleteContactDependents,
   hardDeleteContact,
@@ -101,7 +101,8 @@ function parseContactTags(tagsJson) {
   }
 }
 
-function normalizeContactPhone(contact) {
+function normalizeContactPhone(contact, genericCrm = false) {
+  if (!genericCrm) return contact;
   if (!contact || typeof contact !== "object") return contact;
   if (
     contact.phone === null ||
@@ -110,7 +111,7 @@ function normalizeContactPhone(contact) {
   ) {
     return contact;
   }
-  const normalizedPhone = normalizePhoneValue(contact.phone);
+  const normalizedPhone = normalizeGenericCrmPhone(contact.phone);
   return normalizedPhone === contact.phone
     ? contact
     : { ...contact, phone: normalizedPhone };
@@ -170,15 +171,26 @@ function workflowContactPayload(
   };
 }
 
-function serializeContactTags(contact) {
+function serializeContactTags(contact, genericCrm = false) {
   if (!contact || typeof contact !== "object") return contact;
-  const { tagsJson, ...rest } = normalizeContactPhone(contact);
+  const { tagsJson, ...rest } = normalizeContactPhone(contact, genericCrm);
   return { ...rest, tags: parseContactTags(tagsJson) };
 }
 
-function serializeContactTagsBatch(contacts) {
+function serializeContactTagsBatch(contacts, genericCrm = false) {
   if (!Array.isArray(contacts)) return contacts;
-  return contacts.map(serializeContactTags);
+  return contacts.map((contact) => serializeContactTags(contact, genericCrm));
+}
+
+function isGenericCrmRequest(req) {
+  return (req.user?.vertical || "generic") === "generic";
+}
+
+function normalizePhoneForRequest(req, phone) {
+  if (!phone) return phone;
+  return isGenericCrmRequest(req)
+    ? normalizeGenericCrmPhone(phone)
+    : normalizePhoneValue(phone);
 }
 
 function normalizeContactTagValue(raw) {
@@ -1687,7 +1699,7 @@ router.get("/", async (req, res) => {
     // (no-op elsewhere — see attachLeadCustomFieldsBatch). Skipped for the
     // ?fields=summary slim shape, which is an explicit "give me the minimal
     // projection" opt-in.
-    const withTags = serializeContactTagsBatch(filtered);
+    const withTags = serializeContactTagsBatch(filtered, isGenericCrmRequest(req));
     const withCustomFields = isSummary
       ? withTags
       : await attachLeadCustomFieldsBatch(withTags, req.user.tenantId);
@@ -2286,7 +2298,7 @@ router.get("/:id", async (req, res) => {
       withTimeline,
       req.user.tenantId,
     );
-    res.json(serializeContactTags(withCustomFields));
+    res.json(serializeContactTags(withCustomFields, isGenericCrmRequest(req)));
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch contact" });
   }
@@ -2358,6 +2370,9 @@ router.post("/", async (req, res) => {
           ? req.body.name.trim()
           : req.body.name,
     };
+    if (isGenericCrmRequest(req) && normalised.phone) {
+      normalised.phone = normalizeGenericCrmPhone(normalised.phone);
+    }
     if (tagsResult.hasValue) {
       normalised.tagsJson = tagsResult.tags.length
         ? JSON.stringify(tagsResult.tags)
@@ -2456,7 +2471,7 @@ router.post("/", async (req, res) => {
                 id: c.id,
                 name: c.name,
                 email: c.email,
-                phone: c.phone ? normalizePhoneValue(c.phone) : c.phone,
+                phone: normalizePhoneForRequest(req, c.phone),
                 company: c.company,
                 status: c.status,
                 subBrand: c.subBrand,
@@ -2549,9 +2564,7 @@ router.post("/", async (req, res) => {
           {
             id: contact.id,
             name: contact.name,
-            phone: contact.phone
-              ? normalizePhoneValue(contact.phone)
-              : contact.phone,
+            phone: normalizePhoneForRequest(req, contact.phone),
             email: contact.email,
             status: contact.status,
             assignedToId: contact.assignedToId,
@@ -2609,7 +2622,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    res.status(201).json(serializeContactTags(contact));
+    res.status(201).json(serializeContactTags(contact, isGenericCrmRequest(req)));
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
     // #165: validation-class Prisma errors (string-too-long, FK miss, …) are
@@ -3025,6 +3038,9 @@ const updateContactById = async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
+    if (isGenericCrmRequest(req) && updateData.phone) {
+      updateData.phone = normalizeGenericCrmPhone(updateData.phone);
+    }
     // Custom fields live in related rows, so explicitly touch the Contact
     // timestamp when they are edited; Prisma cannot infer this from an empty
     // Contact update after customFields has been removed above.
@@ -3152,9 +3168,7 @@ const updateContactById = async (req, res) => {
         {
           id: contact.id,
           name: contact.name,
-          phone: contact.phone
-            ? normalizePhoneValue(contact.phone)
-            : contact.phone,
+          phone: normalizePhoneForRequest(req, contact.phone),
           email: contact.email,
           status: contact.status,
           assignedToId: contact.assignedToId,
@@ -3273,7 +3287,7 @@ const updateContactById = async (req, res) => {
       );
     }
 
-    res.json(serializeContactTags(contact));
+    res.json(serializeContactTags(contact, isGenericCrmRequest(req)));
   } catch (err) {
     // #168 #165: PUT used to leak 500s on bad email / out-of-range values
     // because the Prisma validation error fell through unhandled. Map the
@@ -3376,12 +3390,12 @@ router.post("/import-csv", async (req, res) => {
           skipped++;
           continue;
         }
-        await prisma.contact.create({
+        const contact = await prisma.contact.create({
           data: {
             name: sanitizeCellForExport(String(row.name || "").trim()),
             email,
             phone:
-              normalizePhoneValue(
+              (isGenericCrmRequest(req) ? normalizeGenericCrmPhone : normalizePhoneValue)(
                 getSpreadsheetValue(row, [
                   "phone",
                   "phone_number",
@@ -3396,6 +3410,18 @@ router.post("/import-csv", async (req, res) => {
             tenantId: req.user.tenantId,
           },
         });
+        if (isGenericCrmRequest(req)) {
+          try {
+            await require("../lib/eventBus").emitEvent(
+              "contact.created",
+              { contactId: contact.id, userId: req.user.userId },
+              req.user.tenantId,
+              req.io,
+            );
+          } catch (eventError) {
+            console.error("[contacts] Generic CSV contact.created event failed:", eventError.message);
+          }
+        }
         imported++;
       } catch (rowErr) {
         errors.push(
@@ -3537,9 +3563,7 @@ router.put("/:id/assign", async (req, res) => {
         {
           id: contact.id,
           name: contact.name,
-          phone: contact.phone
-            ? normalizePhoneValue(contact.phone)
-            : contact.phone,
+          phone: normalizePhoneForRequest(req, contact.phone),
           status: contact.status,
           assignedToId: contact.assignedToId,
           tenantId: req.user.tenantId,
@@ -3549,7 +3573,7 @@ router.put("/:id/assign", async (req, res) => {
     } catch (_e) {
       /* webhook delivery is fire-and-forget */
     }
-    res.json(serializeContactTags(contact));
+    res.json(serializeContactTags(contact, isGenericCrmRequest(req)));
   } catch (_err) {
     res.status(500).json({ error: "Failed to assign agent" });
   }
@@ -4160,9 +4184,7 @@ router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         {
           id: existing.id,
           name: existing.name,
-          phone: existing.phone
-            ? normalizePhoneValue(existing.phone)
-            : existing.phone,
+          phone: normalizePhoneForRequest(req, existing.phone),
           email: existing.email,
           status: existing.status,
           assignedToId: existing.assignedToId,

@@ -1616,7 +1616,10 @@ describe('Sidebar — load-bearing render surface', () => {
       // "Workflows" nav; the closest equivalent is Sequences).
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       expect(screen.getByText('Sequences')).toBeTruthy();
-      expect(screen.getByText('Marketing')).toBeTruthy();
+      const marketingCampaignLink = screen.getByText('Marketing Campaign').closest('a');
+      expect(marketingCampaignLink).toBeTruthy();
+      expect(marketingCampaignLink.getAttribute('href')).toBe('/marketing');
+      expect(screen.queryByText('Marketing')).toBeNull();
       expect(screen.getByText('Lead Routing')).toBeTruthy();
       // Territories is the sibling routing nav.
       expect(screen.getByText('Territories')).toBeTruthy();
@@ -1625,7 +1628,7 @@ describe('Sidebar — load-bearing render surface', () => {
     it('hides Sequences / Marketing / Lead Routing for USER under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
       expect(screen.queryByText('Sequences')).toBeNull();
-      expect(screen.queryByText('Marketing')).toBeNull();
+      expect(screen.queryByText('Marketing Campaign')).toBeNull();
       expect(screen.queryByText('Lead Routing')).toBeNull();
       expect(screen.queryByText('Territories')).toBeNull();
     });

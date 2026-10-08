@@ -1953,6 +1953,7 @@ model SequenceStep {
 
   position Int // ordering within the sequence (0, 1, 2, …)
   kind     String // 'email' | 'sms' | 'wait' | 'condition'
+  name     String?
 
   // For kind='email' / 'sms':
   emailTemplateId Int?

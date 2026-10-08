@@ -59,6 +59,13 @@ const TRIGGER_TYPES = [
   { value: 'contact.created_or_updated', module: 'contact', kind: 'event', emitted: true, label: 'When a contact is created or updated', description: 'Fires on both contact.created and contact.updated' },
   { value: 'lead.converted', module: 'lead', kind: 'event', emitted: true, label: 'When a lead is converted', description: 'Fires when a contact’s status flips from Lead to Customer' },
 
+  // Generic CRM pickup/plot lifecycle events. These are emitted only for
+  // tenants whose vertical is `generic`; the vertical marker keeps the
+  // catalog explicit without changing Wellness or Travel event behavior.
+  { value: 'pickup_point.created', module: 'contact', kind: 'event', emitted: true, vertical: 'generic', label: 'When a pickup point is added', description: 'Fires when a customer pickup point is captured' },
+  { value: 'pickup_point.updated', module: 'contact', kind: 'event', emitted: true, vertical: 'generic', label: 'When a pickup point is updated', description: 'Fires when a customer pickup point changes' },
+  { value: 'plot.visited', module: 'lead', kind: 'event', emitted: true, vertical: 'generic', label: 'When a plot is visited', description: 'Fires when a Generic CRM site-visit task is completed' },
+
   // ── Deals ───────────────────────────────────────────────────────────
   { value: 'deal.created', module: 'deal', kind: 'event', emitted: true, label: 'When a deal is created', description: 'Fires when a new deal is created' },
   // Label corrected: this fires on UPDATE only. The builder previously read
@@ -88,6 +95,7 @@ const TRIGGER_TYPES = [
   // emitted by cron/workflowScheduler.js on the UNPAID → past-due transition.
   { value: 'invoice.overdue', module: 'invoice', kind: 'event', emitted: true, label: 'When an invoice becomes overdue', description: 'Fires once per invoice when it passes its due date unpaid (cron: hourly)' },
   { value: 'payment.collected', module: 'payment', kind: 'event', emitted: true, label: 'When a payment is collected', description: 'Fires when payment is captured (gateway success or manual mark-paid)' },
+  { value: 'payment.initial_raised', module: 'payment', kind: 'event', emitted: true, vertical: 'generic', label: 'When the initial payment is raised', description: 'Fires for the first successful payment for a Generic CRM customer or invoice' },
 
   // ── Approvals ───────────────────────────────────────────────────────
   { value: 'approval.created', module: 'approval', kind: 'event', emitted: true, label: 'When an approval is created', description: 'Fires when an approval request is created' },
@@ -344,8 +352,8 @@ const SCHEDULED_TRIGGERS = new Set(
 );
 
 /** Triggers safe to advertise: those with a real emit site. */
-function publicTriggers() {
-  return TRIGGER_TYPES.filter((t) => t.emitted !== false);
+function publicTriggers(vertical = null) {
+  return TRIGGER_TYPES.filter((t) => t.emitted !== false && (!t.vertical || !vertical || t.vertical === vertical));
 }
 
 /** Actions offered for a module (null `modules` = every module). */
@@ -354,8 +362,8 @@ function actionsForModule(module) {
 }
 
 /** Triggers offered for a module. `module: '*'` entries appear everywhere. */
-function triggersForModule(module) {
-  return publicTriggers().filter((t) => t.module === module || t.module === '*');
+function triggersForModule(module, vertical = null) {
+  return publicTriggers(vertical).filter((t) => t.module === module || t.module === '*');
 }
 
 function isScheduledTrigger(triggerType) {

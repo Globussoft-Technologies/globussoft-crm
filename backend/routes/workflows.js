@@ -119,10 +119,16 @@ function maskWorkflowSecrets(rule) {
 const TRIGGER_TYPES = workflowSchema.publicTriggers();
 const ACTION_TYPES = workflowSchema.ACTION_TYPES;
 
+async function workflowTenantVertical(req) {
+  const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } }).catch(() => null);
+  return tenant?.vertical || "generic";
+}
+
 // GET /triggers — supported trigger types (optionally scoped to a module)
-router.get("/triggers", canRead, (req, res) => {
+router.get("/triggers", canRead, async (req, res) => {
   const module = req.query.module;
-  res.json(module ? workflowSchema.triggersForModule(module) : TRIGGER_TYPES);
+  const vertical = await workflowTenantVertical(req);
+  res.json(module ? workflowSchema.triggersForModule(module, vertical) : workflowSchema.publicTriggers(vertical));
 });
 
 // GET /actions — supported action types (optionally scoped to a module)
@@ -134,10 +140,11 @@ router.get("/actions", canRead, (req, res) => {
 // GET /schema — everything the builder needs in one round trip: modules,
 // triggers, actions, condition operators, condition fields, and the schedule
 // entity/date-field catalogue for time-based rules.
-router.get("/schema", canRead, (req, res) => {
+router.get("/schema", canRead, async (req, res) => {
+  const vertical = await workflowTenantVertical(req);
   res.json({
     modules: workflowSchema.MODULES,
-    triggers: TRIGGER_TYPES,
+    triggers: workflowSchema.publicTriggers(vertical),
     actions: ACTION_TYPES,
     operators: workflowSchema.CONDITION_OPS,
     fields: workflowSchema.FIELD_OPTIONS,

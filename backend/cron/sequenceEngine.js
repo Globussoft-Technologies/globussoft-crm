@@ -23,12 +23,15 @@
  *   the step it is parked on has pauseOnReply=true — flips status='Paused'
  *   and clears nextRun. Idempotent via the sequenceReplyHandled timestamp.
  */
+const crypto = require('crypto');
 const cronRegistry = require('../lib/cronRegistry');
 const prisma = require('../lib/prisma');
 const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
+const { normalizeGenericTemplatePlaceholders } = require('../lib/genericCampaignAutomation');
 const flyerRenderEngine = require('../services/flyerRenderEngine');
 const shortUrlService = require('../services/shortUrl');
+const { sendEmail } = require('../lib/emailSender');
 const { writeAudit } = require('../lib/audit');
 const { resolveSendGridConfig } = require('../services/travelSendGrid');
 
@@ -143,23 +146,78 @@ async function trySendGridSend(to, subject, body, attachments, provider = null) 
 // resolve nested).
 function buildContextForEnrollment(enrollment) {
   const c = enrollment.contact || {};
-  return {
-    contact: {
-      id: c.id,
-      name: c.name,
-      email: c.email,
-      phone: c.phone,
-      company: c.company,
-      status: c.status,
-    },
-    enrollmentId: enrollment.id,
-    sequenceId: enrollment.sequenceId,
+  const isGeneric = enrollment.sequence?.tenant?.vertical === 'generic';
+  const names = String(c.name || '').trim().split(/\s+/).filter(Boolean);
+  const custom = Object.fromEntries((c.leadCustomFieldValues || []).map(value => [
+    value.field?.fieldKey,
+    value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool ?? '',
+  ]).filter(([key]) => key));
+  let tags = [];
+  try { tags = c.tagsJson ? JSON.parse(c.tagsJson) : []; } catch (_error) { tags = []; }
+  const contact = {
+    id: c.id,
+    name: c.name,
+    email: c.email,
+    phone: c.phone,
+    company: c.company,
+    status: c.status,
+  };
+  if (isGeneric) Object.assign(contact, {
+    first_name: names[0] || '',
+    last_name: names.slice(1).join(' '),
+    whatsappPhone: c.whatsappPhone,
+    title: c.title,
+    source: c.source,
+    medium: c.medium,
+    industry: c.industry,
+    companySize: c.companySize,
+    linkedin: c.linkedin,
+    website: c.website,
+    facebookUrl: c.facebookUrl,
+    githubUrl: c.githubUrl,
+    twitterUrl: c.twitterUrl,
+    firstTouchSource: c.firstTouchSource,
+    lastTouchSource: c.lastTouchSource,
+    birthDate: c.birthDate,
+    anniversary: c.anniversary,
+    gst: c.gst,
+    stateCode: c.stateCode,
+    billingStateCode: c.billingStateCode,
+    externalId: c.externalId,
+    aiScore: c.aiScore,
+    tags,
+    custom,
+  });
+  const context = {
+    contact,
     // Flat fallbacks for templates that author `{{name}}` directly:
     name: c.name,
     email: c.email,
     phone: c.phone,
     company: c.company,
+    enrollmentId: enrollment.id,
+    sequenceId: enrollment.sequenceId,
   };
+  if (isGeneric) {
+    const deal = c.deals?.[0] || {};
+    Object.assign(context, {
+    contact_name: c.name || '',
+    sender_name: FROM_EMAIL,
+    deal_name: deal.name || deal.title || deal.dealName || '',
+    deal,
+    invoice: c.invoices?.[0] || {},
+    task: c.tasks?.[0] || {},
+    activity: c.activities?.[0] || {},
+    expense: c.expenses?.[0] || {},
+    contract: c.contracts?.[0] || {},
+    estimate: c.estimates?.[0] || {},
+      project: c.projects?.[0] || {},
+      pickup: c.customerPickups?.[0]
+        ? { ...c.customerPickups[0], address: c.customerPickups[0].pickupAddress, location: c.customerPickups[0].pickupAddress }
+        : {},
+    });
+  }
+  return context;
 }
 
 // ── Flyer attachment rendering (S19, PRD_TRAVEL_MARKETING_FLYER FR-3.5) ──
@@ -361,18 +419,288 @@ async function resolveStepAttachments(step, enrollment, channel) {
   return resolved;
 }
 
+function parseReceiverCondition(conditionJson) {
+  if (!conditionJson) return null;
+  try {
+    const parsed = JSON.parse(conditionJson);
+    return parsed && parsed.version === 2 && Array.isArray(parsed.conditions) ? parsed : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Generic campaign open conditions must not treat every pixel request as a
+// recipient action.  The existing tracking row already captures the request
+// user-agent, so use only conservative, obvious automation fingerprints here.
+// Unknown or missing user-agents are intentionally not counted as human opens.
+const AUTOMATED_OPEN_USER_AGENT_PATTERNS = [
+  /bot/i,
+  /crawler/i,
+  /spider/i,
+  /headless/i,
+  /phantom/i,
+  /selenium/i,
+  /puppeteer/i,
+  /playwright/i,
+  /curl/i,
+  /wget/i,
+  /python[- ]requests/i,
+  /go-http-client/i,
+  /googleimageproxy/i,
+  /urlscan/i,
+  /proofpoint/i,
+  /mimecast/i,
+  /barracuda/i,
+  /safelinks/i,
+];
+
+const HUMAN_EMAIL_CLIENT_MARKERS = [
+  /mozilla/i,
+  /applewebkit/i,
+  /chrome/i,
+  /safari/i,
+  /firefox/i,
+  /edg/i,
+  /opera/i,
+  /android/i,
+  /iphone/i,
+  /ipad/i,
+  /thunderbird/i,
+];
+
+function classifyGenericEmailOpen(tracking) {
+  const userAgent = String(tracking?.userAgent || '').trim();
+  if (!userAgent) return 'unknown';
+  if (AUTOMATED_OPEN_USER_AGENT_PATTERNS.some(pattern => pattern.test(userAgent))) return 'automated';
+  if (!HUMAN_EMAIL_CLIENT_MARKERS.some(pattern => pattern.test(userAgent))) return 'unknown';
+  return 'likely_human';
+}
+
+function isLikelyHumanGenericEmailOpen(tracking) {
+  return classifyGenericEmailOpen(tracking) === 'likely_human';
+}
+
+function genericCampaignAllowsDispatch(sequence) {
+  const campaign = (sequence.campaigns || []).find(item => item.status === 'Active') || sequence.campaigns?.[0];
+  if (!campaign?.scheduleFilters) return true;
+  let filters;
+  try { filters = JSON.parse(campaign.scheduleFilters); } catch (_error) { return true; }
+  const timezone = typeof filters.timezone === 'string' && filters.timezone ? filters.timezone : 'UTC';
+  let parts;
+  try {
+    parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date()).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+  } catch (_error) {
+    return true;
+  }
+  if (filters.businessDaysOnly && ['Sat', 'Sun'].includes(parts.weekday)) return false;
+  const hour = Number(parts.hour) % 24;
+  const minute = Number(parts.minute);
+  const current = hour * 60 + minute;
+  const startHour = Number.isFinite(Number(filters.startHour)) ? Number(filters.startHour) : 0;
+  const endHour = Number.isFinite(Number(filters.endHour)) ? Number(filters.endHour) : 23;
+  const start = Math.max(0, Math.min(23, startHour)) * 60;
+  const end = Math.max(0, Math.min(23, endHour)) * 60 + 59;
+  return current >= start && current <= end;
+}
+
+async function recordGenericCampaignDelivery(enrollment, firstSequenceEmail) {
+  if (!firstSequenceEmail || enrollment.sequence?.tenant?.vertical !== 'generic') return;
+  const campaigns = enrollment.sequence?.campaigns || [];
+  if (!campaigns.length) return;
+
+  // The enrolment itself is the existing duplicate guard. Count a campaign
+  // recipient only on the first successfully delivered sequence email, and
+  // only for the active campaign whose configured trigger still matches this
+  // Generic contact. The one-active-campaign fallback preserves valid older
+  // campaigns whose trigger fields were subsequently removed.
+  const { matchesCampaign } = require('../lib/genericCampaignAutomation');
+  const activeCampaigns = campaigns.filter(campaign => campaign.status === 'Active');
+  const campaign = activeCampaigns.find(item => matchesCampaign(item, enrollment.contact))
+    || (activeCampaigns.length === 1 ? activeCampaigns[0] : null);
+  if (!campaign?.id) return;
+
+  await prisma.campaign.updateMany({
+    where: {
+      id: campaign.id,
+      tenantId: enrollment.tenantId,
+      sequenceId: enrollment.sequenceId,
+      status: 'Active',
+    },
+    data: { sent: { increment: 1 } },
+  }).catch(error => console.error(`[GenericCampaign] Could not update sent count for campaign ${campaign.id}:`, error.message));
+}
+
+async function latestSequenceEmail(enrollment) {
+  return prisma.emailMessage.findFirst({
+    where: {
+      tenantId: enrollment.tenantId,
+      contactId: enrollment.contactId,
+      threadId: `seq-${enrollment.id}`,
+      direction: 'OUTBOUND',
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+async function addGenericEmailTracking(emailId, body, tenantId) {
+  const baseUrl = process.env.FRONTEND_URL || 'https://crm.globusdemos.com';
+  const openTrackingId = crypto.randomUUID();
+  await prisma.emailTracking.create({ data: { emailId, trackingId: openTrackingId, type: 'open', tenantId } }).catch(() => {});
+  let trackedBody = String(body || '');
+  const links = [];
+  trackedBody = trackedBody.replace(/href\s*=\s*(["'])(https?:\/\/[^"']+)\1/gi, (match, quote, url) => {
+    const trackingId = crypto.randomUUID();
+    links.push({ trackingId, url });
+    return `href=${quote}${baseUrl}/api/communications/track/${trackingId}/click?url=${encodeURIComponent(url)}${quote}`;
+  });
+  for (const link of links) {
+    await prisma.emailTracking.create({ data: { emailId, trackingId: link.trackingId, type: 'click', url: link.url, tenantId } }).catch(() => {});
+  }
+  return `${trackedBody}\n\n<img src="${baseUrl}/api/communications/track/${openTrackingId}/open.gif" width="1" height="1" style="display:none" alt="" />`;
+}
+
+async function receiverConditionMatches(condition, enrollment) {
+  const type = condition?.type;
+  const event = condition?.event;
+  if (type === 'email_activity') {
+    const email = await latestSequenceEmail(enrollment);
+    if (!email) return false;
+    if (event === 'replied' || event === 'no_reply') {
+      const reply = await prisma.emailMessage.findFirst({
+        where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId, direction: 'INBOUND', threadId: `seq-${enrollment.id}` },
+        select: { id: true },
+      });
+      return event === 'replied' ? Boolean(reply) : !reply;
+    }
+    if (event === 'unsubscribed') return String(enrollment.contact?.status || '').toLowerCase() === 'unsubscribed';
+    const tracking = await prisma.emailTracking.findMany({ where: { emailId: email.id, tenantId: enrollment.tenantId }, select: { type: true, openedAt: true, clickedAt: true, ipAddress: true, userAgent: true } });
+    const opened = tracking.some(item => item.openedAt && isLikelyHumanGenericEmailOpen(item));
+    const clicked = tracking.some(item => item.clickedAt);
+    const bounced = tracking.some(item => item.type === 'bounce');
+    return event === 'opened' ? opened
+      : event === 'not_opened' ? !opened
+        : event === 'clicked' ? clicked
+          : event === 'not_clicked' ? !clicked
+            : event === 'bounced' ? bounced
+              : false;
+  }
+  if (type === 'contact_status') {
+    return String(enrollment.contact?.status || '') === String(condition.value || '');
+  }
+  if (type === 'deal_stage') {
+    return String(enrollment.contact?.deals?.[0]?.stage || '') === String(condition.value || '');
+  }
+  if (type === 'payment_status') {
+    const payment = await prisma.payment.findFirst({ where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId }, orderBy: { createdAt: 'desc' }, select: { status: true } });
+    return String(payment?.status || '') === String(condition.value || '');
+  }
+  if (type === 'booking_status') {
+    const booking = await prisma.booking.findFirst({ where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId }, orderBy: { createdAt: 'desc' }, select: { status: true } });
+    return String(booking?.status || '') === String(condition.value || '');
+  }
+  if (type === 'pickup_booking_status') {
+    if (enrollment.sequence?.tenant?.vertical !== 'generic') return false;
+    const transportPeople = await prisma.transportPerson.findMany({
+      where: { tenantId: enrollment.tenantId },
+      select: { customerIdsJson: true, assignmentStatusJson: true, updatedAt: true },
+    });
+    let latest = null;
+    for (const person of transportPeople) {
+      let customerIds = [];
+      let assignments = {};
+      try { customerIds = JSON.parse(person.customerIdsJson || '[]'); } catch (_error) {}
+      try { assignments = JSON.parse(person.assignmentStatusJson || '{}'); } catch (_error) {}
+      if (!Array.isArray(customerIds) || !customerIds.map(Number).includes(Number(enrollment.contactId))) continue;
+      const assignment = assignments?.[`customer-${enrollment.contactId}`];
+      const status = typeof assignment?.status === 'string' ? assignment.status.trim() : '';
+      if (!status) continue;
+      const updatedAt = new Date(assignment.updatedAt || person.updatedAt || 0);
+      if (!latest || updatedAt > latest.updatedAt) latest = { status, updatedAt };
+    }
+    return String(latest?.status || '') === String(condition.value || '');
+  }
+  if (type === 'site_visit_status') {
+    if (enrollment.sequence?.tenant?.vertical !== 'generic') return false;
+    const visit = await prisma.task.findFirst({
+      where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId, type: 'Site Visit', deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { status: true },
+    });
+    return String(visit?.status || '') === String(condition.value || '');
+  }
+  if (type === 'invoice_status') {
+    const invoice = await prisma.invoice.findFirst({ where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId }, orderBy: { issuedDate: 'desc' }, select: { status: true } });
+    return String(invoice?.status || '') === String(condition.value || '');
+  }
+  if (type === 'estimate_status') {
+    const estimate = await prisma.estimate.findFirst({ where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId }, orderBy: { createdAt: 'desc' }, select: { status: true } });
+    return String(estimate?.status || '') === String(condition.value || '');
+  }
+  if (type === 'contract_status') {
+    const contract = await prisma.contract.findFirst({ where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId }, orderBy: { updatedAt: 'desc' }, select: { status: true } });
+    return String(contract?.status || '') === String(condition.value || '');
+  }
+  return false;
+}
+
+async function executeReceiverAction(action, enrollment, ctx) {
+  const type = action?.type || 'send_email';
+  if (type === 'stop_sequence') return { stop: true };
+  if (type === 'wait') {
+    const minutes = Math.max(Number(action.amount || 0) * ({ minutes: 1, hours: 60, days: 1440 }[action.unit] || 1), 0);
+    return { nextRun: new Date(Date.now() + minutes * 60_000) };
+  }
+  if (type === 'change_contact_status') {
+    if (action.value) {
+      await prisma.contact.update({ where: { id: enrollment.contactId }, data: { status: String(action.value) } });
+    }
+    return {};
+  }
+  if (type !== 'send_email' || !action.emailTemplateId) return {};
+
+  const template = await prisma.emailTemplate.findFirst({ where: { id: Number(action.emailTemplateId), tenantId: enrollment.tenantId } });
+  if (!template || !enrollment.contact?.email) return {};
+  const subject = renderTemplate(normalizeGenericTemplatePlaceholders(template.subject || 'Follow-up'), ctx);
+  const body = renderTemplate(normalizeGenericTemplatePlaceholders(template.body || ''), ctx);
+  const outbound = await prisma.emailMessage.create({
+    data: { subject, body, from: FROM_EMAIL, to: enrollment.contact.email, direction: 'OUTBOUND', contactId: enrollment.contact.id, tenantId: enrollment.tenantId, threadId: `seq-${enrollment.id}`, read: true },
+  });
+  const trackedBody = await addGenericEmailTracking(outbound.id, body, enrollment.tenantId);
+  const delivery = await sendEmail({ tenantId: enrollment.tenantId, to: enrollment.contact.email, subject, text: body, html: trackedBody });
+  if (!delivery.sent && String(delivery.reason || '').startsWith('sendgrid_')) {
+    await prisma.emailTracking.updateMany({ where: { emailId: outbound.id, type: 'open' }, data: { type: 'bounce' } }).catch(() => {});
+  }
+  return {};
+}
+
 // ── New step-list dispatcher ──────────────────────────────────────────
 async function processStep(step, enrollment) {
   const ctx = buildContextForEnrollment(enrollment);
+  if (enrollment.sequence?.tenant?.vertical === 'generic') {
+    ctx.payment = await prisma.payment.findFirst({
+      where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId },
+      orderBy: { createdAt: 'desc' },
+    }) || {};
+  }
 
   if (step.kind === 'email') {
     // Render template if linked, otherwise fall back to a sane subject so
     // we never silently drop the step.
+    const isGenericSequence = enrollment.sequence?.tenant?.vertical === 'generic';
     let subject = `Sequence: step ${step.position}`;
     let body = '';
     if (step.emailTemplate) {
-      subject = renderTemplate(step.emailTemplate.subject || subject, ctx);
-      body = renderTemplate(step.emailTemplate.body || '', ctx);
+      const templateSubject = isGenericSequence
+        ? normalizeGenericTemplatePlaceholders(step.emailTemplate.subject || subject)
+        : step.emailTemplate.subject || subject;
+      const templateBody = isGenericSequence
+        ? normalizeGenericTemplatePlaceholders(step.emailTemplate.body || '')
+        : step.emailTemplate.body || '';
+      subject = renderTemplate(templateSubject, ctx);
+      body = renderTemplate(templateBody, ctx);
     }
     const to = enrollment.contact?.email;
     if (!to) {
@@ -386,10 +714,17 @@ async function processStep(step, enrollment) {
     const attachments = await resolveStepAttachments(step, enrollment, 'email');
     const travelProvider = await resolveSequenceTravelProvider(enrollment.tenantId);
 
+    const firstSequenceEmail = isGenericSequence
+      ? !(await prisma.emailMessage.findFirst({
+        where: { tenantId: enrollment.tenantId, threadId: `seq-${enrollment.id}`, direction: 'OUTBOUND' },
+        select: { id: true },
+      }))
+      : false;
+
     // Persist the outbound row (engine source of truth) before attempting
     // delivery. threadId convention is `seq-<enrollmentId>` so #7 reply
     // detection can recover the enrollment from an inbound reply.
-    await prisma.emailMessage.create({
+    const outboundMessage = await prisma.emailMessage.create({
       data: {
         subject,
         body,
@@ -402,9 +737,57 @@ async function processStep(step, enrollment) {
         read: true,
       },
     });
+    let trackedBody = body;
+    if (isGenericSequence) trackedBody = await addGenericEmailTracking(outboundMessage.id, body, enrollment.tenantId);
 
-    // Best-effort delivery. Attachments threaded through for SendGrid MIME.
-    if (travelProvider?.apiKey || SENDGRID_API_KEY) {
+    // EmailMessage is the transport log; Generic CRM also exposes automated
+    // emails in the contact Activity timeline. Travel/Wellness sequence
+    // behavior is unchanged.
+    let tenant = null;
+    try {
+      tenant = await prisma.tenant.findUnique({ where: { id: enrollment.tenantId }, select: { vertical: true } });
+    } catch (_error) {
+      // Older/unit-test Prisma surfaces may not expose Tenant lookup. Activity
+      // logging is additive, so preserve the existing send path if unavailable.
+    }
+    if (tenant?.vertical === 'generic') {
+      await prisma.activity.create({
+        data: {
+          type: 'Email',
+          description: `Automated campaign email: ${subject}`,
+          contactId: enrollment.contact.id,
+          userId: null,
+          tenantId: enrollment.tenantId,
+        },
+      });
+    }
+
+    if (tenant?.vertical === 'generic') {
+      // Generic CRM uses the shared sender and awaits the provider response so
+      // delivery failures are visible in backend logs instead of being lost.
+      const delivery = await sendEmail({
+        tenantId: enrollment.tenantId,
+        to,
+        subject,
+        text: body,
+        html: trackedBody,
+        attachments: attachments
+          .filter(attachment => attachment?.kind === 'flyer' && Buffer.isBuffer(attachment.buffer))
+          .map(attachment => ({
+            content: attachment.buffer.toString('base64'),
+            filename: attachment.filename,
+            type: attachment.mimeType,
+          })),
+      });
+      if (delivery.sent) await recordGenericCampaignDelivery(enrollment, firstSequenceEmail);
+      if (!delivery.sent && String(delivery.reason || '').startsWith('sendgrid_')) {
+        console.error(`[GenericCampaign] Email delivery failed for ${to}: ${delivery.reason || 'unknown_error'}`);
+        if (outboundMessage?.id) {
+          await prisma.emailTracking.updateMany({ where: { emailId: outboundMessage.id, type: 'open' }, data: { type: 'bounce' } }).catch(() => {});
+        }
+      }
+    } else if (travelProvider?.apiKey || SENDGRID_API_KEY) {
+      // Preserve the existing Travel/Wellness sequence delivery behavior.
       trySendGridSend(to, subject, body, attachments, travelProvider).catch(() => {});
     }
     return { advance: true };
@@ -520,7 +903,31 @@ async function processStep(step, enrollment) {
     return { advance: true };
   }
 
+  if (step.kind === 'stop' && enrollment.sequence?.tenant?.vertical === 'generic') {
+    return { stop: true };
+  }
+
   if (step.kind === 'condition') {
+    const receiverCondition = parseReceiverCondition(step.conditionJson);
+    if (receiverCondition && enrollment.sequence?.tenant?.vertical === 'generic') {
+      const checks = [];
+      for (const condition of receiverCondition.conditions) checks.push(await receiverConditionMatches(condition, enrollment));
+      const matched = receiverCondition.logic === 'ANY' ? checks.some(Boolean) : checks.every(Boolean);
+      const branch = matched ? receiverCondition.yesAction : receiverCondition.noAction;
+      const actionResult = await executeReceiverAction(branch, enrollment, ctx);
+      if (actionResult.stop) return { stop: true };
+      const fallback = step.position + 1;
+      // Generic v2 conditions own their YES/NO action. Do not fall through
+      // into a standalone email step or honor stale legacy branch targets,
+      // otherwise the selected branch can send a second message as well.
+      if (branch?.type === 'send_email') {
+        return { complete: true };
+      }
+      const target = matched
+        ? (step.trueNextPosition != null ? step.trueNextPosition : fallback)
+        : (step.falseNextPosition != null ? step.falseNextPosition : fallback);
+      return { advance: false, jumpTo: target, nextRun: actionResult.nextRun || null };
+    }
     const result = evaluateCondition(step.conditionJson, ctx);
     const fallback = step.position + 1;
     const target = result
@@ -552,10 +959,23 @@ async function processStepListEnrollment(enrollment, steps) {
 
     const result = await processStep(step, enrollment);
 
+    if (result.stop) {
+      await prisma.sequenceEnrollment.update({ where: { id: enrollment.id }, data: { status: 'Paused', currentStep: cursor, nextRun: null } });
+      return;
+    }
+
+    if (result.complete) {
+      await prisma.sequenceEnrollment.update({
+        where: { id: enrollment.id },
+        data: { status: 'Completed', currentStep: cursor + 1, nextRun: null },
+      });
+      return;
+    }
+
     if (result.nextRun) {
       // Wait step parked the enrollment. Advance the cursor (so the next
       // tick fires the step AFTER the wait), persist nextRun, exit.
-      const advanced = result.advance ? cursor + 1 : cursor;
+      const advanced = result.advance ? cursor + 1 : (result.jumpTo != null ? result.jumpTo : cursor);
       await prisma.sequenceEnrollment.update({
         where: { id: enrollment.id },
         data: { currentStep: advanced, nextRun: result.nextRun },
@@ -886,6 +1306,7 @@ async function processInboundReplies() {
       const enrollmentId = parseInt(m[1], 10);
       const enrollment = await prisma.sequenceEnrollment.findUnique({
         where: { id: enrollmentId },
+        include: { sequence: { include: { tenant: { select: { vertical: true } } } } },
       });
       if (!enrollment) {
         await prisma.emailMessage.update({
@@ -906,7 +1327,8 @@ async function processInboundReplies() {
           where: { sequenceId: enrollment.sequenceId, position: cursor },
         });
         if (step) {
-          shouldPause = !!step.pauseOnReply;
+          const isGenericReceiverCondition = enrollment.sequence?.tenant?.vertical === 'generic' && parseReceiverCondition(step.conditionJson);
+          shouldPause = isGenericReceiverCondition ? false : !!step.pauseOnReply;
         } else {
           shouldPause = true; // legacy canvas: default-pause on reply.
         }
@@ -964,8 +1386,19 @@ const tickSequenceEngine = async () => {
     const enrollments = await prisma.sequenceEnrollment.findMany({
       where: { id: { in: ids }, lockedBy: WORKER_ID },
       include: {
-        sequence: { include: { steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
-        contact: true,
+        sequence: { include: { tenant: { select: { vertical: true } }, campaigns: { select: { id: true, status: true, scheduleFilters: true, sequenceId: true }, orderBy: { createdAt: 'desc' } }, steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
+        contact: { include: {
+          leadCustomFieldValues: { include: { field: { select: { fieldKey: true } } } },
+          deals: { orderBy: { createdAt: 'desc' }, take: 1 },
+          invoices: { orderBy: { issuedDate: 'desc' }, take: 1 },
+          tasks: { orderBy: { createdAt: 'desc' }, take: 1 },
+          activities: { orderBy: { createdAt: 'desc' }, take: 1 },
+          expenses: { orderBy: { createdAt: 'desc' }, take: 1 },
+          contracts: { orderBy: { createdAt: 'desc' }, take: 1 },
+          estimates: { orderBy: { createdAt: 'desc' }, take: 1 },
+          projects: { orderBy: { createdAt: 'desc' }, take: 1 },
+          customerPickups: { orderBy: { updatedAt: 'desc' }, take: 1 },
+        } },
       },
     });
 
@@ -974,6 +1407,13 @@ const tickSequenceEngine = async () => {
         const { sequence } = enrollment;
         if (!sequence.isActive) {
           // Unlock and skip inactive sequences.
+          await prisma.sequenceEnrollment.update({
+            where: { id: enrollment.id },
+            data: { lockedAt: null, lockedBy: null },
+          });
+          continue;
+        }
+        if (sequence.tenant?.vertical === 'generic' && !genericCampaignAllowsDispatch(sequence)) {
           await prisma.sequenceEnrollment.update({
             where: { id: enrollment.id },
             data: { lockedAt: null, lockedBy: null },
@@ -1024,10 +1464,13 @@ module.exports = {
   processStepListEnrollment, // #616: exported for wellness trigger unit tests
   processNodeLegacy, // S88: exported for WhatsApp legacy-branch unit tests
   resolveStepAttachments, // S19: exported for flyer-attachment unit tests
+  receiverConditionMatches,
   // S19 + S87 — CJS self-mocking seams (cron-learnings 2026-05-24 ~01:43 UTC):
   // tests reassign these to vi.fn() to intercept the SUT's calls without
   // booting pdfkit / prisma.auditLog / shortener providers.
   renderFlyerSafe,
   writeAuditSafe,
   shortenUrlSafe, // S87
+  classifyGenericEmailOpen,
+  isLikelyHumanGenericEmailOpen,
 };

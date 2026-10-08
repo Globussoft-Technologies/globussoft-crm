@@ -142,13 +142,20 @@ import {
   processStepListEnrollment,
   processInboundReplies,
   tickSequenceEngine,
+  receiverConditionMatches,
+  classifyGenericEmailOpen,
+  isLikelyHumanGenericEmailOpen,
 } from '../../cron/sequenceEngine.js';
 
 beforeAll(() => {
   prisma.emailMessage = {
     create: vi.fn(),
     findMany: vi.fn(),
+    findFirst: vi.fn(),
     update: vi.fn(),
+  };
+  prisma.emailTracking = {
+    findMany: vi.fn(),
   };
   prisma.smsMessage = {
     create: vi.fn(),
@@ -178,13 +185,21 @@ beforeAll(() => {
   prisma.tenant = {
     findUnique: vi.fn(),
   };
+  prisma.transportPerson = {
+    findMany: vi.fn(),
+  };
+  prisma.task = {
+    findFirst: vi.fn(),
+  };
 });
 
 let originalSendgridKey;
 beforeEach(() => {
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
+  prisma.emailMessage.findFirst.mockReset();
   prisma.emailMessage.update.mockReset();
+  prisma.emailTracking.findMany.mockReset();
   prisma.smsMessage.create.mockReset();
   prisma.whatsAppMessage.create.mockReset();
   prisma.sequenceEnrollment.findMany.mockReset();
@@ -195,7 +210,9 @@ beforeEach(() => {
 
   prisma.emailMessage.create.mockResolvedValue({ id: 'em-1' });
   prisma.emailMessage.findMany.mockResolvedValue([]);
+  prisma.emailMessage.findFirst.mockResolvedValue(null);
   prisma.emailMessage.update.mockResolvedValue({});
+  prisma.emailTracking.findMany.mockResolvedValue([]);
   prisma.smsMessage.create.mockResolvedValue({ id: 'sms-1' });
   prisma.whatsAppMessage.create.mockResolvedValue({ id: 'wa-1' });
   prisma.sequenceEnrollment.findMany.mockResolvedValue([]);
@@ -205,6 +222,8 @@ beforeEach(() => {
   prisma.sequenceStep.findFirst.mockResolvedValue(null);
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  prisma.transportPerson.findMany.mockReset().mockResolvedValue([]);
+  prisma.task.findFirst.mockReset().mockResolvedValue(null);
   resolveSendGridConfig.mockReset();
 
   // The engine reads SENDGRID_API_KEY at module top and triggers a
@@ -265,6 +284,70 @@ function stepWith(overrides = {}) {
     ...overrides,
   };
 }
+
+describe('cron/sequenceEngine — Generic CRM open classification', () => {
+  test('counts a normal browser user-agent as likely human', () => {
+    const tracking = { userAgent: 'Mozilla/5.0 AppleWebKit/537.36 Chrome/124.0 Safari/537.36', ipAddress: '203.0.113.10' };
+    expect(classifyGenericEmailOpen(tracking)).toBe('likely_human');
+    expect(isLikelyHumanGenericEmailOpen(tracking)).toBe(true);
+  });
+
+  test('ignores an obvious scanner user-agent', () => {
+    const tracking = { userAgent: 'GoogleImageProxy', ipAddress: '203.0.113.11' };
+    expect(classifyGenericEmailOpen(tracking)).toBe('automated');
+    expect(isLikelyHumanGenericEmailOpen(tracking)).toBe(false);
+  });
+
+  test('does not count missing or ambiguous user-agent as a human open', () => {
+    expect(classifyGenericEmailOpen({ userAgent: null })).toBe('unknown');
+    expect(isLikelyHumanGenericEmailOpen({ userAgent: 'EmailSecurityGateway/1.0' })).toBe(false);
+  });
+
+});
+
+describe('cron/sequenceEngine — Generic pickup and site-visit receiver conditions', () => {
+  const genericEnrollment = {
+    id: 90,
+    tenantId: 12,
+    contactId: 44,
+    sequence: { tenant: { vertical: 'generic' } },
+  };
+
+  test('matches only a persisted pickup booking assignment status', async () => {
+    prisma.transportPerson.findMany.mockResolvedValueOnce([
+      {
+        customerIdsJson: JSON.stringify([44]),
+        assignmentStatusJson: JSON.stringify({
+          'customer-44': { status: 'CONFIRMED', updatedAt: '2026-10-08T10:00:00.000Z' },
+        }),
+        updatedAt: new Date('2026-10-08T10:00:00.000Z'),
+      },
+    ]);
+
+    await expect(receiverConditionMatches({ type: 'pickup_booking_status', value: 'CONFIRMED' }, genericEnrollment)).resolves.toBe(true);
+
+    prisma.transportPerson.findMany.mockResolvedValueOnce([]);
+    await expect(receiverConditionMatches({ type: 'pickup_booking_status', value: 'ASSIGNED' }, genericEnrollment)).resolves.toBe(false);
+  });
+
+  test('matches the latest persisted Site Visit task status', async () => {
+    prisma.task.findFirst.mockResolvedValueOnce({ status: 'Completed' });
+
+    await expect(receiverConditionMatches({ type: 'site_visit_status', value: 'Completed' }, genericEnrollment)).resolves.toBe(true);
+    expect(prisma.task.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 12, contactId: 44, type: 'Site Visit', deletedAt: null }),
+    }));
+  });
+
+  test('does not evaluate these Generic-only categories for another vertical', async () => {
+    const travelEnrollment = { ...genericEnrollment, sequence: { tenant: { vertical: 'travel' } } };
+
+    await expect(receiverConditionMatches({ type: 'pickup_booking_status', value: 'CONFIRMED' }, travelEnrollment)).resolves.toBe(false);
+    await expect(receiverConditionMatches({ type: 'site_visit_status', value: 'Completed' }, travelEnrollment)).resolves.toBe(false);
+    expect(prisma.transportPerson.findMany).not.toHaveBeenCalled();
+    expect(prisma.task.findFirst).not.toHaveBeenCalled();
+  });
+});
 
 // ─── processStep — email branch ────────────────────────────────────────────
 

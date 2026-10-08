@@ -2590,6 +2590,21 @@ export default function App() {
                           </RoleGuard>
                         }
                       />
+                      <Route
+                        path="marketing-campaign"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard
+                              allow={["ADMIN", "MANAGER"]}
+                              feature="Marketing Campaign"
+                              roles="manager (or admin)"
+                              lockedInPlace
+                            >
+                              <Marketing />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
                       {/* Generic CRM reports  vertical-gated so travel/wellness
                         tenants use their own /travel/reports | /wellness/reports
                         (the generic deal-stage chart + "Globussoft CRM" PDF don't

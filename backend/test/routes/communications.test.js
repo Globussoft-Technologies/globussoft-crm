@@ -71,6 +71,7 @@ import prisma from '../../lib/prisma.js';
 // `require('../lib/prisma')` resolves at import time.
 prisma.emailMessage = {
   create: vi.fn(),
+  findFirst: vi.fn(),
   findMany: vi.fn(),
   count: vi.fn(),
   updateMany: vi.fn(),
@@ -79,11 +80,18 @@ prisma.emailTracking = {
   create: vi.fn(),
   update: vi.fn(),
   updateMany: vi.fn(),
+  findFirst: vi.fn(),
   findMany: vi.fn(),
   findUnique: vi.fn(),
 };
 prisma.activity = {
   create: vi.fn(),
+};
+prisma.sequenceEnrollment = {
+  findFirst: vi.fn(),
+};
+prisma.campaign = {
+  updateMany: vi.fn(),
 };
 // #611: send-email reads tenant.emailRetention to decide whether to persist.
 // Stub the surface so the route doesn't try to hit a real DB.
@@ -128,9 +136,16 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ emailRetention: true, vertical: 'generic' });
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
+  prisma.emailMessage.findFirst.mockReset();
   prisma.emailMessage.count.mockReset().mockResolvedValue(0);
   prisma.emailMessage.updateMany.mockReset();
   prisma.emailTracking.create.mockReset();
+  prisma.emailTracking.update.mockReset();
+  prisma.emailTracking.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.emailTracking.findFirst.mockReset().mockResolvedValue(null);
+  prisma.emailTracking.findUnique.mockReset().mockResolvedValue(null);
+  prisma.sequenceEnrollment.findFirst.mockReset();
+  prisma.campaign.updateMany.mockReset();
   prisma.activity.create.mockReset();
   // Default: every create resolves with a stub row.
   prisma.emailMessage.create.mockImplementation(({ data }) =>
@@ -587,5 +602,70 @@ describe('POST /inbox/:id/read - persist unread-dot clearing', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('Generic campaign email tracking', () => {
+  const campaignEnrollment = {
+    id: 22,
+    sequenceId: 12,
+    tenantId: 1,
+    contact: { id: 8, status: 'Lead' },
+    sequence: {
+      tenant: { vertical: 'generic' },
+      campaigns: [{
+        id: 31,
+        tenantId: 1,
+        sequenceId: 12,
+        status: 'Active',
+        scheduleFilters: JSON.stringify({
+          trigger: [{ field: 'contact.status', op: 'eq', value: 'Lead' }],
+        }),
+      }],
+    },
+  };
+
+  test('increments the Generic campaign open count once for its first delivered sequence email', async () => {
+    prisma.emailTracking.findUnique.mockResolvedValue({
+      trackingId: 'open-track', emailId: 55, tenantId: 1, openedAt: null,
+    });
+    prisma.emailTracking.updateMany.mockResolvedValue({ count: 1 });
+    prisma.emailMessage.findFirst
+      .mockResolvedValueOnce({ id: 55, threadId: 'seq-22' })
+      .mockResolvedValueOnce({ id: 55 });
+    prisma.sequenceEnrollment.findFirst.mockResolvedValue(campaignEnrollment);
+    prisma.campaign.updateMany.mockResolvedValue({ count: 1 });
+
+    const res = await request(makeApp()).get('/api/communications/track/open-track/open.gif');
+
+    expect(res.status).toBe(200);
+    expect(prisma.campaign.updateMany).toHaveBeenCalledWith({
+      where: { id: 31, tenantId: 1, sequenceId: 12 },
+      data: { opened: { increment: 1 } },
+    });
+  });
+
+  test('increments the Generic campaign click count once for the first clicked link', async () => {
+    prisma.emailTracking.findUnique.mockResolvedValue({
+      trackingId: 'click-track', emailId: 55, tenantId: 1, clickedAt: null,
+    });
+    prisma.emailTracking.findFirst.mockResolvedValue(null);
+    prisma.emailTracking.updateMany.mockResolvedValue({ count: 1 });
+    prisma.emailMessage.findFirst
+      .mockResolvedValueOnce({ id: 55, threadId: 'seq-22' })
+      .mockResolvedValueOnce({ id: 55 });
+    prisma.sequenceEnrollment.findFirst.mockResolvedValue(campaignEnrollment);
+    prisma.campaign.updateMany.mockResolvedValue({ count: 1 });
+
+    const res = await request(makeApp())
+      .get('/api/communications/track/click-track/click')
+      .query({ url: 'https://example.com' })
+      .redirects(0);
+
+    expect(res.status).toBe(302);
+    expect(prisma.campaign.updateMany).toHaveBeenCalledWith({
+      where: { id: 31, tenantId: 1, sequenceId: 12 },
+      data: { clicked: { increment: 1 } },
+    });
   });
 });

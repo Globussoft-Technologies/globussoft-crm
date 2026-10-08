@@ -3,8 +3,10 @@ const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendSms } = require("../services/smsProvider");
+const { sendText: sendWhatsAppText } = require("../services/whatsappProvider");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
+const { decryptCredential } = require("../lib/credentialMasking");
 // v3.4.11: sanitization adopted from the v3.4.10 audit. Campaign.name is
 // rendered in the marketing admin UI cards; Campaign.scheduleFilters is
 // a JSON blob (String? @db.Text) re-rendered in the scheduled-campaigns
@@ -14,6 +16,104 @@ const { getSetting, KEYS } = require("../lib/tenantSettings");
 const { sanitizeText, sanitizeHtmlBody, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 const router = express.Router();
+
+function parseStoredStatusObject(value) {
+  if (!value) return {};
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function pickupBookingStatusOptions(transportPeople) {
+  const statuses = new Set();
+  for (const person of transportPeople) {
+    const assignments = parseStoredStatusObject(person.assignmentStatusJson);
+    for (const [assignmentKey, assignment] of Object.entries(assignments)) {
+      if (!assignmentKey.startsWith("customer-")) continue;
+      const status = typeof assignment?.status === "string" ? assignment.status.trim() : "";
+      if (status) statuses.add(status);
+    }
+  }
+  return [...statuses].sort().map(value => ({ value, label: value }));
+}
+
+// Generic CRM condition metadata is isolated from Travel and Wellness.
+router.get("/generic-condition-metadata", verifyToken, async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+    if (tenant?.vertical !== "generic") {
+      return res.status(404).json({ error: "Generic CRM metadata is not available for this vertical", code: "GENERIC_ONLY" });
+    }
+    const [rules, contacts, deals, payments, bookings, invoices, estimates, contracts, transportPeople, siteVisits] = await Promise.all([
+      prisma.automationRule.findMany({ where: { tenantId: req.user.tenantId }, select: { triggerType: true }, take: 500 }).catch(() => []),
+      prisma.contact.findMany({ where: { tenantId: req.user.tenantId }, select: { status: true }, distinct: ["status"], take: 100 }),
+      prisma.deal.findMany({ where: { tenantId: req.user.tenantId }, select: { stage: true }, distinct: ["stage"], take: 100 }),
+      prisma.payment.findMany({ where: { tenantId: req.user.tenantId }, select: { status: true }, distinct: ["status"], take: 100 }).catch(() => []),
+      prisma.booking.findMany({ where: { tenantId: req.user.tenantId }, select: { status: true }, distinct: ["status"], take: 100 }).catch(() => []),
+      prisma.invoice.findMany({ where: { tenantId: req.user.tenantId }, select: { status: true }, distinct: ["status"], take: 100 }).catch(() => []),
+      prisma.estimate.findMany({ where: { tenantId: req.user.tenantId }, select: { status: true }, distinct: ["status"], take: 100 }).catch(() => []),
+      prisma.contract.findMany({ where: { tenantId: req.user.tenantId }, select: { status: true }, distinct: ["status"], take: 100 }).catch(() => []),
+      prisma.transportPerson.findMany({ where: { tenantId: req.user.tenantId }, select: { assignmentStatusJson: true }, take: 500 }).catch(() => []),
+      prisma.task.findMany({ where: { tenantId: req.user.tenantId, type: "Site Visit", deletedAt: null }, select: { status: true }, distinct: ["status"], take: 100 }).catch(() => []),
+    ]);
+    const eventNames = [...new Set(rules.map(rule => rule.triggerType).filter(Boolean))].sort();
+    const statusOptions = contacts.map(item => item.status).filter(Boolean).sort().map(value => ({ value, label: value }));
+    const dealStageOptions = deals.map(item => item.stage).filter(Boolean).sort().map(value => ({ value, label: value }));
+    const toStatusOptions = rows => rows.map(item => item.status).filter(Boolean).sort().map(value => ({ value, label: value }));
+    const paymentStatusOptions = toStatusOptions(payments);
+    const bookingStatusOptions = toStatusOptions(bookings);
+    const invoiceStatusOptions = toStatusOptions(invoices);
+    const estimateStatusOptions = toStatusOptions(estimates);
+    const contractStatusOptions = toStatusOptions(contracts);
+    const pickupBookingStatusOptionsForTenant = pickupBookingStatusOptions(transportPeople);
+    const siteVisitStatusOptions = toStatusOptions(siteVisits);
+    return res.json({
+      conditionTypes: [
+        { value: "email_activity", label: "Email Activity", options: [
+          { value: "opened", label: "Email Opened" },
+          { value: "not_opened", label: "Email Not Opened" },
+          { value: "clicked", label: "Link Clicked" },
+          { value: "not_clicked", label: "Link Not Clicked" },
+          { value: "replied", label: "Replied" },
+          { value: "no_reply", label: "No Reply" },
+          { value: "bounced", label: "Email Bounced" },
+          { value: "unsubscribed", label: "Unsubscribed" },
+        ] },
+        { value: "contact_status", label: "Lead/Contact Status Changed", options: statusOptions },
+        { value: "deal_stage", label: "Deal Stage Changed", options: dealStageOptions },
+        { value: "payment_status", label: "Payment Status", options: paymentStatusOptions },
+        { value: "booking_status", label: "Booking Status", options: bookingStatusOptions },
+        { value: "pickup_booking_status", label: "Pickup Booking Status", options: pickupBookingStatusOptionsForTenant },
+        { value: "site_visit_status", label: "Site Visit Status", options: siteVisitStatusOptions },
+        { value: "invoice_status", label: "Invoice Status", options: invoiceStatusOptions },
+        { value: "estimate_status", label: "Proposal/Estimate Status", options: estimateStatusOptions },
+        { value: "contract_status", label: "Contract Status", options: contractStatusOptions },
+      ],
+      actions: [
+        { value: "send_email", label: "Send Email" },
+        { value: "wait", label: "Wait" },
+        { value: "stop_sequence", label: "Stop Sequence" },
+        { value: "change_contact_status", label: "Change Lead/Contact Status" },
+      ],
+      statusOptions,
+      dealStageOptions,
+      fields: [
+      { field: "email.activity", label: "Email Activity", kind: "event", options: [
+        { value: "sent", label: "Email Sent" }, { value: "delivered", label: "Email Delivered" },
+        { value: "opened", label: "Email Opened" }, { value: "clicked", label: "Email Clicked" },
+        { value: "replied", label: "Email Replied" }, { value: "bounced", label: "Email Bounced" },
+      ] },
+      { field: "external.event", label: "External Event", kind: "event", options: eventNames.map(value => ({ value, label: value })) },
+      ],
+    });
+  } catch (error) {
+    console.error("[marketing] generic condition metadata failed:", error.message);
+    return res.status(500).json({ error: "Failed to load Generic CRM condition metadata", code: "GENERIC_CONDITION_METADATA_FAILED" });
+  }
+});
 
 // ── Mailgun email helper ──────────────────────────────────────────
 const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
@@ -182,6 +282,23 @@ async function enrollRecipientsInSequence(campaign, contacts) {
 
 async function sendCampaign(campaign, io) {
   const tenantId = campaign.tenantId;
+  let isGenericWhatsApp = false;
+  let whatsappConfig = null;
+  if (campaign.channel === "WHATSAPP") {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    isGenericWhatsApp = tenant?.vertical === "generic";
+  }
+  if (isGenericWhatsApp) {
+    whatsappConfig = await prisma.whatsAppConfig.findFirst({
+      where: { tenantId, provider: "meta_cloud", isActive: true },
+    });
+    if (!whatsappConfig?.phoneNumberId || !whatsappConfig?.accessToken) {
+      throw new Error("No active WhatsApp provider configured for this Generic CRM tenant");
+    }
+  }
   let filters = null;
   // audienceFilter stored in budget field as JSON won't work — use campaign._audienceFilter if passed
   if (campaign._audienceFilter) {
@@ -193,7 +310,7 @@ async function sendCampaign(campaign, io) {
   // For EMAIL campaigns, only contacts with email; for SMS, only those with phone
   if (campaign.channel === "EMAIL") {
     contactWhere.email = { not: "" };
-  } else if (campaign.channel === "SMS") {
+  } else if (campaign.channel === "SMS" || isGenericWhatsApp) {
     contactWhere.phone = { not: null };
   }
 
@@ -286,6 +403,29 @@ async function sendCampaign(campaign, io) {
           } catch (smsErr) {
             console.log(`[CampaignEngine] SMS provider not configured for ${contact.phone}:`, smsErr.message);
           }
+          sentCount++;
+        } else if (isGenericWhatsApp) {
+          const to = String(contact.phone || "").replace(/[^0-9+]/g, "");
+          if (!to) throw new Error("Contact has no valid phone number");
+          const result = await sendWhatsAppText({
+            to,
+            body: `Campaign: ${campaign.name}`,
+            phoneNumberId: whatsappConfig.phoneNumberId,
+            accessToken: decryptCredential(whatsappConfig.accessToken),
+          });
+          if (!result?.success) throw new Error(result?.error || "WhatsApp provider rejected the message");
+          await prisma.whatsAppMessage.create({
+            data: {
+              to,
+              from: whatsappConfig.phoneNumberId,
+              body: `Campaign: ${campaign.name}`,
+              direction: "OUTBOUND",
+              status: "SENT",
+              providerMsgId: result.providerMsgId || null,
+              contactId: contact.id,
+              tenantId,
+            },
+          });
           sentCount++;
         }
       } catch (err) {
@@ -807,6 +947,7 @@ router.post("/submit", async (req, res) => {
     let contact = await prisma.contact.findFirst({
       where: { email: contactEmail, tenantId: FORM_TENANT_ID, deletedAt: null },
     });
+    let createdNewContact = false;
     if (contact) {
       contact = await prisma.contact.update({
         where: { id: contact.id },
@@ -825,6 +966,29 @@ router.post("/submit", async (req, res) => {
           tenantId: FORM_TENANT_ID,
         },
       });
+      createdNewContact = true;
+    }
+
+    // This legacy embedded form defaults to tenant 1. Keep its existing
+    // behaviour intact, but only feed a new lead into Generic campaigns when
+    // that tenant is actually Generic CRM.
+    if (createdNewContact) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: FORM_TENANT_ID },
+        select: { vertical: true },
+      });
+      if (tenant?.vertical === "generic") {
+        try {
+          await require("../lib/eventBus").emitEvent(
+            "contact.created",
+            { contactId: contact.id, userId: null },
+            FORM_TENANT_ID,
+            req.io,
+          );
+        } catch (eventError) {
+          console.error("[marketing/submit] Generic contact.created event failed:", eventError.message);
+        }
+      }
     }
 
     const deal = await prisma.deal.create({

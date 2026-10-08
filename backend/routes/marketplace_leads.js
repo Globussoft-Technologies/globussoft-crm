@@ -119,6 +119,19 @@ router.post("/import/:id", verifyToken, async (req, res) => {
       },
     });
 
+    if (req.user.vertical === "generic") {
+      try {
+        await require("../lib/eventBus").emitEvent(
+          "contact.created",
+          { contactId: contact.id, userId: req.user.userId },
+          req.user.tenantId,
+          req.io,
+        );
+      } catch (eventError) {
+        console.error("[MarketplaceLeads] Generic contact.created event failed:", eventError.message);
+      }
+    }
+
     await prisma.deal.create({
       data: {
         title: `${lead.product || "Inquiry"} — ${lead.company || lead.name || "Unknown"}`,
@@ -192,6 +205,19 @@ router.post("/import-bulk", verifyToken, async (req, res) => {
             tenantId: req.user.tenantId,
           },
         });
+
+        if (req.user.vertical === "generic") {
+          try {
+            await require("../lib/eventBus").emitEvent(
+              "contact.created",
+              { contactId: contact.id, userId: req.user.userId },
+              req.user.tenantId,
+              req.io,
+            );
+          } catch (eventError) {
+            console.error("[MarketplaceLeads] Generic bulk contact.created event failed:", eventError.message);
+          }
+        }
 
         await prisma.deal.create({
           data: {

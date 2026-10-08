@@ -38,7 +38,7 @@ const {
   setCsvDownloadHeaders,
 } = require("../lib/csvHelpers");
 const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
-const { normalizePhoneValue } = require("../lib/phoneFormatting");
+const { normalizePhoneValue, normalizeGenericCrmPhone } = require("../lib/phoneFormatting");
 const { hardDeleteContact } = require("../lib/contactHardDelete");
 
 const router = express.Router();
@@ -357,9 +357,12 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           continue;
         }
 
-        const phone = normalizePhoneValue(
+        const importedPhone = normalizePhoneValue(
           getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "sms_number", "smsNumber"]),
         );
+        const phone = req.user?.vertical === "generic"
+          ? normalizeGenericCrmPhone(importedPhone)
+          : importedPhone;
         if (isGeneric && !name) {
           errors.push({ rowNumber, reason: "missing name" });
           skipped++;
@@ -431,6 +434,23 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           existing = await prisma.contact.create({ data: { ...createData, tenantId: req.user.tenantId }, select: { id: true } });
         }
         await writeImportedCustomFields(existing.id, req.user.tenantId, customFields, customDefinitions);
+        // The Generic campaign engine is driven by the existing contact.created
+        // event. CSV imports previously persisted a new contact without
+        // emitting that event, so configured lead-joined campaigns never saw
+        // these leads. Updates deliberately remain silent to preserve the
+        // event's create-only semantics and avoid duplicate enrollments.
+        if (!wasExisting && req.user.vertical === "generic") {
+          try {
+            await require("../lib/eventBus").emitEvent(
+              "contact.created",
+              { contactId: existing.id, userId: req.user.userId },
+              req.user.tenantId,
+              req.io,
+            );
+          } catch (eventError) {
+            console.error("[csv_io] Generic contact.created event failed:", eventError.message);
+          }
+        }
         importedContacts.push({ id: existing.id, name: createData.name, email, phone: phone || "", company, title, status, source });
         if (wasExisting) updated++;
         else imported++;

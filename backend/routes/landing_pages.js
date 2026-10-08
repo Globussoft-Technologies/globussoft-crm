@@ -2345,13 +2345,15 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
         // We turn those into a destinationImageProvider strategy and
 
-        // attach the returned URLs back onto matching slots. The
+        // attach the returned URLs back onto matching slots. Travel landing
 
-        // provider chain is Unsplash ? Pexels ? Pixabay ? AI fallback
+        // pages intentionally use Pexels only: the configured stock-media
 
-        // (DALL-E with key, else Pollinations Flux). Best-effort; if
+        // integration must not silently turn into billable DALL-E output or
 
-        // every provider misses, the relevant section's data is
+        // keyless Pollinations imagery. Best-effort; if Pexels misses, the
+
+        // relevant section's data is
 
         // missing and the reference's renderVals() simply hides it.
 
@@ -2402,6 +2404,8 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
             __userId: req.user.userId,
 
             __surface: "landing-pages-generate-wanderlux",
+
+            excludeProviders: ["unsplash", "pixabay", "ai-fallback"],
 
           });
 

@@ -14,7 +14,7 @@
  *     "priced at $0" apart from "we don't know the price".
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi, afterEach } from 'vitest';
 import { inferProvider, estimateLlmCost, estimateFlatCost, PRICING_PER_1K, FLAT_RATE_PER_REQUEST } from '../../lib/apiPricing.js';
 
 describe('inferProvider', () => {
@@ -42,6 +42,26 @@ describe('inferProvider', () => {
 });
 
 describe('estimateLlmCost', () => {
+  afterEach(() => vi.useRealTimers());
+
+  test('prices Gemini Flash-Lite input and output instead of reporting zero spend', () => {
+    expect(estimateLlmCost('gemini-3.5-flash-lite', 1_000_000, 0)).toBe(0.3);
+    expect(estimateLlmCost('gemini-3.5-flash-lite', 0, 1_000_000)).toBe(2.5);
+    expect(estimateLlmCost('gemini-3.5-flash-lite', 1_000_000, 1_000_000)).toBe(2.8);
+  });
+
+  test.each([
+    ['2026-10-08T00:00:00Z', 0.75, 3.75],
+    ['2026-12-31T23:59:59.999Z', 0.75, 3.75],
+    ['2027-01-01T00:00:00Z', 1.5, 7.5],
+  ])('prices Gemini Flash fallback at the applicable rates on %s', (date, input, output) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(date));
+    expect(estimateLlmCost('gemini-3.8-flash', 1_000_000, 0)).toBe(input);
+    expect(estimateLlmCost('gemini-3.8-flash', 0, 1_000_000)).toBe(output);
+    expect(estimateLlmCost('GEMINI-3.8-FLASH', 1_000_000, 1_000_000)).toBe(input + output);
+  });
+
   test('computes cost from promptTokens + completionTokens at the model rate', () => {
     const rate = PRICING_PER_1K['gemini-2.5-flash'];
     const cost = estimateLlmCost('gemini-2.5-flash', 1000, 1000);

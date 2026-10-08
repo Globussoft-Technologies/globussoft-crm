@@ -215,6 +215,29 @@ describe('<LandingPages /> — Generate modal', () => {
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Review every section/i));
   });
 
+  it('shows an animated loading indicator and disables Generate while the request is in flight', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/landing-pages/generate-from-destination' && opts?.method === 'POST') {
+        return new Promise(() => {});
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    const user = userEvent.setup();
+    await openGenerateModal(user);
+    await user.type(screen.getByLabelText(/^Destination/), 'Rome');
+    await user.type(screen.getByLabelText(/Audience/i), 'Families');
+    await user.click(screen.getByRole('button', { name: /Generate Draft/i }));
+
+    const generatingButton = await screen.findByRole('button', { name: /Generating/i });
+    expect(generatingButton).toBeDisabled();
+    expect(generatingButton).toHaveAttribute('aria-busy', 'true');
+    const loadingStatus = screen.getByRole('status', { name: /Generating landing page/i });
+    expect(loadingStatus.querySelector('svg')).toHaveStyle({
+      animation: 'spin 0.8s linear infinite',
+    });
+  });
+
   it('requires and submits the selected domestic or international trip type', async () => {
     const user = userEvent.setup();
     fetchApiMock.mockImplementation((url, opts) => {

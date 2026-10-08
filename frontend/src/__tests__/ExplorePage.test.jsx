@@ -117,7 +117,10 @@ function mockExplorePayload(payload = {}) {
   }));
 }
 
-describe('ExplorePage public shell', () => {
+// Explore is intentionally disabled at the router and API-mount layers.
+// Preserve its historical tests for a future restoration without exercising
+// a feature that is no longer exposed.
+describe.skip('ExplorePage public shell (disabled)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     sessionStorage.clear();
@@ -293,5 +296,29 @@ describe('ExplorePage public shell', () => {
     expect(css).toContain('.catalogue-tags');
     expect(css).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
     expect(css).toContain('height: 134px;');
+  });
+});
+
+describe('Explore feature disabled', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('does not request /api/explore even when the retained component is rendered directly', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ExplorePage />);
+    await waitFor(() => expect(screen.queryByText(/Loading experiences/i)).not.toBeInTheDocument());
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/explore'))).toBe(false);
+  });
+
+  it('does not register public or editor Explore routes in App', () => {
+    const appSource = readFileSync(resolve(SRC, 'App.jsx'), 'utf8');
+    const withoutJsxComments = appSource.replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+
+    expect(withoutJsxComments).not.toMatch(/path=["']\/explore["']/);
+    expect(withoutJsxComments).not.toMatch(/landing-pages\/explore-builder/);
   });
 });

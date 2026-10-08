@@ -26,6 +26,10 @@ const PRICING_PER_1K = {
   'gemini-flash': { in: 0.000075, out: 0.0003 }, // gemini-2.5-flash-ish tier
   'gemini-2.5-flash': { in: 0.000075, out: 0.0003 },
   'gemini-2.5-flash-lite': { in: 0.00002, out: 0.00008 },
+  // https://ai.google.dev/gemini-api/docs/pricing (verified 2026-10-08).
+  'gemini-3.5-flash-lite': { in: 0.0003, out: 0.0025 },
+  // Standard rates; introductory 50% discount ends at 2027-01-01 UTC.
+  'gemini-3.8-flash': { in: 0.0015, out: 0.0075 },
   'gemini-2.0-flash': { in: 0.00005, out: 0.0002 },
   'gemini-pro': { in: 0.00125, out: 0.005 },
 
@@ -112,7 +116,9 @@ function inferProvider(model) {
  */
 function estimateLlmCost(model, promptTokens, completionTokens) {
   const key = String(model || '').toLowerCase();
-  const rate = PRICING_PER_1K[key];
+  const rate = key === 'gemini-3.8-flash' && Date.now() < Date.UTC(2027, 0, 1)
+    ? { in: 0.00075, out: 0.00375 }
+    : PRICING_PER_1K[key];
   if (!rate) return 0;
   const inCost = ((promptTokens || 0) / 1000) * rate.in;
   const outCost = ((completionTokens || 0) / 1000) * rate.out;

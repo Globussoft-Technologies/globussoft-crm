@@ -6078,8 +6078,9 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
       && new Date(existing.draftTokenExpiresAt) > new Date()
       && ["DRAFT", "PAYMENT_PENDING"].includes(existingStatus);
     if (existingIsResumable && existingStatus === "DRAFT") {
-      const draft = await prisma.pendingTripRegistration.update({
-        where: { id: existing.id },
+      const claim = await prisma.pendingTripRegistration.updateMany({
+        where: { id: existing.id, tenantId: page.tenantId, tripId: page.tripId, landingPageId: page.id,
+          status: "DRAFT", draftTokenExpiresAt: { gt: new Date() } },
         data: {
           studentName,
           studentSchool,
@@ -6089,7 +6090,10 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
           parentPhone,
         },
       });
-      return res.status(200).json({ draftToken: existing.draftToken, draftId: draft?.id || existing.id });
+      if (claim.count !== 1) {
+        return res.status(409).json({ error: "Registration changed; reload before continuing", code: "DRAFT_CHANGED" });
+      }
+      return res.status(200).json({ draftToken: existing.draftToken, draftId: existing.id });
     }
     if (existingIsResumable) {
       return res.status(200).json({ draftToken: existing.draftToken, draftId: existing.id });
@@ -6245,11 +6249,41 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
     const paymentClaim = await prisma.pendingTripRegistration.updateMany({
       where: {
         id: paymentDraft.id,
+        tenantId,
+        draftToken,
+        ...(paymentDraft.updatedAt ? { updatedAt: paymentDraft.updatedAt } : {}),
         status: { notIn: ["PAYMENT_PENDING", "CONVERTED", "REJECTED"] },
       },
       data: { status: "PAYMENT_PENDING" },
     });
     if (paymentClaim.count !== 1) {
+      // Reuse only this draft's exact payment selection, and only after the
+      // gateway confirms the hosted link is still open. Never create another
+      // link when a previous claim won (including a request still in flight).
+      if (paymentDraft.status === "PAYMENT_PENDING") {
+        const payments = await prisma.payment.findMany({
+          where: { tenantId, gateway: "razorpay", status: "PENDING", metadata: { contains: draftToken } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 20,
+        });
+        for (const payment of payments) {
+          const metadata = safeJsonParse(payment.metadata, {});
+          if (metadata.kind !== "landing-page-registration" || metadata.draftToken !== draftToken
+            || Number(metadata.pageId) !== Number(page.id) || Number(metadata.tripId) !== Number(page.tripId)
+            || metadata.paymentMode !== selection.mode || Number(metadata.amountPaise) !== selection.amountPaise
+            || metadata.currency !== selection.currency
+            || JSON.stringify(metadata.installmentIndexes) !== JSON.stringify(selection.installmentIndexes)
+            || !payment.gatewayId || !rp.client.paymentLink.fetch) continue;
+          const link = await rp.client.paymentLink.fetch(payment.gatewayId);
+          if (link.id !== payment.gatewayId || link.status !== "created" || !link.short_url
+            || (link.expire_by && Number(link.expire_by) * 1000 <= Date.now())
+            || Number(link.amount) !== selection.amountPaise || link.currency !== selection.currency) continue;
+          return res.status(200).json({ paymentId: payment.id, orderId: link.id,
+            paymentUrl: link.short_url, hostedPaymentLink: true, resumed: true,
+            amount: selection.amountPaise, amountMajor: selection.amountMajor, currency: selection.currency,
+            paymentMode: selection.mode, installmentIndex: selection.installmentIndex,
+            installmentIndexes: selection.installmentIndexes });
+        }
+      }
       return res.status(409).json({
         error: "A payment is already in progress for this registration",
         code: "PAYMENT_IN_PROGRESS",

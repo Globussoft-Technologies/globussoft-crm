@@ -405,12 +405,20 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           });
         } else if (isGeneric && phone) {
           // Email-less imports can still update an existing contact when the
-          // row has a phone number. Phone is not unique, so this remains a
-          // best-effort tenant-scoped match rather than a new constraint.
-          existing = await prisma.contact.findFirst({
+          // row has a phone number. Phone is not unique: reject ambiguous
+          // matches before any update or tombstone deletion.
+          const matches = await prisma.contact.findMany({
             where: { phone, tenantId: req.user.tenantId },
             select: { id: true, deletedAt: true },
+            orderBy: { id: "asc" },
+            take: 2,
           });
+          if (matches.length > 1) {
+            errors.push({ rowNumber, reason: "ambiguous phone: multiple contacts match; supply email" });
+            skipped++;
+            continue;
+          }
+          existing = matches[0] || null;
         }
         if (existing?.deletedAt) {
           await hardDeleteContact(prisma, existing.id);

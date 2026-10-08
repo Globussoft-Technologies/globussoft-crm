@@ -155,7 +155,7 @@ function bufferParser(r, cb) {
 }
 
 beforeEach(() => {
-  prisma.contact.findMany.mockReset();
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findFirst.mockReset();
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
@@ -332,6 +332,24 @@ describe('GET /api/csv/contacts/template.csv?format=xlsx', () => {
 });
 
 describe('POST /api/csv/contacts/import.csv with XLSX', () => {
+  test('rejects ambiguous phone matches without updating or deleting either contact', async () => {
+    prisma.contact.findMany.mockResolvedValue([{ id: 1, deletedAt: null }, { id: 2, deletedAt: new Date() }]);
+    const res = await request(makeApp()).post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv').send('name,phone\nShared Number,+919876543210\n');
+    expect(res.body).toMatchObject({ imported: 0, updated: 0, skipped: 1 });
+    expect(res.body.errors[0].reason).toMatch(/ambiguous phone/);
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(hardDeleteContactMock).not.toHaveBeenCalled();
+  });
+  test('updates a single tenant-scoped phone match', async () => {
+    prisma.contact.findMany.mockResolvedValue([{ id: 103, deletedAt: null }]);
+    prisma.contact.update.mockResolvedValue({ id: 103 });
+    const res = await request(makeApp()).post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv').send('name,phone\nUpdated Name,+919876543210\n');
+    expect(res.body).toMatchObject({ imported: 0, updated: 1, skipped: 0 });
+    expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 103 } }));
+  });
   test('imports a lead with a name and phone but no email', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 103 });
@@ -343,9 +361,11 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
-    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
       where: { phone: '+919876543210', tenantId: 1 },
       select: { id: true, deletedAt: true },
+      orderBy: { id: 'asc' },
+      take: 2,
     });
     expect(prisma.contact.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -918,4 +938,3 @@ describe('RBAC + errorReport query flag', () => {
     expect(body).toMatch(/missing name/i);
   });
 });
-

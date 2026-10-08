@@ -163,6 +163,7 @@ const getTenantRazorpayCredsMock = vi.fn();
 const applyLandingPagePaymentToTripMock = vi.fn();
 const ordersCreateMock = vi.fn();
 const paymentLinksCreateMock = vi.fn();
+const paymentLinksFetchMock = vi.fn();
 requireCJS('../../lib/tenantPaymentGateway').getTenantRazorpayClient = getTenantRazorpayClientMock;
 requireCJS('../../lib/tenantPaymentGateway').getTenantRazorpayCreds = getTenantRazorpayCredsMock;
 requireCJS('../../lib/landingPagePayments').applyLandingPagePaymentToTrip = applyLandingPagePaymentToTripMock;
@@ -250,6 +251,7 @@ function wanderluxPaymentPage(overrides = {}) {
 }
 
 beforeEach(() => {
+  paymentLinksFetchMock.mockReset();
   prisma.landingPage.findMany.mockReset();
   prisma.landingPage.findFirst.mockReset();
   prisma.landingPage.findUnique.mockReset();
@@ -290,7 +292,7 @@ beforeEach(() => {
   getTenantRazorpayClientMock
     .mockReset()
     .mockResolvedValue({
-      client: { orders: { create: ordersCreateMock }, paymentLink: { create: paymentLinksCreateMock } },
+      client: { orders: { create: ordersCreateMock }, paymentLink: { create: paymentLinksCreateMock, fetch: paymentLinksFetchMock } },
       keyId: 'rzp_test_key',
       keySecret: KEY_SECRET,
     });
@@ -1695,6 +1697,28 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
 });
 
 describe('POST /p/:slug/payment-order + payment submit', () => {
+  test.each(['open', 'expired', 'cancelled', 'wrong-selection', 'other-draft', 'missing'])('pending draft recovery: %s', async (scenario) => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
+      landingPageId: 51, status: 'PAYMENT_PENDING', draftToken: 'draft-payment-1' });
+    prisma.pendingTripRegistration.updateMany.mockResolvedValue({ count: 0 });
+    const metadata = { kind: 'landing-page-registration', draftToken: scenario === 'other-draft' ? 'another-token' : 'draft-payment-1',
+      pageId: 51, tripId: 7, paymentMode: scenario === 'wrong-selection' ? 'installment' : 'complete',
+      amountPaise: 950000, currency: 'INR', installmentIndexes: [0, 1] };
+    prisma.payment.findMany.mockResolvedValueOnce([]).mockResolvedValue(scenario === 'missing' ? [] : [
+      { id: 901, gatewayId: 'plink_existing', metadata: JSON.stringify(metadata) },
+    ]);
+    paymentLinksFetchMock.mockResolvedValue({ id: 'plink_existing', short_url: 'https://rzp.io/i/existing',
+      status: scenario === 'cancelled' ? 'cancelled' : 'created', amount: 950000, currency: 'INR',
+      expire_by: Math.floor(Date.now() / 1000) + (scenario === 'expired' ? -60 : 3600) });
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'complete', draftToken: 'draft-payment-1', installmentIndex: 1 });
+    expect(res.status).toBe(scenario === 'open' ? 200 : 409);
+    if (scenario === 'open') expect(res.body).toMatchObject({ resumed: true, paymentUrl: 'https://rzp.io/i/existing' });
+    else expect(res.body.code).toBe('PAYMENT_IN_PROGRESS');
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     prisma.pendingTripRegistration.findUnique.mockResolvedValue({
       id: 700,
@@ -1991,6 +2015,19 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
 });
 
 describe('POST /p/:slug/registration-draft', () => {
+  test('rejects an edit when payment claimed the draft after it was read', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 702, tenantId: 1, tripId: 7,
+      landingPageId: 51, status: 'DRAFT', draftToken: 'race-token',
+      draftTokenExpiresAt: new Date(Date.now() + 3600000) });
+    prisma.pendingTripRegistration.updateMany.mockResolvedValue({ count: 0 });
+    const res = await request(makeApp()).post('/p/australia-2026/registration-draft')
+      .send({ draftToken: 'race-token', fields: { name: 'Changed' } });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('DRAFT_CHANGED');
+    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+  });
   test('creates a payment draft from the registration wizard field names', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 51,
@@ -2062,8 +2099,8 @@ describe('POST /p/:slug/registration-draft', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ draftToken: 'resume-draft-token', draftId: 702 });
-    expect(prisma.pendingTripRegistration.update).toHaveBeenCalledWith({
-      where: { id: 702 },
+    expect(prisma.pendingTripRegistration.updateMany).toHaveBeenCalledWith({
+      where: { id: 702, tenantId: 1, tripId: 7, landingPageId: 51, status: 'DRAFT', draftTokenExpiresAt: { gt: expect.any(Date) } },
       data: expect.objectContaining({
         parentName: 'Updated Parent',
         parentEmail: 'updated@example.com',

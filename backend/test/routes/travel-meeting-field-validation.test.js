@@ -1,6 +1,108 @@
 const { _internal } = require("../../routes/travel_meeting_forms");
 
 describe("Travel Meeting Form field validation", () => {
+  const linkPayload = { firstName: "Priya", lastName: "Sharma", email: "priya@school.edu.in",
+    selectedStartTime: "2026-10-09T10:00:00+05:30", zoomEventId: "meeting-123" };
+  const linkForm = { id: 7, tenantId: 3, durationMins: 30, timezone: "Asia/Kolkata" };
+  test.each([
+    "https://zoom.us/j/123?pwd=secret&omn=456",
+    "https://us02web.zoom.us/j/123?pwd=secret",
+    "https://company.zoom.us/my/expert",
+    "https://zoom.com/j/123",
+    "https://agency.zoomgov.com/j/123",
+  ])("preserves valid Zoom join links: %s", (url) => {
+    for (const field of ["zoomJoinUrl", "meetingUrl"]) {
+      expect(_internal.externalBookingData(linkForm, { ...linkPayload, [field]: url }).data.meetingUrl).toBe(url);
+    }
+  });
+  test.each([
+    "javascript:alert(1)", "data:text/html,test", "http://zoom.us/j/123",
+    "https://zoom.us.evil.test/j/123", "https://evilzoom.us/j/123",
+    "https://zoom.us@evil.test/j/123", "https://user:password@zoom.us/j/123",
+    "https://zoom.us:8443/j/123", "//zoom.us/j/123", "not-a-url",
+  ])("rejects unsafe meeting links before booking persistence: %s", (url) => {
+    for (const field of ["zoomJoinUrl", "meetingUrl"]) {
+      try {
+        _internal.externalBookingData(linkForm, { ...linkPayload, [field]: url });
+        throw new Error("Expected rejection");
+      } catch (error) {
+        expect(error).toMatchObject({ status: 400, code: "INVALID_MEETING_URL" });
+      }
+    }
+  });
+  test("keeps an absent or empty meeting link optional", () => {
+    expect(_internal.externalBookingData(linkForm, linkPayload).data.meetingUrl).toBeNull();
+    expect(_internal.externalBookingData(linkForm, { ...linkPayload, zoomJoinUrl: " " }).data.meetingUrl).toBeNull();
+  });
+  test("accepts, normalizes, and deduplicates confirmation email CC recipients", () => {
+    expect(_internal.normalizeEmailCc([" PERSON@EXAMPLE.COM ", "person@example.com", "host@example.com", ""])).toEqual([
+      "person@example.com",
+      "host@example.com",
+    ]);
+    expect(() => _internal.normalizeEmailCc(["not-an-email"])).toThrowError(/valid CC email/i);
+    expect(_internal.normalizeEmailCc([
+      "one@example.com", "two@example.com", "three@example.com", "four@example.com", "five@example.com", "six@example.com",
+    ])).toHaveLength(6);
+  });
+
+  test("prepares a confirmed storage-only booking without CRM provider work", () => {
+    const prepared = _internal.externalBookingData(
+      { id: 7, tenantId: 3, durationMins: 30, timezone: "Asia/Kolkata", createCalendarEvent: false },
+      {
+        firstName: "Priya",
+        lastName: "Sharma",
+        designation: "Principal",
+        school: "Delhi Public School",
+        city: "Bengaluru",
+        email: "priya@school.edu.in",
+        phone: "9876543210",
+        selectedStartTime: "2026-10-09T10:00:00+05:30",
+        duration: 30,
+        timezone: "Asia/Kolkata",
+        zoomEventId: "zoom-event-123",
+      },
+    );
+
+    expect(prepared.unique).toEqual({ tenantId: 3, meetingFormId: 7, idempotencyKey: "zoom:zoom-event-123" });
+    expect(prepared.data).toMatchObject({
+      contactName: "Priya Sharma",
+      contactEmail: "priya@school.edu.in",
+      institution: "Delhi Public School",
+      zoomMeetingId: "zoom-event-123",
+      status: "CONFIRMED",
+      emailStatus: "EXTERNAL",
+      emailChannel: "external_scheduler",
+      calendarProvider: null,
+    });
+    expect(prepared.data).not.toHaveProperty("contactId");
+    expect(JSON.parse(prepared.data.customFieldsJson)).toMatchObject({
+      zoomEventId: "zoom-event-123",
+      ingestionMode: "EXTERNAL_CONFIRMED_BOOKING",
+    });
+    expect(prepared.data.endsAt.getTime() - prepared.data.scheduledAt.getTime()).toBe(30 * 60_000);
+  });
+
+  test("requires an idempotency key when an external booking has no Zoom identifier", () => {
+    expect(() => _internal.externalBookingData(
+      { id: 7, tenantId: 3, durationMins: 30, timezone: "Asia/Kolkata" },
+      { firstName: "Priya", lastName: "Sharma", email: "priya@school.edu.in", selectedStartTime: "2026-10-09T10:00:00+05:30" },
+    )).toThrowError(/Idempotency-Key/i);
+    const prepared = _internal.externalBookingData(
+      { id: 7, tenantId: 3, durationMins: 30, timezone: "Asia/Kolkata", createCalendarEvent: true },
+      { firstName: "Priya", lastName: "Sharma", email: "priya@school.edu.in", selectedStartTime: "2026-10-09T10:00:00+05:30" },
+      "external-booking-1",
+    );
+    expect(prepared.data).toMatchObject({ status: "PROCESSING", zoomMeetingId: null, meetingType: "EXTERNAL" });
+  });
+
+  test("marks external bookings for CRM email only when the form enables it", () => {
+    const payload = { firstName: "Priya", lastName: "Sharma", email: "priya@school.edu.in", selectedStartTime: "2026-10-09T10:00:00+05:30" };
+    const form = { id: 7, tenantId: 3, durationMins: 30, timezone: "Asia/Kolkata", createZoom: false, sendConfirmationEmail: true };
+    const prepared = _internal.externalBookingData(form, payload, "external-email-1");
+    expect(prepared.data).toMatchObject({ status: "CONFIRMED", emailStatus: "PENDING", emailChannel: null, meetingType: "EXTERNAL" });
+    expect(_internal.bookingDeliveryStatus(prepared.data)).toMatchObject({ status: "PENDING", channel: null });
+  });
+
   test("maps provider failures away from proxy-intercepted gateway responses", () => {
     expect(_internal.publicBookingErrorStatus({ status: 502, code: "ZOOM_CREATE_FAILED" })).toBe(424);
     expect(_internal.publicBookingErrorStatus({ status: 503, code: "ZOOM_NOT_CONFIGURED" })).toBe(424);

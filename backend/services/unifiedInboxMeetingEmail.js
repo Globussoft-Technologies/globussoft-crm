@@ -20,7 +20,7 @@ function templateValues(form, booking) {
     date: formatInTenantTZ(booking.scheduledAt, booking.timezone, "EEEE, d MMMM yyyy"),
     time: formatInTenantTZ(booking.scheduledAt, booking.timezone, "h:mm a zzz"),
     timezone: booking.timezone,
-    duration: String(form.durationMins),
+    duration: String(Math.round((new Date(booking.endsAt).getTime() - new Date(booking.scheduledAt).getTime()) / 60_000) || form.durationMins),
     meeting_url: booking.meetingUrl || "",
     meeting_button: MEETING_BUTTON_MARKER,
     institution: booking.institution || "",
@@ -97,9 +97,30 @@ function buildMeetingHtml({ form, text, meetingUrl }) {
   return `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#122647">${body}${logo}</div>`;
 }
 
+function meetingCcRecipients(form, primaryRecipient) {
+  let configured = form.emailCc;
+  if (!Array.isArray(configured)) {
+    try {
+      configured = JSON.parse(form.emailCcJson || "[]");
+    } catch {
+      configured = [];
+    }
+  }
+  const primary = String(primaryRecipient || "").trim().toLowerCase();
+  const seen = new Set(primary ? [primary] : []);
+  return (Array.isArray(configured) ? configured : [])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((email) => {
+      if (!email || seen.has(email)) return false;
+      seen.add(email);
+      return true;
+    });
+}
+
 async function sendMeetingConfirmation({ form, booking }) {
   const { values, subject, text, plainText } = renderMeetingTemplate({ form, booking });
   const html = buildMeetingHtml({ form, text, meetingUrl: values.meeting_url });
+  const cc = meetingCcRecipients(form, booking.contactEmail);
 
   // Travel CRM email always follows its SendGrid selection: the tenant's
   // customer-managed credentials when configured, otherwise the CRM-managed
@@ -107,6 +128,7 @@ async function sendMeetingConfirmation({ form, booking }) {
   const result = await sendEmail({
     tenantId: booking.tenantId,
     to: booking.contactEmail,
+    cc,
     subject,
     text: plainText,
     html,
@@ -125,6 +147,7 @@ async function sendMeetingConfirmation({ form, booking }) {
           body: html,
           from: result.from || process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com",
           to: booking.contactEmail,
+          cc: cc.length ? cc.join(",") : null,
           direction: "OUTBOUND",
           read: true,
           threadId: result.threadId || `travel-meeting-${booking.id}`,
@@ -138,4 +161,4 @@ async function sendMeetingConfirmation({ form, booking }) {
   return { sent: result?.sent === true, reason: failureReason, emailMessageId };
 }
 
-module.exports = { sendMeetingConfirmation, interpolate, templateValues, renderMeetingTemplate, publicAssetUrl, buildMeetingHtml };
+module.exports = { sendMeetingConfirmation, interpolate, templateValues, renderMeetingTemplate, publicAssetUrl, buildMeetingHtml, meetingCcRecipients };

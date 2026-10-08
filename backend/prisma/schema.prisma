@@ -4055,9 +4055,12 @@ model TravelMeetingForm {
   allowedOriginsJson  String?   @db.Text
   calendarProvider    String    @default("google") // google | outlook
   createZoom          Boolean   @default(true)
+  createCalendarEvent Boolean?
+  sendConfirmationEmail Boolean @default(true)
   embedFontFamily     String    @default("Inter")
   emailSubject        String    @default("Your Conversation with TMC is Confirmed")
   emailBody           String    @db.LongText
+  emailCcJson         String?   @db.Text
   emailLogoUrl        String?   @db.Text
   confirmationMessage String?   @db.Text
   isActive            Boolean   @default(false)
@@ -4099,8 +4102,8 @@ model TravelMeetingBooking {
   diagnosticId      Int?
   source            String            @default("Talk to an Expert")
   customFieldsJson  String?           @db.Text
-  emailStatus       String            @default("PENDING") // PENDING | SENT | FAILED
-  emailChannel      String? // unified_inbox (calendar_invite is retained only for legacy rows)
+  emailStatus       String            @default("PENDING") // PENDING | SENT | FAILED | DISABLED | EXTERNAL
+  emailChannel      String? // unified_inbox | external_scheduler (calendar_invite is retained only for legacy rows)
   emailMessageId    Int?
   failureCode       String?
   failureMessage    String?           @db.Text

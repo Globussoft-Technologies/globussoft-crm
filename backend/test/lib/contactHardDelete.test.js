@@ -11,6 +11,9 @@ function buildTransactionMock() {
     contact: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
     tmcParentTrip: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     tmcTrip: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    transportPerson: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
+    plotBroker: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
+    billingPerson: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
   };
   for (const [model] of CONTACT_ID_CHILDREN) {
     tx[model] = { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) };
@@ -55,6 +58,42 @@ describe("contactHardDelete", () => {
 
     await expect(hardDeleteContact(db, 91)).resolves.toBe(1);
     expect(tx.contact.deleteMany).toHaveBeenCalledWith({ where: { id: 91 } });
+  });
+
+  test("removes the deleted customer from transport, broker, and billing assignment JSON", async () => {
+    const tx = buildTransactionMock();
+    tx.transportPerson.findMany.mockResolvedValue([{
+      id: 11,
+      customerIdsJson: "[61,62]",
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30},{"customerId":62,"plotSiteId":31}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED"},"customer-62-plot-31":{"status":"ASSIGNED"}}',
+    }]);
+    tx.plotBroker.findMany.mockResolvedValue([{
+      id: 12,
+      customerIdsJson: "[61]",
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: '{"customer-61":{"status":"INTEREST_CONFIRMED"}}',
+    }]);
+    tx.billingPerson.findMany.mockResolvedValue([{
+      id: 13,
+      customerIdsJson: "[61,63]",
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30},{"customerId":63,"plotSiteId":32}]',
+    }]);
+    const db = { $transaction: vi.fn(async (callback) => callback(tx)) };
+
+    await hardDeleteContact(db, 61);
+
+    expect(tx.transportPerson.update).toHaveBeenCalledWith({ where: { id: 11 }, data: {
+      customerIdsJson: "[62]",
+      assignmentPairsJson: '[{"customerId":62,"plotSiteId":31}]',
+      assignmentStatusJson: '{"customer-62-plot-31":{"status":"ASSIGNED"}}',
+    } });
+    expect(tx.plotBroker.update).toHaveBeenCalledWith({ where: { id: 12 }, data: {
+      customerIdsJson: null, assignmentPairsJson: null, workflowStatusJson: null,
+    } });
+    expect(tx.billingPerson.update).toHaveBeenCalledWith({ where: { id: 13 }, data: {
+      customerIdsJson: "[63]", assignmentPairsJson: '[{"customerId":63,"plotSiteId":32}]',
+    } });
   });
 
   test("deletes the contact when optional TMC relations are absent from an older Prisma client", async () => {

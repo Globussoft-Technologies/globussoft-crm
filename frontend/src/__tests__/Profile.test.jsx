@@ -165,6 +165,28 @@ describe('<Profile /> - practitioner section gating (#641)', () => {
   });
 });
 
+describe('<Profile /> - functional staff role label', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it.each([
+    [{ key: 'TRANSPORT_PERSON', name: 'Transport Person' }, 'Transport'],
+    [{ key: 'BROOKER', name: 'BROOKER' }, 'Sales Executive'],
+    [{ key: 'BILLING', name: 'Billing Department' }, 'Billing'],
+  ])('shows %s instead of the legacy USER access level', async (primaryRole, expectedLabel) => {
+    renderProfile({
+      id: 120, name: 'Operations Staff', email: 'staff@example.com',
+      role: 'USER', primaryRole, wellnessRole: null, createdAt: '2026-01-01T00:00:00Z',
+    });
+
+    await waitFor(() => expect(screen.getByText('Operations Staff')).toBeInTheDocument());
+    expect(screen.getByTestId('profile-role-badge')).toHaveTextContent(expectedLabel);
+    expect(screen.getByLabelText('Role')).toHaveValue(expectedLabel);
+    cleanup();
+  });
+});
+
 describe('<Profile /> - subscription display contract', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();

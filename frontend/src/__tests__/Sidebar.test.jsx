@@ -350,11 +350,12 @@ describe('Sidebar — load-bearing render surface', () => {
     it('shows Pickup & Plot as its own module only to generic CRM admins', () => {
       const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
-      const link = screen.getByText('Inventory').closest('a');
+      const link = screen.getByText('Plot Inventory').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/pickup-plot-inventory');
+      expect(screen.getByText('Pickup Inventory').closest('a').getAttribute('href')).toBe('/pickup-inventory');
       expect(screen.getByText('Transport Persons').closest('a').getAttribute('href')).toBe('/transport-persons');
-      expect(screen.getByText('Plot Brokers').closest('a').getAttribute('href')).toBe('/plot-brokers');
+      expect(screen.getByText('Sales Executives').closest('a').getAttribute('href')).toBe('/plot-brokers');
       expect(screen.getByText('Billing Persons').closest('a').getAttribute('href')).toBe('/billing-persons');
       expect(screen.getByText('Customer Status').closest('a').getAttribute('href')).toBe('/pickup-customers');
       generic.unmount();
@@ -370,9 +371,9 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
     });
 
-    it('shows only My Customers to a broker with the legacy BROOKER spelling', () => {
+    it('shows only Site Visits to a sales executive with the legacy BROOKER spelling', () => {
       renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['BROOKER'] });
-      expect(screen.getByText('My Customers').closest('a')).toHaveAttribute('href', '/home');
+      expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/home');
       expect(screen.queryByText('Dashboard')).toBeNull();
       expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
     });

@@ -45,7 +45,7 @@ export default function TransportDriverWorkspace() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [updating, setUpdating] = useState('');
-  const [tab, setTab] = useState('active');
+  const [filter, setFilter] = useState('active');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -70,9 +70,14 @@ export default function TransportDriverWorkspace() {
     active: assignments.filter((assignment) => assignment.status !== 'COMPLETED').length,
     completed: assignments.filter((assignment) => assignment.status === 'COMPLETED').length,
   }), [assignments]);
-  const visibleAssignments = useMemo(() => assignments.filter((assignment) => (
-    tab === 'completed' ? assignment.status === 'COMPLETED' : assignment.status !== 'COMPLETED'
-  )), [assignments, tab]);
+  const visibleAssignments = useMemo(
+    () => assignments.filter((assignment) => {
+      if (filter === 'completed') return assignment.status === 'COMPLETED';
+      if (filter === 'active') return assignment.status !== 'COMPLETED';
+      return true;
+    }),
+    [assignments, filter],
+  );
 
   const advance = async (assignment) => {
     const index = statusIndex(assignment.status);
@@ -97,8 +102,8 @@ export default function TransportDriverWorkspace() {
         const customerName = assignment.customer?.name;
         notify.success(
           customerName
-            ? `Drop-off completed for ${customerName}. Trip moved to Completed.`
-            : 'Drop-off completed. Trip moved to Completed.',
+            ? `Drop-off completed for ${customerName}. It was removed from your active trips.`
+            : 'Drop-off completed. It was removed from your active trips.',
         );
       }
     } catch (err) {
@@ -134,10 +139,13 @@ export default function TransportDriverWorkspace() {
         <div><span className="transport-summary-icon total"><Clock3 size={18} /></span><span><strong>{summary.total}</strong><small>Total assigned</small></span></div>
       </section>
 
-      <div className="transport-toolbar">
+      <div className="transport-toolbar" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div className="transport-tabs" role="tablist" aria-label="Trip filters">
-          <button type="button" role="tab" aria-selected={tab === 'active'} className={tab === 'active' ? 'active' : ''} onClick={() => setTab('active')}>Active</button>
-          <button type="button" role="tab" aria-selected={tab === 'completed'} className={tab === 'completed' ? 'active' : ''} onClick={() => setTab('completed')}>Completed</button>
+          {[
+            ['all', 'All'], ['active', 'Active'], ['completed', 'Completed'],
+          ].map(([key, label]) => (
+            <button key={key} type="button" role="tab" aria-selected={filter === key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}</button>
+          ))}
         </div>
         <span className="transport-trip-count">{visibleAssignments.length} trip{visibleAssignments.length === 1 ? '' : 's'}</span>
       </div>
@@ -147,17 +155,17 @@ export default function TransportDriverWorkspace() {
       {!loading && !error && visibleAssignments.length === 0 && (
         <section className="transport-empty">
           <span><CheckCircle2 size={28} /></span>
-          <h2>{tab === 'active' ? 'You’re all caught up' : 'No completed trips yet'}</h2>
-          <p>{tab === 'active' ? 'New pickup and drop assignments will appear here automatically.' : 'Finished drop-offs will be kept here for reference.'}</p>
+          <h2>You’re all caught up</h2>
+          <p>New pickup and drop assignments will appear here automatically.</p>
         </section>
       )}
 
-      <section className="transport-trip-list" aria-label={`${tab} trips`}>
+      <section className="transport-trip-list" aria-label={`${filter === 'all' ? 'All' : filter === 'completed' ? 'Completed' : 'Active'} trips`}>
         {visibleAssignments.map((assignment, index) => (
           <TripCard
             key={assignment.assignmentKey}
             assignment={assignment}
-            featured={tab === 'active' && index === 0}
+            featured={index === 0 && assignment.status !== 'COMPLETED'}
             updating={updating === assignment.assignmentKey}
             onAdvance={() => advance(assignment)}
           />

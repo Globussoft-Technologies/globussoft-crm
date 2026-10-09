@@ -13,7 +13,13 @@ describe('pickup and plot form validation', () => {
     expect(validateLocationForm({ name: 'A', address: 'Road', googleMapsLink: '', notes: '' })).toMatch(/at least 2/);
     expect(validateLocationForm({ name: 'North Gate', address: '10 Market Road', googleMapsLink: 'https://example.com/map', notes: '' })).toMatch(/Google Maps/);
     expect(validatePlotForm({ name: 'Plot A-9', address: '25 Lake Road', area: '1200 sq ft', price: '250000', availability: 'AVAILABLE', notes: '' })).toBeNull();
+    expect(validatePlotForm({
+      name: 'Plot A-10', plotNumber: 'A-10', block: 'A', address: '26 Lake Road',
+      area: '2', areaUnit: 'KATHA', roadWidth: '30 ft', facing: 'EAST',
+      propertyType: 'RESIDENTIAL', price: '350000', availability: 'BOOKED', notes: '',
+    })).toBeNull();
     expect(validatePlotForm({ name: 'Plot A-9', address: '', area: '', price: '-1', availability: 'AVAILABLE', notes: '' })).toMatch(/non-negative/);
+    expect(validatePlotForm({ name: 'Plot A-9', availability: 'HIDDEN' })).toMatch(/valid availability/);
   });
 
   it('validates transport and broker contact fields', () => {

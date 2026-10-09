@@ -6,6 +6,7 @@ import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
 import { formatDateLong } from '../utils/date';
 import PasswordInput from '../components/PasswordInput';
+import SelfWorkProfile from '../components/SelfWorkProfile';
 
 // #641  practitioner-specific profile sections (specialty, license, etc.)
 // must ONLY render for users whose wellnessRole identifies them as a
@@ -18,6 +19,17 @@ import PasswordInput from '../components/PasswordInput';
 const PRACTITIONER_WELLNESS_ROLES = new Set(['doctor', 'professional']);
 function isPractitioner(profile) {
   return !!profile && PRACTITIONER_WELLNESS_ROLES.has(profile.wellnessRole);
+}
+
+function profileRoleLabel(profile) {
+  const primaryRole = profile?.primaryRole;
+  const roleText = `${primaryRole?.key || ''} ${primaryRole?.name || ''}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  if (roleText.includes('transportperson') || roleText === 'transport') return 'Transport';
+  if (['broker', 'brooker', 'plotbroker', 'plotbrooker'].some((token) => roleText.includes(token))) return 'Sales Executive';
+  if (roleText.includes('billing')) return 'Billing';
+  return primaryRole?.name || primaryRole?.key || profile?.role || '';
 }
 
 const Profile = () => {
@@ -153,7 +165,7 @@ const Profile = () => {
         method: 'PUT',
         body: JSON.stringify(changed)
       });
-      setProfile(updated);
+      setProfile((current) => ({ ...current, ...updated }));
       // Reflect the server's canonical form (e.g. "9876543210" saved back as
       // "+919876543210") so the field shows what is actually stored and a
       // second save is correctly detected as a no-op.
@@ -551,13 +563,13 @@ const Profile = () => {
               </button>
             )}
             <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
-              <span style={{
+              <span data-testid="profile-role-badge" style={{
                 display: 'inline-block',
                 padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '600',
                 background: profile?.role === 'ADMIN' ? 'rgba(239,68,68,0.15)' : profile?.role === 'MANAGER' ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)',
                 color: profile?.role === 'ADMIN' ? '#ef4444' : profile?.role === 'MANAGER' ? '#f59e0b' : '#3b82f6'
               }}>
-                {profile?.role}
+                {profileRoleLabel(profile)}
               </span>
               {/* #641: only show the wellnessRole pill when one is actually
                   set. Demo User has wellnessRole=null and previously the
@@ -660,13 +672,14 @@ const Profile = () => {
             </div>
           </div>
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            <label htmlFor="profile-role" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               Role
             </label>
             <input
+              id="profile-role"
               type="text"
               className="input-field"
-              value={profile?.role || ''}
+              value={profileRoleLabel(profile)}
               disabled
               style={{ opacity: 0.6, cursor: 'not-allowed' }}
             />
@@ -695,6 +708,8 @@ const Profile = () => {
           </button>
         </form>
       </div>
+
+      <SelfWorkProfile />
 
       {/* Change Password */}
       <div className="card glass" style={{ padding: '1.5rem' }}>

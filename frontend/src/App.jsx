@@ -295,6 +295,7 @@ const RevenueGoals = lazy(() => import("./pages/RevenueGoals"));
 const LeadRouting = lazy(() => import("./pages/LeadRouting"));
 const Territories = lazy(() => import("./pages/Territories"));
 const PickupPlotInventory = lazy(() => import("./pages/PickupPlotInventory"));
+const PickupInventory = lazy(() => import("./pages/PickupInventory"));
 const TransportPersons = lazy(() => import("./pages/TransportPersons"));
 const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
 const BillingPersons = lazy(() => import("./pages/BillingPersons"));
@@ -3114,6 +3115,16 @@ export default function App() {
                         }
                       />
                       <Route
+                        path="pickup-inventory"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN"]} message="Pickup inventory requires admin access.">
+                              <PickupInventory />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
                         path="transport-persons"
                         element={
                           <GenericOnly>
@@ -3127,7 +3138,7 @@ export default function App() {
                         path="plot-brokers"
                         element={
                           <GenericOnly>
-                            <RoleGuard allow={["ADMIN"]} message="Plot brokers requires admin access.">
+                            <RoleGuard allow={["ADMIN"]} message="Sales Executives requires admin access.">
                               <PlotBrokers />
                             </RoleGuard>
                           </GenericOnly>

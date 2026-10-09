@@ -7600,3 +7600,19 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   background: color-mix(in srgb, var(--bg-color) 95%, #111827) !important;
   box-shadow: 0 26px 80px rgba(0, 0, 0, 0.5) !important;
 }
+
+.pickup-plot-resizable-table th:not(:last-child),
+.pickup-plot-resizable-table td:not(:last-child) {
+  border-right: 1px solid var(--border-color);
+}
+
+/* Table cards are scroll viewports. The global card shimmer moves its
+ * ::before pseudo-element beyond the card on hover, which otherwise becomes
+ * invisible horizontal scroll content after the final table column. */
+.card.pickup-plot-table-scroll::before {
+  display: none;
+}
+
+.card.pickup-plot-table-scroll:hover {
+  transform: none;
+}

@@ -94,10 +94,16 @@ export function validateLocationForm(form) {
 export function validatePlotForm(form) {
   return first(
     name(form.name, 'Plot or site name'),
+    optionalText(form.plotNumber, 'Plot number', 100),
+    optionalText(form.block, 'Block', 100),
     clean(form.address) ? requiredText(form.address, 'Address', 5, 2000) : null,
     optionalText(form.area, 'Area or size', 100),
+    ['SQ_FT', 'KATHA'].includes(form.areaUnit || 'SQ_FT') ? null : 'Select a valid area unit.',
+    optionalText(form.roadWidth, 'Road width', 100),
+    !form.facing || ['NORTH', 'SOUTH', 'EAST', 'WEST', 'NORTH_EAST', 'NORTH_WEST', 'SOUTH_EAST', 'SOUTH_WEST'].includes(form.facing) ? null : 'Select a valid facing.',
+    !form.propertyType || ['RESIDENTIAL', 'COMMERCIAL'].includes(form.propertyType) ? null : 'Select a valid property type.',
     money(form.price, 'Price'),
-    ['AVAILABLE', 'RESERVED', 'SOLD'].includes(form.availability) ? null : 'Select a valid availability.',
+    ['AVAILABLE', 'HOLD', 'BOOKED', 'REGISTERED', 'RESERVED', 'SOLD'].includes(form.availability) ? null : 'Select a valid availability.',
     optionalText(form.notes, 'Notes', 4000),
   );
 }

@@ -63,6 +63,7 @@ prisma.emailTemplate = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.tenant = { findUnique: vi.fn() };
 
 import express from 'express';
 import request from 'supertest';
@@ -88,6 +89,8 @@ beforeEach(() => {
   prisma.emailTemplate.create.mockReset();
   prisma.emailTemplate.update.mockReset();
   prisma.emailTemplate.delete.mockReset();
+  prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Generic CRM', vertical: 'generic' });
 });
 
 describe('GET /api/email_templates — list', () => {
@@ -323,12 +326,25 @@ describe('GET /api/email_templates?fields=summary — #920 slice 9 slim-shape op
       name: true,
       subject: true,
       category: true,
+      channel: true,
       tenantId: true,
       createdAt: true,
       updatedAt: true,
     });
     // body is intentionally absent — that's the whole point of the slim shape.
     expect(args.select.body).toBeUndefined();
+  });
+
+  test('channel filter scopes summary templates to the requested channel', async () => {
+    prisma.emailTemplate.findMany.mockResolvedValueOnce([]);
+
+    const app = makeApp();
+    const res = await request(app).get('/api/email_templates?fields=summary&channel=whatsapp');
+
+    expect(res.status).toBe(200);
+    const args = prisma.emailTemplate.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 1, channel: 'WHATSAPP' });
+    expect(args.select.channel).toBe(true);
   });
 
   test('default (no ?fields) does NOT forward select — back-compat preserved', async () => {

@@ -3,7 +3,39 @@ import { AlignCenter, AlignLeft, AlignRight, Bold, Edit, Eye, FileText, Italic, 
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
-const EMPTY_TEMPLATE = { name: '', subject: '', category: 'General', body: '' };
+const TEMPLATE_CHANNELS = [
+  { value: 'EMAIL', label: 'Email' },
+  { value: 'SMS', label: 'SMS' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+];
+
+const EMPTY_TEMPLATE = { name: '', subject: '', category: 'General', body: '', channel: 'EMAIL' };
+const SENDER_DETAIL_FIELDS = [
+  { key: 'sender.name', label: 'Sender Name', group: 'Sender Details' },
+  { key: 'sender.email', label: 'Sender Email', group: 'Sender Details' },
+  { key: 'sender.company', label: 'Sender Company', group: 'Sender Details' },
+];
+const DEFAULT_PERSONALIZATION_FIELDS = [
+  { key: 'contact.name', label: 'Contact Name', group: 'Contact' },
+  { key: 'contact.first_name', label: 'First Name', group: 'Contact' },
+  { key: 'contact.last_name', label: 'Last Name', group: 'Contact' },
+  { key: 'contact.email', label: 'Contact Email', group: 'Contact' },
+  { key: 'contact.phone', label: 'Contact Phone', group: 'Contact' },
+  { key: 'contact.company', label: 'Contact Company', group: 'Contact' },
+  { key: 'enrollmentId', label: 'Enrollment ID', group: 'Campaign' },
+  { key: 'sequenceId', label: 'Sequence ID', group: 'Campaign' },
+  { key: 'deal.title', label: 'Deal Title', group: 'Deal' },
+  { key: 'invoice.number', label: 'Invoice Number', group: 'Invoice' },
+  { key: 'payment.description', label: 'Payment Description', group: 'Payment' },
+  { key: 'pickup.address', label: 'Pickup Address', group: 'Pickup' },
+  { key: 'visit.title', label: 'Visit Title', group: 'Visit' },
+  { key: 'task.title', label: 'Task Title', group: 'Task' },
+  { key: 'activity.description', label: 'Activity Description', group: 'Activity' },
+  { key: 'expense.title', label: 'Expense Title', group: 'Expense' },
+  { key: 'contract.title', label: 'Contract Title', group: 'Contract' },
+  { key: 'estimate.title', label: 'Estimate Title', group: 'Estimate' },
+  { key: 'project.name', label: 'Project Name', group: 'Project' },
+];
 
 function toEditorHtml(value, fields) {
   let html = String(value || '');
@@ -25,6 +57,9 @@ function fromEditorHtml(element) {
 export default function GenericCampaignTemplates() {
   const notify = useNotify();
   const [templates, setTemplates] = useState([]);
+  const [templatePage, setTemplatePage] = useState(1);
+  const [templateChannel, setTemplateChannel] = useState('EMAIL');
+  const [templatePagination, setTemplatePagination] = useState({ page: 1, pageSize: 10, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -44,8 +79,9 @@ export default function GenericCampaignTemplates() {
   const loadTemplates = async () => {
     setLoading(true);
     try {
-      const result = await fetchApi('/api/email-templates');
-      setTemplates(Array.isArray(result) ? result : []);
+      const result = await fetchApi(`/api/email-templates?paginate=1&page=${templatePage}&limit=10&channel=${templateChannel}`);
+      setTemplates(Array.isArray(result) ? result : (result?.items || []));
+      if (result?.pagination) setTemplatePagination(result.pagination);
     } catch (_error) {
       setTemplates([]);
     } finally {
@@ -53,14 +89,23 @@ export default function GenericCampaignTemplates() {
     }
   };
 
-  useEffect(() => { loadTemplates(); }, []);
+  useEffect(() => { loadTemplates(); }, [templatePage, templateChannel]);
+
+  useEffect(() => {
+    setTemplatePage(1);
+  }, [templateChannel]);
 
   useEffect(() => {
     Promise.all([
       fetchApi('/api/email-templates/personalization-fields', { silent: true }).catch(() => ({ fields: [] })),
       fetchApi('/api/contacts?fields=summary&limit=100', { silent: true }).catch(() => ({ data: [] })),
     ]).then(([fieldResponse, contactResponse]) => {
-      setFields(Array.isArray(fieldResponse) ? fieldResponse : (fieldResponse?.fields || []));
+      const availableFields = Array.isArray(fieldResponse) ? fieldResponse : (fieldResponse?.fields || []);
+      const baseFields = availableFields.length > SENDER_DETAIL_FIELDS.length
+        ? availableFields
+        : [...DEFAULT_PERSONALIZATION_FIELDS, ...availableFields];
+      const existingKeys = new Set(baseFields.map(field => field.key));
+      setFields([...baseFields, ...SENDER_DETAIL_FIELDS.filter(field => !existingKeys.has(field.key))]);
       const rows = Array.isArray(contactResponse) ? contactResponse : (contactResponse?.data || []);
       setContacts(rows);
       if (rows[0]?.id) setPreviewContactId(String(rows[0].id));
@@ -149,7 +194,8 @@ export default function GenericCampaignTemplates() {
         name: editor.name.trim(),
         subject: editor.subject.trim(),
         category: editor.category?.trim() || 'General',
-        body: editor.body,
+      body: editor.body,
+      channel: editor.channel || 'EMAIL',
       };
       if (editor.id) {
         await fetchApi(`/api/email-templates/${editor.id}`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -190,19 +236,26 @@ export default function GenericCampaignTemplates() {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
         <div>
-          <h3 style={{ margin: 0 }}>Campaign Templates</h3>
-          <p style={{ margin: '0.35rem 0 0', color: 'var(--text-secondary)' }}>Create and manage reusable templates for Generic CRM campaigns.</p>
+          <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Templates</h3>
         </div>
-        <button type="button" className="btn-primary" onClick={() => setEditor({ ...EMPTY_TEMPLATE })} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
-          <Plus size={16} /> Create New Template
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <label style={{ ...fieldLabelStyle, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            Type
+            <select className="input-field" value={templateChannel} onChange={event => setTemplateChannel(event.target.value)} aria-label="Template type">
+              {TEMPLATE_CHANNELS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <button type="button" className="btn-primary" onClick={() => setEditor({ ...EMPTY_TEMPLATE, channel: templateChannel })} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+            <Plus size={16} /> Create New Template
+          </button>
+        </div>
       </div>
 
       {loading ? <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading templates...</p> : templates.length === 0 ? (
         <div className="card" style={{ padding: '4rem', textAlign: 'center' }}>
           <FileText size={42} style={{ color: 'var(--text-secondary)', opacity: 0.35, marginBottom: '1rem' }} />
           <h3 style={{ margin: '0 0 0.5rem' }}>No templates yet</h3>
-          <p style={{ color: 'var(--text-secondary)' }}>Create a template to use it in your campaign steps.</p>
+          <p style={{ color: 'var(--text-secondary)' }}>Create a template to use it in your sequence steps.</p>
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
@@ -220,11 +273,19 @@ export default function GenericCampaignTemplates() {
                 {(template.body || '').replace(/<[^>]+>/g, '').slice(0, 150)}
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
-                <button type="button" className="btn-secondary" onClick={() => setEditor({ id: template.id, name: template.name || '', subject: template.subject || '', category: template.category || 'General', body: template.body || '' })} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}><Edit size={14} /> Edit</button>
+                <button type="button" className="btn-secondary" onClick={() => setEditor({ id: template.id, name: template.name || '', subject: template.subject || '', category: template.category || 'General', body: template.body || '', channel: template.channel || templateChannel })} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}><Edit size={14} /> Edit</button>
                 <button type="button" className="btn-secondary" onClick={() => deleteTemplate(template)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#ef4444' }}><Trash2 size={14} /> Delete</button>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {!loading && templates.length > 0 && templatePagination.totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', padding: '1.25rem 0 0.25rem' }}>
+          <button type="button" className="btn-secondary" disabled={templatePage <= 1} onClick={() => setTemplatePage(page => Math.max(1, page - 1))}>Previous</button>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Page {templatePage} of {templatePagination.totalPages}</span>
+          <button type="button" className="btn-secondary" disabled={templatePage >= templatePagination.totalPages} onClick={() => setTemplatePage(page => Math.min(templatePagination.totalPages, page + 1))}>Next</button>
         </div>
       )}
 
@@ -240,6 +301,7 @@ export default function GenericCampaignTemplates() {
                 <label style={fieldLabelStyle}>Template Name<input className="input-field" value={editor.name} onChange={e => setEditor({ ...editor, name: e.target.value })} placeholder="Template name" /></label>
                 <label style={fieldLabelStyle}>Category<input className="input-field" value={editor.category} onChange={e => setEditor({ ...editor, category: e.target.value })} placeholder="Category" /></label>
               </div>
+              <label style={fieldLabelStyle}>Template Type<select className="input-field" value={editor.channel || 'EMAIL'} onChange={e => setEditor({ ...editor, channel: e.target.value })}>{TEMPLATE_CHANNELS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <label style={fieldLabelStyle}>Subject<input className="input-field" value={editor.subject} onFocus={() => setPersonalizationTarget('subject')} onChange={e => setEditor({ ...editor, subject: e.target.value })} placeholder="Subject" /></label>
               {aiDraftError && <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.7rem', padding: '0.9rem 1rem', border: '1px solid #f2b547', borderRadius: 8, background: 'rgba(251, 191, 36, 0.12)', color: 'var(--text-primary)' }}><span aria-hidden="true" style={{ color: '#d97706', fontSize: '1.2rem', lineHeight: 1 }}>×</span><div><strong style={{ display: 'block', marginBottom: '0.25rem' }}>AI access is not configured yet</strong><span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{aiDraftError}</span></div></div>}
               <div style={toolbarStyle}>

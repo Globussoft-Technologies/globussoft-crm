@@ -318,7 +318,7 @@ export default function GenericCampaignWizard({ campaign, onClose, onSaved }) {
     let alive = true;
     Promise.all([
       fetchApi('/api/sequences?fields=summary', { silent: true }).catch(() => []),
-      fetchApi('/api/email-templates?fields=summary', { silent: true }).catch(() => []),
+      fetchApi(`/api/email-templates?fields=summary&channel=${encodeURIComponent(draft.channel || campaign?.channel || 'EMAIL')}`, { silent: true }).catch(() => []),
       campaign?.sequenceId ? fetchApi(`/api/sequences/${campaign.sequenceId}/steps`, { silent: true }).catch(() => []) : Promise.resolve([]),
     ]).then(([seqs, tmpls, existingSteps]) => {
       if (!alive) return;
@@ -332,7 +332,7 @@ export default function GenericCampaignWizard({ campaign, onClose, onSaved }) {
       if (loaded.length) setDraft(current => ({ ...current, steps: loaded }));
     }).finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [campaign?.sequenceId]);
+  }, [campaign?.sequenceId, campaign?.channel, draft.channel]);
 
   useEffect(() => {
     let alive = true;

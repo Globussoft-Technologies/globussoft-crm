@@ -8,6 +8,7 @@
 // logic without real delivery.
 
 const { resolveSendGridConfig } = require("../services/travelSendGrid");
+const prisma = require("./prisma");
 
 function recipientList(value) {
   const values = Array.isArray(value) ? value : String(value || "").split(",");
@@ -39,7 +40,12 @@ async function sendEmail({ tenantId = null, to, cc = [], bcc = [], subject, text
   const bccRecipients = recipientList(bcc);
   if (ccRecipients) personalization.cc = ccRecipients;
   if (bccRecipients) personalization.bcc = bccRecipients;
-  const senderName = String(fromName || provider.fromName || "").trim();
+  let configuredSenderName = String(fromName || provider.fromName || "").trim();
+  if (!configuredSenderName && tenantId) {
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, vertical: true } }).catch(() => null);
+    if (tenant?.vertical === "generic") configuredSenderName = String(tenant.name || "").trim();
+  }
+  const senderName = configuredSenderName;
   const payload = {
     personalizations: [personalization],
     from: {

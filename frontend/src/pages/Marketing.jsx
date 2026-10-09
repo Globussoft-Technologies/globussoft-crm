@@ -108,13 +108,7 @@ function formatWindow(metadata) {
   return `${timezone} (${start}:00–${end}:00)`;
 }
 
-function campaignRate(engaged, sent) {
-  const total = Number(sent) || 0;
-  if (total <= 0) return 0;
-  return Math.round(((Number(engaged) || 0) / total) * 10000) / 100;
-}
-
-function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDelete }) {
+function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDelete, entityLabel = 'campaign' }) {
   const metadata = parseCampaignMetadata(campaign);
   const steps = Array.isArray(metadata.steps) ? metadata.steps : [];
   const statusLabel = campaign.status === 'Active' ? 'Running' : campaign.status || 'Draft';
@@ -132,8 +126,6 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
         display: 'flex',
         flexDirection: 'column',
         gap: '0.85rem',
-        minHeight: '340px',
-        height: '100%',
         boxSizing: 'border-box',
       }}
     >
@@ -145,21 +137,18 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
           <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{campaign.name}</h3>
           {description && <p style={{ margin: '0.4rem 0 0', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>{description}</p>}
         </div>
-        <span style={{ fontSize: '0.7rem', padding: '0.25rem 0.6rem', color: statusLabel === 'Running' ? '#047857' : 'var(--text-primary)', background: statusLabel === 'Running' ? 'rgba(16, 185, 129, 0.12)' : 'var(--subtle-bg-3)', border: statusLabel === 'Running' ? '1px solid rgba(16, 185, 129, 0.35)' : 'none', borderRadius: '6px', flexShrink: 0 }}>
-          {statusLabel}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.45rem', flexShrink: 0 }}>
+          <span style={{ fontSize: '0.7rem', padding: '0.25rem 0.6rem', color: statusLabel === 'Running' ? '#047857' : 'var(--text-primary)', background: statusLabel === 'Running' ? 'rgba(16, 185, 129, 0.12)' : 'var(--subtle-bg-3)', border: statusLabel === 'Running' ? '1px solid rgba(16, 185, 129, 0.35)' : 'none', borderRadius: '6px' }}>
+            {statusLabel}
+          </span>
+          <CampaignMetric value={campaign.sent ?? 0} label="Sent" />
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '0.3rem 1rem', padding: '0.65rem 0.75rem', background: 'var(--subtle-bg-2)', borderRadius: '8px', fontSize: '0.7rem' }}>
         <span style={{ color: 'var(--text-secondary)' }}>Trigger:</span><strong style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTrigger(metadata)}</strong>
         <span style={{ color: 'var(--text-secondary)' }}>Sequence:</span><strong style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{metadata.sequenceName || 'Not configured'}{steps.length ? ` (${steps.length} steps)` : ''}</strong>
         <span style={{ color: 'var(--text-secondary)' }}>Window:</span><strong style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatWindow(metadata)}</strong>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
-        <CampaignMetric value={campaign.sent ?? 0} label="Sent" />
-        <CampaignMetric value={`${campaignRate(campaign.opened, campaign.sent)}%`} label="Open Rate" />
-        <CampaignMetric value={`${campaignRate(campaign.clicked, campaign.sent)}%`} label="Click Rate" />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', paddingTop: '0.15rem', marginTop: 'auto', minHeight: '36px' }}>
@@ -169,17 +158,17 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
           </span>
         ) : <span />}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button type="button" onClick={campaign.status === 'Active' ? onPause : onPlay} aria-label={`${campaign.status === 'Active' ? 'Pause' : 'Play'} campaign ${campaign.name}`} title={campaign.status === 'Active' ? 'Pause campaign' : 'Play campaign'} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem' }}>
+          <button type="button" onClick={campaign.status === 'Active' ? onPause : onPlay} aria-label={`${campaign.status === 'Active' ? 'Pause' : 'Play'} ${entityLabel} ${campaign.name}`} title={campaign.status === 'Active' ? `Pause ${entityLabel}` : `Play ${entityLabel}`} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem' }}>
             {campaign.status === 'Active' ? <Pause size={13} /> : <Play size={13} />}
           </button>
-          <button type="button" onClick={onCopy} aria-label={`Copy campaign ${campaign.name}`} title="Copy campaign" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem' }}>
+          <button type="button" onClick={onCopy} aria-label={`Copy ${entityLabel} ${campaign.name}`} title={`Copy ${entityLabel}`} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem' }}>
             <Copy size={13} />
           </button>
-          <button type="button" onClick={onDelete} aria-label={`Delete campaign ${campaign.name}`} title="Delete campaign" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem', color: 'var(--danger-color, #ef4444)' }}>
+          <button type="button" onClick={onDelete} aria-label={`Delete ${entityLabel} ${campaign.name}`} title={`Delete ${entityLabel}`} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem', color: 'var(--danger-color, #ef4444)' }}>
             <Trash2 size={13} />
           </button>
           <button type="button" onClick={onOpen} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.7rem', fontSize: '0.72rem' }}>
-          <Edit3 size={13} /> Edit Campaign
+          <Edit3 size={13} /> Edit {entityLabel[0].toUpperCase() + entityLabel.slice(1)}
           </button>
         </div>
       </div>
@@ -203,10 +192,10 @@ function CampaignMetric({ value, label }) {
 // one is deleting its `hidden` flag, not rebuilding a feature.
 const MARKETING_TABS = [
   { key: 'templates', label: 'Templates', color: 'var(--primary-color)', genericOnly: true },
-  { key: 'campaigns', label: 'Email Campaigns', color: 'var(--primary-color)', channel: 'EMAIL' },
-  { key: 'sms', label: 'SMS Campaigns', color: 'var(--primary-color)', hidden: true },
-  { key: 'whatsapp', label: 'WhatsApp Campaigns', color: 'var(--primary-color)', hidden: true, channel: 'WHATSAPP' },
-  { key: 'push', label: 'Push Campaigns', color: '#8b5cf6', hidden: true },
+  { key: 'campaigns', label: 'Email Campaigns', genericLabel: 'Email Sequences', color: 'var(--primary-color)', channel: 'EMAIL' },
+  { key: 'sms', label: 'SMS Campaigns', genericLabel: 'SMS Sequences', color: 'var(--primary-color)', hidden: true },
+  { key: 'whatsapp', label: 'WhatsApp Campaigns', genericLabel: 'WhatsApp Sequences', color: 'var(--primary-color)', hidden: true, channel: 'WHATSAPP' },
+  { key: 'push', label: 'Push Campaigns', genericLabel: 'Push Sequences', color: '#8b5cf6', hidden: true },
   { key: 'forms', label: 'Embedded Forms', color: 'var(--primary-color)' },
 ];
 
@@ -214,7 +203,7 @@ export default function Marketing() {
   const notify = useNotify();
   const { tenant } = useContext(AuthContext);
   const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
-  const pageTitle = isGeneric ? 'Marketing Campaign' : 'Marketing';
+  const pageTitle = isGeneric ? 'Marketing Sequences' : 'Marketing';
   const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns', 'templates', 'sms', 'push', 'forms'
 
   // ───── Forms State ─────
@@ -232,6 +221,8 @@ export default function Marketing() {
 
   // ───── Campaigns State ─────
   const [campaigns, setCampaigns] = useState([]);
+  const [campaignPage, setCampaignPage] = useState(1);
+  const [campaignPagination, setCampaignPagination] = useState({ page: 1, pageSize: 8, total: 0, totalPages: 1 });
   const [showCreateCampaign, setShowCreateCampaign] = useState(false);
   const [newCampaignName, setNewCampaignName] = useState('');
   const [editingCampaign, setEditingCampaign] = useState(null); // { id, name, subject, body, ... } open in detail modal
@@ -244,7 +235,9 @@ export default function Marketing() {
       })
     : campaigns;
   const displayedCampaigns = isGeneric
-    ? visibleCampaigns.filter(c => (activeTab === 'sms' ? c.channel === 'SMS' : activeTab === 'whatsapp' ? c.channel === 'WHATSAPP' : !c.channel || c.channel === 'EMAIL'))
+    ? (activeTab === 'campaigns'
+      ? visibleCampaigns
+      : visibleCampaigns.filter(c => (activeTab === 'sms' ? c.channel === 'SMS' : c.channel === 'WHATSAPP')))
     : visibleCampaigns;
 
   // ───── SMS Blast Composer State (#502) ─────
@@ -257,14 +250,18 @@ export default function Marketing() {
     if (activeTab === 'campaigns') loadCampaigns();
     if (activeTab === 'sms' && !isGeneric) loadSmsHistory();
     if (activeTab === 'forms') loadSavedForms();
-  }, [activeTab]);
+  }, [activeTab, campaignPage]);
 
   const loadCampaigns = async () => {
     try {
-      const data = await fetchApi(isGeneric ? '/api/marketing/campaigns' : '/api/marketing/campaigns?channel=EMAIL');
+      const data = await fetchApi(isGeneric
+        ? `/api/marketing/campaigns?paginate=1&page=${campaignPage}&limit=8&campaignType=EMAIL`
+        : '/api/marketing/campaigns?channel=EMAIL');
+      const items = Array.isArray(data) ? data : data?.items;
+      if (isGeneric && data?.pagination) setCampaignPagination(data.pagination);
       // Defensive — older rows may have channel=null (treat as EMAIL).
-      setCampaigns(Array.isArray(data)
-        ? data.filter(c => isGeneric
+      setCampaigns(Array.isArray(items)
+        ? items.filter(c => isGeneric
           ? !c.channel || ['EMAIL', 'SMS', 'WHATSAPP'].includes(c.channel)
           : !c.channel || c.channel === 'EMAIL')
         : []);
@@ -752,7 +749,7 @@ ${fields.map(f => {
 
   return (
     <div className="marketing-page" style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+      <header style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>{pageTitle}</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage outbound campaigns and inbound lead capture forms.</p>
@@ -795,7 +792,7 @@ ${fields.map(f => {
                 onClick={() => setActiveTab(tab.key)}
                 style={tabButtonStyle(activeTab === tab.key, tab.color)}
               >
-                {tab.label}
+                {isGeneric && tab.genericLabel ? tab.genericLabel : tab.label}
               </button>
             ))}
           </div>
@@ -818,7 +815,7 @@ ${fields.map(f => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
             {campaigns.length > 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <DateRangeFilter value={campaignDateFilter} onChange={setCampaignDateFilter} label="Filter by created date" />
+                <DateRangeFilter value={campaignDateFilter} onChange={(value) => { setCampaignDateFilter(value); if (isGeneric) setCampaignPage(1); }} label="Filter by created date" />
                     {displayedCampaigns.length !== campaigns.length && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                     {displayedCampaigns.length} of {campaigns.length}
@@ -827,7 +824,7 @@ ${fields.map(f => {
               </div>
             ) : <span />}
             <button className="btn-primary" onClick={startCreateCampaign} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Plus size={18} /> Create Campaign
+              <Plus size={18} /> {isGeneric ? 'Create Sequence' : 'Create Campaign'}
             </button>
           </div>
 
@@ -841,6 +838,7 @@ ${fields.map(f => {
                 onPlay={() => playCampaign(camp)}
                 onCopy={() => copyCampaign(camp)}
                 onDelete={() => deleteCampaign(camp.id)}
+                entityLabel="sequence"
               />
             ) : (
               // #495: card is now a button so click + keyboard (Enter/Space)
@@ -880,11 +878,18 @@ ${fields.map(f => {
             {campaigns.length === 0 && (
               <div style={{ gridColumn: '1 / -1', padding: '4rem', textAlign: 'center', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px dashed var(--border-color)' }}>
                 <Megaphone size={48} color="var(--text-secondary)" style={{ opacity: 0.3, margin: '0 auto 1rem' }} />
-                <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>No campaigns found</h3>
-                <p style={{ color: 'var(--text-secondary)' }}>Launch your first email campaign to start tracking engagement.</p>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>{isGeneric ? 'No sequences found' : 'No campaigns found'}</h3>
+                <p style={{ color: 'var(--text-secondary)' }}>{isGeneric ? 'Create your first email sequence to start sending automatically.' : 'Launch your first email campaign to start tracking engagement.'}</p>
               </div>
             )}
           </div>
+          {isGeneric && activeTab === 'campaigns' && campaignPagination.totalPages > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', padding: '1.25rem 0 0.25rem' }}>
+              <button type="button" className="btn-secondary" disabled={campaignPage <= 1} onClick={() => setCampaignPage((page) => Math.max(1, page - 1))}>Previous</button>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Page {campaignPage} of {campaignPagination.totalPages}</span>
+              <button type="button" className="btn-secondary" disabled={campaignPage >= campaignPagination.totalPages} onClick={() => setCampaignPage((page) => Math.min(campaignPagination.totalPages, page + 1))}>Next</button>
+            </div>
+          )}
         </div>
       )}
 

@@ -37,6 +37,7 @@ prisma.pickupLocation.update = vi.fn();
 prisma.plotSite.findMany = vi.fn();
 prisma.plotSite.create = vi.fn();
 prisma.plotSite.update = vi.fn();
+prisma.plotSite.updateMany = vi.fn();
 prisma.contact.findMany = vi.fn();
 prisma.user.findMany = vi.fn();
 prisma.user.create = vi.fn();
@@ -89,6 +90,7 @@ function makeApp({ tenantId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prisma.plotSite.updateMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
   prisma.customerPickup.findUnique.mockResolvedValue(null);
   prisma.transportPerson.updateMany.mockResolvedValue({ count: 1 });
@@ -1228,10 +1230,27 @@ describe('plot broker mutations', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ status: 'PLOT_SELECTED', handedToBilling: true, bookingStatus: 'PLOT_RESERVED' });
-    expect(prisma.plotSite.update).toHaveBeenCalledWith({ where: { id: 30 }, data: { availability: 'RESERVED' } });
+    expect(prisma.plotSite.updateMany).toHaveBeenCalledWith({ where: { id: 30, tenantId: 7, isActive: true, availability: 'AVAILABLE' }, data: { availability: 'RESERVED' } });
     expect(prisma.plotBooking.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ contactId: 61, plotSiteId: 30, transportPersonId: 41, plotBrokerId: 51 }),
     }));
+  });
+
+  test('only one concurrent reservation wins even when both reads see AVAILABLE', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      workflowStatusJson: '{"customer-61":{"status":"PLOT_SHOWN"}}', isActive: true,
+    });
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41, customerIdsJson: '[61]', plotSiteIdsJson: '[30]', assignmentStatusJson: '{"customer-61":{"status":"COMPLETED"}}',
+    }]);
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, availability: 'AVAILABLE', isActive: true });
+    prisma.plotSite.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    const responses = await Promise.all([0, 1].map(() => request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/brokers/me/customers/61/workflow').send({ status: 'PLOT_SELECTED' })));
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect(responses.find((response) => response.status === 409).body.code).toBe('PLOT_NOT_AVAILABLE');
+    expect(prisma.plotBooking.create).toHaveBeenCalledTimes(1);
   });
 
   test('records a no-show so the visit can be rescheduled', async () => {
@@ -1469,6 +1488,28 @@ describe('plot broker mutations', () => {
     expect(prisma.plotWorkflowEvent.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ stage: 'PAYMENT', toStatus: 'PAYMENT_RECEIVED' }),
     }));
+  });
+
+  test('returns 409 when the database rejects a concurrently reused payment reference', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 3, userRoles: [{ role: { key: 'BILLING' } }] });
+    prisma.billingPerson.findFirst.mockResolvedValue({ id: 71, userId: 3, customerIdsJson: '[61]', plotSiteIdsJson: '[30]', isActive: true });
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, customerIdsJson: '[61]', plotSiteIdsJson: '[30]', isActive: true,
+      workflowStatusJson: '{"customer-61-plot-30":{"status":"INTEREST_CONFIRMED","billingStatus":"PAYMENT_PENDING","plotId":30,"invoiceId":81,"bookingId":91}}',
+    });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 91 });
+    prisma.invoice.findFirst.mockResolvedValue({ id: 81, amount: 250000, balance: 250000 });
+    prisma.payment.create.mockRejectedValueOnce({ code: 'P2002', meta: { target: 'Payment_tenantId_plotPaymentReference_key' } });
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/billing/me/assignments/51-61-30/status')
+      .send({ status: 'PAYMENT_RECEIVED', paymentMethod: 'bank_transfer', transactionRef: 'RACE-REF' });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('DUPLICATE_TRANSACTION_REFERENCE');
+    expect(prisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ tenantId: 7, plotPaymentReference: 'RACE-REF' }),
+    }));
+    expect(prisma.plotBooking.update).not.toHaveBeenCalled();
+    expect(prisma.plotWorkflowEvent.create).not.toHaveBeenCalled();
   });
 
   test('verifies the recorded payment without selling the plot', async () => {

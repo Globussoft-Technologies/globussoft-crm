@@ -4367,6 +4367,8 @@ model Payment {
   currency    String    @default("USD")
   gateway     String // stripe, razorpay
   gatewayId   String? // their charge/payment ID
+  // Only Generic plot payments set this key; other gateways/verticals remain unchanged.
+  plotPaymentReference String? @db.VarChar(128)
   status      String    @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
   paidAt      DateTime?
   metadata    String?   @db.Text
@@ -4380,6 +4382,7 @@ model Payment {
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@unique([tenantId, plotPaymentReference], map: "Payment_tenantId_plotPaymentReference_key")
 }
 
 // ── Accounting Sync ──────────────────────────────────────────────

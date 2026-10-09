@@ -365,7 +365,7 @@ async function claimCustomerForPerson(client, {
 }
 
 function handleClaimError(error, res) {
-  if (!["CUSTOMER_ALREADY_CLAIMED", "WORKFLOW_CONFLICT"].includes(error?.code)) return false;
+  if (!["CUSTOMER_ALREADY_CLAIMED", "WORKFLOW_CONFLICT", "PLOT_NOT_AVAILABLE"].includes(error?.code)) return false;
   res.status(error.statusCode || 409).json({ error: error.message, code: error.code });
   return true;
 }
@@ -1596,7 +1596,17 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
         });
       }
       await prisma.$transaction(async (tx) => {
-        reservedPlot = await tx.plotSite.update({ where: { id: plotId }, data: { availability: "RESERVED" } });
+        const reservation = await tx.plotSite.updateMany({
+          where: { id: plotId, tenantId, isActive: true, availability: "AVAILABLE" },
+          data: { availability: "RESERVED" },
+        });
+        if (reservation.count !== 1) {
+          const error = new Error("The plot has already been reserved. Refresh and choose another plot.");
+          error.statusCode = 409;
+          error.code = "PLOT_NOT_AVAILABLE";
+          throw error;
+        }
+        reservedPlot = { ...plot, availability: "RESERVED" };
         const customerPickup = await tx.customerPickup.findFirst({
           where: { tenantId, contactId: customerId },
           select: { id: true },
@@ -2013,6 +2023,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", async (req, res) =
             amount: receivedAmount,
             gateway: paymentMethod,
             gatewayId: transactionRef,
+            plotPaymentReference: transactionRef,
             status: "PENDING",
             tenantId: req.user.tenantId,
           },
@@ -2123,6 +2134,9 @@ router.patch("/billing/me/assignments/:assignmentKey/status", async (req, res) =
   } catch (error) {
     if (handleClaimError(error, res)) return undefined;
     console.error("pickup-plot-inventory PATCH /billing/me/assignments/:assignmentKey/status error:", error);
+    if (error.code === "P2002" && String(error.meta?.target || "").includes("plotPaymentReference")) {
+      return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });
+    }
     return res.status(500).json({ error: "Failed to update billing status", code: "BILLING_STATUS_UPDATE_FAILED" });
   }
 });

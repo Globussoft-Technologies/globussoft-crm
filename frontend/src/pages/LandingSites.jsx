@@ -2,7 +2,7 @@ import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link, useNavigate } from 'react-router-dom';
 
-import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Sparkles, ExternalLink, LayoutGrid, Megaphone } from 'lucide-react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Sparkles, ExternalLink, LayoutGrid, Megaphone, Calendar } from 'lucide-react';
 
 import { fetchApi } from '../utils/api';
 
@@ -13,6 +13,9 @@ import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../compone
 import { useNotify } from '../utils/notify';
 
 import { AuthContext } from '../App';
+import { DEFAULT_WELLNESS_LANDING_LAYOUT, DEFAULT_WELLNESS_LANDING_THEME, WELLNESS_LANDING_LAYOUTS, WELLNESS_LANDING_THEMES } from '../utils/wellnessLandingThemes';
+import { getWellnessColorOverrides, resolveWellnessLandingTheme } from '../utils/wellnessLandingThemes';
+import WellnessPaletteEditor from '../components/landing-pages/WellnessPaletteEditor';
 
 
 
@@ -240,6 +243,12 @@ export default function LandingSites() {
 
   const notify = useNotify();
 
+  const reportGenerationError = (message) => {
+    const text = message || 'Generation failed.';
+    setGenError(text);
+    notify.error(text);
+  };
+
   const navigate = useNavigate();
 
   const auth = useContext(AuthContext) || {};
@@ -300,6 +309,14 @@ export default function LandingSites() {
     ctaText: 'Get Started',
 
     imageMode: 'auto',
+
+    wellnessTheme: DEFAULT_WELLNESS_LANDING_THEME,
+
+    wellnessCustomColors: null,
+
+    wellnessCustomBaseThemeId: DEFAULT_WELLNESS_LANDING_THEME,
+
+    wellnessLayout: DEFAULT_WELLNESS_LANDING_LAYOUT,
 
   });
 
@@ -441,6 +458,10 @@ export default function LandingSites() {
 
   }, [pages, pinnedPage, rangeStart, rangeEnd]);
 
+  const totalLibraryPages = pages.length + (
+    pinnedPage && !pages.some((page) => page.id === pinnedPage.id) ? 1 : 0
+  );
+
   useEffect(() => {
     if (!hasMore || loading || loadingMore) return;
     const node = sentinelRef.current;
@@ -510,7 +531,7 @@ export default function LandingSites() {
 
     if (!form.campaignName.trim()) {
 
-      setGenError('Campaign name is required.');
+      reportGenerationError('Campaign name is required.');
 
       return;
 
@@ -518,7 +539,7 @@ export default function LandingSites() {
 
     if (!form.campaignGoal.trim()) {
 
-      setGenError('Campaign goal is required.');
+      reportGenerationError('Campaign goal is required.');
 
       return;
 
@@ -526,14 +547,14 @@ export default function LandingSites() {
 
     if (!form.audience.trim()) {
 
-      setGenError('Audience is required.');
+      reportGenerationError('Audience is required.');
 
       return;
 
     }
 
     if (slotError) {
-      setGenError(slotError);
+      reportGenerationError(slotError);
       return;
     }
 
@@ -582,6 +603,14 @@ export default function LandingSites() {
 
           imageMode: form.imageMode,
 
+          wellnessTheme: isWellnessTenant ? form.wellnessTheme : undefined,
+
+          wellnessCustomColors: isWellnessTenant && form.wellnessTheme === 'custom' ? form.wellnessCustomColors : undefined,
+
+          wellnessCustomBaseThemeId: isWellnessTenant && form.wellnessTheme === 'custom' ? form.wellnessCustomBaseThemeId : undefined,
+
+          wellnessLayout: isWellnessTenant ? form.wellnessLayout : undefined,
+
           autoCreate: true,
 
         }),
@@ -615,7 +644,7 @@ export default function LandingSites() {
 
       } else {
 
-        notify.success('AI draft created. Review the page before publishing.');
+        notify.success('Landing site generated successfully. Opening the builder.');
 
       }
 
@@ -629,19 +658,19 @@ export default function LandingSites() {
 
       if (err?.status === 429 && err?.code === 'LLM_BUDGET_EXCEEDED') {
 
-        setGenError('This tenant has reached its monthly LLM spend cap.');
+        reportGenerationError('This tenant has reached its monthly LLM spend cap.');
 
       } else if (err?.status === 429 && err?.code === 'GEMINI_LIMIT_EXHAUSTED') {
 
-        setGenError('Gemini limit has been exhausted. Please try again later.');
+        reportGenerationError('Gemini limit has been exhausted. Please try again later.');
 
       } else if (err?.code === 'AI_NOT_CONFIGURED' || err?.code === 'AI_CREDITS_EXHAUSTED') {
 
-        setGenError(aiBlockedMessage(err.code));
+        reportGenerationError(aiBlockedMessage(err.code));
 
       } else {
 
-        setGenError(err?.message || 'Generation failed.');
+        reportGenerationError(err?.message || 'Generation failed.');
 
       }
 
@@ -698,7 +727,13 @@ export default function LandingSites() {
 
       await fetchApi(`/api/landing-pages/${page.id}`, { method: 'DELETE' });
 
-      loadPages();
+      // Remove the deleted card immediately, including the separately
+      // pinned published site. The follow-up reset fetch also keeps the
+      // current list and pagination metadata in sync with the server.
+      setPages((current) => current.filter((item) => item.id !== page.id));
+      setPinnedPage((current) => (current?.id === page.id ? null : current));
+      setCopiedId((current) => (current === page.id ? null : current));
+      await loadPages({ reset: true, nextPage: 1 });
 
     } catch (err) {
 
@@ -783,10 +818,15 @@ export default function LandingSites() {
 
           {isWellnessTenant && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-              <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by created date" />
-              {visiblePages.length !== pages.length && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.35rem' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  <Calendar size={14} /> Filter by created date
+                </span>
+                <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} />
+              </div>
+              {visiblePages.length !== totalLibraryPages && (
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  {visiblePages.length} of {pages.length}
+                  {visiblePages.length} of {totalLibraryPages}
                 </span>
               )}
             </div>
@@ -1011,10 +1051,6 @@ export default function LandingSites() {
 
             </p>
 
-            {genError && <div style={{ marginBottom: '1rem', padding: '0.75rem', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontSize: '0.85rem' }}>{genError}</div>}
-
-
-
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.9rem' }}>
 
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
@@ -1044,6 +1080,78 @@ export default function LandingSites() {
                 <input className="input-field" value={form.campaignName} onChange={(e) => setForm((s) => ({ ...s, campaignName: e.target.value }))} placeholder="Hair Treatment Consultation" />
 
               </label>
+
+              {isWellnessTenant && (
+                <div style={{ gridColumn: '1 / -1', border: '1px solid rgba(31,138,112,0.2)', borderRadius: 14, padding: '0.8rem', background: 'rgba(31,138,112,0.04)' }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.25rem' }}>Wellness campaign palette</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.65rem' }}>Choose the visual direction for this campaign. You can change it later in the builder.</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.55rem' }}>
+                    {WELLNESS_LANDING_THEMES.map((theme) => {
+                      const selected = form.wellnessTheme === theme.id;
+                      return (
+                        <button
+                          key={theme.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => setForm((current) => ({ ...current, wellnessTheme: theme.id, wellnessCustomColors: null, wellnessCustomBaseThemeId: theme.id }))}
+                          style={{ border: `1px solid ${selected ? theme.colors[0] : 'var(--border-color)'}`, borderRadius: 10, padding: '0.55rem', background: selected ? `${theme.colors[2]}88` : 'var(--surface-color)', cursor: 'pointer', textAlign: 'left', color: 'var(--text-primary)' }}
+                        >
+                          <span style={{ display: 'block', height: 20, borderRadius: 6, marginBottom: 6, background: `linear-gradient(135deg, ${theme.colors[0]}, ${theme.colors[1]})` }} />
+                          <strong style={{ display: 'block', fontSize: '0.76rem' }}>{theme.label}</strong>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ marginTop: '0.85rem', borderTop: '1px solid rgba(31,138,112,0.16)', paddingTop: '0.75rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.55rem', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.wellnessTheme === 'custom'}
+                        onChange={(event) => setForm((current) => {
+                          const baseTheme = WELLNESS_LANDING_THEMES.find((theme) => theme.id === current.wellnessTheme)
+                            || WELLNESS_LANDING_THEMES.find((theme) => theme.id === current.wellnessCustomBaseThemeId)
+                            || WELLNESS_LANDING_THEMES.find((theme) => theme.id === DEFAULT_WELLNESS_LANDING_THEME);
+                          return event.target.checked
+                            ? { ...current, wellnessTheme: 'custom', wellnessCustomBaseThemeId: baseTheme.id, wellnessCustomColors: current.wellnessCustomColors || getWellnessColorOverrides(baseTheme) }
+                            : { ...current, wellnessTheme: baseTheme.id, wellnessCustomBaseThemeId: baseTheme.id, wellnessCustomColors: null };
+                        })}
+                      />
+                      Use custom colors
+                    </label>
+                    {form.wellnessTheme === 'custom' ? (
+                      <WellnessPaletteEditor
+                        theme={resolveWellnessLandingTheme('custom', form.wellnessCustomColors)}
+                        baseThemeId={form.wellnessCustomBaseThemeId || DEFAULT_WELLNESS_LANDING_THEME}
+                        onChange={(nextTheme) => setForm((current) => ({ ...current, wellnessTheme: 'custom', wellnessCustomColors: getWellnessColorOverrides(nextTheme) }))}
+                        onReset={() => setForm((current) => ({ ...current, wellnessCustomColors: getWellnessColorOverrides(WELLNESS_LANDING_THEMES.find((theme) => theme.id === (current.wellnessCustomBaseThemeId || DEFAULT_WELLNESS_LANDING_THEME))) }))}
+                      />
+                    ) : (
+                      <div style={{ border: '1px dashed var(--border-color)', borderRadius: 8, padding: '0.65rem 0.8rem', background: 'rgba(255,255,255,0.45)', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                        Turn this on to fine-tune the wellness palette by color role before generating the campaign.
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, margin: '0.9rem 0 0.25rem' }}>Campaign layout</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.65rem' }}>Choose the page composition that best fits this wellness campaign.</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.55rem' }}>
+                    {WELLNESS_LANDING_LAYOUTS.map((layout) => {
+                      const selected = form.wellnessLayout === layout.id;
+                      return (
+                        <button
+                          key={layout.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => setForm((current) => ({ ...current, wellnessLayout: layout.id }))}
+                          style={{ border: `1px solid ${selected ? 'var(--accent-color)' : 'var(--border-color)'}`, borderRadius: 10, padding: '0.55rem', background: selected ? 'rgba(31,138,112,0.10)' : 'var(--surface-color)', cursor: 'pointer', textAlign: 'left', color: 'var(--text-primary)' }}
+                        >
+                          <strong style={{ display: 'block', fontSize: '0.76rem' }}>{layout.label}</strong>
+                          <span style={{ display: 'block', marginTop: 4, fontSize: '0.68rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{layout.description}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
@@ -1151,6 +1259,16 @@ export default function LandingSites() {
             </div>
 
 
+
+            {genError && (
+              <div
+                role="alert"
+                aria-live="assertive"
+                style={{ marginTop: '1.1rem', padding: '0.8rem 0.9rem', borderRadius: '9px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.22)', color: '#dc2626', fontSize: '0.85rem', lineHeight: 1.45 }}
+              >
+                {genError}
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '1.2rem' }}>
 

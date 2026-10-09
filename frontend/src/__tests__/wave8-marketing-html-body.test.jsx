@@ -23,6 +23,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { AuthContext } from '../App';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -52,6 +53,17 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifySuccess.mockReset();
 });
+
+// This test covers the legacy email-campaign editor. Without a tenant,
+// Marketing renders the Generic CRM campaign wizard rather than that editor.
+const renderLegacyMarketing = (Marketing) =>
+  render(
+    <MemoryRouter>
+      <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'wellness' } }}>
+        <Marketing />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
 
 describe('#596 Marketing — Email Campaign body preserves HTML on save', () => {
   it('HTML body in the editor is forwarded verbatim to the /schedule POST', async () => {
@@ -84,11 +96,7 @@ describe('#596 Marketing — Email Campaign body preserves HTML on save', () => 
       return Promise.resolve({ ok: true });
     });
 
-    render(
-      <MemoryRouter>
-        <Marketing />
-      </MemoryRouter>,
-    );
+    renderLegacyMarketing(Marketing);
 
     await waitFor(() => {
       expect(screen.getByText(/HTML Body Test/)).toBeInTheDocument();

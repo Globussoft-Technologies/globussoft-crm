@@ -1,0 +1,647 @@
+/* Travel pages with controls that need a defined row order at narrow widths. */
+.curriculum-admin__hint-popover {
+  top: calc(100% + 8px) !important;
+  bottom: auto !important;
+  left: auto !important;
+  right: 0 !important;
+  transform: none !important;
+  width: min(300px, calc(100vw - 24px)) !important;
+  max-width: calc(100vw - 24px) !important;
+  box-sizing: border-box !important;
+  z-index: 9999 !important;
+}
+
+.quotes-admin-table-scroll {
+  max-width: 100%;
+  overflow-x: auto !important;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.quotes-admin-table {
+  width: max(100%, 1100px) !important;
+  min-width: 1100px !important;
+  table-layout: auto !important;
+}
+
+.pricing-rules-table-scroll {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto !important;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.pricing-rules-table-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.pricing-rules-table-scroll::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  background: var(--text-secondary);
+}
+
+.embassy-rules-table-scroll {
+  max-width: 100%;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.embassy-rules-table-scroll table.stable-table.embassy-rules-table {
+  display: table;
+  overflow: visible;
+}
+
+.embassy-rules-table-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.embassy-rules-table-scroll::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  background: var(--text-secondary);
+}
+
+@media (max-width: 1100px) {
+  .finance-page .finance-page__filters.pricing-rules-filters > svg {
+    display: none;
+  }
+
+  .leads-page-header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start !important;
+    gap: 10px !important;
+  }
+
+  .leads-page-header > :first-child {
+    min-width: 0;
+  }
+
+  .leads-page-header__actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px !important;
+  }
+
+  .leads-page-header__actions > button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .travel-leads-actions-toolbar {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px !important;
+  }
+
+  .travel-leads-filters {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px !important;
+  }
+
+  .travel-leads-filter-controls {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+    gap: 8px !important;
+  }
+
+  .travel-leads-filter-controls > svg {
+    display: none;
+  }
+
+  .travel-leads-filter-controls > select {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .travel-leads-search-toolbar {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px !important;
+    padding: 12px !important;
+  }
+
+  .travel-leads-search-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    min-width: 0;
+    gap: 8px !important;
+  }
+
+  .travel-leads-search-controls > div:first-child {
+    width: 100% !important;
+    min-width: 0;
+  }
+
+  .travel-leads-search-controls > div:first-child input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .travel-leads-search-controls > button,
+  .travel-leads-search-controls > div > button {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .travel-leads-search-actions {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+    width: 100%;
+    min-width: 0;
+    gap: 8px !important;
+  }
+
+  .travel-leads-search-actions > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .travel-trips-page .travel-trips-page__header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px !important;
+  }
+
+  .travel-trips-page__header > :first-child {
+    min-width: 0;
+  }
+
+  .travel-trips-page__header > button {
+    justify-self: start;
+  }
+
+  .itineraries-page .itineraries-page__header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start !important;
+    gap: 10px !important;
+  }
+
+  .itineraries-page__header > :first-child {
+    min-width: 0;
+  }
+
+  .itineraries-page__header-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px !important;
+  }
+
+  .itineraries-page__header-actions > button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .diagnostics-page {
+    padding: clamp(12px, 2.5vw, 24px) !important;
+    min-width: 0;
+  }
+
+  .diagnostics-page .diagnostics-filter-bar,
+  .curriculum-admin-page .curriculum-admin__header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start !important;
+    gap: 12px !important;
+  }
+
+  .diagnostics-page__actions,
+  .curriculum-admin__actions {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+    gap: 8px !important;
+  }
+
+  .diagnostics-page__actions > a,
+  .curriculum-admin__actions > *,
+  .curriculum-admin__ai-action > button {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .diagnostics-page__actions > a {
+    justify-content: center;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .diagnostics-page__filters,
+  .diagnostics-page__filter-controls,
+  .diagnostics-page__selection-actions {
+    display: grid !important;
+    width: 100%;
+    min-width: 0;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .diagnostics-page__filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diagnostics-page__filter-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .diagnostics-page__filter-icon {
+    display: none;
+  }
+
+  .diagnostics-page__filter-controls > *,
+  .diagnostics-page__selection-actions > * {
+    min-width: 0 !important;
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .diagnostics-page__filter-controls > div > button {
+    width: 100% !important;
+  }
+
+  .diagnostics-page__selection-actions {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    margin-left: 0 !important;
+  }
+
+  .curriculum-admin__actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .curriculum-admin__ai-action {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 768px) {
+  .finance-page:not(.invoices-admin-page) .finance-page__table-card.pricing-rules-table-scroll {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: min(460px, 65dvh) !important;
+    overflow: auto !important;
+    overscroll-behavior: contain !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .tally-export-trips-page {
+    padding: 12px !important;
+  }
+
+  .tally-export-trip-filters {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+  }
+
+  .tally-export-trip-filters > label,
+  .tally-export-trip-filters > select {
+    width: 100%;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .tally-export-trip-filters > label[for="tally-trip-search"] {
+    margin-bottom: 4px;
+  }
+
+  .tally-export-trip-table-scroll {
+    max-width: 100%;
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tally-export-trip-table {
+    width: max(100%, 900px) !important;
+    min-width: 900px !important;
+    table-layout: auto !important;
+  }
+
+  .pricing-rules-table-scroll {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pricing-rules-table--seasons {
+    width: max(100%, 760px) !important;
+    table-layout: auto !important;
+  }
+
+  .pricing-rules-table--markup {
+    width: max(100%, 900px) !important;
+    table-layout: auto !important;
+  }
+
+  .leads-page-header__actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .travel-leads-actions-toolbar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px !important;
+  }
+
+  .travel-leads-actions-toolbar > button,
+  .travel-leads-actions-toolbar > :is(div, span) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .travel-leads-actions-toolbar > span[aria-hidden="true"] {
+    display: none;
+  }
+
+  .travel-leads-actions-toolbar > button,
+  .travel-leads-actions-toolbar > .lead-bulk-actions-control,
+  .travel-leads-actions-toolbar .lead-bulk-actions-control > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .travel-leads-actions-toolbar .lead-bulk-actions-control > [role="menu"] {
+    left: auto !important;
+    right: 0 !important;
+    width: calc(200% + 8px) !important;
+    max-width: calc(100vw - 2rem);
+    box-sizing: border-box;
+  }
+
+  [data-vertical="travel"] .leads-pagination-footer {
+    padding: 0.75rem 1rem !important;
+    box-sizing: border-box;
+  }
+
+  [data-vertical="travel"] .leads-pagination-controls {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.5rem !important;
+  }
+
+  .leads-pagination-page-size,
+  .leads-pagination-navigation {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    white-space: nowrap;
+  }
+
+  [data-vertical="travel"] .leads-pagination-navigation {
+    margin-left: auto;
+  }
+
+  .travel-leads-search-controls {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .travel-leads-search-controls > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .travel-leads-search-controls > button,
+  .travel-leads-search-controls > div:not(:first-child) {
+    grid-column: auto;
+  }
+
+  .travel-trips-page {
+    padding: clamp(12px, 3vw, 20px) !important;
+  }
+
+  .travel-trip-create-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    padding: 1rem !important;
+    box-sizing: border-box;
+  }
+
+  .travel-trip-date-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.65rem !important;
+  }
+
+  .travel-trip-date-row > label,
+  .travel-trip-date-row input {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .travel-trips-page__header > button {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .travel-trips-page__filters {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .travel-trips-page__filters > svg {
+    display: none;
+  }
+
+  .travel-trips-page__search,
+  .travel-trips-page__filters > select {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  .travel-trips-page__search input {
+    width: 100%;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .travel-trips-page__filters > button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .itineraries-page {
+    padding: clamp(12px, 3vw, 20px) !important;
+  }
+
+  .itin-filter-bar {
+    gap: 8px !important;
+  }
+
+  .itin-filter-bar > svg {
+    display: none;
+  }
+
+  .itin-filter-bar select,
+  .itin-filter-search,
+  .itin-filter-actions {
+    flex: 0 0 auto !important;
+    min-width: 0 !important;
+  }
+
+  .itin-filter-search {
+    min-height: 36px;
+  }
+
+  .itin-filter-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px !important;
+  }
+
+  .itin-filter-actions > button {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .diagnostics-page__actions,
+  .curriculum-admin__actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diagnostics-page__filter-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diagnostics-page .diagnostics-page__title {
+    display: grid !important;
+    grid-template-columns: 28px max-content max-content;
+    align-items: center;
+    gap: 6px !important;
+    font-size: clamp(19px, 5.4vw, 24px) !important;
+  }
+
+  .diagnostics-page__title > :last-child {
+    grid-column: auto;
+    justify-self: start;
+  }
+
+  .diagnostics-page__title > .crm-count-badge {
+    justify-self: center;
+    align-self: center;
+    text-align: center;
+  }
+
+  .curriculum-admin-page .curriculum-admin__header > :first-child {
+    min-width: 0;
+  }
+
+  .curriculum-admin-page {
+    overflow-x: clip !important;
+    overflow-y: visible !important;
+  }
+
+  .curriculum-admin__hint-popover {
+    top: calc(100% + 8px) !important;
+    right: 0 !important;
+    bottom: auto !important;
+    left: 0 !important;
+    transform: none !important;
+    width: auto !important;
+    max-width: none !important;
+    box-sizing: border-box !important;
+    z-index: 100 !important;
+  }
+
+  .curriculum-admin__ai-action {
+    position: relative;
+  }
+
+  .curriculum-admin__hint-anchor {
+    position: static !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .itineraries-page__header-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .tally-master-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .tally-master-grid > *,
+  .tally-master-address {
+    min-width: 0;
+  }
+
+  .tally-master-address {
+    grid-column: 1 / -1 !important;
+  }
+
+  .school-term-check {
+    flex-wrap: wrap !important;
+    overflow-x: visible !important;
+    white-space: normal !important;
+  }
+
+  .school-term-check > input[type="date"],
+  .school-term-check > input[type="text"] {
+    min-width: 0 !important;
+  }
+
+  .school-term-check > input[type="text"],
+  .school-term-check-button,
+  .school-term-check-result {
+    flex: 1 1 100% !important;
+    min-width: 0;
+  }
+}
+
+/* Itinerary workspace: stack the fixed-width desktop rail below the plan on
+   phones and tablets so the map and publish cards do not squeeze the editor. */
+@media (max-width: 899px) {
+  .itinerary-workspace-page {
+    padding: 0.75rem !important;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .itinerary-workspace-plan-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.75rem !important;
+  }
+
+  .itinerary-workspace-rail {
+    position: static !important;
+    min-width: 0;
+  }
+
+  .itinerary-workspace-rail-card {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .itinerary-workspace-rail-empty {
+    overflow-wrap: anywhere;
+  }
+}

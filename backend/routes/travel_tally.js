@@ -1414,6 +1414,7 @@ router.get(
               },
               purchaseOrder: {
                 select: {
+                  tripId: true,
                   trip: { select: { destination: true } },
                   booking: { select: { itineraryId: true } },
                 },
@@ -1612,6 +1613,7 @@ router.get(
       const matchingTripExpenses = matchingExpenses.filter((expense) => parseJson(expense.notes, {}).expenseType === "TRIP");
       const matchingPayables = payables.filter((payable) => {
         if (isQuoteAccounting && quoteId && quoteIdFromPayableNotes(payable.notes) !== quoteId) return false;
+        if (tmcTripId && Number(payable.purchaseOrder?.tripId) !== tmcTripId) return false;
         const payableTripId =
           payable.itineraryId ||
           payable.invoiceLine?.invoice?.itineraryId ||
@@ -2053,6 +2055,7 @@ router.get(
             subBrand: payable.supplier?.subBrand || null,
             quoteId: quoteIdFromPayableNotes(payable.notes),
             itineraryId: payableTripId,
+            tripId: payable.purchaseOrder?.tripId || null,
             tripName:
               itineraryMap[payableTripId]?.destination ||
               payable.purchaseOrder?.trip?.destination ||
@@ -2079,6 +2082,7 @@ router.get(
           transactionDate: payable.createdAt,
           quoteId: quoteIdFromPayableNotes(payable.notes),
           itineraryId: payableTripId,
+          tripId: payable.purchaseOrder?.tripId || null,
           tripName:
             itineraryMap[payableTripId]?.destination ||
             payable.purchaseOrder?.trip?.destination ||

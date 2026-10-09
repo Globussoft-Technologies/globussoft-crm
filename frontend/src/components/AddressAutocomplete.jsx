@@ -17,11 +17,20 @@ const menuStyle = {
   background: 'var(--popover-bg, #fff)', boxShadow: '0 12px 28px rgba(15,23,42,.22)',
 };
 
-export default function AddressAutocomplete({ value, onChange, style, maxLength = 2000 }) {
+export default function AddressAutocomplete({
+  value,
+  onChange,
+  onSelect,
+  style,
+  maxLength = 2000,
+  label = 'Address',
+  placeholder = 'Start typing an address...',
+}) {
   const inputId = useId();
   const listId = `${inputId}-suggestions`;
   const rootRef = useRef(null);
   const skipNextSearch = useRef(false);
+  const searchRequested = useRef(false);
   const [suggestions, setSuggestions] = useState([]);
   const [searching, setSearching] = useState(false);
   const [open, setOpen] = useState(false);
@@ -34,8 +43,17 @@ export default function AddressAutocomplete({ value, onChange, style, maxLength 
       return undefined;
     }
 
+    if (!searchRequested.current) {
+      setSuggestions([]);
+      setSearching(false);
+      setOpen(false);
+      setActiveIndex(-1);
+      return undefined;
+    }
+
     const query = String(value || '').trim();
     if (query.length < MIN_QUERY_LENGTH) {
+      searchRequested.current = false;
       setSuggestions([]);
       setSearching(false);
       setOpen(false);
@@ -71,7 +89,9 @@ export default function AddressAutocomplete({ value, onChange, style, maxLength 
 
   const chooseSuggestion = (suggestion) => {
     skipNextSearch.current = true;
+    searchRequested.current = false;
     onChange(suggestion.display_name);
+    onSelect?.(suggestion);
     setSuggestions([]);
     setOpen(false);
     setActiveIndex(-1);
@@ -98,7 +118,7 @@ export default function AddressAutocomplete({ value, onChange, style, maxLength 
 
   return (
     <div ref={rootRef} style={{ ...labelStyle, ...style }}>
-      <label htmlFor={inputId}>Address</label>
+      {label && <label htmlFor={inputId}>{label}</label>}
       <div style={{ position: 'relative' }}>
         <input
           id={inputId}
@@ -111,10 +131,13 @@ export default function AddressAutocomplete({ value, onChange, style, maxLength 
           aria-activedescendant={open && activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
           autoComplete="off"
           maxLength={maxLength}
-          placeholder="Start typing an address..."
-          style={{ width: '100%', marginTop: 5, boxSizing: 'border-box', paddingRight: '2.25rem' }}
+          placeholder={placeholder}
+          style={{ width: '100%', marginTop: label ? 5 : 0, boxSizing: 'border-box', paddingRight: '2.25rem' }}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            searchRequested.current = true;
+            onChange(event.target.value);
+          }}
           onFocus={() => suggestions.length > 0 && setOpen(true)}
           onKeyDown={onKeyDown}
         />

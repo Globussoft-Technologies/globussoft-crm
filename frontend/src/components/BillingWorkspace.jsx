@@ -16,12 +16,16 @@ import { useNotify } from '../utils/notify';
 import './TransportDriverWorkspace.css';
 
 const BILLING_STEPS = [
-  { key: 'READY_FOR_BILLING', label: 'Ready for billing', action: 'Verify customer details' },
-  { key: 'DETAILS_VERIFIED', label: 'Details verified', action: 'Prepare invoice' },
-  { key: 'INVOICE_PREPARED', label: 'Invoice prepared', action: 'Send invoice' },
-  { key: 'INVOICE_SENT', label: 'Invoice sent', action: 'Record payment' },
-  { key: 'PAYMENT_RECEIVED', label: 'Payment received', action: 'Complete billing' },
-  { key: 'BILLING_COMPLETED', label: 'Billing completed', action: null },
+  { key: 'PLOT_RESERVED', label: 'Plot reserved', action: 'Start billing' },
+  { key: 'BILLING', label: 'Billing', action: 'Create invoice' },
+  { key: 'INVOICE_CREATED', label: 'Invoice created', action: 'Send invoice' },
+  { key: 'INVOICE_SENT', label: 'Invoice sent', action: 'Set payment pending' },
+  { key: 'PAYMENT_PENDING', label: 'Payment pending', action: 'Record payment received' },
+  { key: 'PAYMENT_RECEIVED', label: 'Payment received', action: 'Verify payment' },
+  { key: 'PAYMENT_VERIFIED', label: 'Payment verified', action: 'Confirm booking' },
+  { key: 'BOOKING_CONFIRMED', label: 'Booking confirmed', action: 'Mark plot sold' },
+  { key: 'PLOT_SOLD', label: 'Plot sold', action: 'Complete transaction' },
+  { key: 'TRANSACTION_COMPLETED', label: 'Transaction completed', action: null },
 ];
 
 const stepIndex = (status) => Math.max(0, BILLING_STEPS.findIndex((step) => step.key === status));
@@ -32,7 +36,7 @@ export default function BillingWorkspace() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [updating, setUpdating] = useState('');
-  const [tab, setTab] = useState('active');
+  const [paymentDetails, setPaymentDetails] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,14 +53,20 @@ export default function BillingWorkspace() {
   useEffect(() => { load(); }, [load]);
 
   const assignments = useMemo(() => (Array.isArray(data?.assignments) ? data.assignments : []), [data?.assignments]);
+  const waitingAssignments = useMemo(
+    () => (Array.isArray(data?.waitingAssignments) ? data.waitingAssignments : []),
+    [data?.waitingAssignments],
+  );
   const summary = useMemo(() => ({
-    total: assignments.length,
-    active: assignments.filter((row) => row.status !== 'BILLING_COMPLETED').length,
-    completed: assignments.filter((row) => row.status === 'BILLING_COMPLETED').length,
-  }), [assignments]);
-  const visibleAssignments = useMemo(() => assignments.filter((row) => (
-    tab === 'completed' ? row.status === 'BILLING_COMPLETED' : row.status !== 'BILLING_COMPLETED'
-  )), [assignments, tab]);
+    total: assignments.length + waitingAssignments.length,
+    waiting: waitingAssignments.length,
+    active: assignments.filter((row) => row.status !== 'TRANSACTION_COMPLETED').length,
+    completed: assignments.filter((row) => row.status === 'TRANSACTION_COMPLETED').length,
+  }), [assignments, waitingAssignments]);
+  const visibleAssignments = useMemo(
+    () => assignments.filter((row) => row.status !== 'TRANSACTION_COMPLETED'),
+    [assignments],
+  );
 
   const advance = async (assignment) => {
     const current = BILLING_STEPS[stepIndex(assignment.status)];
@@ -65,19 +75,34 @@ export default function BillingWorkspace() {
     setUpdating(assignment.assignmentKey);
     setError('');
     try {
+      const details = paymentDetails[assignment.assignmentKey] || {};
+      const body = { status: next.key };
+      if (next.key === 'PAYMENT_RECEIVED') {
+        body.paymentMethod = details.paymentMethod;
+        body.transactionRef = details.transactionRef;
+        body.amount = Number(details.amount || assignment.balance || assignment.invoiceAmount || assignment.plot?.price);
+      }
       const result = await fetchApi(
         `/api/pickup-plot-inventory/billing/me/assignments/${encodeURIComponent(assignment.assignmentKey)}/status`,
-        { method: 'PATCH', body: JSON.stringify({ status: next.key }) },
+        { method: 'PATCH', body: JSON.stringify(body) },
       );
       setData((existing) => ({
         ...existing,
         assignments: existing.assignments.map((row) => (
           row.assignmentKey === assignment.assignmentKey
-            ? { ...row, status: result.status, statusUpdatedAt: result.statusUpdatedAt }
+            ? {
+              ...row,
+              status: result.status,
+              statusUpdatedAt: result.statusUpdatedAt,
+              amountPaid: result.amountPaid ?? row.amountPaid,
+              balance: result.balance ?? row.balance,
+              paymentId: result.payment?.id ?? row.paymentId,
+              transactionRef: result.payment?.transactionRef ?? row.transactionRef,
+            }
             : row
         )),
       }));
-      notify.success(`${assignment.customer?.name || 'Customer'}: ${next.label}.`);
+      notify.success(`${assignment.customer?.name || 'Customer'}: ${result.status === 'PAYMENT_PENDING' ? 'Partial payment recorded' : next.label}.`);
     } catch (err) {
       setError(err?.message || `Could not ${current.action.toLowerCase()}.`);
     } finally {
@@ -91,7 +116,7 @@ export default function BillingWorkspace() {
         <div>
           <span className="transport-eyebrow"><WalletCards size={15} /> Billing Department</span>
           <h1>Interested customer billing</h1>
-          <p>Customers confirmed by brokers arrive here for invoice and payment processing.</p>
+          <p>Customers who select a plot with a Sales Executive arrive here for invoice and payment processing.</p>
         </div>
         <button type="button" className="transport-refresh" onClick={load} disabled={loading}>
           <RefreshCw size={16} className={loading ? 'is-spinning' : ''} /> Refresh
@@ -107,34 +132,48 @@ export default function BillingWorkspace() {
 
       <section className="transport-summary" aria-label="Billing summary">
         <div><span className="transport-summary-icon active"><Receipt size={18} /></span><span><strong>{summary.active}</strong><small>Active billing</small></span></div>
+        <div><span className="transport-summary-icon total"><Clock3 size={18} /></span><span><strong>{summary.waiting}</strong><small>Awaiting handoff</small></span></div>
         <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Completed</small></span></div>
-        <div><span className="transport-summary-icon total"><Clock3 size={18} /></span><span><strong>{summary.total}</strong><small>Total received</small></span></div>
+        <div><span className="transport-summary-icon total"><UserRound size={18} /></span><span><strong>{summary.total}</strong><small>Total assigned</small></span></div>
       </section>
 
+      {waitingAssignments.length > 0 && (
+        <>
+          <div className="transport-toolbar">
+            <strong>Awaiting Sales Executive handoff</strong>
+            <span className="transport-trip-count">{waitingAssignments.length} customer{waitingAssignments.length === 1 ? '' : 's'}</span>
+          </div>
+          <section className="transport-trip-list" aria-label="Billing assignments awaiting handoff">
+            {waitingAssignments.map((assignment) => <BillingWaitingCard key={assignment.assignmentKey} assignment={assignment} />)}
+          </section>
+        </>
+      )}
+
       <div className="transport-toolbar">
-        <div className="transport-tabs" role="tablist" aria-label="Billing filters">
-          <button type="button" role="tab" aria-selected={tab === 'active'} className={tab === 'active' ? 'active' : ''} onClick={() => setTab('active')}>Active</button>
-          <button type="button" role="tab" aria-selected={tab === 'completed'} className={tab === 'completed' ? 'active' : ''} onClick={() => setTab('completed')}>Completed</button>
-        </div>
+        <strong>Active billing</strong>
         <span className="transport-trip-count">{visibleAssignments.length} customer{visibleAssignments.length === 1 ? '' : 's'}</span>
       </div>
 
       {error && <div className="transport-error" role="alert">{error}</div>}
       {loading && !data && <div className="transport-loading" role="status">Loading billing queue…</div>}
-      {!loading && !error && visibleAssignments.length === 0 && (
+      {!loading && !error && visibleAssignments.length === 0 && waitingAssignments.length === 0 && (
         <section className="transport-empty">
           <span><FileCheck2 size={28} /></span>
-          <h2>{tab === 'active' ? 'No customers waiting for billing' : 'No completed billing yet'}</h2>
-          <p>Customers appear after a broker confirms that they are interested.</p>
+          <h2>No customers waiting for billing</h2>
+          <p>Customers appear after a Sales Executive marks a plot as selected.</p>
         </section>
       )}
 
-      <section className="transport-trip-list" aria-label={`${tab} billing assignments`}>
+      <section className="transport-trip-list" aria-label="Active billing assignments">
         {visibleAssignments.map((assignment) => (
           <BillingCard
             key={assignment.assignmentKey}
             assignment={assignment}
             updating={updating === assignment.assignmentKey}
+            paymentDetails={paymentDetails[assignment.assignmentKey] || {}}
+            onPaymentDetailsChange={(details) => setPaymentDetails((current) => ({
+              ...current, [assignment.assignmentKey]: { ...current[assignment.assignmentKey], ...details },
+            }))}
             onAdvance={() => advance(assignment)}
           />
         ))}
@@ -143,7 +182,33 @@ export default function BillingWorkspace() {
   );
 }
 
-function BillingCard({ assignment, updating, onAdvance }) {
+function BillingWaitingCard({ assignment }) {
+  return (
+    <article className="transport-trip-card">
+      <header>
+        <div>
+          <span className="transport-next-badge">Assigned to you</span>
+          <h2>{assignment.customer?.name || 'Assigned customer'}</h2>
+          <p>{assignment.customer?.company || assignment.customer?.email || 'Customer billing'}</p>
+        </div>
+        <span className="transport-status">Awaiting handoff</span>
+      </header>
+
+      <div className="transport-passenger" style={{ marginTop: 18 }}>
+        <span><Receipt size={17} /></span>
+        <div><small>Assigned plot</small><strong>{assignment.plot?.name || 'Plot not assigned'}</strong></div>
+      </div>
+
+      <footer>
+        {assignment.customer?.email && <a className="transport-map-button" href={`mailto:${assignment.customer.email}`}><Mail size={16} /> Email</a>}
+        {assignment.customer?.phone && <a className="transport-map-button" href={`tel:${assignment.customer.phone}`}><Phone size={16} /> Call</a>}
+        <span className="transport-complete-label"><Clock3 size={16} /> Billing actions unlock after plot selection</span>
+      </footer>
+    </article>
+  );
+}
+
+function BillingCard({ assignment, updating, paymentDetails, onPaymentDetailsChange, onAdvance }) {
   const index = stepIndex(assignment.status);
   const current = BILLING_STEPS[index];
   const next = BILLING_STEPS[index + 1];
@@ -154,11 +219,11 @@ function BillingCard({ assignment, updating, onAdvance }) {
     <article className="transport-trip-card">
       <header>
         <div>
-          <span className="transport-next-badge">From broker {assignment.broker?.name || 'team'}</span>
+          <span className="transport-next-badge">From Sales Executive {assignment.broker?.name || 'team'}</span>
           <h2>{assignment.customer?.name || 'Interested customer'}</h2>
           <p>{assignment.customer?.company || assignment.customer?.email || 'Customer billing'}</p>
         </div>
-        <span className={`transport-status${assignment.status === 'BILLING_COMPLETED' ? ' status-completed' : ''}`}>{current.label}</span>
+        <span className={`transport-status${assignment.status === 'TRANSACTION_COMPLETED' ? ' status-completed' : ''}`}>{current.label}</span>
       </header>
 
       <div className="transport-passenger" style={{ marginTop: 18 }}>
@@ -170,14 +235,30 @@ function BillingCard({ assignment, updating, onAdvance }) {
         {BILLING_STEPS.slice(0, -1).map((step, stepNumber) => <span key={step.key} className={stepNumber < index ? 'done' : ''} />)}
       </div>
 
+      {assignment.status === 'PAYMENT_PENDING' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 10, marginTop: 14 }}>
+          <label style={{ display: 'grid', gap: 5, fontSize: '.78rem', fontWeight: 700 }}>Amount paid
+            <input className="input-field" type="number" min="0.01" step="0.01" max={assignment.balance || assignment.invoiceAmount || assignment.plot?.price} aria-label={`Amount paid for ${assignment.customer?.name || 'customer'}`} value={paymentDetails.amount ?? assignment.balance ?? assignment.invoiceAmount ?? assignment.plot?.price ?? ''} onChange={(event) => onPaymentDetailsChange({ amount: event.target.value })} />
+          </label>
+          <label style={{ display: 'grid', gap: 5, fontSize: '.78rem', fontWeight: 700 }}>Payment method
+            <select className="input-field" aria-label={`Payment method for ${assignment.customer?.name || 'customer'}`} value={paymentDetails.paymentMethod || ''} onChange={(event) => onPaymentDetailsChange({ paymentMethod: event.target.value })}>
+              <option value="">Select method</option><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="cheque">Cheque</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 5, fontSize: '.78rem', fontWeight: 700 }}>Transaction reference
+            <input className="input-field" aria-label={`Transaction reference for ${assignment.customer?.name || 'customer'}`} value={paymentDetails.transactionRef || ''} onChange={(event) => onPaymentDetailsChange({ transactionRef: event.target.value })} placeholder="UTR, receipt, or cheque number" />
+          </label>
+        </div>
+      )}
+
       <footer>
         {assignment.customer?.email && <a className="transport-map-button" href={`mailto:${assignment.customer.email}`}><Mail size={16} /> Email</a>}
         {assignment.customer?.phone && <a className="transport-map-button" href={`tel:${assignment.customer.phone}`}><Phone size={16} /> Call</a>}
         {next ? (
-          <button type="button" className="transport-primary-button" onClick={onAdvance} disabled={updating}>
+          <button type="button" className="transport-primary-button" onClick={onAdvance} disabled={updating || (assignment.status === 'PAYMENT_PENDING' && (!paymentDetails.paymentMethod || !paymentDetails.transactionRef || Number(paymentDetails.amount ?? assignment.balance ?? assignment.invoiceAmount ?? assignment.plot?.price) <= 0))}>
             {updating ? 'Updating…' : current.action}<ArrowRight size={16} />
           </button>
-        ) : <span className="transport-complete-label"><CheckCircle2 size={16} /> Billing completed</span>}
+        ) : <span className="transport-complete-label"><CheckCircle2 size={16} /> Transaction completed</span>}
       </footer>
     </article>
   );

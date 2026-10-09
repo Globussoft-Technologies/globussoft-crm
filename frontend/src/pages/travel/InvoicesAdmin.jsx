@@ -1187,14 +1187,14 @@ export default function InvoicesAdmin() {
 
       {canWrite && (
         <div className="glass" data-testid="excel-reconciliation-panel" style={{ padding: 14, marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div className="invoices-admin-page__reconciliation-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 600 }}>Excel Software reconciliation</div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                 Upload a CSV or XLSX workbook and compare status, sub-brand, customer, and totals against CRM.
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div className="invoices-admin-page__reconciliation-actions" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <input
                 ref={reconInputRef}
                 type="file"

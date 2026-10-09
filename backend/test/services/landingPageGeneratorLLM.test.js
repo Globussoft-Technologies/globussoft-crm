@@ -202,7 +202,7 @@ describe('real mode — happy path', () => {
       ],
     };
 
-    vi.spyOn(client, 'callGemini').mockResolvedValue({ rawJson: cleanLlmOutput, modelUsed: 'gemini-2.5-flash' });
+    vi.spyOn(client, 'callGemini').mockResolvedValue({ rawJson: cleanLlmOutput, modelUsed: 'gemini-2.5-flash', provider: 'gemini' });
 
     const r = await client.generateLandingPageContent({
       tenantId: 1, destination: 'Bali', durationDays: 5, audience: 'honeymooners',
@@ -258,7 +258,7 @@ describe('real mode — scrubbed', () => {
         { type: 'contactFooter', props: { brandName: null, phone: null, email: null, ctaText: 'Reserve Your Spot', ctaUrl: null } },
       ],
     };
-    vi.spyOn(client, 'callGemini').mockResolvedValue({ rawJson: naughty, modelUsed: 'gemini-2.5-flash' });
+    vi.spyOn(client, 'callGemini').mockResolvedValue({ rawJson: naughty, modelUsed: 'gemini-2.5-flash', provider: 'gemini' });
 
     const r = await client.generateLandingPageContent({
       tenantId: 1, destination: 'Bali', durationDays: 5, audience: 'honeymooners',
@@ -316,7 +316,7 @@ describe('real mode — scrubbed', () => {
         { type: 'reviewCarousel', props: { reviews: [{ name: 'Priya', text: 'Amazing!' }] } },
       ],
     };
-    vi.spyOn(client, 'callGemini').mockResolvedValue({ rawJson: naughty, modelUsed: 'gemini-2.5-flash' });
+    vi.spyOn(client, 'callGemini').mockResolvedValue({ rawJson: naughty, modelUsed: 'gemini-2.5-flash', provider: 'gemini' });
 
     const r = await client.generateLandingPageContent({
       tenantId: 1, destination: 'Bali', durationDays: 5, audience: 'honeymooners',
@@ -425,6 +425,50 @@ describe('real mode — failure falls through to stub', () => {
     expect(r.stub).toBe(true);
     expect(r.realModeError).toMatch(/Gemini/);
     expect(r.realModeError).toMatch(/OpenAI/);
+  });
+});
+
+describe('provider-family dispatch', () => {
+  test('allows every supported provider family without forcing Gemini', async () => {
+    const client = requireCjs('../../services/landingPageGeneratorLLM.js');
+    const management = requireCjs('../../lib/aiProviderManagement.js');
+    const resolveSpy = vi.spyOn(management, 'resolveProviderConfig').mockResolvedValue({
+      providerId: 'gemini',
+      family: 'gemini',
+      apiKey: 'test-key',
+    });
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousVitest = process.env.VITEST;
+    // The local stack intentionally runs with NODE_ENV=test; that must not
+    // disable a tenant's configured BYOK provider.
+    process.env.NODE_ENV = 'test';
+    delete process.env.VITEST;
+    try {
+      const providers = [
+        { providerId: 'gemini', family: 'gemini' },
+        { providerId: 'openai', family: 'openai-compatible' },
+        { providerId: 'claude', family: 'anthropic' },
+        { providerId: 'groq', family: 'openai-compatible' },
+        { providerId: 'deepseek', family: 'openai-compatible' },
+        { providerId: 'mistral', family: 'openai-compatible' },
+        { providerId: 'openrouter', family: 'openai-compatible' },
+        { providerId: 'cohere', family: 'openai-compatible' },
+        { providerId: 'azure-openai', family: 'openai-compatible' },
+        { providerId: 'other', family: 'openai-compatible' },
+      ];
+
+      for (const provider of providers) {
+        resolveSpy.mockResolvedValue({ ...provider, apiKey: 'test-key' });
+        await expect(client.realModeEnabled(1)).resolves.toBe(true);
+        await expect(client.groqEnabled(1)).resolves.toBe(provider.providerId === 'groq');
+        await expect(client.openAiFallbackEnabled(1)).resolves.toBe(provider.family === 'openai-compatible');
+      }
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      if (previousVitest === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previousVitest;
+      resolveSpy.mockRestore();
+    }
   });
 });
 

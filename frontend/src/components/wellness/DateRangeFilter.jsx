@@ -178,7 +178,7 @@ export function DateRangeFilter({ value, onChange, label = 'Filter by date', inc
         )}
       </div>
       {pickerOpen && (
-        <RangePickerModal
+        <DateRangeModal
           initialStart={v.start}
           initialEnd={v.end}
           onClose={() => setPickerOpen(false)}
@@ -202,7 +202,9 @@ const buildMonthCells = (year, month) => {
   return cells;
 };
 
-function RangePickerModal({ initialStart, initialEnd, onClose, onSave }) {
+// Standalone version for pages that need the same two-month modal without the
+// preset dropdown (for example, the Attendance payroll export toolbar).
+export function DateRangeModal({ initialStart, initialEnd, onClose, onSave }) {
   const [tempStart, setTempStart] = useState(parseYmd(initialStart));
   const [tempEnd, setTempEnd] = useState(parseYmd(initialEnd));
   const anchor = parseYmd(initialStart) || new Date();
@@ -234,6 +236,8 @@ function RangePickerModal({ initialStart, initialEnd, onClose, onSave }) {
           — its backdrop-filter: blur composites whatever sits behind. */}
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Select date range"
         style={{
           width: '92%', maxWidth: 440, maxHeight: '88vh', overflow: 'auto',
           padding: '1rem 1.25rem',

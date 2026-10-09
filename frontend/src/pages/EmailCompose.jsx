@@ -124,6 +124,11 @@ export default function EmailCompose() {
   const [subjectError, setSubjectError] = useState("");
   const [toError, setToError] = useState("");
   const [bodyHtml, setBodyHtml] = useState("");
+  const [emailTemplates, setEmailTemplates] = useState([]);
+  const [templateContacts, setTemplateContacts] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templateContactId, setTemplateContactId] = useState("");
+  const [templateLoading, setTemplateLoading] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [sending, setSending] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -164,6 +169,42 @@ export default function EmailCompose() {
     } catch { /* no usable draft */ }
     setRestored(true);
   }, [draftKey, searchParams]);
+
+  useEffect(() => {
+    if (tenant?.vertical !== "generic") return undefined;
+    let active = true;
+    Promise.all([
+      fetchApi("/api/email-templates?fields=summary", { silent: true }).catch(() => []),
+      fetchApi("/api/contacts?fields=summary&limit=100", { silent: true }).catch(() => ({ data: [] })),
+    ]).then(([templates, contacts]) => {
+      if (!active) return;
+      setEmailTemplates(Array.isArray(templates) ? templates : []);
+      setTemplateContacts(Array.isArray(contacts) ? contacts : (contacts?.data || contacts?.contacts || []));
+    });
+    return () => { active = false; };
+  }, [tenant?.vertical]);
+
+  const applyEmailTemplate = async (templateId, contactId = templateContactId) => {
+    setSelectedTemplateId(templateId);
+    if (!templateId) return;
+    setTemplateLoading(true);
+    try {
+      const template = await fetchApi(`/api/email-templates/${templateId}`, { silent: true });
+      const rendered = await fetchApi("/api/email-templates/preview", {
+        method: "POST",
+        silent: true,
+        body: JSON.stringify({ subject: template.subject || "", body: template.body || "", contactId: contactId || null }),
+      });
+      setSubject(rendered.subject || template.subject || "");
+      const nextBody = rendered.body || template.body || "";
+      setBodyHtml(nextBody);
+      if (editorRef.current) editorRef.current.innerHTML = nextBody;
+    } catch (error) {
+      notify.error(error?.message || "Failed to load email template.");
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!restored) return;
@@ -348,6 +389,23 @@ export default function EmailCompose() {
         </div>
         {showCc && <RecipientInput id="compose-cc" label="Cc" recipients={cc} onChange={setCc} placeholder="Cc recipients" />}
         {showBcc && <RecipientInput id="compose-bcc" label="Bcc" recipients={bcc} onChange={setBcc} placeholder="Bcc recipients" />}
+
+        {tenant?.vertical === "generic" && <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "0.6rem" }}>
+          <div>
+            <label htmlFor="compose-template" style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Email template</label>
+            <select id="compose-template" className="input-field" value={selectedTemplateId} onChange={(e) => applyEmailTemplate(e.target.value)} disabled={templateLoading} style={{ width: "100%" }}>
+              <option value="">Write custom email</option>
+              {emailTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="compose-template-contact" style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Render for contact</label>
+            <select id="compose-template-contact" className="input-field" value={templateContactId} onChange={(e) => { setTemplateContactId(e.target.value); if (selectedTemplateId) applyEmailTemplate(selectedTemplateId, e.target.value); }} disabled={templateLoading || !selectedTemplateId} style={{ width: "100%" }}>
+              <option value="">Sample values</option>
+              {templateContacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name || contact.email || `Contact #${contact.id}`}</option>)}
+            </select>
+          </div>
+        </div>}
 
         <div>
           <label htmlFor="compose-subject" style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Subject</label>

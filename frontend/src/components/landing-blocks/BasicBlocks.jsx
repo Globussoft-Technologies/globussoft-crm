@@ -4,7 +4,124 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import {
+  BarChart3,
+  CalendarDays,
+  ClipboardList,
+  Clock3,
+  Eye,
+  FileText,
+  Leaf,
+  Mail,
+  MapPin,
+  Sparkles,
+  UserRound,
+  UsersRound,
+} from 'lucide-react';
 import { escapeHtml, safeUrl, normalizeVideoEmbedUrl, isDirectVideoFile } from '../../utils/landingPageUtils';
+
+const WELLNESS_ICON_COMPONENTS = {
+  barChart: BarChart3,
+  calendar: CalendarDays,
+  clipboard: ClipboardList,
+  clock: Clock3,
+  document: FileText,
+  eye: Eye,
+  leaf: Leaf,
+  mail: Mail,
+  location: MapPin,
+  person: UserRound,
+  sparkles: Sparkles,
+  users: UsersRound,
+};
+
+const WELLNESS_SYMBOL_ICONS = {
+  '+': 'eye',
+  o: 'person',
+  ':)': 'users',
+  '#': 'document',
+};
+
+const WELLNESS_DETAIL_ICONS = {
+  date: 'calendar',
+  time: 'clock',
+  location: 'location',
+  for: 'users',
+};
+
+function isWellnessServiceInterestField(field) {
+  const name = String(field?.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const label = String(field?.label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return ['serviceinterest', 'service', 'treatmentofinterest'].includes(name)
+    || label === 'serviceofinterest';
+}
+
+function getWellnessFormFields(props = {}) {
+  const fields = Array.isArray(props.fields) ? props.fields : [];
+  if (props.variant !== 'wellness-consultation') return fields;
+  return fields.filter((field) => !isWellnessServiceInterestField(field));
+}
+
+const WELLNESS_NAV_TARGETS = {
+  home: 'wellness-home',
+  services: 'wellness-services',
+  service: 'wellness-services',
+  about: 'wellness-about',
+  'about us': 'wellness-about',
+  contact: 'wellness-contact',
+};
+
+function getWellnessNavItems(value) {
+  const text = String(value || '').trim();
+  const tokens = text
+    .split(/\s{2,}|\s*\|\s*|\s*[·•]\s*|\s*,\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const items = tokens.length > 1 ? tokens : ['Home', 'Services', 'About Us', 'Contact']
+    .filter((label) => new RegExp(`\\b${label.replace(/\s+/g, '\\s+')}\\b`, 'i').test(text));
+  return (items.length ? items : ['Home', 'Services', 'About Us', 'Contact']).map((label) => ({
+    label,
+    target: WELLNESS_NAV_TARGETS[label.toLowerCase()] || '',
+  }));
+}
+
+export function WellnessNav({ text = '', align = 'right', color = 'var(--wellness-muted, #63766b)', fontSize = '0.82rem' }) {
+  return (
+    <nav
+      className="landing-text landing-text--wellness-nav wellness-nav"
+      aria-label="Wellness campaign navigation"
+      style={{ color, textAlign: align, fontSize }}
+    >
+      {getWellnessNavItems(text).map((item) => (
+        item.target
+          ? <a key={`${item.label}-${item.target}`} href={`#${item.target}`}>{item.label}</a>
+          : <span key={item.label}>{item.label}</span>
+      ))}
+    </nav>
+  );
+}
+
+export function getWellnessIconName(props = {}) {
+  const variant = props.variant || '';
+  const text = String(props.text || '').trim();
+  if (props.icon && WELLNESS_ICON_COMPONENTS[props.icon]) return props.icon;
+  if (variant === 'wellness-badge') return WELLNESS_SYMBOL_ICONS[text] || '';
+  if (variant === 'wellness-detail-label') {
+    const detailText = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (WELLNESS_DETAIL_ICONS[detailText]) return WELLNESS_DETAIL_ICONS[detailText];
+    if (detailText.includes('date')) return 'calendar';
+    if (detailText.includes('time')) return 'clock';
+    if (detailText.includes('location') || detailText.includes('venue')) return 'location';
+    if (detailText === 'for' || detailText.includes('audience') || detailText.includes('attend')) return 'users';
+  }
+  if (variant === 'wellness-logo-mark' && text === '+') return 'leaf';
+  return '';
+}
+
+export function WellnessIcon({ name, size = 20, strokeWidth = 2, ...props }) {
+  const Icon = WELLNESS_ICON_COMPONENTS[name] || Sparkles;
+  return <Icon aria-hidden="true" size={size} strokeWidth={strokeWidth} {...props} />;
+}
 
 export function HeadingBlock({ props = {} }) {
   const level = props.level || 'h1';
@@ -13,6 +130,11 @@ export function HeadingBlock({ props = {} }) {
   const text = props.text || '';
   const variant = props.variant || '';
   const HeadingTag = level;
+  const wellnessInk = variant === 'wellness-metric-value' || variant === 'wellness-band-title' || variant.startsWith('wellness-footer')
+    ? 'var(--wellness-inverse, #ffffff)'
+    : variant === 'wellness-hero-accent'
+      ? 'var(--wellness-primary, #2f6b50)'
+      : 'var(--wellness-ink, #173b35)';
   
 
   const variantStyle = variant === 'wellness-logo'
@@ -22,13 +144,14 @@ export function HeadingBlock({ props = {} }) {
       : variant === 'wellness-section-title' || variant === 'wellness-card-title'
         ? { fontSize: variant === 'wellness-card-title' ? '1.25rem' : '1.35rem', fontWeight: 800, margin: '0 0 10px 0' }
         : variant === 'wellness-metric-value'
-          ? { fontSize: 'clamp(2rem, 3vw, 2.75rem)', lineHeight: 1, fontWeight: 900, margin: '0 0 10px', textShadow: '0 2px 16px rgba(0,0,0,0.28)' }
+          ? { fontSize: 'clamp(1.15rem, 1.4vw, 1.85rem)', lineHeight: 1.08, fontWeight: 900, margin: '0 0 8px', textShadow: '0 2px 16px rgba(0,0,0,0.28)' }
         : {};
 
   return (
     <HeadingTag
+      className={variant ? `landing-heading landing-heading--${variant}` : undefined}
       style={{
-        color,
+        color: variant.startsWith('wellness-') ? wellnessInk : color,
         textAlign: align,
         margin: '0 0 16px 0',
         ...variantStyle,
@@ -45,7 +168,12 @@ export function TextBlock({ props = {} }) {
   const fontSize = props.fontSize || '16px';
   const text = props.text || '';
   const variant = props.variant || '';
-  if (variant === 'wellness-logo-mark' && String(text).trim() === '+') return null;
+  const iconName = getWellnessIconName(props);
+  if (variant === 'wellness-logo-mark' && String(text).trim() === '+' && !iconName) return null;
+
+  if (variant === 'wellness-nav') {
+    return <WellnessNav text={text} align={align} color="var(--wellness-muted, #63766b)" fontSize={fontSize} />;
+  }
 
   const variantStyle = variant === 'wellness-nav'
     ? { textTransform: 'uppercase', letterSpacing: '0.16em', fontWeight: 700, margin: 0, lineHeight: 1.4 }
@@ -53,24 +181,53 @@ export function TextBlock({ props = {} }) {
       ? { textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, margin: '0 0 14px' }
       : variant === 'wellness-detail'
         ? { margin: '0 0 10px', lineHeight: 1.45 }
+        : variant === 'wellness-detail-label'
+          ? { margin: '0 0 6px', lineHeight: 1.25 }
         : variant === 'wellness-metric-label'
-          ? { margin: 0, color: '#fff4ef', fontWeight: 700, lineHeight: 1.45 }
+          ? { margin: 0, color: '#fff4ef', fontWeight: 700, lineHeight: 1.35, maxWidth: '100%', minWidth: 0, overflowWrap: 'anywhere' }
         : variant === 'wellness-footer'
           ? { margin: 0, padding: '22px 24px', background: '#202a27', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }
           : {};
 
+  const style = {
+    color: variant === 'wellness-eyebrow' || variant === 'wellness-badge'
+      ? 'var(--wellness-primary, #2f6b50)'
+      : variant === 'wellness-metric-label' || variant === 'wellness-band-copy' || variant.startsWith('wellness-footer')
+        ? 'var(--wellness-inverse, #ffffff)'
+        : variant.startsWith('wellness-')
+          ? 'var(--wellness-muted, #63766b)'
+          : color,
+    textAlign: align,
+    fontSize,
+    lineHeight: '1.6',
+    margin: '0 0 16px 0',
+    ...variantStyle,
+  };
+
+  if (iconName && (variant === 'wellness-badge' || variant === 'wellness-logo-mark')) {
+    return (
+      <span
+        className={variant ? `landing-text landing-text--${variant}` : undefined}
+        style={style}
+        aria-label={variant === 'wellness-badge' ? 'Wellness benefit' : 'Wellness brand'}
+      >
+        <WellnessIcon name={iconName} size={variant === 'wellness-logo-mark' ? 24 : 20} />
+      </span>
+    );
+  }
+
+  const content = iconName && variant === 'wellness-detail-label'
+    ? (
+      <span className="wellness-detail-label-content">
+        <span className="wellness-detail-icon"><WellnessIcon name={iconName} size={18} /></span>
+        <span>{text}</span>
+      </span>
+    )
+    : text;
+
   return (
-    <p
-      style={{
-        color,
-        textAlign: align,
-        fontSize,
-        lineHeight: '1.6',
-        margin: '0 0 16px 0',
-        ...variantStyle,
-      }}
-    >
-      {text}
+    <p className={variant ? `landing-text landing-text--${variant}` : undefined} style={style}>
+      {content}
     </p>
   );
 }
@@ -81,7 +238,19 @@ export function ImageBlock({ props = {} }) {
   const src = safeUrl(props.src, 'image-src');
   const variant = props.variant || '';
   const isWellnessEventImage = variant === 'wellness-event-image';
+  const isWellnessHeroImage = variant === 'wellness-hero-image';
+  const isWellnessGalleryImage = variant === 'wellness-gallery-image';
+  const isWellnessCtaImage = variant === 'wellness-cta-image';
   const maxWidth = isWellnessEventImage ? '100%' : (props.maxWidth || '100%');
+
+  if (isWellnessHeroImage || isWellnessGalleryImage || isWellnessCtaImage) {
+    const mediaClass = isWellnessHeroImage ? 'wellness-media--hero' : isWellnessGalleryImage ? 'wellness-media--gallery' : 'wellness-media--cta';
+    return (
+      <figure className={`wellness-media ${mediaClass}`}>
+        {src ? <img src={src} alt={alt} /> : <span className="wellness-media-placeholder">{isWellnessHeroImage ? 'Wellness campaign' : isWellnessGalleryImage ? 'Your campaign story' : 'Wellness experience'}</span>}
+      </figure>
+    );
+  }
 
   return (
     <div style={{ textAlign: 'center', margin: isWellnessEventImage ? '0' : '0 0 20px 0' }}>
@@ -145,7 +314,7 @@ export function ButtonBlock({ props = {} }) {
 }
 
 export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint = '' }) {
-  const fields = props.fields || [];
+  const fields = getWellnessFormFields(props);
   const submitText = props.submitText || 'Submit';
   const thankYouMessage = props.thankYouMessage || 'Thank you for your submission!';
   const enableCaptcha = !!props.enableCaptcha;
@@ -262,16 +431,16 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           maxWidth: formVariant === 'wellness-consultation' ? '100%' : '480px',
           margin: formVariant === 'wellness-consultation' ? '0 0 20px' : '0 auto 20px',
           padding: formVariant === 'wellness-consultation' ? '36px' : '28px',
-          background: formVariant === 'wellness-consultation' ? '#fbfaf4' : 'linear-gradient(180deg, #fffdf8 0%, #faf7ef 100%)',
+          background: formVariant === 'wellness-consultation' ? 'var(--wellness-surface, #ffffff)' : 'linear-gradient(180deg, #fffdf8 0%, #faf7ef 100%)',
           borderRadius: formVariant === 'wellness-consultation' ? '18px' : '24px',
-          border: formVariant === 'wellness-consultation' ? '1px solid #d8d2c3' : '1px solid rgba(148, 163, 184, 0.22)',
-          borderTop: formVariant === 'wellness-consultation' ? '2px solid #7c6f45' : undefined,
+          border: formVariant === 'wellness-consultation' ? '1px solid var(--wellness-border, #cfe3d9)' : '1px solid rgba(148, 163, 184, 0.22)',
+          borderTop: formVariant === 'wellness-consultation' ? '2px solid var(--wellness-primary, #1f8a70)' : undefined,
           boxShadow: formVariant === 'wellness-consultation' ? '0 18px 55px rgba(31, 47, 44, 0.08)' : '0 24px 80px rgba(15, 23, 42, 0.10)',
           boxSizing: 'border-box',
         }}
       >
         {formTitle && (
-          <h2 style={{ margin: '0 0 28px', color: '#1f2f2c', fontFamily: "Georgia, 'Times New Roman', serif", fontSize: '1.75rem', fontWeight: 500 }}>
+          <h2 style={{ margin: '0 0 28px', color: 'var(--wellness-ink, #173b35)', fontFamily: "Georgia, 'Times New Roman', serif", fontSize: '1.75rem', fontWeight: 500 }}>
             {formTitle}
           </h2>
         )}
@@ -283,19 +452,19 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           const controlStyle = {
             width: '100%',
             padding: formVariant === 'wellness-consultation' ? '14px 16px' : '10px 12px',
-            border: formVariant === 'wellness-consultation' ? '1px solid #c9c3b4' : '1px solid #d1d5db',
-            borderRadius: formVariant === 'wellness-consultation' ? '8px' : '6px',
+            border: formVariant === 'wellness-consultation' ? '1px solid var(--wellness-border, #d7e2d0)' : '1px solid #d1d5db',
+            borderRadius: formVariant === 'wellness-consultation' ? '10px' : '6px',
             fontSize: '15px',
             boxSizing: 'border-box',
-            background: formVariant === 'wellness-consultation' ? '#fffdf7' : '#ffffff',
-            backgroundColor: formVariant === 'wellness-consultation' ? '#fffdf7' : '#ffffff',
+            background: formVariant === 'wellness-consultation' ? 'var(--wellness-bg, #f7fbf4)' : '#ffffff',
+            backgroundColor: formVariant === 'wellness-consultation' ? 'var(--wellness-bg, #f7fbf4)' : '#ffffff',
             backgroundImage: 'none',
-            color: '#1f2937',
+            color: 'var(--wellness-ink, #173b2c)',
             opacity: 1,
             colorScheme: 'light',
-            WebkitTextFillColor: '#1f2937',
+            WebkitTextFillColor: 'var(--wellness-ink, #173b2c)',
             appearance: fieldType === 'select' ? 'auto' : undefined,
-            boxShadow: 'inset 0 0 0 9999px #fffdf7',
+            boxShadow: formVariant === 'wellness-consultation' ? 'none' : 'inset 0 0 0 9999px #fffdf7',
           };
           const isHalfWidth = formVariant === 'wellness-consultation' && index < 2;
           return (
@@ -306,7 +475,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
                   display: 'block',
                   marginBottom: formVariant === 'wellness-consultation' ? '8px' : '4px',
                   fontWeight: '600',
-                  color: formVariant === 'wellness-consultation' ? '#5e675f' : '#333',
+                  color: formVariant === 'wellness-consultation' ? 'var(--wellness-muted, #63766b)' : '#333',
                   fontSize: formVariant === 'wellness-consultation' ? '12px' : '14px',
                   letterSpacing: formVariant === 'wellness-consultation' ? '0.12em' : 0,
                   textTransform: formVariant === 'wellness-consultation' ? 'uppercase' : 'none',
@@ -380,7 +549,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           style={{
             width: '100%',
             padding: formVariant === 'wellness-consultation' ? '16px' : '12px',
-            background: formVariant === 'wellness-consultation' ? 'linear-gradient(90deg, #b7ad8c, #d1a083)' : '#2563eb',
+            background: formVariant === 'wellness-consultation' ? 'linear-gradient(135deg, var(--wellness-primary, #1f8a70), var(--wellness-primary-deep, #126052))' : '#2563eb',
             color: '#fff',
             border: 'none',
             borderRadius: formVariant === 'wellness-consultation' ? '999px' : '6px',
@@ -475,6 +644,7 @@ export function ColumnsBlock({ props = {}, renderBlock }) {
   const isWellnessHeaderRow = variant === 'wellness-header-row';
   const isWellnessHeroRow = variant === 'wellness-hero-row';
   const isWellnessDetailsStrip = variant === 'wellness-details-strip';
+  const isWellnessGalleryRow = variant === 'wellness-gallery-row';
   const isWellnessBenefitsRow = variant === 'wellness-benefits-row';
   const isWellnessProcessRow = variant === 'wellness-process-row';
   const isWellnessImpactBand = variant === 'wellness-impact-band';
@@ -490,22 +660,22 @@ export function ColumnsBlock({ props = {}, renderBlock }) {
   const looksLikeWellnessSupporting = columns.some((col) => (col.components || []).some((child) => ['why-title', 'after-title'].includes(child.id)));
   const isWellnessSupporting = variant === 'wellness-supporting' || looksLikeWellnessSupporting;
   const isWellnessCardGrid = isWellnessBenefitGrid || isWellnessStepGrid || isWellnessMetricGrid;
-  const isWellnessSection = isWellnessCampaignPage || isWellnessHeaderRow || isWellnessHeroRow || isWellnessDetailsStrip || isWellnessBenefitsRow || isWellnessProcessRow || isWellnessImpactBand || isWellnessCtaRow || isWellnessFormRow || isWellnessFooterRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessCardGrid || isWellnessConsultation || isWellnessSupporting;
-  const isWellnessInnerRow = isWellnessHeaderRow || isWellnessHeroRow || isWellnessDetailsStrip || isWellnessBenefitsRow || isWellnessProcessRow || isWellnessCtaRow || isWellnessFormRow || isWellnessFooterRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessCardGrid;
+  const isWellnessSection = isWellnessCampaignPage || isWellnessHeaderRow || isWellnessHeroRow || isWellnessDetailsStrip || isWellnessGalleryRow || isWellnessBenefitsRow || isWellnessProcessRow || isWellnessImpactBand || isWellnessCtaRow || isWellnessFormRow || isWellnessFooterRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessCardGrid || isWellnessConsultation || isWellnessSupporting;
+  const isWellnessInnerRow = isWellnessHeaderRow || isWellnessHeroRow || isWellnessDetailsStrip || isWellnessGalleryRow || isWellnessBenefitsRow || isWellnessProcessRow || isWellnessCtaRow || isWellnessFormRow || isWellnessFooterRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessCardGrid;
   const hasFullWidthSupport = isWellnessConsultation && columns.some((col) => col.fullWidth);
 
-  const containerStyle = isWellnessCampaignPage ? {
+  const baseContainerStyle = isWellnessCampaignPage ? {
     display: 'flex',
     flexWrap: 'wrap',
     gap,
     alignItems: 'stretch',
     width: '100%',
-    maxWidth: '1440px',
+    maxWidth: 'none',
     minWidth: '0',
     margin: '0 auto',
     padding: 0,
-    background: '#fbfaf4',
-    color: '#1f2f2c',
+    background: 'var(--wellness-bg, #f4fbf7)',
+    color: 'var(--wellness-ink, #173b35)',
     borderRadius: 0,
     border: 'none',
     boxShadow: 'none',
@@ -520,23 +690,41 @@ export function ColumnsBlock({ props = {}, renderBlock }) {
     width: isWellnessDetailsStrip ? 'calc(100% - 112px)' : '100%',
     maxWidth: isWellnessSection ? '100%' : undefined,
     margin: isWellnessDetailsStrip ? '0 56px 34px' : isWellnessInnerRow ? 0 : (isWellnessConsultation && !hasFullWidthSupport ? '0 auto 0' : (isWellnessSection ? '0 auto 24px' : '0 0 20px 0')),
-    padding: isWellnessHeaderRow ? '28px 56px' : isWellnessHeroRow ? '64px 56px 58px' : isWellnessDetailsStrip ? '22px 24px' : isWellnessBenefitsRow ? '34px 56px 32px' : isWellnessProcessRow ? '28px 56px 36px' : isWellnessImpactBand ? '32px 56px' : isWellnessCtaRow ? '28px 56px' : isWellnessFormRow ? '72px 56px 76px' : isWellnessFooterRow ? '40px 56px' : isWellnessRegistrationRow ? '28px 64px 56px' : (isWellnessBenefitCards || isWellnessCardGrid) ? '0' : (isWellnessSection ? (isWellnessConsultation ? '36px' : '0 56px 36px') : '0'),
-    background: isWellnessImpactBand ? 'linear-gradient(90deg, #9e120c 0%, #c61a14 100%)' : isWellnessMetricGrid ? 'transparent' : isWellnessFormRow ? '#eef3ff' : isWellnessFooterRow ? '#fffdf8' : (isWellnessHeaderRow ? '#fffdf8' : (isWellnessInnerRow || isWellnessConsultation || isWellnessSupporting ? '#fbfaf4' : 'transparent')),
-    color: isWellnessImpactBand ? '#ffffff' : (isWellnessSection ? '#1f2f2c' : 'inherit'),
+    padding: isWellnessHeaderRow ? '28px 56px' : isWellnessHeroRow ? '64px 56px 58px' : isWellnessDetailsStrip ? '22px 24px' : isWellnessGalleryRow ? '18px 56px 36px' : isWellnessBenefitsRow ? '34px 56px 32px' : isWellnessProcessRow ? '28px 56px 36px' : isWellnessImpactBand ? '32px 56px' : isWellnessCtaRow ? '28px 56px' : isWellnessFormRow ? '72px 56px 76px' : isWellnessFooterRow ? '40px 56px' : isWellnessRegistrationRow ? '28px 64px 56px' : (isWellnessBenefitCards || isWellnessCardGrid) ? '0' : (isWellnessSection ? (isWellnessConsultation ? '36px' : '0 56px 36px') : '0'),
+    background: isWellnessImpactBand ? 'linear-gradient(90deg, var(--wellness-primary-deep, #126052) 0%, var(--wellness-primary, #1f8a70) 100%)' : isWellnessMetricGrid ? 'transparent' : isWellnessFormRow ? 'var(--wellness-surface-soft, #e8f4ee)' : isWellnessFooterRow ? 'var(--wellness-surface, #ffffff)' : (isWellnessHeaderRow ? 'var(--wellness-surface, #ffffff)' : (isWellnessInnerRow || isWellnessConsultation || isWellnessSupporting ? 'var(--wellness-bg, #f4fbf7)' : 'transparent')),
+    color: isWellnessImpactBand ? '#ffffff' : (isWellnessSection ? 'var(--wellness-ink, #173b35)' : 'inherit'),
     borderRadius: isWellnessHeaderRow ? 0 : isWellnessDetailsStrip ? '16px' : (isWellnessImpactBand ? 0 : isWellnessConsultation ? (hasFullWidthSupport ? '18px' : '18px 18px 0 0') : (isWellnessSupporting ? '0 0 18px 18px' : 0)),
-    border: isWellnessDetailsStrip ? '1px solid #d8d2c3' : 'none',
-    borderTop: isWellnessFooterRow ? '1px solid #ded6c8' : 'none',
-    borderBottom: isWellnessHeaderRow ? '1px solid #ded6c8' : 'none',
+    border: isWellnessDetailsStrip ? '1px solid var(--wellness-border, #cfe3d9)' : 'none',
+    borderTop: isWellnessFooterRow ? '1px solid var(--wellness-border, #cfe3d9)' : 'none',
+    borderBottom: isWellnessHeaderRow ? '1px solid var(--wellness-border, #cfe3d9)' : 'none',
     boxShadow: isWellnessDetailsStrip ? '0 18px 45px rgba(31, 47, 44, 0.08)' : (isWellnessImpactBand ? 'inset 0 1px 0 rgba(255,255,255,0.18)' : 'none'),
     boxSizing: 'border-box',
     overflow: 'visible',
   };
+  const containerStyle = isWellnessCardGrid
+    ? {
+      ...baseContainerStyle,
+      display: 'grid',
+      gridTemplateColumns: isWellnessMetricGrid ? 'repeat(4, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+      gap: '16px',
+      width: '100%',
+      maxWidth: '100%',
+      margin: 0,
+      padding: 0,
+      alignItems: 'stretch',
+      background: 'transparent',
+      border: 'none',
+      borderRadius: 0,
+      boxShadow: 'none',
+    }
+    : baseContainerStyle;
 
   const columnStyle = (col, idx) => {
     let flex = col.fullWidth ? '1 1 100%' : '1 1 0';
     if (isWellnessHeaderRow) flex = idx === 0 ? '0 0 360px' : '1 1 auto';
     if (isWellnessHeroRow) flex = idx === 1 ? '0 1 560px' : '1 1 0';
     if (isWellnessDetailsStrip) flex = '1 1 0';
+    if (isWellnessGalleryRow) flex = '1 1 0';
     if (isWellnessBenefitsRow) flex = idx === 0 ? '0 1 360px' : '1 1 0';
     if (isWellnessProcessRow) flex = idx === 0 ? '0 1 360px' : '1 1 0';
     if (isWellnessImpactBand) flex = idx === 0 ? '0 1 360px' : '1 1 0';
@@ -548,33 +736,62 @@ export function ColumnsBlock({ props = {}, renderBlock }) {
     if (isWellnessConsultation && idx === 1) flex = '0 1 480px';
 
     return {
-      flex,
-      minWidth: col.fullWidth ? '100%' : (isWellnessHeaderRow ? (idx === 0 ? '280px' : '0') : isWellnessHeroRow ? (idx === 1 ? '420px' : '500px') : isWellnessDetailsStrip ? '0' : isWellnessBenefitsRow ? (idx === 0 ? '360px' : '360px') : isWellnessProcessRow ? (idx === 0 ? '360px' : '320px') : isWellnessImpactBand ? (idx === 0 ? '320px' : '220px') : isWellnessCardGrid ? '220px' : isWellnessFormRow ? (columns.length === 1 ? '420px' : (idx === 0 ? '420px' : '420px')) : isWellnessCtaRow ? (idx === 0 ? '320px' : '240px') : isWellnessRegistrationRow ? (idx === 0 ? '540px' : '360px') : isWellnessSection ? '240px' : '260px'),
+      flex: isWellnessCardGrid ? 'none' : flex,
+      minWidth: isWellnessCardGrid ? 0 : (col.fullWidth ? '100%' : (isWellnessHeaderRow ? (idx === 0 ? '280px' : '0') : isWellnessHeroRow ? (idx === 1 ? '420px' : '500px') : (isWellnessDetailsStrip || isWellnessGalleryRow) ? '0' : isWellnessBenefitsRow ? (idx === 0 ? '360px' : '360px') : isWellnessProcessRow ? (idx === 0 ? '360px' : '320px') : isWellnessImpactBand ? (idx === 0 ? '320px' : '220px') : isWellnessCardGrid ? '220px' : isWellnessFormRow ? (columns.length === 1 ? '420px' : (idx === 0 ? '420px' : '420px')) : isWellnessCtaRow ? (idx === 0 ? '320px' : '240px') : isWellnessRegistrationRow ? (idx === 0 ? '540px' : '360px') : isWellnessSection ? '240px' : '260px')),
       maxWidth: '100%',
       boxSizing: 'border-box',
       display: 'flex',
-      flexDirection: isWellnessHeaderRow && idx === 1 ? 'row' : 'column',
-      gap: isWellnessHeaderRow ? '28px' : isWellnessBenefitCards ? '10px' : '16px',
-      padding: isWellnessDetailsStrip ? '22px 20px' : (isWellnessMetricGrid ? '28px 22px' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '24px' : 0)),
-      minHeight: isWellnessDetailsStrip ? '112px' : (isWellnessMetricGrid ? '132px' : undefined),
-      background: isWellnessMetricGrid ? 'linear-gradient(180deg, rgba(88,11,7,0.96), rgba(140,22,15,0.92))' : ((isWellnessDetailsStrip || isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '#fffdf7' : 'transparent'),
-      border: isWellnessMetricGrid ? '1px solid rgba(255,255,255,0.36)' : (isWellnessDetailsStrip ? '1px solid #e5ded0' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '1px solid #d8d2c3' : 'none')),
-      borderRadius: isWellnessDetailsStrip ? '12px' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '14px' : 0),
-      boxShadow: isWellnessMetricGrid ? '0 18px 36px rgba(70,0,0,0.24)' : (isWellnessDetailsStrip ? '0 10px 24px rgba(31, 47, 44, 0.06)' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '0 14px 35px rgba(31, 47, 44, 0.07)' : 'none')),
+      flexDirection: (isWellnessHeaderRow && idx === 1) || isWellnessDetailsStrip ? 'row' : 'column',
+      gap: isWellnessHeaderRow ? '28px' : isWellnessDetailsStrip ? 0 : isWellnessBenefitCards ? '10px' : '16px',
+      width: isWellnessCardGrid ? '100%' : undefined,
+      height: isWellnessCardGrid ? '100%' : undefined,
+      padding: isWellnessDetailsStrip ? '30px 34px' : (isWellnessMetricGrid ? '28px 22px' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '24px' : 0)),
+      minHeight: isWellnessDetailsStrip ? '154px' : (isWellnessMetricGrid ? '132px' : undefined),
+      background: isWellnessMetricGrid ? 'linear-gradient(180deg, var(--wellness-primary-deep, #126052), var(--wellness-primary, #1f8a70))' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? 'var(--wellness-surface, #ffffff)' : 'transparent'),
+      border: isWellnessMetricGrid ? '1px solid rgba(255,255,255,0.36)' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '1px solid var(--wellness-border, #cfe3d9)' : 'none'),
+      borderRadius: (isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '14px' : 0,
+      boxShadow: isWellnessMetricGrid ? '0 18px 36px rgba(23,59,53,0.24)' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '0 14px 35px rgba(23,59,53,0.07)' : 'none'),
       justifyContent: isWellnessHeaderRow && idx === 1 ? 'space-between' : (isWellnessImpactBand || isWellnessDetailsStrip ? 'center' : undefined),
       alignItems: isWellnessHeaderRow ? (idx === 0 ? 'flex-start' : 'center') : (isWellnessFooterRow ? (idx === 0 ? 'flex-start' : idx === columns.length - 1 ? 'flex-end' : 'center') : (isWellnessDetailsStrip || isWellnessMetricGrid || (isWellnessFormRow && columns.length === 1) ? 'center' : undefined)),
-      textAlign: isWellnessHeaderRow ? (idx === 0 ? 'left' : 'right') : (isWellnessFooterRow ? (idx === 0 ? 'left' : idx === columns.length - 1 ? 'right' : 'center') : (isWellnessDetailsStrip || isWellnessMetricGrid || (isWellnessFormRow && columns.length === 1) ? 'center' : undefined)),
+      textAlign: isWellnessHeaderRow ? (idx === 0 ? 'left' : 'right') : (isWellnessFooterRow ? (idx === 0 ? 'left' : idx === columns.length - 1 ? 'right' : 'center') : (isWellnessDetailsStrip ? 'left' : (isWellnessMetricGrid || (isWellnessFormRow && columns.length === 1) ? 'center' : undefined))),
       color: isWellnessMetricGrid ? '#ffffff' : undefined,
       overflowWrap: isWellnessDetailsStrip ? 'anywhere' : undefined,
     };
   };
 
+  const wellnessVariantClass = variant.replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
+  const wellnessLayoutClass = isWellnessCampaignPage
+    ? ` wellness-campaign--${String(props.layoutId || 'editorial').replace(/[^a-z0-9_-]/gi, '-').toLowerCase()}`
+    : '';
+  const wellnessClass = isWellnessCampaignPage
+      ? `wellness-shell wellness-layout wellness-layout--${wellnessVariantClass}${wellnessLayoutClass}`
+    : isWellnessSection
+      ? `wellness-layout wellness-layout--${wellnessVariantClass}`
+      : '';
+  const wellnessAnchorId = isWellnessCampaignPage
+    ? 'wellness-home'
+    : isWellnessBenefitsRow
+      ? 'wellness-services'
+      : isWellnessProcessRow
+        ? 'wellness-about'
+        : isWellnessFormRow || isWellnessRegistrationRow
+          ? 'wellness-contact'
+          : undefined;
   return (
-    <div style={containerStyle}>
+    <div id={wellnessAnchorId} className={wellnessClass} style={containerStyle}>
       {columns.map((col, idx) => (
         <div key={idx} style={columnStyle(col, idx)}>
           {col.components &&
-            col.components.map((c, cidx) => (
+            (isWellnessHeroRow
+              ? (() => {
+                const heroButtons = col.components.filter((child) => child?.type === 'button');
+                const preferredHeroButton = heroButtons.find((buttonBlock) => buttonBlock.id === 'hero-primary-cta') || heroButtons[0];
+                return heroButtons.length > 1
+                  ? col.components.filter((child) => child?.type !== 'button' || child === preferredHeroButton)
+                  : col.components;
+              })()
+              : col.components
+            ).map((c, cidx) => (
               <div key={cidx}>{renderBlock ? renderBlock(c) : null}</div>
             ))}
         </div>

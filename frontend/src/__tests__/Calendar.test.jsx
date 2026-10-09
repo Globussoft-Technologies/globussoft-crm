@@ -196,6 +196,13 @@ describe('<Calendar /> — #615 layout regressions', () => {
     const bottomScroll = document.querySelector('.top-scroll-sync__bottom');
     expect(topScroll).toBeTruthy();
     expect(bottomScroll).toBeTruthy();
+    const calendarCard = topScroll.closest('.calendar-day-grid-card');
+    const timeWidth = Number.parseInt(calendarCard.style.getPropertyValue('--calendar-time-column-width'), 10);
+    const gridWidth = Number.parseInt(calendarCard.querySelector('.calendar-grid').style.minWidth, 10);
+    expect(Number.parseInt(topScroll.firstElementChild.style.width, 10)).toBe(gridWidth - timeWidth);
+    expect(calendarCard.querySelector('.calendar-time-cell--header').style.background)
+      .toContain('--calendar-gutter-bg');
+    expect(calendarCard.querySelector('.calendar-time-cell--header')).toHaveTextContent('Time');
 
     // Re-fire the convergence action while polling. Under the full CI suite,
     // React can render the grid just before TopScrollSync's effect attaches
@@ -541,7 +548,9 @@ describe('<Calendar /> — doctor swimlanes + appointment cells', () => {
 
     const grid = container.querySelector('.calendar-grid');
     expect(grid).toBeTruthy();
-    expect(grid.style.minWidth).toBe('560px');
+    expect(grid.style.minWidth).toBe('572px');
+    expect(container.querySelector('.calendar-scroll').style.overflow).toBe('visible');
+    expect(grid.querySelectorAll('.calendar-time-cell')).toHaveLength(12);
   });
 
   it('status border colour reflects the visit status (in-treatment → amber)', async () => {

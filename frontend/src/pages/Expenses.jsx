@@ -6,6 +6,7 @@ import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
 import { Receipt, Plus, Eye, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
+import SearchableSelect from '../components/ui/SearchableSelect';
 
 const CATEGORY_OPTIONS = [
   'Building Rent',
@@ -599,6 +600,7 @@ export default function Expenses() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
+            className="expense-create-modal"
             style={{
               padding: '1.5rem',
               width: '720px',
@@ -702,14 +704,15 @@ export default function Expenses() {
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
                   Category <span style={{ color: '#ef4444' }}>*</span>
                 </label>
-                <select className="input-field" value={form.category}
-                  onChange={e => setForm({
-                    ...form,
-                    category: e.target.value,
-                  })}
-                  style={{ background: 'var(--input-bg)' }}>
-                  {CATEGORY_OPTIONS.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                </select>
+                <SearchableSelect
+                  value={form.category}
+                  onChange={category => setForm({ ...form, category })}
+                  options={CATEGORY_OPTIONS.map(category => ({ value: category, label: category }))}
+                  placeholder="Search expense categories..."
+                  ariaLabel="Category"
+                  allowClear={false}
+                  boundarySelector=".expense-create-modal"
+                />
               </div>}
 
               <div>

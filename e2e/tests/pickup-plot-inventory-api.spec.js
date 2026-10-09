@@ -101,12 +101,29 @@ test('a user without the Billing role cannot access the billing queue', async ({
   expect((await response.json()).code).toBe('BILLING_ROLE_REQUIRED');
 });
 
+test('an unlinked user cannot read or update another staff work profile', async ({ request }) => {
+  const [readResponse, updateResponse] = await Promise.all([
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/people/me`, {
+      headers: headers(userToken),
+    }),
+    request.put(`${BASE_URL}/api/pickup-plot-inventory/people/me`, {
+      headers: headers(userToken),
+      data: { roleType: 'transport', assignments: [] },
+    }),
+  ]);
+  expect(readResponse.status()).toBe(404);
+  expect((await readResponse.json()).code).toBe('OPERATIONAL_PROFILE_NOT_LINKED');
+  expect(updateResponse.status()).toBe(404);
+  expect((await updateResponse.json()).code).toBe('OPERATIONAL_PROFILE_NOT_LINKED');
+});
+
 test('admin creates and edits a plot assigned to the pickup location', async ({ request }) => {
   const created = await request.post(`${BASE_URL}/api/pickup-plot-inventory/plots`, {
     headers: headers(adminToken),
     data: {
-      name: `${RUN_TAG} Plot A`, address: '25 Lake Road',
-      area: '1200 sq ft', price: 250000, availability: 'AVAILABLE', isActive: true,
+      name: `${RUN_TAG} Plot A`, plotNumber: 'A-101', block: 'A', address: '25 Lake Road',
+      area: '2', areaUnit: 'KATHA', price: 250000, roadWidth: '30 ft', facing: 'EAST',
+      propertyType: 'RESIDENTIAL', availability: 'AVAILABLE', isActive: true,
     },
   });
   expect(created.status()).toBe(201);
@@ -115,12 +132,16 @@ test('admin creates and edits a plot assigned to the pickup location', async ({ 
   const updated = await request.put(`${BASE_URL}/api/pickup-plot-inventory/plots/${plotId}`, {
     headers: headers(adminToken),
     data: {
-      name: `${RUN_TAG} Plot A`, address: '26 Lake Road',
-      area: '1200 sq ft', price: 250000, availability: 'RESERVED', isActive: true,
+      name: `${RUN_TAG} Plot A`, plotNumber: 'A-101', block: 'A', address: '26 Lake Road',
+      area: '2', areaUnit: 'KATHA', price: 250000, roadWidth: '40 ft', facing: 'EAST',
+      propertyType: 'RESIDENTIAL', availability: 'RESERVED', isActive: true,
     },
   });
   expect(updated.status()).toBe(200);
-  expect(await updated.json()).toMatchObject({ availability: 'RESERVED', address: '26 Lake Road' });
+  expect(await updated.json()).toMatchObject({
+    plotNumber: 'A-101', block: 'A', area: '2', areaUnit: 'KATHA', roadWidth: '40 ft',
+    facing: 'EAST', propertyType: 'RESIDENTIAL', availability: 'RESERVED', address: '26 Lake Road',
+  });
 });
 
 test('list returns the tagged tenant-scoped location, plot, and summary', async ({ request }) => {

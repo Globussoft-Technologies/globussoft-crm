@@ -4,7 +4,7 @@
  *
  * Glue between:
  *   - services/landingPagePrompts.js   (system + user prompt)
- *   - lib/llmRouter.js                 (Gemini key resolution, spend log)
+ *   - lib/aiGateway.js                 (tenant provider resolution, spend log)
  *   - lib/landingPageGuard.js          (3-layer output validation)
  *
  * Surfaces ONE function:
@@ -16,7 +16,7 @@
  *     suggestedSlug: string,
  *     suggestedTitle: string,
  *     seoMeta: { metaTitle, metaDescription },
- *     source: 'gemini' | 'stub',
+ *     source: configured provider id | 'stub',
  *     model: string,
  *     stub: boolean,
  *     verdict: 'passed' | 'scrubbed' | 'fallback',
@@ -98,7 +98,21 @@ async function computeMonthlySpendCents(tenantId) {
 }
 
 /**
- * Whether the real Gemini call should fire. Wraps the resolver probe so
+ * Keep unit tests offline without disabling real AI for the local server.
+ * The local stack also uses NODE_ENV=test, so NODE_ENV alone cannot identify
+ * a Vitest process. Set AI_DISABLE_REAL_MODE=1 when an explicit hard stop is
+ * needed outside a test runner.
+ */
+function realAiDisabledForTestProcess() {
+  return process.env.AI_DISABLE_REAL_MODE === '1'
+    || process.env.VITEST === 'true'
+    || process.env.VITEST === '1'
+    || process.env.JEST_WORKER_ID != null;
+}
+
+/**
+ * Whether the configured tenant provider should be called. Wraps the
+ * resolver probe so
  * vitest can mock it without setting the env directly.
  *
  * Delegates to lib/aiProviderManagement.resolveProviderConfig — the SAME
@@ -107,15 +121,16 @@ async function computeMonthlySpendCents(tenantId) {
  * llmRouter.getLlmKey() probe that treated the bare platform env var as
  * sufficient for ANY tenant regardless of subscription state.
  *
- * Disabled under NODE_ENV=test so unit suites stay offline and
- * deterministic even when a key/subscription happens to resolve.
+ * The resolver returns the tenant's selected BYOK provider, regardless of
+ * whether it is Gemini, OpenAI-compatible, Anthropic, or another catalogued
+ * provider. The aiGateway then selects the matching adapter.
  */
 async function realModeEnabled(tenantId) {
-  if (process.env.NODE_ENV === 'test') return false;
+  if (realAiDisabledForTestProcess()) return false;
   if (!tenantId) return false;
   const { resolveProviderConfig } = require('../lib/aiProviderManagement');
-  const config = await resolveProviderConfig(tenantId, { requestedModelLabel: 'gemini-flash' });
-  return Boolean(config);
+  const config = await resolveProviderConfig(tenantId);
+  return Boolean(config && config.apiKey);
 }
 
 /**
@@ -169,7 +184,8 @@ async function callGemini({ destination, durationDays, audience, subBrand, tenan
     userId,
     task: TASK_NAME,
     surface: 'landingPageGeneratorLLM',
-    requestedModelLabel: 'gemini-flash',
+    // Do not bias provider selection; the tenant's saved provider is authoritative.
+    requestedModelLabel: null,
     messages: [{ role: 'user', content: fullPrompt }],
     // maxOutputTokens 8192 (PR-C): the richer 9-block prompt produces
     // significantly more tokens than earlier revisions; 4096 truncated
@@ -180,9 +196,19 @@ async function callGemini({ destination, durationDays, audience, subBrand, tenan
   return {
     rawJson: parseGeminiJson(resp.text),
     modelUsed: resp.model,
+    provider: resp.provider,
     promptTokens: resp.usage.promptTokens,
     completionTokens: resp.usage.completionTokens,
   };
+}
+
+/**
+ * Backward-compatible seam with an explicit provider-neutral name. The
+ * gateway honors the tenant's saved provider; callGemini is retained because
+ * existing callers/tests use that seam.
+ */
+async function callSelectedProvider(args) {
+  return module.exports.callGemini(args);
 }
 
 /**
@@ -219,7 +245,7 @@ async function callOpenAI({ destination, durationDays, audience, subBrand, tenan
     const preview = raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
     throw new Error(`OpenAI JSON parse failed: ${e.message}. Raw: ${preview}`);
   }
-  return { rawJson: parsed, modelUsed: resp.model };
+  return { rawJson: parsed, modelUsed: resp.model, provider: resp.provider };
 }
 
 /**
@@ -228,17 +254,17 @@ async function callOpenAI({ destination, durationDays, audience, subBrand, tenan
  * funded CRM-managed subscription) — same gate as realModeEnabled, just
  * probed with an OpenAI-family model hint.
  *
- * Disabled under NODE_ENV=test by default so unit suites stay offline
- * and deterministic; the OpenAI-fallback-path tests in
+ * Disabled in Vitest/Jest by default so unit suites stay offline and
+ * deterministic; the OpenAI-fallback-path tests in
  * landingPageGeneratorLLM.test.js use vi.spyOn(...).mockReturnValue(true)
  * to opt in for that specific branch.
  */
 async function openAiFallbackEnabled(tenantId) {
-  if (process.env.NODE_ENV === 'test') return false;
+  if (realAiDisabledForTestProcess()) return false;
   if (!tenantId) return false;
   const { resolveProviderConfig } = require('../lib/aiProviderManagement');
   const config = await resolveProviderConfig(tenantId, { requestedModelLabel: 'gpt-4' });
-  return Boolean(config);
+  return Boolean(config && config.family === 'openai-compatible');
 }
 
 /**
@@ -277,23 +303,26 @@ async function callGroq({ destination, durationDays, audience, subBrand, tenantI
     const preview = raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
     throw new Error(`Groq JSON parse failed: ${e.message}. Raw: ${preview}`);
   }
-  return { rawJson: parsed, modelUsed: resp.model };
+  return { rawJson: parsed, modelUsed: resp.model, provider: resp.provider };
 }
 
 /**
  * Whether the Groq primary path is authorized. Delegates to the shared
  * AI Subscription & Credit Management resolver (BYOK or a funded
  * CRM-managed subscription) — same gate as realModeEnabled /
- * openAiFallbackEnabled, probed with a Groq-family model hint. Disabled
- * under NODE_ENV=test so the existing unit-test mocks don't have to
- * rewire for this path.
+ * openAiFallbackEnabled, probed with a Groq-family model hint. Disabled in
+ * Vitest/Jest so the existing unit-test mocks don't have to rewire for this
+ * path.
  */
 async function groqEnabled(tenantId) {
-  if (process.env.NODE_ENV === 'test') return false;
+  if (realAiDisabledForTestProcess()) return false;
   if (!tenantId) return false;
   const { resolveProviderConfig } = require('../lib/aiProviderManagement');
   const config = await resolveProviderConfig(tenantId, { requestedModelLabel: 'groq-llama' });
-  return Boolean(config);
+  // Do not send a Gemini/other BYOK config through the Groq-labelled path.
+  // resolveProviderConfig intentionally gives BYOK priority over the model
+  // hint, so checking only Boolean(config) would call the wrong adapter.
+  return Boolean(config && config.providerId === 'groq');
 }
 
 /**
@@ -382,7 +411,7 @@ async function generateLandingPageContent(args = {}) {
   let geminiError = null;
   if (await module.exports.groqEnabled(tenantId)) {
     try {
-      const { rawJson, modelUsed } = await module.exports.callGroq(callInput);
+      const { rawJson, modelUsed, provider } = await module.exports.callGroq(callInput);
       const guardResult = guardLandingPageOutput(rawJson, input);
       const outputSize = JSON.stringify(guardResult.output).length;
       persistCallLog({
@@ -397,7 +426,7 @@ async function generateLandingPageContent(args = {}) {
       });
       return {
         ...guardResult.output,
-        source: 'groq',
+        source: provider || 'groq',
         model: modelUsed,
         stub: false,
         verdict: guardResult.verdict,
@@ -413,7 +442,13 @@ async function generateLandingPageContent(args = {}) {
 
   if (await module.exports.realModeEnabled(tenantId)) {
     try {
-      const { rawJson, modelUsed, promptTokens, completionTokens } = await module.exports.callGemini(callInput);
+      const {
+        rawJson,
+        modelUsed,
+        provider,
+        promptTokens,
+        completionTokens,
+      } = await module.exports.callSelectedProvider(callInput);
       const guardResult = guardLandingPageOutput(rawJson, input);
       const outputSize = JSON.stringify(guardResult.output).length;
       persistCallLog({
@@ -425,14 +460,14 @@ async function generateLandingPageContent(args = {}) {
         model: modelUsed || MODEL_PRIMARY,
         userId: __userId,
         surface: __surface,
-        provider: 'gemini',
+        provider: provider || 'configured',
         status: 'success',
         promptTokens,
         completionTokens,
       });
       return {
         ...guardResult.output,
-        source: 'gemini',
+        source: provider || 'configured',
         model: modelUsed || MODEL_PRIMARY,
         stub: false,
         verdict: guardResult.verdict,
@@ -468,7 +503,7 @@ async function generateLandingPageContent(args = {}) {
   // to [REVIEW] stubs when the operator has OpenAI credit available.
   if (await module.exports.openAiFallbackEnabled(tenantId)) {
     try {
-      const { rawJson, modelUsed } = await module.exports.callOpenAI(callInput);
+      const { rawJson, modelUsed, provider } = await module.exports.callOpenAI(callInput);
       const guardResult = guardLandingPageOutput(rawJson, input);
       const outputSize = JSON.stringify(guardResult.output).length;
       persistCallLog({
@@ -483,7 +518,7 @@ async function generateLandingPageContent(args = {}) {
       });
       return {
         ...guardResult.output,
-        source: 'openai',
+        source: provider || 'openai',
         model: modelUsed,
         stub: false,
         verdict: guardResult.verdict,
@@ -559,7 +594,8 @@ async function callGeminiTeeCascade({ system, user, tenantId, userId }) {
     userId,
     task: TASK_NAME,
     surface: 'landingPageGeneratorLLM-TEE',
-    requestedModelLabel: 'gemini-flash',
+    // Keep the tenant's configured provider/model authoritative for TEE too.
+    requestedModelLabel: null,
     messages: [{ role: 'user', content: combined }],
     generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192 },
   });
@@ -919,6 +955,7 @@ module.exports = {
   checkBudgetCap,
   computeMonthlySpendCents,
   realModeEnabled,
+  callSelectedProvider,
   callGemini,
   callOpenAI,
   openAiFallbackEnabled,

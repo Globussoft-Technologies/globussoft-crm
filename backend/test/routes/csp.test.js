@@ -372,6 +372,18 @@ describe("POST /api/csp/report", () => {
   });
 
   // ── 16. Oversized payload → 413 with NO audit-row side-effect ────────
+  test("localhost Host -> 204 with no tenant lookup or audit write", async () => {
+    const res = await request(makeApp())
+      .post("/api/csp/report")
+      .set("Host", "localhost:5000")
+      .set("Content-Type", "application/csp-report")
+      .send(JSON.stringify({ "csp-report": { "violated-directive": "img-src" } }));
+
+    expect(res.status).toBe(204);
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
   // Companion to case 5 (which checks the 413 status). The load-bearing
   // additional pin here: even when the parser rejects the body, the
   // route MUST NOT have invoked prisma.auditLog.create. Otherwise an

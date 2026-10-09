@@ -45,11 +45,14 @@
  * ({ formId, fields }). This keeps everything within existing routes and
  * the existing sanitize-helper coverage, with no new model required.
  */
-import React, { useState, useEffect, useMemo } from 'react';
-import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare, X, Save, Trash2, Edit3, Calendar, FileText } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
+import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare, X, Save, Trash2, Edit3, Calendar, FileText, Pause, Play } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
+import { AuthContext } from '../appContexts';
+import GenericCampaignWizard from '../components/GenericCampaignWizard';
+import GenericCampaignTemplates from '../components/GenericCampaignTemplates';
 
 const NAME_MAX = 100;
 const SMS_BODY_MAX = 480; // 3 segments worth — provider chunks into 160-char SMSes
@@ -78,21 +81,141 @@ function looksLikeXss(str) {
   return /<|>|javascript:|on\w+\s*=/i.test(str);
 }
 
+function parseCampaignMetadata(campaign) {
+  if (!campaign?.scheduleFilters) return {};
+  try {
+    const parsed = JSON.parse(campaign.scheduleFilters);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function formatTrigger(metadata) {
+  const trigger = Array.isArray(metadata.trigger) ? metadata.trigger[0] : null;
+  if (!trigger?.field) return 'Not configured';
+  const field = String(trigger.field).replace(/^contact\./, '').replace(/[._]/g, ' ');
+  const operator = ({ eq: 'eq', neq: 'not eq', contains: 'contains', notContains: 'not contains', empty: 'is empty', notEmpty: 'is not empty' })[trigger.op] || trigger.op || 'eq';
+  const value = trigger.value ? ` ${trigger.value}` : '';
+  return `${field} ${operator}${value}`;
+}
+
+function formatWindow(metadata) {
+  if (!metadata.timezone && metadata.startHour == null && metadata.endHour == null) return 'All day';
+  const timezone = metadata.timezone || 'UTC';
+  const start = String(Number(metadata.startHour ?? 0)).padStart(2, '0');
+  const end = String(Number(metadata.endHour ?? 23)).padStart(2, '0');
+  return `${timezone} (${start}:00–${end}:00)`;
+}
+
+function campaignRate(engaged, sent) {
+  const total = Number(sent) || 0;
+  if (total <= 0) return 0;
+  return Math.round(((Number(engaged) || 0) / total) * 10000) / 100;
+}
+
+function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDelete }) {
+  const metadata = parseCampaignMetadata(campaign);
+  const steps = Array.isArray(metadata.steps) ? metadata.steps : [];
+  const statusLabel = campaign.status === 'Active' ? 'Running' : campaign.status || 'Draft';
+  const category = metadata.category || 'Add your own category';
+  const channel = campaign.channel || 'EMAIL';
+  const description = metadata.description || '';
+
+  return (
+    <div
+      className="card campaign-card"
+      style={{
+        padding: '1.25rem 1.35rem',
+        border: '1px solid rgba(79, 93, 255, 0.75)',
+        boxShadow: '0 8px 24px rgba(40, 52, 120, 0.12)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.85rem',
+        minHeight: '340px',
+        height: '100%',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: 'var(--primary-color, var(--accent-color))', fontSize: '0.65rem', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+            {category} · {channel}
+          </div>
+          <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{campaign.name}</h3>
+          {description && <p style={{ margin: '0.4rem 0 0', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>{description}</p>}
+        </div>
+        <span style={{ fontSize: '0.7rem', padding: '0.25rem 0.6rem', color: statusLabel === 'Running' ? '#047857' : 'var(--text-primary)', background: statusLabel === 'Running' ? 'rgba(16, 185, 129, 0.12)' : 'var(--subtle-bg-3)', border: statusLabel === 'Running' ? '1px solid rgba(16, 185, 129, 0.35)' : 'none', borderRadius: '6px', flexShrink: 0 }}>
+          {statusLabel}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '0.3rem 1rem', padding: '0.65rem 0.75rem', background: 'var(--subtle-bg-2)', borderRadius: '8px', fontSize: '0.7rem' }}>
+        <span style={{ color: 'var(--text-secondary)' }}>Trigger:</span><strong style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTrigger(metadata)}</strong>
+        <span style={{ color: 'var(--text-secondary)' }}>Sequence:</span><strong style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{metadata.sequenceName || 'Not configured'}{steps.length ? ` (${steps.length} steps)` : ''}</strong>
+        <span style={{ color: 'var(--text-secondary)' }}>Window:</span><strong style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatWindow(metadata)}</strong>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
+        <CampaignMetric value={campaign.sent ?? 0} label="Sent" />
+        <CampaignMetric value={`${campaignRate(campaign.opened, campaign.sent)}%`} label="Open Rate" />
+        <CampaignMetric value={`${campaignRate(campaign.clicked, campaign.sent)}%`} label="Click Rate" />
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', paddingTop: '0.15rem', marginTop: 'auto', minHeight: '36px' }}>
+        {campaign.status === 'Active' ? (
+          <span style={{ fontSize: '0.7rem', color: 'var(--primary-color, var(--accent-color))', background: 'rgba(79, 93, 255, 0.08)', borderRadius: '6px', padding: '0.35rem 0.55rem' }}>
+            Active Selection
+          </span>
+        ) : <span />}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button type="button" onClick={campaign.status === 'Active' ? onPause : onPlay} aria-label={`${campaign.status === 'Active' ? 'Pause' : 'Play'} campaign ${campaign.name}`} title={campaign.status === 'Active' ? 'Pause campaign' : 'Play campaign'} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem' }}>
+            {campaign.status === 'Active' ? <Pause size={13} /> : <Play size={13} />}
+          </button>
+          <button type="button" onClick={onCopy} aria-label={`Copy campaign ${campaign.name}`} title="Copy campaign" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem' }}>
+            <Copy size={13} />
+          </button>
+          <button type="button" onClick={onDelete} aria-label={`Delete campaign ${campaign.name}`} title="Delete campaign" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.45rem', fontSize: '0.72rem', color: 'var(--danger-color, #ef4444)' }}>
+            <Trash2 size={13} />
+          </button>
+          <button type="button" onClick={onOpen} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.7rem', fontSize: '0.72rem' }}>
+          <Edit3 size={13} /> Edit Campaign
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CampaignMetric({ value, label }) {
+  return (
+    <div style={{ textAlign: 'center', minWidth: 0 }}>
+      <div style={{ color: 'var(--text-secondary)', fontSize: '0.62rem', textTransform: 'uppercase', marginBottom: '0.25rem' }}>{label}</div>
+      <strong style={{ fontSize: '0.9rem' }}>{value}</strong>
+    </div>
+  );
+}
+
 // The tab strip, as data.
 //
 // SMS and Push are hidden for now. Their tab bodies, loaders and API calls are
 // left untouched below — hiding is a strip-level decision, so restoring either
 // one is deleting its `hidden` flag, not rebuilding a feature.
 const MARKETING_TABS = [
-  { key: 'campaigns', label: 'Email Campaigns', color: 'var(--primary-color)' },
-  { key: 'sms', label: 'SMS Campaigns', color: '#10b981', hidden: true },
+  { key: 'templates', label: 'Templates', color: 'var(--primary-color)', genericOnly: true },
+  { key: 'campaigns', label: 'Email Campaigns', color: 'var(--primary-color)', channel: 'EMAIL' },
+  { key: 'sms', label: 'SMS Campaigns', color: 'var(--primary-color)', hidden: true },
+  { key: 'whatsapp', label: 'WhatsApp Campaigns', color: 'var(--primary-color)', hidden: true, channel: 'WHATSAPP' },
   { key: 'push', label: 'Push Campaigns', color: '#8b5cf6', hidden: true },
   { key: 'forms', label: 'Embedded Forms', color: 'var(--primary-color)' },
 ];
 
 export default function Marketing() {
   const notify = useNotify();
-  const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns', 'sms', 'push', 'forms'
+  const { tenant } = useContext(AuthContext);
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
+  const pageTitle = isGeneric ? 'Marketing Campaign' : 'Marketing';
+  const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns', 'templates', 'sms', 'push', 'forms'
 
   // ───── Forms State ─────
   const [formName, setFormName] = useState('My Contact Form');
@@ -120,6 +243,9 @@ export default function Marketing() {
         return ts >= campaignRangeStart.getTime() && ts <= campaignRangeEnd.getTime();
       })
     : campaigns;
+  const displayedCampaigns = isGeneric
+    ? visibleCampaigns.filter(c => (activeTab === 'sms' ? c.channel === 'SMS' : activeTab === 'whatsapp' ? c.channel === 'WHATSAPP' : !c.channel || c.channel === 'EMAIL'))
+    : visibleCampaigns;
 
   // ───── SMS Blast Composer State (#502) ─────
   const [smsTo, setSmsTo] = useState('');
@@ -129,15 +255,19 @@ export default function Marketing() {
 
   useEffect(() => {
     if (activeTab === 'campaigns') loadCampaigns();
-    if (activeTab === 'sms') loadSmsHistory();
+    if (activeTab === 'sms' && !isGeneric) loadSmsHistory();
     if (activeTab === 'forms') loadSavedForms();
   }, [activeTab]);
 
   const loadCampaigns = async () => {
     try {
-      const data = await fetchApi('/api/marketing/campaigns?channel=EMAIL');
+      const data = await fetchApi(isGeneric ? '/api/marketing/campaigns' : '/api/marketing/campaigns?channel=EMAIL');
       // Defensive — older rows may have channel=null (treat as EMAIL).
-      setCampaigns(Array.isArray(data) ? data.filter(c => !c.channel || c.channel === 'EMAIL') : []);
+      setCampaigns(Array.isArray(data)
+        ? data.filter(c => isGeneric
+          ? !c.channel || ['EMAIL', 'SMS', 'WHATSAPP'].includes(c.channel)
+          : !c.channel || c.channel === 'EMAIL')
+        : []);
     } catch (err) {
       console.error(err);
     }
@@ -190,26 +320,52 @@ export default function Marketing() {
     }
   };
 
-  const openEditor = (camp) => {
+  const startCreateCampaign = () => {
+    if (!isGeneric) {
+      setShowCreateCampaign(true);
+      return;
+    }
+    setEditingCampaign({
+      id: null,
+      name: '',
+      status: 'Draft',
+      channel: 'EMAIL',
+      budget: 0,
+      scheduledAt: '',
+      originalScheduledAt: '',
+      subject: '',
+      preheader: '',
+      body: '',
+      audienceFilter: { status: '' },
+    });
+  };
+
+  const openEditor = async (camp) => {
+    let sourceCampaign = camp;
+    if (isGeneric && camp?.id) {
+      sourceCampaign = await fetchApi(`/api/marketing/campaigns/${camp.id}`, { silent: true }).catch(() => camp);
+    }
     // Pull subject/body/preheader out of scheduleFilters JSON (campaigns
     // don't have first-class subject/body columns — this matches the
     // pattern used elsewhere where a side payload rides scheduleFilters).
     let extra = {};
-    if (camp.scheduleFilters) {
-      try { extra = JSON.parse(camp.scheduleFilters) || {}; } catch { /* ignore parse errors */ }
+    if (sourceCampaign.scheduleFilters) {
+      try { extra = JSON.parse(sourceCampaign.scheduleFilters) || {}; } catch { /* ignore parse errors */ }
     }
     setEditingCampaign({
-      id: camp.id,
-      name: camp.name,
-      status: camp.status,
-      channel: camp.channel || 'EMAIL',
-      budget: camp.budget || 0,
-      scheduledAt: camp.scheduledAt || '',
+      id: sourceCampaign.id,
+      name: sourceCampaign.name,
+      status: sourceCampaign.status,
+      sequenceId: sourceCampaign.sequenceId || '',
+      scheduleFilters: sourceCampaign.scheduleFilters || '',
+      channel: sourceCampaign.channel || 'EMAIL',
+      budget: sourceCampaign.budget || 0,
+      scheduledAt: sourceCampaign.scheduledAt || '',
       // #610: snapshot the saved scheduledAt so a no-op Save doesn't overwrite
       // the persisted Mon–Fri value with the +1yr placeholder. We compare
       // against this on save and keep the original if the user didn't touch
       // the field. The "today" defaulter is only legal in CREATE mode now.
-      originalScheduledAt: camp.scheduledAt || '',
+      originalScheduledAt: sourceCampaign.scheduledAt || '',
       subject: extra.subject || '',
       preheader: extra.preheader || '',
       body: extra.body || '',
@@ -236,14 +392,26 @@ export default function Marketing() {
         body: editingCampaign.body || '',
         audienceFilter: editingCampaign.audienceFilter || {},
       };
-      await fetchApi(`/api/marketing/campaigns/${editingCampaign.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: trimmedName.slice(0, NAME_MAX),
-          status: editingCampaign.status || 'Draft',
-        }),
-      });
+      let campaignId = editingCampaign.id;
+      if (campaignId) {
+        await fetchApi(`/api/marketing/campaigns/${campaignId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: trimmedName.slice(0, NAME_MAX),
+            status: editingCampaign.status || 'Draft',
+            ...(isGeneric ? { channel: editingCampaign.channel || 'EMAIL' } : {}),
+          }),
+        });
+      } else {
+        const created = await fetchApi('/api/marketing/campaigns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: trimmedName.slice(0, NAME_MAX), channel: isGeneric ? editingCampaign.channel : 'EMAIL', budget: 0 }),
+        });
+        campaignId = created?.id;
+        if (!campaignId) throw new Error('Campaign creation returned no id');
+      }
       // #610: preserve the saved scheduledAt when the user didn't touch the
       // picker. Pre-fix, an empty picker fell through to a +1yr placeholder
       // which silently overwrote the saved Mon–Fri value. Now: if the user
@@ -258,7 +426,7 @@ export default function Marketing() {
       } else {
         scheduledAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(); // +1yr placeholder, CREATE mode only
       }
-      await fetchApi(`/api/marketing/campaigns/${editingCampaign.id}/schedule`, {
+      await fetchApi(`/api/marketing/campaigns/${campaignId}/schedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scheduledAt, filters: filterPayload }),
@@ -267,7 +435,7 @@ export default function Marketing() {
       // schedule), immediately pause so it doesn't dispatch on the
       // placeholder date.
       if (!editingCampaign.scheduledAt && !editingCampaign.originalScheduledAt) {
-        await fetchApi(`/api/marketing/campaigns/${editingCampaign.id}/pause`, { method: 'POST' });
+        await fetchApi(`/api/marketing/campaigns/${campaignId}/pause`, { method: 'POST' });
       }
       notify.success('Campaign saved');
       setEditingCampaign(null);
@@ -292,6 +460,68 @@ export default function Marketing() {
       loadCampaigns();
     } catch {
       notify.error('Failed to delete campaign');
+    }
+  };
+
+  const pauseCampaign = async (campaign) => {
+    try {
+      await fetchApi(`/api/marketing/campaigns/${campaign.id}/pause`, { method: 'POST' });
+      notify.success('Campaign paused');
+      loadCampaigns();
+    } catch {
+      notify.error('Failed to pause campaign');
+    }
+  };
+
+  const playCampaign = async (campaign) => {
+    try {
+      await fetchApi(`/api/marketing/campaigns/${campaign.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Active', sequenceId: campaign.sequenceId || null }),
+      });
+      if (campaign.sequenceId) {
+        await fetchApi(`/api/sequences/${campaign.sequenceId}/toggle`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isActive: true }),
+        });
+      }
+      notify.success('Campaign activated');
+      loadCampaigns();
+    } catch {
+      notify.error('Failed to activate campaign');
+    }
+  };
+
+  const copyCampaign = async (campaign) => {
+    try {
+      const metadata = parseCampaignMetadata(campaign);
+      const created = await fetchApi('/api/marketing/campaigns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `${campaign.name} Copy`.slice(0, NAME_MAX),
+          channel: campaign.channel || 'EMAIL',
+          budget: campaign.budget || 0,
+          sequenceId: campaign.sequenceId || null,
+        }),
+      });
+      if (created?.id && Object.keys(metadata).length) {
+        await fetchApi(`/api/marketing/campaigns/${created.id}/schedule`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scheduledAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+            filters: metadata,
+          }),
+        });
+        await fetchApi(`/api/marketing/campaigns/${created.id}/pause`, { method: 'POST' });
+      }
+      notify.success('Campaign copied');
+      loadCampaigns();
+    } catch {
+      notify.error('Failed to copy campaign');
     }
   };
 
@@ -510,11 +740,21 @@ ${fields.map(f => {
   };
 
   // ───── Render ─────
+  if (editingCampaign && isGeneric) {
+    return (
+      <GenericCampaignWizard
+        campaign={editingCampaign}
+        onClose={() => setEditingCampaign(null)}
+        onSaved={() => { setEditingCampaign(null); loadCampaigns(); }}
+      />
+    );
+  }
+
   return (
-    <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="marketing-page" style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Marketing</h1>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>{pageTitle}</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage outbound campaigns and inbound lead capture forms.</p>
         </div>
 
@@ -523,8 +763,20 @@ ${fields.map(f => {
             wrapper handles the gradient overlay; the inner container does
             the scrolling. flex-wrap kicks in as a secondary fallback when
             there's enough vertical space. */}
-        <div style={{ position: 'relative', maxWidth: '100%' }}>
-          <div
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2rem', maxWidth: '100%' }}>
+          {isGeneric && (
+            <div style={{ background: 'var(--primary-color, var(--accent-color))', borderRadius: '8px', padding: '0.25rem' }}>
+              <button
+                type="button"
+                onClick={() => setActiveTab('templates')}
+                style={{ ...tabButtonStyle(activeTab === 'templates', 'var(--primary-color, var(--accent-color))'), background: 'transparent', color: '#fff', fontWeight: '600' }}
+              >
+                Templates
+              </button>
+            </div>
+          )}
+          <div style={{ position: 'relative', maxWidth: '100%' }}>
+            <div
             data-marketing-tabs
             style={{
               display: 'flex',
@@ -537,7 +789,7 @@ ${fields.map(f => {
               maxWidth: '100%',
             }}
           >
-            {MARKETING_TABS.filter((tab) => !tab.hidden).map((tab) => (
+            {MARKETING_TABS.filter((tab) => tab.key !== 'templates' && (!tab.hidden || (isGeneric && ['sms', 'whatsapp'].includes(tab.key))) && !(isGeneric && tab.key === 'forms') && (!tab.genericOnly || isGeneric)).map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
@@ -556,30 +808,41 @@ ${fields.map(f => {
               pointerEvents: 'none', borderRadius: '0 8px 8px 0',
             }}
           />
+          </div>
         </div>
       </header>
 
       {/* ─── Email Campaigns Tab ─── */}
-      {activeTab === 'campaigns' && (
+      {(activeTab === 'campaigns' || (isGeneric && (activeTab === 'sms' || activeTab === 'whatsapp'))) && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
             {campaigns.length > 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <DateRangeFilter value={campaignDateFilter} onChange={setCampaignDateFilter} label="Filter by created date" />
-                {visibleCampaigns.length !== campaigns.length && (
+                    {displayedCampaigns.length !== campaigns.length && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    {visibleCampaigns.length} of {campaigns.length}
+                    {displayedCampaigns.length} of {campaigns.length}
                   </span>
                 )}
               </div>
             ) : <span />}
-            <button className="btn-primary" onClick={() => setShowCreateCampaign(true)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <button className="btn-primary" onClick={startCreateCampaign} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Plus size={18} /> Create Campaign
             </button>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
-            {visibleCampaigns.map(camp => (
+          <div className="marketing-campaign-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
+            {displayedCampaigns.map(camp => isGeneric ? (
+              <GenericCampaignCard
+                key={camp.id}
+                campaign={camp}
+                onOpen={() => openEditor(camp)}
+                onPause={() => pauseCampaign(camp)}
+                onPlay={() => playCampaign(camp)}
+                onCopy={() => copyCampaign(camp)}
+                onDelete={() => deleteCampaign(camp.id)}
+              />
+            ) : (
               // #495: card is now a button so click + keyboard (Enter/Space)
               // both open the editor. role=button + tabIndex make it
               // discoverable by accessibility tooling.
@@ -626,7 +889,7 @@ ${fields.map(f => {
       )}
 
       {/* ─── Create Campaign Modal (#501 validation) ─── */}
-      {showCreateCampaign && (
+      {showCreateCampaign && !isGeneric && (
         <div style={modalBackdropStyle}>
           <form role="dialog" aria-label="Create campaign" className="card modal" onSubmit={handleCreateCampaign} style={{ padding: '2.5rem', width: '500px', maxWidth: '95vw', border: '1px solid var(--border-color)', boxShadow: '0 25px 50px rgba(0,0,0,0.8)' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1.5rem' }}>Create New Campaign</h3>
@@ -657,11 +920,12 @@ ${fields.map(f => {
       )}
 
       {/* ─── Campaign Editor Modal (#495) ─── */}
-      {editingCampaign && (
+      {activeTab === 'templates' && isGeneric && <GenericCampaignTemplates />}
+      {editingCampaign && !isGeneric && (
         <div style={modalBackdropStyle} onClick={() => setEditingCampaign(null)}>
-          <div role="dialog" aria-label="Edit campaign" className="card modal" onClick={(e) => e.stopPropagation()} style={{ padding: '2rem', width: '720px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border-color)', boxShadow: '0 25px 50px rgba(0,0,0,0.8)' }}>
+          <div role="dialog" aria-label={editingCampaign.id ? 'Edit campaign' : 'Create campaign'} className="card modal" onClick={(e) => e.stopPropagation()} style={{ padding: '2rem', width: '720px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border-color)', boxShadow: '0 25px 50px rgba(0,0,0,0.8)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>Edit Campaign</h3>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>{editingCampaign.id ? 'Edit Campaign' : 'Create New Campaign'}</h3>
               <button type="button" onClick={() => setEditingCampaign(null)} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
                 <X size={20} />
               </button>
@@ -672,18 +936,29 @@ ${fields.map(f => {
                 <label style={fieldLabelStyle}>Campaign Name</label>
                 <input
                   type="text"
+                  required
+                  autoFocus={!editingCampaign.id}
                   className="input-field"
                   maxLength={NAME_MAX}
                   value={editingCampaign.name}
                   onChange={e => setEditingCampaign({ ...editingCampaign, name: e.target.value })}
+                  placeholder="e.g. Q4 Product Launch"
                 />
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.4rem', fontSize: '0.75rem', color: looksLikeXss(editingCampaign.name || '') ? '#f59e0b' : 'var(--text-secondary)' }}>
+                  <span>{looksLikeXss(editingCampaign.name || '') ? 'Angle brackets and "javascript:" will be stripped on save.' : 'Letters, numbers, spaces. Max 100 chars.'}</span>
+                  <span>{(editingCampaign.name || '').length}/{NAME_MAX}</span>
+                </div>
               </div>
               <div>
                 <label style={fieldLabelStyle}>Status</label>
                 <select
                   className="input-field"
                   value={editingCampaign.status}
-                  onChange={e => setEditingCampaign({ ...editingCampaign, status: e.target.value })}
+                  onChange={e => setEditingCampaign({
+                    ...editingCampaign,
+                    status: e.target.value,
+                    ...(isGeneric && e.target.value !== 'Scheduled' ? { scheduledAt: '' } : {}),
+                  })}
                 >
                   <option value="Draft">Draft</option>
                   <option value="Scheduled">Scheduled</option>
@@ -705,29 +980,48 @@ ${fields.map(f => {
               />
             </div>
 
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={fieldLabelStyle}>Preheader (preview text)</label>
-              <input
-                type="text"
-                className="input-field"
-                maxLength={150}
-                value={editingCampaign.preheader}
-                onChange={e => setEditingCampaign({ ...editingCampaign, preheader: e.target.value })}
-                placeholder="Optional preview text shown next to the subject"
-              />
-            </div>
+            {isGeneric && (
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={fieldLabelStyle}>Campaign Channel</label>
+                <select
+                  className="input-field"
+                  value={editingCampaign.channel || 'EMAIL'}
+                  onChange={e => setEditingCampaign({ ...editingCampaign, channel: e.target.value })}
+                >
+                  <option value="EMAIL">Email</option>
+                  <option value="SMS">SMS</option>
+                  <option value="WHATSAPP">WhatsApp</option>
+                </select>
+              </div>
+            )}
 
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={fieldLabelStyle}>Body (HTML)</label>
-              <textarea
-                className="input-field"
-                rows={8}
-                value={editingCampaign.body}
-                onChange={e => setEditingCampaign({ ...editingCampaign, body: e.target.value })}
-                placeholder="<p>Hello {{contact.firstName}}, ...</p>"
-                style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
-              />
-            </div>
+            {!isGeneric && (
+              <>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={fieldLabelStyle}>Preheader (preview text)</label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    maxLength={150}
+                    value={editingCampaign.preheader}
+                    onChange={e => setEditingCampaign({ ...editingCampaign, preheader: e.target.value })}
+                    placeholder="Optional preview text shown next to the subject"
+                  />
+                </div>
+
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={fieldLabelStyle}>Body (HTML)</label>
+                  <textarea
+                    className="input-field"
+                    rows={8}
+                    value={editingCampaign.body}
+                    onChange={e => setEditingCampaign({ ...editingCampaign, body: e.target.value })}
+                    placeholder="<p>Hello {{contact.firstName}}, ...</p>"
+                    style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                  />
+                </div>
+              </>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
               <div>
@@ -746,29 +1040,35 @@ ${fields.map(f => {
                   <option value="Active">Active only</option>
                 </select>
               </div>
-              <div>
-                <label style={fieldLabelStyle}><Calendar size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />Schedule (optional)</label>
-                <input
-                  type="datetime-local"
-                  className="input-field"
-                  value={editingCampaign.scheduledAt ? new Date(editingCampaign.scheduledAt).toISOString().slice(0, 16) : ''}
-                  onChange={e => setEditingCampaign({ ...editingCampaign, scheduledAt: e.target.value })}
-                />
-              </div>
+              {(isGeneric ? editingCampaign.status === 'Scheduled' : true) && (
+                <div>
+                  <label style={fieldLabelStyle}><Calendar size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />Schedule (optional)</label>
+                  <input
+                    type="datetime-local"
+                    className="input-field"
+                    value={editingCampaign.scheduledAt ? new Date(editingCampaign.scheduledAt).toISOString().slice(0, 16) : ''}
+                    onChange={e => setEditingCampaign({ ...editingCampaign, scheduledAt: e.target.value })}
+                  />
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-              <button type="button" onClick={() => deleteCampaign(editingCampaign.id)} style={{ background: 'transparent', border: '1px solid var(--danger-color, #ef4444)', color: 'var(--danger-color, #ef4444)', padding: '0.5rem 1rem', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Trash2 size={14} /> Delete
-              </button>
+              {editingCampaign.id ? (
+                <button type="button" onClick={() => deleteCampaign(editingCampaign.id)} style={{ background: 'transparent', border: '1px solid var(--danger-color, #ef4444)', color: 'var(--danger-color, #ef4444)', padding: '0.5rem 1rem', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Trash2 size={14} /> Delete
+                </button>
+              ) : <span />}
               <div style={{ display: 'flex', gap: '0.75rem' }}>
                 <button type="button" onClick={() => setEditingCampaign(null)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>Cancel</button>
-                <button type="button" onClick={saveEditor} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Save size={14} /> Save
+                <button type="button" onClick={saveEditor} className="btn-secondary" disabled={!editingCampaign.id && !(editingCampaign.name || '').trim()} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Save size={14} /> {editingCampaign.id ? 'Save' : 'Create Campaign'}
                 </button>
-                <button type="button" onClick={sendCampaignNow} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <Send size={14} /> Send Now
-                </button>
+                {editingCampaign.id && (
+                  <button type="button" onClick={sendCampaignNow} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Send size={14} /> Send Now
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -776,8 +1076,8 @@ ${fields.map(f => {
       )}
 
       {/* ─── SMS Campaigns Tab (#493 + #502) ─── */}
-      {activeTab === 'sms' && (
-        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '1.5rem', alignContent: 'start' }}>
+      {activeTab === 'sms' && !isGeneric && (
+        <div className="marketing-sms-grid" style={{ flex: 1, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '1.5rem', alignContent: 'start' }}>
           {/* Blast Composer */}
           <form onSubmit={handleSendSmsBlast} className="card" style={{ padding: '1.5rem' }}>
             <h3 style={{ fontSize: '1.125rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -877,7 +1177,7 @@ ${fields.map(f => {
 
       {/* ─── Embedded Forms Tab (#499 / #500 / #504) ─── */}
       {activeTab === 'forms' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', flex: 1, minHeight: 0 }}>
+        <div className="marketing-forms-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', flex: 1, minHeight: 0 }}>
           {/* Builder View */}
           <div className="card" style={{ padding: '2rem', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>

@@ -142,6 +142,8 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', email = 'admin@exam
 }
 
 beforeEach(() => {
+  prisma.tenant = prisma.tenant || {};
+  prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
   prisma.automationRule.findMany.mockReset();
   prisma.automationRule.findFirst.mockReset();
   prisma.automationRule.create.mockReset();

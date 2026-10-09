@@ -11,6 +11,7 @@ const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 
 const { renderPage } = require("../services/landingPageRenderer");
+const { hydrateWellnessLandingImages } = require("../services/wellnessLandingImages");
 const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
 const {
   applyLandingPagePaymentToTrip,
@@ -1394,7 +1395,7 @@ router.get("/public/featured", async (req, res) => {
 
     }
 
-    res.json(page);
+    res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
 
   } catch (err) {
 
@@ -2233,6 +2234,13 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
     }
 
     if (result.stub) {
+      if (result.realModeError) {
+        console.error("[LandingPages] configured AI provider failed:", result.realModeError);
+        return res.status(502).json({
+          error: "The configured AI provider could not generate this landing page. Check the API key, selected model, Base URL, and provider quota.",
+          code: "AI_PROVIDER_ERROR",
+        });
+      }
       return res.status(503).json({ error: "AI provider is not configured. Configure an AI provider to generate this landing page.", code: "AI_NOT_CONFIGURED" });
     }
 
@@ -2337,13 +2345,15 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
         // We turn those into a destinationImageProvider strategy and
 
-        // attach the returned URLs back onto matching slots. The
+        // attach the returned URLs back onto matching slots. Travel landing
 
-        // provider chain is Unsplash ? Pexels ? Pixabay ? AI fallback
+        // pages intentionally use Pexels only: the configured stock-media
 
-        // (DALL-E with key, else Pollinations Flux). Best-effort; if
+        // integration must not silently turn into billable DALL-E output or
 
-        // every provider misses, the relevant section's data is
+        // keyless Pollinations imagery. Best-effort; if Pexels misses, the
+
+        // relevant section's data is
 
         // missing and the reference's renderVals() simply hides it.
 
@@ -2394,6 +2404,8 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
             __userId: req.user.userId,
 
             __surface: "landing-pages-generate-wanderlux",
+
+            excludeProviders: ["unsplash", "pixabay", "ai-fallback"],
 
           });
 
@@ -3220,7 +3232,7 @@ router.get("/:id", verifyToken, async (req, res) => {
 
     if (!page) return res.status(404).json({ error: "Page not found" });
 
-    res.json(page);
+    res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
 
   } catch (_err) { res.status(500).json({ error: "Failed to fetch page" }); }
 
@@ -5054,7 +5066,14 @@ router.get("/:id/preview", async (req, res) => {
 
 
 
-    const html = renderPage(rendered, { preview: true });
+    const hydratedRendered = await hydrateWellnessLandingImages(rendered, {
+      db: prisma,
+      // Historical previews must remain immutable. Live draft previews may
+      // persist the fetched Pexels URLs so the public page uses the same
+      // distinct image set after publishing.
+      persist: versionForLog == null,
+    });
+    const html = renderPage(hydratedRendered, { preview: true });
 
     res.set({
 
@@ -6043,18 +6062,58 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
     if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
     // Registration starts here; travel documents are collected later in the
     // parent portal and are not part of the landing-page payment flow.
+    const studentName = String(fields.student_name || fields.studentName || fields.student || fields.name || fields.fullName || "").trim();
+    const studentSchool = fields.student_school || fields.school || null;
+    const studentClass = fields.student_class || fields.student_grade || fields.grade || null;
+    const parentName = String(fields.parent_name || fields.parentName || fields.name || fields.fullName || "").trim();
+    const parentEmail = String(fields.parent_email || fields.parentEmail || fields.email || "").trim().toLowerCase();
+    const parentPhone = String(fields.parent_phone || fields.parentPhone || fields.phone || "").trim();
+    const requestedToken = String(req.body?.draftToken || "").trim();
+    const existing = requestedToken && prisma.pendingTripRegistration?.findUnique
+      ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken: requestedToken } })
+      : null;
+    const existingBelongsToPage = existing
+      && Number(existing.tenantId) === Number(page.tenantId || 1)
+      && Number(existing.tripId) === Number(page.tripId)
+      && Number(existing.landingPageId) === Number(page.id);
+    const existingStatus = String(existing?.status || "DRAFT");
+    const existingIsResumable = existingBelongsToPage
+      && existing.draftTokenExpiresAt
+      && new Date(existing.draftTokenExpiresAt) > new Date()
+      && ["DRAFT", "PAYMENT_PENDING"].includes(existingStatus);
+    if (existingIsResumable && existingStatus === "DRAFT") {
+      const claim = await prisma.pendingTripRegistration.updateMany({
+        where: { id: existing.id, tenantId: page.tenantId, tripId: page.tripId, landingPageId: page.id,
+          status: "DRAFT", draftTokenExpiresAt: { gt: new Date() } },
+        data: {
+          studentName,
+          studentSchool,
+          studentClass,
+          parentName,
+          parentEmail,
+          parentPhone,
+        },
+      });
+      if (claim.count !== 1) {
+        return res.status(409).json({ error: "Registration changed; reload before continuing", code: "DRAFT_CHANGED" });
+      }
+      return res.status(200).json({ draftToken: existing.draftToken, draftId: existing.id });
+    }
+    if (existingIsResumable) {
+      return res.status(200).json({ draftToken: existing.draftToken, draftId: existing.id });
+    }
     const draftToken = crypto.randomBytes(24).toString("hex");
     const draft = await prisma.pendingTripRegistration.create({
       data: {
         tenantId: page.tenantId || 1,
         tripId: page.tripId,
         landingPageId: page.id,
-        studentName: String(fields.student_name || "").trim(),
-        studentSchool: fields.school || null,
-        studentClass: fields.grade || null,
-        parentName: String(fields.parent_name || "").trim(),
-        parentEmail: String(fields.parent_email || "").trim(),
-        parentPhone: String(fields.parent_phone || "").trim(),
+        studentName,
+        studentSchool,
+        studentClass,
+        parentName,
+        parentEmail,
+        parentPhone,
         extrasJson: JSON.stringify({ landingPage: true }),
         status: "DRAFT",
         draftToken,
@@ -6194,11 +6253,41 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
     const paymentClaim = await prisma.pendingTripRegistration.updateMany({
       where: {
         id: paymentDraft.id,
+        tenantId,
+        draftToken,
+        ...(paymentDraft.updatedAt ? { updatedAt: paymentDraft.updatedAt } : {}),
         status: { notIn: ["PAYMENT_PENDING", "CONVERTED", "REJECTED"] },
       },
       data: { status: "PAYMENT_PENDING" },
     });
     if (paymentClaim.count !== 1) {
+      // Reuse only this draft's exact payment selection, and only after the
+      // gateway confirms the hosted link is still open. Never create another
+      // link when a previous claim won (including a request still in flight).
+      if (paymentDraft.status === "PAYMENT_PENDING") {
+        const payments = await prisma.payment.findMany({
+          where: { tenantId, gateway: "razorpay", status: "PENDING", metadata: { contains: draftToken } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 20,
+        });
+        for (const payment of payments) {
+          const metadata = safeJsonParse(payment.metadata, {});
+          if (metadata.kind !== "landing-page-registration" || metadata.draftToken !== draftToken
+            || Number(metadata.pageId) !== Number(page.id) || Number(metadata.tripId) !== Number(page.tripId)
+            || metadata.paymentMode !== selection.mode || Number(metadata.amountPaise) !== selection.amountPaise
+            || metadata.currency !== selection.currency
+            || JSON.stringify(metadata.installmentIndexes) !== JSON.stringify(selection.installmentIndexes)
+            || !payment.gatewayId || !rp.client.paymentLink.fetch) continue;
+          const link = await rp.client.paymentLink.fetch(payment.gatewayId);
+          if (link.id !== payment.gatewayId || link.status !== "created" || !link.short_url
+            || (link.expire_by && Number(link.expire_by) * 1000 <= Date.now())
+            || Number(link.amount) !== selection.amountPaise || link.currency !== selection.currency) continue;
+          return res.status(200).json({ paymentId: payment.id, orderId: link.id,
+            paymentUrl: link.short_url, hostedPaymentLink: true, resumed: true,
+            amount: selection.amountPaise, amountMajor: selection.amountMajor, currency: selection.currency,
+            paymentMode: selection.mode, installmentIndex: selection.installmentIndex,
+            installmentIndexes: selection.installmentIndexes });
+        }
+      }
       return res.status(409).json({
         error: "A payment is already in progress for this registration",
         code: "PAYMENT_IN_PROGRESS",
@@ -7192,13 +7281,14 @@ function removePassportFromLandingConfig(config, tripType) {
 }
 
 async function preparePublicLandingPage(page) {
+  const hydrated = await hydrateWellnessLandingImages(page, { db: prisma, persist: true });
   const tripType = await resolveLandingPageTripType(page);
-  const parsed = typeof page?.content === "string" ? safeJsonParse(page.content, null) : page?.content;
+  const parsed = typeof hydrated?.content === "string" ? safeJsonParse(hydrated.content, null) : hydrated?.content;
   const content = removePassportFromLandingConfig(parsed, tripType);
   return {
-    ...page,
+    ...hydrated,
     tripType,
-    content: content && content !== parsed ? JSON.stringify(content) : page.content,
+    content: content && content !== parsed ? JSON.stringify(content) : hydrated.content,
   };
 }
 
@@ -8357,7 +8447,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 
 
-    // The generated wellness form posts first_name / last_name / service_interest;
+    // Legacy saved pages and custom forms may still send service_interest;
 
     // travel templates may post nested `fields` or parent/student aliases.
 

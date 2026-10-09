@@ -163,7 +163,7 @@ export default function Locations() {
   };
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="wellness-locations-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       {tab === 'clinics' ? (
         <PageHeader
           icon={Building2}
@@ -215,14 +215,14 @@ export default function Locations() {
       {tab === 'zones' && <GeofenceZonesPanel />}
 
       {tab === 'clinics' && showAdd && (
-        <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem' }}>
+        <form onSubmit={submit} className="glass wellness-location-form" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem' }}>
           {editingId && (
             <div style={{ gridColumn: '1 / -1', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
               Editing <strong>{form.name}</strong>
             </div>
           )}
           <input placeholder="Short name — e.g. Ranchi" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
-          <input placeholder="Address — e.g. 12, Main Rd, Lalpur" required value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
+          <input className="wellness-location-address" placeholder="Address — e.g. 12, Main Rd, Lalpur" required value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />
           <input placeholder="City — e.g. Ranchi" required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} style={inputStyle} />
           <input placeholder="State — e.g. Jharkhand" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} style={inputStyle} />
           {/* #385: Indian PIN codes are exactly 6 digits — pattern + maxLength keep
@@ -252,7 +252,7 @@ export default function Locations() {
               lets one search also populate address/city/state/pincode.
               minRadiusM/maxRadiusM bracket the backend's DEFAULT_RADIUS_M
               (150m) and stay under ACCURACY_THRESHOLD_M's practical ceiling. */}
-          <div style={{ gridColumn: '1 / -1' }}>
+          <div className="wellness-location-geofence-wrap" style={{ gridColumn: '1 / -1' }}>
             <GeofencePicker
               // Remount per edited row. The picker keeps its own search text
               // and "Pinned at ..." label; without a key, switching from
@@ -269,7 +269,7 @@ export default function Locations() {
             />
           </div>
 
-          <button type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+          <button className="wellness-location-save" type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', gridColumn: '1 / -1' }}>
             {saving ? 'Saving…' : (editingId ? 'Save changes' : 'Save location')}
           </button>
         </form>

@@ -65,6 +65,7 @@ function makeFakePrisma() {
 
   return {
     state,
+    tenant: { findUnique: vi.fn().mockResolvedValue({ vertical: 'generic' }) },
     campaign: {
       findFirst: vi.fn(async ({ where }) =>
         state.campaigns.find(

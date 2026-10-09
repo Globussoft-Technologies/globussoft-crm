@@ -139,6 +139,7 @@ import {
   Brain,
   PanelLeftClose,
   PanelLeftOpen,
+  X,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -251,6 +252,9 @@ const Sidebar = ({
   // discoverable, while allowing each product area to be collapsed in place.
   const [openTravelSections, setOpenTravelSections] = useState({});
   const [isTravelCollapsed, setIsTravelCollapsed] = useState(false);
+  // The compact rail is a desktop preference. A drawer needs full labels and
+  // nested links even if the operator collapsed the sidebar before resizing.
+  const isTravelRailCollapsed = isTravelCollapsed && !isMobileViewport;
   const location = useLocation();
 
   // Generic navigation uses the same one-level flyout pattern as Wellness.
@@ -258,7 +262,15 @@ const Sidebar = ({
   // browser history changes that do not originate from a submenu click.
   useEffect(() => {
     setOpenGenericGroup(null);
+    setOpenWellnessGroup(null);
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (isMobileViewport && !mobileOpen) {
+      setOpenGenericGroup(null);
+      setOpenWellnessGroup(null);
+    }
+  }, [isMobileViewport, mobileOpen]);
 
   // T2.1: ref to the <aside> so the focus-trap effect below can locate
   // focusable descendants. Also used to read the drawer's bounding rect for
@@ -843,7 +855,7 @@ const Sidebar = ({
       // In the compact rail the section items are intentionally hidden to
       // preserve the icon-only layout. Re-open the rail before toggling so a
       // click on a section icon still exposes the destinations it represents.
-      if (isTravelCollapsed) {
+      if (isTravelRailCollapsed) {
         setIsTravelCollapsed(false);
         setOpenTravelSections((current) => ({
           ...current,
@@ -864,7 +876,7 @@ const Sidebar = ({
           aria-label={label}
           aria-expanded={isOpen}
           aria-controls={sectionId}
-          title={isTravelCollapsed ? label : undefined}
+          title={isTravelRailCollapsed ? label : undefined}
           onClick={handleSectionToggle}
         >
           <span className="travel-nav-section-icon"><SectionIcon size={20} aria-hidden="true" /></span>
@@ -1121,9 +1133,9 @@ const Sidebar = ({
         aria-label="Main navigation"
         data-tour="welcome-sidebar"
         data-search-highlight-scope="global-search"
-        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}${isTravel && isTmcDomain ? " travel-sidebar-tmc" : ""}`}
+        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelRailCollapsed ? " travel-sidebar-collapsed" : ""}${isTravel && isTmcDomain ? " travel-sidebar-tmc" : ""}`}
         style={{
-          width: isTravel ? (isTravelCollapsed ? "64px" : "240px") : "250px",
+          width: isTravel ? (isTravelRailCollapsed ? "64px" : "240px") : "250px",
           height: "100vh",
           padding: "1rem 1.25rem",
           display: "flex",
@@ -1190,11 +1202,11 @@ const Sidebar = ({
             <button
               type="button"
               className="travel-sidebar-collapse"
-              aria-label={isTravelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              title={isTravelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              onClick={() => setIsTravelCollapsed((value) => !value)}
+              aria-label={isMobileViewport ? "Close navigation menu" : isTravelRailCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={isMobileViewport ? "Close navigation menu" : isTravelRailCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={isMobileViewport ? onMobileClose : () => setIsTravelCollapsed((value) => !value)}
             >
-              {isTravelCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+              {isMobileViewport ? <X size={20} /> : isTravelRailCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
             </button>
           )}
         </div>
@@ -1566,6 +1578,7 @@ function WellnessNavGroup({
       ref={panelRef}
       id={panelId}
       role="menu"
+      className="wellness-sidebar-submenu"
       aria-label={`${label} submodules`}
       data-search-highlight-scope="global-search"
       onMouseEnter={() => {
@@ -1585,22 +1598,24 @@ function WellnessNavGroup({
         deactivatePanel();
       }}
       style={{
-        position: "fixed",
-        top: panelPosition.top,
-        left: isMobileViewport ? 12 : 254,
-        width: isMobileViewport ? "calc(100vw - 24px)" : 252,
-        maxWidth: "calc(100vw - 24px)",
-        maxHeight: isMobileViewport ? "min(220px, calc(100vh - 96px))" : 220,
-        overflowY: "auto",
+        position: isMobileViewport ? "static" : "fixed",
+        top: isMobileViewport ? "auto" : panelPosition.top,
+        left: isMobileViewport ? "auto" : 254,
+        width: isMobileViewport ? "100%" : 252,
+        maxWidth: isMobileViewport ? "100%" : "calc(100vw - 24px)",
+        maxHeight: isMobileViewport ? "none" : 220,
+        overflowY: isMobileViewport ? "visible" : "auto",
         display: isOpen ? "flex" : "none",
         flexDirection: "column",
         gap: "0.25rem",
         padding: "0.625rem",
+        boxSizing: "border-box",
         borderRadius: 12,
         border: "1px solid var(--border-color)",
-        background: "var(--surface-color, #16181d)",
-        backgroundColor: "rgb(from var(--surface-color, #16181d) r g b / 1)",
-        boxShadow: "0 14px 34px rgba(0, 0, 0, 0.28)",
+        background: "var(--popover-bg, var(--modal-bg, #16181d))",
+        color: "var(--text-primary)",
+        boxShadow: isMobileViewport ? "none" : "0 14px 34px rgba(0, 0, 0, 0.28)",
+        marginTop: isMobileViewport ? 4 : 0,
         zIndex: 1200,
       }}
     >
@@ -1608,19 +1623,20 @@ function WellnessNavGroup({
     </div>
   );
 
-  return (
-    <>
+  const trigger = (
       <div
         ref={triggerRef}
         onMouseEnter={() => {
+          if (isMobileViewport) return;
           triggerHoverRef.current = true;
           openPanel();
         }}
         onMouseLeave={() => {
+          if (isMobileViewport) return;
           triggerHoverRef.current = false;
           scheduleClose();
         }}
-        onFocusCapture={openPanel}
+        onFocusCapture={isMobileViewport ? undefined : openPanel}
         onBlurCapture={(event) => {
           if (
             !event.currentTarget.contains(event.relatedTarget) &&
@@ -1668,6 +1684,20 @@ function WellnessNavGroup({
           <span style={{ flex: 1 }}>{label}</span>
         </button>
       </div>
+  );
+
+  if (isMobileViewport) {
+    return (
+      <div style={{ width: "100%", minWidth: 0 }}>
+        {trigger}
+        {isOpen ? panel : null}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {trigger}
       {typeof document !== "undefined" ? createPortal(panel, document.body) : null}
     </>
   );
@@ -2601,21 +2631,30 @@ function renderGenericNav({
     return token === 'transportperson' || token === 'transport';
   });
   if (isTransportPerson && !isAdmin) {
-    return <Link to="/home" end icon={Truck} label="My Trips" />;
+    return <>
+      <Link to="/home" end icon={Truck} label="My Trips" />
+      <Link to="/profile" icon={UserCircle} label="My Profile" />
+    </>;
   }
   const isBroker = roles.some((value) => {
     const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     return ['broker', 'brooker', 'plotbroker', 'plotbrooker'].includes(token);
   });
   if (isBroker && !isAdmin) {
-    return <Link to="/home" end icon={Handshake} label="My Customers" />;
+    return <>
+      <Link to="/home" end icon={Handshake} label="Site Visits" />
+      <Link to="/profile" icon={UserCircle} label="My Profile" />
+    </>;
   }
   const isBilling = roles.some((value) => {
     const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     return token === 'billing' || token === 'billingdepartment';
   });
   if (isBilling && !isAdmin) {
-    return <Link to="/home" end icon={Receipt} label="Billing Queue" />;
+    return <>
+      <Link to="/home" end icon={Receipt} label="Billing Queue" />
+      <Link to="/profile" icon={UserCircle} label="My Profile" />
+    </>;
   }
   const canRenderLink = (props) => {
     const canonical = getGenericAccessByPath(props.to);
@@ -2719,11 +2758,10 @@ function renderGenericNav({
         <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
         <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
       </>)}
-
       {renderGroup("Marketing & Automation", <>
         <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
         <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
-        <Link to="/marketing" icon={Send} label="Marketing" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/marketing" icon={Send} label="Marketing Campaign" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "sequences", action: "read" }} />
         <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} />
         <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
@@ -2767,9 +2805,10 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Pickup & Plot", <>
-        <Link to="/pickup-plot-inventory" icon={MapIcon} label="Inventory" adminOnly />
+        <Link to="/pickup-plot-inventory" icon={MapIcon} label="Plot Inventory" adminOnly />
+        <Link to="/pickup-inventory" icon={MapPin} label="Pickup Inventory" adminOnly />
         <Link to="/transport-persons" icon={Truck} label="Transport Persons" adminOnly />
-        <Link to="/plot-brokers" icon={Handshake} label="Plot Brokers" adminOnly />
+        <Link to="/plot-brokers" icon={Handshake} label="Sales Executives" adminOnly />
         <Link to="/billing-persons" icon={Receipt} label="Billing Persons" adminOnly />
         <Link to="/pickup-customers" icon={MapPin} label="Customer Status" adminOnly />
       </>)}

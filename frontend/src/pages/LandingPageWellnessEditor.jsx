@@ -4,6 +4,8 @@ import { getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { isUploadedS3Url } from '../utils/uploadDisplay';
 import UploadedAssetChip from '../components/UploadedAssetChip';
+import { DEFAULT_WELLNESS_LANDING_LAYOUT, DEFAULT_WELLNESS_LANDING_THEME, WELLNESS_LANDING_LAYOUTS, WELLNESS_LANDING_THEMES, getWellnessColorOverrides, resolveWellnessLandingTheme } from '../utils/wellnessLandingThemes';
+import WellnessPaletteEditor from '../components/landing-pages/WellnessPaletteEditor';
 
 function clone(value) {
   try {
@@ -98,12 +100,12 @@ function buildWellnessScaffold(page = {}, content = []) {
   const text = (id, value, extra = {}) => ({ id, type: 'text', props: { text: value, ...extra } });
   const heading = (id, value, level = 'h3', extra = {}) => ({ id, type: 'heading', props: { text: value, level, ...extra } });
   const button = (id, value, url, extra = {}) => ({ id, type: 'button', props: { text: value, url, ...extra } });
-  const image = (id, alt) => ({ id, type: 'image', props: { src: '', alt, variant: 'wellness-hero-image', width: '100%', maxWidth: '100%' } });
+  const image = (id, alt, variant = 'wellness-hero-image') => ({ id, type: 'image', props: { src: '', alt, variant, width: '100%', maxWidth: '100%' } });
   const form = () => ({
     id: 'lead-form',
     type: 'form',
     props: {
-      title: page?.formTitle || 'Request More Information',
+      title: page?.formTitle || `Register for ${campaignName}`,
       submitText: page?.formSubmitText || 'Submit Enquiry',
       thankYouMessage: page?.formThankYou || `Thanks. We have received your enquiry for ${campaignName}.`,
       variant: 'wellness-consultation',
@@ -112,25 +114,22 @@ function buildWellnessScaffold(page = {}, content = []) {
         { label: 'Last Name', name: 'last_name', type: 'text', required: true, placeholder: 'e.g., Doe' },
         { label: 'Email Address', name: 'email', type: 'email', required: true, placeholder: 'e.g., name@example.com' },
         { label: 'Phone Number', name: 'phone', type: 'tel', required: true, placeholder: 'e.g., +91 98765 43210' },
-        { label: 'Service of Interest', name: 'service_interest', type: 'select', required: false, options: [sectorLabel, campaignName, 'General Enquiry'] },
         { label: 'Tell Us More', name: 'message', type: 'textarea', required: false, placeholder: 'Share any questions or concerns...' },
       ],
     },
   });
-  const section = (id, variant, columns, gap = '24px') => ({ id, type: 'columns', props: { variant, gap, columns } });
+  const section = (id, variant, columns, gap = '24px', extraProps = {}) => ({ id, type: 'columns', props: { variant, gap, columns, ...extraProps } });
 
   return [
     section('wellness-page', 'wellness-campaign-page', [
       { fullWidth: true, components: [
         section('wellness-header-row', 'wellness-header-row', [
           { components: [
-            text('brand-mark', page?.brandMark || '+', { align: 'center', color: '#b31d15', fontSize: '1.7rem', variant: 'wellness-logo-mark' }),
+            text('brand-mark', page?.brandMark || '+', { align: 'center', color: '#b31d15', fontSize: '1.7rem', variant: 'wellness-logo-mark', icon: 'leaf' }),
             heading('brand-name', page?.brandLine || businessName, 'h3', { align: 'left', color: '#1f2f2c', variant: 'wellness-logo' }),
-            text('brand-subline', page?.brandSubline || sectorLabel, { align: 'left', color: '#5f6c67', fontSize: '0.82rem', variant: 'wellness-brand-subline' }),
           ] },
           { components: [
             text('top-nav', page?.navText || 'HOME   SERVICES   ABOUT US   CONTACT', { align: 'center', color: '#1f2f2c', fontSize: '0.78rem', variant: 'wellness-nav' }),
-            button('top-cta', page?.topCta || 'Book Now', '#lead-form', { bgColor: '#b31d15', color: '#ffffff', align: 'right', size: 'small' }),
           ] },
         ], '8px'),
       ] },
@@ -149,10 +148,17 @@ function buildWellnessScaffold(page = {}, content = []) {
       ] },
       { fullWidth: true, components: [
         section('wellness-details-strip', 'wellness-details-strip', [
-          { components: [text('detail-date-label', 'Date', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' }), heading('detail-date-value', eventDate, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
-          { components: [text('detail-time-label', 'Time', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' }), heading('detail-time-value', eventTime, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
-          { components: [text('detail-location-label', 'Location', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' }), heading('detail-location-value', location, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
-          { components: [text('detail-audience-label', 'For', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' }), heading('detail-audience-value', audience, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
+          { components: [text('detail-date-label', 'Date', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label', icon: 'calendar' }), heading('detail-date-value', eventDate, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
+          { components: [text('detail-time-label', 'Time', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label', icon: 'clock' }), heading('detail-time-value', eventTime, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
+          { components: [text('detail-location-label', 'Location', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label', icon: 'location' }), heading('detail-location-value', location, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
+          { components: [text('detail-audience-label', 'For', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label', icon: 'users' }), heading('detail-audience-value', audience, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
+        ], '8px'),
+      ] },
+      { fullWidth: true, components: [
+        section('wellness-gallery-row', 'wellness-gallery-row', [
+          { components: [image('gallery-image-1', `${campaignName} wellness experience`, 'wellness-gallery-image')] },
+          { components: [image('gallery-image-2', `${campaignName} care team`, 'wellness-gallery-image')] },
+          { components: [image('gallery-image-3', `${campaignName} community`, 'wellness-gallery-image')] },
         ], '8px'),
       ] },
       { fullWidth: true, components: [
@@ -164,10 +170,10 @@ function buildWellnessScaffold(page = {}, content = []) {
           ] },
           { components: [
             section('benefit-grid', 'wellness-benefit-grid', [
-              { components: [text('benefit-1-icon', '+', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge' }), heading('benefit-1-title', page?.benefit1Title || 'Clear value', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-1-body', page?.benefit1Body || `Show visitors why the ${sectorLabel.toLowerCase()} offer matters and how it helps them.`, { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
-              { components: [text('benefit-2-icon', 'o', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge' }), heading('benefit-2-title', page?.benefit2Title || 'Professional follow-up', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-2-body', page?.benefit2Body || 'The team can respond quickly with the right next step once the enquiry is submitted.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
-              { components: [text('benefit-3-icon', ':)', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge' }), heading('benefit-3-title', page?.benefit3Title || 'Trust-building copy', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-3-body', page?.benefit3Body || 'Clear language and a polished layout make the page feel credible and easy to use.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
-              { components: [text('benefit-4-icon', '#', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge' }), heading('benefit-4-title', page?.benefit4Title || 'Stronger conversions', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-4-body', page?.benefit4Body || 'A focused landing page keeps attention on the offer and the enquiry form.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
+              { components: [text('benefit-1-icon', '', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'eye' }), heading('benefit-1-title', page?.benefit1Title || 'Clear value', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-1-body', page?.benefit1Body || `Show visitors why the ${sectorLabel.toLowerCase()} offer matters and how it helps them.`, { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
+              { components: [text('benefit-2-icon', '', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'person' }), heading('benefit-2-title', page?.benefit2Title || 'Professional follow-up', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-2-body', page?.benefit2Body || 'The team can respond quickly with the right next step once the enquiry is submitted.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
+              { components: [text('benefit-3-icon', '', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'users' }), heading('benefit-3-title', page?.benefit3Title || 'Trust-building copy', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-3-body', page?.benefit3Body || 'Clear language and a polished layout make the page feel credible and easy to use.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
+              { components: [text('benefit-4-icon', '', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'document' }), heading('benefit-4-title', page?.benefit4Title || 'Stronger conversions', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-4-body', page?.benefit4Body || 'A focused landing page keeps attention on the offer and the enquiry form.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
             ], '8px'),
           ] },
         ], '28px'),
@@ -212,19 +218,21 @@ function buildWellnessScaffold(page = {}, content = []) {
       { fullWidth: true, components: [
         section('wellness-cta-row', 'wellness-cta-row', [
           { components: [
+            image('cta-image', `${campaignName} wellness experience`, 'wellness-cta-image'),
+          ] },
+          { components: [
             heading('cta-title', page?.ctaTitle || 'Ready to get started?', 'h3', { align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' }),
             text('cta-copy', page?.ctaCopy || `Invite your visitors to take the next step with a clear, professional experience tailored to ${sectorLabel.toLowerCase()}.`, { align: 'left', color: '#5f6c67', fontSize: '0.96rem', variant: 'wellness-body' }),
             text('cta-note', page?.ctaNote || 'Your details will be captured in the CRM and shared with the right team for follow-up.', { align: 'left', color: '#5f6c67', fontSize: '0.86rem', variant: 'wellness-note' }),
+            button('cta-button', page?.ctaText || 'Book Now', '#lead-form', { bgColor: '#b31d15', color: '#ffffff', align: 'left', size: 'medium' }),
           ] },
-          { components: [ button('cta-button', page?.ctaText || 'Book Now', '#lead-form', { bgColor: '#b31d15', color: '#ffffff', align: 'center', size: 'large' }) ] },
         ], '8px'),
       ] },
       { fullWidth: true, components: [
         section('wellness-form-row', 'wellness-form-row', [
           { components: [
             text('form-kicker', 'Lead capture', { align: 'left', color: '#b31d15', fontSize: '0.76rem', variant: 'wellness-eyebrow' }),
-            heading('form-title-copy', page?.formTitle || 'Request More Information', 'h3', { align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' }),
-            text('form-copy', page?.formCopy || 'Share your details and the team will follow up with confirmation and next steps.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-body' }),
+            text('form-copy', page?.formCopy || 'Fill out the form below and the team will follow up with confirmation and next steps.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-body' }),
             form(),
           ] },
           { components: [
@@ -232,10 +240,10 @@ function buildWellnessScaffold(page = {}, content = []) {
             heading('register-title', page?.registerTitle || `A smoother way to join ${campaignName}.`, 'h2', { align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' }),
             text('register-copy', page?.registerCopy || `Tell us a few details and the ${businessName} team will confirm availability, share preparation notes, and guide you through the next step.`, { align: 'left', color: '#4d5d58', fontSize: '1rem', variant: 'wellness-body' }),
             section('register-cards', 'wellness-step-grid', [
-              { components: [heading('register-card-1-title', page?.registerCard1Title || 'Confirmation', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-1-body', page?.registerCard1Body || 'Your enquiry is captured in the CRM and routed to the right team.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
-              { components: [heading('register-card-2-title', page?.registerCard2Title || 'Personal follow-up', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-2-body', page?.registerCard2Body || 'A team member can respond with timing, venue, and preparation details.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
-              { components: [heading('register-card-3-title', page?.registerCard3Title || 'Secure records', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-3-body', page?.registerCard3Body || 'Every submission remains editable, trackable, and ready for lead follow-up.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
-              { components: [heading('register-card-4-title', page?.registerCard4Title || 'Clear next steps', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-4-body', page?.registerCard4Body || 'Visitors know exactly what will happen after they submit the form.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
+              { components: [text('register-card-1-icon', '', { align: 'left', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'mail' }), heading('register-card-1-title', page?.registerCard1Title || 'Confirmation', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-1-body', page?.registerCard1Body || 'Your enquiry is captured in the CRM and routed to the right team.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
+              { components: [text('register-card-2-icon', '', { align: 'left', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'users' }), heading('register-card-2-title', page?.registerCard2Title || 'Personal follow-up', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-2-body', page?.registerCard2Body || 'A team member can respond with timing, venue, and preparation details.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
+              { components: [text('register-card-3-icon', '', { align: 'left', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'clipboard' }), heading('register-card-3-title', page?.registerCard3Title || 'Secure records', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-3-body', page?.registerCard3Body || 'Every submission remains editable, trackable, and ready for lead follow-up.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
+              { components: [text('register-card-4-icon', '', { align: 'left', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'barChart' }), heading('register-card-4-title', page?.registerCard4Title || 'Clear next steps', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-4-body', page?.registerCard4Body || 'Visitors know exactly what will happen after they submit the form.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
             ], '8px'),
           ] },
         ], '28px'),
@@ -243,7 +251,7 @@ function buildWellnessScaffold(page = {}, content = []) {
       { fullWidth: true, components: [
         section('wellness-footer-row', 'wellness-footer-row', [
           { components: [
-            text('footer-brand-mark', page?.brandMark || '+', { align: 'left', color: '#b31d15', fontSize: '1.4rem', variant: 'wellness-logo-mark' }),
+            text('footer-brand-mark', page?.brandMark || '+', { align: 'left', color: '#b31d15', fontSize: '1.4rem', variant: 'wellness-logo-mark', icon: 'leaf' }),
             heading('footer-brand-name', page?.brandLine || businessName, 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-footer-brand' }),
             text('footer-links', page?.footerLinks || 'Home | Services | About Us | Contact', { align: 'left', color: '#5f6c67', fontSize: '0.84rem', variant: 'wellness-footer-links' }),
           ] },
@@ -253,7 +261,7 @@ function buildWellnessScaffold(page = {}, content = []) {
           ] },
         ], '8px'),
       ] },
-    ], '24px'),
+    ], '24px', { themeId: page?.wellnessTheme || page?.themeId || DEFAULT_WELLNESS_LANDING_THEME, layoutId: page?.wellnessLayout || page?.layoutId || DEFAULT_WELLNESS_LANDING_LAYOUT, customColors: page?.wellnessCustomColors || page?.customColors || undefined, customBaseThemeId: page?.wellnessCustomBaseThemeId || undefined }),
   ];
 }
 
@@ -261,6 +269,12 @@ function replaceContentBlock(content, blockId, updater) {
   const next = clone(content);
   const root = getWellnessRoot(next);
   if (!root) return content;
+  if (root.id === blockId) {
+    const rootIndex = next.findIndex((block) => block && block.id === blockId);
+    if (rootIndex < 0) return content;
+    next[rootIndex] = updater(root);
+    return next;
+  }
   const result = updateBlockInColumns(root.props?.columns, blockId, updater);
   if (!result.changed) return content;
   root.props.columns = result.columns;
@@ -547,6 +561,7 @@ const sectionLabels = {
   'wellness-header-row': 'Brand header',
   'wellness-hero-row': 'Hero',
   'wellness-details-strip': 'Event details',
+  'wellness-gallery-row': 'Campaign gallery',
   'wellness-benefits-row': 'Benefits and proof',
   'wellness-process-row': 'Eligibility and process',
   'wellness-impact-band': 'Impact band',
@@ -584,6 +599,24 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
     if (next !== resolvedContent) onChange(next);
   };
 
+  const selectedThemeId = root?.props?.themeId || DEFAULT_WELLNESS_LANDING_THEME;
+  const customBaseThemeId = root?.props?.customBaseThemeId || DEFAULT_WELLNESS_LANDING_THEME;
+  const selectedPreset = WELLNESS_LANDING_THEMES.find((theme) => theme.id === selectedThemeId)
+    || WELLNESS_LANDING_THEMES.find((theme) => theme.id === customBaseThemeId)
+    || WELLNESS_LANDING_THEMES.find((theme) => theme.id === DEFAULT_WELLNESS_LANDING_THEME);
+  const customColors = root?.props?.customColors;
+  const customTheme = resolveWellnessLandingTheme('custom', customColors || getWellnessColorOverrides(selectedPreset));
+  const selectPreset = (themeId) => edit('wellness-page', (block) => {
+    const props = { ...block.props, themeId };
+    delete props.customColors;
+    delete props.customBaseThemeId;
+    return { ...block, props };
+  });
+  const setCustomColors = (nextColors) => edit('wellness-page', (block) => ({
+    ...block,
+    props: { ...block.props, themeId: 'custom', customBaseThemeId: selectedPreset.id, customColors: getWellnessColorOverrides(nextColors) },
+  }));
+
   const move = (index, delta) => {
     const next = moveSection(resolvedContent, index, delta);
     if (next !== resolvedContent) onChange(next);
@@ -592,9 +625,7 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
   const header = {
     brandMark: findBlockInColumns(sections, 'brand-mark'),
     brandName: findBlockInColumns(sections, 'brand-name'),
-    brandSubline: findBlockInColumns(sections, 'brand-subline'),
     navText: findBlockInColumns(sections, 'top-nav'),
-    topCta: findBlockInColumns(sections, 'top-cta'),
   };
   const hero = {
     kicker: findBlockInColumns(sections, 'hero-kicker'),
@@ -605,6 +636,11 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
     note: findBlockInColumns(sections, 'hero-note'),
     image: findBlockInColumns(sections, 'hero-image'),
   };
+  const gallery = [
+    findBlockInColumns(sections, 'gallery-image-1'),
+    findBlockInColumns(sections, 'gallery-image-2'),
+    findBlockInColumns(sections, 'gallery-image-3'),
+  ];
   const details = {
     dateLabel: findBlockInColumns(sections, 'detail-date-label'),
     dateValue: findBlockInColumns(sections, 'detail-date-value'),
@@ -676,13 +712,80 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
           </p>
         </div>
 
+        <SectionEditor title="Visual theme" eyebrow="Wellness campaign style">
+          <p style={{ margin: '0 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+            Choose a palette for this wellness campaign. It is saved with the page and does not affect travel or other CRM pages.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.6rem' }}>
+            {WELLNESS_LANDING_THEMES.map((theme) => {
+              const selected = selectedThemeId === theme.id;
+              return (
+                <button
+                  key={theme.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => selectPreset(theme.id)}
+                  style={{ border: `1px solid ${selected ? theme.colors[0] : 'var(--border-color)'}`, borderRadius: 12, padding: '0.65rem', background: selected ? `${theme.colors[2]}88` : 'var(--surface-color)', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', boxShadow: selected ? `0 0 0 2px ${theme.colors[0]}22` : 'none' }}
+                >
+                  <span style={{ display: 'block', height: 28, borderRadius: 8, marginBottom: 8, background: `linear-gradient(135deg, ${theme.colors[0]}, ${theme.colors[1]})` }} />
+                  <strong style={{ display: 'block', fontSize: '0.8rem' }}>{theme.label}</strong>
+                  <span style={{ display: 'block', marginTop: 3, fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{theme.description}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.55rem', fontSize: '0.84rem', color: 'var(--text-primary)', fontWeight: 600, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={selectedThemeId === 'custom'}
+                onChange={(event) => {
+                  if (event.target.checked) setCustomColors(customColors || getWellnessColorOverrides(selectedPreset));
+                  else selectPreset(selectedPreset.id);
+                }}
+              />
+              Use custom colors
+            </label>
+            {selectedThemeId === 'custom' ? (
+              <WellnessPaletteEditor
+                theme={customTheme}
+                baseThemeId={selectedPreset.id}
+                onChange={setCustomColors}
+                onReset={() => setCustomColors(getWellnessColorOverrides(selectedPreset))}
+              />
+            ) : (
+              <div style={{ border: '1px dashed var(--border-color)', borderRadius: 8, padding: '0.7rem 0.85rem', background: 'rgba(255,255,255,0.45)', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                Turn this on to tailor this wellness campaign’s colors by role. The selected preset remains unchanged until you enable custom colors.
+              </div>
+            )}
+          </div>
+          <p style={{ margin: '1rem 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+            Choose a composition for this campaign. Layout changes the rhythm and visual hierarchy; it does not affect your content or lead form.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.6rem' }}>
+            {WELLNESS_LANDING_LAYOUTS.map((layout) => {
+              const selected = (root?.props?.layoutId || DEFAULT_WELLNESS_LANDING_LAYOUT) === layout.id;
+              return (
+                <button
+                  key={layout.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => edit('wellness-page', (block) => ({ ...block, props: { ...block.props, layoutId: layout.id } }))}
+                  style={{ border: `1px solid ${selected ? 'var(--accent-color)' : 'var(--border-color)'}`, borderRadius: 12, padding: '0.65rem', background: selected ? 'rgba(31,138,112,0.10)' : 'var(--surface-color)', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', boxShadow: selected ? '0 0 0 2px rgba(31,138,112,0.10)' : 'none' }}
+                >
+                  <strong style={{ display: 'block', fontSize: '0.8rem' }}>{layout.label}</strong>
+                  <span style={{ display: 'block', marginTop: 3, fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{layout.description}</span>
+                </button>
+              );
+            })}
+          </div>
+        </SectionEditor>
+
         <SectionEditor title="Brand header" eyebrow="Section 1">
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <Field label="Brand mark" value={header.brandMark?.props?.text} onChange={editText(edit, 'brand-mark')} placeholder="+" />
             <Field label="Brand line" value={header.brandName?.props?.text} onChange={editText(edit, 'brand-name')} placeholder="Enhance Wellness Initiative" />
-            <Field label="Brand subline" value={header.brandSubline?.props?.text} onChange={editText(edit, 'brand-subline')} placeholder="Wellness Initiative" />
             <Field label="Nav text" value={header.navText?.props?.text} onChange={editText(edit, 'top-nav')} placeholder="HOME   EVENTS   ABOUT US   DONATE   CONTACT" />
-            <Field label="Top CTA" value={header.topCta?.props?.text} onChange={editText(edit, 'top-cta')} placeholder="Become a Donor" />
           </div>
         </SectionEditor>
 
@@ -707,6 +810,20 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
             <Field label="Audience label" value={details.audienceLabel?.props?.text} onChange={editText(edit, 'detail-audience-label')} placeholder="For" />
             <Field label="Audience value" value={details.audienceValue?.props?.text} onChange={editText(edit, 'detail-audience-value')} placeholder="Audience segment" />
           </div>
+        </SectionEditor>
+
+        <SectionEditor title="Campaign gallery" eyebrow="Visuals">
+          <p style={{ margin: '0 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+            AI generation fills these slots from the configured stock-image provider. You can replace any image with an upload or URL.
+          </p>
+          {gallery.map((imageBlock, index) => (
+            <ImageField
+              key={`gallery-${index}`}
+              label={`Gallery image ${index + 1}`}
+              value={imageBlock?.props?.src}
+              onChange={(value) => edit(`gallery-image-${index + 1}`, (block) => ({ ...block, props: { ...block.props, src: value } }))}
+            />
+          ))}
         </SectionEditor>
 
         <SectionEditor title="Benefits and proof" eyebrow="Section 4">

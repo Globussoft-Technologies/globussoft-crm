@@ -65,15 +65,18 @@ export default function ExplorePage() {
     grades: "",
     students: "",
   });
-  const [data, setData] = useState({ trips: [], catalogue: [], files: [], exploreConfig: null });
+  const [data] = useState({ trips: [], catalogue: [], files: [], exploreConfig: null });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/explore?ts=${Date.now()}`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("load failed"))))
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    // Explore is intentionally disabled. Do not call /api/explore even if
+    // this retained component is imported directly outside the router.
+    // fetch(`/api/explore?ts=${Date.now()}`, { cache: "no-store" })
+    //   .then((r) => (r.ok ? r.json() : Promise.reject(new Error("load failed"))))
+    //   .then(setData)
+    //   .catch(() => {})
+    //   .finally(() => setLoading(false));
+    setLoading(false);
   }, []);
 
   const exploreConfig = useMemo(() => {

@@ -30,7 +30,21 @@ export default function SalesTeams() {
   const openEdit = async (team) => { const data = await fetchApi("/api/staff?fields=summary", { silent: true }); setEditor(team); setName(text(team.name)); setMemberIds((team.members || []).map((m) => m.user?.id).filter(Boolean)); setUsers(Array.isArray(data) ? data : data?.users || []); };
   const save = async (event) => { event.preventDefault(); try { await fetchApi(editor.id ? `/api/sales-teams/${editor.id}` : "/api/sales-teams", { method: editor.id ? "PUT" : "POST", body: JSON.stringify({ name: name.trim(), memberIds }) }); await load(); notify.success("Team saved successfully"); setEditor(null); } catch (error) { notify.error(error.message || "Failed to save team"); } };
   const remove = async (team) => { try { await fetchApi(`/api/sales-teams/${team.id}`, { method: "DELETE" }); await load(); notify.success("Team deleted"); } catch (error) { notify.error(error.message || "Failed to delete team"); } };
-  return <main style={{ display: "grid", gap: 14, padding: "0 28px 28px", width: "100%", boxSizing: "border-box" }}>
+  return <main
+    className="sales-teams-page"
+    data-testid="sales-teams-page"
+    style={{
+      display: "grid",
+      alignContent: "start",
+      gap: 14,
+      height: "fit-content",
+      minHeight: 0,
+      overflowY: "visible",
+      padding: "0 28px 28px",
+      width: "100%",
+      boxSizing: "border-box",
+    }}
+  >
     <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted, #64748b)", fontSize: 13 }}>
       <span style={{ color: "var(--accent-color, #4f46e5)" }}>Admin Settings</span><span aria-hidden="true">›</span><strong>Teams</strong>
     </div>
@@ -44,8 +58,8 @@ export default function SalesTeams() {
         <button type="button" className="btn-primary" style={{ padding: "10px 16px", whiteSpace: "nowrap" }} onClick={openCreate}><Plus size={15} /> Create team</button>
       </div>
     </section>
-    <section className="card" style={{ padding: 0, overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+    <section className="card sales-teams-table" data-testid="sales-teams-table" style={{ padding: 0, width: "100%", minWidth: 0, maxWidth: "100%", overflowX: "hidden", overflowY: "hidden" }}>
+      <table className="stable-table" style={{ width: "100%", maxWidth: "100%", tableLayout: "fixed", borderCollapse: "collapse", minWidth: 0 }}>
         <thead><tr>{["Team name", "Team manager(s)", "Users", "Created by", "Updated by", "Actions"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "14px 20px", borderBottom: "1px solid var(--border-color)", fontSize: 12, textTransform: "uppercase", letterSpacing: ".02em" }}>{heading}</th>)}</tr></thead>
         <tbody>{teams.length ? teams.map((team) => {
           const members = team.members || [];

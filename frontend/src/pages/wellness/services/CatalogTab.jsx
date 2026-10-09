@@ -204,7 +204,7 @@ export default function CatalogTab({ services, total, loading, loadingMore, hasM
             scrollbarWidth: 'thin',
           }}
         >
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))', gap: '1rem' }}>
             {services.map((s) => (
               <ServiceCard
                 key={s.id}

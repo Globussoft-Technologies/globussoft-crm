@@ -19,6 +19,7 @@ function isAvailable() {
 async function search(query, { aspectRatio, perPage = 5 } = {}) {
   if (!isAvailable()) return [];
   const key = process.env.PEXELS_API_KEY;
+  const shortQuery = String(query || '').slice(0, 80);
   const orientation = pickOrientation(aspectRatio);
   const params = new URLSearchParams({
     query: String(query || '').slice(0, 200),
@@ -31,14 +32,25 @@ async function search(query, { aspectRatio, perPage = 5 } = {}) {
       headers: { 'Authorization': key },
       signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined,
     });
-  } catch (_e) {
+  } catch (e) {
+    console.warn(`[pexels-images] request failed for "${shortQuery}": ${e.message || e}`);
     return [];
   }
-  if (!response || !response.ok) return [];
+  if (!response || !response.ok) {
+    const status = response ? response.status : 'no-response';
+    const retryAfter = response && response.headers && response.headers.get
+      ? response.headers.get('retry-after')
+      : null;
+    console.warn(
+      `[pexels-images] search rejected for "${shortQuery}" (status=${status}${retryAfter ? ` retry-after=${retryAfter}` : ''})`,
+    );
+    return [];
+  }
   let data;
   try {
     data = await response.json();
-  } catch (_e) {
+  } catch (e) {
+    console.warn(`[pexels-images] invalid JSON for "${shortQuery}": ${e.message || e}`);
     return [];
   }
   if (!data || !Array.isArray(data.photos)) return [];
@@ -58,6 +70,7 @@ function normalize(item) {
   return {
     url: item.src.large2x || item.src.large || item.src.original || '',
     thumbUrl: item.src.medium || item.src.small || '',
+    alt: item.alt || '',
     width: item.width,
     height: item.height,
     attribution: {

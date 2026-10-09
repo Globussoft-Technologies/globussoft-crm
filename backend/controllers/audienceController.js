@@ -2,6 +2,7 @@
 
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
+const { normalizeGenericCrmPhone } = require("../lib/phoneFormatting");
 
 // Get Contacts By Status
 /**
@@ -169,12 +170,18 @@ exports.getContactsByStatus = async (req, res) => {
         }
 
         const withCustomFields = await attachLeadCustomFieldsBatch(contacts, req.user.tenantId);
+        const data = req.user?.vertical === "generic"
+            ? withCustomFields.map((contact) => ({
+                ...contact,
+                phone: contact.phone ? normalizeGenericCrmPhone(contact.phone) : contact.phone,
+              }))
+            : withCustomFields;
 
         return res.status(200).json({
             success: true,
             message: "Contacts fetched successfully",
-            count: withCustomFields.length,
-            data: withCustomFields,
+            count: data.length,
+            data,
         });
 
     } catch (error) {

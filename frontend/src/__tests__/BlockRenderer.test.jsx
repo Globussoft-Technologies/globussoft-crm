@@ -52,6 +52,14 @@ const sampleLandingPage = {
 };
 
 describe('<BlockRenderer /> — block rendering and pageId passing', () => {
+  it('preserves non-wellness Generic campaign content without wellness styling', () => {
+    const { container } = render(<MemoryRouter><BlockRenderer landingPage={{
+      templateType: 'generic-site-real_estate-v1',
+      content: [{ type: 'heading', props: { text: 'Original property offer' } }],
+    }} /></MemoryRouter>);
+    expect(screen.getByText('Original property offer')).toBeInTheDocument();
+    expect(container.querySelector('.wellness-page')).toBeNull();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -315,6 +323,121 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(screen.getByRole('link', { name: /Get Started/i })).toHaveAttribute('href', '#lead-form');
   });
 
+  test('renders semantic wellness icons for new and legacy benefit badges', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'wellness-icons',
+          content: [
+            { id: 'new-eye', type: 'text', props: { variant: 'wellness-badge', icon: 'eye', text: '' } },
+            { id: 'legacy-person', type: 'text', props: { variant: 'wellness-badge', text: 'o' } },
+            { id: 'legacy-users', type: 'text', props: { variant: 'wellness-badge', text: ':)' } },
+            { id: 'legacy-document', type: 'text', props: { variant: 'wellness-badge', text: '#' } },
+          ],
+        }} />
+      </MemoryRouter>,
+    );
+
+    expect(container.querySelectorAll('.landing-text--wellness-badge')).toHaveLength(4);
+    expect(container.querySelectorAll('.landing-text--wellness-badge svg')).toHaveLength(4);
+    const badgeText = Array.from(container.querySelectorAll('.landing-text--wellness-badge'))
+      .map((badge) => badge.textContent)
+      .join('');
+    expect(badgeText).not.toContain(':)');
+    expect(badgeText).not.toContain('#');
+  });
+
+  test('renders wellness navigation as separate section links', () => {
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'wellness-navigation',
+          content: [{
+            id: 'wellness-nav',
+            type: 'text',
+            props: { variant: 'wellness-nav', text: 'HOME   SERVICES   ABOUT US   CONTACT' },
+          }],
+        }} />
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation', { name: 'Wellness campaign navigation' });
+    expect(nav.querySelector('a[href="#wellness-home"]')).toHaveTextContent('HOME');
+    expect(nav.querySelector('a[href="#wellness-services"]')).toHaveTextContent('SERVICES');
+    expect(nav.querySelector('a[href="#wellness-about"]')).toHaveTextContent('ABOUT US');
+    expect(nav.querySelector('a[href="#wellness-contact"]')).toHaveTextContent('CONTACT');
+  });
+
+  test('exposes wellness section anchors for header navigation', () => {
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'wellness-navigation-targets',
+          content: ['wellness-campaign-page', 'wellness-benefits-row', 'wellness-process-row', 'wellness-form-row']
+            .map((variant) => ({ type: 'columns', props: { variant, columns: [] } })),
+        }} />
+      </MemoryRouter>,
+    );
+
+    expect(document.getElementById('wellness-home')).toBeInTheDocument();
+    expect(document.getElementById('wellness-services')).toBeInTheDocument();
+    expect(document.getElementById('wellness-about')).toBeInTheDocument();
+    expect(document.getElementById('wellness-contact')).toBeInTheDocument();
+  });
+
+  test('removes the legacy wellness brand subline and duplicate hero CTA', () => {
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'legacy-wellness-campaign',
+          templateType: 'generic-site-eye-care',
+          content: [{
+            id: 'wellness-page',
+            type: 'columns',
+            props: {
+              variant: 'wellness-campaign-page',
+              columns: [{
+                fullWidth: true,
+                components: [
+                  {
+                    id: 'wellness-header-row',
+                    type: 'columns',
+                    props: {
+                      variant: 'wellness-header-row',
+                      columns: [
+                        { components: [
+                          { id: 'brand-name', type: 'heading', props: { text: 'Enhance Wellness' } },
+                          { id: 'brand-subline', type: 'text', props: { text: 'Wellness' } },
+                        ] },
+                        { components: [] },
+                      ],
+                    },
+                  },
+                  {
+                    id: 'wellness-hero-row',
+                    type: 'columns',
+                    props: {
+                      variant: 'wellness-hero-row',
+                      columns: [{ components: [
+                        { id: 'hero-primary-cta', type: 'button', props: { text: 'Register Now', url: '#lead-form' } },
+                        { id: 'contact-cta', type: 'button', props: { text: 'Contact Us', url: '#lead-form' } },
+                      ] }],
+                    },
+                  },
+                ],
+              }],
+            },
+          }],
+        }} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Enhance Wellness')).toBeInTheDocument();
+    expect(screen.queryByText('Wellness')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Register Now' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Contact Us' })).not.toBeInTheDocument();
+  });
+
   test('renders wellness consultation form with the lead-form anchor target', () => {
     const pageWithForm = {
       id: 224,
@@ -340,6 +463,98 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     );
 
     expect(document.getElementById('lead-form')).toBeInTheDocument();
+  });
+
+  test('hides the wellness service-of-interest field from the registration form', () => {
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'wellness-form-fields',
+          content: [{
+            id: 'lead-form',
+            type: 'form',
+            props: {
+              variant: 'wellness-consultation',
+              fields: [
+                { name: 'first_name', label: 'First Name', required: true },
+                { name: 'service_interest', label: 'Service of Interest', type: 'select' },
+                { name: 'message', label: 'Tell Us More', type: 'textarea' },
+              ],
+            },
+          }],
+        }} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText(/First Name/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Tell Us More/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Service of Interest/)).not.toBeInTheDocument();
+  });
+
+  test('centers legacy wellness registration forms and removes the duplicate form heading', () => {
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'legacy-registration-page',
+          templateType: 'generic-site-eye-care',
+          content: [{
+            id: 'wellness-page',
+            type: 'columns',
+            props: {
+              variant: 'wellness-campaign-page',
+              columns: [{
+                fullWidth: true,
+                components: [{
+                  id: 'legacy-registration',
+                  type: 'columns',
+                  props: {
+                    variant: 'wellness-registration-row',
+                    columns: [
+                      { components: [
+                        { id: 'form-title-copy', type: 'heading', props: { text: 'Register for Eye Checkup' } },
+                        { id: 'lead-form', type: 'form', props: { title: 'Register for Eye Checkup', fields: [] } },
+                      ] },
+                      { components: [{ id: 'secondary-copy', type: 'text', props: { text: 'Secondary registration content' } }] },
+                    ],
+                  },
+                }],
+              }],
+            },
+          }],
+        }} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getAllByText('Register for Eye Checkup')).toHaveLength(1);
+    expect(screen.queryByText('Secondary registration content')).not.toBeInTheDocument();
+    expect(document.querySelector('.wellness-layout--wellness-registration-row')).toBeInTheDocument();
+    expect(document.querySelector('.wellness-layout--wellness-registration-row > div:only-child')).toBeInTheDocument();
+  });
+
+  test('applies custom wellness colors from the campaign root', () => {
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'custom-wellness-page',
+          templateType: 'generic-site-eye-care',
+          content: [{
+            id: 'wellness-page',
+            type: 'columns',
+            props: {
+              variant: 'wellness-campaign-page',
+              themeId: 'custom',
+              customColors: { bg: '#fef2f2', primary: '#be123c', accent: '#f59e0b' },
+              columns: [],
+            },
+          }],
+        }} />
+      </MemoryRouter>
+    );
+
+    const content = document.querySelector('.landing-page-content');
+    expect(content.style.getPropertyValue('--wellness-bg')).toBe('#fef2f2');
+    expect(content.style.getPropertyValue('--wellness-primary')).toBe('#be123c');
+    expect(content.style.getPropertyValue('--wellness-accent')).toBe('#f59e0b');
   });
 
   test('renders video block with iframe for embed URL', () => {
@@ -575,6 +790,8 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     const styleTag = container.querySelector('style');
     expect(styleTag).toBeInTheDocument();
     expect(styleTag.textContent).toContain('.landing-page');
+    expect(styleTag.textContent).toContain('.landing-heading--wellness-metric-value');
+    expect(styleTag.textContent).toContain('overflow-wrap: anywhere !important;');
   });
 
   test('form block receives correct slug parameter', () => {
@@ -632,4 +849,3 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(mainElement).toBeInTheDocument();
   });
 });
-

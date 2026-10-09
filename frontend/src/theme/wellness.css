@@ -12,6 +12,7 @@
 [data-vertical="wellness"] {
   --bg-color:          #F4EFE4;        /* cream — Awards section bg */
   --surface-color:     #FAF6ED;        /* lighter warm white for cards */
+  --calendar-gutter-bg: #FAF6ED;
   --subtle-bg:         rgba(201, 160, 99, 0.06);
   --subtle-bg-3:       rgba(201, 160, 99, 0.12);
 
@@ -60,6 +61,7 @@ html[data-theme="dark"][data-vertical="wellness"],
 [data-theme="dark"] [data-vertical="wellness"] {
   --bg-color:          #0D0F0E;
   --surface-color:     rgba(31, 34, 32, 0.90);
+  --calendar-gutter-bg: #1F2220;
   --subtle-bg:         rgba(201, 160, 99, 0.06);
   --subtle-bg-3:       rgba(201, 160, 99, 0.12);
 
@@ -207,6 +209,31 @@ html[data-theme="dark"][data-vertical="wellness"],
 }
 [data-vertical="wellness"] aside.glass .nav-link.active svg {
   color: var(--accent-color, #C9A063);
+}
+
+/* Wellness navigation groups sit on the dark sidebar in both app themes.
+   The global [role="menu"] popover surface follows the page theme, which
+   becomes white in light mode while these sidebar links stay cream-colored. */
+[data-vertical="wellness"] .wellness-sidebar-submenu {
+  background: linear-gradient(180deg, var(--sidebar-bg, #1F2220), var(--sidebar-bg-deep, #161917)) !important;
+  color: #F5F1E8 !important;
+  border-color: rgba(201, 160, 99, 0.2) !important;
+}
+[data-vertical="wellness"] .wellness-sidebar-submenu .nav-link {
+  color: rgba(245, 241, 232, 0.82) !important;
+}
+[data-vertical="wellness"] .wellness-sidebar-submenu .nav-link svg {
+  color: rgba(245, 241, 232, 0.65) !important;
+}
+[data-vertical="wellness"] .wellness-sidebar-submenu .nav-link:hover,
+[data-vertical="wellness"] .wellness-sidebar-submenu .nav-link.active {
+  color: #FFFFFF !important;
+}
+[data-vertical="wellness"] .wellness-sidebar-submenu .nav-link:hover {
+  background: rgba(201, 160, 99, 0.13) !important;
+}
+[data-vertical="wellness"] .wellness-sidebar-submenu .nav-link.active {
+  background: rgba(201, 160, 99, 0.22) !important;
 }
 
 /* Sidebar section labels — bronze matches awards/recognition accent.

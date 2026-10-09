@@ -14,7 +14,7 @@ import { Clock, LogIn, LogOut, Calendar, Users, Upload } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
-import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
+import { DateRangeFilter, DateRangeModal, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 import TopScrollSync from '../../components/TopScrollSync';
 
 // Wraps navigator.geolocation.getCurrentPosition in a promise. Resolves to
@@ -54,6 +54,15 @@ function fmtMinutes(m) {
   const h = Math.floor(m / 60);
   const mm = m % 60;
   return `${h}h ${mm}m`;
+}
+
+function formatDateRangeLabel(from, to) {
+  const format = (value) => new Date(`${value}T00:00:00`).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  return `${format(from)} – ${format(to)}`;
 }
 
 // Turns the backend's geofence error codes (see lib/attendanceGeofence.js)
@@ -389,6 +398,7 @@ function ManagerStaffSnapshot() {
   })();
   const [exportFrom, setExportFrom] = useState(thirtyDaysAgo);
   const [exportTo, setExportTo] = useState(todayKey);
+  const [exportDatePickerOpen, setExportDatePickerOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -451,26 +461,21 @@ function ManagerStaffSnapshot() {
           <Users size={20} aria-hidden /> Today &mdash; All Staff
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            From
-            <input
-              type="date"
-              aria-label="Payroll CSV from date"
-              value={exportFrom}
-              onChange={(e) => setExportFrom(e.target.value)}
-              style={{ padding: '4px 6px' }}
-            />
-          </label>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            To
-            <input
-              type="date"
-              aria-label="Payroll CSV to date"
-              value={exportTo}
-              onChange={(e) => setExportTo(e.target.value)}
-              style={{ padding: '4px 6px' }}
-            />
-          </label>
+          <button
+            type="button"
+            onClick={() => setExportDatePickerOpen(true)}
+            aria-label="Select payroll date range"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '6px 10px', borderRadius: 6,
+              border: '1px solid var(--border-color, #ddd)',
+              background: 'var(--surface-color, #fff)', color: 'var(--text-primary)',
+              cursor: 'pointer', fontSize: 13,
+            }}
+          >
+            <Calendar size={14} aria-hidden />
+            {formatDateRangeLabel(exportFrom, exportTo)}
+          </button>
           <button
             type="button"
             onClick={onExport}
@@ -486,6 +491,18 @@ function ManagerStaffSnapshot() {
           </button>
         </div>
       </div>
+      {exportDatePickerOpen && (
+        <DateRangeModal
+          initialStart={exportFrom}
+          initialEnd={exportTo}
+          onClose={() => setExportDatePickerOpen(false)}
+          onSave={(start, end) => {
+            setExportFrom(start);
+            setExportTo(end);
+            setExportDatePickerOpen(false);
+          }}
+        />
+      )}
       {loading ? (
         <div>Loading&hellip;</div>
       ) : !summary ? (

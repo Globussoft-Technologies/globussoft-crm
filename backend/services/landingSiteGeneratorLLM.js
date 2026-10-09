@@ -8,6 +8,11 @@ if (process.env.NODE_ENV !== 'test') {
 const llmRouter = require('../lib/llmRouter');
 const aiGateway = require('../lib/aiGateway');
 const destinationImageProvider = require('./destinationImageProvider');
+const {
+  IMAGE_QUERY_VERSION,
+  buildWellnessImagePlan,
+  queryForWellnessImageSlot,
+} = require('./wellnessImageQueries');
 const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 const { getBudgetCap, evaluateCap } = require('../lib/tenantSettings');
 const {
@@ -89,14 +94,25 @@ async function enrichWithImages(payload, input, options = {}) {
   const blocks = ensureBlockArray(payload.blocks);
   if (!blocks.length) return payload;
 
+  if (String(input.imageMode || 'auto').toLowerCase() === 'manual') {
+    return { ...payload, blocks, imagesFetched: 0 };
+  }
+
   const imageBlocks = collectBlocksByType(blocks, 'image');
   if (!imageBlocks.length) return { ...payload, blocks };
 
-  const wellnessPhotoQuery = [input.campaignName, input.campaignGoal, input.audience, input.location, input.sectorLabel || input.sectorKey, 'wellness healthcare community event'].filter(Boolean).join(' ');
-  const queries = isWellnessSector(input.sectorKey)
+  const wellnessMode = isWellnessSector(input.sectorKey);
+  const wellnessImagePlan = wellnessMode
+    ? buildWellnessImagePlan(input)
+    : null;
+  const wellnessPhotoQuery = [input.imageQuery, input.campaignName, input.campaignGoal, input.audience, input.location, input.sectorLabel || input.sectorKey].filter(Boolean).join(' ');
+  const queries = wellnessMode
     ? [
-        wellnessPhotoQuery,
-        [input.businessName, input.sectorLabel || input.sectorKey, 'wellness event registration'].filter(Boolean).join(' '),
+        `${wellnessPhotoQuery} wellness event hero`,
+        `${wellnessPhotoQuery} professional consultation care team`,
+        `${wellnessPhotoQuery} community wellness event participants`,
+        `${wellnessPhotoQuery} healthy lifestyle self care`,
+        `${wellnessPhotoQuery} registration follow up clinic`,
       ]
     : [
         `${input.sectorLabel || input.sectorKey || 'business'} landing page`,
@@ -104,25 +120,69 @@ async function enrichWithImages(payload, input, options = {}) {
       ];
 
   const fetched = [];
-  for (const query of queries) {
+  const usedUrls = new Set();
+  const prefilledUrls = new Set();
+  imageBlocks.forEach((block) => {
+    const src = String(block?.props?.src || '').trim();
+    if (!src) return;
+    // Wellness pages must use the campaign-aware Pexels pass below. Do not
+    // trust an arbitrary external URL emitted by the model, because it may
+    // be a generic clinic image or an unrelated stock photo.
+    if (wellnessMode && /^https?:\/\//i.test(src)) {
+      block.props.src = '';
+      return;
+    }
+    if (prefilledUrls.has(src)) {
+      // LLMs occasionally copy one image URL into several slots. Clear the
+      // later occurrence so the slot can be filled by the distinct-image
+      // provider pass below instead of rendering the same photo repeatedly.
+      block.props.src = '';
+      return;
+    }
+    prefilledUrls.add(src);
+    usedUrls.add(src);
+  });
+  for (let index = 0; index < imageBlocks.length; index += 1) {
+    if (imageBlocks[index]?.props?.src) {
+      fetched[index] = null;
+      continue;
+    }
+    const query = wellnessMode
+      ? queryForWellnessImageSlot(wellnessImagePlan, imageBlocks[index]?.id || imageBlocks[index]?.props?.variant, index)
+      : queries[index % queries.length];
     try {
       const image = await destinationImageProvider.fetchOne(query, {
         tenantId: options.tenantId,
         aspectRatio: '16:9',
         stockOnly: true,
+        excludeUrls: usedUrls,
+        ...(wellnessMode ? { excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'] } : {}),
+        ...(wellnessMode ? {
+          relevanceTerms: wellnessImagePlan.relevanceTerms,
+          requireRelevance: true,
+        } : {}),
       });
-      if (image && image.url) fetched.push(image);
+      if (image && image.url && !usedUrls.has(image.url)) {
+        fetched[index] = image;
+        usedUrls.add(image.url);
+      } else {
+        fetched[index] = null;
+      }
     } catch (_err) {
-      fetched.push(null);
+      fetched[index] = null;
     }
   }
 
   imageBlocks.forEach((block, index) => {
-    const image = fetched[index] || fetched[0] || null;
+    const image = fetched[index] || null;
     if (!block.props.src && image && image.url) {
       block.props.src = image.url;
       if (!block.props.alt && image.attribution) {
         block.props.alt = `Photo by ${image.attribution.photographer || image.attribution.providerId}`;
+      }
+      if (wellnessMode && image.attribution?.providerId === 'pexels') {
+        block.props.imageProvider = 'pexels';
+        block.props.imageQueryVersion = IMAGE_QUERY_VERSION;
       }
     }
   });
@@ -191,6 +251,7 @@ async function generateLandingSiteContent(input = {}, options = {}) {
   }
 
   let payload = null;
+  let imageInput = { ...input, sectorKey };
   if (rawJson) {
     try {
       payload = parseJson(rawJson);
@@ -208,7 +269,14 @@ async function generateLandingSiteContent(input = {}, options = {}) {
   const fallback = buildGenericFallback(input);
   if (wellnessMode) {
     const wellnessContent = payload && typeof payload.content === 'object' && !Array.isArray(payload.content) ? payload.content : {};
-    const wellnessInput = { ...input, ...wellnessContent, sectorKey, sectorLabel: input.sectorLabel || fallback.seoMeta.metaTitle?.split(' | ')[1] || input.sectorLabel };
+    const wellnessInput = {
+      ...input,
+      ...wellnessContent,
+      wellnessLayout: input.wellnessLayout || wellnessContent.layoutId || input.layoutId,
+      sectorKey,
+      sectorLabel: input.sectorLabel || fallback.seoMeta.metaTitle?.split(' | ')[1] || input.sectorLabel,
+    };
+    imageInput = wellnessInput;
     if (!payload.suggestedTitle) payload.suggestedTitle = wellnessContent.suggestedTitle || fallback.suggestedTitle;
     if (!payload.suggestedSlug) payload.suggestedSlug = wellnessContent.suggestedSlug || fallback.suggestedSlug;
     if (!payload.description) payload.description = wellnessContent.description || fallback.description;
@@ -225,9 +293,7 @@ async function generateLandingSiteContent(input = {}, options = {}) {
     }
   }
 
-  payload = await enrichWithImages({ ...payload, blocks: ensureBlockArray(payload.blocks) }, { ...input, sectorKey }, options);
-
-  payload = await enrichWithImages({ ...payload, blocks: ensureBlockArray(payload.blocks) }, { ...input, sectorKey }, options);
+  payload = await enrichWithImages({ ...payload, blocks: ensureBlockArray(payload.blocks) }, imageInput, options);
   payload.blocks = ensureBlockArray(payload.blocks);
 
   return {

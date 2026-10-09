@@ -350,11 +350,12 @@ describe('Sidebar — load-bearing render surface', () => {
     it('shows Pickup & Plot as its own module only to generic CRM admins', () => {
       const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
-      const link = screen.getByText('Inventory').closest('a');
+      const link = screen.getByText('Plot Inventory').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/pickup-plot-inventory');
+      expect(screen.getByText('Pickup Inventory').closest('a').getAttribute('href')).toBe('/pickup-inventory');
       expect(screen.getByText('Transport Persons').closest('a').getAttribute('href')).toBe('/transport-persons');
-      expect(screen.getByText('Plot Brokers').closest('a').getAttribute('href')).toBe('/plot-brokers');
+      expect(screen.getByText('Sales Executives').closest('a').getAttribute('href')).toBe('/plot-brokers');
       expect(screen.getByText('Billing Persons').closest('a').getAttribute('href')).toBe('/billing-persons');
       expect(screen.getByText('Customer Status').closest('a').getAttribute('href')).toBe('/pickup-customers');
       generic.unmount();
@@ -370,9 +371,9 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
     });
 
-    it('shows only My Customers to a broker with the legacy BROOKER spelling', () => {
+    it('shows only Site Visits to a sales executive with the legacy BROOKER spelling', () => {
       renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['BROOKER'] });
-      expect(screen.getByText('My Customers').closest('a')).toHaveAttribute('href', '/home');
+      expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/home');
       expect(screen.queryByText('Dashboard')).toBeNull();
       expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
     });
@@ -695,6 +696,40 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
       expect(sidebar).not.toHaveClass('travel-sidebar-collapsed');
+    });
+
+    it('opens the full travel menu on mobile even after desktop rail collapse', () => {
+      const rendered = renderSidebar({ vertical: 'travel', role: 'ADMIN', expandTravelGroups: false });
+      fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+      expect(document.querySelector('#app-sidebar')).toHaveClass('travel-sidebar-collapsed');
+
+      const onMobileClose = vi.fn();
+      const view = (isMobileViewport, mobileOpen) => (
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider value={{
+            user: { name: 'Maya Iyer', email: 'maya@acme.test', role: 'ADMIN' },
+            tenant: { name: 'Travel Stall', vertical: 'travel' },
+            token: 't-abc', setUser: vi.fn(), setToken: vi.fn(), setTenant: vi.fn(),
+          }}>
+            <ActiveSubBrandProvider>
+              <Sidebar isMobileViewport={isMobileViewport} mobileOpen={mobileOpen} onMobileClose={onMobileClose} />
+            </ActiveSubBrandProvider>
+          </AuthContext.Provider>
+        </MemoryRouter>
+      );
+
+      rendered.rerender(view(true, true));
+      const sidebar = document.querySelector('#app-sidebar');
+      expect(sidebar).toHaveAttribute('role', 'dialog');
+      expect(sidebar).not.toHaveClass('travel-sidebar-collapsed');
+      expect(screen.getByRole('button', { name: 'Close navigation menu' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Sales' }));
+      expect(document.querySelector('a[href="/leads"]')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Close navigation menu' }));
+      expect(onMobileClose).toHaveBeenCalled();
+
+      rendered.rerender(view(false, false));
+      expect(sidebar).toHaveClass('travel-sidebar-collapsed');
     });
 
     it('re-opens the rail and exposes a section when its collapsed icon is clicked', () => {
@@ -1466,6 +1501,33 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Finance')).toBeNull();
       expect(screen.queryByText('Reports')).toBeNull();
     });
+
+    it('keeps mobile wellness submodules inside the drawer and closes them with it', async () => {
+      currentAccessiblePages = [
+        { category: 'Clinical', path: '/wellness/calendar', label: 'Calendar' },
+      ];
+      currentPermissionSet = permsForRole('ADMIN', 'wellness');
+      const user = { name: 'Maya Iyer', email: 'maya@acme.test', role: 'ADMIN' };
+      const tenant = { name: 'Enhanced Wellness', vertical: 'wellness' };
+      const onMobileClose = vi.fn();
+      const view = (mobileOpen) => (
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <AuthContext.Provider value={{ user, setUser: vi.fn(), token: 't', setToken: vi.fn(), tenant, setTenant: vi.fn() }}>
+            <Sidebar mobileOpen={mobileOpen} isMobileViewport={true} onMobileClose={onMobileClose} />
+          </AuthContext.Provider>
+        </MemoryRouter>
+      );
+
+      const { container, rerender } = render(view(true));
+      const clinical = await screen.findByRole('button', { name: 'Clinical' });
+      fireEvent.click(clinical);
+      const menu = screen.getByRole('menu', { name: 'Clinical submodules' });
+      expect(container.querySelector('#app-sidebar').contains(menu)).toBe(true);
+      expect(menu.style.position).toBe('static');
+
+      rerender(view(false));
+      await waitFor(() => expect(screen.queryByRole('menu', { name: 'Clinical submodules' })).toBeNull());
+    });
   });
 
   describe('Aside backdrop + mobile-drawer wiring', () => {
@@ -1555,7 +1617,10 @@ describe('Sidebar — load-bearing render surface', () => {
       // "Workflows" nav; the closest equivalent is Sequences).
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       expect(screen.getByText('Sequences')).toBeTruthy();
-      expect(screen.getByText('Marketing')).toBeTruthy();
+      const marketingCampaignLink = screen.getByText('Marketing Campaign').closest('a');
+      expect(marketingCampaignLink).toBeTruthy();
+      expect(marketingCampaignLink.getAttribute('href')).toBe('/marketing');
+      expect(screen.queryByText('Marketing')).toBeNull();
       expect(screen.getByText('Lead Routing')).toBeTruthy();
       // Territories is the sibling routing nav.
       expect(screen.getByText('Territories')).toBeTruthy();
@@ -1564,7 +1629,7 @@ describe('Sidebar — load-bearing render surface', () => {
     it('hides Sequences / Marketing / Lead Routing for USER under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
       expect(screen.queryByText('Sequences')).toBeNull();
-      expect(screen.queryByText('Marketing')).toBeNull();
+      expect(screen.queryByText('Marketing Campaign')).toBeNull();
       expect(screen.queryByText('Lead Routing')).toBeNull();
       expect(screen.queryByText('Territories')).toBeNull();
     });

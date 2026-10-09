@@ -197,6 +197,27 @@ function normalizeOrigins(raw) {
   }))];
 }
 
+function normalizeEmailCc(raw) {
+  const values = Array.isArray(raw) ? raw : parseJson(raw, []);
+  const emails = [];
+  const seen = new Set();
+  for (const value of values) {
+    const email = String(value || "").trim().toLowerCase();
+    if (!email) continue;
+    if (!EMAIL_RE.test(email) || email.length > 191) {
+      const error = new Error(`Enter a valid CC email address: ${email.slice(0, 191)}`);
+      error.status = 400;
+      error.code = "INVALID_CC_EMAIL";
+      throw error;
+    }
+    if (!seen.has(email)) {
+      seen.add(email);
+      emails.push(email);
+    }
+  }
+  return emails;
+}
+
 function normalizeFields(raw) {
   const values = Array.isArray(raw) ? raw : parseJson(raw, DEFAULT_FIELDS);
   const allowedTypes = new Set(["text", "email", "tel", "select", "textarea"]);
@@ -323,12 +344,14 @@ function serializeForm(form, { includeSecrets = false } = {}) {
     blackoutDates: parseJson(form.blackoutDatesJson, []),
     fields: normalizeFields(parseJson(form.fieldsJson, DEFAULT_FIELDS)),
     allowedOrigins: parseJson(form.allowedOriginsJson, []),
+    emailCc: normalizeEmailCc(form.emailCcJson),
   };
   delete data.weeklyHoursJson;
   delete data.dateOverridesJson;
   delete data.blackoutDatesJson;
   delete data.fieldsJson;
   delete data.allowedOriginsJson;
+  delete data.emailCcJson;
   delete data.apiKeyHash;
   if (!includeSecrets) delete data.apiKey;
   return data;
@@ -367,11 +390,22 @@ function publicConfig(form) {
     bookingSubmission: {
       method: "POST",
       endpointSuffix: "/book",
+      available: form.createZoom !== false,
       slotField: "selectedStartTime",
       idempotencyKeyHeader: "Idempotency-Key",
       idempotencyKeyRequired: true,
       confirmationTokenPath: "booking.confirmationToken",
     },
+    externalBookingSubmission: {
+      method: "POST",
+      endpointSuffix: "/external-bookings",
+      description: "Store a confirmed external booking. Host calendar and CRM confirmation email are optional, independent form settings.",
+      idempotencyKeyHeader: "Idempotency-Key",
+      idempotencyFallbackField: "zoomEventId",
+      requiredFields: ["firstName", "lastName", "email", "selectedStartTime", "timezone", "duration"],
+      optionalFields: ["designation", "school", "city", "phone", "zoomEventId", "zoomJoinUrl", "calendarEventId", "customFields"],
+    },
+    integrations: { createZoom: form.createZoom !== false, createCalendarEvent: form.createCalendarEvent === true || (form.createCalendarEvent == null && form.createZoom !== false), sendConfirmationEmail: form.sendConfirmationEmail !== false },
     confirmationMessage: form.confirmationMessage,
     meetingType: "Zoom",
     apiVersion: "2026-10-01",
@@ -395,23 +429,19 @@ async function assertHost(tenantId, hostUserId) {
 
 async function assertPublishable(tenantId, data) {
   await assertHost(tenantId, data.hostUserId);
-  const connected = await prisma.calendarIntegration.findUnique({
+  const calendarEnabled = data.createCalendarEvent === true || (data.createCalendarEvent == null && data.createZoom);
+  if (!calendarEnabled && !data.createZoom) return;
+  const connected = calendarEnabled ? await prisma.calendarIntegration.findUnique({
     where: { tenantId_userId_provider: { tenantId, userId: Number(data.hostUserId), provider: "google" } },
     select: { id: true },
-  });
-  if (!connected) {
+  }) : null;
+  if (calendarEnabled && !connected) {
     const error = new Error("The selected host must connect Google Calendar before this form can be activated.");
     error.status = 409;
     error.code = "CALENDAR_NOT_CONNECTED";
     throw error;
   }
-  if (!data.createZoom) {
-    const error = new Error("TMC Meeting Forms require Zoom meeting creation.");
-    error.status = 400;
-    error.code = "ZOOM_REQUIRED";
-    throw error;
-  }
-  if (!(await travelMeetingZoom.isConfigured(tenantId))) {
+  if (data.createZoom && !(await travelMeetingZoom.isConfigured(tenantId))) {
     const error = new Error("Connect and verify this tenant's Zoom account inside Meeting Forms before activating the form.");
     error.status = 409;
     error.code = "ZOOM_NOT_CONFIGURED";
@@ -481,9 +511,12 @@ function dataFromBody(body, existing = null) {
     // legacy or client-supplied Outlook value without affecting other CRM calendars.
     calendarProvider: "google",
     createZoom: body.createZoom !== undefined ? body.createZoom !== false : existing?.createZoom !== false,
+    createCalendarEvent: body.createCalendarEvent !== undefined ? body.createCalendarEvent === true : existing?.createCalendarEvent ?? null,
+    sendConfirmationEmail: body.sendConfirmationEmail !== undefined ? body.sendConfirmationEmail !== false : existing?.sendConfirmationEmail !== false,
     embedFontFamily: normalizeEmbedFont(body.embedFontFamily ?? existing?.embedFontFamily ?? "Inter"),
     emailSubject: sanitizeText(String(body.emailSubject ?? existing?.emailSubject ?? "Your Conversation with TMC is Confirmed")).slice(0, 191),
     emailBody: sanitizeText(String(body.emailBody ?? existing?.emailBody ?? DEFAULT_EMAIL_BODY)).slice(0, 50_000),
+    emailCcJson: sanitizeJsonForStringColumn(normalizeEmailCc(body.emailCc ?? existing?.emailCcJson ?? [])),
     confirmationMessage: sanitizeText(String(body.confirmationMessage ?? existing?.confirmationMessage ?? "Your conversation with a TMC Experiential Learning Expert has been scheduled.")).slice(0, 1000),
     isActive: body.isActive !== undefined ? body.isActive === true : existing?.isActive === true,
   };
@@ -530,12 +563,132 @@ function authorizeConsumer(form, req) {
   });
 }
 
+function normalizeZoomMeetingUrl(raw) {
+  if (raw == null || raw === "") return null;
+  const value = String(raw).trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    const allowedHost = ["zoom.us", "zoom.com", "zoomgov.com"].some((domain) =>
+      url.hostname === domain || url.hostname.endsWith(`.${domain}`));
+    if (value.length > 2000 || value.includes("\\")
+      || [...value].some((character) => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)
+      || url.protocol !== "https:" || !allowedHost || url.username || url.password
+      || (url.port && url.port !== "443")) throw new Error("Invalid Zoom link");
+    // Preserve the original join path and password/query parameters.
+    return value;
+  } catch {
+    const error = new Error("Meeting URL must be an HTTPS Zoom link");
+    error.status = 400;
+    error.code = "INVALID_MEETING_URL";
+    throw error;
+  }
+}
+
+function externalBookingData(form, body = {}, idempotencyHeader = "") {
+  const normalized = normalizeBookingPayload(body);
+  const values = normalized.values;
+  if (!values.contactName || !EMAIL_RE.test(values.contactEmail)) {
+    const error = new Error("A valid contact name and email are required");
+    error.status = 400;
+    error.code = "INVALID_CONTACT";
+    throw error;
+  }
+
+  const scheduledAt = new Date(normalized.scheduledAtInput);
+  if (Number.isNaN(scheduledAt.getTime())) {
+    const error = new Error("selectedStartTime must be a valid ISO datetime");
+    error.status = 400;
+    error.code = "INVALID_BOOKING_TIME";
+    throw error;
+  }
+  const duration = Number(body.duration ?? form.durationMins);
+  if (!Number.isInteger(duration) || duration < 5 || duration > 480) {
+    const error = new Error("duration must be between 5 and 480 minutes");
+    error.status = 400;
+    error.code = "INVALID_DURATION";
+    throw error;
+  }
+  const timezone = String(body.timezone || form.timezone || "Asia/Kolkata").trim();
+  if (!isValidTimeZone(timezone)) {
+    const error = new Error("timezone must be a valid IANA timezone");
+    error.status = 400;
+    error.code = "INVALID_TIMEZONE";
+    throw error;
+  }
+  const zoomEventId = sanitizeText(String(body.zoomEventId || "")).trim().slice(0, 191);
+  if (!zoomEventId && !idempotencyHeader && !body.idempotencyKey) {
+    const error = new Error("Send Idempotency-Key when zoomEventId is not provided");
+    error.status = 400;
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const idempotencyKey = String(idempotencyHeader || body.idempotencyKey || `zoom:${zoomEventId}`).trim().slice(0, 191);
+  const meetingUrl = normalizeZoomMeetingUrl(body.zoomJoinUrl) || normalizeZoomMeetingUrl(body.meetingUrl);
+  const calendarEventId = sanitizeText(String(body.calendarEventId || "")).trim().slice(0, 191) || null;
+  const endsAt = new Date(scheduledAt.getTime() + duration * 60_000);
+  const payload = { ...body, ingestionMode: "EXTERNAL_CONFIRMED_BOOKING" };
+
+  return {
+    unique: { tenantId: form.tenantId, meetingFormId: form.id, idempotencyKey },
+    data: {
+      tenantId: form.tenantId,
+      meetingFormId: form.id,
+      idempotencyKey,
+      confirmationToken: randomKey("tmcb_"),
+      ...values,
+      scheduledAt,
+      endsAt,
+      timezone,
+      status: form.createCalendarEvent === true ? "PROCESSING" : "CONFIRMED",
+      meetingType: zoomEventId ? "ZOOM" : "EXTERNAL",
+      zoomMeetingId: zoomEventId || null,
+      meetingUrl,
+      calendarProvider: form.createCalendarEvent === true ? null : calendarEventId ? "external" : null,
+      calendarEventId: form.createCalendarEvent === true ? null : calendarEventId,
+      source: "Talk to an Expert",
+      customFieldsJson: sanitizeJsonForStringColumn(payload),
+      emailStatus: form.sendConfirmationEmail ? "PENDING" : "EXTERNAL",
+      emailChannel: form.sendConfirmationEmail ? null : "external_scheduler",
+    },
+  };
+}
+
+async function finishExternalCalendarBooking(form, booking) {
+  if (form.createCalendarEvent !== true) return booking;
+  let event = null;
+  try {
+    event = await calendar.createEvent({
+      tenantId: form.tenantId,
+      userId: form.hostUserId,
+      provider: form.calendarProvider,
+      title: `${form.name} — ${booking.contactName}`,
+      description: [`Meeting with ${booking.contactName}`, booking.institution, booking.contactEmail, booking.meetingUrl].filter(Boolean).join("\n"),
+      start: booking.scheduledAt,
+      end: booking.endsAt,
+      attendeeEmail: booking.contactEmail,
+      contactId: null,
+      meetingUrl: booking.meetingUrl,
+    });
+    return await prisma.travelMeetingBooking.update({
+      where: { id: booking.id },
+      data: { status: "CONFIRMED", calendarProvider: form.calendarProvider, calendarEventId: String(event.externalId), failureCode: null, failureMessage: null },
+    });
+  } catch (error) {
+    if (event?.externalId) await calendar.deleteEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, externalId: event.externalId });
+    return prisma.travelMeetingBooking.update({
+      where: { id: booking.id },
+      data: { status: "CONFIRMED", failureCode: "CALENDAR_CREATE_FAILED", failureMessage: String(error.message || "Calendar event could not be created").slice(0, 2000) },
+    });
+  }
+}
+
 async function availabilityFor(form, startDate, days) {
   const rangeStart = parseDateTimeLocalInTZ(`${startDate}T00:00`, form.timezone);
   const finalDate = addUtcDays(startDate, boundedInt(days, 14, 1, 62));
   const rangeEnd = parseDateTimeLocalInTZ(`${addUtcDays(finalDate, 1)}T00:00`, form.timezone);
   const [busyIntervals, reservedSlots] = await Promise.all([
-    calendar.getBusyIntervals({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, start: rangeStart, end: rangeEnd }),
+    (form.createCalendarEvent === true || (form.createCalendarEvent == null && form.createZoom)) ? calendar.getBusyIntervals({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, start: rangeStart, end: rangeEnd }) : Promise.resolve([]),
     prisma.travelMeetingSlot.findMany({
       where: { tenantId: form.tenantId, meetingFormId: form.id, scheduledAt: { lt: rangeEnd }, endsAt: { gt: rangeStart } },
       select: { scheduledAt: true, endsAt: true },
@@ -665,8 +818,8 @@ function publicBooking(booking, form) {
     timezone: booking.timezone,
     formattedDate: formatInTenantTZ(booking.scheduledAt, booking.timezone, "EEEE, d MMMM yyyy"),
     formattedTime: formatInTenantTZ(booking.scheduledAt, booking.timezone, "h:mm a zzz"),
-    durationMins: form.durationMins,
-    meetingType: "Zoom",
+    durationMins: Math.round((new Date(booking.endsAt).getTime() - new Date(booking.scheduledAt).getTime()) / 60_000) || form.durationMins,
+    meetingType: booking.meetingType || "Zoom",
     meetingUrl: booking.meetingUrl,
     firstName: names.firstName,
     lastName: names.lastName,
@@ -676,7 +829,7 @@ function publicBooking(booking, form) {
     email: booking.contactEmail,
     phone: booking.contactPhone,
     selectedStartTime: new Date(booking.scheduledAt).toISOString(),
-    duration: form.durationMins,
+    duration: Math.round((new Date(booking.endsAt).getTime() - new Date(booking.scheduledAt).getTime()) / 60_000) || form.durationMins,
     zoomEventId: booking.zoomMeetingId,
     zoomJoinUrl: booking.meetingUrl,
     calendarEventId: booking.calendarEventId,
@@ -694,6 +847,9 @@ function bookingDeliveryStatus(booking) {
   // attendee's inbox, so never expose legacy calendar-only attempts as SENT.
   if (booking.emailChannel === "calendar_invite") {
     return { status: "FAILED", channel: null };
+  }
+  if (booking.emailChannel === "external_scheduler" || booking.emailStatus === "EXTERNAL") {
+    return { status: "EXTERNAL", channel: "external_scheduler" };
   }
   if (booking.emailStatus === "SENT") {
     return { status: "SENT", channel: booking.emailChannel || "unified_inbox" };
@@ -901,17 +1057,63 @@ router.post("/meeting-forms/:id(\\d+)/rotate-api-key", verifyToken, requireTrave
 router.get("/meeting-forms/:id(\\d+)/bookings", verifyToken, requireTravelTenant, requirePermission("marketing", "read"), async (req, res) => {
   const form = await prisma.travelMeetingForm.findFirst({ where: { id: Number(req.params.id), tenantId: req.user.tenantId, subBrand: "tmc" } });
   if (!form) return res.status(404).json({ error: "Meeting form not found", code: "NOT_FOUND" });
-  const bookings = await prisma.travelMeetingBooking.findMany({ where: { tenantId: req.user.tenantId, meetingFormId: form.id }, orderBy: { scheduledAt: "desc" }, take: 500 });
-  res.json(bookings.map((booking) => {
+  const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
+  const page = Number(req.query.page || 1);
+  const pageSize = Number(req.query.pageSize || 10);
+  if (paginated && (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100 || !Number.isSafeInteger((page - 1) * pageSize))) {
+    return res.status(400).json({ error: "page must be a positive integer and pageSize must be between 1 and 100", code: "INVALID_PAGINATION" });
+  }
+  const where = { tenantId: req.user.tenantId, meetingFormId: form.id };
+  const [total, bookings] = paginated
+    ? await Promise.all([
+      prisma.travelMeetingBooking.count({ where }),
+      prisma.travelMeetingBooking.findMany({ where, orderBy: [{ scheduledAt: "desc" }, { id: "desc" }], skip: (page - 1) * pageSize, take: pageSize }),
+    ])
+    : [null, await prisma.travelMeetingBooking.findMany({ where, orderBy: { scheduledAt: "desc" }, take: 500 })];
+  const items = bookings.map((booking) => {
     const delivery = bookingDeliveryStatus(booking);
-    return { ...booking, emailStatus: delivery.status, emailChannel: delivery.channel, confirmationEmailStatus: booking.emailStatus };
-  }));
+    return { ...booking, payload: parseJson(booking.customFieldsJson, {}), emailStatus: delivery.status, emailChannel: delivery.channel, confirmationEmailStatus: booking.emailStatus };
+  });
+  res.json(paginated ? { items, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) } : items);
+});
+
+router.delete("/meeting-forms/:id(\\d+)/bookings/:bookingId(\\d+)", verifyToken, requireTravelTenant, requirePermission("marketing", "write"), async (req, res) => {
+  try {
+    const form = await prisma.travelMeetingForm.findFirst({ where: { id: Number(req.params.id), tenantId: req.user.tenantId, subBrand: "tmc" }, select: { id: true } });
+    const booking = form ? await prisma.travelMeetingBooking.findFirst({ where: { id: Number(req.params.bookingId), meetingFormId: form.id, tenantId: req.user.tenantId } }) : null;
+    if (!booking) return res.status(404).json({ error: "Booking not found", code: "NOT_FOUND" });
+    await prisma.$transaction(async (tx) => {
+      await tx.travelMeetingSlot.deleteMany({ where: { tenantId: req.user.tenantId, bookingId: booking.id } });
+      await tx.travelMeetingBooking.delete({ where: { id: booking.id } });
+    });
+    await writeAudit("TravelMeetingBooking", "DELETE", booking.id, req.user.userId, req.user.tenantId, { meetingFormId: form.id });
+    res.json({ success: true, deletedBookingId: booking.id });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Booking could not be deleted", code: error.code || "BOOKING_DELETE_FAILED" });
+  }
+});
+
+router.post("/meeting-forms/:id(\\d+)/bookings/:bookingId(\\d+)/retry-calendar", verifyToken, requireTravelTenant, requirePermission("marketing", "write"), async (req, res) => {
+  try {
+    const form = await prisma.travelMeetingForm.findFirst({ where: { id: Number(req.params.id), tenantId: req.user.tenantId, subBrand: "tmc", createCalendarEvent: true } });
+    const booking = form ? await prisma.travelMeetingBooking.findFirst({ where: { id: Number(req.params.bookingId), meetingFormId: form.id, tenantId: req.user.tenantId, failureCode: "CALENDAR_CREATE_FAILED", calendarEventId: null } }) : null;
+    if (!booking || parseJson(booking.customFieldsJson, {}).ingestionMode !== "EXTERNAL_CONFIRMED_BOOKING") return res.status(409).json({ error: "This booking has no failed CRM calendar event to retry", code: "CALENDAR_RETRY_UNAVAILABLE" });
+    const claimed = await prisma.travelMeetingBooking.updateMany({ where: { id: booking.id, tenantId: form.tenantId, failureCode: "CALENDAR_CREATE_FAILED", calendarEventId: null }, data: { status: "PROCESSING", failureCode: null } });
+    if (claimed.count !== 1) return res.status(409).json({ error: "Calendar retry is already in progress", code: "BOOKING_IN_PROGRESS" });
+    const updated = await finishExternalCalendarBooking(form, booking);
+    return res.json({ success: updated.failureCode == null, booking: publicBooking(updated, form), warning: updated.failureCode ? "Calendar event creation failed again. The booking remains stored." : null });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Calendar retry failed", code: error.code || "CALENDAR_RETRY_FAILED" });
+  }
 });
 
 router.post("/meeting-forms/:id(\\d+)/bookings/:bookingId(\\d+)/resend-confirmation", verifyToken, requireTravelTenant, requirePermission("marketing", "write"), async (req, res) => {
   const form = await prisma.travelMeetingForm.findFirst({ where: { id: Number(req.params.id), tenantId: req.user.tenantId, subBrand: "tmc" } });
   const booking = form ? await prisma.travelMeetingBooking.findFirst({ where: { id: Number(req.params.bookingId), meetingFormId: form.id, tenantId: req.user.tenantId, status: "CONFIRMED" } }) : null;
   if (!form || !booking) return res.status(404).json({ error: "Confirmed booking not found", code: "NOT_FOUND" });
+  if (!form.sendConfirmationEmail) {
+    return res.status(409).json({ error: "CRM confirmation email is not enabled for this booking", code: "CONFIRMATION_EMAIL_NOT_MANAGED" });
+  }
   const delivery = await deliverBookingConfirmation(form, booking);
   const updated = await prisma.travelMeetingBooking.update({ where: { id: booking.id }, data: { emailStatus: delivery.sent ? "SENT" : "FAILED", emailChannel: delivery.channel, emailMessageId: delivery.emailMessageId } });
   if (!delivery.sent) {
@@ -931,6 +1133,7 @@ router.get("/meeting-forms/public/:publicKey/availability", async (req, res) => 
   try {
     const form = await loadPublicForm(req.params.publicKey);
     if (!form || !authorizeConsumer(form, req)) return res.status(404).json({ error: "Meeting form not found", code: "NOT_FOUND" });
+    if (!form.createZoom) return res.status(409).json({ error: "CRM-managed scheduling is disabled for this form. Submit confirmed bookings to /external-bookings.", code: "CRM_SCHEDULING_DISABLED" });
     const start = String(req.query.start || formatInTenantTZ(new Date(), form.timezone, "yyyy-MM-dd"));
     if (!validDateKey(start)) return res.status(400).json({ error: "start must be YYYY-MM-DD", code: "INVALID_DATE" });
     const days = boundedInt(req.query.days, 14, 1, 62);
@@ -958,6 +1161,47 @@ router.post("/meeting-forms/public/:publicKey/validate-slot", async (req, res) =
   }
 });
 
+// Receives bookings already confirmed by Zoom Scheduler or another external provider.
+// Host calendar and CRM confirmation email are independent options; this endpoint never creates Zoom meetings.
+router.post("/meeting-forms/public/:publicKey/external-bookings", publicBookingLimiter, async (req, res) => {
+  try {
+    const form = await loadPublicForm(req.params.publicKey);
+    if (!form || !authorizeConsumer(form, req)) return res.status(403).json({ error: "Website origin is not allowed", code: "ORIGIN_NOT_ALLOWED" });
+    const prepared = externalBookingData(form, req.body || {}, req.headers["idempotency-key"]);
+    const existing = await prisma.travelMeetingBooking.findUnique({
+      where: { tenantId_meetingFormId_idempotencyKey: prepared.unique },
+    });
+    if (existing?.status === "PROCESSING") return res.status(409).json({ error: "This booking is still being processed", code: "BOOKING_IN_PROGRESS" });
+    if (existing) {
+      const warnings = [];
+      if (existing.failureCode === "CALENDAR_CREATE_FAILED") warnings.push("Booking stored, but calendar event creation failed.");
+      if (form.sendConfirmationEmail && bookingDeliveryStatus(existing).status === "FAILED") warnings.push("The confirmation email could not be sent. The CRM team can retry it from Bookings.");
+      return res.status(200).json({ success: true, booking: publicBooking(existing, form), idempotentReplay: true, warning: warnings.join(" ") || null });
+    }
+
+    let booking;
+    try {
+      booking = await prisma.travelMeetingBooking.create({ data: prepared.data });
+    } catch (error) {
+      if (error.code !== "P2002") throw error;
+      booking = await prisma.travelMeetingBooking.findUnique({
+        where: { tenantId_meetingFormId_idempotencyKey: prepared.unique },
+      });
+      if (!booking) throw error;
+      return res.status(200).json({ success: true, booking: publicBooking(booking, form), idempotentReplay: true });
+    }
+    booking = await finishExternalCalendarBooking(form, booking);
+    if (form.sendConfirmationEmail) booking = await persistBookingConfirmationDelivery(form, booking);
+    emitTravelMeetingBooked(req.io, form, booking);
+    const warnings = [];
+    if (booking.failureCode === "CALENDAR_CREATE_FAILED") warnings.push("Booking stored, but calendar event creation failed.");
+    if (form.sendConfirmationEmail && bookingDeliveryStatus(booking).status !== "SENT") warnings.push("Booking stored, but the confirmation email could not be sent. The CRM team can retry it from Bookings.");
+    return res.status(201).json({ success: true, booking: publicBooking(booking, form), storedOnly: form.createCalendarEvent !== true, warning: warnings.join(" ") || null });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || "External booking could not be stored", code: error.code || "EXTERNAL_BOOKING_STORE_FAILED" });
+  }
+});
+
 router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async (req, res) => {
   let form;
   let booking;
@@ -967,6 +1211,7 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
   try {
     form = await loadPublicForm(req.params.publicKey);
     if (!form || !authorizeConsumer(form, req)) return res.status(403).json({ error: "Website origin is not allowed", code: "ORIGIN_NOT_ALLOWED" });
+    if (!form.createZoom) return res.status(409).json({ error: "CRM-managed scheduling is disabled for this form. Submit confirmed bookings to /external-bookings.", code: "CRM_SCHEDULING_DISABLED" });
     const body = req.body || {};
     const normalized = normalizeBookingPayload(body);
     assertSchedulingMetadata(form, normalized);
@@ -1055,7 +1300,7 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
       form,
       booking: { ...booking, ...values, scheduledAt, timezone: form.timezone, meetingUrl: zoom.joinUrl },
     });
-    calendarEvent = await calendar.createEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, title: calendarCopy.subject, description: calendarCopy.plainText, start: scheduledAt, end: endsAt, attendeeEmail: values.contactEmail, contactId: contact?.id || null, meetingUrl: zoom.joinUrl });
+    if (form.createCalendarEvent === true || (form.createCalendarEvent == null && form.createZoom)) calendarEvent = await calendar.createEvent({ tenantId: form.tenantId, userId: form.hostUserId, provider: form.calendarProvider, title: calendarCopy.subject, description: calendarCopy.plainText, start: scheduledAt, end: endsAt, attendeeEmail: values.contactEmail, contactId: contact?.id || null, meetingUrl: zoom.joinUrl });
 
     // Update CRM only after both provider resources exist, so integration
     // failures can never leave behind a false "Meeting Booked" lead state.
@@ -1070,27 +1315,31 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
         crmContact = await tx.contact.create({
           data: { tenantId: form.tenantId, name: values.contactName, email: values.contactEmail, phone: values.contactPhone || null, title: values.designation || null, company: values.institution || null, status: "Meeting Booked", subBrand: "tmc", source: "Talk to an Expert", firstTouchSource: "Talk to an Expert", lastTouchSource: "Talk to an Expert" },
         });
-        await tx.calendarEvent.update({ where: { id: calendarEvent.calendarEventId }, data: { contactId: crmContact.id } });
+        if (calendarEvent) await tx.calendarEvent.update({ where: { id: calendarEvent.calendarEventId }, data: { contactId: crmContact.id } });
       }
       await tx.touchpoint.create({ data: { tenantId: form.tenantId, contactId: crmContact.id, channel: "web", source: diagnostic ? "Diagnostic Completed → Talk to an Expert → Meeting Booked" : "Talk to an Expert", medium: "meeting_form", formId: String(form.id), landingPage: body.sourceUrl ? String(body.sourceUrl).slice(0, 2000) : null } });
       await tx.activity.create({ data: { tenantId: form.tenantId, contactId: crmContact.id, userId: form.hostUserId, type: "Meeting", description: `Meeting Booked: ${formatInTenantTZ(scheduledAt, form.timezone)} via Zoom` } });
       const confirmedBooking = await tx.travelMeetingBooking.update({
         where: { id: booking.id },
-        data: { status: "CONFIRMED", contactId: crmContact.id, diagnosticId: diagnostic?.id || null, meetingUrl: zoom.joinUrl, zoomMeetingId: zoom.meetingId ? String(zoom.meetingId) : null, calendarProvider: form.calendarProvider, calendarEventId: String(calendarEvent.externalId), failureCode: null, failureMessage: null },
+        data: { status: "CONFIRMED", contactId: crmContact.id, diagnosticId: diagnostic?.id || null, meetingUrl: zoom.joinUrl, zoomMeetingId: zoom.meetingId ? String(zoom.meetingId) : null, calendarProvider: calendarEvent ? form.calendarProvider : null, calendarEventId: calendarEvent ? String(calendarEvent.externalId) : null, failureCode: null, failureMessage: null },
       });
       return { contact: crmContact, booking: confirmedBooking };
     });
     contact = crmResult.contact;
     booking = crmResult.booking;
     bookingCommitted = true;
-    booking = await persistBookingConfirmationDelivery(form, booking);
+    if (form.sendConfirmationEmail) {
+      booking = await persistBookingConfirmationDelivery(form, booking);
+    } else {
+      booking = await prisma.travelMeetingBooking.update({ where: { id: booking.id }, data: { emailStatus: "DISABLED", emailChannel: null } });
+    }
     const delivery = bookingDeliveryStatus(booking);
     try {
       emitTravelMeetingBooked(req.io, form, booking);
     } catch (socketError) {
       console.warn("[travel-meeting-forms] tenant notification failed:", socketError.message);
     }
-    const warning = delivery.status !== "SENT"
+    const warning = form.sendConfirmationEmail && delivery.status !== "SENT"
       ? "The meeting is confirmed, but the confirmation email could not be sent yet. The CRM team can retry it from Bookings."
       : null;
     res.status(201).json({ success: true, booking: publicBooking(booking, form), warning });
@@ -1136,4 +1385,4 @@ router.get("/meeting-forms/public/:publicKey/bookings/:confirmationToken/calenda
 });
 
 module.exports = router;
-module.exports._internal = { normalizeOrigins, normalizeFields, normalizeWeeklyHours, normalizeEmbedFont, validateConfiguredFieldValues, validateSplitNameSubmission, authorizeConsumer, hashKey, safeEqualHash, dataFromBody, publicConfig, publicBooking, bookingDeliveryStatus, assertSlotClaimAvailable, chooseBookingContact, resolveBookingContact, emitTravelMeetingBooked, persistBookingConfirmationDelivery, publicBookingErrorStatus };
+module.exports._internal = { normalizeOrigins, normalizeEmailCc, normalizeFields, normalizeWeeklyHours, normalizeEmbedFont, validateConfiguredFieldValues, validateSplitNameSubmission, authorizeConsumer, hashKey, safeEqualHash, dataFromBody, externalBookingData, finishExternalCalendarBooking, publicConfig, publicBooking, bookingDeliveryStatus, assertSlotClaimAvailable, chooseBookingContact, resolveBookingContact, emitTravelMeetingBooked, persistBookingConfirmationDelivery, publicBookingErrorStatus };

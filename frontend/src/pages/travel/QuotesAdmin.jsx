@@ -691,20 +691,21 @@ export default function QuotesAdmin() {
           <div
             ref={listRef}
             data-testid="quotes-admin-table-scroll"
+            className="quotes-admin-table-scroll"
             onScroll={handleListScroll}
             style={{ maxHeight: "68vh", overflowY: "auto", overflowX: "hidden" }}
           >
           <TopScrollSync disabled>
-          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <table className="quotes-admin-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "9%" }} />
-              <col style={{ width: "16%" }} />
-              <col style={{ width: "9%" }} />
-              <col style={{ width: "11%" }} />
               <col style={{ width: "8%" }} />
-              <col style={{ width: "11%" }} />
-              <col style={{ width: "10%" }} />
               <col style={{ width: "16%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "14%" }} />
               <col style={{ width: "10%" }} />
               {canWrite && <col style={{ width: "9%" }} />}
             </colgroup>

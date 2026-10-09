@@ -88,8 +88,8 @@ const masterCostCentreXml = (name) =>
   `<TALLYMESSAGE xmlns:UDF="TallyUDF"><COSTCENTRE NAME="${xmlCell(name)}" ACTION="Create"><NAME>${xmlCell(name)}</NAME><PARENT></PARENT><CATEGORY>Primary Cost Category</CATEGORY></COSTCENTRE></TALLYMESSAGE>`;
 
 const tripCostCentreCode = ({ itineraryId, tripId, quoteId } = {}) => {
-  if (Number(itineraryId) > 0) return `TRIP-${Number(itineraryId)}`;
   if (Number(tripId) > 0) return `TMC-TRIP-${Number(tripId)}`;
+  if (Number(itineraryId) > 0) return `TRIP-${Number(itineraryId)}`;
   if (Number(quoteId) > 0) return `QUOTE-${Number(quoteId)}`;
   return "";
 };
@@ -103,6 +103,9 @@ const tripRowCostCentreCode = (trip = {}) => {
   }
   return tripCostCentreCode({ itineraryId: trip.id });
 };
+
+// Tally NAME is an accounting identity, not a display label. Keep the
+// established ID-based name across destination edits and repeated exports.
 
 const shouldAllocateCostCentre = (sourceTag) =>
   !/customer receipt|supplier payment/i.test(String(sourceTag || ""));
@@ -321,6 +324,10 @@ export const buildVoucherRows = ({
   voucherTypes = [],
 }) => {
   const ledgerName = createLedgerResolver({ ledgerRows, ledgerMappings });
+  const tripCostCentreName = tripCostCentreCode;
+  const fallbackTripCostCentreName = master.tripId
+    ? `TRIP-${master.tripId}`
+    : "";
   const rows = [
     [
       "Voucher Date",
@@ -387,7 +394,7 @@ export const buildVoucherRows = ({
       receivedAmount,
       toTallyAmount(row.invoiceTotal ?? row.invoiceAmount),
     );
-    const tripName = tripCostCentreCode(row);
+    const tripName = tripCostCentreName(row);
     const customerName = row.name || "Customer";
     const invoiceReference = row.reference || "";
     let salesBillReference = "";
@@ -464,7 +471,7 @@ export const buildVoucherRows = ({
       date: dateOnly(row.transactionDate || row.dueDate || row.paidDate || master.to || master.from),
       ledger: ledgerName("supplierPayable", "Purchase Ledger"),
       party: row.name || row.supplierName || "Supplier",
-      trip: tripCostCentreCode(row),
+      trip: tripCostCentreName(row),
       reference: purchaseReference,
       debit: amount.toFixed(2),
       narration: `${selectedSubBrandLabel} supplier payable`,
@@ -480,7 +487,7 @@ export const buildVoucherRows = ({
           ? cashLedgerName
           : ledgerName("customerPayment", "Bank Ledger"),
         party: row.name || row.supplierName || "Supplier",
-        trip: tripCostCentreCode(row),
+        trip: tripCostCentreName(row),
         reference: `SUP-PAY-${row.id || "UNKNOWN"}`,
         credit: paidAmount.toFixed(2),
         narration: `${selectedSubBrandLabel} supplier payment`,
@@ -507,7 +514,7 @@ export const buildVoucherRows = ({
       ),
       ledger: ledgerName("officeExpense", "Common Ledger"),
       party: row.name || "Office Expenses",
-      trip: tripCostCentreCode(row) || (master.tripId ? `TRIP-${master.tripId}` : ""),
+      trip: tripCostCentreName(row) || fallbackTripCostCentreName,
       reference: row.reference || row.category || "COMMON-EXPENSE",
       debit: amount.toFixed(2),
       narration: row.description || `${selectedSubBrandLabel} common expense`,
@@ -523,7 +530,7 @@ export const buildVoucherRows = ({
       date: dateOnly(master.to || master.from),
       ledger: ledgerName("officeExpense", "Common Ledger"),
       party: "Office Expenses",
-      trip: master.tripId ? `TRIP-${master.tripId}` : "",
+      trip: fallbackTripCostCentreName,
       reference: "COMMON-EXPENSES-BALANCE",
       debit: remainingCommonExpenses.toFixed(2),
       narration: `${selectedSubBrandLabel} common expenses balance`,

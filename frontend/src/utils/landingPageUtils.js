@@ -196,8 +196,8 @@ export function getLandingPageSharePath(landingPage) {
   }
 
   if (isTravelLandingPage(landingPage)) {
-    const content = typeof landingPage.content === 'string' ? landingPage.content : JSON.stringify(landingPage.content || '');
-    if (!landingPage?.tripId && ( /pre-trip marketing page/i.test(String(landingPage.title || '')) || content.includes('marketing-heading') || content.includes('Before the trip is confirmed'))) return '/explore';
+    // The legacy Explore public surface is intentionally disabled. Do not
+    // generate /explore share links for old records that remain in storage.
     const identifier = getLandingPageIdentifier(landingPage);
     return identifier ? `/trips/${identifier}` : '/trips';
   }

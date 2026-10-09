@@ -197,8 +197,10 @@ const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // falls back to the hardcoded TripsLanding (Japan). No auth, renders
 // outside the AuthContext shell.
 const TripsResolver = lazy(() => import("./pages/public/TripsResolver"));
-const ExplorePage = lazy(() => import("./pages/public/ExplorePage"));
-const ExplorePageBuilder = lazy(() => import("./pages/ExplorePageBuilder"));
+// Explore is intentionally disabled. Keep the implementation files in place
+// so the feature can be restored later without exposing routes in production.
+// const ExplorePage = lazy(() => import("./pages/public/ExplorePage"));
+// const ExplorePageBuilder = lazy(() => import("./pages/ExplorePageBuilder"));
 // Public travel share page  /trips/:id-or-slug. SPA route so direct
 // share links render the public landing page without bouncing through /p.
 const TripsShareResolver = lazy(() => import("./pages/public/TripsShareResolver"));
@@ -293,6 +295,7 @@ const RevenueGoals = lazy(() => import("./pages/RevenueGoals"));
 const LeadRouting = lazy(() => import("./pages/LeadRouting"));
 const Territories = lazy(() => import("./pages/Territories"));
 const PickupPlotInventory = lazy(() => import("./pages/PickupPlotInventory"));
+const PickupInventory = lazy(() => import("./pages/PickupInventory"));
 const TransportPersons = lazy(() => import("./pages/TransportPersons"));
 const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
 const BillingPersons = lazy(() => import("./pages/BillingPersons"));
@@ -1717,7 +1720,8 @@ export default function App() {
                       served by the backend/Nginx proxy so the public page
                       matches production HTML. The SPA resolver is only a
                       fallback for client-side navigation or local tests. */}
-                    <Route path="/explore" element={<ExplorePage />} />
+                    {/* Explore public page intentionally disabled. */}
+                    {/* <Route path="/explore" element={<ExplorePage />} /> */}
                     <Route path="/trips" element={<TripsResolver />} />
                     <Route path="/trips/:tripRef" element={<TripsShareResolver />} />
                     <Route
@@ -2587,6 +2591,21 @@ export default function App() {
                           </RoleGuard>
                         }
                       />
+                      <Route
+                        path="marketing-campaign"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard
+                              allow={["ADMIN", "MANAGER"]}
+                              feature="Marketing Campaign"
+                              roles="manager (or admin)"
+                              lockedInPlace
+                            >
+                              <Marketing />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
                       {/* Generic CRM reports  vertical-gated so travel/wellness
                         tenants use their own /travel/reports | /wellness/reports
                         (the generic deal-stage chart + "Globussoft CRM" PDF don't
@@ -2675,10 +2694,13 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
+                      {/* Explore page editor intentionally disabled. */}
+                      {/*
                       <Route
                         path="landing-pages/explore-builder/:id"
                         element={<TravelOnly><ExplorePageBuilder /></TravelOnly>}
                       />
+                      */}
                       <Route path="objects" element={<CustomObjects />} />
                       <Route
                         path="objects/:entityName"
@@ -3093,6 +3115,16 @@ export default function App() {
                         }
                       />
                       <Route
+                        path="pickup-inventory"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN"]} message="Pickup inventory requires admin access.">
+                              <PickupInventory />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
                         path="transport-persons"
                         element={
                           <GenericOnly>
@@ -3106,7 +3138,7 @@ export default function App() {
                         path="plot-brokers"
                         element={
                           <GenericOnly>
-                            <RoleGuard allow={["ADMIN"]} message="Plot brokers requires admin access.">
+                            <RoleGuard allow={["ADMIN"]} message="Sales Executives requires admin access.">
                               <PlotBrokers />
                             </RoleGuard>
                           </GenericOnly>

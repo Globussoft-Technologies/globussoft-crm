@@ -19,6 +19,8 @@ import {
   CalendarRange,
   UserRound,
   Package,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -54,6 +56,129 @@ function StatusBadge({ status, borderless = false }) {
     >
       {cfg.label}
     </span>
+  );
+}
+
+const INVOICE_PAGE_SIZE_OPTIONS = [10, 25, 50];
+
+function getInvoicePaginationPages(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages = [1];
+  const start = Math.max(2, currentPage - 1);
+  const end = Math.min(totalPages - 1, currentPage + 1);
+
+  if (start > 2) pages.push("ellipsis-start");
+  for (let page = start; page <= end; page += 1) pages.push(page);
+  if (end < totalPages - 1) pages.push("ellipsis-end");
+  pages.push(totalPages);
+  return pages;
+}
+
+function InvoicePagination({
+  page,
+  pageSize,
+  pageSizeSelection,
+  customPageSize,
+  total,
+  onPageChange,
+  onPageSizeSelectionChange,
+  onCustomPageSizeChange,
+}) {
+  if (total === 0) return null;
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const firstRow = (page - 1) * pageSize + 1;
+  const lastRow = Math.min(page * pageSize, total);
+  const pages = getInvoicePaginationPages(page, totalPages);
+
+  return (
+    <nav
+      className="invoice-pagination"
+      aria-label="Invoice pagination"
+      data-testid="invoice-pagination"
+    >
+      <div
+        className="invoice-pagination-summary"
+        aria-label={`Showing ${firstRow}-${lastRow} of ${total}`}
+      >
+        Showing <strong>{firstRow}-{lastRow}</strong> of <strong>{total}</strong>
+        <label className="invoice-page-size-control">
+          <span>Rows per page</span>
+          <select
+            value={pageSizeSelection}
+            onChange={(event) => onPageSizeSelectionChange(event.target.value)}
+            aria-label="Invoices per page"
+          >
+            {INVOICE_PAGE_SIZE_OPTIONS.map((option) => (
+              <option key={option} value={String(option)}>
+                {option}
+              </option>
+            ))}
+            <option value="custom">Custom</option>
+          </select>
+          {pageSizeSelection === "custom" && (
+            <input
+              type="number"
+              min="1"
+              step="1"
+              inputMode="numeric"
+              value={customPageSize}
+              onChange={(event) => onCustomPageSizeChange(event.target.value)}
+              aria-label="Custom invoices per page"
+              placeholder="Limit"
+            />
+          )}
+        </label>
+      </div>
+
+      <div className="invoice-pagination-controls">
+        <button
+          type="button"
+          className="invoice-page-button invoice-page-button--arrow"
+          onClick={() => onPageChange(page - 1)}
+          disabled={page === 1}
+          aria-label="Previous invoice page"
+        >
+          <ChevronLeft size={15} aria-hidden="true" />
+          <span>Previous</span>
+        </button>
+        {pages.map((pageNumber) =>
+          typeof pageNumber === "string" ? (
+            <span
+              key={pageNumber}
+              className="invoice-page-ellipsis"
+              aria-hidden="true"
+            >
+              ...
+            </span>
+          ) : (
+            <button
+              key={pageNumber}
+              type="button"
+              className={`invoice-page-button${pageNumber === page ? " is-active" : ""}`}
+              onClick={() => onPageChange(pageNumber)}
+              aria-current={pageNumber === page ? "page" : undefined}
+              aria-label={`Invoice page ${pageNumber}`}
+            >
+              {pageNumber}
+            </button>
+          ),
+        )}
+        <button
+          type="button"
+          className="invoice-page-button invoice-page-button--arrow"
+          onClick={() => onPageChange(page + 1)}
+          disabled={page === totalPages}
+          aria-label="Next invoice page"
+        >
+          <span>Next</span>
+          <ChevronRight size={15} aria-hidden="true" />
+        </button>
+      </div>
+    </nav>
   );
 }
 
@@ -277,6 +402,10 @@ export default function Invoices() {
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [invoicePage, setInvoicePage] = useState(1);
+  const [invoicePageSize, setInvoicePageSize] = useState(INVOICE_PAGE_SIZE_OPTIONS[0]);
+  const [invoicePageSizeSelection, setInvoicePageSizeSelection] = useState("10");
+  const [customInvoicePageSize, setCustomInvoicePageSize] = useState("");
   // Reports link to one or more invoice ids with this query parameter. Keep
   // the filter client-side because the billing ledger already returns the
   // tenant-scoped rows needed for the table and existing callers remain
@@ -534,7 +663,26 @@ export default function Invoices() {
     return rows.filter((inv) => inv.status === statusFilter);
   }, [invoices, statusFilter, hasReportInvoiceFilter, reportInvoiceIds]);
 
-  const visibleInvoices = filteredInvoices;
+  const invoiceTotalPages = Math.max(
+    1,
+    Math.ceil(filteredInvoices.length / invoicePageSize),
+  );
+  const currentInvoicePage = Math.min(invoicePage, invoiceTotalPages);
+
+  // A filter change should always show the first page. Clamping also handles
+  // rows being removed while the user is on the last page.
+  useEffect(() => {
+    setInvoicePage(1);
+  }, [statusFilter, dateRange, customFrom, customTo, reportInvoiceIds]);
+
+  useEffect(() => {
+    setInvoicePage((page) => Math.min(Math.max(page, 1), invoiceTotalPages));
+  }, [invoiceTotalPages]);
+
+  const visibleInvoices = useMemo(() => {
+    const start = (currentInvoicePage - 1) * invoicePageSize;
+    return filteredInvoices.slice(start, start + invoicePageSize);
+  }, [currentInvoicePage, filteredInvoices, invoicePageSize]);
 
 
   const nextInvoiceNum = useMemo(() => {
@@ -919,6 +1067,13 @@ export default function Invoices() {
 
   return (
     <div
+      className={`invoices-mobile-page${
+        isWellness
+          ? " invoices-wellness-page"
+          : !isTravel
+            ? " invoices-generic-page"
+            : ""
+      }`}
       style={{
         padding: "2rem",
         height: "100%",
@@ -944,16 +1099,8 @@ export default function Invoices() {
       </header>
 
       {/* Summary Stats */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "0.75rem",
-          marginBottom: "1.75rem",
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="invoice-summary-controls">
+      <div className="invoice-summary-badges">
         <span
           style={{
             padding: "0.4rem 1rem",
@@ -1036,13 +1183,16 @@ export default function Invoices() {
             Report drill-down: {reportInvoiceIds.size} invoice{reportInvoiceIds.size === 1 ? "" : "s"}
           </span>
         )}
+      </div>
 
         {/* Travel vertical — Sub-brand filter for the ledger. Bound to the
             shared active-sub-brand context (same source the sidebar selector
             uses), so picking here filters the ledger AND keeps the whole travel
             vertical in sync. Hidden for generic/wellness. */}
+      <div className="invoice-filters">
         {isTravel && (
           <div
+            className="invoice-filter-pill invoice-subbrand-filter"
             style={{
               marginLeft: "auto",
               display: "flex",
@@ -1112,6 +1262,7 @@ export default function Invoices() {
             /api/billing); the API's default issued-date scope is the only
             date basis exposed by this ledger control. */}
         <div
+          className="invoice-filter-pill invoice-date-filter"
           style={{
             marginLeft: isTravel ? "0.5rem" : "auto",
             display: "flex",
@@ -1202,6 +1353,7 @@ export default function Invoices() {
         </div>
 
         <div
+          className="invoice-filter-pill invoice-status-filter"
           style={{
             marginLeft: "0.5rem",
             display: "flex",
@@ -1303,7 +1455,7 @@ export default function Invoices() {
 
         <button
           type="button"
-          className="btn-primary"
+          className="btn-primary invoice-create-button"
           onClick={() => setIsCreateFormOpen(true)}
           style={{
             display: "flex",
@@ -1321,6 +1473,7 @@ export default function Invoices() {
         >
           <Plus size={16} /> Create Invoice
         </button>
+      </div>
       </div>
 
       {isCreateFormOpen && (
@@ -2136,10 +2289,11 @@ export default function Invoices() {
             </p>
           </div>
         ) : (
-          <div className="invoice-table-scroll">
-            <TopScrollSync
-              scrollWidth={`${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`}
-            >
+          <>
+            <div className="invoice-table-scroll">
+              <TopScrollSync
+                scrollWidth={`${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`}
+              >
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
@@ -2649,8 +2803,37 @@ export default function Invoices() {
                   })}
                 </tbody>
               </table>
-            </TopScrollSync>
-          </div>
+              </TopScrollSync>
+            </div>
+            <InvoicePagination
+              page={currentInvoicePage}
+              pageSize={invoicePageSize}
+              pageSizeSelection={invoicePageSizeSelection}
+              customPageSize={customInvoicePageSize}
+              total={filteredInvoices.length}
+              onPageChange={(nextPage) => {
+                setInvoicePage(Math.min(Math.max(nextPage, 1), invoiceTotalPages));
+              }}
+              onPageSizeSelectionChange={(selection) => {
+                setInvoicePageSizeSelection(selection);
+                if (selection === "custom") {
+                  setCustomInvoicePageSize(String(invoicePageSize));
+                } else {
+                  setInvoicePageSize(Number(selection));
+                }
+                setInvoicePage(1);
+              }}
+              onCustomPageSizeChange={(value) => {
+                const nextValue = value.replace(/\D/g, "");
+                setCustomInvoicePageSize(nextValue);
+                const nextPageSize = Number(nextValue);
+                if (Number.isInteger(nextPageSize) && nextPageSize > 0) {
+                  setInvoicePageSize(nextPageSize);
+                }
+                setInvoicePage(1);
+              }}
+            />
+          </>
         )}
       </div>
 
@@ -3073,6 +3256,94 @@ export default function Invoices() {
           min-height: 0;
           overflow-y: visible;
         }
+        .invoice-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          flex-wrap: wrap;
+          padding-top: 1rem;
+          margin-top: 1rem;
+          border-top: 1px solid var(--border-color);
+          color: var(--text-secondary);
+          font-size: 0.78rem;
+        }
+        .invoice-pagination-summary,
+        .invoice-pagination-controls,
+        .invoice-page-size-control {
+          display: flex;
+          align-items: center;
+          gap: 0.45rem;
+        }
+        .invoice-pagination-summary strong {
+          color: var(--text-primary);
+          font-weight: 700;
+        }
+        .invoice-page-size-control {
+          margin-left: 0.75rem;
+          color: var(--text-secondary);
+        }
+        .invoice-page-size-control select {
+          min-height: 2rem;
+          padding: 0.25rem 1.7rem 0.25rem 0.5rem;
+          border: 1px solid var(--border-color);
+          border-radius: 7px;
+          background: var(--surface-color);
+          color: var(--text-primary);
+          font: inherit;
+          cursor: pointer;
+        }
+        .invoice-page-size-control input {
+          width: 4.5rem;
+          min-height: 2rem;
+          box-sizing: border-box;
+          padding: 0.25rem 0.45rem;
+          border: 1px solid var(--border-color);
+          border-radius: 7px;
+          background: var(--surface-color);
+          color: var(--text-primary);
+          font: inherit;
+        }
+        .invoice-page-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 2rem;
+          min-height: 2rem;
+          padding: 0.25rem 0.55rem;
+          border: 1px solid var(--border-color);
+          border-radius: 7px;
+          background: var(--surface-color);
+          color: var(--text-primary);
+          font: inherit;
+          font-size: 0.78rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        .invoice-page-button:hover:not(:disabled),
+        .invoice-page-button:focus-visible {
+          border-color: var(--accent-color);
+          color: var(--accent-color);
+          outline: none;
+        }
+        .invoice-page-button.is-active {
+          border-color: var(--accent-color);
+          background: var(--accent-color);
+          color: #fff;
+        }
+        .invoice-page-button--arrow {
+          gap: 0.25rem;
+        }
+        .invoice-page-button:disabled {
+          cursor: not-allowed;
+          opacity: 0.45;
+        }
+        .invoice-page-ellipsis {
+          min-width: 1rem;
+          text-align: center;
+          color: var(--text-secondary);
+        }
         .invoice-table-header th {
           position: sticky;
           top: 0;
@@ -3227,6 +3498,15 @@ export default function Invoices() {
           .invoices-grid { grid-template-columns: 1fr; gap: 1.25rem; }
           .invoice-table-scroll .top-scroll-sync__bottom {
             max-height: none;
+          }
+          .invoice-pagination {
+            align-items: stretch;
+            flex-direction: column;
+          }
+          .invoice-pagination-summary,
+          .invoice-pagination-controls {
+            justify-content: space-between;
+            flex-wrap: wrap;
           }
         }
       `}</style>

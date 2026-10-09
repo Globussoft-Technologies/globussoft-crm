@@ -32,8 +32,9 @@ const inventory = {
     googleMapsLink: 'https://maps.google.com/?q=12,77', isActive: true, plotCount: 2,
   }],
   plots: [{
-    id: 9, name: 'Plot A-9', address: '25 Lake Road', area: '1200 sq ft', price: '250000',
-    availability: 'AVAILABLE', isActive: true,
+    id: 9, name: 'Plot A-9', plotNumber: 'A-9', block: 'A', address: '25 Lake Road',
+    area: '1200', areaUnit: 'SQ_FT', price: '250000', roadWidth: '30 ft', facing: 'EAST',
+    propertyType: 'RESIDENTIAL', availability: 'AVAILABLE', isActive: true,
   }],
   summary: { activeLocations: 1, totalPlots: 1, availablePlots: 1, reservedPlots: 0, soldPlots: 0 },
 };
@@ -47,6 +48,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  window.localStorage.removeItem('plot-inventory-column-widths');
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url, options) => {
     if (url === '/api/pickup-plot-inventory' && !options) return Promise.resolve(inventory);
@@ -76,7 +78,9 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.queryByText('No pickup locations yet.')).toBeNull();
     expect(screen.getByRole('button', { name: /Add Plot \/ Site/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Filter by status' })).not.toHaveStyle({ height: '26px' });
-    expect(screen.getByText('Available')).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: 'Search plots and sites' })).toHaveStyle({ height: '44px', boxSizing: 'border-box' });
+    expect(screen.getByRole('button', { name: /Add Plot \/ Site/i })).toHaveStyle({ minHeight: '44px', alignItems: 'center' });
+    expect(screen.queryByText('Total active plots/sites')).not.toBeInTheDocument();
   });
 
   it('shows linked plots and sites inventory data', async () => {
@@ -85,11 +89,14 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.getByText('25 Lake Road')).toBeInTheDocument();
     expect(screen.getByText('Area: 1,200 sq ft')).toBeInTheDocument();
     expect(screen.getAllByText('1,200 sq ft')).toHaveLength(1);
-    expect(screen.getByRole('columnheader', { name: 'Map' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'View Plot A-9 on Google Maps' })).toHaveAttribute(
-      'href',
-      'https://www.google.com/maps/search/?api=1&query=25%20Lake%20Road',
-    );
+    expect(screen.getByRole('columnheader', { name: 'Plot number' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Block' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Road width' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Facing' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Type' })).toBeInTheDocument();
+    expect(screen.getByText('30 ft')).toBeInTheDocument();
+    expect(screen.getByText('EAST')).toBeInTheDocument();
+    expect(screen.getByText('RESIDENTIAL')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Show Plot A-9 address on Google Maps' })).toHaveAttribute(
       'href',
       'https://www.google.com/maps/search/?api=1&query=25%20Lake%20Road',
@@ -97,17 +104,49 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.getByTestId('pickup-plot-inventory-page')).toHaveStyle({
       display: 'flex', height: '100%', minHeight: '0', overflow: 'hidden',
     });
+    expect(screen.getByTestId('plot-inventory-table')).toHaveClass('pickup-plot-table-scroll');
     expect(screen.getByTestId('plot-inventory-table')).toHaveStyle({
-      flex: '1 1 0', minHeight: '0', width: '100%', maxWidth: '100%',
-      overflowX: 'hidden', overflowY: 'auto',
+      flex: '1 1 auto', minHeight: '0', maxHeight: '100%', width: '100%', maxWidth: '100%',
+      overflowX: 'auto', overflowY: 'auto',
     });
-    expect(screen.getByRole('table')).toHaveStyle({ width: '100%', minWidth: '0', maxWidth: '100%' });
+    expect(screen.getByTestId('plot-inventory-table-width')).toHaveStyle({ width: '2370px', minWidth: '100%' });
+    expect(screen.getByRole('table')).toHaveStyle({ width: '100%', height: 'auto' });
+    expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();
     const stickyHeader = screen.getByRole('columnheader', { name: 'Plot / Site' });
     expect(stickyHeader).toHaveStyle({
       position: 'sticky', top: '0px', zIndex: '1',
     });
-    expect(stickyHeader.style.background).toContain('var(--popover-bg, #fff)');
-    expect(screen.getByRole('table')).toHaveStyle({ display: 'table', overflow: 'visible', width: '100%', minWidth: '0', tableLayout: 'fixed' });
+    expect(stickyHeader).toHaveStyle({ color: 'var(--text-secondary)', background: '#f3f4f6' });
+    expect(screen.getByRole('table')).toHaveStyle({ display: 'table', overflow: 'visible', width: '100%', tableLayout: 'fixed' });
+
+    const resizeHandle = screen.getByRole('separator', { name: 'Resize Plot / Site column' });
+    fireEvent.mouseDown(resizeHandle, { button: 0, clientX: 100 });
+    fireEvent.mouseMove(window, { clientX: 150 });
+    fireEvent.mouseUp(window);
+    expect(screen.getByRole('table').querySelectorAll('col')[1]).toHaveStyle({ width: '235px' });
+  });
+
+  it('shows all pickup locations in a fixed-height scrollable cell without a selector', async () => {
+    fetchApiMock.mockResolvedValueOnce({
+      ...inventory,
+      plots: [{
+        ...inventory.plots[0],
+        pickupLocations: [
+          { id: 1, name: 'North Gate', address: '10 Market Road' },
+          { id: 2, name: 'South Gate', address: '22 Garden Road' },
+        ],
+      }],
+    });
+    renderPage();
+    await screen.findByText('Plot A-9');
+
+    expect(screen.queryByRole('combobox', { name: 'Select pickup location for Plot A-9' })).toBeNull();
+    expect(screen.getByLabelText('Pickup locations for Plot A-9')).toHaveStyle({ maxHeight: '104px', overflowY: 'auto' });
+    expect(screen.getByRole('link', { name: 'Open North Gate pickup location in Google Maps' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open South Gate pickup location in Google Maps' })).toHaveAttribute(
+      'href',
+      'https://www.google.com/maps/search/?api=1&query=22%20Garden%20Road',
+    );
   });
 
   it('does not create an external map link when a plot has no stored address', async () => {
@@ -118,7 +157,6 @@ describe('<PickupPlotInventory />', () => {
     renderPage();
     await screen.findByText('Plot A-9');
 
-    expect(screen.getByLabelText('No map available')).toBeInTheDocument();
     expect(screen.getByLabelText('No address available')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Google Maps/i })).toBeNull();
   });
@@ -198,14 +236,68 @@ describe('<PickupPlotInventory />', () => {
     });
     expect(screen.getByText('Address', { selector: 'label' }).parentElement).toHaveStyle({ gridColumn: '1 / -1' });
     expect(screen.queryByLabelText(/Reference code/i)).toBeNull();
-    expect(screen.queryByLabelText(/Pickup location/i)).toBeNull();
     const labels = Array.from(
       screen.getByRole('dialog').querySelectorAll('label'),
       (label) => label.childNodes[0]?.textContent?.trim(),
     );
-    expect(labels.slice(0, 5)).toEqual(['Name *', 'Availability', 'Area / size', 'Price', 'Address']);
+    expect(labels.slice(0, 10)).toEqual([
+      'Name *', 'Plot number', 'Block', 'Availability', 'Area', 'Area unit', 'Price',
+      'Road width', 'Facing', 'Residential / Commercial',
+    ]);
     expect(screen.queryByText('Exact plot boundary')).toBeNull();
     expect(screen.queryByTestId('boundary-editor')).toBeNull();
+  });
+
+  it('only selects locations already added in Pickup Inventory', async () => {
+    renderPage();
+    await screen.findByText('Plot A-9');
+    fireEvent.click(screen.getByRole('button', { name: /Add Plot \/ Site/i }));
+
+    expect(screen.getByRole('button', { name: 'Pickup locations (select multiple)' })).toHaveTextContent(
+      'Select one or more pickup locations',
+    );
+    expect(screen.queryByRole('button', { name: /Add location/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /View all pickup locations/i })).toBeNull();
+    expect(screen.queryByPlaceholderText('Start typing a pickup location address...')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
+    expect(screen.getByRole('checkbox', { name: 'North Gate · 10 Market Road' })).toBeInTheDocument();
+  });
+
+  it('selects and submits multiple pickup locations', async () => {
+    const inventoryWithTwoLocations = {
+      ...inventory,
+      pickupLocations: [
+        inventory.pickupLocations[0],
+        { id: 2, name: 'South Gate', address: '22 Garden Road', isActive: true, plotCount: 0 },
+      ],
+    };
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory' && !options) return Promise.resolve(inventoryWithTwoLocations);
+      return Promise.resolve({});
+    });
+    renderPage();
+    await screen.findByText('Plot A-9');
+    fireEvent.click(screen.getByRole('button', { name: /Add Plot \/ Site/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name *' }), { target: { value: 'Plot B-10' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'North Gate · 10 Market Road' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'South Gate · 22 Garden Road' }));
+
+    const selected = screen.getByLabelText('Selected pickup locations');
+    expect(selected).toHaveTextContent('North Gate');
+    expect(selected).toHaveTextContent('South Gate');
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/plots',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    const createCall = fetchApiMock.mock.calls.find(([url, options]) => (
+      url === '/api/pickup-plot-inventory/plots' && options?.method === 'POST'
+    ));
+    expect(JSON.parse(createCall[1].body).pickupLocationIds).toEqual([1, 2]);
   });
 
   it('suggests matching addresses and fills the selected result', async () => {

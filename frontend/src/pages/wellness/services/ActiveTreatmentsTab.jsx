@@ -71,7 +71,7 @@ export default function ActiveTreatmentsTab({ treatments, loading, onChanged, on
             scrollbarWidth: 'thin',
           }}
         >
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))', gap: '1rem' }}>
             {displayedTreatments.map((t) => (
               <TreatmentCard key={t.id} treatment={t} onChanged={onChanged} onSelect={onSelectTreatment} />
             ))}

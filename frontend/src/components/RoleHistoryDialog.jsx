@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -122,8 +123,12 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
 
   if (!role || !open) return null;
 
+  const dialogHeightVh = !loading && !error && versions.length === 0 ? 40 : DIALOG_HEIGHT_VH;
+
   return (
+    createPortal(
     <div
+      className="role-history-backdrop"
       role="presentation"
       onClick={onClose}
       style={{
@@ -152,6 +157,7 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
           app's iconography. */}
       <button
         type="button"
+        className="role-history-floating-close"
         onClick={(e) => {
           e.stopPropagation();
           onClose();
@@ -192,6 +198,7 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
         <X size={18} strokeWidth={2} />
       </button>
       <div
+        className="role-history-dialog-card"
         role="dialog"
         aria-modal="true"
         aria-labelledby="role-history-title"
@@ -210,8 +217,8 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
           // Fixed height — predictable layout for absolute-positioned
           // children. 60vh leaves comfortable margin even on short
           // laptop viewports (~600-700px).
-          height: `${DIALOG_HEIGHT_VH}vh`,
-          maxHeight: `${DIALOG_HEIGHT_VH}vh`,
+          height: `${dialogHeightVh}vh`,
+          maxHeight: `${dialogHeightVh}vh`,
           // Critical: position: relative makes this the containing
           // block for the absolutely-positioned header, body, footer.
           position: 'relative',
@@ -222,6 +229,7 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
             pushed off-screen by any body content, regardless of
             version count. Solid background, prominent close button. */}
         <div
+          className="role-history-dialog-header"
           style={{
             position: 'absolute',
             top: 0,
@@ -284,6 +292,7 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
             are physically outside this scroll, so neither can ever
             be obscured by body content. */}
         <div
+          className="role-history-dialog-body"
           style={{
             position: 'absolute',
             top: `${HEADER_HEIGHT_PX}px`,
@@ -434,6 +443,7 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
             pushed off-screen. Visible Close button with prominent
             background. */}
         <div
+          className="role-history-dialog-footer"
           style={{
             position: 'absolute',
             bottom: 0,
@@ -469,6 +479,8 @@ export default function RoleHistoryDialog({ role, canManage, open, onClose, onRe
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
+    )
   );
 }

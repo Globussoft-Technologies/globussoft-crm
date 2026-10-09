@@ -64,6 +64,18 @@ beforeEach(() => {
   notifySuccess.mockReset();
 });
 
+// These assertions cover the legacy email-campaign editor. Marketing defaults
+// to Generic CRM when no tenant is supplied, which renders the campaign wizard
+// instead of the editor and its schedule controls.
+const renderLegacyMarketing = (Marketing) =>
+  render(
+    <MemoryRouter>
+      <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'wellness' } }}>
+        <Marketing />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
+
 // ───────────────────────────────────────────────────────────────
 // #604 — DocumentTemplates empty-state CTA
 // ───────────────────────────────────────────────────────────────
@@ -349,11 +361,7 @@ describe('#610 Marketing — edit campaign preserves saved scheduledAt', () => {
       return Promise.resolve([]);
     });
 
-    render(
-      <MemoryRouter>
-        <Marketing />
-      </MemoryRouter>,
-    );
+    renderLegacyMarketing(Marketing);
 
     await waitFor(() => {
       expect(screen.getByText(/Q3 Saved Campaign/)).toBeInTheDocument();
@@ -411,11 +419,7 @@ describe('#610 Marketing — edit campaign preserves saved scheduledAt', () => {
       return Promise.resolve({ ok: true });
     });
 
-    render(
-      <MemoryRouter>
-        <Marketing />
-      </MemoryRouter>,
-    );
+    renderLegacyMarketing(Marketing);
 
     await waitFor(() => {
       expect(screen.getByText(/Q3 Saved Campaign/)).toBeInTheDocument();
@@ -487,11 +491,7 @@ describe('#610 Marketing — edit campaign preserves saved scheduledAt', () => {
       return Promise.resolve({ ok: true });
     });
 
-    render(
-      <MemoryRouter>
-        <Marketing />
-      </MemoryRouter>,
-    );
+    renderLegacyMarketing(Marketing);
 
     await waitFor(() => {
       expect(screen.getByText(/Q3 Saved Campaign/)).toBeInTheDocument();

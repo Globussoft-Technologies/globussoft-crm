@@ -678,11 +678,18 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const bottomScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__bottom');
-    // Generic CRM uses synchronized top and sticky-bottom controls while the
-    // native scrollbar stays hidden behind the split-table viewport.
-    expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
-    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top')).toBeTruthy();
-    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom')).toBeTruthy();
+    // Generic CRM keeps the top bar synced, while the table itself remains
+    // natively scrollable for mobile swipes and Windows trackpads.
+    expect(bottomScroll).not.toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+    const topScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top');
+    expect(topScroll).toBeTruthy();
+    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom')).toBeNull();
+    bottomScroll.scrollLeft = 120;
+    fireEvent.scroll(bottomScroll);
+    expect(topScroll.scrollLeft).toBe(120);
+    topScroll.scrollLeft = 80;
+    fireEvent.scroll(topScroll);
+    expect(bottomScroll.scrollLeft).toBe(80);
 
     const genericPage = container.querySelector('.leads-page-root--generic');
     const actionsToolbar = container.querySelector('.leads-actions-toolbar');

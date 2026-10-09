@@ -436,8 +436,9 @@ export default function Trips() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1480, margin: "0 auto" }}>
+    <div className="travel-trips-page" style={{ padding: 24, maxWidth: 1480, margin: "0 auto" }}>
       <div
+        className="travel-trips-page__header"
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -483,6 +484,7 @@ export default function Trips() {
       </div>
 
       <div
+        className="travel-trips-page__filters"
         style={{
           display: "flex",
           gap: 12,
@@ -501,6 +503,7 @@ export default function Trips() {
           style={{ color: "var(--text-secondary)" }}
         />
         <div
+          className="travel-trips-page__search"
           style={{
             position: "relative",
             display: "flex",
@@ -519,6 +522,7 @@ export default function Trips() {
           />
           <input
             type="search"
+            className="crm-search-input"
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search trip code or destination…"
@@ -776,7 +780,7 @@ export default function Trips() {
         >
           <form
             onSubmit={submitCreate}
-            className="card"
+            className="card travel-trip-create-modal"
             role="dialog"
             aria-modal="true"
             style={drawerStyle}
@@ -842,7 +846,7 @@ export default function Trips() {
                   maxLength={200}
                 />
               </label>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div className="travel-trip-date-row" style={{ display: "flex", gap: 8 }}>
                 <label style={{ ...fieldLabel, flex: 1 }}>
                   Depart date
                   <input

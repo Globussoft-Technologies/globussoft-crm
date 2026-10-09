@@ -41,7 +41,7 @@ const CountBadge = ({ count, className, style, title, ariaLabel }) => {
 
   return (
     <span
-      className={className}
+      className={className ? `crm-count-badge ${className}` : "crm-count-badge"}
       aria-label={label}
       title={label}
       style={{

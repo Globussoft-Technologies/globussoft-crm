@@ -45,9 +45,16 @@
  */
 const { test, expect } = require('@playwright/test');
 
+// Every test touches shared provider rows. Keep this file serial even when
+// the API gate runs other spec files with fullyParallel enabled.
+test.describe.configure({ mode: 'serial' });
+
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
-const RUN_TAG = `E2E_CRED_${Date.now()}`;
+const RUN_TAG = `E2E_CRED_${Date.now()}_${process.pid}`;
+const SMS_PROVIDER = `${RUN_TAG}_sms`;
+// Unlike the MSG91 sender-validation tests in sms-api.spec.js, these
+// tests can use a run-owned SMS provider instead of their shared row.
 
 const tokenCache = { admin: null, manager: null, user: null, wellnessAdmin: null };
 
@@ -127,8 +134,8 @@ test.describe('Channels credentials — GET /config masking', () => {
 
     // Seed at least one credential so we can inspect the masked shape.
     const fresh = `${RUN_TAG}-msg91-secret-XYZ123456`;
-    const seedRes = await authPut(request, '/api/sms/config/msg91', {
-      provider: 'msg91',
+    const seedRes = await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+      provider: SMS_PROVIDER,
       apiKey: fresh,
       authToken: `${RUN_TAG}-tok-ABCDEF`,
       senderId: 'GBSCRM',
@@ -140,7 +147,7 @@ test.describe('Channels credentials — GET /config masking', () => {
     expect(r.status()).toBe(200);
     const rows = await r.json();
     expect(Array.isArray(rows)).toBeTruthy();
-    const row = rows.find(x => x.provider === 'msg91');
+    const row = rows.find(x => x.provider === SMS_PROVIDER);
     expect(row).toBeTruthy();
 
     // Contract: apiKey is an object, not a string.
@@ -176,10 +183,10 @@ test.describe('Channels credentials — GET /config masking', () => {
       provider: 'meta_cloud',
       accessToken: seedFresh,
       webhookVerifyToken: `${RUN_TAG}-verify-VV99`,
-      phoneNumberId: '12345',
+      phoneNumberId: `${Date.now()}${process.pid}`,
       isActive: false,
     }, token);
-    expect(seedRes.ok()).toBeTruthy();
+    expect(seedRes.ok(), `seed: ${await seedRes.text()}`).toBeTruthy();
 
     const r = await authGet(request, '/api/whatsapp/config', token);
     expect(r.status()).toBe(200);
@@ -240,19 +247,18 @@ test.describe('Channels credentials — PUT /config rotation', () => {
 
     // 1. Set a known credential.
     const original = `${RUN_TAG}-orig-LAST00`;
-    await authPut(request, '/api/sms/config/msg91', {
-      provider: 'msg91', apiKey: original, isActive: false,
+    const seedRes = await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+      provider: SMS_PROVIDER, apiKey: original, isActive: false,
     }, token);
+    expect(seedRes.ok(), `seed: ${await seedRes.text()}`).toBeTruthy();
 
     // 2. Re-PUT with the MASKED echo (what the frontend would send back
     // if the user didn't retype). Backend must SKIP the field.
-    // v3.7.x: msg91 senderId must be exactly 6 alphanumeric chars
-    // (INVALID_SENDER_ID_LENGTH gate at routes/sms.js:481). Use 'GBSCRM'
-    // (6 char alphanumeric) so the PUT itself passes validation; the
-    // load-bearing assertion is the apiKey-skip, not the senderId echo.
+    // Sender validation for MSG91 is covered by sms-api.spec.js. This
+    // isolated provider exercises the shared credential-preservation path.
     const NEW_SENDER = 'GBSCRM';
-    const echoRes = await authPut(request, '/api/sms/config/msg91', {
-      provider: 'msg91',
+    const echoRes = await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+      provider: SMS_PROVIDER,
       apiKey: '****T00', // looks-like-masked-sentinel (≤8 chars + ends ****)
       senderId: NEW_SENDER,
       isActive: false,
@@ -261,7 +267,7 @@ test.describe('Channels credentials — PUT /config rotation', () => {
 
     // 3. Verify the apiKey wasn't trampled — last4 should still end LAST00.
     const r = await authGet(request, '/api/sms/config', token);
-    const row = (await r.json()).find(x => x.provider === 'msg91');
+    const row = (await r.json()).find(x => x.provider === SMS_PROVIDER);
     expect(row.apiKey.configured).toBe(true);
     expect(row.apiKey.last4.endsWith('ST00')).toBe(true);
     expect(row.senderId).toBe(NEW_SENDER);
@@ -272,11 +278,11 @@ test.describe('Channels credentials — PUT /config rotation', () => {
     test.skip(!token, 'no admin token');
 
     // Stamp before
-    await authPut(request, '/api/sms/config/msg91', {
-      provider: 'msg91', apiKey: `${RUN_TAG}-pre-PRE000`, isActive: false,
+    await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+      provider: SMS_PROVIDER, apiKey: `${RUN_TAG}-pre-PRE000`, isActive: false,
     }, token);
     const before = await authGet(request, '/api/sms/config', token);
-    const beforeRow = (await before.json()).find(x => x.provider === 'msg91');
+    const beforeRow = (await before.json()).find(x => x.provider === SMS_PROVIDER);
     const beforeRotated = beforeRow.lastRotatedAt;
 
     // Wait 1.1s so the timestamp will tick. Resilient across millisecond
@@ -285,8 +291,8 @@ test.describe('Channels credentials — PUT /config rotation', () => {
 
     // Rotate
     const fresh = `${RUN_TAG}-NEW-WRITEME-NEW999`;
-    const putRes = await authPut(request, '/api/sms/config/msg91', {
-      provider: 'msg91', apiKey: fresh, isActive: false,
+    const putRes = await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+      provider: SMS_PROVIDER, apiKey: fresh, isActive: false,
     }, token);
     expect(putRes.ok()).toBeTruthy();
     const putBody = await putRes.json();
@@ -295,7 +301,7 @@ test.describe('Channels credentials — PUT /config rotation', () => {
     expect(JSON.stringify(putBody)).not.toContain(fresh);
 
     const after = await authGet(request, '/api/sms/config', token);
-    const afterRow = (await after.json()).find(x => x.provider === 'msg91');
+    const afterRow = (await after.json()).find(x => x.provider === SMS_PROVIDER);
     expect(afterRow.apiKey.last4.endsWith('W999')).toBe(true);
     expect(new Date(afterRow.lastRotatedAt).getTime()).toBeGreaterThan(new Date(beforeRotated).getTime());
 
@@ -314,7 +320,7 @@ test.describe('Channels credentials — PUT /config rotation', () => {
       const found = rows.some(r => {
         let d = r.details;
         if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = {}; } }
-        return d && d.provider === 'sms:msg91' && Array.isArray(d.rotatedFields) && d.rotatedFields.includes('apiKey');
+        return d && d.provider === `sms:${SMS_PROVIDER}` && Array.isArray(d.rotatedFields) && d.rotatedFields.includes('apiKey');
       });
       expect(found, `expected ProviderConfig.ROTATE audit row for sms:msg91 with apiKey rotatedFields; got: ${JSON.stringify(rows).slice(0, 600)}`).toBe(true);
       // CRITICAL: the audit details must NOT contain the new plaintext.
@@ -382,8 +388,8 @@ test.describe('Channels credentials — cross-tenant isolation', () => {
 
     // Tenant B writes a uniquely-marked credential.
     const uniqueB = `${RUN_TAG}-tenantB-UNIQUE-Z00Z00`;
-    const wB = await authPut(request, '/api/sms/config/msg91', {
-      provider: 'msg91', apiKey: uniqueB, isActive: false,
+    const wB = await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+      provider: SMS_PROVIDER, apiKey: uniqueB, isActive: false,
     }, tokenB);
     expect(wB.ok(), `tenant B seed: ${await wB.text()}`).toBeTruthy();
 
@@ -414,8 +420,8 @@ test.afterAll(async ({ request }) => {
   const token = await adminToken(request);
   if (!token) return;
   const sentinel = `_teardown_${RUN_TAG}_disabled`;
-  await authPut(request, '/api/sms/config/msg91', {
-    provider: 'msg91', apiKey: sentinel, authToken: sentinel, isActive: false,
+  await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+    provider: SMS_PROVIDER, apiKey: sentinel, authToken: sentinel, isActive: false,
   }, token).catch(() => {});
   await authPut(request, '/api/whatsapp/config/meta_cloud', {
     provider: 'meta_cloud', accessToken: sentinel, webhookVerifyToken: sentinel, isActive: false,
@@ -426,8 +432,8 @@ test.afterAll(async ({ request }) => {
 
   const tokenB = await wellnessAdminToken(request);
   if (tokenB) {
-    await authPut(request, '/api/sms/config/msg91', {
-      provider: 'msg91', apiKey: sentinel, authToken: sentinel, isActive: false,
+    await authPut(request, `/api/sms/config/${SMS_PROVIDER}`, {
+      provider: SMS_PROVIDER, apiKey: sentinel, authToken: sentinel, isActive: false,
     }, tokenB).catch(() => {});
   }
 });

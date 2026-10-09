@@ -8,9 +8,9 @@ vi.mock('../lib/geocoder', () => ({
   geocodeSuggest: (...args) => geocodeSuggestMock(...args),
 }));
 
-function Harness() {
+function Harness({ onSelect }) {
   const [address, setAddress] = useState('');
-  return <AddressAutocomplete value={address} onChange={setAddress} />;
+  return <AddressAutocomplete value={address} onChange={setAddress} onSelect={onSelect} />;
 }
 
 beforeEach(() => {
@@ -25,7 +25,8 @@ afterEach(() => vi.useRealTimers());
 describe('<AddressAutocomplete />', () => {
   it('debounces address lookup and applies the selected suggestion', async () => {
     vi.useFakeTimers();
-    render(<Harness />);
+    const onSelect = vi.fn();
+    render(<Harness onSelect={onSelect} />);
     const input = screen.getByRole('combobox', { name: 'Address' });
 
     fireEvent.change(input, { target: { value: 'Ko' } });
@@ -38,6 +39,9 @@ describe('<AddressAutocomplete />', () => {
 
     fireEvent.mouseDown(screen.getByRole('option', { name: /CA-17, Koramangala/i }));
     expect(input).toHaveValue('CA-17, Koramangala, Bengaluru, India');
+    expect(onSelect).toHaveBeenCalledWith({
+      lat: 12.9352, lng: 77.6245, display_name: 'CA-17, Koramangala, Bengaluru, India',
+    });
     expect(screen.queryByRole('listbox', { name: 'Address suggestions' })).toBeNull();
   });
 });

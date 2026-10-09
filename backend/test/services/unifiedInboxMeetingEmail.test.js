@@ -25,6 +25,29 @@ afterEach(() => {
 });
 
 describe("unifiedInboxMeetingEmail", () => {
+  it("CCs configured team members and excludes the customer address", async () => {
+    mocks.sendEmail.mockResolvedValue({ sent: true });
+    mocks.prisma.tenant.findUnique.mockResolvedValue({ emailRetention: true });
+    mocks.prisma.emailMessage.create.mockResolvedValue({ id: 80 });
+
+    await service.sendMeetingConfirmation({
+      form: {
+        hostUserId: 5,
+        durationMins: 30,
+        emailSubject: "Confirmed",
+        emailBody: "Join {{meeting_url}}",
+        emailCcJson: JSON.stringify(["TEAM1@TMC.TEST", "asha@example.edu", "team2@tmc.test"]),
+      },
+      booking: { id: 8, tenantId: 2, contactName: "Asha", contactEmail: "asha@example.edu", scheduledAt: new Date("2026-10-15T04:30:00Z"), timezone: "Asia/Kolkata", meetingUrl: "https://zoom.us/j/1" },
+    });
+
+    expect(mocks.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "asha@example.edu",
+      cc: ["team1@tmc.test", "team2@tmc.test"],
+    }));
+    expect(mocks.prisma.emailMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ cc: "team1@tmc.test,team2@tmc.test" }) });
+  });
+
   it("renders one configured template for calendar invitations and confirmation emails", () => {
     const rendered = service.renderMeetingTemplate({
       form: { durationMins: 45, emailSubject: "Confirmed for {{name}}", emailBody: "Hi {{name}}\n{{date}} at {{time}}\nJoin: {{meeting_url}}" },
@@ -34,6 +57,14 @@ describe("unifiedInboxMeetingEmail", () => {
     expect(rendered.text).toContain("Hi Asha");
     expect(rendered.text).toContain("https://zoom.us/j/1");
     expect(rendered.text).not.toContain("{{");
+  });
+
+  it("uses the actual external booking duration in a CRM confirmation", () => {
+    const rendered = service.renderMeetingTemplate({
+      form: { durationMins: 30, emailSubject: "Confirmed", emailBody: "Your {{duration}} minute conversation is confirmed." },
+      booking: { contactName: "Asha", scheduledAt: new Date("2026-10-15T04:30:00Z"), endsAt: new Date("2026-10-15T05:15:00Z"), timezone: "Asia/Kolkata", meetingUrl: null },
+    });
+    expect(rendered.text).toContain("45 minute conversation");
   });
 
   it("appends the configured form logo after the confirmation content", () => {

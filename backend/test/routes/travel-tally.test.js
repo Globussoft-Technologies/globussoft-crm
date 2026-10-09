@@ -78,6 +78,24 @@ function tokenFor(role = "ADMIN", tenantId = 1) {
 
 const auth = () => ({ Authorization: `Bearer ${tokenFor()}` });
 
+test('TMC ledger isolates supplier payables by purchase-order trip and exposes trip identity', async () => {
+  for (const name of ['travelInvoice', 'expense', 'commissionData']) {
+    prisma[name] = { ...(prisma[name] || {}), findMany: vi.fn().mockResolvedValue([]) };
+  }
+  const payable = tripId => ({ id: tripId, amount: 1250, status: 'pending',
+    supplier: { name: 'Hotel', subBrand: 'tmc' },
+    purchaseOrder: { tripId, trip: { destination: 'School trip' } } });
+  prisma.travelSupplierPayable = { findMany: vi.fn().mockResolvedValue([payable(8), payable(9), { ...payable(10), purchaseOrder: null }]) };
+  const response = await request(makeApp()).get('/api/travel/tally/ledger?subBrand=tmc&itineraryId=tmc-8').set(auth());
+  expect(response.status).toBe(200);
+  expect(response.body.payableDetails).toEqual([expect.objectContaining({ id: 8, tripId: 8, amount: 1250 })]);
+  expect(response.body.supplierLedgerDetails).toEqual([expect.objectContaining({ id: 8, tripId: 8 })]);
+  expect(prisma.travelSupplierPayable.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ tenantId: 1 }),
+    select: expect.objectContaining({ purchaseOrder: expect.objectContaining({ select: expect.objectContaining({ tripId: true }) }) }),
+  }));
+});
+
 beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1,

@@ -855,6 +855,9 @@ model Contact {
   callifiedLeadStatusReason    String?
   callifiedLeadStatusUpdatedAt DateTime?
 
+  // Generic property-interest area captured from Callified plot conversations.
+  interestedPlotArea String?
+
   // DNP retry state for the Callified auto-dial retry engine.
   // Tracks how many automatic retries have been attempted for the current
   // DNP streak and when the next retry is due.
@@ -1817,6 +1820,10 @@ model Invoice {
   shippingAddress String? @db.Text
   paymentMode     String? // cash, upi, card, bank_transfer, other
   lineItemsJson   String? @db.Text // [{type, itemId, name, quantity, unitPrice, amount}]
+  currency        String  @default("USD")
+  amountPaid      Float?
+  balance         Float?
+  plotInvoiceItems PlotInvoiceItem[]
 
   // #601 — wellness visit linkage. Optional so generic CRM invoices don't
   // need it. SetNull on visit delete; Invoice itself stays Restrict-on-tenant.
@@ -1930,6 +1937,7 @@ model SequenceEnrollment {
   // #9 — step-list cursor. Position within Sequence.steps (0-based). Null
   // before first tick → engine starts at position 0.
   currentStep Int?      @default(0)
+  emailDelayStep Int? // cursor whose pre-send delay has already been scheduled
   nextRun     DateTime?
   status      String    @default("Active") // Active, Completed, Paused, Unenrolled
   // Pessimistic locking — mirrors waOutboundJob lockedAt/lockedBy pattern.
@@ -1953,6 +1961,7 @@ model SequenceStep {
 
   position Int // ordering within the sequence (0, 1, 2, …)
   kind     String // 'email' | 'sms' | 'wait' | 'condition'
+  name     String?
 
   // For kind='email' / 'sms':
   emailTemplateId Int?
@@ -3470,6 +3479,7 @@ model PickupLocation {
   name             String
   address          String            @db.Text
   googleMapsLink   String?           @db.Text
+  maxAssignments   Int?
   notes            String?           @db.Text
   isActive         Boolean           @default(true)
   tenantId         Int               @default(1)
@@ -3486,22 +3496,29 @@ model PickupLocation {
 model PlotSite {
   id               Int             @id @default(autoincrement())
   name             String
+  plotNumber       String?
+  block            String?
   address          String?         @db.Text
   referenceCode    String?
   area             String?
+  areaUnit         String?
+  roadWidth        String?
+  facing           String?
+  propertyType     String?
   boundaryJson     String?         @db.Text
   boundaryAreaSqFt Float?
   price            Decimal?        @db.Decimal(15, 2)
-  availability     String          @default("AVAILABLE") // AVAILABLE, RESERVED, SOLD
+  availability     String          @default("AVAILABLE") // AVAILABLE, HOLD, BOOKED, REGISTERED, RESERVED, SOLD
   notes            String?         @db.Text
   isActive         Boolean         @default(true)
-  pickupLocationId Int?
-  pickupLocation   PickupLocation? @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
-  tenantId         Int             @default(1)
-  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  brokers          PlotBroker[]
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  pickupLocationIdsJson String?          @db.Text
+  pickupLocationId      Int?
+  pickupLocation        PickupLocation?  @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
+  tenantId              Int              @default(1)
+  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  brokers               PlotBroker[]
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
 
   @@index([tenantId, availability, isActive])
   @@index([tenantId, pickupLocationId])
@@ -3520,6 +3537,7 @@ model TransportPerson {
   plotSiteIdsJson       String?         @db.Text
   serviceAreasJson      String?         @db.Text
   customerIdsJson       String?         @db.Text
+  assignmentPairsJson   String?         @db.Text
   assignmentStatusJson  String?         @db.Text
   notes                 String?         @db.Text
   isActive              Boolean         @default(true)
@@ -3545,6 +3563,8 @@ model PlotBroker {
   agency            String?
   commissionPercent Decimal?  @db.Decimal(5, 2)
   customerIdsJson   String?   @db.Text
+  pickupLocationIdsJson String? @db.Text
+  assignmentPairsJson String? @db.Text
   workflowStatusJson String?  @db.Text
   notes             String?   @db.Text
   isActive          Boolean   @default(true)
@@ -3570,6 +3590,8 @@ model BillingPerson {
   email           String?
   customerIdsJson String?  @db.Text
   plotSiteIdsJson String?  @db.Text
+  pickupLocationIdsJson String? @db.Text
+  assignmentPairsJson String? @db.Text
   notes           String?  @db.Text
   isActive        Boolean  @default(true)
   userId          Int?     @unique
@@ -3581,6 +3603,81 @@ model BillingPerson {
 
   @@index([tenantId, isActive])
   @@index([tenantId, name])
+}
+
+// Central record for the customer -> pickup -> transport -> broker -> billing
+// -> payment lifecycle. Operational modules retain their own records; this row
+// provides the stable transaction id used by the admin status view.
+model PlotBooking {
+  id                Int      @id @default(autoincrement())
+  bookingNumber     String   @unique
+  tenantId          Int
+  contactId         Int
+  customerPickupId  Int?
+  plotSiteId        Int
+  transportPersonId Int?
+  plotBrokerId      Int?
+  billingPersonId   Int?
+  invoiceId         Int?
+  status            String   @default("PLOT_RESERVED")
+  paymentStatus     String   @default("UNPAID")
+  totalAmount       Decimal  @default(0) @db.Decimal(15, 2)
+  amountPaid        Decimal  @default(0) @db.Decimal(15, 2)
+  balance           Decimal  @default(0) @db.Decimal(15, 2)
+  reservedAt        DateTime @default(now())
+  soldAt            DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  invoiceItems      PlotInvoiceItem[]
+  workflowEvents    PlotWorkflowEvent[]
+
+  @@index([tenantId, contactId, updatedAt])
+  @@index([tenantId, plotSiteId, status])
+  @@index([tenantId, billingPersonId, status])
+  @@index([tenantId, invoiceId])
+}
+
+model PlotInvoiceItem {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int
+  invoiceId   Int
+  plotBookingId Int?
+  itemType    String   @default("PLOT")
+  itemId      Int?
+  description String
+  quantity    Decimal  @default(1) @db.Decimal(12, 2)
+  unitPrice   Decimal  @db.Decimal(15, 2)
+  amount      Decimal  @db.Decimal(15, 2)
+  createdAt   DateTime @default(now())
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  plotBooking PlotBooking? @relation(fields: [plotBookingId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, plotBookingId])
+}
+
+// Append-only domain history. Unlike the JSON status snapshots, rows are never
+// replaced, which makes the timeline suitable for audit and reporting.
+model PlotWorkflowEvent {
+  id            Int      @id @default(autoincrement())
+  tenantId      Int
+  plotBookingId Int?
+  contactId     Int
+  plotSiteId    Int?
+  stage         String
+  eventType     String
+  label         String
+  fromStatus    String?
+  toStatus      String?
+  actorUserId   Int?
+  metadataJson  String?  @db.Text
+  occurredAt    DateTime @default(now())
+  plotBooking   PlotBooking? @relation(fields: [plotBookingId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, contactId, occurredAt])
+  @@index([tenantId, plotBookingId, occurredAt])
+  @@index([tenantId, eventType, occurredAt])
 }
 
 // Pickup address captured from a customer's Callified transcript. The trip
@@ -4055,9 +4152,12 @@ model TravelMeetingForm {
   allowedOriginsJson  String?   @db.Text
   calendarProvider    String    @default("google") // google | outlook
   createZoom          Boolean   @default(true)
+  createCalendarEvent Boolean?
+  sendConfirmationEmail Boolean @default(true)
   embedFontFamily     String    @default("Inter")
   emailSubject        String    @default("Your Conversation with TMC is Confirmed")
   emailBody           String    @db.LongText
+  emailCcJson         String?   @db.Text
   emailLogoUrl        String?   @db.Text
   confirmationMessage String?   @db.Text
   isActive            Boolean   @default(false)
@@ -4099,8 +4199,8 @@ model TravelMeetingBooking {
   diagnosticId      Int?
   source            String            @default("Talk to an Expert")
   customFieldsJson  String?           @db.Text
-  emailStatus       String            @default("PENDING") // PENDING | SENT | FAILED
-  emailChannel      String? // unified_inbox (calendar_invite is retained only for legacy rows)
+  emailStatus       String            @default("PENDING") // PENDING | SENT | FAILED | DISABLED | EXTERNAL
+  emailChannel      String? // unified_inbox | external_scheduler (calendar_invite is retained only for legacy rows)
   emailMessageId    Int?
   failureCode       String?
   failureMessage    String?           @db.Text
@@ -4267,6 +4367,8 @@ model Payment {
   currency    String    @default("USD")
   gateway     String // stripe, razorpay
   gatewayId   String? // their charge/payment ID
+  // Only Generic plot payments set this key; other gateways/verticals remain unchanged.
+  plotPaymentReference String? @db.VarChar(128)
   status      String    @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
   paidAt      DateTime?
   metadata    String?   @db.Text
@@ -4280,6 +4382,7 @@ model Payment {
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@unique([tenantId, plotPaymentReference], map: "Payment_tenantId_plotPaymentReference_key")
 }
 
 // ── Accounting Sync ──────────────────────────────────────────────

@@ -3441,7 +3441,7 @@ const Leads = () => {
       const phoneOut = isWellness
         ? phone
         : newLead.phone
-          ? `${newLead.countryCode} ${isGeneric ? phone : newLead.phone}`
+          ? `${newLead.countryCode}${isGeneric ? "" : " "}${newLead.phone}`
           : "";
       await fetchApi("/api/contacts", {
         method: "POST",
@@ -6269,6 +6269,7 @@ const Leads = () => {
       {/* Renders only when this page was opened as a drill-down from a report. */}
       <ReturnToBanner />
       <header
+        className="leads-page-header"
         style={{
           marginBottom: "1rem",
           display: "flex",
@@ -6345,6 +6346,7 @@ const Leads = () => {
             tenant-scoped field without leaving the Leads table. */}
         {supportsLeadCustomFields && (
           <div
+            className="leads-page-header__actions"
             style={{
               display: "flex",
               alignItems: "center",
@@ -6389,7 +6391,7 @@ const Leads = () => {
         )}
       </header>
       <div
-        className={isGeneric ? "leads-actions-toolbar" : undefined}
+        className={isGeneric ? "leads-actions-toolbar" : isTravel ? "travel-leads-actions-toolbar" : undefined}
         style={{
           ...compactToolbarSurfaceStyle,
           marginBottom: "1rem",
@@ -7103,7 +7105,7 @@ const Leads = () => {
 
         <span aria-hidden="true" style={compactToolbarDividerStyle} />
 
-        <div style={{ position: "relative" }}>
+        <div className="lead-bulk-actions-control" style={{ position: "relative" }}>
           <button
             type="button"
             className="btn-secondary"
@@ -7467,7 +7469,7 @@ const Leads = () => {
 
         {/* Lead Fields lives in the header for generic (see above); the
             lower-row Create Lead stays for non-generic tenants only. */}
-        {!isGeneric && (
+        {!supportsLeadCustomFields && (
           <button
             type="button"
             className="btn-primary"
@@ -7487,7 +7489,7 @@ const Leads = () => {
 
       {isTravel && (
         <div
-          className="card"
+          className="card travel-leads-filters"
           style={{
             padding: "0.75rem 1rem",
             display: "flex",
@@ -7499,6 +7501,7 @@ const Leads = () => {
           }}
         >
           <div
+            className="travel-leads-filter-controls"
             style={{
               display: "flex",
               alignItems: "center",
@@ -7654,7 +7657,7 @@ const Leads = () => {
         }
       >
         <div
-          className={isGeneric ? "leads-toolbar-shell" : undefined}
+          className={isGeneric ? "leads-toolbar-shell" : isTravel ? "travel-leads-search-toolbar" : undefined}
           style={{
             display: "flex",
             alignItems: "center",
@@ -7680,6 +7683,7 @@ const Leads = () => {
           }}
         >
           <div
+            className={isTravel ? "travel-leads-search-controls" : undefined}
             style={{
               display: "flex",
               alignItems: "center",
@@ -7703,7 +7707,7 @@ const Leads = () => {
               <input
                 data-tour="leads-search"
                 type="search"
-                className="input-field"
+                className="input-field crm-search-input"
                 placeholder="Search leads..."
                 value={searchTerm}
                 onChange={(e) => {
@@ -7752,6 +7756,7 @@ const Leads = () => {
           </div>
 
           <div
+            className={isTravel ? "travel-leads-search-actions" : undefined}
             style={{
               display: "flex",
               alignItems: "center",
@@ -8589,12 +8594,10 @@ const Leads = () => {
                 topBarLeadingWidth={leadsFrozenTableWidth}
                 stickyTop
               stickyTopOffset={0}
-              // Travel CRM must keep the native table scrollbar visible;
-              // hiding it leaves no usable horizontal-scroll affordance when
-              // the wide lead table exceeds the viewport.
+              // Keep the native table scrollbar visible in every vertical so
+              // wide columns can be swiped or scrolled directly on the table.
               hideBottomScrollbar={false}
               verticalOverflow="visible"
-              stickyBottom={isGeneric}
             >
               <table
                 ref={leadsScrollableTableRef}
@@ -9959,6 +9962,7 @@ const Leads = () => {
         )}
         {!loading && filteredLeads.length > 0 && (
           <div
+            className="leads-pagination-footer"
             style={{
               display: "flex",
               alignItems: "center",
@@ -9993,6 +9997,7 @@ const Leads = () => {
               {isGeneric ? leadPagination.total : filteredLeads.length}
             </span>
             <div
+              className="leads-pagination-controls"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -10000,6 +10005,7 @@ const Leads = () => {
                 flexWrap: "wrap",
               }}
             >
+              <div className="leads-pagination-page-size" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <label
                 htmlFor="leads-page-size"
                 style={{
@@ -10038,6 +10044,8 @@ const Leads = () => {
                   </option>
                 ))}
               </select>
+              </div>
+              <div className="leads-pagination-navigation" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <button
                 type="button"
                 title="Previous page"
@@ -10112,6 +10120,7 @@ const Leads = () => {
               >
                 <ChevronRight size={16} />
               </button>
+              </div>
             </div>
           </div>
         )}
@@ -10421,6 +10430,7 @@ const Leads = () => {
             inline form  only the trigger surface moved. */}
       {creating && (
         <div
+          className="create-lead-backdrop"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeCreate();
           }}

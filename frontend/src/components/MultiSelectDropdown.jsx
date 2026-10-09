@@ -29,7 +29,7 @@ const modalInputStyle = {
 //   2. The popover auto-flips upward when there's not enough room
 //      below the trigger — so the last filter in the modal can show
 //      its full list without forcing the modal to scroll at all.
-export default function MultiSelectDropdown({ options, selected, onChange, placeholder, ariaLabel, searchable = false, chipColours = false }) {
+export default function MultiSelectDropdown({ options, selected, onChange, placeholder, ariaLabel, searchable = false, chipColours = false, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [popoverPos, setPopoverPos] = useState(null);
@@ -121,15 +121,19 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
     else onChange([...selected, value]);
   };
 
+  const optionValues = new Set(options.map((option) => option.value));
+  const visibleSelected = selected.filter((value) => optionValues.has(value));
+  const hiddenSelected = selected.filter((value) => !optionValues.has(value));
+
   // Summary shown inside the trigger.
   let summary;
-  if (selected.length === 0) {
+  if (visibleSelected.length === 0) {
     summary = <span style={{ color: "var(--text-tertiary, var(--text-secondary))" }}>{placeholder}</span>;
-  } else if (selected.length === 1) {
-    const lone = options.find((o) => o.value === selected[0]);
-    summary = lone ? lone.label : "1 selected";
+  } else if (visibleSelected.length === 1) {
+    const lone = options.find((o) => o.value === visibleSelected[0]);
+    summary = lone?.label || "1 selected";
   } else {
-    summary = `${selected.length} selected`;
+    summary = `${visibleSelected.length} selected`;
   }
 
   const filtered = searchable && search.trim()
@@ -141,7 +145,8 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { if (!disabled) setOpen((v) => !v); }}
+        disabled={disabled}
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -150,7 +155,8 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
           display: "flex",
           alignItems: "center",
           gap: "0.5rem",
-          cursor: "pointer",
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.65 : 1,
           textAlign: "left",
           minHeight: 42,
           padding: "0.55rem 0.8rem",
@@ -159,12 +165,12 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {summary}
         </span>
-        {selected.length > 0 && (
+        {visibleSelected.length > 0 && !disabled && (
           <span
             role="button"
             tabIndex={0}
-            onClick={(e) => { e.stopPropagation(); onChange([]); }}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange([]); } }}
+            onClick={(e) => { e.stopPropagation(); onChange(hiddenSelected); }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onChange(hiddenSelected); } }}
             aria-label="Clear selection"
             title="Clear selection"
             style={{

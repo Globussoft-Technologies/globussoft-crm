@@ -8,6 +8,7 @@ const unsplashProvider = require('../../services/imageProviders/unsplashProvider
 const pexelsProvider = require('../../services/imageProviders/pexelsProvider');
 const pixabayProvider = require('../../services/imageProviders/pixabayProvider');
 const aiImageFallbackProvider = require('../../services/imageProviders/aiImageFallbackProvider');
+const marketingFlyerImageLLM = require('../../services/marketingFlyerImageLLM');
 
 beforeEach(() => {
   provider._resetForTests();
@@ -53,6 +54,28 @@ describe('provider hierarchy + fallback', () => {
 
   test('AI fallback isAvailable() is ALWAYS true (budget-gated internally)', () => {
     expect(aiImageFallbackProvider.isAvailable()).toBe(true);
+  });
+});
+
+describe('AI fallback adapter contract', () => {
+  test('passes the image query as marketingFlyerImageLLM destination', async () => {
+    const generateSpy = vi.spyOn(marketingFlyerImageLLM, 'generateFlyerImage').mockResolvedValue({
+      imageUrl: 'https://openai.example/munich.png',
+      model: 'dall-e-3',
+    });
+
+    const results = await aiImageFallbackProvider.search('Munich, Germany', {
+      tenantId: 73,
+      aspectRatio: '4:3',
+    });
+
+    expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      destination: 'Munich, Germany',
+      tenantId: 73,
+      aspectRatio: '4:3',
+    }));
+    expect(generateSpy.mock.calls[0][0]).not.toHaveProperty('prompt');
+    expect(results[0].url).toBe('https://openai.example/munich.png');
   });
 });
 
@@ -165,6 +188,37 @@ describe('fetchOne — fallback hierarchy behaviour', () => {
     ]);
     const result = await provider.fetchOne('Iceland');
     expect(result.attribution.providerId).toBe('pexels');
+  });
+
+  test('relevance filtering selects a subject-matching Pexels result', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
+      { url: 'https://pexels.example/generic.jpg', alt: 'doctor holding a clipboard', attribution: { providerId: 'pexels' } },
+      { url: 'https://pexels.example/hair.jpg', alt: 'hair and scalp consultation', attribution: { providerId: 'pexels' } },
+    ]);
+
+    const result = await provider.fetchOne('hair treatment consultation', {
+      excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'],
+      relevanceTerms: ['hair', 'scalp'],
+      requireRelevance: true,
+    });
+
+    expect(result.url).toBe('https://pexels.example/hair.jpg');
+  });
+
+  test('relevance filtering leaves the slot empty instead of applying an unrelated result', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
+      { url: 'https://pexels.example/generic-only.jpg', alt: 'doctor holding a clipboard', attribution: { providerId: 'pexels' } },
+    ]);
+
+    const result = await provider.fetchOne('hair treatment consultation', {
+      excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'],
+      relevanceTerms: ['hair', 'scalp'],
+      requireRelevance: true,
+    });
+
+    expect(result).toBeNull();
   });
 
   test('Falls through Pexels → Unsplash when Pexels empty', async () => {

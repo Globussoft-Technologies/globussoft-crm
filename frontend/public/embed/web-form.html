@@ -39,6 +39,35 @@
 
     .phone-input{display:grid;grid-template-columns:120px minmax(0, 1fr);gap:8px;align-items:stretch}
 
+    html.generic-scope .phone-input,
+    html.generic-scope .generic-whatsapp-number .phone-input{grid-template-columns:minmax(0, 24%) minmax(0, 1fr)!important;gap:0!important;width:100%!important}
+
+    html.generic-scope .generic-phone-with-whatsapp .phone-input{width:100%;min-width:0}
+
+    html.generic-scope .generic-phone-with-whatsapp .phone-input{grid-template-columns:minmax(0, 24%) minmax(0, 1fr)!important;gap:10px!important}
+
+    html.generic-scope .generic-phone-with-whatsapp .phone-country-picker{border-right:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
+
+    html.generic-scope .generic-phone-with-whatsapp .phone-input>input{border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
+
+    html.generic-scope .phone-country-picker{border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-right:0;border-radius:var(--gbs-field-radius,12px) 0 0 var(--gbs-field-radius,12px);overflow:visible}
+
+    html.generic-scope .phone-country-picker>input{border:0;border-radius:var(--gbs-field-radius,12px);background-color:var(--gbs-field-bg,#fff)!important;background-position:14px center;padding-left:49px;text-align:left;color:var(--gbs-field-text,#111827);-webkit-text-fill-color:var(--gbs-field-text,#111827)}
+
+    html.generic-scope .phone-country-picker>input::selection{background:transparent;color:inherit}
+
+    .phone-country-control{display:flex;align-items:center;min-width:0;border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-right:0;border-radius:var(--gbs-field-radius,12px) 0 0 var(--gbs-field-radius,12px);background:var(--gbs-field-bg,#fff);overflow:hidden}
+
+    .phone-country-control .phone-country-flag{width:24px;height:16px;flex:0 0 24px;margin-left:14px;object-fit:cover;border-radius:2px;box-shadow:0 0 0 1px rgba(15,23,42,.12)}
+
+    .phone-country-control select{width:100%;min-width:0;min-height:var(--gbs-field-height,0);border:0;border-radius:0;background:transparent;color:var(--gbs-field-text,#111827);padding:.82rem .7rem;font:inherit;box-shadow:none;transform:none}
+
+    .phone-country-control select:focus{outline:none;box-shadow:none;transform:none}
+
+    .phone-country-control>span{display:flex!important;align-items:center;justify-content:center;padding:0 .7rem!important;border:0!important;border-radius:0!important;background:transparent!important;color:var(--gbs-field-text,#111827);font-size:inherit}
+
+    html.generic-scope .phone-input>input{border-radius:0 var(--gbs-field-radius,12px) var(--gbs-field-radius,12px) 0}
+
     .phone-input select{scrollbar-color:#8b8b8b #f1f1f1;scrollbar-width:thin}
     .phone-input select::-webkit-scrollbar{width:8px}
     .phone-input select::-webkit-scrollbar-track{background:#f1f1f1;border-radius:4px}
@@ -47,7 +76,7 @@
     .phone-country-picker.open{z-index:40}
     .phone-country-picker>input{width:100%;min-height:var(--gbs-field-height,0);padding:.82rem .65rem .82rem 2rem;background:var(--gbs-field-bg,#fff);background-repeat:no-repeat;background-position:.7rem center;background-size:20px 14px;color:var(--gbs-placeholder-color,#6b7280);-webkit-text-fill-color:var(--gbs-placeholder-color,#6b7280);opacity:1;border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px);font-family:var(--gbs-placeholder-font,var(--gbs-font));font-size:var(--gbs-placeholder-size,14px);font-weight:var(--gbs-placeholder-weight,400);font-style:var(--gbs-placeholder-style,normal);text-align:left;line-height:1.2;text-indent:0}
     .phone-country-picker>input:focus{outline:none;border-color:var(--gbs-focus-border,#6366f1);box-shadow:0 0 0 4px color-mix(in srgb,var(--gbs-focus-border,#6366f1) 13%,transparent)}
-    .phone-country-options{position:absolute;z-index:20;display:none;top:calc(100% + 4px);left:0;width:180px;max-height:145px;overflow-y:auto;background:#fff;border:1px solid #9ca3af;border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+    .phone-country-options{position:fixed;z-index:1000;display:none;top:auto!important;left:auto!important;width:180px;max-height:145px;overflow-y:auto;background:#fff;border:1px solid #9ca3af;border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.18);transform:none!important}
     .phone-country-picker>input:focus + .phone-country-options{display:block}
     .phone-country-picker.open .phone-country-options{display:block}
     .phone-country-options button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:0;background:#fff;color:#111827;text-align:left;font-family:var(--gbs-label-font,var(--gbs-font));font-size:var(--gbs-label-size,.78rem);font-weight:var(--gbs-label-weight,var(--gbs-font-weight,700));cursor:pointer}
@@ -62,6 +91,8 @@
 
     label{display:block;font-family:var(--gbs-label-font,var(--gbs-font));font-size:var(--gbs-label-size,.78rem);color:var(--gbs-label,#34405e);font-weight:var(--gbs-label-weight,var(--gbs-font-weight,700));font-style:var(--gbs-label-style,normal);text-decoration:var(--gbs-label-decoration,none);text-align:var(--gbs-label-align,left);margin-bottom:4px}
 
+    .required-star{color:#ef4444!important}
+
     input,select,textarea{width:var(--gbs-field-width,100%);max-width:100%;min-height:var(--gbs-field-height,0);border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px);padding:.82rem .9rem;font-family:var(--gbs-input-font,var(--gbs-font));font-size:var(--gbs-field-font-size,inherit);font-weight:var(--gbs-input-weight,400);font-style:var(--gbs-input-style,normal);text-decoration:var(--gbs-input-decoration,none);text-align:var(--gbs-input-align,left);background:var(--gbs-field-bg,#fff);color:var(--gbs-field-text,#111827);transition:border-color .2s,box-shadow .2s,transform .2s}
 
     textarea{min-height:var(--gbs-textarea-height,104px);resize:vertical}
@@ -73,12 +104,30 @@
 
     .check input{flex-shrink:0;width:auto;min-height:0;margin:2px 0 0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;transform:none}
 
-    .generic-phone-with-whatsapp{margin-bottom:0}
-    .generic-whatsapp-section{display:block;margin-top:-9px;padding-left:4px}
-    .generic-whatsapp-section>.check{display:flex;align-items:center;gap:8px;width:100%;margin-bottom:0;white-space:nowrap;line-height:1.2}
+    .generic-phone-with-whatsapp{margin-bottom:16px}
+    .generic-whatsapp-section{display:block;margin-top:0;padding-left:0}
+
+    html.generic-scope .generic-phone-with-whatsapp,
+    html.generic-scope .generic-whatsapp-section{grid-column:1 / -1!important}
+    .generic-whatsapp-section>.check{display:flex;align-items:center;gap:8px;width:100%;margin-bottom:0;white-space:nowrap;line-height:1.2;font-weight:var(--gbs-form-weight,400)}
     .generic-whatsapp-section>.check input{margin-top:0}
-    .generic-whatsapp-number{margin-top:0}
-    .generic-whatsapp-number .phone-input>span{width:96px;min-width:0;box-sizing:border-box}
+    .generic-whatsapp-section>.check input{accent-color:#4f6df5}
+    .generic-whatsapp-number{margin-top:16px}
+
+    .generic-whatsapp-sync{display:flex;align-items:center;gap:8px;margin-top:16px;padding:10px 14px;border:1px solid #dbe5f1;border-radius:12px;background:#f8fbff;color:#4b6077;font-size:.82rem;line-height:1.3}
+
+    .generic-whatsapp-sync[hidden]{display:none!important}
+    .generic-whatsapp-number .phone-input>span{width:auto;min-width:0;box-sizing:border-box}
+
+    .generic-whatsapp-number .phone-country-control{font-size:14px}
+
+    .generic-whatsapp-number .phone-country-control .phone-country-flag{margin-left:14px}
+
+    html.generic-scope .generic-whatsapp-number .phone-input{grid-template-columns:minmax(0, 24%) minmax(0, 1fr)!important;gap:10px!important}
+
+    html.generic-scope .generic-whatsapp-number .phone-country-control{border-right:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
+
+    html.generic-scope .generic-whatsapp-number .phone-input>input{border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
 
     .choices{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 
@@ -120,6 +169,10 @@
     .error{background:#fef2f2;color:var(--gbs-error-color,#b91c1c);border:1px solid #fecaca;white-space:pre-line;font-family:var(--gbs-error-font,var(--gbs-font));font-size:var(--gbs-error-size,inherit);font-weight:var(--gbs-error-weight,400);font-style:var(--gbs-error-style,normal);text-decoration:var(--gbs-error-decoration,none);text-align:var(--gbs-error-align,left)}
     .field-error{display:block;color:var(--gbs-error-color,#b91c1c);font-family:var(--gbs-error-font,var(--gbs-font));font-size:var(--gbs-error-size,13px);font-weight:var(--gbs-error-weight,400);font-style:var(--gbs-error-style,normal);text-decoration:var(--gbs-error-decoration,none);text-align:var(--gbs-error-align,left);margin-top:3px;line-height:1.35}
 
+    .field-error[hidden]{display:none!important}
+
+    html.generic-scope #recaptcha-container{margin-top:16px}
+
     .success{background:linear-gradient(135deg,#ecfdf5,#f0fdf4);color:var(--gbs-success-color,#065f46);border:1px solid #a7f3d0;font-family:var(--gbs-success-font,var(--gbs-font));font-size:var(--gbs-success-size,inherit);font-weight:var(--gbs-success-weight,700);font-style:var(--gbs-success-style,normal);text-decoration:var(--gbs-success-decoration,none);text-align:var(--gbs-success-align,center)}
 
     /* Keep the generic CRM confirmation centered in the available page. */
@@ -134,7 +187,7 @@
     @keyframes spin{to{transform:rotate(360deg)}}
 
     @media (min-width:641px) and (max-width:900px){.grid{grid-template-columns:var(--gbs-tablet-columns,1fr)}}
-    @media (max-width:640px){body{padding:12px}.panel{padding:22px 18px;border-radius:20px}.grid{grid-template-columns:var(--gbs-mobile-columns,1fr)}.half,.full{grid-column:auto}}
+    @media (max-width:640px){body{padding:12px}.panel{padding:22px 18px;border-radius:20px}.grid{grid-template-columns:var(--gbs-mobile-columns,1fr)}.half,.full{grid-column:auto}.phone-input{grid-template-columns:minmax(0,1fr)}html.generic-scope .phone-country-control{border-right:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}html.generic-scope .phone-input>input{border-left:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}.phone-country-options{width:min(180px,100%)}}
     html.generic-preview-desktop.generic-scope .grid,html.generic-preview-desktop.travel-scope .grid{grid-template-columns:var(--gbs-columns)}
     html.generic-preview-tablet.generic-scope .grid,html.generic-preview-tablet.travel-scope .grid{grid-template-columns:var(--gbs-tablet-columns)}
     html.generic-preview-mobile.generic-scope .grid,html.generic-preview-mobile.travel-scope .grid{grid-template-columns:var(--gbs-mobile-columns)}
@@ -647,6 +700,46 @@
 
       }
 
+      function setupGenericNameValidation(){
+        if (scope !== 'generic') return;
+        var nameInput = root.querySelector('input[name="name"]');
+        if (!nameInput) return;
+        var field = nameInput.closest('.field');
+        if (!field) return;
+        var error = document.createElement('span');
+        error.className = 'field-error';
+        error.hidden = true;
+        error.textContent = 'Only letters and spaces are allowed.';
+        nameInput.insertAdjacentElement('afterend', error);
+        function setInvalid(invalid){
+          error.hidden = !invalid;
+          nameInput.setAttribute('aria-invalid', invalid ? 'true' : 'false');
+          nameInput.style.borderColor = invalid ? 'var(--gbs-error-color,#b91c1c)' : '';
+        }
+        function hasInvalidCharacters(value){ return /[^\p{L}\s]/u.test(String(value || '')); }
+        nameInput.addEventListener('beforeinput', function(event){
+          if (event.data && hasInvalidCharacters(event.data)) {
+            event.preventDefault();
+            setInvalid(true);
+          }
+        });
+        nameInput.addEventListener('paste', function(event){
+          var pasted = event.clipboardData ? event.clipboardData.getData('text') : '';
+          if (hasInvalidCharacters(pasted)) {
+            event.preventDefault();
+            setInvalid(true);
+          }
+        });
+        nameInput.addEventListener('input', function(){
+          if (hasInvalidCharacters(nameInput.value)) {
+            nameInput.value = String(nameInput.value).replace(/[^\p{L}\s]/gu, '');
+            setInvalid(true);
+          } else {
+            setInvalid(false);
+          }
+        });
+      }
+
       function setupGenericWhatsapp(){
         if (scope !== 'generic') return;
         var phoneInput = root.querySelector('input[name="phone"]');
@@ -658,11 +751,30 @@
         var wrapper = document.createElement('div');
         wrapper.className = 'field full generic-whatsapp-section';
         wrapper.innerHTML = '<label class="check"><input type="checkbox" name="whatsappSameAsPhone" value="true" /><span>WhatsApp number is the same as phone number</span></label><div id="whatsapp-number-field" class="generic-whatsapp-number"><label for="f-whatsappPhone">WhatsApp number</label><div class="phone-input"><span id="whatsapp-country-code" style="display:flex;align-items:center;justify-content:center;padding:0 10px;border:1px solid var(--gbs-field-border);border-radius:8px;background:var(--gbs-field-bg);color:var(--gbs-field-text);font-size:14px"></span><input id="f-whatsappPhone" type="tel" name="whatsappPhone" placeholder="Enter WhatsApp number" autocomplete="tel" inputmode="numeric" /></div><span id="whatsapp-number-error" class="field-error" hidden>Only numbers are allowed.</span></div>';
+        var whatsappPhoneInput = wrapper.querySelector('.generic-whatsapp-number .phone-input');
+        whatsappPhoneInput.style.gridTemplateColumns = 'minmax(0, 24%) minmax(0, 1fr)';
+        whatsappPhoneInput.style.gap = '10px';
+        whatsappPhoneInput.style.width = '100%';
+        var whatsappCountryCode = wrapper.querySelector('#whatsapp-country-code');
+        var whatsappCountryControl = document.createElement('div');
+        whatsappCountryControl.className = 'phone-country-control';
+        var whatsappCountryFlag = document.createElement('img');
+        whatsappCountryFlag.className = 'phone-country-flag';
+        whatsappCountryFlag.alt = '';
+        whatsappCountryFlag.src = phoneCountryFlagUrl(phoneCountry && phoneCountry.value || '+91');
+        whatsappCountryControl.appendChild(whatsappCountryFlag);
+        whatsappCountryControl.appendChild(whatsappCountryCode);
+        whatsappPhoneInput.insertBefore(whatsappCountryControl, whatsappPhoneInput.firstChild);
         phoneField.insertAdjacentElement('afterend', wrapper);
         var sameCheckbox = wrapper.querySelector('input[name="whatsappSameAsPhone"]');
         var whatsappInput = wrapper.querySelector('input[name="whatsappPhone"]');
         var whatsappField = wrapper.querySelector('#whatsapp-number-field');
-        var whatsappCountryCode = wrapper.querySelector('#whatsapp-country-code');
+        var whatsappSyncNotice = document.createElement('div');
+        whatsappSyncNotice.className = 'generic-whatsapp-sync';
+        whatsappSyncNotice.hidden = true;
+        whatsappSyncNotice.innerHTML = '<span aria-hidden="true">✓</span><span></span>';
+        wrapper.insertBefore(whatsappSyncNotice, whatsappField);
+        var whatsappCountryFlag = wrapper.querySelector('.phone-country-control .phone-country-flag');
         var whatsappError = wrapper.querySelector('#whatsapp-number-error');
         function showWhatsappError(show){
           whatsappError.hidden = !show;
@@ -687,6 +799,9 @@
           whatsappField.hidden = same;
           whatsappInput.disabled = same;
           whatsappCountryCode.textContent = phoneCountry && phoneCountry.value ? phoneCountry.value : '+91';
+          if (whatsappCountryFlag) whatsappCountryFlag.src = phoneCountryFlagUrl(phoneCountry && phoneCountry.value || '+91');
+          whatsappSyncNotice.hidden = !same;
+          if (same) whatsappSyncNotice.querySelector('span:last-child').textContent = 'WhatsApp sync enabled (' + (phoneCountry && phoneCountry.value ? phoneCountry.value : '+91') + ' ' + (phoneInput.value || '') + ')';
           if (same) whatsappInput.value = phoneInput.value || '';
         }
         sameCheckbox.addEventListener('change', syncWhatsappField);
@@ -961,7 +1076,9 @@
           return visibleControls.some(function(control){ return String(control.value || '').trim() !== ''; });
         });
 
-        button.disabled = !complete;
+        // Keep the submit control clickable so native required-field checks
+        // and the existing submit validation can run on click.
+        button.disabled = false;
 
       }
 
@@ -1040,6 +1157,7 @@
         var progress = stepConfig.enabled ? '<div class="step-progress" aria-label="Form progress">' + stepConfig.steps.map(function(step, index){ return '<div class="step-progress-item" data-step="' + index + '"><span class="step-number">' + (index + 1) + '</span>' + esc(step.title || ('Step ' + (index + 1))) + '</div>'; }).join('') + '</div><div id="step-description" class="step-description"></div>' : '';
         var stepActions = stepConfig.enabled ? '<button type="button" class="primary" id="step-previous">Previous</button><button type="button" class="primary" id="step-next">Next</button>' : '';
         root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div>' + progress + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(function(field, index){ return conditionalFieldHtml(field, index, fields); }).join('') + '</div>' + optIn + recaptcha + '<div class="actions">' + stepActions + '<button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form>' + (footerLink ? '<div class="note powered-by">' + footerLink + '</div>' : '') + '</div>';
+        setupGenericNameValidation();
         setupGenericWhatsapp();
         setupGenericConditionalFields(fields);
         setupGenericPhone();
@@ -1060,6 +1178,7 @@
             if (pickerRestrictedCountries && pickerAllowedCountries.length && pickerAllowedCountries.indexOf(countrySelect.value) === -1) countrySelect.value = pickerAllowedCountries[0];
             var picker = document.createElement('div');
             picker.className = 'phone-country-picker';
+            picker.style.width = '100%';
             var trigger = document.createElement('input');
             trigger.type = 'text';
             function updatePickerTrigger(){
@@ -1110,6 +1229,10 @@
               options.appendChild(item);
             });
             function openCountryPicker(){
+              var triggerRect = trigger.getBoundingClientRect();
+              options.style.left = triggerRect.left + 'px';
+              options.style.top = (triggerRect.bottom + 6) + 'px';
+              options.style.width = Math.max(180, triggerRect.width) + 'px';
               picker.classList.add('open');
               options.style.display = 'block';
             }
@@ -1144,6 +1267,8 @@
             picker.appendChild(options);
             countrySelect.style.display = 'none';
             countrySelect.parentNode.insertBefore(picker, countrySelect);
+            picker.parentNode.style.gridTemplateColumns = 'minmax(0, 24%) minmax(0, 1fr)';
+            picker.parentNode.style.gap = '0';
           }
 
         if (genericPhoneInput) {

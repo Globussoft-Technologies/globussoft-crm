@@ -89,7 +89,68 @@ async function optionalDeleteMany(operation, missingField = null) {
   }
 }
 
+function parseJson(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function jsonOrNull(value) {
+  const empty = Array.isArray(value) ? value.length === 0 : Object.keys(value).length === 0;
+  return empty ? null : JSON.stringify(value);
+}
+
+async function removeContactFromAssignmentProfiles(tx, contactId) {
+  const profiles = [
+    { model: "transportPerson", statusField: "assignmentStatusJson" },
+    { model: "plotBroker", statusField: "workflowStatusJson" },
+    { model: "billingPerson", statusField: null },
+  ];
+  for (const { model, statusField } of profiles) {
+    const delegate = tx[model];
+    if (!delegate?.findMany || !delegate?.update) continue;
+    try {
+      const select = { id: true, customerIdsJson: true, assignmentPairsJson: true };
+      if (statusField) select[statusField] = true;
+      const rows = await delegate.findMany({
+        where: { customerIdsJson: { contains: String(contactId) } },
+        select,
+      });
+      for (const row of rows) {
+        const customerIds = parseJson(row.customerIdsJson, [])
+          .filter((id) => Number(id) !== Number(contactId));
+        const assignmentPairs = parseJson(row.assignmentPairsJson, [])
+          .filter((pair) => Number(pair?.customerId) !== Number(contactId));
+        const data = {
+          customerIdsJson: jsonOrNull(customerIds),
+          assignmentPairsJson: jsonOrNull(assignmentPairs),
+        };
+        if (statusField) {
+          const statuses = parseJson(row[statusField], {});
+          for (const key of Object.keys(statuses)) {
+            if (key === `customer-${contactId}` || key.startsWith(`customer-${contactId}-plot-`)) {
+              delete statuses[key];
+            }
+          }
+          data[statusField] = jsonOrNull(statuses);
+        }
+        await delegate.update({ where: { id: row.id }, data });
+      }
+    } catch (error) {
+      // These assignment fields are additive and may be absent briefly during
+      // a rolling schema deployment. Keep Contact deletion available there.
+      if (isMissingSchemaError(error) || isMissingOptionalFieldError(error, "assignmentPairsJson")) continue;
+      throw error;
+    }
+  }
+}
+
 async function deleteContactDependents(tx, contactId) {
+  await removeContactFromAssignmentProfiles(tx, contactId);
+
   // TMC parent links have two required Contact foreign keys, so they need a
   // compound OR rather than the simple contactId loop below.
   // These delegates/fields may not exist yet when the app is running with a

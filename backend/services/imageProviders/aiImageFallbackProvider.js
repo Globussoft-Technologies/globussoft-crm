@@ -90,7 +90,11 @@ async function search(query, { tenantId, aspectRatio, perPage = 1 } = {}) {
       console.log(`[ai-image-fallback] DALL-E path attempt for "${shortQ}" (aspect=${aspectRatio || '4:3'})`);
       const t0 = Date.now();
       const result = await generateImage({
-        prompt: enrichPhotoPrompt(query).slice(0, 400),
+        // marketingFlyerImageLLM's public contract requires `destination`;
+        // passing `prompt` made every attempt throw "destination required"
+        // before an image provider was contacted.
+        destination: String(query || '').trim(),
+        themeJson: enrichPhotoPrompt(query).slice(0, 400),
         tenantId,
         aspectRatio: aspectRatio || '4:3',
         __surface: 'landing-page-image',

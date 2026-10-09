@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
-const { normalizePhoneValue } = requireCJS('../../lib/phoneFormatting');
+const { normalizePhoneValue, normalizeGenericCrmPhone } = requireCJS('../../lib/phoneFormatting');
 
 describe('phoneFormatting — normalizePhoneValue', () => {
   test('preserves normal phone strings', () => {
@@ -17,5 +17,19 @@ describe('phoneFormatting — normalizePhoneValue', () => {
 
   test('stringifies numeric values', () => {
     expect(normalizePhoneValue(919560000000)).toBe('919560000000');
+  });
+});
+
+describe('normalizeGenericCrmPhone', () => {
+  test('converts formatted international numbers to E.164-style values', () => {
+    expect(normalizeGenericCrmPhone('+91 7896541230')).toBe('+917896541230');
+    expect(normalizeGenericCrmPhone('+91-7896541230')).toBe('+917896541230');
+    expect(normalizeGenericCrmPhone('+91 (789) 654-1230')).toBe('+917896541230');
+  });
+
+  test('leaves already normalized numbers unchanged and uses a supplied country code', () => {
+    expect(normalizeGenericCrmPhone('+917896541230')).toBe('+917896541230');
+    expect(normalizeGenericCrmPhone('7896541230', '+91')).toBe('+917896541230');
+    expect(normalizeGenericCrmPhone('+44 7911123456')).toBe('+447911123456');
   });
 });

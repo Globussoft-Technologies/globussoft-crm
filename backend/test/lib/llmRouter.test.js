@@ -195,6 +195,7 @@ describe('llmRouter — module shape', () => {
     // backend/services/marketingFlyerImageLLM.js for structured-image shape).
     expect(r.TASK_ROUTING).toEqual({
       "search": { primary: "perplexity-sonar", fallback: null },
+      "email-template-draft": { primary: "gemini-flash", fallback: "gpt-4" },
       "citation": { primary: "perplexity-sonar", fallback: null },
       "reasoning": { primary: "gemini-flash", fallback: "gpt-4" },
       "talking-points": { primary: "gemini-flash", fallback: "gpt-4" },
@@ -263,7 +264,7 @@ describe('llmRouter — module shape', () => {
     // 'travel-knowledge-rag' (RAG brochure recommendation report) +
     // 'curriculum-objective-extraction' + 'curriculum-itinerary-match'
     // (AI curriculum-to-itinerary matching, 2026-08-24) = 26.
-    expect(r.VALID_TASKS).toHaveLength(26);
+    expect(r.VALID_TASKS).toHaveLength(27);
   });
 });
 

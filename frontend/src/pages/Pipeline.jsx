@@ -214,7 +214,9 @@ export default function Pipeline() {
     } catch (err) { notify.error(err?.body?.error || 'Unable to generate deal score'); }
   };
 
-  return <div style={{ padding: '24px 28px', maxWidth: 1500, margin: '0 auto' }}>
+  return <div style={isGeneric
+    ? { width: '100%', boxSizing: 'border-box', padding: 'clamp(1rem, 3vw, 2rem)' }
+    : { padding: '24px 28px', maxWidth: 1500, margin: '0 auto' }}>
     {isGeneric && <button type="button" aria-label="Go back" title="Back" style={{ ...backButton, display: 'inline-flex', marginBottom: 12 }} onClick={() => navigate(-1)}><ArrowLeft size={16} /> Back</button>}
     <style>{'.deals-kanban-list { scrollbar-width: thin; scrollbar-color: #94a3b8 #e2e8f0; } .deals-kanban-list::-webkit-scrollbar { width: 10px; } .deals-kanban-list::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 6px; } .deals-kanban-list::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 6px; border: 2px solid #e2e8f0; }'}</style>
     <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}><div><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>{isGeneric && <button type="button" aria-label="Go back" title="Back" style={backButton} onClick={() => navigate(-1)}><ArrowLeft size={16} /> Back</button>}<Briefcase size={21} color="var(--accent-color)" /><h1 style={heading}>Deals and Pipelines</h1></div><p style={subtitle}>Track and manage your deals across different stages</p></div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button type="button" style={secondaryButton} onClick={refreshDeals}><RefreshCw size={14} /> Refresh</button><button type="button" style={primaryButton} onClick={() => { setCreateDealDefaults({ pipelineId: pipelineId || undefined, stage: stages[0]?.id || undefined }); setShowCreate(true); }}><Plus size={15} /> Add deal</button></div></header>

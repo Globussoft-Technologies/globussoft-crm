@@ -61,7 +61,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 9050,
+    "all-js-maxKB": 9100,
+    "//pr1535-total-bump": "9050 → 9100 KB: Generic Pickup inventory and operational workspaces added in PR #1535. Run 37892887744 measured 9066.2 KB (49.4 KB growth from PR #1533). All individual chunk caps remain unchanged.",
     "//pr1533-total-bump": "9000 → 9050 KB: Generic campaign wizard and email templates; run #2085 measured 9016.8 KB. Individual chunk caps remain unchanged.",
     "//pr1524-total-bump": "8800→9000 on 2026-10-07: Generic Pickup/Plot, transport, broker, billing and customer pickup workflows add lazy route chunks. Merged CI total is 8865 KB; retain 135 KB headroom. Individual entry/vendor budgets remain unchanged.",
     "//latest-total-bump": "8650→8800 on 2026-10-01: PR #1514 expands wellness booking, invoices, services, notifications, and tenant-wide subscription access, bringing total JS to 8721.0 KB. No runtime dependency was added and the cap retains about 79 KB headroom.",

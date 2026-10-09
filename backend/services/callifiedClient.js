@@ -19,7 +19,11 @@
 
 const prisma = require('../lib/prisma');
 const { getBudgetCap, getSetting, evaluateCap, KEYS } = require('../lib/tenantSettings');
-const { extractPickupLocationFromCallifiedDetails } = require('../lib/callifiedPickup');
+const {
+  extractInterestedPlotAreaFromCallifiedDetails,
+  extractPickupLocationFromCallifiedDetails,
+  hasExplicitNoInterestedPlotArea,
+} = require('../lib/callifiedPickup');
 
 const INTEGRATION = 'ai_calling';
 const FEATURE_FLAG_KEY = 'featureFlag_ai_calling_enabled';
@@ -1757,29 +1761,41 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
 
   let capturedPickup = null;
   const pickupMatch = contactId ? extractPickupLocationFromCallifiedDetails(details) : null;
-  if (pickupMatch) {
+  const interestedPlotArea = contactId ? extractInterestedPlotAreaFromCallifiedDetails(details) : null;
+  const shouldClearInterestedPlotArea = contactId
+    ? hasExplicitNoInterestedPlotArea(details)
+    : false;
+  if (pickupMatch || interestedPlotArea || shouldClearInterestedPlotArea) {
     try {
       const [tenant, contact] = await Promise.all([
         prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }),
         prisma.contact.findFirst({ where: { id: Number(contactId), tenantId, deletedAt: null }, select: { id: true } }),
       ]);
       if (tenant?.vertical === 'generic' && contact) {
-        capturedPickup = await prisma.customerPickup.upsert({
-          where: { tenantId_contactId: { tenantId, contactId: Number(contactId) } },
-          create: {
-            tenantId,
-            contactId: Number(contactId),
-            pickupAddress: pickupMatch.pickupAddress,
-            sourceTranscriptId: pickupMatch.sourceTranscriptId || null,
-            sourceExcerpt: pickupMatch.sourceExcerpt || null,
-          },
-          update: {
-            pickupAddress: pickupMatch.pickupAddress,
-            sourceTranscriptId: pickupMatch.sourceTranscriptId || null,
-            sourceExcerpt: pickupMatch.sourceExcerpt || null,
-          },
-          select: { id: true, pickupAddress: true, sourceTranscriptId: true, updatedAt: true },
-        });
+        if (interestedPlotArea || shouldClearInterestedPlotArea) {
+          await prisma.contact.updateMany({
+            where: { id: Number(contactId), tenantId, deletedAt: null },
+            data: { interestedPlotArea: interestedPlotArea || null },
+          });
+        }
+        if (pickupMatch) {
+          capturedPickup = await prisma.customerPickup.upsert({
+            where: { tenantId_contactId: { tenantId, contactId: Number(contactId) } },
+            create: {
+              tenantId,
+              contactId: Number(contactId),
+              pickupAddress: pickupMatch.pickupAddress,
+              sourceTranscriptId: pickupMatch.sourceTranscriptId || null,
+              sourceExcerpt: pickupMatch.sourceExcerpt || null,
+            },
+            update: {
+              pickupAddress: pickupMatch.pickupAddress,
+              sourceTranscriptId: pickupMatch.sourceTranscriptId || null,
+              sourceExcerpt: pickupMatch.sourceExcerpt || null,
+            },
+            select: { id: true, pickupAddress: true, sourceTranscriptId: true, updatedAt: true },
+          });
+        }
       }
     } catch (pickupError) {
       // Pickup extraction is an additive plot-management workflow. It must
@@ -1788,7 +1804,15 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
     }
   }
 
-  return { ...details, latestTranscript, latestReview, updatedScore, capturedPickup, callStatus: inferredStatus };
+  return {
+    ...details,
+    latestTranscript,
+    latestReview,
+    updatedScore,
+    capturedPickup,
+    interestedPlotArea,
+    callStatus: inferredStatus,
+  };
 }
 
 /**

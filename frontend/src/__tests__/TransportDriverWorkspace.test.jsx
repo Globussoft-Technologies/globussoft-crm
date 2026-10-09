@@ -50,7 +50,7 @@ describe('<TransportDriverWorkspace />', () => {
     expect(screen.getByRole('button', { name: /start pickup/i })).toBeInTheDocument();
   });
 
-  it('moves completed work into the completed tab', async () => {
+  it('shows completed customer trips only when Completed or All is selected', async () => {
     fetchApi.mockResolvedValueOnce({
       ...driverData,
       assignments: [{ ...driverData.assignments[0], status: 'COMPLETED' }],
@@ -58,8 +58,14 @@ describe('<TransportDriverWorkspace />', () => {
     });
     render(<TransportDriverWorkspace />);
     expect(await screen.findByText(/you’re all caught up/i)).toBeInTheDocument();
+    expect(screen.queryByText('Priya Shah')).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: 'Completed' }));
+    expect(screen.getAllByText('Priya Shah').length).toBeGreaterThan(0);
     expect(screen.getByText('Drop-off completed')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Active' }));
+    expect(screen.queryByText('Priya Shah')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'All' }));
+    expect(screen.getAllByText('Priya Shah').length).toBeGreaterThan(0);
   });
 
   it('shows a customer-specific success toast after completing the drop-off', async () => {
@@ -74,7 +80,7 @@ describe('<TransportDriverWorkspace />', () => {
     render(<TransportDriverWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /complete drop-off/i }));
     await waitFor(() => expect(notifyMock.success).toHaveBeenCalledWith(
-      'Drop-off completed for Priya Shah. Trip moved to Completed.',
+      'Drop-off completed for Priya Shah. It was removed from your active trips.',
     ));
     expect(screen.getByText(/you’re all caught up/i)).toBeInTheDocument();
   });

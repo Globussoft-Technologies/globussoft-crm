@@ -1,0 +1,7 @@
+ALTER TABLE `PlotSite`
+    ADD COLUMN `plotNumber` VARCHAR(191) NULL,
+    ADD COLUMN `block` VARCHAR(191) NULL,
+    ADD COLUMN `areaUnit` VARCHAR(191) NULL,
+    ADD COLUMN `roadWidth` VARCHAR(191) NULL,
+    ADD COLUMN `facing` VARCHAR(191) NULL,
+    ADD COLUMN `propertyType` VARCHAR(191) NULL;

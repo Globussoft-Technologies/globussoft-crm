@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
+  Bell,
   Building2,
+  CalendarClock,
   CheckCircle2,
   Clock3,
   Handshake,
@@ -10,6 +12,8 @@ import {
   Phone,
   RefreshCw,
   Search,
+  UserCheck,
+  UserX,
   Users,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
@@ -17,13 +21,23 @@ import { useNotify } from '../utils/notify';
 import './TransportDriverWorkspace.css';
 
 const BROKER_STEPS = [
-  { key: 'READY_TO_EXPLAIN', label: 'Ready to explain', action: 'Start explanation' },
-  { key: 'EXPLANATION_STARTED', label: 'Explaining property', action: 'Finish explanation' },
-  { key: 'EXPLANATION_COMPLETED', label: 'Explanation complete', action: null },
-  { key: 'INTEREST_CONFIRMED', label: 'Sent to Billing', action: null },
+  { key: 'READY_TO_SCHEDULE', label: 'Ready to schedule', action: 'Schedule visit' },
+  { key: 'VISIT_SCHEDULED', label: 'Visit scheduled', action: 'Confirm visit', next: 'VISIT_CONFIRMED' },
+  { key: 'VISIT_CONFIRMED', label: 'Visit confirmed', action: 'Send reminder', next: 'REMINDER_SENT' },
+  { key: 'REMINDER_SENT', label: 'Reminder sent', action: null },
+  { key: 'ATTENDED', label: 'Attended', action: 'Mark plot shown', next: 'PLOT_SHOWN' },
+  { key: 'PLOT_SHOWN', label: 'Plot shown', action: 'Mark plot selected', next: 'PLOT_SELECTED' },
+  { key: 'PLOT_SELECTED', label: 'Plot selected', action: null },
 ];
 
-const workflowIndex = (status) => Math.max(0, BROKER_STEPS.findIndex((step) => step.key === status));
+const SPECIAL_STEPS = {
+  NO_SHOW: { key: 'NO_SHOW', label: 'No-show', action: 'Reschedule visit', next: 'VISIT_RESCHEDULED' },
+  VISIT_RESCHEDULED: { key: 'VISIT_RESCHEDULED', label: 'Visit rescheduled', action: 'Confirm visit', next: 'VISIT_CONFIRMED' },
+};
+
+const workflowIndex = (status) => ['NO_SHOW', 'VISIT_RESCHEDULED'].includes(status)
+  ? 3
+  : Math.max(0, BROKER_STEPS.findIndex((step) => step.key === status));
 
 export default function BrokerCustomerWorkspace() {
   const notify = useNotify();
@@ -57,6 +71,7 @@ export default function BrokerCustomerWorkspace() {
   const visibleCustomers = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return customers.filter((customer) => {
+      if (['PLOT_SELECTED', 'CLOSED_NO_INTEREST'].includes(customer.brokerWorkflow?.status)) return false;
       if (filter === 'completed' && !customer.tripCompleted) return false;
       if (filter === 'waiting' && customer.tripCompleted) return false;
       if (!needle) return true;
@@ -65,38 +80,32 @@ export default function BrokerCustomerWorkspace() {
     });
   }, [customers, filter, search]);
 
-  const advanceWorkflow = async (customer, decisionStatus = null) => {
+  const advanceWorkflow = async (customer, requestedStatus, details = {}) => {
     if (!customer.tripCompleted || !customer.brokerWorkflow) return;
-    const next = BROKER_STEPS[workflowIndex(customer.brokerWorkflow.status) + 1];
-    const requestedStatus = decisionStatus || next?.key;
     if (!requestedStatus) return;
-    setUpdating(customer.id);
+    setUpdating(customer.assignmentKey);
     setError('');
     try {
       const result = await fetchApi(
-        `/api/pickup-plot-inventory/brokers/me/customers/${customer.id}/workflow`,
-        { method: 'PATCH', body: JSON.stringify({ status: requestedStatus }) },
+        `/api/pickup-plot-inventory/brokers/me/assignments/${encodeURIComponent(customer.assignmentKey)}/workflow`,
+        { method: 'PATCH', body: JSON.stringify({ status: requestedStatus, ...details }) },
       );
       setData((current) => ({
         ...current,
         customers: current.customers.map((row) => (
-          row.id === customer.id
-            ? { ...row, brokerWorkflow: { status: result.status, updatedAt: result.statusUpdatedAt } }
+          row.assignmentKey === customer.assignmentKey
+            ? { ...row, brokerWorkflow: { status: result.status, updatedAt: result.statusUpdatedAt, visitScheduledAt: result.visitScheduledAt } }
             : row
         )),
       }));
-      if (result.status === 'INTEREST_CONFIRMED') {
-        notify.success(`${customer.name} was sent to the Billing Department.`);
-      } else if (result.status === 'NOT_INTERESTED') {
-        notify.success(result.messageDelivery?.sent
-          ? `${customer.name}'s case was closed and a thank-you message was sent by ${result.messageDelivery.channel}.`
-          : `${customer.name}'s case was closed. Configure email or SMS to send the thank-you message.`);
+      if (result.status === 'PLOT_SELECTED') {
+        notify.success(`${customer.name}'s selected plot was sent to the Billing Department.`);
       } else {
-        const completedStep = BROKER_STEPS.find((step) => step.key === result.status);
-        notify.success(`${customer.name}: ${completedStep?.label || 'Broker process updated'}.`);
+        const completedStep = BROKER_STEPS.find((step) => step.key === result.status) || SPECIAL_STEPS[result.status];
+        notify.success(`${customer.name}: ${completedStep?.label || 'Site visit updated'}.`);
       }
     } catch (err) {
-      setError(err?.message || 'Could not update the broker process.');
+      setError(err?.message || 'Could not update the site visit.');
     } finally {
       setUpdating(null);
     }
@@ -106,9 +115,9 @@ export default function BrokerCustomerWorkspace() {
     <main className="transport-workspace" data-testid="broker-customer-workspace">
       <section className="transport-hero">
         <div>
-          <span className="transport-eyebrow"><Handshake size={15} /> Broker workspace</span>
-          <h1>My assigned customers</h1>
-          <p>Customers become ready for follow-up only after their transport drop-off is completed.</p>
+          <span className="transport-eyebrow"><Handshake size={15} /> Sales Executive workspace</span>
+          <h1>Site Visit Management</h1>
+          <p>Schedule and manage customer site visits after transport drop-off is completed.</p>
         </div>
         <button type="button" className="transport-refresh" onClick={load} disabled={loading}>
           <RefreshCw size={16} className={loading ? 'is-spinning' : ''} /> Refresh
@@ -116,7 +125,7 @@ export default function BrokerCustomerWorkspace() {
         {data?.broker && (
           <div className="transport-driver-strip">
             <span className="transport-avatar"><Handshake size={19} /></span>
-            <span><strong>{data.broker.name}</strong><small>{data.broker.agency || 'Independent broker'}</small></span>
+            <span><strong>{data.broker.name}</strong><small>{data.broker.agency || 'Independent sales executive'}</small></span>
             {data.broker.commissionPercent != null && <span className="transport-vehicle-number">{Number(data.broker.commissionPercent)}% commission</span>}
           </div>
         )}
@@ -124,8 +133,8 @@ export default function BrokerCustomerWorkspace() {
 
       <section className="transport-summary" aria-label="Customer summary">
         <div><span className="transport-summary-icon total"><Users size={18} /></span><span><strong>{summary.total}</strong><small>All customers</small></span></div>
-        <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Trip completed</small></span></div>
-        <div><span className="transport-summary-icon active"><Clock3 size={18} /></span><span><strong>{summary.waiting}</strong><small>Trip not completed</small></span></div>
+        <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Ready for visit</small></span></div>
+        <div><span className="transport-summary-icon active"><Clock3 size={18} /></span><span><strong>{summary.waiting}</strong><small>Waiting for trip</small></span></div>
       </section>
 
       <div className="transport-toolbar" style={{ gap: 12, flexWrap: 'wrap' }}>
@@ -155,10 +164,10 @@ export default function BrokerCustomerWorkspace() {
       <section aria-label="Assigned customers" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 310px), 1fr))', gap: 14 }}>
         {visibleCustomers.map((customer) => (
           <CustomerCard
-            key={customer.id}
+            key={customer.assignmentKey}
             customer={customer}
-            updating={updating === customer.id}
-            onAdvance={(status) => advanceWorkflow(customer, status)}
+            updating={updating === customer.assignmentKey}
+            onAdvance={(status, details) => advanceWorkflow(customer, status, details)}
           />
         ))}
       </section>
@@ -167,16 +176,20 @@ export default function BrokerCustomerWorkspace() {
 }
 
 function CustomerCard({ customer, updating, onAdvance }) {
+  const [visitScheduledAt, setVisitScheduledAt] = useState('');
   const initials = String(customer.name || '?').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const workflowStatus = customer.brokerWorkflow?.status;
-  const index = workflowStatus === 'NOT_INTERESTED' ? 2 : workflowIndex(workflowStatus);
-  const currentStep = workflowStatus === 'NOT_INTERESTED'
-    ? { key: 'NOT_INTERESTED', label: 'Not interested', action: null }
-    : BROKER_STEPS[index];
-  const nextStep = BROKER_STEPS[index + 1];
-  const needsDecision = workflowStatus === 'EXPLANATION_COMPLETED';
-  const handedToBilling = workflowStatus === 'INTEREST_CONFIRMED';
-  const notInterested = workflowStatus === 'NOT_INTERESTED';
+  const index = workflowIndex(workflowStatus);
+  const currentStep = SPECIAL_STEPS[workflowStatus] || BROKER_STEPS[index];
+  const needsSchedule = ['READY_TO_SCHEDULE', 'NO_SHOW'].includes(workflowStatus);
+  const needsAttendance = workflowStatus === 'REMINDER_SENT';
+  const handedToBilling = workflowStatus === 'PLOT_SELECTED';
+  const noShow = workflowStatus === 'NO_SHOW';
+
+  const submitSchedule = () => {
+    if (!visitScheduledAt) return;
+    onAdvance(workflowStatus === 'NO_SHOW' ? 'VISIT_RESCHEDULED' : 'VISIT_SCHEDULED', { visitScheduledAt });
+  };
   return (
     <article className="transport-trip-card" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <header style={{ alignItems: 'flex-start' }}>
@@ -192,49 +205,59 @@ function CustomerCard({ customer, updating, onAdvance }) {
       <div style={{ display: 'grid', gap: 9, color: 'var(--text-secondary)', fontSize: '.82rem' }}>
         <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><MapPin size={15} /> {customer.plot?.name || 'Plot not assigned'}</span>
         {customer.plot?.address && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Building2 size={15} /> {customer.plot.address}</span>}
+        {customer.brokerWorkflow?.visitScheduledAt && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><CalendarClock size={15} /> {new Date(customer.brokerWorkflow.visitScheduledAt).toLocaleString()}</span>}
       </div>
 
       <div style={{ padding: 12, borderRadius: 12, background: customer.tripCompleted ? 'rgba(16,185,129,.10)' : 'var(--subtle-bg-2)', color: customer.tripCompleted ? '#047857' : 'var(--text-secondary)', fontSize: '.8rem', fontWeight: 700 }}>
         {customer.tripCompleted
-          ? 'Trip completed — customer is ready for broker follow-up.'
-          : 'Trip not completed. Customer details remain listed, but no in-progress transport status is shared.'}
+          ? 'Trip completed — customer is ready for site visit management.'
+          : 'Trip not completed. Site visit actions unlock after the customer reaches the plot.'}
       </div>
 
       {customer.tripCompleted && customer.brokerWorkflow && (
-        <section aria-label={`Broker process for ${customer.name}`} style={{ display: 'grid', gap: 10 }}>
+        <section aria-label={`Site visit process for ${customer.name}`} style={{ display: 'grid', gap: 10 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
-            <span style={{ fontSize: '.68rem', color: 'var(--text-secondary)', fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase' }}>Broker process</span>
-            <strong style={{ color: notInterested ? '#b45309' : handedToBilling ? '#047857' : 'var(--primary-color, var(--accent-color))', fontSize: '.78rem' }}>{currentStep.label}</strong>
+            <span style={{ fontSize: '.68rem', color: 'var(--text-secondary)', fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase' }}>Site visit process</span>
+            <strong style={{ color: noShow ? '#b45309' : handedToBilling ? '#047857' : 'var(--primary-color, var(--accent-color))', fontSize: '.78rem' }}>{currentStep.label}</strong>
           </div>
-          <div className="transport-progress" aria-label={`Broker progress: ${currentStep.label}`} style={{ gridTemplateColumns: `repeat(${BROKER_STEPS.length - 1}, 1fr)`, margin: 0 }}>
+          <div className="transport-progress" aria-label={`Site visit progress: ${currentStep.label}`} style={{ gridTemplateColumns: `repeat(${BROKER_STEPS.length - 1}, 1fr)`, margin: 0 }}>
             {BROKER_STEPS.slice(0, -1).map((step, stepIndex) => <span key={step.key} className={stepIndex < index ? 'done' : ''} />)}
           </div>
           <small style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-            Explain the property, record the customer’s decision, and send interested customers to Billing.
+            Schedule the visit, record attendance, show the plot, and send a selected plot to Billing.
           </small>
         </section>
       )}
 
-      {customer.tripCompleted && needsDecision && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          <button type="button" className="transport-map-button" onClick={() => onAdvance('NOT_INTERESTED')} disabled={updating}>
-            Not interested
-          </button>
-          <button type="button" className="transport-primary-button" onClick={() => onAdvance('INTEREST_CONFIRMED')} disabled={updating}>
-            Interested<ArrowRight size={16} />
+      {customer.tripCompleted && needsSchedule && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <label style={{ display: 'grid', gap: 5, color: 'var(--text-secondary)', fontSize: '.75rem', fontWeight: 700 }}>
+            Visit date and time
+            <input className="input-field" type="datetime-local" aria-label={`Visit date and time for ${customer.name}`} value={visitScheduledAt} onChange={(event) => setVisitScheduledAt(event.target.value)} />
+          </label>
+          <button type="button" className="transport-primary-button" onClick={submitSchedule} disabled={updating || !visitScheduledAt} style={{ width: '100%' }}>
+            <CalendarClock size={16} /> {updating ? 'Updating…' : currentStep.action}
           </button>
         </div>
       )}
-      {customer.tripCompleted && nextStep && !needsDecision && !handedToBilling && !notInterested && (
-        <button type="button" className="transport-primary-button" onClick={() => onAdvance()} disabled={updating} style={{ width: '100%' }}>
+      {customer.tripCompleted && needsAttendance && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <button type="button" className="transport-map-button" onClick={() => onAdvance('NO_SHOW')} disabled={updating}>
+            <UserX size={16} /> No-show
+          </button>
+          <button type="button" className="transport-primary-button" onClick={() => onAdvance('ATTENDED')} disabled={updating}>
+            <UserCheck size={16} /> Attendance
+          </button>
+        </div>
+      )}
+      {customer.tripCompleted && currentStep?.next && !needsSchedule && !needsAttendance && !handedToBilling && (
+        <button type="button" className="transport-primary-button" onClick={() => onAdvance(currentStep.next)} disabled={updating} style={{ width: '100%' }}>
+          {workflowStatus === 'VISIT_CONFIRMED' && <Bell size={16} />}
           {updating ? 'Updating…' : currentStep.action}<ArrowRight size={16} />
         </button>
       )}
       {customer.tripCompleted && handedToBilling && (
-        <span className="transport-complete-label" style={{ justifyContent: 'center' }}><CheckCircle2 size={16} /> Customer sent to Billing Department</span>
-      )}
-      {customer.tripCompleted && notInterested && (
-        <span style={{ color: '#b45309', textAlign: 'center', fontWeight: 800, fontSize: '.82rem' }}>Case closed — thank-you follow-up recorded</span>
+        <span className="transport-complete-label" style={{ justifyContent: 'center' }}><CheckCircle2 size={16} /> Selected plot sent to Billing Department</span>
       )}
 
       <footer style={{ marginTop: 'auto' }}>

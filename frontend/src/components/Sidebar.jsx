@@ -2631,21 +2631,30 @@ function renderGenericNav({
     return token === 'transportperson' || token === 'transport';
   });
   if (isTransportPerson && !isAdmin) {
-    return <Link to="/home" end icon={Truck} label="My Trips" />;
+    return <>
+      <Link to="/home" end icon={Truck} label="My Trips" />
+      <Link to="/profile" icon={UserCircle} label="My Profile" />
+    </>;
   }
   const isBroker = roles.some((value) => {
     const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     return ['broker', 'brooker', 'plotbroker', 'plotbrooker'].includes(token);
   });
   if (isBroker && !isAdmin) {
-    return <Link to="/home" end icon={Handshake} label="My Customers" />;
+    return <>
+      <Link to="/home" end icon={Handshake} label="Site Visits" />
+      <Link to="/profile" icon={UserCircle} label="My Profile" />
+    </>;
   }
   const isBilling = roles.some((value) => {
     const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     return token === 'billing' || token === 'billingdepartment';
   });
   if (isBilling && !isAdmin) {
-    return <Link to="/home" end icon={Receipt} label="Billing Queue" />;
+    return <>
+      <Link to="/home" end icon={Receipt} label="Billing Queue" />
+      <Link to="/profile" icon={UserCircle} label="My Profile" />
+    </>;
   }
   const canRenderLink = (props) => {
     const canonical = getGenericAccessByPath(props.to);
@@ -2796,9 +2805,10 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Pickup & Plot", <>
-        <Link to="/pickup-plot-inventory" icon={MapIcon} label="Inventory" adminOnly />
+        <Link to="/pickup-plot-inventory" icon={MapIcon} label="Plot Inventory" adminOnly />
+        <Link to="/pickup-inventory" icon={MapPin} label="Pickup Inventory" adminOnly />
         <Link to="/transport-persons" icon={Truck} label="Transport Persons" adminOnly />
-        <Link to="/plot-brokers" icon={Handshake} label="Plot Brokers" adminOnly />
+        <Link to="/plot-brokers" icon={Handshake} label="Sales Executives" adminOnly />
         <Link to="/billing-persons" icon={Receipt} label="Billing Persons" adminOnly />
         <Link to="/pickup-customers" icon={MapPin} label="Customer Status" adminOnly />
       </>)}

@@ -1,7 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Clock3, Eye, MapPin, Pencil, RefreshCw, Search, Truck, Users, X } from 'lucide-react';
+import { CheckCircle2, Eye, MapPin, Pencil, RefreshCw, Search, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import ResizableTableHeader from '../components/ResizableTableHeader';
+import useResizableColumnWidths from '../utils/useResizableColumnWidths';
+
+const CUSTOMER_TABLE_COLUMNS = [
+  { label: 'S.No.', width: 80, minWidth: 70 },
+  { label: 'Customer', width: 170, minWidth: 110 },
+  { label: 'Contact', width: 190, minWidth: 130 },
+  { label: 'Interested plot area', width: 190, minWidth: 145 },
+  { label: 'Pickup location', width: 270, minWidth: 180 },
+  { label: 'Trip status', width: 180, minWidth: 130 },
+  { label: 'Transport person', width: 170, minWidth: 130 },
+  { label: 'Overall status', width: 230, minWidth: 160 },
+  { label: 'Actions', width: 190, minWidth: 150 },
+];
+const customerHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere', background: '#f3f4f6' };
 
 const STATUS_LABELS = {
   PICKUP_LOCATION_CAPTURED: 'Awaiting transport assignment',
@@ -14,21 +29,30 @@ const STATUS_LABELS = {
   ARRIVED_AT_DROP: 'Arrived at plot',
   COMPLETED: 'Trip completed',
   PENDING: 'Not started',
-  AWAITING_BROKER_ASSIGNMENT: 'Awaiting broker assignment',
-  READY_TO_EXPLAIN: 'Ready for plot explanation',
-  EXPLANATION_STARTED: 'Plot explanation started',
-  EXPLANATION_COMPLETED: 'Plot explanation completed',
-  INTEREST_CONFIRMED: 'Interest confirmed',
-  NOT_INTERESTED: 'Not interested',
-  READY_FOR_BILLING: 'Ready for billing',
-  DETAILS_VERIFIED: 'Billing details verified',
-  INVOICE_PREPARED: 'Invoice prepared',
+  AWAITING_BROKER_ASSIGNMENT: 'Awaiting Sales Executive assignment',
+  READY_TO_SCHEDULE: 'Ready to schedule site visit',
+  VISIT_SCHEDULED: 'Site visit scheduled',
+  VISIT_CONFIRMED: 'Site visit confirmed',
+  REMINDER_SENT: 'Site visit reminder sent',
+  ATTENDED: 'Customer attended',
+  NO_SHOW: 'No-show',
+  VISIT_RESCHEDULED: 'Site visit rescheduled',
+  PLOT_SHOWN: 'Plot shown',
+  PLOT_SELECTED: 'Plot selected',
+  CLOSED_NO_INTEREST: 'Closed (not interested)',
+  PLOT_RESERVED: 'Plot reserved',
+  BILLING: 'Billing',
+  INVOICE_CREATED: 'Invoice created',
   INVOICE_SENT: 'Invoice sent',
+  PAYMENT_PENDING: 'Payment pending',
   PAYMENT_RECEIVED: 'Payment received',
-  BILLING_COMPLETED: 'Billing completed',
+  PAYMENT_VERIFIED: 'Payment verified',
+  BOOKING_CONFIRMED: 'Booking confirmed',
+  PLOT_SOLD: 'Plot sold',
+  TRANSACTION_COMPLETED: 'Transaction completed',
 };
 
-const STAGE_LABELS = { transport: 'Transport', broker: 'Broker', billing: 'Billing' };
+const STAGE_LABELS = { pickup: 'Pickup', transport: 'Transport', broker: 'Sales Executive', billing: 'Billing', payment: 'Payment', plot: 'Plot' };
 
 const WORKFLOW_STEPS = {
   transport: [
@@ -36,12 +60,13 @@ const WORKFLOW_STEPS = {
     'ARRIVED_AT_PICKUP', 'PICKED_UP', 'EN_ROUTE', 'ARRIVED_AT_DROP', 'COMPLETED',
   ],
   broker: [
-    'AWAITING_BROKER_ASSIGNMENT', 'READY_TO_EXPLAIN', 'EXPLANATION_STARTED',
-    'EXPLANATION_COMPLETED', 'INTEREST_CONFIRMED',
+    'AWAITING_BROKER_ASSIGNMENT', 'READY_TO_SCHEDULE', 'VISIT_SCHEDULED',
+    'VISIT_CONFIRMED', 'REMINDER_SENT', 'ATTENDED', 'PLOT_SHOWN', 'PLOT_SELECTED',
   ],
   billing: [
-    'READY_FOR_BILLING', 'DETAILS_VERIFIED', 'INVOICE_PREPARED',
-    'INVOICE_SENT', 'PAYMENT_RECEIVED', 'BILLING_COMPLETED',
+    'PLOT_RESERVED', 'BILLING', 'INVOICE_CREATED', 'INVOICE_SENT', 'PAYMENT_PENDING',
+    'PAYMENT_RECEIVED', 'PAYMENT_VERIFIED', 'BOOKING_CONFIRMED',
+    'PLOT_SOLD', 'TRANSACTION_COMPLETED',
   ],
 };
 
@@ -49,6 +74,11 @@ const formatStatus = (status) => STATUS_LABELS[status] || String(status || 'PEND
 const formatDate = (value) => value ? new Date(value).toLocaleString() : 'No update yet';
 
 function workflowTimeline(row) {
+  const historyByStep = new Map();
+  for (const event of row.workflowHistory || []) {
+    const step = event.toStatus || event.eventType;
+    if (step) historyByStep.set(step, event);
+  }
   const currentStage = row.currentStage || 'transport';
   const stages = ['transport', 'broker', 'billing'];
   return stages.flatMap((stage) => {
@@ -56,9 +86,11 @@ function workflowTimeline(row) {
     const stageIndex = stages.indexOf(stage);
     const currentStageIndex = stages.indexOf(currentStage);
     const currentStatus = detail.status || (stage === 'transport' ? row.status : 'PENDING');
-    const steps = stage === 'broker' && currentStatus === 'NOT_INTERESTED'
-      ? [...WORKFLOW_STEPS.broker.slice(0, -1), 'NOT_INTERESTED']
-      : WORKFLOW_STEPS[stage];
+    const steps = stage === 'broker' && ['NO_SHOW', 'VISIT_RESCHEDULED'].includes(currentStatus)
+      ? [...WORKFLOW_STEPS.broker.slice(0, 5), 'NO_SHOW', 'VISIT_RESCHEDULED', ...WORKFLOW_STEPS.broker.slice(5)]
+      : stage === 'broker' && currentStatus === 'CLOSED_NO_INTEREST'
+        ? [...WORKFLOW_STEPS.broker.slice(0, 2), 'CLOSED_NO_INTEREST']
+        : WORKFLOW_STEPS[stage];
     const currentIndex = steps.indexOf(currentStatus);
 
     return steps.map((step, index) => {
@@ -66,14 +98,16 @@ function workflowTimeline(row) {
       if (stageIndex < currentStageIndex) state = 'complete';
       if (stageIndex === currentStageIndex && currentIndex >= 0) {
         if (index < currentIndex) state = 'complete';
-        if (index === currentIndex) state = ['COMPLETED', 'BILLING_COMPLETED'].includes(currentStatus) ? 'complete' : 'current';
+        if (index === currentIndex) state = ['COMPLETED', 'TRANSACTION_COMPLETED'].includes(currentStatus) ? 'complete' : 'current';
       }
+      const history = historyByStep.get(step);
       return {
         stage,
         step,
         state,
+        eventLabel: history?.label,
         assignee: index === 0 ? detail.assignee : null,
-        updatedAt: index === currentIndex ? detail.updatedAt : null,
+        updatedAt: history?.occurredAt || (index === currentIndex ? detail.updatedAt : null),
       };
     });
   });
@@ -107,10 +141,16 @@ function PickupLocationLink({ address, customerName }) {
   );
 }
 
+function StatusDetail({ label, value }) {
+  return <div style={{ minWidth: 0 }}>
+    <div style={{ color: 'var(--text-secondary)', fontSize: '.7rem', fontWeight: 700 }}>{label}</div>
+    <div style={{ marginTop: 3, fontSize: '.82rem', fontWeight: 700, overflowWrap: 'anywhere' }}>{value || 'Not available'}</div>
+  </div>;
+}
+
 export default function PickupCustomers() {
   const notify = useNotify();
   const [customers, setCustomers] = useState([]);
-  const [summary, setSummary] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
@@ -118,13 +158,16 @@ export default function PickupCustomers() {
   const [viewingCustomer, setViewingCustomer] = useState(null);
   const [editAddress, setEditAddress] = useState('');
   const [saving, setSaving] = useState(false);
+  const { columnWidths, resizeColumn, tableMinWidth } = useResizableColumnWidths(
+    CUSTOMER_TABLE_COLUMNS,
+    'pickup-plot-customer-status-column-widths',
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const response = await fetchApi('/api/pickup-plot-inventory/customer-pickups');
       setCustomers(Array.isArray(response?.customers) ? response.customers : []);
-      setSummary(response?.summary || {});
     } catch (error) {
       notify.error(error.message || 'Could not load customer pickup status.');
     } finally {
@@ -166,7 +209,7 @@ export default function PickupCustomers() {
     if (status === 'active' && ['PICKUP_LOCATION_CAPTURED', 'COMPLETED'].includes(row.status)) return false;
     if (status === 'completed' && row.status !== 'COMPLETED') return false;
     const needle = search.trim().toLowerCase();
-    return !needle || [row.contact?.name, row.contact?.phone, row.contact?.email, row.contact?.company, row.pickupAddress, row.transportPerson?.name]
+    return !needle || [row.contact?.name, row.contact?.phone, row.contact?.email, row.contact?.company, row.pickupAddress, row.contact?.interestedPlotArea, row.transportPerson?.name]
       .some((value) => String(value || '').toLowerCase().includes(needle));
   }), [customers, search, status]);
 
@@ -177,40 +220,35 @@ export default function PickupCustomers() {
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><MapPin size={28} /> Customer Status</h1>
           <p style={{ color: 'var(--text-secondary)', margin: '.4rem 0 0' }}>Pickup locations confirmed from Callified transcripts and their live transport status.</p>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) 190px auto', gap: 8, flex: '1 1 560px', justifyContent: 'flex-end', maxWidth: 720, alignItems: 'center' }}>
-          <label style={{ position: 'relative', flex: '1 1 220px' }}><Search size={15} style={{ position: 'absolute', left: 11, top: 11, color: 'var(--text-secondary)' }} /><input className="input-field" aria-label="Search customer status" placeholder="Search customers or locations..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ width: '100%', boxSizing: 'border-box', paddingLeft: 34 }} /></label>
-          <select className="input-field" aria-label="Filter customer trip status" value={status} onChange={(event) => setStatus(event.target.value)} style={{ width: '100%', boxSizing: 'border-box' }}><option value="all">All statuses</option><option value="waiting">Awaiting assignment</option><option value="active">Active trips</option><option value="completed">Completed</option></select>
-          <button type="button" className="btn-secondary" onClick={load} style={{ whiteSpace: 'nowrap' }}><RefreshCw size={15} /> Refresh</button>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, flex: '1 1 620px', justifyContent: 'flex-end', maxWidth: 760 }}>
+          <label style={{ position: 'relative', flex: '1 1 260px', minWidth: 220 }}><Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} /><input className="input-field" type="search" aria-label="Search customer status" placeholder="Search customers or locations..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 34 }} /></label>
+          <select className="input-field" aria-label="Filter customer trip status" value={status} onChange={(event) => setStatus(event.target.value)} style={{ flex: '0 0 190px', height: 44, boxSizing: 'border-box' }}><option value="all">All statuses</option><option value="waiting">Awaiting assignment</option><option value="active">Active trips</option><option value="completed">Completed</option></select>
+          <button type="button" className="btn-secondary" onClick={load} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><RefreshCw size={15} /> Refresh</button>
         </div>
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,180px),1fr))', gap: 12, marginBottom: '1.25rem' }}>
-        {[
-          ['Customers', summary.total || 0, Users],
-          ['Awaiting assignment', summary.awaitingAssignment || 0, Clock3],
-          ['Active trips', summary.activeTrips || 0, Truck],
-          ['Completed', summary.completed || 0, CheckCircle2],
-        ].map(([label, value, Icon]) => <div key={label} className="card" style={{ padding: '1rem' }}><Icon size={18} /><div style={{ color: 'var(--text-secondary)', fontSize: '.76rem', fontWeight: 700, marginTop: 7 }}>{label}</div><div style={{ fontSize: '1.65rem', fontWeight: 800 }}>{value}</div></div>)}
-      </div>
-
       {loading ? <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>Loading customer statusâ€¦</div> : (
         <div
-          className="card"
+          className="card pickup-plot-table-scroll"
           data-testid="pickup-customers-table-scroll"
           style={{
             flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',
-            overflowX: 'hidden', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
+            overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
-          <table aria-label="Customer pickup status" style={{ width: '100%', minWidth: 0, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
-            <thead><tr>{['Customer', 'Contact', 'Pickup location', 'Trip status', 'Transport person', 'Overall status', 'Actions'].map((label) => <th key={label} scope="col" style={{ position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere', background: 'linear-gradient(var(--table-header-bg, rgba(148,163,184,.08)), var(--table-header-bg, rgba(148,163,184,.08))), var(--popover-bg, #fff)' }}>{label}</th>)}</tr></thead>
+          <div data-testid="pickup-customers-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
+          <table className="pickup-plot-resizable-table" aria-label="Customer pickup status" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+            <colgroup>{columnWidths.map((width, index) => <col key={CUSTOMER_TABLE_COLUMNS[index].label} style={{ width }} />)}</colgroup>
+            <thead><tr>{CUSTOMER_TABLE_COLUMNS.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={customerHeaderStyle}>{column.label}</ResizableTableHeader>)}</tr></thead>
             <tbody>
-              {visibleCustomers.map((row) => {
+              {visibleCustomers.map((row, index) => {
                 const badge = statusColor(row.status);
                 return <tr key={row.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <td style={{ padding: '.55rem .65rem' }}>{index + 1}</td>
                   <td style={{ padding: '.55rem .65rem', fontWeight: 800, overflowWrap: 'anywhere' }}>{row.contact?.name || 'Customer'}</td>
                   <td style={{ padding: '.55rem .65rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{row.contact?.company || row.contact?.phone || row.contact?.email || 'No contact details'}</td>
+                  <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}>{row.contact?.interestedPlotArea || <span style={{ color: 'var(--text-secondary)' }}>Not captured</span>}</td>
                   <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><PickupLocationLink address={row.pickupAddress} customerName={row.contact?.name} /></td>
                   <td style={{ padding: '.55rem .65rem' }}><span style={{ ...badge, display: 'inline-flex', padding: '.22rem .45rem', borderRadius: 999, fontSize: '.7rem', fontWeight: 800 }}>{STATUS_LABELS[row.status] || row.status}</span></td>
                   <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}>{row.transportPerson?.name || 'Not assigned'}</td>
@@ -219,16 +257,17 @@ export default function PickupCustomers() {
                     <div style={{ marginTop: 3, color: 'var(--text-secondary)', fontSize: '.72rem' }}>{formatDate(row.currentStatusUpdatedAt || row.statusUpdatedAt)}</div>
                   </td>
                   <td style={{ padding: '.55rem .65rem' }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
                       <button type="button" className="btn-secondary" aria-label={`Edit ${row.contact?.name || 'customer'} pickup location`} onClick={() => openEdit(row)} style={{ padding: '.38rem .55rem', fontSize: '.72rem' }}><Pencil size={13} /> Edit</button>
                       <button type="button" className="btn-secondary" aria-label={`View all status for ${row.contact?.name || 'customer'}`} onClick={() => setViewingCustomer(row)} style={{ padding: '.38rem .55rem', fontSize: '.72rem' }}><Eye size={13} /> View status</button>
                     </div>
                   </td>
                 </tr>;
               })}
-              {visibleCustomers.length === 0 && <tr><td colSpan="7" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No customer pickup records found. Save an address from a Callified transcript to add one.</td></tr>}
+              {visibleCustomers.length === 0 && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No customer pickup records found. Save an address from a Callified transcript to add one.</td></tr>}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -253,19 +292,35 @@ export default function PickupCustomers() {
 
       {viewingCustomer && (
         <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>
-          <section role="dialog" aria-modal="true" aria-labelledby="status-history-title" className="card" style={{ width: 'min(680px, 100%)', maxHeight: '82vh', display: 'flex', flexDirection: 'column', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="status-history-title" className="card" style={{ width: 'min(780px, 100%)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <div><h2 id="status-history-title" style={{ margin: 0, fontSize: '1.2rem' }}>All customer statuses</h2><div style={{ marginTop: 4, color: 'var(--text-secondary)' }}>{viewingCustomer.contact?.name || 'Customer'}</div></div>
               <button type="button" className="btn-secondary" aria-label="Close customer statuses" onClick={() => setViewingCustomer(null)} style={{ padding: '.4rem' }}><X size={17} /></button>
             </div>
-            <div data-testid="workflow-timeline" style={{ overflowY: 'auto', marginTop: 18, padding: '2px 8px 4px 2px' }}>
+            <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', marginTop: 16, paddingRight: 8 }}>
+              <div data-testid="customer-status-details" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: 12, padding: '.85rem', border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--subtle-bg, rgba(148,163,184,.08))' }}>
+                <StatusDetail label="Phone" value={viewingCustomer.contact?.phone} />
+                <StatusDetail label="Email" value={viewingCustomer.contact?.email} />
+                <StatusDetail label="Company" value={viewingCustomer.contact?.company} />
+                <StatusDetail label="CRM status" value={viewingCustomer.contact?.status} />
+                <StatusDetail label="Interested plot area" value={viewingCustomer.contact?.interestedPlotArea} />
+                <StatusDetail label="Pickup location" value={viewingCustomer.pickupAddress} />
+                <StatusDetail label="Assigned plot" value={viewingCustomer.assignedPlot?.name} />
+                <StatusDetail label="Plot address" value={viewingCustomer.assignedPlot?.address} />
+                <StatusDetail label="Transport person" value={viewingCustomer.workflow?.transport?.assignee?.name || viewingCustomer.transportPerson?.name} />
+                <StatusDetail label="Sales Executive" value={viewingCustomer.workflow?.broker?.assignee?.name} />
+                <StatusDetail label="Overall status" value={`${STAGE_LABELS[viewingCustomer.currentStage] || 'Transport'}: ${formatStatus(viewingCustomer.currentStatus || viewingCustomer.status)}`} />
+                <StatusDetail label="Last updated" value={formatDate(viewingCustomer.currentStatusUpdatedAt || viewingCustomer.statusUpdatedAt)} />
+              </div>
+              <h3 style={{ margin: '18px 0 12px', fontSize: '1rem' }}>Workflow progress</h3>
+              <div data-testid="workflow-timeline" style={{ padding: '2px 0 4px 2px' }}>
               {workflowTimeline(viewingCustomer).map((item, index, timeline) => {
                 const firstInStage = index === 0 || timeline[index - 1].stage !== item.stage;
                 const isLast = index === timeline.length - 1;
                 const activeColor = 'var(--primary-color, var(--accent-color))';
                 return (
-                  <div key={`${item.stage}-${item.step}`} style={{ display: 'grid', gridTemplateColumns: '88px 28px minmax(0, 1fr)', minHeight: 58 }}>
-                    <div style={{ paddingTop: 3, color: 'var(--text-primary)', fontSize: '.78rem', fontWeight: 800 }}>{firstInStage ? STAGE_LABELS[item.stage] : ''}</div>
+                  <div key={item.id || `${item.stage}-${item.step}`} style={{ display: 'grid', gridTemplateColumns: '88px 28px minmax(0, 1fr)', minHeight: 58 }}>
+                    <div style={{ paddingTop: 3, color: 'var(--text-primary)', fontSize: '.78rem', fontWeight: 800 }}>{firstInStage ? (STAGE_LABELS[item.stage] || item.stage.replaceAll('_', ' ')) : ''}</div>
                     <div aria-hidden="true" style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
                       {!isLast && <span data-testid="workflow-connector" style={{ position: 'absolute', top: 18, bottom: -18, width: 2, background: item.state === 'complete' ? activeColor : 'var(--border-color)', zIndex: 0 }} />}
                       <span style={{ position: 'relative', zIndex: 1, width: 18, height: 18, boxSizing: 'border-box', borderRadius: '50%', display: 'grid', placeItems: 'center', color: item.state === 'upcoming' ? 'var(--text-secondary)' : '#fff', background: item.state === 'upcoming' ? 'var(--popover-bg, #fff)' : activeColor, border: `2px solid ${item.state === 'upcoming' ? 'var(--border-color)' : activeColor}`, boxShadow: item.state === 'current' ? `0 0 0 4px color-mix(in srgb, ${activeColor} 18%, transparent)` : 'none' }}>
@@ -275,12 +330,14 @@ export default function PickupCustomers() {
                     <div style={{ padding: '1px 0 15px 8px', minWidth: 0 }}>
                       <strong style={{ color: item.state === 'upcoming' ? 'var(--text-secondary)' : 'var(--text-primary)' }}>{formatStatus(item.step)}</strong>
                       {item.state === 'current' && <span style={{ display: 'inline-flex', marginLeft: 8, padding: '.15rem .4rem', borderRadius: 999, color: activeColor, background: 'rgba(79,70,229,.1)', fontSize: '.66rem', fontWeight: 800 }}>Current</span>}
+                      {item.eventLabel && item.eventLabel !== formatStatus(item.step) && <div style={{ marginTop: 3, color: 'var(--text-secondary)', fontSize: '.75rem' }}>{item.eventLabel}</div>}
                       {item.assignee?.name && <div style={{ marginTop: 3, color: 'var(--text-secondary)', fontSize: '.75rem' }}>Assigned to {item.assignee.name}</div>}
                       {item.updatedAt && <div style={{ marginTop: 3, color: 'var(--text-secondary)', fontSize: '.72rem' }}>{formatDate(item.updatedAt)}</div>}
                     </div>
                   </div>
                 );
               })}
+              </div>
             </div>
           </section>
         </div>

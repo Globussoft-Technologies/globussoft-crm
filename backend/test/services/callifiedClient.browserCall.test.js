@@ -44,6 +44,7 @@ beforeEach(() => {
   prisma.contact.findUnique = vi.fn().mockResolvedValue({ ...CONTACT });
   prisma.contact.findFirst = vi.fn().mockResolvedValue({ id: CONTACT.id });
   prisma.contact.update = vi.fn().mockResolvedValue({ ...CONTACT });
+  prisma.contact.updateMany = vi.fn().mockResolvedValue({ count: 1 });
   prisma.tenant = prisma.tenant || {};
   prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
   prisma.customerPickup = prisma.customerPickup || {};
@@ -316,5 +317,35 @@ describe('fetchAndStoreCallDetails pickup extraction', () => {
       latestTranscript: { id: 790 },
     });
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('pickup capture failed (non-fatal)'));
+  });
+
+  test('clears a previously inferred interested area when the customer explicitly has no preference', async () => {
+    stub('getCallDetails', async () => ({
+      transcripts: [{
+        id: 791,
+        created_at: '2026-10-08T11:40:00.000Z',
+        transcript: [
+          { role: 'AI', text: 'Which plot or area would you like to visit?' },
+          { role: 'User', text: "I don't have any specific area. Can you recommend?" },
+        ],
+      }],
+      reviews: [{
+        transcript_id: 791,
+        summary: 'The customer may be interested in Koramangala plots.',
+      }],
+    }));
+
+    const result = await client.fetchAndStoreCallDetails({
+      tenantId: 1,
+      callifiedLeadId: '902',
+      contactId: 11,
+      updateScore: false,
+    });
+
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: 11, tenantId: 1, deletedAt: null },
+      data: { interestedPlotArea: null },
+    });
+    expect(result.interestedPlotArea).toBeNull();
   });
 });

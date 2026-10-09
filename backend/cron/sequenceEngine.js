@@ -29,6 +29,7 @@ const prisma = require('../lib/prisma');
 const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
 const { normalizeGenericTemplatePlaceholders } = require('../lib/genericCampaignAutomation');
+const { renderGenericTemplate } = require('../lib/genericEmailTemplateRenderer');
 const flyerRenderEngine = require('../services/flyerRenderEngine');
 const shortUrlService = require('../services/shortUrl');
 const { sendEmail } = require('../lib/emailSender');
@@ -148,10 +149,12 @@ function buildContextForEnrollment(enrollment) {
   const c = enrollment.contact || {};
   const isGeneric = enrollment.sequence?.tenant?.vertical === 'generic';
   const names = String(c.name || '').trim().split(/\s+/).filter(Boolean);
-  const custom = Object.fromEntries((c.leadCustomFieldValues || []).map(value => [
-    value.field?.fieldKey,
-    value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool ?? '',
-  ]).filter(([key]) => key));
+  const customFields = (c.leadCustomFieldValues || []).map(value => ({
+    key: value.field?.fieldKey,
+    label: value.field?.label,
+    value: value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool ?? '',
+  })).filter(value => value.key);
+  const custom = Object.fromEntries(customFields.map(value => [value.key, value.value]));
   let tags = [];
   try { tags = c.tagsJson ? JSON.parse(c.tagsJson) : []; } catch (_error) { tags = []; }
   const contact = {
@@ -160,6 +163,9 @@ function buildContextForEnrollment(enrollment) {
     email: c.email,
     phone: c.phone,
     company: c.company,
+    first_name: names[0] || '',
+    last_name: names.slice(1).join(' '),
+    company_name: enrollment.sequence?.tenant?.name || '',
     status: c.status,
   };
   if (isGeneric) Object.assign(contact, {
@@ -197,12 +203,19 @@ function buildContextForEnrollment(enrollment) {
     company: c.company,
     enrollmentId: enrollment.id,
     sequenceId: enrollment.sequenceId,
+    organization: { name: enrollment.sequence?.tenant?.name || '' },
+    tenant: { name: enrollment.sequence?.tenant?.name || '' },
+    companyName: enrollment.sequence?.tenant?.name || '',
+    company_name: enrollment.sequence?.tenant?.name || '',
+    organizationName: enrollment.sequence?.tenant?.name || '',
+    customFields,
   };
   if (isGeneric) {
     const deal = c.deals?.[0] || {};
     Object.assign(context, {
-    contact_name: c.name || '',
-    sender_name: FROM_EMAIL,
+      contact_name: c.name || '',
+      sender_name: enrollment.sequence?.tenant?.name || '',
+      sender: { name: enrollment.sequence?.tenant?.name || '', email: '', company: enrollment.sequence?.tenant?.name || '' },
     deal_name: deal.name || deal.title || deal.dealName || '',
     deal,
     invoice: c.invoices?.[0] || {},
@@ -699,8 +712,8 @@ async function processStep(step, enrollment) {
       const templateBody = isGenericSequence
         ? normalizeGenericTemplatePlaceholders(step.emailTemplate.body || '')
         : step.emailTemplate.body || '';
-      subject = renderTemplate(templateSubject, ctx);
-      body = renderTemplate(templateBody, ctx);
+      subject = renderGenericTemplate(templateSubject, ctx);
+      body = renderGenericTemplate(templateBody, ctx, { html: true });
     }
     const to = enrollment.contact?.email;
     if (!to) {
@@ -1404,9 +1417,9 @@ const tickSequenceEngine = async () => {
     const enrollments = await prisma.sequenceEnrollment.findMany({
       where: { id: { in: ids }, lockedBy: claimId },
       include: {
-        sequence: { include: { tenant: { select: { vertical: true } }, campaigns: { select: { id: true, status: true, scheduleFilters: true, sequenceId: true }, orderBy: { createdAt: 'desc' } }, steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
+        sequence: { include: { tenant: { select: { vertical: true, name: true } }, campaigns: { select: { id: true, status: true, scheduleFilters: true, sequenceId: true }, orderBy: { createdAt: 'desc' } }, steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
         contact: { include: {
-          leadCustomFieldValues: { include: { field: { select: { fieldKey: true } } } },
+          leadCustomFieldValues: { include: { field: { select: { fieldKey: true, label: true } } } },
           deals: { orderBy: { createdAt: 'desc' }, take: 1 },
           invoices: { orderBy: { issuedDate: 'desc' }, take: 1 },
           tasks: { orderBy: { createdAt: 'desc' }, take: 1 },

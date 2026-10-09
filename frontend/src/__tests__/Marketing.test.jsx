@@ -113,6 +113,9 @@ function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], forms = [], sequenc
     if (/^\/api\/marketing\/campaigns\/\d+$/.test(url)) {
       return Promise.resolve(campaigns.find(campaign => campaign.id === Number(url.split('/').at(-1))) || null);
     }
+    if (url.startsWith('/api/marketing/campaigns?paginate=1')) {
+      return Promise.resolve({ items: campaigns, pagination: { page: 1, pageSize: 8, total: campaigns.length, totalPages: Math.max(1, Math.ceil(campaigns.length / 8)) } });
+    }
     if (url === '/api/marketing/campaigns') return Promise.resolve(campaigns);
     if (url.startsWith('/api/marketing/campaigns?channel=EMAIL')) {
       return Promise.resolve(campaigns);
@@ -166,8 +169,8 @@ describe('<Marketing /> — Generic campaign workflow', () => {
   it('shows Generic channel tabs and keeps legacy forms and push hidden', async () => {
     wireFetch();
     renderMarketing(GENERIC_USER);
-    expect(await screen.findByRole('heading', { name: 'Marketing Campaign' })).toBeInTheDocument();
-    for (const name of ['Email Campaigns', 'SMS Campaigns', 'WhatsApp Campaigns']) {
+    expect(await screen.findByRole('heading', { name: 'Marketing Sequences' })).toBeInTheDocument();
+    for (const name of ['Email Sequences', 'SMS Sequences', 'WhatsApp Sequences']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole('button', { name: 'Embedded Forms' })).not.toBeInTheDocument();
@@ -178,16 +181,16 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     wireFetch({ campaigns: [{ ...workflow, status: 'Active' }] });
     renderMarketing(GENERIC_USER);
     expect(await screen.findByText('Running')).toBeInTheDocument();
-    expect(screen.getByText('14%')).toBeInTheDocument();
-    expect(screen.getByText('4.8%')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Pause campaign Q4 Holiday Promo/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Delete campaign Q4 Holiday Promo/ })).toBeInTheDocument();
+    expect(screen.queryByText('14%')).toBeNull();
+    expect(screen.queryByText('4.8%')).toBeNull();
+    expect(screen.getByRole('button', { name: /Pause sequence Q4 Holiday Promo/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Delete sequence Q4 Holiday Promo/ })).toBeInTheDocument();
   });
 
   it('opens the Generic wizard and rejects advancing or saving an unnamed campaign', async () => {
     wireFetch({ campaigns: [] });
     renderMarketing(GENERIC_USER);
-    fireEvent.click(await screen.findByRole('button', { name: 'Create Campaign' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create Sequence' }));
     const wizard = await screen.findByRole('main', { name: 'Create campaign' });
     expect(screen.queryByRole('dialog', { name: 'Create campaign' })).not.toBeInTheDocument();
     fireEvent.click(within(wizard).getByRole('button', { name: /^Next/ }));
@@ -195,13 +198,13 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     fireEvent.click(within(wizard).getByRole('button', { name: 'Save Draft' }));
     expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
     fireEvent.click(within(wizard).getByRole('button', { name: 'Close' }));
-    expect(await screen.findByRole('heading', { name: 'Marketing Campaign' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Marketing Sequences' })).toBeInTheDocument();
   });
 
   it.each([false, true])('persists Generic steps, delay and send window (activate=%s)', async activate => {
     wireFetch({ campaigns: [workflow] });
     renderMarketing(GENERIC_USER);
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit Campaign' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Sequence' }));
     const wizard = await screen.findByRole('main', { name: 'Edit campaign' });
     expect(screen.queryByText(/Sub-brand audience/i)).not.toBeInTheDocument();
     if (activate) {

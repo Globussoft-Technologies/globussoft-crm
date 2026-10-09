@@ -504,11 +504,29 @@ router.get("/campaigns", verifyToken, async (req, res) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.channel) where.channel = req.query.channel;
     if (req.query.status) where.status = req.query.status;
-    const campaigns = await prisma.campaign.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
+    const paginate = req.query.paginate === "1";
+    if (!paginate) {
+      const campaigns = await prisma.campaign.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+      });
+      return res.json(campaigns);
+    }
+    if (req.query.campaignType === "EMAIL") {
+      where.channel = "EMAIL";
+    }
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 50) : 8;
+    const [campaigns, total] = await Promise.all([
+      prisma.campaign.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.campaign.count({ where }),
+    ]);
+    return res.json({
+      items: campaigns,
+      pagination: { page, pageSize: limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
     });
-    res.json(campaigns);
   } catch (err) {
     console.error("[Marketing] List campaigns error:", err.message);
     res.status(500).json({ error: "Failed to fetch campaigns." });

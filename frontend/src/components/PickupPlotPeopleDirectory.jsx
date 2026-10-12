@@ -714,8 +714,8 @@ export default function PickupPlotPeopleDirectory({ type }) {
           </div>}
           {type === 'transport' ? <>
             <Field label="Alternate phone"><input className="input-field" type="tel" maxLength="25" inputMode="tel" style={fieldStyle} value={form.alternatePhone} onChange={(event) => setForm({ ...form, alternatePhone: event.target.value })} /></Field>
-            <Field label="Vehicle type"><input className="input-field" maxLength="100" placeholder="e.g. Mini truck" style={fieldStyle} value={form.vehicleType} onChange={(event) => setForm({ ...form, vehicleType: event.target.value })} /></Field>
-            <Field label="Vehicle number"><input className="input-field" minLength="3" maxLength="30" placeholder="e.g. KA 01 AB 1234" style={fieldStyle} value={form.vehicleNumber} onChange={(event) => setForm({ ...form, vehicleNumber: event.target.value })} /></Field>
+            <Field label="Vehicle type *"><input className="input-field" required maxLength="100" placeholder="e.g. Mini truck" style={fieldStyle} value={form.vehicleType} onChange={(event) => setForm({ ...form, vehicleType: event.target.value })} /></Field>
+            <Field label="Vehicle number *"><input className="input-field" required minLength="3" maxLength="30" placeholder="e.g. KA 01 AB 1234" style={fieldStyle} value={form.vehicleNumber} onChange={(event) => setForm({ ...form, vehicleNumber: event.target.value })} /></Field>
             <div>
               <div style={{ ...labelStyle, marginBottom: 5 }}>Customers</div>
               <div style={{ display: 'flex', alignItems: 'stretch', gap: 6, minWidth: 0 }}>

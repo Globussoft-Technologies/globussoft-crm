@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { SlidersHorizontal, Search, GripVertical } from "lucide-react";
+import { SlidersHorizontal, Search, GripVertical, Trash2 } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 
@@ -20,7 +20,12 @@ import { useNotify } from "../utils/notify";
 // fires after a successful save, so the parent table re-renders with the
 // new column set immediately (no extra round-trip — the parent already
 // has availableColumns cached from the initial GET this component does).
-export default function ColumnPicker({ tableKey, onColumnsChange }) {
+export default function ColumnPicker({
+  tableKey,
+  onColumnsChange,
+  deletableColumns = [],
+  onFieldDeleted,
+}) {
   const notify = useNotify();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -31,6 +36,7 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
   const [popoverPos, setPopoverPos] = useState(null);
   const [draggedKey, setDraggedKey] = useState(null);
   const [dropKey, setDropKey] = useState(null);
+  const [deletingKey, setDeletingKey] = useState(null);
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
@@ -237,6 +243,33 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
     setDraftVisible(available.filter((c) => !c.key.startsWith("cf_")).map((c) => c.key));
   };
 
+  const handleDeleteField = async (column) => {
+    const definition = deletableColumns.find((item) => item.key === column.key);
+    if (!definition?.id) return;
+    const confirmed = await notify.confirm({
+      title: "Delete this field?",
+      message: `The "${column.label}" field will be removed, along with any values stored for it on existing leads. This cannot be undone.`,
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setDeletingKey(column.key);
+    try {
+      await fetchApi(`/api/lead-custom-fields/${definition.id}`, {
+        method: "DELETE",
+      });
+      setAvailable((current) => current.filter((item) => item.key !== column.key));
+      setDraftVisible((current) => current.filter((key) => key !== column.key));
+      onFieldDeleted?.(definition);
+      notify.success("Field deleted");
+    } catch (err) {
+      notify.error(err?.message || "Failed to delete field");
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
   const filtered = search.trim()
     ? available.filter((c) => c.label.toLowerCase().includes(search.trim().toLowerCase()))
     : available;
@@ -396,13 +429,40 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
                   Fields not shown in table
                 </div>
                 {hidden.map((c) => (
-                  <label
+                  <div
                     key={c.key}
                     style={{ display: "flex", alignItems: "center", gap: "0.55rem", padding: "0.4rem 0.75rem", fontSize: "0.88rem", cursor: "pointer" }}
                   >
-                    <input type="checkbox" checked={false} onChange={() => toggleColumn(c.key)} />
-                    {c.label}
-                  </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: "0.55rem", minWidth: 0, flex: 1, cursor: "pointer" }}>
+                      <input type="checkbox" checked={false} onChange={() => toggleColumn(c.key)} />
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {c.label}
+                      </span>
+                    </label>
+                    {deletableColumns.some((item) => item.key === c.key) && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteField(c)}
+                        disabled={deletingKey === c.key}
+                        aria-label={`Delete ${c.label} field`}
+                        title={`Delete ${c.label} field`}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "var(--danger-color, #dc2626)",
+                          padding: "0.2rem",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          cursor: deletingKey === c.key ? "wait" : "pointer",
+                          opacity: deletingKey === c.key ? 0.55 : 1,
+                          flexShrink: 0,
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
                 ))}
               </>
             )}

@@ -3160,13 +3160,7 @@ export default function App() {
                       />
                       <Route
                         path="pickup-customers"
-                        element={
-                          <GenericOnly>
-                            <RoleGuard allow={["ADMIN"]} message="Customer pickup status requires admin access.">
-                              <PickupCustomers />
-                            </RoleGuard>
-                          </GenericOnly>
-                        }
+                        element={<GenericOnly><RoleGuard allow={["ADMIN"]}><PickupCustomers /></RoleGuard></GenericOnly>}
                       />
                       <Route
                         path="quotas"

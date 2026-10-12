@@ -357,7 +357,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Transport Persons').closest('a').getAttribute('href')).toBe('/transport-persons');
       expect(screen.getByText('Sales Executives').closest('a').getAttribute('href')).toBe('/plot-brokers');
       expect(screen.getByText('Billing Persons').closest('a').getAttribute('href')).toBe('/billing-persons');
-      expect(screen.getByText('Customer Status').closest('a').getAttribute('href')).toBe('/pickup-customers');
+      expect(screen.queryByText('Customer Status')).toBeNull();
       generic.unmount();
 
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });

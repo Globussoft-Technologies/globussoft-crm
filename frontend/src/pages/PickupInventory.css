@@ -1,0 +1,140 @@
+.pickup-inventory-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  margin-top: 7px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pickup-inventory-status-badge > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.pickup-inventory-status-badge.is-active {
+  color: #047857;
+  background: #ecfdf5;
+}
+
+.pickup-inventory-status-badge.is-inactive {
+  color: #64748b;
+  background: #f1f5f9;
+}
+
+.pickup-inventory-address-link {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 7px;
+  color: inherit;
+  text-decoration: none;
+  line-height: 1.45;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.pickup-inventory-address-link:hover,
+.pickup-inventory-address-link:focus-visible {
+  color: var(--primary-color, var(--accent-color));
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, transparent);
+  outline: none;
+}
+
+.pickup-inventory-actions-cell {
+  text-align: center;
+}
+
+.pickup-inventory-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 11px;
+  background: var(--surface-color, #fff);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.pickup-inventory-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.pickup-inventory-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.pickup-inventory-action:focus-visible {
+  outline: 2px solid var(--primary-color, var(--accent-color));
+  outline-offset: 2px;
+}
+
+.pickup-inventory-action:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.pickup-inventory-action--edit {
+  color: var(--primary-color, var(--accent-color));
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+}
+
+.pickup-inventory-action--edit:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 17%, transparent);
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent);
+}
+
+.pickup-inventory-action--disable {
+  color: #b42318;
+  background: #fff1f0;
+}
+
+.pickup-inventory-action--disable:hover:not(:disabled) {
+  color: #991b1b;
+  background: #fee2e2;
+  box-shadow: 0 3px 8px rgba(220, 38, 38, 0.12);
+}
+
+.pickup-inventory-action--activate {
+  color: #047857;
+  background: #ecfdf5;
+}
+
+.pickup-inventory-action--activate:hover:not(:disabled) {
+  color: #065f46;
+  background: #d1fae5;
+  box-shadow: 0 3px 8px rgba(5, 150, 105, 0.12);
+}
+
+@media (max-width: 900px) {
+  .pickup-inventory-action {
+    width: 32px;
+    padding: 0;
+  }
+
+  .pickup-inventory-action span {
+    display: none;
+  }
+}

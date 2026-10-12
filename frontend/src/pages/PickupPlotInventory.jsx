@@ -519,15 +519,15 @@ export default function PickupPlotInventory() {
       {plotDialog && <Modal title={plotDialog.id ? 'Edit Plot / Site' : 'Add Plot / Site'} onClose={() => setPlotDialog(null)} onSave={savePlot} saving={saving} wide>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
           <label style={labelStyle}>Name *<input className="input-field" required minLength="2" maxLength="150" style={fieldStyle} value={plotForm.name} onChange={(event) => setPlotForm({ ...plotForm, name: event.target.value })} /></label>
-          <label style={labelStyle}>Plot number<input className="input-field" maxLength="100" style={fieldStyle} value={plotForm.plotNumber} onChange={(event) => setPlotForm({ ...plotForm, plotNumber: event.target.value })} /></label>
-          <label style={labelStyle}>Block<input className="input-field" maxLength="100" style={fieldStyle} value={plotForm.block} onChange={(event) => setPlotForm({ ...plotForm, block: event.target.value })} /></label>
-          <label style={labelStyle}>Availability<select className="input-field" style={fieldStyle} value={plotForm.availability} onChange={(event) => setPlotForm({ ...plotForm, availability: event.target.value })}>{AVAILABILITY.map((status) => <option key={status}>{status}</option>)}</select></label>
-          <label style={labelStyle}>Area<input className="input-field" maxLength="100" placeholder="e.g. 1,200" style={fieldStyle} value={plotForm.area} onChange={(event) => setPlotForm({ ...plotForm, area: event.target.value })} /></label>
-          <label style={labelStyle}>Area unit<select className="input-field" style={fieldStyle} value={plotForm.areaUnit} onChange={(event) => setPlotForm({ ...plotForm, areaUnit: event.target.value })}>{PLOT_AREA_UNIT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-          <label style={labelStyle}>Price<input className="input-field" type="number" min="0" max="9999999999999.99" step="0.01" style={fieldStyle} value={plotForm.price} onChange={(event) => setPlotForm({ ...plotForm, price: event.target.value })} /></label>
-          <label style={labelStyle}>Road width<input className="input-field" maxLength="100" placeholder="e.g. 30 ft" style={fieldStyle} value={plotForm.roadWidth} onChange={(event) => setPlotForm({ ...plotForm, roadWidth: event.target.value })} /></label>
+          <label style={labelStyle}>Plot number *<input className="input-field" required maxLength="100" style={fieldStyle} value={plotForm.plotNumber} onChange={(event) => setPlotForm({ ...plotForm, plotNumber: event.target.value })} /></label>
+          <label style={labelStyle}>Block *<input className="input-field" required maxLength="100" style={fieldStyle} value={plotForm.block} onChange={(event) => setPlotForm({ ...plotForm, block: event.target.value })} /></label>
+          <label style={labelStyle}>Availability *<select className="input-field" required style={fieldStyle} value={plotForm.availability} onChange={(event) => setPlotForm({ ...plotForm, availability: event.target.value })}>{AVAILABILITY.map((status) => <option key={status}>{status}</option>)}</select></label>
+          <label style={labelStyle}>Area *<input className="input-field" required maxLength="100" placeholder="e.g. 1,200" style={fieldStyle} value={plotForm.area} onChange={(event) => setPlotForm({ ...plotForm, area: event.target.value })} /></label>
+          <label style={labelStyle}>Area unit *<select className="input-field" required style={fieldStyle} value={plotForm.areaUnit} onChange={(event) => setPlotForm({ ...plotForm, areaUnit: event.target.value })}>{PLOT_AREA_UNIT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          <label style={labelStyle}>Price *<input className="input-field" required type="number" min="0" max="9999999999999.99" step="0.01" style={fieldStyle} value={plotForm.price} onChange={(event) => setPlotForm({ ...plotForm, price: event.target.value })} /></label>
+          <label style={labelStyle}>Road width *<input className="input-field" required maxLength="100" placeholder="e.g. 30 ft" style={fieldStyle} value={plotForm.roadWidth} onChange={(event) => setPlotForm({ ...plotForm, roadWidth: event.target.value })} /></label>
           <label style={labelStyle}>Facing<select className="input-field" style={fieldStyle} value={plotForm.facing} onChange={(event) => setPlotForm({ ...plotForm, facing: event.target.value })}><option value="">Select facing</option>{FACING_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label style={labelStyle}>Residential / Commercial<select className="input-field" style={fieldStyle} value={plotForm.propertyType} onChange={(event) => setPlotForm({ ...plotForm, propertyType: event.target.value })}><option value="">Select type</option>{PROPERTY_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label style={labelStyle}>Residential / Commercial *<select className="input-field" required style={fieldStyle} value={plotForm.propertyType} onChange={(event) => setPlotForm({ ...plotForm, propertyType: event.target.value })}><option value="">Select type</option>{PROPERTY_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <div style={{ gridColumn: '1 / -1', minWidth: 0 }}>
             <div style={{ ...labelStyle, marginBottom: 5 }}>Pickup locations (select multiple)</div>
             <MultiSelectDropdown
@@ -563,6 +563,8 @@ export default function PickupPlotInventory() {
           </div>
           <AddressAutocomplete
             style={{ gridColumn: '1 / -1' }}
+            label="Address *"
+            required
             value={plotForm.address}
             onChange={(address) => setPlotForm((current) => ({ ...current, address }))}
           />

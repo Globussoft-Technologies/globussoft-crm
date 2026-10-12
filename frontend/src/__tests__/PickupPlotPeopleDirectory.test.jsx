@@ -126,7 +126,7 @@ describe('<TransportPersons />', () => {
     fetchApiMock.mockImplementation((url, options) => {
       if (url === '/api/pickup-plot-inventory/transport-persons' && !options) return Promise.resolve({
         transportPersons: [{
-          id: 1, name: 'Sant Kumar', phone: '9000011111', isActive: true,
+          id: 1, name: 'Sant Kumar', phone: '9000011111', vehicleType: 'Van', vehicleNumber: 'KA 01 AB 1234', isActive: true,
           customerIds: [21, 22], plotSiteIds: [9],
           assignments: [
             { customerId: 21, plotSiteId: 9, status: 'COMPLETED', plotLocked: true },
@@ -202,6 +202,10 @@ describe('<TransportPersons />', () => {
     expect(loginSetup.compareDocumentPosition(workEmail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Mohan' } });
     fireEvent.change(screen.getByLabelText('Phone *'), { target: { value: '9000033333' } });
+    expect(screen.getByLabelText('Vehicle type *')).toBeRequired();
+    expect(screen.getByLabelText('Vehicle number *')).toBeRequired();
+    fireEvent.change(screen.getByLabelText('Vehicle type *'), { target: { value: 'Mini truck' } });
+    fireEvent.change(screen.getByLabelText('Vehicle number *'), { target: { value: 'KA 01 AB 1234' } });
     fireEvent.change(screen.getByLabelText('Work email *'), { target: { value: 'mohan@example.com' } });
     fireEvent.change(screen.getByLabelText('Password *'), { target: { value: 'secret123' } });
     fireEvent.change(screen.getByLabelText('Work email *'), { target: { value: 'mohan@example.com' } });
@@ -285,6 +289,8 @@ describe('<TransportPersons />', () => {
     expect(screen.getByLabelText('Name *')).toHaveValue('Sant Kumar');
     expect(screen.getByLabelText('Phone *')).toHaveValue('9000099999');
     expect(screen.queryByLabelText('Password *')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Vehicle type *'), { target: { value: 'Van' } });
+    fireEvent.change(screen.getByLabelText('Vehicle number *'), { target: { value: 'KA 02 CD 5678' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(

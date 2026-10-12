@@ -6806,8 +6806,21 @@ async function renderProfessionalInvoicePdf(invoice, contact, clinic, options = 
     ? Number(invoice.taxRate)
     : (Number.isFinite(configuredTaxRate) ? configuredTaxRate : 0);
   const total = Number.isFinite(Number(invoice?.amount)) ? Number(invoice.amount) : subtotal - discount + tax;
-  const paid = /^(PAID|COMPLETED)$/i.test(status) ? total : 0;
-  const balance = Math.max(0, total - paid);
+  // Prefer recorded financial values over status: an UNPAID invoice may
+  // already have partial payments. Legacy records without these fields
+  // retain the original paid/unpaid status fallback.
+  const recordedPaid = invoice?.amountPaid == null || invoice.amountPaid === ''
+    ? NaN : Number(invoice.amountPaid);
+  const recordedBalance = invoice?.balance == null || invoice.balance === ''
+    ? NaN : Number(invoice.balance);
+  const paid = Number.isFinite(recordedPaid)
+    ? Math.max(0, recordedPaid)
+    : Number.isFinite(recordedBalance)
+      ? Math.max(0, total - recordedBalance)
+      : /^(PAID|COMPLETED)$/i.test(status) ? total : 0;
+  const balance = Number.isFinite(recordedBalance)
+    ? Math.max(0, recordedBalance)
+    : Math.max(0, total - paid);
 
   const metadataDividerX = left + 300;
   const metadataContentLeft = metadataDividerX + 18;
@@ -6967,9 +6980,7 @@ async function renderProfessionalInvoicePdf(invoice, contact, clinic, options = 
     doc.font("Helvetica-Bold").fontSize(label === "Total" ? 12 : 9.5).fillColor(navy).text(value, right - 92, summaryY + (label === "Total" ? 9 : 6), { width: 80, align: "right" });
     summaryY += rowHeight;
   });
-  if (paid > 0) {
-    doc.font("Helvetica").fontSize(8.5).fillColor(muted).text(`Paid ${money(paid)}  •  Balance ${money(balance)}`, summaryX, summaryY + 10, { width: summaryWidth, align: "right" });
-  }
+  doc.font("Helvetica").fontSize(8.5).fillColor(muted).text(`Paid ${money(paid)}  •  Balance ${money(balance)}`, summaryX, summaryY + 10, { width: summaryWidth, align: "right" });
 
   const footerNote = professionalInvoiceSetting(settings, ["invoice.notes", "branding.invoiceNotes"]);
   doc.moveTo(left, footerY - 10).lineTo(right, footerY - 10).lineWidth(0.7).strokeColor(border).stroke();
@@ -7051,4 +7062,3 @@ module.exports = {
   fetchLogoBuffer,
   _resetLogoCache,
 };
-

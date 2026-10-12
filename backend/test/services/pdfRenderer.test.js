@@ -1036,6 +1036,22 @@ describe('renderBrandedInvoicePdf', () => {
 });
 
 describe('renderProfessionalInvoicePdf', () => {
+  test.each([
+    ['partial payment', { status: 'UNPAID', amountPaid: 250, balance: 750 }, '250.00', '750.00'],
+    ['derive missing balance', { status: 'UNPAID', amountPaid: '250' }, '250.00', '750.00'],
+    ['derive missing paid amount', { status: 'UNPAID', balance: 750 }, '250.00', '750.00'],
+    ['explicit zero overrides paid status', { status: 'PAID', amountPaid: 0, balance: 1000 }, '0.00', '1,000.00'],
+    ['legacy paid fallback', { status: 'PAID' }, '1,000.00', '0.00'],
+    ['legacy unpaid fallback', { status: 'UNPAID', amountPaid: null, balance: null }, '0.00', '1,000.00'],
+  ])('renders correct financial totals: %s', async (_label, fields, paid, balance) => {
+    const buf = await renderProfessionalInvoicePdf(
+      { invoiceNum: 'INV-PARTIAL', amount: 1000, ...fields },
+      { name: 'Customer' }, null, { currency: 'USD', locale: 'en-US' },
+    );
+    const text = extractPdfText(buf);
+    expect(text).toContain(`Paid $${paid}`);
+    expect(text).toContain(`Balance $${balance}`);
+  });
   test('uses settings-driven organization branding for a non-wellness invoice shape', async () => {
     const buf = await renderProfessionalInvoicePdf(
       {
@@ -1545,4 +1561,3 @@ describe('renderTravelDiagnosticPdf — curriculum-fit section', () => {
     expect(buf.slice(0, 4).toString()).toBe('%PDF');
   });
 });
-

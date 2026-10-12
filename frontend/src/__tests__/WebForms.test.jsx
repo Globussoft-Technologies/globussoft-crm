@@ -106,6 +106,26 @@ describe('public web form embed footer', () => {
     expect(html).toContain("input[name=\"phone\"]");
   });
 
+  test('keeps the WhatsApp implementation behind the opt-in setting', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('setupGenericWhatsapp');
+    expect(html).toContain('name="whatsappSameAsPhone"');
+    expect(html).toContain('WhatsApp number is the same as phone number');
+    expect(html).toContain("whatsappCountry.name = 'whatsappPhoneCountry'");
+    expect(html).toContain('name="whatsappPhone"');
+    expect(html).toContain('WhatsApp country code');
+    expect(html).toContain('setupGenericWhatsappPhone');
+    expect(html).toContain('Enter a valid WhatsApp number with ');
+    expect(html).toContain('setupGenericCountryPicker(whatsappCountrySelect');
+    expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}');
+    expect(html).toContain('line-height:1.35;font-weight:400');
+    expect(html).toContain('.generic-whatsapp-phone{margin-bottom:0}');
+    expect(html).toContain("phoneField.classList.add('generic-whatsapp-phone')");
+    expect(html).toContain('generic-whatsapp-number');
+    expect(html).toContain("formData.settings.whatsappEnabled !== true");
+  });
+
   test('uses field-specific Enter placeholders instead of one email example for every field', () => {
     const builder = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
 
@@ -206,8 +226,9 @@ describe('public web form embed footer', () => {
 
     expect(html).toContain('function nationalPhoneMaxLength()');
     expect(html).toContain('return Math.max(1, 15 - countryDigits.length)');
-    expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '16')");
-    expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
+    expect(html).toContain('function setupGenericPhoneInputLimit(countrySelect, input)');
+    expect(html).toContain("input.setAttribute('maxlength', '16')");
+    expect(html).toContain("input.setAttribute('inputmode', 'numeric')");
     expect(html).toContain('slice(0, nationalPhoneMaxLength())');
     expect(html).toContain("rawPhoneInput.trim().charAt(0) === '+'");
     expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");

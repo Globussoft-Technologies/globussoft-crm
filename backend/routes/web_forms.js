@@ -623,6 +623,7 @@ function defaultSettings() {
     notificationEmail: "",
     contactNotificationChannels: ["whatsapp"],
     contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
+    whatsappEnabled: false,
     phoneAllowAllCountries: true,
     phoneAllowedCountries: [],
     multiStepEnabled: false,
@@ -947,6 +948,8 @@ function normalizeSettings(raw) {
       settings.contactNotificationMessage,
       defaultSettings().contactNotificationMessage,
     ),
+
+    whatsappEnabled: settings.whatsappEnabled === true || settings.showWhatsappSameAsPhone === true,
 
     phoneAllowAllCountries: settings.phoneAllowAllCountries !== false,
     phoneAllowedCountries: Array.isArray(settings.phoneAllowedCountries)
@@ -1662,7 +1665,8 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const whatsappPhoneValue = String(body.whatsappPhone || "").trim();
     const whatsappWasSubmitted =
       Object.prototype.hasOwnProperty.call(body, "whatsappSameAsPhone") ||
-      Object.prototype.hasOwnProperty.call(body, "whatsappPhone");
+      Object.prototype.hasOwnProperty.call(body, "whatsappPhone") ||
+      Object.prototype.hasOwnProperty.call(body, "whatsappPhoneCountry");
     const companyValue = String(contactData.company || "").trim();
     const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(formScope);
     const fieldErrors = {};
@@ -1690,20 +1694,23 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     } else if (phoneValue) {
       const digits = phoneValue.replace(/\D/g, "");
       if (!/^[+\d][\d\s().-]*$/.test(phoneValue) || digits.length < 7 || digits.length > 15) {
-        fieldErrors.phone = "Enter a valid phone number with 7–15 digits";
+        fieldErrors.phone = "Enter a valid phone number with 7-15 digits";
       }
     }
     if (formScope === "generic" && whatsappWasSubmitted) {
+      const whatsappPhoneCountry = String(body.whatsappPhoneCountry || body.phoneCountry || "").trim();
       if (whatsappSameAsPhone && contactData.phone) {
         contactData.whatsappPhone = contactData.phone;
       } else if (whatsappPhoneValue) {
-        if (!/^[+\d\s().-]+$/.test(whatsappPhoneValue)) {
+        if (whatsappPhoneCountry && !settings.phoneAllowAllCountries && settings.phoneAllowedCountries.length && !settings.phoneAllowedCountries.includes(whatsappPhoneCountry)) {
+          fieldErrors.whatsappPhone = "Please select an allowed country code";
+        } else if (!/^[+\d\s().-]+$/.test(whatsappPhoneValue)) {
           fieldErrors.whatsappPhone = "Only numbers are allowed.";
         } else {
-          const whatsappLengthError = genericPhoneLengthError(whatsappPhoneValue, body.phoneCountry);
+          const whatsappLengthError = genericPhoneLengthError(whatsappPhoneValue, whatsappPhoneCountry);
           const normalizedWhatsappPhone = normalizeGenericPhone(
             whatsappPhoneValue,
-            body.phoneCountry,
+            whatsappPhoneCountry,
           );
           if (normalizedWhatsappPhone && !whatsappLengthError) contactData.whatsappPhone = normalizedWhatsappPhone;
           else fieldErrors.whatsappPhone = whatsappLengthError || "Enter a valid international WhatsApp number with country code, for example +919876543210";

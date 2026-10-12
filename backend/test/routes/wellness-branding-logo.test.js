@@ -46,6 +46,7 @@ prisma.auditLog = { create: vi.fn().mockResolvedValue({ id: 1 }) };
 import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 const requireCJS = createRequire(import.meta.url);
 
 // ── s3Service mock — patched on the shared singleton BEFORE the router is
@@ -130,6 +131,36 @@ describe('POST /api/wellness/branding/logo — S3 upload + replace-deletes-old',
 
     // Nothing to clean up — no orphan delete fired.
     expect(s3Service.deleteFile).not.toHaveBeenCalled();
+  });
+
+  test('falls back to local storage when cloud upload fails outside production', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    s3Service.uploadImage.mockRejectedValue(new Error('AccessDenied'));
+    const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined);
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+
+    try {
+      const res = await request(makeApp())
+        .post('/api/wellness/branding/logo')
+        .attach('logo', PNG, 'logo.png');
+
+      expect(res.status).toBe(200);
+      expect(res.body.logoUrl).toMatch(
+        /^\/api\/uploads\/branding\/tenant-1\/logo-\d+\.png$/,
+      );
+      expect(mkdirSpy).toHaveBeenCalledTimes(1);
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(prisma.tenant.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: { logoUrl: res.body.logoUrl },
+      });
+    } finally {
+      mkdirSpy.mockRestore();
+      writeSpy.mockRestore();
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 
   test('200 REPLACE path: the previous S3 object is deleted (no orphan logos)', async () => {

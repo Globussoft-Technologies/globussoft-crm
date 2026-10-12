@@ -40,7 +40,7 @@ const WELLNESS_PAYMENT_MODES = new Set([
   "other",
 ]);
 const WELLNESS_GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9][Z][0-9A-Z]$/;
-const WELLNESS_INVOICE_SETTING_KEYS = [
+const INVOICE_SETTING_KEYS = [
   "invoice.brandName",
   "invoice.brandColor",
   "invoice.themeColor",
@@ -77,13 +77,13 @@ function isWellnessRequest(req) {
   return req.user?.vertical === "wellness";
 }
 
-async function loadWellnessInvoiceContext(tenantId, tenant) {
+async function loadInvoiceBrandContext(tenantId, tenant) {
   let settings = [];
   let clinic = null;
   try {
     if (prisma.tenantSetting?.findMany) {
       settings = await prisma.tenantSetting.findMany({
-        where: { tenantId, key: { in: WELLNESS_INVOICE_SETTING_KEYS } },
+        where: { tenantId, key: { in: INVOICE_SETTING_KEYS } },
         select: { key: true, value: true },
       });
     }
@@ -2901,6 +2901,7 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
       include: {
         contact: true,
+        deal: true,
         ...(isWellnessInvoice
           ? {
               visit: {
@@ -2938,141 +2939,39 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     const currency = tenant?.defaultCurrency || "USD";
     const locale = tenant?.locale || undefined;
 
-    // Wellness invoices use the structured, tenant-branded layout. The
-    // generic/travel renderer below is intentionally left unchanged.
-    if (isWellnessInvoice) {
-      const context = await loadWellnessInvoiceContext(
-        req.user.tenantId,
+    // Keep the corporate and wellness documents separate. Both receive the
+    // same dynamic tenant branding context, but wellness invoices retain their
+    // clinical layout while generic/travel legacy invoices use the corporate
+    // invoice layout. Travel's dedicated /api/travel/invoices/:id/pdf route is
+    // unchanged.
+    const context = await loadInvoiceBrandContext(
+      req.user.tenantId,
+      tenant,
+    );
+    const renderInvoicePdf = isWellnessInvoice
+      ? pdfRenderer.renderProfessionalWellnessInvoicePdf
+      : pdfRenderer.renderProfessionalInvoicePdf;
+    const buf = await renderInvoicePdf(
+      invoice,
+      invoice.contact,
+      context.clinic,
+      {
         tenant,
-      );
-      const buf = await pdfRenderer.renderProfessionalWellnessInvoicePdf(
-        invoice,
-        invoice.contact,
-        context.clinic,
-        {
-          tenant,
-          settings: context.settings,
-          logoBuffer: context.logoBuffer,
-          currency,
-          locale,
-        },
-      );
-      const filename = `${invoice.invoiceNum || "INV-" + invoice.id}.pdf`;
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${filename}"`,
-      );
-      res.setHeader("Content-Length", buf.length);
-      return res.send(buf);
-    }
-
-    const doc = new PDFDocument({ size: "A4", margin: 50 });
-    applyRupeeCapableFonts(doc); // ₹ glyph fix
-
+        settings: context.settings,
+        logoBuffer: context.logoBuffer,
+        currency,
+        locale,
+      },
+    );
     const filename = `${invoice.invoiceNum || "INV-" + invoice.id}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    // If PDFKit emits an error mid-stream we can't send a JSON envelope (headers
-    // are flushed on first chunk), but we MUST detach the pipe and end the
-    // response cleanly so the browser doesn't hang on a half-written body.
-    doc.on("error", (err) => {
-      console.error("[PDF Generation Error] (stream):", err);
-      try {
-        res.end();
-      } catch (_) {
-        /* already destroyed */
-      }
-    });
-    doc.pipe(res);
-
-    // Header
-    doc.fontSize(24).font("Helvetica-Bold").text("Globussoft CRM", 50, 50);
-    doc
-      .fontSize(10)
-      .font("Helvetica")
-      .fillColor("#666666")
-      .text("Enterprise Invoice", 50, 80);
-
-    // Invoice details box
-    doc
-      .fillColor("#000000")
-      .fontSize(14)
-      .font("Helvetica-Bold")
-      .text(`Invoice: ${invoice.invoiceNum || "N/A"}`, 50, 130);
-
-    doc.fontSize(10).font("Helvetica").fillColor("#333333");
-    const statusLabel = invoice.status || "UNPAID";
-    doc.text(`Status: ${statusLabel}`, 50, 155);
-    doc.text(
-      `Issue Date: ${new Date(invoice.issuedDate).toLocaleDateString()}`,
-      50,
-      172,
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename}"`,
     );
-    doc.text(
-      `Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}`,
-      50,
-      189,
-    );
+    res.setHeader("Content-Length", buf.length);
+    return res.send(buf);
 
-    // Wellness invoice data is rendered by the structured renderer above.
-    // Generic and Travel invoices retain the existing PDF layout below.
-    // Contact info
-    doc
-      .fontSize(12)
-      .font("Helvetica-Bold")
-      .fillColor("#000000")
-      .text("Bill To:", 50, 225);
-    doc
-      .fontSize(10)
-      .font("Helvetica")
-      .fillColor("#333333")
-      .text(invoice.contact?.name || "Unknown Contact", 50, 245)
-      .text(invoice.contact?.email || "", 50, 260)
-      .text(invoice.contact?.company || "", 50, 275);
-
-    // Line separator
-    doc.moveTo(50, 310).lineTo(545, 310).strokeColor("#cccccc").stroke();
-
-    // Amount table header
-    doc.fillColor("#ffffff").rect(50, 325, 495, 30).fill("#3b82f6");
-    doc
-      .fillColor("#ffffff")
-      .fontSize(10)
-      .font("Helvetica-Bold")
-      .text("Description", 60, 333)
-      .text("Amount", 450, 333, { width: 85, align: "right" });
-
-    // Amount row
-    doc
-      .fillColor("#333333")
-      .font("Helvetica")
-      .fontSize(10)
-      .text("Invoice Charge", 60, 370)
-      .text(formatMoney(invoice.amount, currency, locale), 450, 370, {
-        width: 85,
-        align: "right",
-      });
-
-    // Total
-    doc.moveTo(50, 400).lineTo(545, 400).strokeColor("#cccccc").stroke();
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(12)
-      .fillColor("#000000")
-      .text("Total:", 350, 415)
-      .text(formatMoney(invoice.amount, currency, locale), 450, 415, {
-        width: 85,
-        align: "right",
-      });
-    // Footer
-    doc
-      .fontSize(8)
-      .font("Helvetica")
-      .fillColor("#999999")
-      .text("Generated by Globussoft CRM", 50, 750, { align: "center" });
-
-    doc.end();
   } catch (err) {
     console.error("[PDF Generation Error]:", err);
     if (res.headersSent) {

@@ -13,6 +13,8 @@ const requireCJS = createRequire(import.meta.url);
 
 const {
   mockGetSuperAdminTenantsOverview,
+  mockGetSuperAdminRoleLimitsOverview,
+  mockSetSuperAdminCustomRoleLimit,
   mockGetSuperAdminTenantDetail,
   mockSuperAdminGrantSubscription,
   mockSuperAdminCancelPlatformSubscription,
@@ -20,6 +22,8 @@ const {
   mockProvisionTenantRbac,
 } = vi.hoisted(() => ({
   mockGetSuperAdminTenantsOverview: vi.fn(),
+  mockGetSuperAdminRoleLimitsOverview: vi.fn(),
+  mockSetSuperAdminCustomRoleLimit: vi.fn(),
   mockGetSuperAdminTenantDetail: vi.fn(),
   mockSuperAdminGrantSubscription: vi.fn(),
   mockSuperAdminCancelPlatformSubscription: vi.fn(),
@@ -32,6 +36,8 @@ require('node:module')._cache[libPath] = {
   id: libPath, filename: libPath, loaded: true,
   exports: {
     getSuperAdminTenantsOverview: mockGetSuperAdminTenantsOverview,
+    getSuperAdminRoleLimitsOverview: mockGetSuperAdminRoleLimitsOverview,
+    setSuperAdminCustomRoleLimit: mockSetSuperAdminCustomRoleLimit,
     getSuperAdminTenantDetail: mockGetSuperAdminTenantDetail,
     superAdminGrantSubscription: mockSuperAdminGrantSubscription,
     superAdminCancelPlatformSubscription: mockSuperAdminCancelPlatformSubscription,
@@ -62,6 +68,7 @@ prisma.tenant.delete = vi.fn();
 prisma.user.findFirst = vi.fn();
 prisma.user.create = vi.fn();
 prisma.role.findFirst = vi.fn();
+prisma.role.count = vi.fn();
 prisma.userRole.upsert = vi.fn();
 prisma.$transaction = vi.fn();
 prisma.webForm.findFirst = vi.fn();
@@ -87,6 +94,8 @@ function makeApp({ username = 'ops_alice' } = {}) {
 
 beforeEach(() => {
   mockGetSuperAdminTenantsOverview.mockReset();
+  mockGetSuperAdminRoleLimitsOverview.mockReset();
+  mockSetSuperAdminCustomRoleLimit.mockReset();
   mockGetSuperAdminTenantDetail.mockReset();
   mockSuperAdminGrantSubscription.mockReset();
   mockSuperAdminCancelPlatformSubscription.mockReset();
@@ -100,6 +109,7 @@ beforeEach(() => {
   prisma.user.findFirst.mockReset();
   prisma.user.create.mockReset();
   prisma.role.findFirst.mockReset();
+  prisma.role.count.mockReset();
   prisma.userRole.upsert.mockReset();
   prisma.$transaction.mockReset().mockImplementation((callback) => callback(prisma));
   prisma.webForm.findFirst.mockReset();
@@ -227,6 +237,71 @@ describe('GET /tenants', () => {
     mockGetSuperAdminTenantsOverview.mockRejectedValue(new Error('db down'));
     const res = await request(makeApp()).get('/api/super-admin/tenant-management/tenants');
     expect(res.status).toBe(500);
+  });
+});
+
+describe('Custom role limits', () => {
+  test('GET /role-limits passes the search filter and returns the overview', async () => {
+    mockGetSuperAdminRoleLimitsOverview.mockResolvedValue({
+      tenants: [{ tenantId: 1, organization: 'Acme', customRoleCount: 2, maxCustomRoles: 5 }],
+      summary: { totalTenants: 1 },
+    });
+
+    const res = await request(makeApp()).get('/api/super-admin/tenant-management/role-limits?search=acme');
+
+    expect(res.status).toBe(200);
+    expect(mockGetSuperAdminRoleLimitsOverview).toHaveBeenCalledWith({ search: 'acme' });
+    expect(res.body.tenants[0].maxCustomRoles).toBe(5);
+  });
+
+  test('PUT /tenants/:tenantId/role-limit passes null for unlimited and the Super Admin identity', async () => {
+    mockSetSuperAdminCustomRoleLimit.mockResolvedValue({
+      tenantId: 7,
+      organization: 'Wellness Demo',
+      customRoleCount: 3,
+      maxCustomRoles: null,
+    });
+
+    const res = await request(makeApp({ username: 'ops_role_admin' }))
+      .put('/api/super-admin/tenant-management/tenants/7/role-limit')
+      .send({ maxCustomRoles: null });
+
+    expect(res.status).toBe(200);
+    expect(mockSetSuperAdminCustomRoleLimit).toHaveBeenCalledWith({
+      tenantId: 7,
+      maxCustomRoles: null,
+      superAdminUsername: 'ops_role_admin',
+    });
+  });
+
+  test('PUT /tenants/:tenantId/role-limit requires the setting field', async () => {
+    const res = await request(makeApp())
+      .put('/api/super-admin/tenant-management/tenants/7/role-limit')
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('CUSTOM_ROLE_LIMIT_REQUIRED');
+    expect(mockSetSuperAdminCustomRoleLimit).not.toHaveBeenCalled();
+  });
+
+  test('maps invalid limits and missing tenants to their canonical statuses', async () => {
+    const invalid = new Error('bad limit');
+    invalid.code = 'INVALID_CUSTOM_ROLE_LIMIT';
+    mockSetSuperAdminCustomRoleLimit.mockRejectedValueOnce(invalid);
+    const invalidRes = await request(makeApp())
+      .put('/api/super-admin/tenant-management/tenants/7/role-limit')
+      .send({ maxCustomRoles: -1 });
+    expect(invalidRes.status).toBe(400);
+    expect(invalidRes.body.code).toBe('INVALID_CUSTOM_ROLE_LIMIT');
+
+    const missing = new Error('missing tenant');
+    missing.code = 'TENANT_NOT_FOUND';
+    mockSetSuperAdminCustomRoleLimit.mockRejectedValueOnce(missing);
+    const missingRes = await request(makeApp())
+      .put('/api/super-admin/tenant-management/tenants/999/role-limit')
+      .send({ maxCustomRoles: 5 });
+    expect(missingRes.status).toBe(404);
+    expect(missingRes.body.code).toBe('TENANT_NOT_FOUND');
   });
 });
 

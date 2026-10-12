@@ -124,6 +124,7 @@ function coerceRoleSubBrandScope(input) {
 const { isValidWidgetKey } = require("../lib/widgetCatalog");
 const { getAccessiblePages, canAccessPath } = require("../lib/pageCatalog");
 const { getNewlyGrantedSensitive } = require("../lib/sensitivePermissions");
+const { assertCustomRoleCreationAllowed } = require("../lib/customRoleLimit");
 
 // Count how many users currently hold the ADMIN role within a tenant.
 // Used by the last-admin guards on assign / unassign / permission-strip.
@@ -625,34 +626,41 @@ router.post(
         return res.status(400).json({ error: "subBrandScope is only available for travel tenants" });
       }
 
-      // Check if key already exists in this tenant
-      const existingRole = await prisma.role.findFirst({
-        where: {
-          tenantId: req.user.tenantId,
-          key,
-        },
-      });
+      // Lock the tenant row before counting custom roles. This makes the
+      // quota authoritative even when two admins submit role creation at the
+      // same time. Seeded/built-in roles are excluded by isCustom=true.
+      const role = await prisma.$transaction(async (tx) => {
+        await assertCustomRoleCreationAllowed(tx, req.user.tenantId);
 
-      if (existingRole) {
-        return res
-          .status(409)
-          .json({ error: "Role key already exists in this tenant" });
-      }
+        const existingRole = await tx.role.findFirst({
+          where: {
+            tenantId: req.user.tenantId,
+            key,
+          },
+        });
 
-      const role = await prisma.role.create({
-        data: {
-          tenantId: req.user.tenantId,
-          key,
-          name,
-          description: description || null,
-          isSystem: false,
-          userType: userType || "STAFF",
-          isActive: true,
-          dataScope: dataScope !== undefined ? normalizeDataScope(dataScope) : "ALL",
-          subBrandScopeJson: serializeSubBrandScope(subBrandScopeResult.value),
-          landingPath: normalizeLandingPath(landingPath),
-        },
-        include: { permissions: true },
+        if (existingRole) {
+          const error = new Error("Role key already exists in this tenant");
+          error.code = "ROLE_KEY_EXISTS";
+          throw error;
+        }
+
+        return tx.role.create({
+          data: {
+            tenantId: req.user.tenantId,
+            key,
+            name,
+            description: description || null,
+            isSystem: false,
+            isCustom: true,
+            userType: userType || "STAFF",
+            isActive: true,
+            dataScope: dataScope !== undefined ? normalizeDataScope(dataScope) : "ALL",
+            subBrandScopeJson: serializeSubBrandScope(subBrandScopeResult.value),
+            landingPath: normalizeLandingPath(landingPath),
+          },
+          include: { permissions: true },
+        });
       });
 
       await writeAudit(
@@ -676,6 +684,20 @@ router.post(
       });
     } catch (err) {
       console.error("[roles] create error:", err);
+      if (err?.code === "ROLE_LIMIT_REACHED") {
+        return res.status(409).json({
+          error: err.message,
+          code: err.code,
+          customRoleCount: err.customRoleCount,
+          maxCustomRoles: err.maxCustomRoles,
+        });
+      }
+      if (err?.code === "ROLE_KEY_EXISTS") {
+        return res.status(409).json({ error: err.message, code: err.code });
+      }
+      if (err?.code === "TENANT_NOT_FOUND") {
+        return res.status(404).json({ error: err.message, code: err.code });
+      }
       res.status(500).json({ error: "Failed to create role" });
     }
   },

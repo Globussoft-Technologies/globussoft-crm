@@ -88,8 +88,8 @@ function formatMoney(amount, currency = "INR") {
 // flights) — bare "×2" was confusing.
 function qtyLabel(l) {
   const q = Number(l.quantity) || 1;
-  if (l.lineType === "hotel") return `Hotel � ${q} night${q === 1 ? "" : "s"}`;
-  if (l.lineType === "flight") return `Flight � ${q} traveller${q === 1 ? "" : "s"}`;
+  if (l.lineType === "hotel") return `Hotel — ${q} night${q === 1 ? "" : "s"}`;
+  if (l.lineType === "flight") return `Flight — ${q} traveller${q === 1 ? "" : "s"}`;
   if (l.lineType === "transport") return "Transfer";
   return l.lineType;
 }
@@ -327,7 +327,7 @@ export default function QuoteAcceptLanding() {
                         <div style={{ fontWeight: 600, fontSize: 15, color: "#111827", letterSpacing: 0.1 }}>{l.description}</div>
                         <div style={{ fontSize: 12, color: "var(--text-muted, #6b7280)", marginTop: 2 }}>
                           {qtyLabel(l)}
-                          {unitPriceLabel(l, l.currency || quote.currency) ? ` � ${unitPriceLabel(l, l.currency || quote.currency)}` : ""}
+                          {unitPriceLabel(l, l.currency || quote.currency) ? ` — ${unitPriceLabel(l, l.currency || quote.currency)}` : ""}
                         </div>
                       </div>
                       <div style={{ fontWeight: 800, fontSize: 15, whiteSpace: "nowrap", color: "#111827" }}>{formatMoney(l.amount, l.currency || quote.currency)}</div>

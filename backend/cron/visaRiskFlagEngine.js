@@ -70,6 +70,35 @@ const prisma = require("../lib/prisma");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
+// Staff notifications are user-scoped in the schema. Visa risk flags are
+// tenant-level alerts, so address them to one responsible staff recipient:
+// prefer an Admin, then a Manager, then any active staff user.
+async function resolveRiskNotificationRecipient(tenantId) {
+  const baseWhere = { tenantId, deactivatedAt: null, userType: "STAFF" };
+  try {
+    return (
+      (await prisma.user.findFirst({
+        where: { ...baseWhere, role: "ADMIN" },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      })) ||
+      (await prisma.user.findFirst({
+        where: { ...baseWhere, role: "MANAGER" },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      })) ||
+      (await prisma.user.findFirst({
+        where: baseWhere,
+        select: { id: true },
+        orderBy: { id: "asc" },
+      }))
+    );
+  } catch (error) {
+    console.error(`[VisaRiskFlag] tenant ${tenantId} recipient lookup failed:`, error.message);
+    return null;
+  }
+}
+
 // R7 threshold — applications updated more than this many days ago AND
 // still in a pre-filed status are flagged as stale. 14d is a holding
 // value pending PRD §5 PC-4 sign-off on SLA targets; the cron's real
@@ -447,6 +476,17 @@ async function runRiskFlaggingForTenant(tenantId) {
 
   let evaluated = 0;
   let flagged = 0;
+  let notificationRecipient;
+  let recipientResolved = false;
+  let recipientWarningLogged = false;
+
+  const getNotificationRecipient = async () => {
+    if (!recipientResolved) {
+      notificationRecipient = await resolveRiskNotificationRecipient(tenantId);
+      recipientResolved = true;
+    }
+    return notificationRecipient;
+  };
 
   for (const app of applications) {
     evaluated++;
@@ -488,10 +528,23 @@ async function runRiskFlaggingForTenant(tenantId) {
       `Advisor priority review recommended. ` +
       `Open ${PORTAL_BASE}/travel/visa/applications/${app.id}`;
 
+    const recipient = await getNotificationRecipient();
+    if (!recipient) {
+      if (!recipientWarningLogged) {
+        console.warn(
+          `[VisaRiskFlag] tenant ${tenantId} has no active staff users; ` +
+            "risk notifications will be skipped",
+        );
+        recipientWarningLogged = true;
+      }
+      continue;
+    }
+
     try {
       await prisma.notification.create({
         data: {
           tenantId,
+          userId: recipient.id,
           title,
           message,
           type: "warning",

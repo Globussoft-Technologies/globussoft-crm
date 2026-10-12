@@ -136,6 +136,9 @@ const SuperAdminApiKeyManagement = lazy(
 const SuperAdminTenantManagement = lazy(
   () => import("./pages/superadmin/SuperAdminTenantManagement"),
 );
+const SuperAdminRoleManagement = lazy(
+  () => import("./pages/superadmin/SuperAdminRoleManagement"),
+);
 const SuperAdminLandingForm = lazy(() => import("./pages/superadmin/SuperAdminLandingForm"));
 const SuperAdminRevenue = lazy(
   () => import("./pages/superadmin/SuperAdminRevenue"),
@@ -1641,6 +1644,7 @@ export default function App() {
                     <Route path="ai-management/:tenantId" element={<SuperAdminAiManagement />} />
                     <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
                     <Route path="tenant-management/:tenantId" element={<SuperAdminTenantManagement />} />
+                    <Route path="role-management" element={<SuperAdminRoleManagement />} />
                     <Route path="landing-form" element={<SuperAdminLandingForm />} />
                     <Route path="revenue" element={<SuperAdminRevenue />} />
                   </Route>

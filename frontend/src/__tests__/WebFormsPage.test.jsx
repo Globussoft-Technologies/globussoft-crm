@@ -315,6 +315,7 @@ describe('WebForms builder page', () => {
       const body = JSON.parse(update[1].body);
       expect(body.settings.steps.map((step) => step.title)).toEqual(['Contact details', 'Requirements']);
       expect(body.settings.multiStepEnabled).toBe(true);
+      expect(body.settings.whatsappEnabled).toBe(false);
       expect(body.fields[0].stepId).toBe(body.settings.steps[1].id);
     });
   });
@@ -408,6 +409,17 @@ describe('WebForms builder page', () => {
     expect(screen.getByText(/Send SMS automatically to all leads/i)).toBeInTheDocument();
 
     expect(screen.getByText(/Send WhatsApp automatically to all leads/i)).toBeInTheDocument();
+
+    const whatsappToggle = screen.getByRole('checkbox', { name: /Enable WhatsApp number field and same-as-phone checkbox/i });
+    expect(whatsappToggle).not.toBeChecked();
+    fireEvent.click(whatsappToggle);
+    expect(whatsappToggle).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    await waitFor(() => {
+      const update = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT');
+      expect(update).toBeTruthy();
+      expect(JSON.parse(update[1].body).settings.whatsappEnabled).toBe(true);
+    });
 
     expect(screen.getByText('Logo and form text')).toBeInTheDocument();
 

@@ -781,6 +781,7 @@ describe('GET /api/forms/public/:slug', () => {
 
     // Existing forms that predate the setting remain branded by default.
     expect(res.body.settings.showPoweredBy).toBe(true);
+    expect(res.body.settings.whatsappEnabled).toBe(false);
 
   });
 
@@ -795,13 +796,14 @@ describe('GET /api/forms/public/:slug', () => {
       isActive: true,
       fieldsJson: JSON.stringify([]),
       styleJson: JSON.stringify({}),
-      settingsJson: JSON.stringify({ showPoweredBy: false }),
+      settingsJson: JSON.stringify({ showPoweredBy: false, whatsappEnabled: true }),
     });
 
     const res = await request(makeApp()).get('/api/forms/public/unbranded-form');
 
     expect(res.status).toBe(200);
     expect(res.body.settings.showPoweredBy).toBe(false);
+    expect(res.body.settings.whatsappEnabled).toBe(true);
   });
 
   test('resolves the active form by stable numeric id', async () => {
@@ -1197,6 +1199,23 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(response.status).toBe(201);
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ whatsappPhone: '+919123456789' }),
+    }));
+  });
+
+  test('validates and normalizes a WhatsApp number with its own country selector', async () => {
+    mockGenericPhoneForm();
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Separate WhatsApp Country Customer')
+      .field('phoneCountry', '+91')
+      .field('phone', '9876543210')
+      .field('whatsappPhoneCountry', '+65')
+      .field('whatsappPhone', '81234567');
+
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ whatsappPhone: '+6581234567' }),
     }));
   });
 

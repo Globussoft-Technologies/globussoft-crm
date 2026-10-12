@@ -16,7 +16,7 @@ import { describe, test, expect, vi } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
 
-const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalWellnessInvoicePdf, fitReferenceInvoiceMetadataFont, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
+const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalInvoicePdf, renderProfessionalWellnessInvoicePdf, fitReferenceInvoiceMetadataFont, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1032,6 +1032,67 @@ describe('renderBrandedInvoicePdf', () => {
     const txt = extractPdfText(buf);
     expect(txt).toContain('hello@enhancedwellness.in');
     expect(txt).toContain('+919999000011');
+  });
+});
+
+describe('renderProfessionalInvoicePdf', () => {
+  test('uses settings-driven organization branding for a non-wellness invoice shape', async () => {
+    const buf = await renderProfessionalInvoicePdf(
+      {
+        invoiceNum: 'INV-GENERIC-101',
+        amount: 2499.5,
+        status: 'UNPAID',
+        issuedDate: '2026-10-01',
+        dueDate: '2026-10-15',
+        lineItemsJson: JSON.stringify([
+          {
+            type: 'service',
+            name: 'Implementation service',
+            quantity: 1,
+            unitPrice: 2499.5,
+            amount: 2499.5,
+          },
+        ]),
+      },
+      {
+        name: 'Asha Customer',
+        email: 'asha@example.com',
+        company: 'Asha Trading',
+      },
+      null,
+      {
+        tenant: {
+          name: 'Tenant fallback name',
+          brandColor: '#193B8C',
+          defaultCurrency: 'INR',
+          locale: 'en-IN',
+          ownerEmail: 'owner@asha.example',
+        },
+        settings: [
+          { key: 'invoice.brandName', value: 'Asha Trading Private Limited' },
+          { key: 'invoice.tagline', value: 'Business systems that scale' },
+          { key: 'invoice.companyAddress', value: '42 Market Street, Bengaluru' },
+          { key: 'invoice.companyPhone', value: '+91 90000 00000' },
+          { key: 'invoice.companyEmail', value: 'accounts@asha.example' },
+          { key: 'invoice.companyWebsite', value: 'https://asha.example' },
+        ],
+      },
+    );
+
+    const text = extractPdfText(buf);
+    expect(text).toContain('Asha Trading Private Limited');
+    expect(text).toContain('CRM Invoice');
+    expect(text).toContain('ITEM / DEAL');
+    expect(text).toContain('Business systems that scale');
+    expect(text).toContain('42 Market Street, Bengaluru');
+    expect(text).toContain('accounts@asha.example');
+    expect(text).toContain('Implementation service');
+    expect(text).toContain('Total');
+    expect(text).not.toContain('Payment Information');
+    expect(text).not.toContain('PAYMENT MODE');
+    expect(text).not.toContain('Notes');
+    expect(text).not.toContain('ENTERPRISE INVOICE');
+    expect(text).not.toContain('Globussoft CRM');
   });
 });
 

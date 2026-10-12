@@ -2197,6 +2197,9 @@ function PaymentTab({ trip, notify }) {
   const [plan, setPlan] = useState(null);
   const [instalments, setInstalments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const loadRequestRef = useRef(0);
+  const editorDirtyRef = useRef(false);
+  const editorRevisionRef = useRef(0);
 
   // Editor state — always editable. Hydrated from the loaded plan; an
   // empty plan starts blank.
@@ -2210,7 +2213,10 @@ function PaymentTab({ trip, notify }) {
   const [expandedParticipant, setExpandedParticipant] = useState(null);
 
   const load = useCallback(() => {
-    setLoading(true);
+    const requestId = ++loadRequestRef.current;
+    // Background refreshes must not replace a draft while the operator is
+    // editing it. The initial load still shows the normal loading state.
+    if (!editorDirtyRef.current) setLoading(true);
     // silent:true on both — a fresh trip with no plan returns 404 on
     // payment-plan; the dedicated catch handles it. Without silent, fetchApi
     // would red-toast "Payment plan not found" before the catch runs.
@@ -2219,6 +2225,10 @@ function PaymentTab({ trip, notify }) {
       fetchApi(`/api/travel/trips/${trip.id}/instalments`, { silent: true }).then((r) => r?.instalments || []).catch(() => []),
     ])
       .then(([p, ins]) => {
+        // A slower request must not overwrite the result of a newer save or
+        // refresh. This is especially important when the first no-plan GET
+        // resolves after the PUT that created the plan.
+        if (requestId !== loadRequestRef.current || editorDirtyRef.current) return;
         setPlan(p);
         setInstalments(ins);
         if (p) {
@@ -2231,7 +2241,9 @@ function PaymentTab({ trip, notify }) {
           setEditInstalments([]);
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (requestId === loadRequestRef.current) setLoading(false);
+      });
   }, [trip.id]);
 
   useEffect(load, [load]);
@@ -2283,7 +2295,12 @@ function PaymentTab({ trip, notify }) {
       .then(() => notify.success("Payment portal link copied"))
       .catch(() => notify.error("Copy failed - select the link manually"));
   };
+  const markEditorDirty = () => {
+    editorDirtyRef.current = true;
+    editorRevisionRef.current += 1;
+  };
   const addInstalment = () => {
+    markEditorDirty();
     setEditInstalments([
       ...editInstalments,
       { dueDate: "", amount: 0, reminderDays: 7 },
@@ -2291,16 +2308,19 @@ function PaymentTab({ trip, notify }) {
   };
 
   const updateInstalment = (idx, patch) => {
+    markEditorDirty();
     setEditInstalments(editInstalments.map((it, j) => (j === idx ? { ...it, ...patch } : it)));
   };
 
   const removeInstalment = (idx) => {
+    markEditorDirty();
     setEditInstalments(editInstalments.filter((_it, j) => j !== idx));
   };
 
   const moveInstalment = (idx, dir) => {
     const target = idx + dir;
     if (target < 0 || target >= editInstalments.length) return;
+    markEditorDirty();
     const next = editInstalments.slice();
     [next[idx], next[target]] = [next[target], next[idx]];
     setEditInstalments(next);
@@ -2334,6 +2354,7 @@ function PaymentTab({ trip, notify }) {
       }
       previousDueDate = dueDate;
     }
+    const savedRevision = editorRevisionRef.current;
     setSaving(true);
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, {
@@ -2344,6 +2365,7 @@ function PaymentTab({ trip, notify }) {
         }),
       });
       notify.success(`Payment plan saved (${editInstalments.length} instalments).`);
+      if (editorRevisionRef.current === savedRevision) editorDirtyRef.current = false;
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to save payment plan");
@@ -2364,6 +2386,7 @@ function PaymentTab({ trip, notify }) {
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, { method: "DELETE" });
       notify.success("Payment plan deleted.");
+      editorDirtyRef.current = false;
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to delete payment plan");
@@ -2436,7 +2459,10 @@ function PaymentTab({ trip, notify }) {
               type="number"
               min="0"
               value={graceDays}
-              onChange={(e) => setGraceDays(e.target.value === "" ? 0 : Number(e.target.value))}
+              onChange={(e) => {
+                markEditorDirty();
+                setGraceDays(e.target.value === "" ? 0 : Number(e.target.value));
+              }}
               style={{ ...input, width: 70 }}
               aria-label="Grace days"
             />

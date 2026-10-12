@@ -364,7 +364,7 @@ export default function Estimates() {
   };
 
   return (
-    <div className="estimates-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="estimates-page" style={{ padding: '2rem', minHeight: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <FileSpreadsheet size={26} color="var(--accent-color)" /> Estimates
@@ -761,6 +761,10 @@ export default function Estimates() {
             </div>
           ) : (
             <div
+              className="estimates-ledger-scroll"
+              role="region"
+              aria-label="Estimate ledger columns"
+              tabIndex={0}
               style={{
                 overflowX: 'auto',
                 border: '1px solid var(--border-color)',
@@ -769,6 +773,7 @@ export default function Estimates() {
               }}
             >
               <table
+                className="estimates-ledger-table"
                 style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
                 role="table"
                 aria-label="Estimates table"

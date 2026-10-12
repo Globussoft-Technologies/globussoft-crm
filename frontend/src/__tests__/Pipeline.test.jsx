@@ -120,6 +120,27 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getAllByText('Anita').length).toBeGreaterThan(0);
   });
 
+  it('lets each phone stage open and close independently', async () => {
+    renderPipeline();
+    await screen.findByText('Acme Corp Renewal');
+
+    const newLead = screen.getByRole('button', { name: 'Toggle New Lead deals' });
+    const won = screen.getByRole('button', { name: 'Toggle Won deals' });
+    expect(newLead).toHaveAttribute('aria-expanded', 'false');
+    expect(won).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(newLead);
+    expect(newLead).toHaveAttribute('aria-expanded', 'true');
+    expect(newLead.closest('.deals-pipeline-stage')).toHaveClass('is-expanded');
+    expect(won).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(won);
+    expect(won).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(newLead);
+    expect(newLead).toHaveAttribute('aria-expanded', 'false');
+    expect(won).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('keeps a ten-stage board readable with horizontal scrolling and removes duplicate stage columns', async () => {
     const manyStages = Array.from({ length: 10 }, (_, index) => ({
       id: index + 1,

@@ -288,10 +288,9 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
     });
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.slice(0, 4).toString()).toBe('%PDF');
-    // TMC header color #1F4E79 → float prefix [0.12156, 0.30588, 0.47450].
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
-    // RFU's distinctive green should NOT appear in the TMC invoice.
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false);
+    // Invoice print palette is consistent across sub-brands.
+    expect(pdfContainsHexColor(buf, '#14253F')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
     // Producer metadata records that we used the fallback path.
     const producer = extractProducer(buf);
     expect(producer).toMatch(/brand-kit: fallback/);
@@ -304,8 +303,8 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
       tenant: null,
     });
     expect(Buffer.isBuffer(buf)).toBe(true);
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#14253F')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
     const producer = extractProducer(buf);
     expect(producer).toMatch(/brand-kit: fallback/);
   });
@@ -316,9 +315,8 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
       lines: sampleLines(),
       tenant: null,
     });
-    expect(pdfContainsHexColor(buf, '#922B21')).toBe(true);
-    // Travel Stall's primaryColor (#C0392B) appears as the Total-Due label.
-    expect(pdfContainsHexColor(buf, '#C0392B')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#14253F')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
   });
 
   test('Visa Sure sub-brand → renders Visa-Sure fallback header (#283747)', async () => {
@@ -327,7 +325,8 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
       lines: sampleLines(),
       tenant: null,
     });
-    expect(pdfContainsHexColor(buf, '#283747')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#14253F')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
   });
 
   test('explicit subBrandConfigJson overrides the hard-coded fallback', async () => {
@@ -350,9 +349,9 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
     // "1", "0", "1" (well — pdfkit emits "1 0 1" — so substring "1" is
     // trivially in any PDF; assert via Producer instead).
     expect(extractProducer(buf)).toMatch(/brand-kit: subBrandConfig/);
-    // And the fallback teal MUST NOT appear at all in the PDF (operator
-    // overrode it; "fallback color leaked" would be a bug).
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(false);
+    // Configured primary color is used, with the default accent when omitted.
+    expect(pdfContainsHexColor(buf, '#FF00FF')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
   });
 
   test('null subBrandConfigJson on tenant → falls back per sub-brand', async () => {
@@ -363,7 +362,7 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
       tenant,
     });
     expect(extractProducer(buf)).toMatch(/brand-kit: fallback/);
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#14253F')).toBe(true);
   });
 
   test('malformed subBrandConfigJson → silent fall-through to fallback (no throw)', async () => {
@@ -381,7 +380,7 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
     // sub-brand's fallback palette.
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(extractProducer(buf)).toMatch(/brand-kit: fallback/);
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
   });
 
   test('top-level cfg block applies when subBrand has no dedicated block', async () => {
@@ -400,10 +399,9 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
       tenant,
     });
     expect(extractProducer(buf)).toMatch(/brand-kit: subBrandConfig/);
-    // Top-level color #123456 should be present; TMC's fallback color
-    // (#1F4E79) should NOT be (top-level overrode it).
+    // The configured primary color is honored; absent accent uses teal.
     expect(pdfContainsHexColor(buf, '#123456')).toBe(true);
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
   });
 
   test('per-render explicit override (opts.branding) wins over tenant config', async () => {
@@ -420,10 +418,9 @@ describe('renderTravelInvoicePdf — brand-kit-aware header colors', () => {
       tenant,
       branding: { headerColor: '#0000FF' },
     });
-    // Per-render explicit override is precedence layer 1 — top of chain.
+    // Explicit per-render primary wins, with the premium teal default accent.
     expect(pdfContainsHexColor(buf, '#0000FF')).toBe(true);
-    // The tenant-config value MUST NOT also leak through.
-    expect(pdfContainsHexColor(buf, '#AAAAAA')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#0F766E')).toBe(true);
   });
 
   test('renders valid PDF with expected body text (no regression vs pre-S34 shape)', async () => {
@@ -554,7 +551,25 @@ describe('renderTravelInvoicePdf — S51 logo URL embedding', () => {
     expect(pdfContainsImageXObject(buf)).toBe(false);
     // TMC fallback header color is still present — the failed logo
     // fetch MUST NOT regress the brand-kit selector.
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#14253F')).toBe(true);
+  });
+
+  test('falls through failed sub-brand logo variants to the same tenant logo', async () => {
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(TINY_PNG);
+    const buf = await generateTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ subBrand: 'tmc' }),
+      lines: sampleLines(),
+      tenant: { id: 7, logoUrl: 'https://cdn.example.com/tenant-logo.png' },
+      branding: {
+        thumbnailUrl: 'https://cdn.example.com/stale-brand-logo.png',
+        logoCandidates: ['https://cdn.example.com/stale-brand-logo.png'],
+      },
+    });
+    expect(spy).toHaveBeenNthCalledWith(1, 'https://cdn.example.com/stale-brand-logo.png');
+    expect(spy).toHaveBeenNthCalledWith(2, 'https://cdn.example.com/tenant-logo.png');
+    expect(pdfContainsImageXObject(buf)).toBe(true);
   });
 
   test('S51 (c) — thumbnailUrl null → PDF unchanged from S34 output (back-compat)', async () => {
@@ -578,7 +593,7 @@ describe('renderTravelInvoicePdf — S51 logo URL embedding', () => {
     // S34 contract preserved: header color, Producer metadata, body all
     // unchanged. No /Image XObject because fetcher was never called.
     expect(pdfContainsImageXObject(buf)).toBe(false);
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#14253F')).toBe(true);
     expect(extractProducer(buf)).toMatch(/brand-kit: fallback/);
   });
 

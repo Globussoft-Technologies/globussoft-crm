@@ -425,9 +425,9 @@ export default function DealInsights() {
       </header>
 
       {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem', marginBottom: '1.75rem' }}>
+      <div className="deal-insights-kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem', marginBottom: '1.75rem' }}>
         {KPI_CARDS.map(k => (
-          <div key={k.label} className="card" style={{ padding: '1.5rem' }}>
+          <div key={k.label} className="card deal-insights-kpi-card" style={{ padding: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{k.label}</span>
               {k.icon}
@@ -627,6 +627,7 @@ export default function DealInsights() {
               <div key={dealId} className="card" style={{ padding: '2rem', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
                 {/* Deal header */}
                 <div
+                  className="deal-insights-group-header"
                   role="button"
                   tabIndex={0}
                   onClick={() => navigate(`/pipeline?dealId=${dealId}`)}
@@ -638,9 +639,9 @@ export default function DealInsights() {
                     paddingBottom: '1rem', borderBottom: '2px solid var(--border-color)',
                   }}
                 >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                      {deal ? deal.title : `Deal #${dealId}`}
+                  <div className="deal-insights-group-main" style={{ flex: 1 }}>
+                    <div className="deal-insights-group-title" style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                      <span>{deal ? deal.title : `Deal #${dealId}`}</span>
                       <ArrowRight size={18} color="var(--accent-color)" style={{ opacity: 0.7 }} />
                     </div>
                     <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
@@ -662,7 +663,7 @@ export default function DealInsights() {
                       )}
                     </div>
                   </div>
-                  <span style={{
+                  <span className="deal-insights-group-count" style={{
                     fontSize: '0.8rem', padding: '0.4rem 0.9rem', fontWeight: 600,
                     background: 'var(--accent-color)', color: '#fff', borderRadius: '8px',
                     whiteSpace: 'nowrap',

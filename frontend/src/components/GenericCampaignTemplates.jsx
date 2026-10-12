@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, Bold, Edit, Eye, FileText, Italic, Link, Plus, Save, Search, Sparkles, Trash2, Underline, X } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, Edit, Eye, FileText, Italic, Link, Plus, Save, Search, Sparkles, Trash2, Underline, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -73,6 +73,7 @@ export default function GenericCampaignTemplates() {
   const [personalizationTarget, setPersonalizationTarget] = useState('body');
   const [personalizationQuery, setPersonalizationQuery] = useState('');
   const [personalizationGroup, setPersonalizationGroup] = useState('');
+  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
   const editorRef = useRef(null);
   const editorIdentityRef = useRef(null);
   const templateRequest = useRef(0);
@@ -291,15 +292,15 @@ export default function GenericCampaignTemplates() {
         </div>
       )}
 
-      {editor && <div onClick={() => setEditor(null)} style={modalBackdropStyle}>
-        <div role="dialog" aria-label={editor.id ? 'Edit campaign template' : 'Create campaign template'} onClick={event => event.stopPropagation()} className="card modal generic-template-scrollbar" style={modalStyle}>
+      {editor && <div className="generic-template-backdrop" onClick={() => setEditor(null)} style={modalBackdropStyle}>
+        <div role="dialog" aria-label={editor.id ? 'Edit campaign template' : 'Create campaign template'} onClick={event => event.stopPropagation()} className="card modal generic-template-scrollbar generic-template-modal" style={modalStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h3 style={{ margin: 0 }}>{editor.id ? 'Edit Template' : 'New Template'}</h3>
             <button type="button" onClick={() => setEditor(null)} aria-label="Close" style={iconButtonStyle}><X size={20} /></button>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 220px', gap: '1rem', minHeight: '430px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px', gap: '0.75rem' }}>
+          <div className="generic-template-modal__layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 220px', gap: '1rem', minHeight: '430px' }}>
+            <div className="generic-template-modal__editor" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div className="generic-template-modal__fields" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px', gap: '0.75rem' }}>
                 <label style={fieldLabelStyle}>Template Name<input className="input-field" value={editor.name} onChange={e => setEditor({ ...editor, name: e.target.value })} placeholder="Template name" /></label>
                 <label style={fieldLabelStyle}>Category<input className="input-field" value={editor.category} onChange={e => setEditor({ ...editor, category: e.target.value })} placeholder="Category" /></label>
               </div>
@@ -318,21 +319,27 @@ export default function GenericCampaignTemplates() {
                 <button type="button" style={toolbarButtonStyle} onClick={() => { const url = window.prompt('Enter link URL'); if (url) runCommand('createLink', url); }} aria-label="Insert link"><Link size={15} /></button>
                 <button type="button" className="btn-secondary" onClick={() => { setPersonalizationTarget('body'); setPersonalizationOpen(open => !open); }}>Insert Personalization</button>
               </div>
-              {personalizationOpen && <div style={personalizationMenuStyle}>{Object.entries(groupedFields).map(([group, groupFields]) => <div key={group}><strong style={{ display: 'block', margin: '0.2rem 0 0.3rem' }}>{group}</strong>{groupFields.map(field => <button type="button" key={field.key} onClick={() => insertVariable(field)} style={variableButtonStyle}>{field.label}</button>)}</div>)}</div>}
+              {personalizationOpen && <div className="generic-template-modal__picker" style={personalizationMenuStyle}>{Object.entries(groupedFields).map(([group, groupFields]) => <div key={group}><strong style={{ display: 'block', margin: '0.2rem 0 0.3rem' }}>{group}</strong>{groupFields.map(field => <button type="button" key={field.key} onClick={() => insertVariable(field)} style={variableButtonStyle}>{field.label}</button>)}</div>)}</div>}
               <div ref={editorRef} contentEditable role="textbox" aria-label="Email body" onFocus={() => setPersonalizationTarget('body')} onInput={() => setEditor(current => ({ ...current, body: fromEditorHtml(editorRef.current) }))} data-placeholder="Write your email here..." style={richEditorStyle} />
             </div>
-            <aside className="generic-template-scrollbar" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <aside className="generic-template-scrollbar generic-template-modal__personalization" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}><h4 style={{ fontSize: '0.85rem', margin: 0 }}>Personalization</h4><span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>{fields.length} tags</span></div>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>Fields come from Generic CRM backend metadata.</span>
               <label style={{ position: 'relative', display: 'flex', alignItems: 'center' }}><Search size={14} style={{ position: 'absolute', left: 8, color: 'var(--text-secondary)' }} /><input className="input-field" value={personalizationQuery} onChange={event => setPersonalizationQuery(event.target.value)} placeholder="Filter merge fields..." aria-label="Filter merge fields" style={{ paddingLeft: 28 }} /></label>
-              {personalizationGroups.length > 0 && <select className="input-field" value={activePersonalizationGroup} onChange={event => setPersonalizationGroup(event.target.value)} aria-label="Personalization field group">{personalizationGroups.map(group => <option key={group} value={group}>{group}</option>)}</select>}
+              {personalizationGroups.length > 0 && <>
+                <select className="input-field generic-template-modal__group-select" value={activePersonalizationGroup} onChange={event => setPersonalizationGroup(event.target.value)} aria-label="Personalization field group">{personalizationGroups.map(group => <option key={group} value={group}>{group}</option>)}</select>
+                <button type="button" className="input-field generic-template-modal__group-trigger" aria-label="Personalization field group" aria-expanded={groupDropdownOpen} aria-haspopup="listbox" onClick={() => setGroupDropdownOpen(open => !open)}>{activePersonalizationGroup}<ChevronDown size={16} /></button>
+                {groupDropdownOpen && <div className="generic-template-modal__group-list" role="listbox" aria-label="Personalization field groups">
+                  {personalizationGroups.map(group => <button type="button" role="option" key={group} aria-selected={activePersonalizationGroup === group} onClick={() => { setPersonalizationGroup(group); setGroupDropdownOpen(false); }}>{group}</button>)}
+                </div>}
+              </>}
               {activePersonalizationGroup && <strong style={{ display: 'block', margin: '0.2rem 0' }}>{activePersonalizationGroup}</strong>}
               {activePersonalizationFields.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>{activePersonalizationFields.map(field => <button type="button" key={field.key} onClick={() => insertVariable(field)} style={variableButtonStyle}>{field.label}</button>)}</div>}
               {fields.length > 0 && !activePersonalizationFields.length && <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>No matching personalization fields.</span>}
               {!fields.length && <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>No personalization fields available.</span>}
             </aside>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginTop: '1rem' }}>
+          <div className="generic-template-modal__footer" style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginTop: '1rem' }}>
             <button type="button" className="btn-secondary" onClick={previewTemplate} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}><Eye size={15} /> Preview</button>
             <div style={{ display: 'flex', gap: '0.5rem' }}><button type="button" className="btn-secondary" onClick={() => setEditor(null)}>Cancel</button><button type="button" className="btn-primary" onClick={saveTemplate} disabled={busy} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}><Save size={15} /> {busy ? 'Saving...' : 'Save Template'}</button></div>
           </div>

@@ -299,7 +299,7 @@ export default function Channels() {
   const webhookBase = window.location.origin.replace(':5173', ':5000');
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+    <div className="communication-channels-page" style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
       <header style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
         <Radio size={24} style={{ color: 'var(--accent-color)' }} />
         <div>
@@ -309,7 +309,7 @@ export default function Channels() {
       </header>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '0.25rem', marginBottom: '1.5rem', width: 'fit-content' }}>
+      <div className="communication-channels-tabs" style={{ display: 'flex', gap: '0.25rem', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '0.25rem', marginBottom: '1.5rem', width: 'fit-content' }}>
         {TABS.map(t => (
           <button key={t.key} onClick={() => setActiveTab(t.key)} style={{ padding: '0.5rem 1.25rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.85rem', fontWeight: activeTab === t.key ? '600' : '400', background: activeTab === t.key ? t.color : 'transparent', color: activeTab === t.key ? '#fff' : 'var(--text-secondary)', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <t.icon size={16} /> {t.label}
@@ -320,7 +320,7 @@ export default function Channels() {
       {/* SMS Config */}
       {activeTab === 'sms' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+          <div className="communication-provider-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
             {/* #716 — MSG91 Sender IDs are strictly 6 alphanumeric characters
                 (DLT-registered). Enforce maxLength + pattern client-side AND
                 surface a helper line so operators don't bounce off the 400 on
@@ -385,7 +385,7 @@ export default function Channels() {
 
       {/* Telephony Config */}
       {activeTab === 'telephony' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+        <div className="communication-provider-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
           {[{ provider: 'myoperator', label: 'MyOperator', fields: [{ key: 'apiKey', label: 'API Token', secret: true }, { key: 'virtualNumber', label: 'Virtual Number' }] },
             { provider: 'knowlarity', label: 'Knowlarity', fields: [{ key: 'apiKey', label: 'API Key', secret: true }, { key: 'apiSecret', label: 'SR Number', secret: true }, { key: 'virtualNumber', label: 'Virtual Number' }] }
           ].map(p => (
@@ -499,7 +499,7 @@ function ConfigCard({ provider, config, onChangeField, onSave, onRotateSecret })
   const [rotating, setRotating] = React.useState(null); // { field, label }
   const { lastRotatedAt } = config;
   return (
-    <div className="card" style={{ padding: '1.5rem' }}>
+    <div className="card communication-provider-card" style={{ padding: '1.5rem' }}>
       <h3 style={{ fontWeight: '600', marginBottom: '0.25rem' }}>{provider.label}</h3>
       {lastRotatedAt && (
         <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
@@ -589,7 +589,7 @@ function SecretFieldRow({ value, label, onRotate }) {
     display = 'Not configured';
   }
   return (
-    <div style={{
+    <div className="communication-secret-row" style={{
       display: 'flex',
       alignItems: 'center',
       gap: '0.5rem',

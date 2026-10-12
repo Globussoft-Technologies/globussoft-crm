@@ -399,6 +399,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
     return (
       <div
         style={{
+          width: '100%',
           maxWidth: '480px',
           margin: '0 auto 16px',
           padding: '24px',
@@ -408,6 +409,8 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           textAlign: 'center',
           color: '#16a34a',
           fontWeight: '500',
+          boxSizing: 'border-box',
+          overflowWrap: 'anywhere',
         }}
       >
         {thankYouMessage}
@@ -430,7 +433,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           width: '100%',
           maxWidth: formVariant === 'wellness-consultation' ? '100%' : '480px',
           margin: formVariant === 'wellness-consultation' ? '0 0 20px' : '0 auto 20px',
-          padding: formVariant === 'wellness-consultation' ? '36px' : '28px',
+          padding: formVariant === 'wellness-consultation' ? 'clamp(16px, 5vw, 36px)' : 'clamp(16px, 5vw, 28px)',
           background: formVariant === 'wellness-consultation' ? 'var(--wellness-surface, #ffffff)' : 'linear-gradient(180deg, #fffdf8 0%, #faf7ef 100%)',
           borderRadius: formVariant === 'wellness-consultation' ? '18px' : '24px',
           border: formVariant === 'wellness-consultation' ? '1px solid var(--wellness-border, #cfe3d9)' : '1px solid rgba(148, 163, 184, 0.22)',
@@ -445,16 +448,17 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           </h2>
         )}
 
-        <div style={{ display: formVariant === 'wellness-consultation' ? 'flex' : 'block', flexWrap: 'wrap', gap: formVariant === 'wellness-consultation' ? '0 16px' : 0 }}>
+        <div style={{ display: formVariant === 'wellness-consultation' ? 'grid' : 'block', gridTemplateColumns: formVariant === 'wellness-consultation' ? 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' : undefined, columnGap: formVariant === 'wellness-consultation' ? '16px' : undefined }}>
         {fields.map((field, index) => {
           const fieldId = `${formId}_${field.name}`;
           const fieldType = field.type || 'text';
           const controlStyle = {
             width: '100%',
+            minWidth: 0,
             padding: formVariant === 'wellness-consultation' ? '14px 16px' : '10px 12px',
             border: formVariant === 'wellness-consultation' ? '1px solid var(--wellness-border, #d7e2d0)' : '1px solid #d1d5db',
             borderRadius: formVariant === 'wellness-consultation' ? '10px' : '6px',
-            fontSize: '15px',
+            fontSize: '16px',
             boxSizing: 'border-box',
             background: formVariant === 'wellness-consultation' ? 'var(--wellness-bg, #f7fbf4)' : '#ffffff',
             backgroundColor: formVariant === 'wellness-consultation' ? 'var(--wellness-bg, #f7fbf4)' : '#ffffff',
@@ -468,7 +472,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           };
           const isHalfWidth = formVariant === 'wellness-consultation' && index < 2;
           return (
-            <div key={field.name} style={{ marginBottom: formVariant === 'wellness-consultation' ? '18px' : '12px', flex: isHalfWidth ? '1 1 calc(50% - 8px)' : '1 1 100%', minWidth: isHalfWidth ? '0' : '100%', boxSizing: 'border-box' }}>
+            <div key={field.name} style={{ marginBottom: formVariant === 'wellness-consultation' ? '18px' : '12px', gridColumn: formVariant === 'wellness-consultation' && !isHalfWidth ? '1 / -1' : undefined, minWidth: 0, boxSizing: 'border-box' }}>
               <label
                 htmlFor={fieldId}
                 style={{
@@ -531,6 +535,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null, submitEndpoint
           <div style={{ margin: '0 0 12px 0' }}>
             <div
               className="cf-turnstile"
+              data-size="compact"
               data-sitekey={turnstileSiteKey}
               data-callback={`${formId}_onTurnstile`}
             />

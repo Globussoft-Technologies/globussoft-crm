@@ -24,6 +24,59 @@
   table-layout: auto !important;
 }
 
+/* Travel Staff keeps its wide columns inside the table scroller. The outer
+   card must allow the Filter popover to extend over the table. */
+.travel-staff-page .travel-staff-card {
+  overflow: visible !important;
+}
+
+.travel-staff-page .travel-staff-table-scroll {
+  max-width: 100%;
+  overflow-x: auto !important;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.travel-staff-page .travel-staff-toolbar {
+  position: relative;
+  z-index: 3;
+}
+
+/* Long generated meeting URLs must wrap inside their panel, not widen it. */
+.meeting-form-integration {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.meeting-form-integration .meeting-embed-url-row {
+  min-width: 0;
+}
+
+.meeting-form-integration .meeting-embed-url-row input {
+  min-width: 0;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+}
+
+.meeting-form-integration .meeting-embed-url-row button {
+  flex: 0 0 auto;
+}
+
+.meeting-form-integration textarea,
+.meeting-form-integration iframe {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.meeting-form-integration .meeting-api-endpoints {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .pricing-rules-table-scroll {
   max-width: 100%;
   min-width: 0;
@@ -273,6 +326,16 @@
     width: 100% !important;
   }
 
+  /* The shared mobile dialog rule is for full-screen modals, not this
+     calendar popover. Keep it beside its trigger and inside the page. */
+  .diagnostics-page .diagnostics-page__filter-controls [role="dialog"][aria-label="Select date range"] {
+    left: auto !important;
+    right: 0 !important;
+    width: min(300px, calc(100vw - 32px)) !important;
+    max-width: calc(100vw - 32px) !important;
+    box-sizing: border-box;
+  }
+
   .diagnostics-page__selection-actions {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
     margin-left: 0 !important;
@@ -301,6 +364,67 @@
 }
 
 @media (max-width: 600px) {
+  .travel-staff-page .travel-staff-stats {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px !important;
+  }
+
+  .travel-staff-page .travel-staff-stats > button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .travel-staff-page .travel-staff-availability-toggle {
+    grid-column: 1 / -1;
+    margin-left: 0 !important;
+  }
+
+  .travel-staff-page .travel-staff-availability-toggle > button {
+    width: 100%;
+  }
+
+  .travel-staff-page .travel-staff-toolbar {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px !important;
+  }
+
+  .travel-staff-page .travel-staff-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    min-width: 0;
+    gap: 8px !important;
+  }
+
+  .travel-staff-page .travel-staff-search {
+    grid-column: 1 / -1;
+    width: 100% !important;
+    min-width: 0;
+  }
+
+  .travel-staff-page .travel-staff-search input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .travel-staff-page .travel-staff-filter-anchor {
+    justify-self: end;
+  }
+
+  .travel-staff-page .travel-staff-filter-panel {
+    width: min(300px, calc(100vw - 32px)) !important;
+    max-width: calc(100vw - 32px);
+    box-sizing: border-box;
+  }
+
+  .travel-staff-page .travel-staff-table-scroll > table {
+    width: max(100%, 900px) !important;
+    min-width: 900px !important;
+  }
+
   .tally-export-trips-page {
     padding: 12px !important;
   }
@@ -527,6 +651,11 @@
 
   .diagnostics-page__filter-controls {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diagnostics-page .diagnostics-page__filter-controls [role="dialog"][aria-label="Select date range"] {
+    width: 100% !important;
+    max-width: 100% !important;
   }
 
   .diagnostics-page .diagnostics-page__title {

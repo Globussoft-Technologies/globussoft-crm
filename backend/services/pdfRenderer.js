@@ -5319,6 +5319,7 @@ function extractTravellerListFromInvoice(invoice, lines) {
 }
 
 async function renderTravelInvoicePdf(opts) {
+  const { renderTravelInvoiceLayout } = require("./travelInvoicePdf");
   const o = opts || {};
   const invoice = o.invoice || {};
   const lines = Array.isArray(o.lines)
@@ -5342,7 +5343,22 @@ async function renderTravelInvoicePdf(opts) {
   // Per-render explicit overrides win (precedence layer 1). Callers can pass
   // { branding: { headerColor: "#000", ... } } to opts to bypass the kit.
   const callerBranding = (o.branding && typeof o.branding === "object") ? o.branding : {};
-  const branding = { ...brandKit, ...callerBranding };
+  const subBrandConfig = cfg && cfg[sub] && typeof cfg[sub] === "object" && !Array.isArray(cfg[sub])
+    ? cfg[sub]
+    : {};
+  const configuredLogo = subBrandConfig.logoUrl || subBrandConfig.wordmarkUrl ||
+    subBrandConfig.logoDarkUrl || cfg.logoUrl || cfg.wordmarkUrl || cfg.logoDarkUrl;
+  const configuredPrimaryColor = callerBranding.primaryColor || callerBranding.headerColor ||
+    subBrandConfig.primaryColor || subBrandConfig.headerColor || cfg.primaryColor || cfg.headerColor || null;
+  const configuredAccentColor = callerBranding.accentColor ||
+    subBrandConfig.accentColor || cfg.accentColor || null;
+  const configuredColors = Boolean(configuredPrimaryColor || configuredAccentColor);
+  const branding = {
+    ...brandKit,
+    ...callerBranding,
+    thumbnailUrl: callerBranding.thumbnailUrl || brandKit.thumbnailUrl ||
+      configuredLogo || (tenant && tenant.logoUrl) || null,
+  };
 
   // S51 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
   // pdfkit's doc.image() needs the buffer synchronously, so we resolve the
@@ -5350,389 +5366,54 @@ async function renderTravelInvoicePdf(opts) {
   // unit tests can vi.spyOn(...) the seam without reaching into axios.
   // Fail-soft: on any error, the helper returns null and we render a
   // logo-less header band (back-compat with pre-S51 output).
-  const logoBuffer = branding.thumbnailUrl
-    ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
-    : null;
-  // The header band fill — was bare SUB_BRAND_ACCENT[sub] pre-S34. Now
-  // sources from the brand-kit so the admin-curated palette wins.
-  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
-  // primaryColor drives the "Total Due" line + section accents downstream.
-  // accentColor drives secondary dividers (header band underline).
-  const primaryColor = branding.primaryColor || INVOICE_BRAND_KIT_FALLBACKS._generic.primaryColor;
-  // _brandingSource: stamped into PDF Producer metadata so we can observe in
-  // a tester / smoke check which resolution path fired without parsing PDF
-  // body text. Values: "subBrandConfig" | "fallback".
-  void brandSource;
-
-  const currency = invoice.currency || "INR";
-  const docType = invoice.docType || "TaxInvoice";
-  const docHeaderTitle = docTypeHeader(docType);
-  const docFooterText = docTypeFooter(docType);
-
-  function fmt(n) {
-    const v = Number(n) || 0;
-    if (currency === "INR") return `₹${v.toFixed(2)}`;
-    if (currency === "USD") return `$${v.toFixed(2)}`;
-    if (currency === "GBP") return `£${v.toFixed(2)}`;
-    return `${currency} ${v.toFixed(2)}`;
-  }
-
-  const doc = new PDFDocument({
-    size: "A4",
-    margin: 50,
-    info: {
-      // S34 — stamp brand-kit resolution path into PDF Producer metadata so
-      // downstream observers (tests, ops greps) can see whether the rendered
-      // colors came from subBrandConfigJson or from the hard-coded fallback
-      // without parsing body-text. Format: "Globussoft CRM (brand-kit: <src>)"
-      Producer: `Globussoft CRM (brand-kit: ${brandSource})`,
-    },
-  });
-  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
-  const bufPromise = streamToBuffer(doc);
-
-  doc.rect(0, 0, doc.page.width, 60).fill(accent);
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
-    .text(brandLabel, 50, 22, { align: "left" });
-  const bandSubLabel = docHeaderTitle
-    .toLowerCase()
-    .replace(/(^|\s)\S/g, (c) => c.toUpperCase());
-  doc.fillColor("#fff").fontSize(10).text(bandSubLabel, 50, 42, { align: "left" });
-
-  // S51 — embed brand logo into the header band's top-right (80×40 fit
-  // box at right edge). doc.image() throws on invalid buffers; wrap in
-  // try/catch so a malformed logo can't 500 the download. The brand
-  // color band still renders behind the logo regardless.
-  if (logoBuffer) {
-    try {
-      const LOGO_W = 80;
-      const LOGO_H = 40;
-      const LOGO_X = doc.page.width - LOGO_W - 50;
-      const LOGO_Y = 10;
-      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[pdfRenderer/S51] doc.image() rejected logo buffer: ${err && err.message ? err.message : err}`,
-      );
-    }
-  }
-
-  doc.fillColor("#111").moveDown(2);
-
-  const metaTop = 80;
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
-    .text(docHeaderTitle, 380, metaTop, { width: 165, align: "right" });
-  doc.font("Helvetica").fontSize(10).fillColor("#333");
-  doc.text(
-    `Invoice #: ${invoice.invoiceNum || invoice.id || "—"}`,
-    380, metaTop + 26, { width: 165, align: "right" },
-  );
-  doc.text(
-    `Issued: ${formatDate(invoice.issuedDate || invoice.createdAt || new Date())}`,
-    380, metaTop + 40, { width: 165, align: "right" },
-  );
-  doc.text(
-    `Due: ${formatDate(invoice.dueDate)}`,
-    380, metaTop + 54, { width: 165, align: "right" },
-  );
-  doc.text(
-    `Status: ${invoice.status || "Draft"}`,
-    380, metaTop + 68, { width: 165, align: "right" },
-  );
-
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Bill To", 50, metaTop);
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
-  doc.text(invoice.contactName || "—", 50, metaTop + 18);
-  if (invoice.contactEmail) doc.text(invoice.contactEmail, 50, doc.y);
-  if (invoice.contactPhone) doc.text(invoice.contactPhone, 50, doc.y);
-
-  doc.y = Math.max(doc.y, metaTop + 100);
-  doc.moveDown(0.6);
-  const divY = doc.y;
-  doc.moveTo(50, divY).lineTo(545, divY).lineWidth(0.7).strokeColor(accent).stroke();
-  doc.moveDown(0.8);
-
-  if (docType === "TravelVoucher") {
-    const voucherLines = (lines || []).filter(
-      (l) => l && VOUCHER_FULFILLMENT_TYPES.has(l.lineType || "other"),
-    );
-    const travellers = extractTravellerListFromInvoice(invoice, lines);
-
-    const vTop = doc.y;
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-      .text("Voucher Details", 50, vTop);
-    let vy = vTop + 16;
-
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555")
-      .text("Travellers:", 50, vy, { width: 65, continued: false });
-    doc.font("Helvetica").fontSize(9).fillColor("#222")
-      .text(travellers, 115, vy, { width: 430 });
-    vy = Math.max(vy + 14, doc.y + 4);
-
-    if (voucherLines.length === 0) {
-      doc.font("Helvetica-Oblique").fontSize(9).fillColor("#777")
-        .text(
-          "(No fulfillment lines yet — add Hotel / Transfer / Activity lines to populate this block.)",
-          50, vy, { width: 495 },
-        );
-      vy += 16;
+  let logoBuffer = null;
+  // Try the active sub-brand's preferred asset first, then its alternate logo
+  // variants, configured fallback, and finally this tenant's legacy logo. A
+  // stale BrandKit URL must not hide another usable logo for the same tenant.
+  const logoCandidates = [
+    ...(Array.isArray(callerBranding.logoCandidates) ? callerBranding.logoCandidates : []),
+    branding.thumbnailUrl,
+    configuredLogo,
+    tenant && tenant.logoUrl,
+  ].filter((url, index, urls) => typeof url === "string" && url.trim() && urls.indexOf(url) === index);
+  for (const logoUrl of logoCandidates) {
+    const local = /^\/uploads\/brand-kits\/([0-9]+)\/([a-z0-9_-]+)\/([a-zA-Z0-9._-]+)$/.exec(logoUrl);
+    if (local) {
+      if (!tenant || Number(local[1]) !== Number(tenant.id)) continue;
+      try {
+        const fs = require("fs/promises");
+        logoBuffer = await fs.readFile(nodePath.join(__dirname, "..", "uploads", "brand-kits", ...local.slice(1)));
+      } catch (_) { /* try the next tenant-scoped logo */ }
+    } else if (/^https?:\/\//i.test(logoUrl)) {
+      logoBuffer = await module.exports.fetchLogoBuffer(logoUrl);
     } else {
-      const colVX = { subtype: 50, desc: 130, conf: 305, date: 405 };
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
-      doc.text("Subtype", colVX.subtype, vy, { width: 70, align: "left" });
-      doc.text("Description", colVX.desc, vy, { width: 165, align: "left" });
-      doc.text("Supplier Conf #", colVX.conf, vy, { width: 90, align: "left" });
-      doc.text("Service Date", colVX.date, vy, { width: 140, align: "left" });
-      vy += 12;
-      doc.moveTo(50, vy).lineTo(545, vy).lineWidth(0.4).strokeColor("#bbb").stroke();
-      vy += 4;
-      doc.font("Helvetica").fontSize(9).fillColor("#222");
-      const colVW = { subtype: 70, desc: 165, conf: 90, date: 140 };
-      for (const line of voucherLines) {
-        const subtype = voucherSubtypeForLine(line.lineType);
-        const confNum = line.bookingRef || line.pnr || "—";
-        const range = formatVoucherServiceRange(
-          line.serviceStartDate,
-          line.serviceEndDate,
-        );
-        // Measure wrapped text so voucher rows grow to fit long descriptions
-        // or confirmation numbers instead of colliding with the next row.
-        const subtypeH = doc.heightOfString(String(subtype), { width: colVW.subtype });
-        const descH = doc.heightOfString(String(line.description || "—"), { width: colVW.desc });
-        const confH = doc.heightOfString(String(confNum), { width: colVW.conf });
-        const rangeH = doc.heightOfString(range, { width: colVW.date });
-        const rowH = Math.max(16, subtypeH, descH, confH, rangeH) + 6;
-        if (vy + rowH > 720) {
-          doc.addPage();
-          vy = 60;
-        }
-        doc.text(subtype, colVX.subtype, vy, { width: colVW.subtype, align: "left" });
-        doc.text(String(line.description || "—"), colVX.desc, vy, {
-          width: colVW.desc,
-          align: "left",
-        });
-        doc.text(String(confNum), colVX.conf, vy, { width: colVW.conf, align: "left" });
-        doc.text(range, colVX.date, vy, { width: colVW.date, align: "left" });
-        vy += rowH;
-      }
+      // Older tenant logos use /api/uploads/branding/tenant-<id>/... paths,
+      // which need the shared local-upload resolver rather than an HTTP fetch.
+      logoBuffer = await resolveProfessionalInvoiceLogo(logoUrl);
     }
-    doc.y = vy + 6;
-    doc.moveTo(50, doc.y).lineTo(545, doc.y).lineWidth(0.4).strokeColor("#ddd").stroke();
-    doc.moveDown(0.6);
+    if (logoBuffer) break;
   }
-
-  const isInterstate = !!invoice.placeOfSupplyInterstate;
-  const tableTop = doc.y;
-  const colX = {
-    desc: 50,
-    sac: 270,
-    gst: 315,
-    qty: 380,
-    unit: 415,
-    total: 475,
-  };
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
-  doc.text("Description", colX.desc, tableTop);
-  doc.text("SAC", colX.sac, tableTop, { width: 40, align: "left" });
-  doc.text("GST", colX.gst, tableTop, { width: 60, align: "right" });
-  doc.text("Qty", colX.qty, tableTop, { width: 30, align: "right" });
-  doc.text("Unit", colX.unit, tableTop, { width: 55, align: "right" });
-  doc.text("Amount", colX.total, tableTop, { width: 70, align: "right" });
-  doc.moveTo(50, tableTop + 14).lineTo(545, tableTop + 14).lineWidth(0.5).strokeColor("#bbb").stroke();
-
-  let rowY = tableTop + 22;
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
-  let computedSubtotal = 0;
-  const lineRowMinHeight = 20;
-  const lineRowGap = 6;
-  if (lines.length === 0) {
-    doc.fillColor("#777").text(
-      "(No line items on this invoice yet.)",
-      colX.desc, rowY, { width: 480 },
-    );
-    rowY += 18;
-  } else {
-    for (const line of lines) {
-      const qty = Number(line.quantity) || 0;
-      const unit = Number(line.unitPrice) || 0;
-      const amount = line.amount != null ? Number(line.amount) : qty * unit;
-      computedSubtotal += amount;
-      const sacCode = hsnSacMapper.sacForLineType(line.lineType);
-      const gstPct = Number(line.gstPercent) || 0;
-      const taxable = line.taxableValue != null
-        ? Number(line.taxableValue)
-        : amount;
-      const split = gstCalculation.computeGstSplit({
-        taxableAmount: taxable,
-        gstPercent: gstPct,
-        isInterstate,
-      });
-      let gstCell = "—";
-      if (gstPct > 0) {
-        if (isInterstate) {
-          gstCell = `${gstPct}% IGST ${fmt(split.igst)}`;
-        } else {
-          const half = gstPct / 2;
-          const halfStr = Number.isInteger(half) ? String(half) : half.toFixed(1);
-          gstCell = `${halfStr}+${halfStr}% CGST/SGST ${fmt(split.cgst + split.sgst)}`;
-        }
-      }
-      const descText = String(line.description || "—");
-      doc.font("Helvetica").fontSize(10);
-      const descHeight = doc.heightOfString(descText, { width: 210 });
-      doc.font("Helvetica").fontSize(8);
-      const gstHeight = doc.heightOfString(gstCell, { width: 60, align: "right" });
-      const thisRowHeight = Math.max(lineRowMinHeight, descHeight, gstHeight) + lineRowGap;
-      if (rowY + thisRowHeight > 720) {
-        doc.addPage();
-        rowY = 60;
-      }
-      doc.fillColor("#222");
-      doc.font("Helvetica").fontSize(10);
-      doc.text(descText, colX.desc, rowY, { width: 210 });
-      doc.text(sacCode == null ? "—" : sacCode, colX.sac, rowY, { width: 40, align: "left" });
-      doc.fontSize(8);
-      doc.text(gstCell, colX.gst, rowY, { width: 60, align: "right" });
-      doc.fontSize(10);
-      doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 30, align: "right" });
-      doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 55, align: "right" });
-      doc.text(fmt(amount), colX.total, rowY, { width: 70, align: "right" });
-      rowY += thisRowHeight;
-    }
-  }
-  doc.y = rowY + 4;
-
-  const grandTotal = invoice.totalAmount != null
-    ? Number(invoice.totalAmount)
-    : computedSubtotal;
-  // amountPaid is passed by the caller (route layer) after summing
-  // TravelPaymentSchedule.receivedAmount. Fallback to invoice fields
-  // for other invoice types (wellness, etc.) that may store it directly.
-  const amountPaid = Math.max(0, Number(
-    invoice.amountPaid != null
-      ? invoice.amountPaid
-      : invoice.totalPaid != null
-        ? invoice.totalPaid
-        : invoice.paidAmount || 0,
-  ) || 0);
-  const explicitBalanceDue = invoice.balanceDue != null
-    ? Number(invoice.balanceDue)
-    : null;
-  const balanceDue = explicitBalanceDue != null && Number.isFinite(explicitBalanceDue)
-    ? Math.max(0, explicitBalanceDue)
-    : Math.max(0, grandTotal - amountPaid);
-  // A payment is partial if: (1) status is not "Paid", AND (2) some amount was paid
-  // OR (3) status is "Paid" but the actual amountPaid is less than total (invoice
-  // status mismatch — honor the math over the status field). This ensures that even
-  // if status is incorrectly set to "Paid", the PDF still shows the correct Balance Due.
-  const hasPartialPayment = (invoice.status !== "Paid" && amountPaid > 0) || (invoice.status === "Paid" && amountPaid < grandTotal && amountPaid > 0);
-  const isFullyPaid = invoice.status === "Paid" && amountPaid >= grandTotal;
-
-  doc.moveDown(0.5);
-  const totalsY = doc.y;
-  doc.moveTo(350, totalsY).lineTo(545, totalsY).lineWidth(0.5).strokeColor("#bbb").stroke();
-  let ty = totalsY + 8;
-  doc.font("Helvetica").fontSize(10).fillColor("#333");
-  doc.text("Subtotal", 350, ty, { width: 95, align: "right" });
-  doc.text(fmt(computedSubtotal), 450, ty, { width: 95, align: "right" });
-  ty += 16;
-
-  if (hasPartialPayment) {
-    doc.text("Amount Paid", 350, ty, { width: 95, align: "right" });
-    doc.text(`-${fmt(amountPaid)}`, 450, ty, { width: 95, align: "right" });
-    ty += 16;
-  }
-
-  doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
-  ty += 6;
-  // S34 — paint the total label in the sub-brand's primaryColor so the
-  // page's most-load-bearing figure is brand-tinted. Numeric value stays
-  // #111 (high-contrast black) for readability. Only show "Total Paid" if
-  // status=Paid AND amountPaid >= total (fully paid). If status=Paid but
-  // partial, show "Balance Due" instead.
-  const totalLabel = isFullyPaid
-    ? "Total Paid"
-    : hasPartialPayment
-      ? "Balance Due"
-      : "Total Due";
-  const totalValue = hasPartialPayment ? balanceDue : grandTotal;
-  doc.font("Helvetica-Bold").fontSize(11).fillColor(primaryColor);
-  doc.text(totalLabel, 350, ty, { width: 95, align: "right" });
-  doc.fillColor("#111");
-  doc.text(fmt(totalValue), 450, ty, { width: 95, align: "right" });
-  ty += 18;
-  doc.y = ty + 8;
-
-  const hsnSummary = hsnSacMapper.groupLinesBySac(lines);
-  if (hsnSummary.length > 0) {
-    if (doc.y > 680) { doc.addPage(); }
-    doc.moveDown(0.8);
-    const summaryTop = doc.y;
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
-      .text("HSN/SAC Summary", 50, summaryTop);
-    let sy = summaryTop + 16;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
-    doc.text("SAC", 50, sy, { width: 50, align: "left" });
-    doc.text("Description", 105, sy, { width: 230, align: "left" });
-    doc.text("Rate", 340, sy, { width: 55, align: "right" });
-    doc.text("Taxable Value", 400, sy, { width: 95, align: "right" });
-    doc.text("Lines", 500, sy, { width: 45, align: "right" });
-    sy += 12;
-    doc.moveTo(50, sy).lineTo(545, sy).lineWidth(0.4).strokeColor("#bbb").stroke();
-    sy += 4;
-    doc.font("Helvetica").fontSize(9).fillColor("#222");
-    for (const row of hsnSummary) {
-      doc.font("Helvetica").fontSize(9);
-      const summaryDescHeight = doc.heightOfString(row.description, { width: 230, align: "left" });
-      const summaryRowHeight = Math.max(18, summaryDescHeight + 12);
-      if (sy + summaryRowHeight > 720) { doc.addPage(); sy = 60; }
-      doc.text(row.sacCode, 50, sy, { width: 50, align: "left" });
-      doc.text(row.description, 105, sy, { width: 230, align: "left" });
-      doc.text(
-        `${row.gstPercent}%`,
-        340, sy, { width: 55, align: "right" },
-      );
-      doc.text(fmt(row.taxableValue), 400, sy, { width: 95, align: "right" });
-      doc.text(String(row.count), 500, sy, { width: 45, align: "right" });
-      doc.fillColor("#777").fontSize(7);
-      doc.text(`${row.sacCode} / ${row.gstPercent}%`, 105, sy + summaryDescHeight + 1, { width: 230, align: "left" });
-      doc.fillColor("#222").fontSize(9);
-      sy += summaryRowHeight;
-    }
-    doc.y = sy + 4;
-  }
-
-  doc.moveDown(1);
-  const termsY = doc.y;
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333").text("Payment Terms", 50, termsY);
-  // Only show "fully paid" message if truly fully paid (status=Paid AND amountPaid >= total).
-  // If status=Paid but partial payment, show the payment status + balance due.
-  const termsText = isFullyPaid
-    ? "Payment has been received in full. Thank you for your business."
-    : hasPartialPayment
-      ? `Payment received: ${fmt(amountPaid)}. Balance due: ${fmt(balanceDue)}. Please quote invoice number ${invoice.invoiceNum || invoice.id || ""} on any payment or correspondence.`
-      : invoice.dueDate
-        ? `Payment is due by ${formatDate(invoice.dueDate)}. Please quote invoice number ${invoice.invoiceNum || invoice.id || ""} on any payment or correspondence.`
-        : "Please quote the invoice number on any payment or correspondence.";
-  doc.font("Helvetica").fontSize(9).fillColor("#555").text(termsText, 50, termsY + 14, { width: 495 });
-
-  doc.moveDown(1);
-  doc.font("Helvetica-Oblique").fontSize(9).fillColor("#444").text(
-    docFooterText,
-    50, doc.y, { width: 495 },
-  );
-
-  const footerY = doc.page.height - doc.page.margins.bottom - 24;
-  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.4).strokeColor("#bbb").stroke();
-  const tenantLine = tenant && tenant.name ? `${tenant.name} — ` : "";
-  doc.font("Helvetica").fontSize(8).fillColor("#777").text(
-    `${tenantLine}${brandLabel} — ${docHeaderTitle} #${invoice.invoiceNum || invoice.id || "?"}.`,
-    50, footerY + 6, { width: doc.page.width - 100, align: "center" },
-  );
-
-  doc.end();
-  return bufPromise;
+  return renderTravelInvoiceLayout({
+    invoice, lines, tenant, logoBuffer, brandLabel,
+    voucher: invoice.docType === "TravelVoucher" ? {
+      travellers: extractTravellerListFromInvoice(invoice, lines),
+      lines: lines.filter((line) => line && VOUCHER_FULFILLMENT_TYPES.has(line.lineType || "other"))
+        .map((line) => ({
+          subtype: voucherSubtypeForLine(line.lineType),
+          description: line.description || "—",
+          confirmation: line.bookingRef || line.pnr || "—",
+          serviceDate: formatVoucherServiceRange(line.serviceStartDate, line.serviceEndDate),
+        })),
+    } : null,
+    title: invoice.subBrand === "tmc" && (!invoice.docType || invoice.docType === "TaxInvoice")
+      ? "INVOICE" : docTypeHeader(invoice.docType || "TaxInvoice"),
+    footerText: invoice.subBrand === "tmc" && (!invoice.docType || invoice.docType === "TaxInvoice")
+      ? "" : docTypeFooter(invoice.docType || "TaxInvoice"),
+    branding: { ...branding, source: brandSource, configuredColors,
+      primaryColor: configuredPrimaryColor, accentColor: configuredAccentColor,
+      identity: { ...cfg, ...subBrandConfig, ...(o.identity || {}) } },
+    applyFonts: applyRupeeCapableFonts, streamToBuffer, formatDate,
+  });
 }
 
 const generateTravelInvoicePdf = renderTravelInvoicePdf;

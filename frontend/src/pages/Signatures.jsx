@@ -312,7 +312,7 @@ useEffect(() => {
   if (isWellness && isCustomer) return <CustomerConsentForms />;
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div style={{ padding: '2rem', minHeight: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -352,7 +352,7 @@ useEffect(() => {
       </div>
 
       {/* Requests Table */}
-      <div className="card" style={{ padding: '2rem' }}>
+      <div className="card" style={{ padding: '2rem', minWidth: 0, overflowX: 'hidden' }}>
         <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <FileSignature size={20} color="var(--accent-color)" /> All Signature Requests
         </h3>
@@ -363,8 +363,8 @@ useEffect(() => {
             <p style={{ color: 'var(--text-secondary)' }}>No signature requests yet. Send your first one to get started.</p>
           </div>
         ) : (
-          <TopScrollSync>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+          <TopScrollSync hideTopBar>
+            <table style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
                   <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Document</th>
@@ -386,7 +386,7 @@ useEffect(() => {
                       {r.documentType} #{r.documentId}
                     </td>
                     <td style={{ padding: '0.85rem 0.5rem' }}>{r.signerName}</td>
-                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)' }}>{r.signerEmail}</td>
+                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{r.signerEmail}</td>
                     <td style={{ padding: '0.85rem 0.5rem' }}><StatusBadge status={r.status} /></td>
                     <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                       {r.createdAt ? formatDate(r.createdAt) : '—'}

@@ -311,7 +311,7 @@
 
         .hero-top {
             display: grid;
-            grid-template-columns: 1.15fr 0.95fr;
+            grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
             gap: 52px;
             align-items: center;
             text-align: left;
@@ -334,6 +334,7 @@
 
         .hero-top .hero-form-card {
             margin: 0;
+            min-width: 0;
         }
 
         @media (max-width:960px) {
@@ -766,6 +767,8 @@
 
         /* Hero form */
         .hero-form-card {
+            width: 100%;
+            min-width: 0;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 20px;
@@ -793,6 +796,7 @@
         .hero-form-card iframe {
             display: block;
             width: 100%;
+            max-width: 100%;
             height: auto;
             min-height: 0;
             border: 0;

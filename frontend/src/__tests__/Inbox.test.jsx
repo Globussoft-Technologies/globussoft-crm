@@ -244,8 +244,13 @@ describe("<Inbox />", () => {
     const listCard = screen.getByTestId("inbox-list-card");
     expect(listCard).toHaveStyle({
       width: "100%",
-      flex: "0 0 auto",
+      flex: "1 1 auto",
     });
+
+    const messageScroll = listCard.querySelector(".inbox-message-scroll--generic");
+    expect(messageScroll).toContainElement(await screen.findByText(sampleInboxEmail.subject));
+    expect(messageScroll).not.toContainElement(screen.getByRole("searchbox", { name: "Search mail" }));
+    expect(messageScroll).not.toContainElement(screen.getByRole("tablist", { name: "Email folder" }));
   });
 
   it("opens the restored composer with autocomplete, Cc/Bcc, and theme-aware modal surfaces", async () => {

@@ -139,11 +139,9 @@ function TenantChip({ tenant }) {
   );
 }
 
-// T2.1: drawer breakpoint. Mirror of the @media (max-width: 899px) rule in
-// frontend/src/styles/responsive.css. CSS owns the visual contract; JS uses
-// this constant only to decide when the sidebar is in "drawer" mode and
-// therefore needs role="dialog" + aria-modal="true" + a focus trap.
-const MOBILE_BREAKPOINT_PX = 900;
+// Keep this aligned with the drawer media queries in responsive.css. JS uses
+// it for the sidebar dialog semantics and keyboard focus trap.
+const DRAWER_BREAKPOINT_PX = 1440;
 
 const Layout = () => {
   const { user, setUser, setToken, token, tenant } =
@@ -190,7 +188,7 @@ const Layout = () => {
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT_PX - 1}px)`);
+    const mql = window.matchMedia(`(max-width: ${DRAWER_BREAKPOINT_PX - 1}px)`);
     const update = () => setIsMobileViewport(mql.matches);
     update();
     // matchMedia change events: addEventListener is the modern API; some

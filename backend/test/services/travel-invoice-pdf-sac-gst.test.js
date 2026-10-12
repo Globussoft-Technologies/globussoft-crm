@@ -42,6 +42,7 @@ const pdfR = requireFromHere('../../services/pdfRenderer.js');
 const hsnSacMapper = requireFromHere('../../lib/hsnSacMapper.js');
 const gstCalculation = requireFromHere('../../lib/gstCalculation.js');
 const PDFDocument = requireFromHere('pdfkit');
+const pdfjs = requireFromHere('pdfjs-dist/legacy/build/pdf.js');
 
 const { generateTravelInvoicePdf } = pdfR;
 
@@ -86,7 +87,7 @@ function invoiceFixture(overrides = {}) {
   return {
     id: 200,
     invoiceNum: 'TINV-2026-0099',
-    subBrand: 'tmc',
+    subBrand: 'travelstall', // Taxable sub-brand; TMC deliberately omits GST/SAC presentation.
     status: 'Issued',
     totalAmount: '45000.00',
     currency: 'INR',
@@ -176,8 +177,8 @@ describe('renderTravelInvoicePdf — slice 8: SAC + GST split + HSN summary', ()
         },
       ],
     });
-    const text = extractPdfText(buf);
-    // The renderer emits "9+9% CGST/SGST" for an intra-state 18% line.
+    const parsed = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+    const text = (await (await parsed.getPage(1)).getTextContent()).items.map((item) => item.str).join(' ');
     expect(text).toMatch(/CGST/);
     expect(text).toMatch(/SGST/);
     // IGST must NOT appear for intra-state line.
@@ -317,10 +318,10 @@ describe('renderTravelInvoicePdf — slice 8: SAC + GST split + HSN summary', ()
       });
 
       expect(buf.slice(0, 5).toString('latin1')).toBe('%PDF-');
-      expect(heightSpy).toHaveBeenCalledWith(
-        'Hotel Corporate Hotel Near Sealdah Railway station, Kolkata',
-        expect.objectContaining({ width: 210 }),
-      );
+      expect(heightSpy.mock.calls.some(([value, options]) =>
+        String(value).startsWith('Hotel Corporate Hotel Near Sealdah Railway station, Kolkata') &&
+        options.width === 330,
+      )).toBe(true);
     } finally {
       heightSpy.mockRestore();
     }
@@ -351,10 +352,10 @@ describe('renderTravelInvoicePdf — slice 8: SAC + GST split + HSN summary', ()
 
     const text = extractPdfText(buf);
     expect(text).toMatch(/Subtotal/);
-    expect(text).toMatch(/Amount Paid/);
-    expect(text).toMatch(/Balance Due/);
-    expect(text).toMatch(/21000\.00/);
-    expect(text).toMatch(/19585\.96/);
+    expect(text).toMatch(/Amount received/);
+    expect(text).toMatch(/Outstanding balance/);
+    expect(text).toMatch(/21,000\.00/);
+    expect(text).toMatch(/19,585\.96/);
   });
 
   test('sacForLineType is invoked at least once per non-empty line list', async () => {

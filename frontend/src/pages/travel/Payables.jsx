@@ -488,16 +488,16 @@ export default function Payables() {
         ) : filtered.length === 0 ? (
           <div style={empty}>No payables found</div>
         ) : (
-          <table className="payables-table" style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+          <table className="payables-table" style={{ width: "100%", minWidth: 1100, tableLayout: "fixed", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={{ ...th, width: "24%" }}>{sortHeader("Supplier", "supplierName")}</th>
-                <th style={{ ...th, width: "13%" }}>{sortHeader("PO #", "poNumber")}</th>
-                <th style={{ ...th, width: "27%" }}>{sortHeader("Description", "description")}</th>
-                <th style={{ ...th, width: "14%" }}>{sortHeader("Amount", "amount")}</th>
-                <th style={{ ...th, width: "10%" }}>{sortHeader("Due date", "dueDate")}</th>
-                <th style={{ ...th, width: "10%" }}>{sortHeader("Status", "status")}</th>
-                <th style={{ ...th, width: "12%" }}>{sortHeader("Days until due", "daysUntilDue")}</th>
+                <th style={{ ...th, width: "18%" }}>{sortHeader("Supplier", "supplierName")}</th>
+                <th style={{ ...th, width: "10%" }}>{sortHeader("PO #", "poNumber")}</th>
+                <th style={{ ...th, width: "22%" }}>{sortHeader("Description", "description")}</th>
+                <th style={{ ...th, width: "12%" }}>{sortHeader("Amount", "amount")}</th>
+                <th style={{ ...th, width: "12%" }}>{sortHeader("Due date", "dueDate")}</th>
+                <th style={{ ...th, width: "11%" }}>{sortHeader("Status", "status")}</th>
+                <th style={{ ...th, width: "15%" }}>{sortHeader("Days until due", "daysUntilDue")}</th>
               </tr>
             </thead>
             <tbody>
@@ -652,13 +652,12 @@ const th = {
   top: 0,
   zIndex: 3,
   fontWeight: 600,
-  whiteSpace: "normal",
-  overflowWrap: "anywhere",
+  whiteSpace: "nowrap",
 };
 const sortButtonStyle = {
   display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6,
   width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
-  background: "transparent", color: "inherit", font: "inherit", cursor: "pointer", textAlign: "left",
+  background: "transparent", color: "inherit", font: "inherit", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap",
 };
 const sortButtonActiveStyle = { color: "var(--primary-color)", background: "transparent" };
 const td = {
@@ -671,7 +670,7 @@ const td = {
 };
 const tableFrame = {
   padding: 0,
-  overflowX: "hidden",
+  overflowX: "auto",
   overflowY: "auto",
   height: "calc(100vh - 360px)",
   minHeight: 520,

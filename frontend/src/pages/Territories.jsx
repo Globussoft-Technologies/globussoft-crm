@@ -123,7 +123,7 @@ export default function Territories() {
   // Detail view
   if (viewing) {
     return (
-      <div style={{ padding: '2rem', animation: 'fadeIn 0.4s ease-out' }}>
+      <div className="territories-page" style={{ padding: '2rem', animation: 'fadeIn 0.4s ease-out' }}>
         <button onClick={() => { setViewing(null); setViewContacts([]); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
           <ArrowLeft size={16} /> Back to Territories
         </button>
@@ -216,10 +216,10 @@ export default function Territories() {
   }
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-          <div style={{
+    <div className="territories-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="territories-header" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div className="territories-header-main" style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          <div className="territories-header-icon" style={{
             width: 44, height: 44, borderRadius: 12,
             background: 'linear-gradient(135deg, #10b981, #06b6d4)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -227,7 +227,7 @@ export default function Territories() {
           }}>
             <Network size={22} color="white" />
           </div>
-          <div>
+          <div className="territories-header-copy">
             <h1 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>Territories</h1>
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem', margin: 0 }}>
               Define geographic territories and assign sales teams. Used by routing rules with assignType "territory".
@@ -258,7 +258,7 @@ export default function Territories() {
           <button onClick={openNew} className="btn-primary"><Plus size={16} /> Create First Territory</button>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))', gap: '1rem' }}>
           {territories.map(t => (
             <div key={t.id} className="card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
@@ -303,7 +303,7 @@ export default function Territories() {
 
       {showModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }}>
-          <div className="card" style={{ padding: '1.75rem', width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', background: '#ffffff', backgroundColor: '#ffffff', opacity: 1, backdropFilter: 'none', WebkitBackdropFilter: 'none', filter: 'none' }}>
+          <div className="card territories-modal" style={{ boxSizing: 'border-box', padding: '1.75rem', width: '100%', maxWidth: 560, maxHeight: '90dvh', overflowY: 'auto', background: 'var(--modal-bg)', color: 'var(--text-primary)', backdropFilter: 'none', WebkitBackdropFilter: 'none' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold', fontSize: '1.2rem', margin: 0 }}>{editing ? 'Edit Territory' : 'New Territory'}</h3>
               <button onClick={() => setShowModal(false)} aria-label="Close territory dialog" title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={22} /></button>
@@ -311,12 +311,12 @@ export default function Territories() {
 
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Name</label>
-              <input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. North America West" style={{ width: '100%', marginTop: 4 }} />
+              <input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. North America West" style={{ boxSizing: 'border-box', width: '100%', marginTop: 4 }} />
             </div>
 
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Regions (comma-separated)</label>
-              <input className="input-field" value={form.regionsText} onChange={e => setForm({ ...form, regionsText: e.target.value })} placeholder="US-CA, US-NY, US-WA" style={{ width: '100%', marginTop: 4 }} />
+              <input className="input-field" value={form.regionsText} onChange={e => setForm({ ...form, regionsText: e.target.value })} placeholder="US-CA, US-NY, US-WA" style={{ boxSizing: 'border-box', width: '100%', marginTop: 4 }} />
               <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: 4 }}>
                 Matched against contact city/state/country (case-insensitive substring).
               </div>

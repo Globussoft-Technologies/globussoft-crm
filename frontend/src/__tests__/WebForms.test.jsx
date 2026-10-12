@@ -119,8 +119,8 @@ describe('public web form embed footer', () => {
     expect(html).toContain('setupGenericWhatsappPhone');
     expect(html).toContain('Enter a valid WhatsApp number with ');
     expect(html).toContain('setupGenericCountryPicker(whatsappCountrySelect');
-    expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:0;padding-left:0}');
-    expect(html).toContain('line-height:1.2;font-weight:var(--gbs-form-weight,400)');
+    expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}');
+    expect(html).toContain('white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)');
     expect(html).toContain('.generic-whatsapp-phone{margin-bottom:0}');
     expect(html).toContain("phoneField.classList.add('generic-phone-with-whatsapp')");
     expect(html).toContain('generic-whatsapp-number');
@@ -212,6 +212,25 @@ describe('public web form embed footer', () => {
     expect(html).not.toContain('grid-scroll');
     expect(html).not.toContain('max-height:500px');
     expect(html).not.toContain('overflow-y:auto;overflow-x:hidden');
+  });
+
+  test('shows the WhatsApp validation message only when it is active', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const style = document.createElement('style');
+    style.textContent = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] || '';
+    const error = document.createElement('span');
+    error.className = 'field-error';
+    error.hidden = true;
+    document.head.appendChild(style);
+    document.body.appendChild(error);
+    try {
+      expect(getComputedStyle(error).display).toBe('none');
+      error.hidden = false;
+      expect(getComputedStyle(error).display).toBe('block');
+    } finally {
+      error.remove();
+      style.remove();
+    }
   });
 
   test('applies configured form and submit-button colors through CSS variables', () => {

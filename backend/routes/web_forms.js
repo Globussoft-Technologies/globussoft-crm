@@ -559,6 +559,8 @@ function defaultStyle() {
     customColumnWidth: 50,
     rowGap: 9,
     columnGap: 9,
+    titleDescriptionGap: 10,
+    descriptionFieldsGap: 24,
     mobileColumns: "one",
     tabletColumns: "one",
     containerBackgroundMode: "solid",
@@ -638,7 +640,7 @@ function defaultSettings() {
   };
 }
 
-function normalizeField(field, index) {
+function normalizeField(field, index, leadFieldDefinitions = []) {
   const sourceKind = ["contact", "lead_custom", "custom"].includes(
     field?.sourceKind,
   )
@@ -651,6 +653,11 @@ function normalizeField(field, index) {
     : FIELD_TYPES.has(field?.fieldType)
       ? field.fieldType
       : "text";
+  const leadDefinition = sourceKind === "lead_custom"
+    ? leadFieldDefinitions.find((definition) => String(definition?.fieldKey || "") === sourceKey)
+    : null;
+  const configuredOptions = CHOICE_TYPES.has(fieldType) ? parseOptions(field?.options) : [];
+  const leadOptions = leadDefinition ? parseOptions(leadDefinition.options) : [];
   const showWhen = field?.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey)
     ? {
       fieldId: textOr(field.showWhen.fieldId),
@@ -681,7 +688,7 @@ function normalizeField(field, index) {
 
     hidden: Boolean(field?.hidden),
 
-    options: CHOICE_TYPES.has(fieldType) ? parseOptions(field?.options) : [],
+    options: leadOptions.length ? leadOptions : configuredOptions,
 
     fileFormats:
       fieldType === "file" ? parseFileFormats(field?.fileFormats) : [],
@@ -695,15 +702,16 @@ function normalizeField(field, index) {
 
     width: field?.width === "half" ? "half" : "full",
     stepId: textOr(field?.stepId),
+    choiceLayout: fieldType === "radio" && field?.choiceLayout === "horizontal" ? "horizontal" : "vertical",
   };
 }
 
-function normalizeFields(raw, scope = "generic") {
+function normalizeFields(raw, scope = "generic", leadFieldDefinitions = []) {
   const parsed = parseJson(raw, null);
 
   if (!Array.isArray(parsed) || parsed.length === 0) return defaultFields();
 
-  const fields = parsed.map((field, index) => normalizeField(field, index));
+  const fields = parsed.map((field, index) => normalizeField(field, index, leadFieldDefinitions));
 
   if (!supportsAdvancedWebFormFeatures(scope)) return fields.map((field) => ({ ...field, showWhen: null }));
 
@@ -855,6 +863,8 @@ function normalizeStyle(raw) {
     customColumnWidth: safeNumber(style.customColumnWidth, 50, 25, 75),
     rowGap: safeNumber(style.rowGap, 9, 0, 64),
     columnGap: safeNumber(style.columnGap, 9, 0, 64),
+    titleDescriptionGap: safeNumber(style.titleDescriptionGap, 10, 0, 80),
+    descriptionFieldsGap: safeNumber(style.descriptionFieldsGap, 24, 0, 80),
     mobileColumns: safeEnum(style.mobileColumns, ["one", "two"], "one"),
     tabletColumns: safeEnum(style.tabletColumns, ["one", "two"], "one"),
     containerBackgroundMode: safeEnum(style.containerBackgroundMode, ["solid", "gradient"], "solid"),
@@ -1035,10 +1045,10 @@ async function ensureUniqueSlug(baseSlug, scope = "generic", excludeId = null) {
   }
 }
 
-function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
+function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, leadFieldDefinitions = []) {
   if (!row) return null;
 
-  const fields = normalizeFields(row.fieldsJson, row.scope || "generic");
+  const fields = normalizeFields(row.fieldsJson, row.scope || "generic", leadFieldDefinitions);
   const style = normalizeStyle(row.styleJson);
   const settings = normalizeSettings(row.settingsJson);
 
@@ -1323,6 +1333,13 @@ async function findPublicForm(ref, scope = "generic") {
   });
 }
 
+async function loadLeadFieldDefinitions(tenantId) {
+  return prisma.leadCustomFieldDefinition.findMany({
+    where: { tenantId },
+    select: { fieldKey: true, options: true },
+  });
+}
+
 router.get("/public/:slug", async (req, res) => {
   try {
     const scope = normalizeScope(req.query?.scope);
@@ -1342,7 +1359,8 @@ router.get("/public/:slug", async (req, res) => {
     // Form configuration is editable by CRM users. Do not let an embedded
     // browser reuse an older public configuration after a successful save.
     res.set("Cache-Control", "no-store");
-    const publicPayload = shapeForm(form, 0, origin, true);
+    const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
+    const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions);
     if (supportsAdvancedWebFormFeatures(form.scope || "generic") && publicPayload.settings?.recaptchaEnabled) {
       const recaptchaSiteKey = form.scope === "travel"
         ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
@@ -1381,7 +1399,8 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
     submitStage = "normalize_form";
 
-    const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
+    const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
+    const fields = normalizeFields(form.fieldsJson, form.scope || "generic", leadFieldDefinitions);
 
     const formScope = form.scope || "generic";
 
@@ -2155,6 +2174,9 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const slug = await ensureUniqueSlug(body.slug || name, scope);
+    const leadFieldDefinitions = body.fields !== undefined
+      ? await loadLeadFieldDefinitions(req.user.tenantId)
+      : [];
 
     const form = await prisma.webForm.create({
       data: {
@@ -2172,7 +2194,7 @@ router.post("/", verifyToken, async (req, res) => {
 
         isActive: body.isActive !== false,
 
-        fieldsJson: JSON.stringify(normalizeFields(body.fields, scope)),
+        fieldsJson: JSON.stringify(normalizeFields(body.fields, scope, leadFieldDefinitions)),
 
         styleJson: JSON.stringify(normalizeStyle(body.style)),
 
@@ -2382,8 +2404,10 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     if (body.isActive !== undefined) data.isActive = Boolean(body.isActive);
 
-    if (body.fields !== undefined)
-      data.fieldsJson = JSON.stringify(normalizeFields(body.fields, scope));
+    if (body.fields !== undefined) {
+      const leadFieldDefinitions = await loadLeadFieldDefinitions(req.user.tenantId);
+      data.fieldsJson = JSON.stringify(normalizeFields(body.fields, scope, leadFieldDefinitions));
+    }
 
     if (body.style !== undefined)
       data.styleJson = JSON.stringify(normalizeStyle(body.style));

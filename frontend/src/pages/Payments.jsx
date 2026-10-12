@@ -172,6 +172,7 @@ function formatPaidDate(value) {
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
+  const isCustomer = user?.role === "CUSTOMER" || user?.userType === "CUSTOMER";
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
@@ -210,7 +211,7 @@ export default function Payments() {
     try {
       const [list, cfg] = await Promise.all([
         fetchApi("/api/payments").catch(() => []),
-        fetchApi("/api/payments/config").catch(() => null),
+        isCustomer ? Promise.resolve(null) : fetchApi("/api/payments/config").catch(() => null),
       ]);
       setPayments(Array.isArray(list) ? list : []);
       setConfig(cfg);
@@ -395,7 +396,7 @@ export default function Payments() {
         <div className="finance-page__title-row" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <CreditCard className="finance-page__title-icon" size={28} style={{ color: "#635bff" }} />
           <h1 className="finance-page__title" style={{ margin: 0, fontSize: "1.75rem", fontWeight: 700 }}>
-            Payments Received
+            {isCustomer ? "Payments" : "Payments Received"}
           </h1>
         </div>
         <button
@@ -428,8 +429,9 @@ export default function Payments() {
           fontSize: "0.85rem",
         }}
       >
-        Customer payment UI is implemented at the invoice level (separate page)
-        â€” this dashboard is for tenants to track received payments.
+        {isCustomer
+          ? "Your invoice payments and payment status."
+          : "Customer payment UI is implemented at the invoice level (separate page) â€” this dashboard is for tenants to track received payments."}
       </p>
 
       {error && (
@@ -611,7 +613,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
       >
         <StatCard
           icon={<IndianRupee size={20} />}
-          label={`Total Collected (${filterLabel})`}
+          label={`${isCustomer ? "Total Paid" : "Total Collected"} (${filterLabel})`}
           value={formatMoney(stats.collected)}
           color="#10b981"
         />
@@ -708,7 +710,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
                   borderBottom: "1px solid var(--border-color)",
                 }}
               >
-                <Th>Customer</Th>
+                <Th>{isCustomer ? "Payer" : "Customer"}</Th>
                 <Th>For</Th>
                 <Th>Amount</Th>
                 <Th>Gateway</Th>
@@ -758,11 +760,11 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
                           No payments yet
                         </div>
                         <div style={{ fontSize: "0.82rem", maxWidth: 380 }}>
-                          Once a customer pays an invoice via Stripe or
-                          Razorpay, the transaction will appear here with
-                          status, amount, and gateway details.
+                          {isCustomer
+                            ? "Your invoice payments will appear here with their status and amount."
+                            : "Once a customer pays an invoice via Stripe or Razorpay, the transaction will appear here with status, amount, and gateway details."}
                         </div>
-                        <Link
+                        {!isCustomer && <Link
                           to="/invoices"
                           style={{
                             marginTop: "0.4rem",
@@ -780,7 +782,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
                           }}
                         >
                           <Plus size={14} /> Process your first payment
-                        </Link>
+                        </Link>}
                       </div>
                     )}
                   </td>
@@ -803,7 +805,9 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
                   }
                 >
                   <Td>
-                    {p.contact ? (
+                    {isCustomer ? (
+                      <span style={{ fontWeight: 600 }}>You</span>
+                    ) : p.contact ? (
                       <span style={{ fontWeight: 600 }}>
                         {p.contact.name || p.contact.email || `#${p.contactId}`}
                       </span>

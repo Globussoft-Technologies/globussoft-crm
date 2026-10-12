@@ -145,6 +145,14 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getAllByText(/Failed/).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('shows a customer-facing payment ledger without loading gateway configuration', async () => {
+    renderPayments({ userId: 3, role: 'CUSTOMER', userType: 'CUSTOMER' });
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^Payments$/i })).toBeInTheDocument());
+    expect(screen.getByText(/Total Paid/i)).toBeInTheDocument();
+    expect(screen.getAllByText('You').length).toBeGreaterThan(0);
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/payments/config');
+  });
+
   it('renders one row per payment with invoiceId, amount, and gateway+status badges', async () => {
     renderPayments();
     // All rows render in the tenant's default currency (USD here) — per-row

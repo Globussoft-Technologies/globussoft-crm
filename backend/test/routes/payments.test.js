@@ -94,6 +94,8 @@ prisma.payment.findFirst = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
 prisma.payment.aggregate = vi.fn();
+prisma.patient = prisma.patient || {};
+prisma.patient.findFirst = vi.fn();
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.findMany = vi.fn();
@@ -161,7 +163,7 @@ const stripe = stripeLib(process.env.STRIPE_SECRET_KEY);
 // function). Instead we assert audit emission via the writeAudit's
 // downstream prisma.auditLog.create call, which is stubbed above.
 
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', userType = 'STAFF' } = {}) {
   const app = express();
   // Webhooks need raw body — the route installs express.raw per-route,
   // so we MUST NOT install a global JSON parser ahead of /webhook/*.
@@ -174,7 +176,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
     return express.json()(req, res, next);
   });
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role };
+    req.user = { userId, tenantId, role, userType };
     next();
   });
   app.use('/api/payments', paymentsRouter);
@@ -187,6 +189,7 @@ beforeEach(() => {
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
   prisma.payment.aggregate.mockReset().mockResolvedValue({ _sum: { amount: 0 } });
+  prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
   prisma.invoice.update.mockReset();
@@ -237,6 +240,33 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET / — list payments under tenant scope', () => {
+  test('returns an empty list when the customer has no linked patient', async () => {
+    const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
+      .get('/api/payments');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+    expect(prisma.payment.findMany).not.toHaveBeenCalled();
+  });
+
+  test('restricts customer payments to their patient and strips gateway metadata', async () => {
+    prisma.patient.findFirst.mockResolvedValue({ id: 12, contactId: 34 });
+    prisma.visit.findMany.mockResolvedValue([{ id: 56 }]);
+    prisma.invoice.findMany.mockResolvedValue([{ id: 78 }]);
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 90, invoiceId: 78, amount: 4999, currency: 'INR', gateway: 'razorpay',
+      status: 'PENDING', description: 'Wellness Visit', gatewayId: 'plink_secret',
+      metadata: '{"url":"https://private.example"}', createdAt: new Date('2026-09-29'),
+    }]);
+    const res = await request(makeApp({ role: 'USER', userType: 'CUSTOMER' }))
+      .get('/api/payments');
+    expect(res.status).toBe(200);
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, OR: [{ invoiceId: { in: [78] } }, { contactId: 34, invoiceId: null }] },
+    }));
+    expect(res.body[0]).toMatchObject({ id: 90, amount: 4999, status: 'PENDING' });
+    expect(res.body[0]).not.toHaveProperty('gatewayId');
+    expect(res.body[0]).not.toHaveProperty('metadata');
+  });
   test('returns serialized payments with metadata JSON-parsed, scoped by req.user.tenantId', async () => {
     prisma.payment.findMany.mockResolvedValue([
       {
@@ -449,6 +479,40 @@ describe('GET / — list payments under tenant scope', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /:id — single payment', () => {
+  test('does not reveal a payment when the customer has no linked patient', async () => {
+    const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
+      .get('/api/payments/5');
+    expect(res.status).toBe(404);
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('looks up a customer payment by both id and ownership scope', async () => {
+    prisma.patient.findFirst.mockResolvedValue({ id: 12, contactId: 34 });
+    prisma.invoice.findMany.mockResolvedValue([{ id: 78 }]);
+    prisma.payment.findFirst.mockResolvedValue({
+      id: 90, invoiceId: 78, amount: 4999, gatewayId: 'private-id', metadata: '{}',
+    });
+    const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
+      .get('/api/payments/90');
+    expect(res.status).toBe(200);
+    expect(prisma.payment.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 1, OR: [{ invoiceId: { in: [78] } }, { contactId: 34, invoiceId: null }], id: 90 },
+    });
+    expect(res.body).not.toHaveProperty('gatewayId');
+    expect(res.body).not.toHaveProperty('metadata');
+  });
+
+  test('returns 404 for a payment outside the customer ownership scope', async () => {
+    prisma.patient.findFirst.mockResolvedValue({ id: 12, contactId: 34 });
+    prisma.invoice.findMany.mockResolvedValue([{ id: 78 }]);
+    prisma.payment.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
+      .get('/api/payments/91');
+    expect(res.status).toBe(404);
+    expect(prisma.payment.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 1, OR: [{ invoiceId: { in: [78] } }, { contactId: 34, invoiceId: null }], id: 91 },
+    });
+  });
   test('200 with serialized payment scoped by id + tenantId', async () => {
     prisma.payment.findFirst.mockResolvedValue({
       id: 5,

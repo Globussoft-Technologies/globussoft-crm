@@ -2028,6 +2028,22 @@ describe('Sidebar — load-bearing render surface', () => {
       { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
     ];
 
+    it('shows Payments and My Transactions but hides the staff Invoices link for customers', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'CUSTOMER',
+        userType: 'CUSTOMER',
+        accessiblePages: [
+          { category: 'Finance', path: '/payments', label: 'Payments' },
+          { category: 'Finance', path: '/wellness/invoices', label: 'Invoices' },
+          ...CUSTOMER_PAGES,
+        ],
+      });
+      await screen.findByText('Payments');
+      expect(screen.getByText('My Transactions')).toBeTruthy();
+      expect(screen.queryByText('Invoices')).toBeNull();
+    });
+
     it('shows customerOnly pages for a USER-role account stamped CUSTOMER', async () => {
       // A legacy customer carries role USER with the customer userType — the
       // userType is what makes them a customer, not the role.

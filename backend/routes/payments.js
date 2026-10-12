@@ -51,6 +51,56 @@ function tenantOf(req) {
   return (req.user && req.user.tenantId) || 1;
 }
 
+function isCustomer(req) {
+  return req.user?.role === "CUSTOMER" || req.user?.userType === "CUSTOMER";
+}
+
+function requireStaffPaymentStats(req, res, next) {
+  if (isCustomer(req)) {
+    return res.status(403).json({ error: "Payment stats access denied", code: "RBAC_DENIED" });
+  }
+  next();
+}
+
+// A customer shares the tenant with staff, so resolve ownership from the
+// signed-in user's Patient record before reading any Payment rows.
+async function customerPaymentScope(req) {
+  const tenantId = tenantOf(req);
+  const patient = await prisma.patient.findFirst({
+    where: { tenantId, userId: req.user.userId },
+    select: { id: true, contactId: true },
+  });
+  if (!patient) return null;
+  const visits = await prisma.visit.findMany({
+    where: { tenantId, patientId: patient.id }, select: { id: true },
+  });
+  const invoiceOr = [{ patientId: patient.id }];
+  if (visits.length) invoiceOr.push({ visitId: { in: visits.map((visit) => visit.id) } });
+  const invoices = await prisma.invoice.findMany({
+    where: { tenantId, OR: invoiceOr }, select: { id: true },
+  });
+  const paymentOr = [];
+  if (invoices.length) paymentOr.push({ invoiceId: { in: invoices.map((invoice) => invoice.id) } });
+  // A Contact can represent a family. Do not let its id grant access to
+  // another patient's invoice payments; use it only for standalone rows.
+  if (patient.contactId) paymentOr.push({ contactId: patient.contactId, invoiceId: null });
+  return paymentOr.length ? { tenantId, OR: paymentOr } : null;
+}
+
+function customerPaymentView(payment) {
+  return {
+    id: payment.id,
+    invoiceId: payment.invoiceId,
+    description: payment.description,
+    amount: payment.amount,
+    currency: payment.currency,
+    gateway: payment.gateway,
+    status: payment.status,
+    paidAt: payment.paidAt,
+    createdAt: payment.createdAt,
+  };
+}
+
 function safeJsonParse(value, fallback = {}) {
   if (value == null) return fallback;
   if (typeof value === "object") return value;
@@ -1130,32 +1180,49 @@ router.get("/", async (req, res) => {
       ? Math.min(500, Math.max(1, requestedLimit))
       : 200;
 
+    const createdAt = {};
+    if (from) {
+      const fromDate = new Date(String(from));
+      if (!Number.isFinite(fromDate.getTime())) {
+        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE_RANGE" });
+      }
+      createdAt.gte = fromDate;
+    }
+    if (to) {
+      const toDate = new Date(String(to));
+      if (!Number.isFinite(toDate.getTime())) {
+        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE_RANGE" });
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(to))) toDate.setHours(23, 59, 59, 999);
+      createdAt.lte = toDate;
+    }
+
+    if (isCustomer(req)) {
+      const scope = await customerPaymentScope(req);
+      if (!scope) return res.json([]);
+      const where = { ...scope };
+      if (status) where.status = String(status).toUpperCase();
+      if (gateway) where.gateway = String(gateway).toLowerCase();
+      if (invoiceId) {
+        const requestedInvoiceId = Number.parseInt(invoiceId, 10);
+        if (!Number.isInteger(requestedInvoiceId)) return res.json([]);
+        where.invoiceId = requestedInvoiceId;
+      }
+      if (from || to) where.createdAt = createdAt;
+      const payments = await prisma.payment.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: limit,
+      });
+      return res.json(payments.map(customerPaymentView));
+    }
+
     const where = { tenantId };
     if (status) where.status = String(status).toUpperCase();
     if (gateway) where.gateway = String(gateway).toLowerCase();
     if (invoiceId) where.invoiceId = parseInt(invoiceId);
 
-    if (from || to) {
-      const createdAt = {};
-      if (from) {
-        const fromDate = new Date(String(from));
-        if (!Number.isFinite(fromDate.getTime())) {
-          return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE_RANGE" });
-        }
-        createdAt.gte = fromDate;
-      }
-      if (to) {
-        const toDate = new Date(String(to));
-        if (!Number.isFinite(toDate.getTime())) {
-          return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE_RANGE" });
-        }
-        if (/^\d{4}-\d{2}-\d{2}$/.test(String(to))) {
-          toDate.setHours(23, 59, 59, 999);
-        }
-        createdAt.lte = toDate;
-      }
-      where.createdAt = createdAt;
-    }
+    if (from || to) where.createdAt = createdAt;
 
     const payments = await prisma.payment.findMany({
       where,
@@ -1606,7 +1673,7 @@ router.get("/config", async (req, res) => {
 //     lastPaymentAt }
 // ────────────────────────────────────────────────────────────────
 const { verifyToken } = require("../middleware/auth");
-router.get("/stats", verifyToken, async (req, res) => {
+router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => {
   try {
     // Validate optional date bounds. Independent validation so a bad
     // ?from doesn't get masked by a missing ?to and vice-versa.
@@ -1686,6 +1753,13 @@ router.get("/:id", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
     const id = parseInt(req.params.id);
+    if (isCustomer(req)) {
+      const scope = await customerPaymentScope(req);
+      if (!scope) return res.status(404).json({ error: "Payment not found" });
+      const ownPayment = await prisma.payment.findFirst({ where: { ...scope, id } });
+      if (!ownPayment) return res.status(404).json({ error: "Payment not found" });
+      return res.json(customerPaymentView(ownPayment));
+    }
     const payment = await prisma.payment.findFirst({ where: { id, tenantId } });
     if (!payment) return res.status(404).json({ error: "Payment not found" });
     res.json(serialize(payment));

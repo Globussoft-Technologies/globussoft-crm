@@ -1774,6 +1774,7 @@ function renderWellnessNav({
   for (const page of accessiblePages) {
     if (!page || !page.category || !page.path) continue;
     if (hiddenSidebarPaths.has(page.path)) continue;
+    if (isCustomerTier && page.path === "/wellness/invoices") continue;
     if (page.hideForAdminTier && isAdmin) continue;
     // customerOnly pages (e.g. Buy Gift Cards storefront) only surface to
     // customer-tier roles (USER / CUSTOMER). Admin / manager / staff don't

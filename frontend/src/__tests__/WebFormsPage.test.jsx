@@ -219,13 +219,13 @@ function installFetchMock(form = FORM_FIXTURE, leadFields = [
 
 
 
-function renderPage(form = FORM_FIXTURE, leadFields) {
+function renderPage(form = FORM_FIXTURE, leadFields, authValue = { user: { id: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }) {
 
   installFetchMock(form, leadFields);
 
   return render(
 
-    <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'generic' } }}>
+    <AuthContext.Provider value={authValue}>
 
       <WebForms />
 
@@ -245,7 +245,7 @@ function renderTravelPage(form = FORM_FIXTURE) {
     return Promise.resolve(null);
   });
   return render(
-    <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+    <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'travel' } }}>
       <WebForms scope="travel" />
     </AuthContext.Provider>,
   );
@@ -265,7 +265,7 @@ function renderRoutedPage(form = FORM_FIXTURE) {
   installFetchMock(form);
   return render(
     <MemoryRouter initialEntries={['/forms']}>
-      <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'generic' } }}>
+      <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}>
         <WebForms />
         <NavigationProbe />
       </AuthContext.Provider>
@@ -314,6 +314,37 @@ beforeEach(() => {
 
 
 describe('WebForms builder page', () => {
+  test('does not copy or restore another account draft when identity changes in the same tab', async () => {
+    const view = renderPage();
+    await openBuilder();
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'First account draft' } });
+    const firstKey = 'globuscrm:web-form-draft:generic:14:1';
+    await waitFor(() => expect(window.sessionStorage.getItem(firstKey)).toContain('First account draft'));
+    view.rerender(<AuthContext.Provider value={{ user: { id: 2, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+    await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url]) => url === '/api/forms').length).toBeGreaterThan(1));
+    expect(screen.queryByDisplayValue('First account draft')).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem('globuscrm:web-form-draft:generic:14:2')).toBeNull();
+    expect(window.sessionStorage.getItem(firstKey)).toContain('First account draft');
+  });
+
+  test('does not persist drafts under a shared unknown identity key', async () => {
+    renderPage(FORM_FIXTURE, undefined, { user: { role: 'ADMIN' }, tenant: { vertical: 'generic' } });
+    await openBuilder();
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Unresolved draft' } });
+    await waitFor(() => expect(screen.getByDisplayValue('Unresolved draft')).toBeInTheDocument());
+    expect(window.sessionStorage.length).toBe(0);
+  });
+
+  test('supports the legacy userId identity without sharing across tenants', async () => {
+    const view = renderPage(FORM_FIXTURE, undefined, { user: { userId: 9, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } });
+    await openBuilder();
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Tenant fourteen draft' } });
+    await waitFor(() => expect(window.sessionStorage.getItem('globuscrm:web-form-draft:generic:14:9')).toContain('Tenant fourteen draft'));
+    view.rerender(<AuthContext.Provider value={{ user: { userId: 9, role: 'ADMIN' }, tenant: { id: 15, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+    await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url]) => url === '/api/forms').length).toBeGreaterThan(1));
+    expect(screen.queryByDisplayValue('Tenant fourteen draft')).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem('globuscrm:web-form-draft:generic:15:9')).toBeNull();
+  });
 
   test('persists Generic multi-page definitions and field assignment', async () => {
     renderPage({ ...FORM_FIXTURE, scope: 'generic' });

@@ -394,7 +394,15 @@ function defaultSettings() {
 }
 
 function webFormDraftStorageKey(scope, tenantId, userId) {
-  return `globuscrm:web-form-draft:${scope}:${tenantId || "unknown"}:${userId || "unknown"}`;
+  if (!Number.isSafeInteger(Number(tenantId)) || Number(tenantId) <= 0
+    || !Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) return null;
+  return `globuscrm:web-form-draft:${scope}:${tenantId}:${userId}`;
+}
+
+function draftKeyForAuth(scope, auth) {
+  return webFormDraftStorageKey(scope,
+    auth?.tenant?.id ?? auth?.user?.tenantId ?? auth?.user?.tenant?.id,
+    auth?.user?.id ?? auth?.user?.userId);
 }
 
 function readWebFormDraft(key) {
@@ -7078,8 +7086,11 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 
 export default function WebForms({ scope = "generic" }) {
+  const auth = useContext(AuthContext);
   if (scope !== "travel" && scope !== "generic") return null;
-  return <WebFormsContent scope={scope} />;
+  // Remount editor state on identity changes so the previous account's
+  // in-memory draft cannot be written into the new account's storage key.
+  return <WebFormsContent key={draftKeyForAuth(scope, auth) || `${scope}:unresolved`} scope={scope} />;
 }
 
 function UnsavedChangesGuard({ active, notifyRef, onDiscard }) {
@@ -7259,7 +7270,7 @@ function WebFormsContent({ scope = "generic" }) {
   const formScope = scope === "travel" ? "travel" : "generic";
   const scopeQuery = formScope === "generic" ? "" : `?scope=${encodeURIComponent(formScope)}`;
   const isGenericScope = formScope === "generic";
-  const draftStorageKey = webFormDraftStorageKey(formScope, auth?.tenant?.id, auth?.user?.userId);
+  const draftStorageKey = draftKeyForAuth(formScope, auth);
 
 
 

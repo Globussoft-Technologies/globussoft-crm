@@ -769,10 +769,12 @@
           grid-column: auto;
         }
         .phone-input {
-          grid-template-columns: minmax(0, 1fr);
+          grid-template-columns: minmax(96px, 24%) minmax(0, 1fr);
+          gap: 8px;
         }
         html.generic-scope .phone-input {
-          grid-template-columns: minmax(0, 1fr)!important;
+          grid-template-columns: minmax(96px, 24%) minmax(0, 1fr)!important;
+          gap: 10px!important;
         }
         html.generic-scope .phone-country-picker {
           border-right: var(--gbs-field-border-width, 1px) solid
@@ -815,6 +817,28 @@
       html.generic-preview-mobile.travel-scope .grid .half,
       html.generic-preview-mobile.travel-scope .grid .full {
         grid-column: auto;
+      }
+      html.generic-public-desktop-columns .grid {
+        grid-template-columns: var(--gbs-columns) !important;
+      }
+      html.generic-public-desktop-columns .grid .half {
+        grid-column: span 1;
+      }
+      html.generic-public-desktop-columns .grid .full {
+        grid-column: var(--gbs-full-span, 1/-1);
+      }
+      html.generic-public-desktop-columns .phone-input {
+        grid-template-columns: minmax(92px, 34%) minmax(0, 1fr) !important;
+        gap: 10px !important;
+      }
+      html.generic-two-columns .phone-input {
+        grid-template-columns: minmax(92px, 34%) minmax(0, 1fr) !important;
+        gap: 10px !important;
+      }
+      html.generic-two-columns .phone-country-picker > input {
+        padding-left: 44px;
+        padding-right: 4px;
+        white-space: nowrap;
       }
     </style>
   </head>
@@ -3322,6 +3346,17 @@
           );
 
           var style = formData.style || {};
+
+          document.documentElement.classList.toggle(
+            "generic-public-desktop-columns",
+            !isBuilderPreview &&
+              scope === "generic" &&
+              style.layoutColumns === "two",
+          );
+          document.documentElement.classList.toggle(
+            "generic-two-columns",
+            scope === "generic" && style.layoutColumns === "two",
+          );
 
           document.body.style.background = /^(#[0-9a-f]{6})$/i.test(
             String(style.backgroundColor || ""),

@@ -97,6 +97,14 @@ describe('public web form embed footer', () => {
     expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
     expect(html).toMatch(/fd\.set\(["']phone["']\s*,\s*nationalDigits\)/);
     expect(html).toMatch(/if\s*\(\s*advanced\s*&&\s*fd\.get\(["']phone["']\)\s*&&\s*fd\.get\(["']phoneCountry["']\)\s*\)/);
+    expect(html).toContain('grid-template-columns: minmax(96px, 24%) minmax(0, 1fr);');
+    expect(html).toContain('grid-template-columns: minmax(96px, 24%) minmax(0, 1fr)!important;');
+    expect(html).toContain('generic-public-desktop-columns');
+    expect(html).toContain('generic-two-columns');
+    expect(html).toContain('!isBuilderPreview');
+    expect(html).toContain('grid-template-columns: minmax(92px, 34%) minmax(0, 1fr) !important;');
+    expect(html).toContain('padding-left: 44px;');
+    expect(html).toContain('@media (max-width: 640px)');
   });
 
   test('renders the numeric phone control for the default phone field', () => {

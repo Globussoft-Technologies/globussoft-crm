@@ -20,6 +20,7 @@ import { createPortal } from "react-dom";
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useInRouterContext, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowDown, ArrowUp, ChevronDown, Code2, Copy, Eye, GripVertical, Hash,
   Link2, ListChecks, Paperclip, Plus, Save, Search, Trash2, Type,
@@ -200,50 +201,6 @@ function resolveConditionalParent(field, fields) {
   )) || null;
 }
 
-function createsConditionalCycle(candidate, child, fields) {
-  const childId = String(child?.id || "");
-  const visited = new Set();
-  let current = candidate;
-
-  while (current) {
-    const currentId = String(current.id || "");
-    if (!currentId) return false;
-    if (currentId === childId || visited.has(currentId)) return true;
-    visited.add(currentId);
-    current = resolveConditionalParent(current, fields);
-  }
-
-  return false;
-}
-
-function getConditionalDepth(field, fields) {
-  let depth = 1;
-  const visited = new Set();
-  let parent = resolveConditionalParent(field, fields);
-
-  while (parent && !visited.has(String(parent.id))) {
-    visited.add(String(parent.id));
-    depth += 1;
-    parent = resolveConditionalParent(parent, fields);
-  }
-
-  return depth;
-}
-
-function getConditionalPath(field, fields) {
-  const path = [];
-  const visited = new Set();
-  let current = field;
-
-  while (current && !visited.has(String(current.id))) {
-    visited.add(String(current.id));
-    path.unshift(current.label || "Untitled field");
-    current = resolveConditionalParent(current, fields);
-  }
-
-  return path;
-}
-
 function getConditionalRoot(field, fields) {
   const visited = new Set();
   let current = field;
@@ -376,6 +333,8 @@ function defaultStyle() {
     customColumnWidth: 50,
     rowGap: 9,
     columnGap: 9,
+    titleDescriptionGap: 10,
+    descriptionFieldsGap: 24,
     mobileColumns: "one",
     tabletColumns: "one",
     containerBackgroundMode: "solid",
@@ -433,6 +392,48 @@ function defaultSettings() {
     steps: [],
   };
 }
+
+function webFormDraftStorageKey(scope, tenantId, userId) {
+  if (!Number.isSafeInteger(Number(tenantId)) || Number(tenantId) <= 0
+    || !Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) return null;
+  return `globuscrm:web-form-draft:${scope}:${tenantId}:${userId}`;
+}
+
+function draftKeyForAuth(scope, auth) {
+  return webFormDraftStorageKey(scope,
+    auth?.tenant?.id ?? auth?.user?.tenantId ?? auth?.user?.tenant?.id,
+    auth?.user?.id ?? auth?.user?.userId);
+}
+
+function readWebFormDraft(key) {
+  if (typeof window === "undefined" || !key) return null;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(key) || "null");
+    if (!parsed?.formId || !parsed?.draft || typeof parsed.draft !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeWebFormDraft(key, form) {
+  if (typeof window === "undefined" || !key || !form?.id) return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify({ formId: String(form.id), draft: form }));
+  } catch {
+    // Session storage can be unavailable in private browsing or restricted embeds.
+  }
+}
+
+function clearWebFormDraft(key) {
+  if (typeof window === "undefined" || !key) return;
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Ignore storage cleanup failures; the in-memory draft is still controlled by React.
+  }
+}
+
 const PHONE_COUNTRY_OPTIONS = [
   ["+1", "United States / Canada"], ["+7", "Russia / Kazakhstan"], ["+20", "Egypt"], ["+27", "South Africa"], ["+30", "Greece"], ["+31", "Netherlands"], ["+32", "Belgium"], ["+33", "France"], ["+34", "Spain"], ["+39", "Italy"], ["+40", "Romania"], ["+41", "Switzerland"], ["+43", "Austria"], ["+44", "United Kingdom"], ["+45", "Denmark"], ["+46", "Sweden"], ["+47", "Norway"], ["+48", "Poland"], ["+49", "Germany"], ["+51", "Peru"], ["+52", "Mexico"], ["+53", "Cuba"], ["+54", "Argentina"], ["+55", "Brazil"], ["+56", "Chile"], ["+57", "Colombia"], ["+58", "Venezuela"], ["+60", "Malaysia"], ["+61", "Australia"], ["+62", "Indonesia"], ["+63", "Philippines"], ["+64", "New Zealand"], ["+65", "Singapore"], ["+66", "Thailand"], ["+81", "Japan"], ["+82", "South Korea"], ["+84", "Vietnam"], ["+86", "China"], ["+90", "Türkiye"], ["+91", "India"], ["+92", "Pakistan"], ["+93", "Afghanistan"], ["+94", "Sri Lanka"], ["+95", "Myanmar"], ["+98", "Iran"], ["+211", "South Sudan"], ["+212", "Morocco"], ["+213", "Algeria"], ["+216", "Tunisia"], ["+218", "Libya"], ["+220", "Gambia"], ["+221", "Senegal"], ["+222", "Mauritania"], ["+223", "Mali"], ["+224", "Guinea"], ["+225", "Ivory Coast"], ["+226", "Burkina Faso"], ["+227", "Niger"], ["+228", "Togo"], ["+229", "Benin"], ["+230", "Mauritius"], ["+231", "Liberia"], ["+232", "Sierra Leone"], ["+233", "Ghana"], ["+234", "Nigeria"], ["+235", "Chad"], ["+236", "Central African Republic"], ["+237", "Cameroon"], ["+238", "Cape Verde"], ["+239", "Sao Tome and Principe"], ["+240", "Equatorial Guinea"], ["+241", "Gabon"], ["+242", "Republic of the Congo"], ["+243", "DR Congo"], ["+244", "Angola"], ["+245", "Guinea-Bissau"], ["+246", "British Indian Ocean Territory"], ["+248", "Seychelles"], ["+249", "Sudan"], ["+250", "Rwanda"], ["+251", "Ethiopia"], ["+252", "Somalia"], ["+253", "Djibouti"], ["+254", "Kenya"], ["+255", "Tanzania"], ["+256", "Uganda"], ["+257", "Burundi"], ["+258", "Mozambique"], ["+260", "Zambia"], ["+261", "Madagascar"], ["+262", "Reunion"], ["+263", "Zimbabwe"], ["+264", "Namibia"], ["+265", "Malawi"], ["+266", "Lesotho"], ["+267", "Botswana"], ["+268", "Eswatini"], ["+269", "Comoros"], ["+290", "Saint Helena"], ["+291", "Eritrea"], ["+297", "Aruba"], ["+298", "Faroe Islands"], ["+299", "Greenland"], ["+350", "Gibraltar"], ["+351", "Portugal"], ["+352", "Luxembourg"], ["+353", "Ireland"], ["+354", "Iceland"], ["+355", "Albania"], ["+356", "Malta"], ["+357", "Cyprus"], ["+358", "Finland"], ["+359", "Bulgaria"], ["+370", "Lithuania"], ["+371", "Latvia"], ["+372", "Estonia"], ["+373", "Moldova"], ["+374", "Armenia"], ["+375", "Belarus"], ["+376", "Andorra"], ["+377", "Monaco"], ["+378", "San Marino"], ["+380", "Ukraine"], ["+381", "Serbia"], ["+382", "Montenegro"], ["+383", "Kosovo"], ["+385", "Croatia"], ["+386", "Slovenia"], ["+387", "Bosnia and Herzegovina"], ["+389", "North Macedonia"], ["+420", "Czechia"], ["+421", "Slovakia"], ["+971", "United Arab Emirates"], ["+974", "Qatar"], ["+975", "Bhutan"], ["+976", "Mongolia"], ["+977", "Nepal"], ["+992", "Tajikistan"], ["+993", "Turkmenistan"], ["+994", "Azerbaijan"], ["+995", "Georgia"], ["+996", "Kyrgyzstan"], ["+998", "Uzbekistan"],
 ];
@@ -459,7 +460,8 @@ defaultValue: "",
   required: false,
    hidden: false,
   showWhen: null,
-width: "full",
+   width: "full",
+    choiceLayout: "vertical",
     optionsText: Array.isArray(contactDefaults.options) ? contactDefaults.options.join(", ") : "",
    fileFormats: resolvedFieldType === "file" ? DEFAULT_FILE_FORMATS : [],
    allowMultipleFiles: false,
@@ -640,6 +642,13 @@ function normalizeField(field, index, leadFields = []) {
 
 
   const leadLabel = leadFields.find((item) => item.fieldKey === sourceKey)?.label || sourceKey.replace(/_/g, " ");
+  const leadDefinition = sourceKind === "lead_custom"
+    ? leadFields.find((item) => item.fieldKey === sourceKey)
+    : null;
+  const leadOptions = Array.isArray(leadDefinition?.options) ? leadDefinition.options : [];
+  const persistedOptions = Array.isArray(field?.options) && field.options.length
+    ? field.options
+    : splitOptions(field?.optionsText);
 
 
 
@@ -883,7 +892,9 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-    optionsText: Array.isArray(field?.options) ? field.options.join(", ") : String(field?.optionsText || CONTACT_FIELD_DEFAULTS[sourceKey]?.options?.join(", ") || ""),
+    choiceLayout: fieldType === "radio" && field?.choiceLayout === "horizontal" ? "horizontal" : "vertical",
+
+    optionsText: (sourceKind === "lead_custom" && leadOptions.length ? leadOptions : persistedOptions).join(", ") || String(CONTACT_FIELD_DEFAULTS[sourceKey]?.options?.join(", ") || ""),
 
 
 
@@ -1437,7 +1448,10 @@ function emptyFieldFor(kind, leadFields, sourceKey = "", fieldType = "text", lab
 
 
 
-    return defaultField("lead_custom", firstLead?.fieldKey || sourceKey || "lead_custom_field", label || firstLead?.label || "Lead field", fieldType || firstLead?.fieldType || "text");
+    const field = defaultField("lead_custom", firstLead?.fieldKey || sourceKey || "lead_custom_field", label || firstLead?.label || "Lead field", fieldType || firstLead?.fieldType || "text");
+    const options = Array.isArray(firstLead?.options) ? firstLead.options : [];
+    if (options.length) field.optionsText = options.join(", ");
+    return field;
 
 
 
@@ -3316,6 +3330,8 @@ function GenericFormStyleControls({ group, form, style, updateStyle, applyDraft,
     {field("Custom column width (%)", style.customColumnWidth, (value) => updateStyle({ customColumnWidth: value }), 25, 75)}
     {field("Row gap (px)", style.rowGap, (value) => updateStyle({ rowGap: value }), 0, 64)}
     {field("Column gap (px)", style.columnGap, (value) => updateStyle({ columnGap: value }), 0, 64)}
+    {field("Title to description gap (px)", style.titleDescriptionGap, (value) => updateStyle({ titleDescriptionGap: value }), 0, 80)}
+    {field("Description to fields gap (px)", style.descriptionFieldsGap, (value) => updateStyle({ descriptionFieldsGap: value }), 0, 80)}
     <label style={{ display: "grid", gap: 6 }}><span>Tablet layout</span><select className="input-field" value={style.tabletColumns} onChange={(e) => updateStyle({ tabletColumns: e.target.value })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
     <label style={{ display: "grid", gap: 6 }}><span>Mobile layout</span><select className="input-field" value={style.mobileColumns} onChange={(e) => updateStyle({ mobileColumns: e.target.value })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
   </>;
@@ -3532,7 +3548,7 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
   );
 }
 
-function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFields, scope, onChange, onMove, onRemove, phoneSettings, onPhoneSettingsChange, onAddConditionalChild, steps = [], multiStepEnabled = false, formScope = scope || "generic", formSettings, onFormSettingsChange }) {
+function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove, phoneSettings, onPhoneSettingsChange, onAddConditionalChild, steps = [], multiStepEnabled = false, formScope = scope || "generic", formSettings, onFormSettingsChange }) {
 
 
 
@@ -3549,7 +3565,6 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
   const supportsAdvancedFeatures = supportsAdvancedWebFormFeatures(scope);
-  const isConditional = supportsAdvancedFeatures && Boolean(field.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey));
   const isChoice = CHOICE_FIELD_TYPES.has(field.fieldType);
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
   const [countrySearch, setCountrySearch] = useState("");
@@ -3659,20 +3674,7 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
     }
     return [];
   };
-  const conditionalParentFields = supportsAdvancedFeatures
-    ? (conditionalFlowFields.length ? conditionalFlowFields : allFields).filter((candidate) => (
-      String(candidate.id) !== String(field.id) &&
-      !candidate.hidden &&
-      candidate.fieldType !== "file" &&
-      getConditionalOptions(candidate).length > 0 &&
-      !createsConditionalCycle(candidate, field, allFields)
-    ))
-    : [];
-  const selectedConditionalField = resolveConditionalParent(field, conditionalParentFields) || null;
-  const conditionalOptions = getConditionalOptions(selectedConditionalField);
   const branchOptions = supportsAdvancedFeatures ? getConditionalOptions(field) : [];
-  const conditionalDepth = isConditional ? getConditionalDepth(field, allFields) : 0;
-  const conditionalPath = isConditional ? getConditionalPath(field, allFields) : [];
   const fieldTypeOptions = editableFieldTypes;
 
 
@@ -5503,13 +5505,21 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
               {isChoice ? (
 
-                <label className="wf-generic-field-secondary" style={{ display: "grid", gap: 6, minWidth: 0 }}>
-
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
-
-                  <textarea className="input-field wf-generic-options-input" rows={2} value={field.optionsText || ""} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Type one option per line (or use commas)" />
-
-                </label>
+                <div className="wf-generic-field-secondary" style={{ display: "grid", gap: 10, minWidth: 0 }}>
+                  <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
+                    <textarea className="input-field wf-generic-options-input" rows={2} value={field.optionsText || ""} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Type one option per line (or use commas)" />
+                  </label>
+                  {field.fieldType === "radio" ? (
+                    <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Radio layout</span>
+                      <select className="input-field" value={field.choiceLayout || "vertical"} onChange={(e) => onChange(index, { choiceLayout: e.target.value })}>
+                        <option value="vertical">Vertical</option>
+                        <option value="horizontal">Horizontal</option>
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
 
               ) : (
 
@@ -5811,56 +5821,6 @@ function FieldCard({ field, index, allFields, conditionalFlowFields = [], leadFi
 
 
 
-
-        {supportsAdvancedFeatures && isConditional ? (
-
-          <div className="wf-conditional-config" style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--wf-border)", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(180px, 0.8fr)", gap: 10 }}>
-
-            <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>
-              Conditional level {conditionalDepth}{conditionalPath.length > 1 ? ` · ${conditionalPath.join(" → ")}` : ""}
-            </div>
-
-            <label className="wf-conditional-parent-select" style={{ display: "grid", gap: 6, minWidth: 0 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Parent question</span>
-              <select
-                className="input-field"
-                value={field.showWhen?.fieldId || ""}
-                onChange={(e) => {
-                   const parent = conditionalParentFields.find((candidate) => String(candidate.id) === e.target.value);
-                  const options = getConditionalOptions(parent);
-                  onChange(index, { showWhen: parent ? { fieldId: parent.id, fieldKey: parent.sourceKey, parentQuestion: parent.label, value: options[0] || "" } : null });
-                }}
-              >
-                <option value="">Select the root question</option>
-                 {conditionalParentFields.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
-              </select>
-            </label>
-
-            {selectedConditionalField ? (
-              <label className="wf-conditional-answer-select" style={{ display: "grid", gap: 6, minWidth: 0 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Child answer</span>
-                {conditionalOptions.length > 0 ? (
-                  <select
-                    className="input-field"
-                    value={field.showWhen?.value || ""}
-                    onChange={(e) => onChange(index, { showWhen: { ...field.showWhen, value: e.target.value } })}
-                  >
-                    {conditionalOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                  </select>
-                ) : (
-                  <input
-                    className="input-field"
-                    value={field.showWhen?.value || ""}
-                    onChange={(e) => onChange(index, { showWhen: { ...field.showWhen, value: e.target.value } })}
-                    placeholder="Enter the value that should show this field"
-                  />
-                )}
-              </label>
-            ) : null}
-
-          </div>
-
-        ) : null}
 
         {supportsAdvancedFeatures && branchOptions.length > 0 && onAddConditionalChild ? (
           <div style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px dashed var(--wf-border)", display: "grid", gap: 8 }}>
@@ -7126,12 +7086,140 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 
 export default function WebForms({ scope = "generic" }) {
+  const auth = useContext(AuthContext);
   if (scope !== "travel" && scope !== "generic") return null;
-  return <WebFormsContent scope={scope} />;
+  // Remount editor state on identity changes so the previous account's
+  // in-memory draft cannot be written into the new account's storage key.
+  return <WebFormsContent key={draftKeyForAuth(scope, auth) || `${scope}:unresolved`} scope={scope} />;
+}
+
+function UnsavedChangesGuard({ active, notifyRef, onDiscard }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const currentPathRef = useRef(`${location.pathname}${location.search}${location.hash}`);
+  const confirmingRef = useRef(false);
+  const bypassHistoryGuardRef = useRef(false);
+
+  useEffect(() => {
+    currentPathRef.current = `${location.pathname}${location.search}${location.hash}`;
+  }, [location.pathname, location.search, location.hash]);
+
+  useEffect(() => {
+    if (!active) return undefined;
+
+    const navigateAfterConfirmation = (nextPath, replace) => {
+      bypassHistoryGuardRef.current = true;
+      try {
+        navigate(nextPath, { replace });
+      } finally {
+        window.setTimeout(() => {
+          bypassHistoryGuardRef.current = false;
+        }, 0);
+      }
+    };
+
+    const confirmNavigation = (nextPath, replace = false) => {
+      if (confirmingRef.current) return;
+      confirmingRef.current = true;
+      Promise.resolve(notifyRef.current.confirm({
+        title: "Unsaved changes",
+        message: "Your unsaved changes will be lost if you leave this page. Do you want to continue?",
+        confirmText: "Continue",
+        cancelText: "Stay",
+        destructive: true,
+      })).then((ok) => {
+        if (ok) {
+          onDiscard();
+          navigateAfterConfirmation(nextPath, replace);
+        }
+      }).finally(() => {
+        confirmingRef.current = false;
+      });
+    };
+
+    const handleDocumentClick = (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = event.target instanceof Element ? event.target.closest("a") : null;
+      if (!link || link.target === "_blank" || link.hasAttribute("download")) return;
+
+      let targetUrl;
+      try {
+        targetUrl = new URL(link.href, window.location.href);
+      } catch {
+        return;
+      }
+
+      if (targetUrl.origin !== window.location.origin) return;
+      const nextPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
+      if (nextPath === currentPathRef.current) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      confirmNavigation(nextPath);
+    };
+
+    const handlePopState = () => {
+      const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const currentPath = currentPathRef.current;
+      if (nextPath === currentPath) return;
+
+      // Restore the current entry while the async confirmation is open. If
+      // confirmed, replace it with the originally requested destination so
+      // the browser history does not gain an extra duplicate entry.
+      window.history.pushState(window.history.state, "", currentPath);
+      confirmNavigation(nextPath, true);
+    };
+
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+    const guardHistoryMethod = (originalMethod, replace, state, title, url) => {
+      if (bypassHistoryGuardRef.current || url == null) {
+        return originalMethod.call(window.history, state, title, url);
+      }
+
+      let targetUrl;
+      try {
+        targetUrl = new URL(url, window.location.href);
+      } catch {
+        return originalMethod.call(window.history, state, title, url);
+      }
+
+      if (targetUrl.origin !== window.location.origin) {
+        return originalMethod.call(window.history, state, title, url);
+      }
+
+      const nextPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
+      if (nextPath === currentPathRef.current) {
+        return originalMethod.call(window.history, state, title, url);
+      }
+
+      confirmNavigation(nextPath, replace);
+      return undefined;
+    };
+
+    window.history.pushState = function guardedPushState(state, title, url) {
+      return guardHistoryMethod(originalPushState, false, state, title, url);
+    };
+    window.history.replaceState = function guardedReplaceState(state, title, url) {
+      return guardHistoryMethod(originalReplaceState, true, state, title, url);
+    };
+
+    document.addEventListener("click", handleDocumentClick, true);
+    window.addEventListener("popstate", handlePopState, true);
+    return () => {
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+      document.removeEventListener("click", handleDocumentClick, true);
+      window.removeEventListener("popstate", handlePopState, true);
+    };
+  }, [active, navigate, notifyRef, onDiscard]);
+
+  return null;
 }
 
 function WebFormsContent({ scope = "generic" }) {
   const auth = useContext(AuthContext);
+  const inRouterContext = useInRouterContext();
   const [leadsForm, setLeadsForm] = useState(null);
   const canViewFormLeads = scope === "generic" && (auth?.tenant?.vertical || auth?.user?.vertical || "generic") === "generic";
 
@@ -7182,6 +7270,7 @@ function WebFormsContent({ scope = "generic" }) {
   const formScope = scope === "travel" ? "travel" : "generic";
   const scopeQuery = formScope === "generic" ? "" : `?scope=${encodeURIComponent(formScope)}`;
   const isGenericScope = formScope === "generic";
+  const draftStorageKey = draftKeyForAuth(formScope, auth);
 
 
 
@@ -7303,6 +7392,11 @@ function WebFormsContent({ scope = "generic" }) {
 
 
   const [dirty, setDirty] = useState(false);
+  const hasStoredDraft = Boolean(readWebFormDraft(draftStorageKey));
+
+  useEffect(() => {
+    if (builderOpen && dirty && selectedForm?.id) writeWebFormDraft(draftStorageKey, selectedForm);
+  }, [builderOpen, dirty, draftStorageKey, selectedForm]);
 
 
 
@@ -7708,6 +7802,28 @@ function WebFormsContent({ scope = "generic" }) {
 
       setForms(normalizedForms);
 
+      const storedDraft = readWebFormDraft(draftStorageKey);
+      const storedBase = storedDraft
+        ? normalizedForms.find((form) => String(form.id) === String(storedDraft.formId))
+        : null;
+      if (storedDraft && !storedBase) clearWebFormDraft(draftStorageKey);
+      if (storedBase) {
+        setBuilderOpen(true);
+        setDirty(true);
+        Promise.resolve(notifyRef.current.confirm({
+          title: "Unsaved changes restored",
+          message: "Your unsaved changes were restored. Do you want to continue editing this form?",
+          confirmText: "Continue editing",
+          cancelText: "Discard changes",
+          destructive: false,
+        })).then((continueEditing) => {
+          if (continueEditing) return;
+          clearWebFormDraft(draftStorageKey);
+          setSelectedForm(normalizeForm(storedBase, leadList));
+          setDirty(false);
+        });
+      }
+
 
 
 
@@ -7802,7 +7918,9 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-        return normalizedForms[0] || null;
+        return storedBase
+          ? normalizeForm({ ...storedBase, ...storedDraft.draft }, leadList)
+          : normalizedForms[0] || null;
 
 
 
@@ -7914,7 +8032,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-  }, [formScope, scopeQuery]);
+  }, [draftStorageKey, formScope, scopeQuery]);
 
 
 
@@ -8050,6 +8168,10 @@ function WebFormsContent({ scope = "generic" }) {
 
 
     if (!selectedForm && forms.length) {
+      const storedDraft = readWebFormDraft(draftStorageKey);
+      const hasMatchingDraft = storedDraft
+        && forms.some((form) => String(form.id) === String(storedDraft.formId));
+      if (hasMatchingDraft) return;
 
 
 
@@ -8113,7 +8235,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-  }, [forms, selectedForm]);
+  }, [draftStorageKey, forms, selectedForm]);
 
 
 
@@ -8312,7 +8434,9 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-      return next ? normalizeForm(next, leadFields) : next;
+      const normalized = next ? normalizeForm(next, leadFields) : next;
+      if (normalized?.id) writeWebFormDraft(draftStorageKey, normalized);
+      return normalized;
 
 
 
@@ -9136,7 +9260,7 @@ function WebFormsContent({ scope = "generic" }) {
 
   const fieldExists = (kind, sourceKey = "") => (selectedForm?.fields || []).some((field) => field.sourceKind === kind && String(field.sourceKey || "") === String(sourceKey || ""));
 
-  const addField = (kind, sourceKey = "", fieldType = "text", label = "") => {
+  const addField = (kind, sourceKey = "", fieldType = "text", label = "", options = []) => {
 
     if ((kind === "contact" || kind === "lead_custom") && fieldExists(kind, sourceKey)) {
       notifyRef.current?.error?.("That field is already added.");
@@ -9145,6 +9269,9 @@ function WebFormsContent({ scope = "generic" }) {
 
     applyDraft((current) => {
       const field = emptyFieldFor(kind, leadFields, sourceKey, fieldType, label);
+      if (kind === "lead_custom" && Array.isArray(options) && options.length) {
+        field.optionsText = options.join(", ");
+      }
       if (current?.settings?.multiStepEnabled && activeBuilderStepId) field.stepId = activeBuilderStepId;
       return { ...(current || {}), fields: [...(current?.fields || []), field] };
     });
@@ -9202,7 +9329,7 @@ function WebFormsContent({ scope = "generic" }) {
       return;
     }
 
-    addField(item.kind, item.sourceKey || "", item.fieldType || "text", item.label || "");
+    addField(item.kind, item.sourceKey || "", item.fieldType || "text", item.label || "", item.options || []);
 
     setFieldPickerOpen(false);
 
@@ -9418,7 +9545,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-      const ok = await notify.confirm({ title: "Discard changes?", message: "You have unsaved changes on the current form.", confirmText: "Discard", destructive: true });
+      const ok = await notify.confirm({ title: "Unsaved changes", message: "Your unsaved changes will be lost if you continue. Do you want to continue?", confirmText: "Continue", cancelText: "Stay", destructive: true });
 
 
 
@@ -9466,6 +9593,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
+    clearWebFormDraft(draftStorageKey);
     setSelectedForm(normalizeForm(form, leadFields));
 
 
@@ -9538,12 +9666,13 @@ function WebFormsContent({ scope = "generic" }) {
 
     if (dirty) {
 
-      const ok = await notify.confirm({ title: "Discard changes?", message: "You have unsaved changes on the current form.", confirmText: "Discard", destructive: true });
+      const ok = await notify.confirm({ title: "Unsaved changes", message: "Your unsaved changes will be lost if you continue. Do you want to continue?", confirmText: "Continue", cancelText: "Stay", destructive: true });
 
       if (!ok) return;
 
     }
 
+    clearWebFormDraft(draftStorageKey);
     setBuilderOpen(false);
 
     setDirty(false);
@@ -9565,6 +9694,16 @@ function WebFormsContent({ scope = "generic" }) {
 
   const createForm = async () => {
 
+    if (dirty) {
+      const ok = await notify.confirm({
+        title: "Unsaved changes",
+        message: "Your unsaved changes will be lost if you continue. Do you want to continue?",
+        confirmText: "Continue",
+        cancelText: "Stay",
+        destructive: true,
+      });
+      if (!ok) return;
+    }
 
 
 
@@ -9579,6 +9718,8 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
+
+    clearWebFormDraft(draftStorageKey);
     const now = new Date();
 
 
@@ -10271,6 +10412,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
+      clearWebFormDraft(draftStorageKey);
       notify.success("Form saved");
 
 
@@ -10419,6 +10561,7 @@ function WebFormsContent({ scope = "generic" }) {
 
         setBuilderOpen(false);
 
+        clearWebFormDraft(draftStorageKey);
         setDirty(false);
 
       }
@@ -10717,6 +10860,13 @@ function WebFormsContent({ scope = "generic" }) {
 
 
     <div className={`${scope === "generic" ? "web-form-builder web-form-builder-generic" : "web-form-builder"}${scope === "travel" ? " web-form-builder-travel" : ""}`} style={{ padding: "1.5rem", display: "grid", gap: 16, alignContent: "start", color: "var(--text-primary)", animation: "fadeIn 0.2s ease" }}>
+      {inRouterContext ? (
+        <UnsavedChangesGuard
+          active={Boolean(builderOpen && (dirty || hasStoredDraft))}
+          notifyRef={notifyRef}
+          onDiscard={() => clearWebFormDraft(draftStorageKey)}
+        />
+      ) : null}
 
 
 
@@ -11530,37 +11680,6 @@ function WebFormsContent({ scope = "generic" }) {
       margin-left: clamp(66px, 9vw, 124px);
     }
 
-    .web-form-builder-generic .wf-conditional-config {
-      display: flex !important;
-      flex-wrap: wrap;
-      align-items: flex-start;
-      gap: 12px !important;
-    }
-
-    .web-form-builder-generic .wf-conditional-config > div:first-child {
-      flex-basis: 100%;
-    }
-
-    .web-form-builder-generic .wf-conditional-config > .wf-conditional-parent-select {
-      flex: 0 1 300px;
-      width: 300px;
-      min-width: 220px;
-      max-width: 300px;
-    }
-
-    .web-form-builder-generic .wf-conditional-config > .wf-conditional-answer-select {
-      flex: 0 1 180px;
-      width: 180px;
-      min-width: 150px;
-      max-width: 220px;
-    }
-
-    .web-form-builder-generic .wf-conditional-config .input-field {
-      width: 100%;
-      min-width: 0;
-      box-sizing: border-box;
-    }
-
     .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-label {
       flex: 0 1 clamp(180px, 20vw, 220px);
       width: clamp(180px, 20vw, 220px);
@@ -11831,14 +11950,6 @@ function WebFormsContent({ scope = "generic" }) {
 
       .web-form-builder-generic .wf-conditional-child-card.wf-conditional-depth-3 {
         margin-left: 36px;
-      }
-
-      .web-form-builder-generic .wf-conditional-config > .wf-conditional-parent-select,
-      .web-form-builder-generic .wf-conditional-config > .wf-conditional-answer-select {
-        flex: 1 1 100%;
-        width: 100%;
-        min-width: 0;
-        max-width: none;
       }
 
       .web-form-builder-generic .wf-generic-field-editor-grid > .wf-generic-field-label,
@@ -19683,9 +19794,8 @@ function WebFormsContent({ scope = "generic" }) {
                  <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis, restrictToWebFormsFieldList]} onDragEnd={handleDragEnd}>
                         <SortableContext items={(selectedForm.fields || []).map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
                           {builderFieldGroups.map((group) => {
-                            const groupFields = group.fields.map(({ field }) => field);
                             const renderField = ({ field, index }) => (
-                              <FieldCard key={field.id} field={field} index={index} allFields={builderFields} conditionalFlowFields={groupFields} leadFields={leadFields} scope={selectedForm.scope} onChange={updateField} onMove={moveField} onRemove={removeField} phoneSettings={supportsAdvancedWebFormFeatures(selectedForm.scope) && field.sourceKey === "phone" ? selectedForm.settings : null} onPhoneSettingsChange={(settings) => applyDraft({ settings })} onAddConditionalChild={addConditionalChild} steps={selectedForm.settings.steps} multiStepEnabled={selectedForm.settings.multiStepEnabled} formScope={selectedForm.scope} formSettings={selectedForm.settings} onFormSettingsChange={(settings) => applyDraft({ settings })} />
+                              <FieldCard key={field.id} field={field} index={index} leadFields={leadFields} scope={selectedForm.scope} onChange={updateField} onMove={moveField} onRemove={removeField} phoneSettings={supportsAdvancedWebFormFeatures(selectedForm.scope) && field.sourceKey === "phone" ? selectedForm.settings : null} onPhoneSettingsChange={(settings) => applyDraft({ settings })} onAddConditionalChild={addConditionalChild} steps={selectedForm.settings.steps} multiStepEnabled={selectedForm.settings.multiStepEnabled} formScope={selectedForm.scope} formSettings={selectedForm.settings} onFormSettingsChange={(settings) => applyDraft({ settings })} />
                             );
 
                             if (group.fields.length === 1) return renderField(group.fields[0]);
@@ -19695,7 +19805,7 @@ function WebFormsContent({ scope = "generic" }) {
                                 <div className="wf-conditional-group-header">
                                   <span>Conditional flow</span>
                                   <small>Starts with: {group.root?.label || "Parent question"} · {group.fields.length} questions</small>
-                                  <small>For each child: choose its parent question and answer. A child can become the next parent.</small>
+                                   <small>Each child stays attached to the answer that created it. A child can become the next parent.</small>
                                 </div>
                                 <div className="wf-conditional-group-fields">
                                   {(() => {
@@ -19836,6 +19946,8 @@ function WebFormsContent({ scope = "generic" }) {
                             <StyleNumberField label="Custom column width (%)" value={selectedForm.style.customColumnWidth} min={25} max={75} onChange={(value) => applyDraft({ style: { ...selectedForm.style, customColumnWidth: value } })} />
                             <StyleNumberField label="Row gap (px)" value={selectedForm.style.rowGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, rowGap: value } })} />
                             <StyleNumberField label="Column gap (px)" value={selectedForm.style.columnGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, columnGap: value } })} />
+                            <StyleNumberField label="Title to description gap (px)" value={selectedForm.style.titleDescriptionGap} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, titleDescriptionGap: value } })} />
+                            <StyleNumberField label="Description to fields gap (px)" value={selectedForm.style.descriptionFieldsGap} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, descriptionFieldsGap: value } })} />
                             <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Tablet layout") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Tablet layout</span><select className="input-field" style={optionLengthStyle(["One column", "Two columns"])} value={selectedForm.style.tabletColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, tabletColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
                             <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Mobile layout") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile layout</span><select className="input-field" style={optionLengthStyle(["One column", "Two columns"])} value={selectedForm.style.mobileColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, mobileColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
                           </div>

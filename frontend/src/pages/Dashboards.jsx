@@ -54,6 +54,13 @@ const button = (variant = 'primary') => ({
     variant === 'primary' ? '#fff' : 'var(--text-primary,#e2e8f0)',
 });
 
+const modalSecondaryButton = {
+  ...button('secondary'),
+  background: 'var(--subtle-bg)',
+  border: '1px solid var(--border-color)',
+  color: 'var(--text-primary)',
+};
+
 const PALETTE = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#84cc16'];
 
 function truncateLeadSourceLabel(value, max = 18) {
@@ -542,13 +549,13 @@ export default function Dashboards() {
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
             autoFocus
             style={{
-              width: '100%', padding: '0.7rem 0.9rem', borderRadius: 10,
-              background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.1)',
-              color: 'inherit', fontSize: '0.95rem', outline: 'none',
+              boxSizing: 'border-box', width: '100%', padding: '0.7rem 0.9rem', borderRadius: 10,
+              background: 'var(--input-bg)', border: '1px solid var(--border-color)',
+              color: 'var(--text-primary)', fontSize: '0.95rem', outline: 'none',
             }}
           />
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-            <button onClick={() => setShowCreate(false)} style={button('secondary')}>Cancel</button>
+            <button onClick={() => setShowCreate(false)} style={modalSecondaryButton}>Cancel</button>
             <button onClick={handleCreate} style={button('primary')}>Create</button>
           </div>
         </Modal>
@@ -595,19 +602,25 @@ function Modal({ children, onClose, title, wide }) {
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
         backdropFilter: 'blur(4px)', display: 'flex',
         alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+        boxSizing: 'border-box', padding: '1rem',
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         onClick={(e) => e.stopPropagation()}
         style={{
-          ...glass, padding: '1.5rem', minWidth: wide ? 560 : 380,
-          maxWidth: '90vw', maxHeight: '85vh', overflow: 'auto',
-          background: 'rgba(15,23,42,0.92)',
+          ...glass, boxSizing: 'border-box', padding: '1.5rem',
+          width: wide ? 'min(640px, 100%)' : 'min(440px, 100%)',
+          minWidth: 0, maxWidth: '100%', maxHeight: 'calc(100dvh - 2rem)', overflow: 'auto',
+          background: 'var(--modal-bg)', border: '1px solid var(--border-color)',
+          color: 'var(--text-primary)',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0, fontSize: '1.05rem' }}>{title}</h3>
-          <button onClick={onClose} aria-label={`Close ${title} dialog`} title="Close" style={{ ...button('secondary'), padding: '0.35rem' }}><X size={16} /></button>
+          <button onClick={onClose} aria-label={`Close ${title} dialog`} title="Close" style={{ ...modalSecondaryButton, padding: '0.35rem' }}><X size={16} /></button>
         </div>
         {children}
       </div>

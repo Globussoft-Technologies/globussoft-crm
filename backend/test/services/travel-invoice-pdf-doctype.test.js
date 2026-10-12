@@ -35,6 +35,7 @@
 import { describe, test, expect } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
+import pdfjs from 'pdfjs-dist/legacy/build/pdf.js';
 
 const { generateTravelInvoicePdf } = pdfR;
 
@@ -175,7 +176,8 @@ describe('renderTravelInvoicePdf — docType-aware header + legal footer', () =>
       invoice: invoiceFixture({ docType: 'CreditNote' }),
       lines: sampleLines(),
     });
-    const text = extractPdfText(buf);
+    const parsed = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+    const text = (await (await parsed.getPage(1)).getTextContent()).items.map((item) => item.str).join(' ');
     expect(text).toMatch(/CREDIT NOTE/);
     expect(text).toMatch(/Credit Note\W+reduces customer payable/);
     expect(text).not.toMatch(/TAX INVOICE/);
@@ -271,6 +273,6 @@ describe('renderTravelInvoicePdf — docType-aware header + legal footer', () =>
     expect(text).toMatch(/Issued/);
     // INR currency glyph plus the trailing total (formatted as
     // ₹12345.67 by the renderer's fmt helper).
-    expect(text).toMatch(/12345\.67/);
+    expect(text).toMatch(/12,345\.67/);
   });
 });

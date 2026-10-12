@@ -1219,7 +1219,7 @@ export default function Staff() {
 
   return (
     <div
-      className={isTravel ? "travel-admin-page travel-staff-page" : isWellness ? "wellness-staff-page" : undefined}
+      className={isTravel ? "travel-admin-page travel-staff-page" : isWellness ? "wellness-staff-page staff-directory-page" : "staff-directory-page"}
       style={{
         padding: "2rem",
         height: "100%",
@@ -1294,6 +1294,7 @@ export default function Staff() {
       {/* Stats bar */}
       {staff.length > 0 && (
         <div
+          className={isTravel ? "travel-staff-stats" : "staff-directory-stats"}
           style={{
             display: "flex",
             gap: "0.75rem",
@@ -1381,7 +1382,10 @@ export default function Staff() {
           </button>
           {/* Availability toggle - only for ADMIN/MANAGER */}
           {canManageStaff && (
-            <div style={{ marginLeft: "auto" }}>
+            <div
+              className={isTravel ? "travel-staff-availability-toggle" : "staff-directory-availability-toggle"}
+              style={{ marginLeft: "auto" }}
+            >
               <button
                 onClick={() => setShowAvailability(!showAvailability)}
                 style={{
@@ -1642,7 +1646,7 @@ export default function Staff() {
 
       {/* Staff Table */}
       <div
-        className="card"
+        className={isTravel ? "card travel-staff-card" : "card staff-team-card"}
         style={{
           padding: "2rem",
           minWidth: isTravel ? 0 : undefined,
@@ -1650,6 +1654,7 @@ export default function Staff() {
         }}
       >
         <div
+          className={isTravel ? "travel-staff-toolbar" : "staff-team-toolbar"}
           style={{
             display: "flex",
             justifyContent: "space-between",
@@ -1673,6 +1678,7 @@ export default function Staff() {
           </h3>
           {staff.length > 0 && (
             <div
+              className={isTravel ? "travel-staff-controls" : "staff-team-controls"}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1681,7 +1687,10 @@ export default function Staff() {
               }}
             >
               {/* Inline search — name + email, case-insensitive substring match. */}
-              <div style={{ position: "relative", width: 260 }}>
+              <div
+                className={isTravel ? "travel-staff-search" : "staff-team-search"}
+                style={{ position: "relative", width: 260 }}
+              >
                 <Search
                   size={14}
                   style={{
@@ -1717,7 +1726,11 @@ export default function Staff() {
                   Badge surfaces the count of active in-panel filters so the
                   user can see at a glance that the dropdown is narrowing the
                   table beyond the inline search. */}
-              <div ref={filterPanelRef} style={{ position: "relative" }}>
+              <div
+                ref={filterPanelRef}
+                className={isTravel ? "travel-staff-filter-anchor" : "staff-team-filter-anchor"}
+                style={{ position: "relative" }}
+              >
                 <button
                   type="button"
                   onClick={() => setFilterOpen((v) => !v)}
@@ -1771,6 +1784,7 @@ export default function Staff() {
                 {filterOpen && (
                   <div
                     data-testid="staff-filter-panel"
+                    className={isTravel ? "travel-staff-filter-panel" : "staff-team-filter-panel"}
                     style={{
                       position: "absolute",
                       top: "calc(100% + 0.4rem)",
@@ -1940,7 +1954,10 @@ export default function Staff() {
           </p>
         ) : (
           <div
-            className={isTravel ? "travel-staff-table-scroll" : undefined}
+            className={isTravel ? "travel-staff-table-scroll" : isWellness ? "staff-team-table-scroll" : "staff-team-table-scroll staff-team-table-scroll--generic"}
+            role="region"
+            aria-label="Team members table"
+            tabIndex={0}
             onScroll={handleStaffTableScroll}
             style={isTravel || isWellness ? {
               width: "100%",
@@ -1949,8 +1966,12 @@ export default function Staff() {
               overflowY: "auto",
               overflowX: isTravel ? "hidden" : "auto",
             } : {
-              maxHeight: "calc(100vh - 28rem)",
-              overflow: "visible",
+              width: "100%",
+              minWidth: 0,
+              maxHeight: "min(60dvh, 560px)",
+              overflowX: "auto",
+              overflowY: "auto",
+              overscrollBehavior: "contain",
             }}
           >
             {!isTravel && !isWellness && <style>{genericStaffTableStyles}</style>}
@@ -2023,6 +2044,7 @@ export default function Staff() {
                     }
                   >
                     <td
+                      data-label={!isTravel && !isWellness ? "User" : undefined}
                       style={{
                         padding: "0.75rem 0.5rem",
                         fontWeight:
@@ -2032,6 +2054,7 @@ export default function Staff() {
                       {member.name || "—"}
                     </td>
                     <td
+                      data-label={!isTravel && !isWellness ? "Email" : undefined}
                       style={{
                         padding: "0.75rem 0.5rem",
                         color: "var(--text-secondary)",
@@ -2041,12 +2064,12 @@ export default function Staff() {
                     </td>
                     {!isTravel && !isWellness && (
                       <>
-                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{staff.find((manager) => String(manager.id) === String(member.reportingToId))?.name || "--"}</td>
-                        <td style={{ padding: "0.75rem 0.5rem" }}>{member.primaryRole?.name || member.role || "--"}</td>
-                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{member.lastLoginAt ? formatDate(member.lastLoginAt) : "--"}</td>
-                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{member.territories?.map((territory) => territory.name).filter(Boolean).join(", ") || "--"}</td>
-                        <td style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{member.teamMemberships?.map((membership) => membership.team?.name).filter(Boolean).join(", ") || "--"}</td>
-                        <td style={{ padding: "0.75rem 0.5rem" }}>{member.defaultPipelineId || "Default Pipeline"}</td>
+                        <td data-label="Reporting manager" style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{staff.find((manager) => String(manager.id) === String(member.reportingToId))?.name || "--"}</td>
+                        <td data-label="Role" style={{ padding: "0.75rem 0.5rem" }}>{member.primaryRole?.name || member.role || "--"}</td>
+                        <td data-label="Last login" style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{member.lastLoginAt ? formatDate(member.lastLoginAt) : "--"}</td>
+                        <td data-label="Territories" style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{member.territories?.map((territory) => territory.name).filter(Boolean).join(", ") || "--"}</td>
+                        <td data-label="Teams" style={{ padding: "0.75rem 0.5rem", color: "var(--text-secondary)" }}>{member.teamMemberships?.map((membership) => membership.team?.name).filter(Boolean).join(", ") || "--"}</td>
+                        <td data-label="Default pipeline" style={{ padding: "0.75rem 0.5rem" }}>{member.defaultPipelineId || "Default Pipeline"}</td>
                       </>
                     )}
                     {(isTravel || isWellness) && (
@@ -2055,6 +2078,7 @@ export default function Staff() {
                       </td>
                     )}
                     <td
+                      data-label={!isTravel && !isWellness ? "Joined" : undefined}
                       style={{
                         padding: "0.75rem 0.5rem",
                         color: "var(--text-secondary)",
@@ -2082,6 +2106,7 @@ export default function Staff() {
                       )}
                     </td>
                     <td
+                      data-label={!isTravel && !isWellness ? "Actions" : undefined}
                       style={{ padding: "0.75rem 0.5rem", position: "relative" }}
                       data-testid={`staff-actions-${member.id}`}
                     >

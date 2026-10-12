@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sparkles, Check, X, Clock, AlertCircle, Play } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -23,7 +23,6 @@ export default function Recommendations() {
   const [allItems, setAllItems] = useState([]);
   const [running, setRunning] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const listRef = useRef(null);
 
   // Manually trigger the orchestrator. Same endpoint the daily 07:00 IST
   // cron uses — gives admin/manager a way to populate the page without
@@ -55,7 +54,6 @@ export default function Recommendations() {
         const next = Array.isArray(rows) ? rows : [];
         setItems(next);
         setVisibleCount(Math.min(PAGE_SIZE, next.length || PAGE_SIZE));
-        if (listRef.current) listRef.current.scrollTop = 0;
       })
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
@@ -84,16 +82,6 @@ export default function Recommendations() {
     () => items.slice(0, Math.min(visibleCount, items.length)),
     [items, visibleCount],
   );
-
-  const handleListScroll = useCallback((e) => {
-    const el = e.currentTarget;
-    if (!el) return;
-    const threshold = 72;
-    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
-    if (!nearBottom) return;
-    if (visibleCount >= items.length) return;
-    setVisibleCount((current) => Math.min(current + PAGE_SIZE, items.length));
-  }, [items.length, visibleCount]);
 
   const handleAction = async (id, action) => {
     const rec = items.find(r => r.id === id);
@@ -232,24 +220,17 @@ export default function Recommendations() {
       )}
 
       <div
-        ref={listRef}
-        data-testid="recommendations-list-scroll"
-        onScroll={handleListScroll}
+        data-testid="recommendations-list"
         style={{
-          display: 'flex',
-          flexDirection: 'column',
+          display: 'grid',
           gap: '1rem',
-          maxHeight: 'calc(100vh - 220px)',
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          paddingRight: 4,
         }}
       >
         {displayedItems.map((r) => (
           <div key={r.id} className="glass" style={{ padding: '1.25rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.25rem' }}>
                   <span style={{ background: priorityColor[r.priority] || priorityColor.medium, color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 600 }}>
                     {r.priority}
                   </span>
@@ -264,7 +245,7 @@ export default function Recommendations() {
                 </div>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.4rem' }}>{r.title}</h3>
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.3rem', marginLeft: 'auto' }}>
                 <Clock size={12} /> {new Date(r.createdAt).toLocaleString('en-IN')}
               </div>
             </div>
@@ -301,11 +282,14 @@ export default function Recommendations() {
           </div>
         ))}
         {!loading && displayedItems.length < items.length && (
-          <div
-            data-testid="recommendations-scroll-sentinel"
-            aria-hidden="true"
-            style={{ height: 1 }}
-          />
+          <button
+            type="button"
+            className="glass"
+            onClick={() => setVisibleCount((current) => Math.min(current + PAGE_SIZE, items.length))}
+            style={{ justifySelf: 'center', padding: '0.6rem 1rem', color: 'var(--text-primary)', cursor: 'pointer' }}
+          >
+            Load more recommendations
+          </button>
         )}
       </div>
     </div>

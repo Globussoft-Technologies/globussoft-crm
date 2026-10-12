@@ -395,13 +395,13 @@ export default function LeadRouting() {
           <datalist id="country-list">
             {COUNTRY_OPTIONS.map(c => <option key={c} value={c} />)}
           </datalist>
-          <div className="card" style={{ padding: '1.75rem', width: '100%', maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="card lead-routing-rule-modal" style={{ padding: '1.75rem', width: '100%', maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold', fontSize: '1.2rem', margin: 0 }}>{editing ? 'Edit Rule' : 'New Routing Rule'}</h3>
               <button onClick={() => setShowModal(false)} aria-label="Close routing rule dialog" title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={22} /></button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '0.85rem', marginBottom: '1rem' }}>
+            <div className="lead-routing-rule-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '0.85rem', marginBottom: '1rem' }}>
               <div>
                 <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rule Name</label>
                 <input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. India Web Leads → Sales Team" style={{ width: '100%', marginTop: 4 }} />
@@ -417,7 +417,7 @@ export default function LeadRouting() {
               <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>Conditions (all must match)</label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {form.rows.map((row, idx) => (
-                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 1.4fr 36px', gap: '0.4rem' }}>
+                  <div key={idx} className="lead-routing-condition-row" style={{ display: 'grid', gridTemplateColumns: '1fr 110px 1.4fr 36px', gap: '0.4rem' }}>
                     <select className="input-field" value={row.field} onChange={e => updateRow(idx, 'field', e.target.value)}>
                       {fieldOptions.map(f => <option key={f} value={f}>{f}</option>)}
                     </select>
@@ -457,7 +457,7 @@ export default function LeadRouting() {
                     ) : (
                       <input className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)} placeholder={row.op === 'in' ? (row.field === 'status' ? 'Lead,Prospect,Customer' : row.field === 'subBrand' ? 'tmc,rfu' : 'Website,Referral,Ad') : 'value'} />
                     )}
-                    <button onClick={() => removeRow(idx)} className="btn-secondary" style={{ padding: '0.4rem' }} title="Remove"><Trash2 size={14} /></button>
+                    <button onClick={() => removeRow(idx)} className="btn-secondary" style={{ padding: '0.4rem' }} title="Remove" aria-label="Remove condition"><Trash2 size={14} /></button>
                   </div>
                 ))}
                 <button onClick={addRow} className="btn-secondary" style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}>
@@ -466,7 +466,7 @@ export default function LeadRouting() {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '1rem' }}>
+            <div className="lead-routing-assign-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '1rem' }}>
               <div>
                 <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Assign Type</label>
                 <select className="input-field" value={form.assignType} onChange={e => setForm({ ...form, assignType: e.target.value })} style={{ width: '100%', marginTop: 4 }}>

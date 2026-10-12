@@ -379,7 +379,7 @@ export default function Payments() {
       style={{
         padding: "2rem",
         color: "var(--text-primary)",
-        minHeight: "100vh",
+        minHeight: "100%",
       }}
     >
       {/* Header */}
@@ -692,11 +692,11 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
           boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
         }}
       >
-        <TopScrollSync>
+        <TopScrollSync hideTopBar>
           <table
             style={{
               width: "100%",
-              minWidth: 1500,
+              minWidth: 1100,
               borderCollapse: "collapse",
               fontSize: "0.85rem",
             }}
@@ -1060,9 +1060,10 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
           </div>
 
           <div
+            className="payment-gateway-grid"
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
               gap: "1rem",
             }}
           >
@@ -1255,6 +1256,7 @@ function ConfigCard({ name, configured, extras, hint, brandColor }) {
 
   return (
     <div
+      className="payment-gateway-card"
       style={{
         padding: "1.25rem",
         borderRadius: "12px",
@@ -1330,6 +1332,7 @@ function ConfigCard({ name, configured, extras, hint, brandColor }) {
       </div>
 
       <ul
+        className="payment-gateway-keys"
         style={{
           listStyle: "none",
           padding: "0 0 0 0.5rem",
@@ -1365,6 +1368,7 @@ function ConfigCard({ name, configured, extras, hint, brandColor }) {
             <span>{x.label}</span>
             {x.value && (
               <code
+                className="payment-gateway-key-value"
                 style={{
                   marginLeft: "auto",
                   color: "var(--text-primary)",

@@ -25,6 +25,17 @@ function thisYear() {
 }
 
 const fmt = (v) => formatMoney(Number(v) || 0, { maximumFractionDigits: 0 });
+const shortRepName = (value) => {
+  const words = String(value || '').trim().split(/\s+/);
+  return words.length > 1 ? `${words[0]} ${words[words.length - 1][0]}.` : words[0];
+};
+const shortMonth = (value) => {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(value || ''));
+  if (!match) return String(value || '');
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return String(value || '');
+  return `${new Date(Date.UTC(Number(match[1]), month - 1, 1)).toLocaleString('en', { month: 'short', timeZone: 'UTC' })} '${match[1].slice(-2)}`;
+};
 
 const PERIOD_OPTIONS = [
   { value: currentQuarter(), label: `Current Quarter (${currentQuarter()})` },
@@ -118,10 +129,10 @@ export default function Forecasting() {
   };
 
   return (
-    <div style={{ padding: '2rem', color: 'var(--text-primary)' }}>
+    <div className="sales-forecasting-page" style={{ padding: '2rem', color: 'var(--text-primary)' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+      <div className="sales-forecasting-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+        <div className="sales-forecasting-title" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <TrendingUp size={28} color="var(--accent-color, #3b82f6)" />
           <div>
             <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Sales Forecasting</h1>
@@ -131,7 +142,7 @@ export default function Forecasting() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div className="sales-forecasting-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <select
             className="input-field"
             value={period}
@@ -222,11 +233,12 @@ export default function Forecasting() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={repBars}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, rgba(255,255,255,0.1))" vertical={false} />
-                  <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
+                  <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={shortRepName} minTickGap={12} interval="preserveStartEnd" padding={{ left: 8, right: 8 }} />
                   <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={(v) => formatMoneyCompact(v)} />
                   <Tooltip
                     formatter={(v) => fmt(v)}
                     contentStyle={{ background: 'rgba(20,20,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
+                    labelStyle={{ color: '#fff' }}
                   />
                   <Legend />
                   <Bar dataKey="Closed" fill="#10b981" radius={[6, 6, 0, 0]} />
@@ -256,11 +268,12 @@ export default function Forecasting() {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={trend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, rgba(255,255,255,0.1))" vertical={false} />
-                  <XAxis dataKey="month" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
+                  <XAxis dataKey="month" stroke="var(--text-secondary)" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={shortMonth} minTickGap={16} interval="preserveStartEnd" padding={{ left: 8, right: 8 }} />
                   <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={(v) => formatMoneyCompact(v)} />
                   <Tooltip
                     formatter={(v) => fmt(v)}
                     contentStyle={{ background: 'rgba(20,20,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
+                    labelStyle={{ color: '#fff' }}
                   />
                   <Line type="monotone" dataKey="closed" stroke="#10b981" strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                 </LineChart>

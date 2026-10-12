@@ -488,7 +488,7 @@ export default function Expenses() {
     .reduce((sum, e) => sum + e.amount, 0);
 
   return (
-    <div className="expenses-page finance-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="expenses-page finance-page" style={{ padding: '2rem', minHeight: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header className="finance-page__header" style={{ marginBottom: '2rem' }}>
         <div>
         <h1 className="finance-page__title" style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

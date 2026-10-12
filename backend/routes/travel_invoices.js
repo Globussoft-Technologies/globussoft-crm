@@ -5786,29 +5786,37 @@ router.get(
       // rows → entire totalAmount is outstanding.
       const schedule = await prisma.travelPaymentSchedule.findMany({
         where: { invoiceId: id, tenantId: req.travelTenant.id },
-        select: { receivedAmount: true },
+        select: { receivedAmount: true, expectedAmount: true, status: true },
       });
-      let amountPaid = 0;
+      let schedulePaid = 0;
       for (const s of schedule) {
-        const r = Number(s.receivedAmount);
-        if (Number.isFinite(r)) amountPaid += r;
+        const r = Number(s.receivedAmount != null ? s.receivedAmount : s.status === "paid" ? s.expectedAmount : 0);
+        if (Number.isFinite(r)) schedulePaid += r;
       }
-
-      // Load the bill-to contact so the PDF "Bill To" block isn't blank.
-      // TravelInvoice stores only contactId; the renderer reads contactName/
-      // contactEmail/contactPhone off the invoice object, so we resolve them
-      // here. Non-fatal — a missing contact just falls back to "—".
-      let contact = null;
-      if (invoice.contactId != null) {
-        try {
-          contact = await prisma.contact.findFirst({
-            where: { id: invoice.contactId, tenantId: req.travelTenant.id },
-            select: { name: true, email: true, phone: true },
-          });
-        } catch (_) {
-          // ignore — Bill To falls back to "—"
+      // Gateway/manual Payment rows can exist without a schedule. A receipt
+      // may also update both stores, so use the larger recorded total.
+      const paymentTransactions = await successfulTravelInvoicePayments(req.travelTenant.id, id);
+      const paymentPaid = paymentTransactions.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+      let amountPaid = Math.max(schedulePaid, paymentPaid);
+      if (invoice.tripId && invoice.participantId) {
+        // TMC participant invoices settle through installments. This model
+        // has no tenantId; all three IDs come from the tenant-scoped invoice.
+        const installments = await prisma.tripInstalmentPayment.findMany({
+          where: { invoiceId: id, tripId: invoice.tripId, participantId: invoice.participantId },
+          select: { paidAmount: true },
+        });
+        if (installments.length) {
+          amountPaid = installments.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0);
         }
       }
+
+      // TravelInvoice stores only contactId. Resolve the tenant's Contact for
+      // the PDF; a genuinely deleted contact can still render as unavailable.
+      const contact = invoice.contactId == null ? null : await prisma.contact.findFirst({
+        where: { id: invoice.contactId, tenantId: req.travelTenant.id },
+        select: { name: true, email: true, phone: true, company: true,
+          gst: true, stateCode: true, billingStateCode: true },
+      });
 
       // Tenant is optional input to the helper — load it for the footer
       // line. Failure to load (e.g. soft-deleted tenant) is non-fatal;
@@ -5822,18 +5830,62 @@ router.get(
         // ignore — proceed with null tenant
       }
 
+      const activeKit = prisma.brandKit?.findFirst
+        ? await prisma.brandKit.findFirst({
+          where: { tenantId: req.travelTenant.id, subBrand: invoice.subBrand, isActive: true },
+          orderBy: { version: "desc" },
+          select: { logoUrl: true, logoDarkUrl: true, wordmarkUrl: true,
+            primaryColor: true, accentColor: true, supportEmail: true, supportPhone: true },
+        }).catch(() => null)
+        : null;
+
+      const [trip, itinerary] = await Promise.all([
+        invoice.tripId && prisma.tmcTrip?.findFirst
+          ? prisma.tmcTrip.findFirst({ where: { id: invoice.tripId, tenantId: req.travelTenant.id },
+            select: { tripCode: true, destination: true, departDate: true, returnDate: true } }).catch(() => null) : null,
+        invoice.itineraryId && prisma.itinerary?.findFirst
+          ? prisma.itinerary.findFirst({ where: { id: invoice.itineraryId, tenantId: req.travelTenant.id },
+            select: { destination: true, startDate: true, endDate: true, pax: true } }).catch(() => null) : null,
+      ]);
+      const participant = invoice.participantId && trip && prisma.tripParticipant?.findFirst
+        ? await prisma.tripParticipant.findFirst({ where: { id: invoice.participantId, tripId: invoice.tripId },
+          select: { fullName: true } }).catch(() => null) : null;
+
       let pdfBuffer;
       try {
         pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({
           invoice: {
             ...invoice,
             amountPaid,
+            paymentTransactions,
             contactName: contact?.name || null,
             contactEmail: contact?.email || null,
             contactPhone: contact?.phone || null,
+            contactCompany: contact?.company || null,
+            contactGstin: contact?.gst || null,
+            destination: trip?.destination || itinerary?.destination || null,
+            travellerName: participant?.fullName || (itinerary?.pax ? `${itinerary.pax} traveller(s)` : null),
+            tripReference: trip?.tripCode || null,
+            travelStartDate: trip?.departDate || itinerary?.startDate || null,
+            travelEndDate: trip?.returnDate || itinerary?.endDate || null,
+            placeOfSupplyInterstate: tenant?.gstStateCode && (invoice.placeOfSupply || contact?.billingStateCode || contact?.stateCode)
+              ? isInterstateSupply(tenant.gstStateCode, invoice.placeOfSupply || contact.billingStateCode || contact.stateCode)
+              : false,
           },
           lines,
           tenant,
+          branding: activeKit ? {
+            ...((activeKit.logoUrl || activeKit.wordmarkUrl || activeKit.logoDarkUrl)
+              ? { thumbnailUrl: activeKit.logoUrl || activeKit.wordmarkUrl || activeKit.logoDarkUrl }
+              : {}),
+            logoCandidates: [activeKit.logoUrl, activeKit.wordmarkUrl, activeKit.logoDarkUrl].filter(Boolean),
+            ...(activeKit.primaryColor ? { primaryColor: activeKit.primaryColor } : {}),
+            ...(activeKit.accentColor ? { accentColor: activeKit.accentColor } : {}),
+          } : undefined,
+          identity: activeKit ? {
+            ...(activeKit.supportEmail ? { email: activeKit.supportEmail } : {}),
+            ...(activeKit.supportPhone ? { phone: activeKit.supportPhone } : {}),
+          } : undefined,
         });
       } catch (renderErr) {
         console.error(
@@ -7522,6 +7574,11 @@ function isPaymentLinkedToTravelInvoice(payment, meta, invoiceId) {
 }
 
 async function successfulTravelInvoicePaymentTotal(tenantId, invoiceId) {
+  const payments = await successfulTravelInvoicePayments(tenantId, invoiceId);
+  return payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+}
+
+async function successfulTravelInvoicePayments(tenantId, invoiceId) {
   try {
     const candidates = await prisma.payment.findMany({
       where: {
@@ -7531,14 +7588,23 @@ async function successfulTravelInvoicePaymentTotal(tenantId, invoiceId) {
           { metadata: { contains: `\"travelInvoiceId\":${invoiceId}` } },
         ],
       },
-      select: { id: true, invoiceId: true, amount: true, status: true, metadata: true },
+      orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
+      select: { id: true, invoiceId: true, amount: true, currency: true, gateway: true,
+        gatewayId: true, paidAt: true, createdAt: true, status: true, metadata: true },
     });
     return candidates
       .map((pmt) => ({ pmt, meta: parsePaymentMetadata(pmt.metadata) }))
       .filter(({ pmt, meta }) => isSuccessfulPaymentStatus(pmt.status) && isPaymentLinkedToTravelInvoice(pmt, meta, invoiceId))
-      .reduce((sum, { pmt }) => sum + Number(pmt.amount || 0), 0);
+      .map(({ pmt }) => ({
+        id: pmt.id,
+        amount: Number(pmt.amount || 0),
+        currency: pmt.currency || null,
+        method: pmt.gateway || null,
+        reference: pmt.gatewayId || null,
+        paidAt: pmt.paidAt || pmt.createdAt || null,
+      }));
   } catch (_e) {
-    return 0;
+    return [];
   }
 }
 

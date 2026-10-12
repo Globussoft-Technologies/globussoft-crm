@@ -104,7 +104,7 @@ export default function FunnelPage() {
   );
 
   return (
-    <div style={{ padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="funnel-page" style={{ padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem', animation: 'fadeIn 0.5s ease-out' }}>
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -150,7 +150,7 @@ export default function FunnelPage() {
       </div>
 
       {/* Funnel + Velocity */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', gap: '1.5rem' }}>
         <div style={cardStyle}>
           <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <BarChart3 size={18} /> Funnel by Stage
@@ -175,7 +175,7 @@ export default function FunnelPage() {
                     }}
                   />
                   <Funnel dataKey="value" data={funnelData} isAnimationActive>
-                    <LabelList position="right" fill="var(--text-primary)" stroke="none" dataKey="name" />
+                    <LabelList className="funnel-chart-stage-label" position="right" fill="var(--text-primary)" stroke="none" dataKey="name" />
                     <LabelList position="center" fill="#fff" stroke="none" dataKey="value" />
                   </Funnel>
                 </FunnelChart>
@@ -183,7 +183,7 @@ export default function FunnelPage() {
               {/* Stacked stage breakdown table */}
               <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                 {funnelData.map((s, i) => (
-                  <div key={s.name} style={{
+                  <div key={s.name} className="funnel-stage-row" style={{
                     display: 'grid',
                     gridTemplateColumns: '110px 1fr auto',
                     alignItems: 'center',
@@ -258,7 +258,7 @@ export default function FunnelPage() {
       </div>
 
       {/* Tables */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: '1.5rem' }}>
         <div style={cardStyle}>
           <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.05rem' }}>Conversion by Source</h3>
           {bySource.length === 0 ? (
@@ -294,8 +294,8 @@ export default function FunnelPage() {
           {byRep.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)' }}>No rep data.</p>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+            <div className="funnel-rep-scroll" role="region" aria-label="Rep performance columns" tabIndex={0} style={{ overflowX: 'auto' }}>
+              <table className="funnel-rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
                     <th style={{ padding: '0.5rem 0.6rem' }}>Rep</th>

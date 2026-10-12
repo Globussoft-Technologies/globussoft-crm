@@ -211,13 +211,13 @@ export default function PickupInventory() {
   };
 
   return (
-    <div data-testid="pickup-inventory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
+    <div className="pickup-inventory-page" data-testid="pickup-inventory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><MapPin size={28} /> Pickup Inventory</h1>
           <p style={{ margin: '0.4rem 0 0', color: 'var(--text-secondary)' }}>Track pickup-address capacity, assignments, dates, and map locations.</p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flex: '1 1 620px', maxWidth: 900, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+        <div className="pickup-inventory-controls" style={{ display: 'flex', gap: 8, flex: '1 1 620px', maxWidth: 900, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
           <label style={{ position: 'relative', flex: '1 1 240px', minWidth: 220 }}>
             <Search size={16} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input className="input-field" type="search" aria-label="Search pickup inventory" placeholder="Search pickup locations..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 36 }} />
@@ -236,13 +236,13 @@ export default function PickupInventory() {
               <option value="inactive">Inactive</option>
             </select>
           </label>
-          <button type="button" className="btn-secondary" onClick={load} disabled={loading} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><RefreshCw size={15} /> Refresh</button>
-          <button type="button" className="btn-primary" onClick={openAddLocation} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><Plus size={15} /> Add Pickup Location</button>
+          <button type="button" className="btn-secondary pickup-inventory-refresh" onClick={load} disabled={loading} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><RefreshCw size={15} /> Refresh</button>
+          <button type="button" className="btn-primary pickup-inventory-add" onClick={openAddLocation} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><Plus size={15} /> Add Pickup Location</button>
         </div>
       </header>
 
       {error && <div role="alert" className="card" style={{ padding: '1rem', color: 'var(--danger-color, #dc2626)' }}>{error}</div>}
-      {loading ? <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</div> : (
+      {loading ? <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</div> : !error && (
         <div
           className="card pickup-plot-table-scroll"
           data-testid="pickup-inventory-table-scroll"

@@ -533,13 +533,13 @@ export default function PickupPlotPeopleDirectory({ type }) {
   }, [completedTransportCustomerIds, customerOptions, editing?.id, form.plotSiteIds, type]);
 
   return (
-    <div data-testid={`${type}-directory-page`} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
+    <div className="pickup-person-directory-page" data-testid={`${type}-directory-page`} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><Icon size={28} /> {config.title}</h1>
           <p style={{ color: 'var(--text-secondary)', margin: '0.4rem 0 0' }}>{config.description}</p>
         </div>
-        <div aria-label={`${config.title} filters`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '1 1 520px', maxWidth: 760 }}>
+        <div className="pickup-person-directory-controls" aria-label={`${config.title} filters`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '1 1 520px', maxWidth: 760 }}>
           <input
             className="input-field"
             type="search"

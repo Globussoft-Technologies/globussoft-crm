@@ -243,14 +243,14 @@ export default function Reports() {
       </div>
 
 
-      <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+      <header className="reports-page__header" style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Reports & Analytics</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Business intelligence dashboard — real-time revenue, pipeline, and deal analytics.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div className="reports-page__header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div className="reports-page__date-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexDirection: 'column' }}>
+            <div className="reports-page__date-row" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Calendar size={16} color="var(--text-secondary)" />
               <input type="date" className="input-field" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
               <span style={{ color: 'var(--text-secondary)' }}>to</span>
@@ -344,7 +344,8 @@ export default function Reports() {
               </h3>
             </div>
 
-            <div style={{ position: 'relative', height: '450px', minHeight: '350px', minWidth: 0 }}>
+            <div className="reports-page__chart-scroll">
+            <div className="reports-page__chart-stage" style={{ position: 'relative', height: '450px', minHeight: '350px', minWidth: 0 }}>
               {loading ? (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>Crunching metrics...</div>
               ) : data.length === 0 ? (
@@ -397,6 +398,7 @@ export default function Reports() {
                   )}
                 </ResponsiveContainer>
               )}
+            </div>
             </div>
           </div>
         </div>

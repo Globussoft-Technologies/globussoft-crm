@@ -374,9 +374,9 @@ describe('<Recommendations /> — mount fetch + card render', () => {
     ).toBeGreaterThanOrEqual(1);
   });
 
-  it('loads additional cards when the scroll container reaches the bottom', async () => {
+  it('loads additional cards on request without a nested scroll area', async () => {
     const manyPending = Array.from({ length: 12 }, (_, index) =>
-      makePendingRec(5000 + index, `Scrollable recommendation ${index + 1}`),
+      makePendingRec(5000 + index, `Recommendation ${index + 1}`),
     );
     installFetchMock({ filteredList: manyPending, allList: manyPending });
     renderPage();
@@ -385,7 +385,7 @@ describe('<Recommendations /> — mount fetch + card render', () => {
       expect(
         screen.getByRole('heading', {
           level: 3,
-          name: /^Scrollable recommendation 1$/i,
+          name: /^Recommendation 1$/i,
         }),
       ).toBeInTheDocument();
     });
@@ -393,20 +393,18 @@ describe('<Recommendations /> — mount fetch + card render', () => {
     expect(
       screen.queryByRole('heading', {
         level: 3,
-        name: /Scrollable recommendation 11/i,
+        name: /Recommendation 11/i,
       }),
     ).toBeNull();
 
-    const scrollContainer = screen.getByTestId('recommendations-list-scroll');
-    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
-    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
-    scrollContainer.scrollTop = 728;
-    fireEvent.scroll(scrollContainer);
+    const list = screen.getByTestId('recommendations-list');
+    expect(list.style.overflowY).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more recommendations' }));
 
     expect(
       await screen.findByRole('heading', {
         level: 3,
-        name: /Scrollable recommendation 11/i,
+        name: /Recommendation 11/i,
       }),
     ).toBeInTheDocument();
   });

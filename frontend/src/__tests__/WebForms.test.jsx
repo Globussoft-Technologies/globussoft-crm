@@ -214,6 +214,25 @@ describe('public web form embed footer', () => {
     expect(html).not.toContain('overflow-y:auto;overflow-x:hidden');
   });
 
+  test('shows the WhatsApp validation message only when it is active', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const style = document.createElement('style');
+    style.textContent = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] || '';
+    const error = document.createElement('span');
+    error.className = 'field-error';
+    error.hidden = true;
+    document.head.appendChild(style);
+    document.body.appendChild(error);
+    try {
+      expect(getComputedStyle(error).display).toBe('none');
+      error.hidden = false;
+      expect(getComputedStyle(error).display).toBe('block');
+    } finally {
+      error.remove();
+      style.remove();
+    }
+  });
+
   test('applies configured form and submit-button colors through CSS variables', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 

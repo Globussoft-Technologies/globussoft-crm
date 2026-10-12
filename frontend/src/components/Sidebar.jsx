@@ -1682,6 +1682,17 @@ function WellnessNavGroup({
         >
           <Icon size={20} />
           <span style={{ flex: 1 }}>{label}</span>
+          {isMobileViewport && (
+            <ChevronDown
+              size={16}
+              aria-hidden="true"
+              style={{
+                flexShrink: 0,
+                transform: isOpen ? "rotate(180deg)" : "none",
+                transition: "transform 0.18s ease",
+              }}
+            />
+          )}
         </button>
       </div>
   );
@@ -1860,6 +1871,10 @@ function renderWellnessNav({
     // remains reachable via deep-link.
   };
 
+  const adminCatalogItems = byCategory["Admin"] || [];
+  const settingsPage = adminCatalogItems.find((page) => page.path === "/settings");
+  const otherAdminItems = adminCatalogItems.filter((page) => page.path !== "/settings");
+
   return (
     <>
       {/* Core + Manager render at the top with no section header  they're
@@ -1909,7 +1924,7 @@ function renderWellnessNav({
           the sidebar, below day-to-day operational entries (Leads & Revenue,
           Finance, etc.). Catalog-driven entries pulled from /api/pages/me 
           Locations, Staff, Roles, Commission Profiles, Revenue Goals,
-          Channels, Approvals, Audit Log, Privacy, Settings. These are
+          Channels, Approvals, Audit Log, Privacy. These are
           gated by the user's RolePermission grants, so a non-literal-ADMIN
           custom role with `roles.read` (etc.) still sees the subset of
           admin pages it can access.
@@ -1918,43 +1933,24 @@ function renderWellnessNav({
           Bonus Rules sidebar shortcuts were removed by request  the
           underlying routes stay mounted in App.jsx and remain reachable
           via deep-link (e.g. CapBanners' "Tenant Settings ?? ?" anchor). */}
-      {(() => {
-        const adminCatalogItems = byCategory["Admin"] || [];
-        // Pull Settings out of the catalog admin list  it MUST render
-        // last in the sidebar per UX requirement. If the user lacks
-        // settings.read, /api/pages/me already filtered Settings out so
-        // settingsPage is undefined and nothing renders for it  the
-        // matrix-is-authoritative contract stays intact.
-        const settingsPage = adminCatalogItems.find(
-          (p) => p.path === "/settings",
-        );
-        const otherAdminItems = adminCatalogItems.filter(
-          (p) => p.path !== "/settings",
-        );
-        if (otherAdminItems.length === 0 && !settingsPage) {
-          return null;
-        }
-        return (
-          <WellnessNavGroup
-            label="Admin"
-            paths={adminCatalogItems.map((page) => page.path)}
-            moduleColor={labelStyle.color}
-            isMobileViewport={isMobileViewport}
-            activeGroup={openWellnessGroup}
-            onActivate={onOpenWellnessGroup}
-          >
-            {otherAdminItems.map(renderPage)}
-            {/* Settings  pinned LAST in the sidebar per UX requirement.
-                Only renders if /api/pages/me granted access (i.e. the
-                user has settings.read on at least one assigned role). */}
-            {settingsPage && renderPage(settingsPage)}
-          </WellnessNavGroup>
-        );
-      })()}
-
-      {!isAdmin && isManager && (
-        <Link to="/settings" icon={Settings} label="Settings" />
+      {otherAdminItems.length > 0 && (
+        <WellnessNavGroup
+          label="Admin"
+          paths={otherAdminItems.map((page) => page.path)}
+          moduleColor={labelStyle.color}
+          isMobileViewport={isMobileViewport}
+          activeGroup={openWellnessGroup}
+          onActivate={onOpenWellnessGroup}
+        >
+          {otherAdminItems.map(renderPage)}
+        </WellnessNavGroup>
       )}
+
+      {/* Keep Settings after Admin as a direct link. The catalog controls
+          visibility for admins; the existing manager fallback is retained. */}
+      {settingsPage
+        ? renderPage(settingsPage)
+        : (!isAdmin && isManager && <Link to="/settings" icon={Settings} label="Settings" />)}
 
       {/* Notification Settings is rendered via the page-catalog "User"
           category iteration above (WELLNESS_CATEGORY_ORDER loop). The

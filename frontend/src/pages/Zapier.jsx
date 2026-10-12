@@ -75,8 +75,8 @@ export default function Zapier() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="zapier-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="zapier-page-header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <div style={{
             width: 56, height: 56, borderRadius: 12,
@@ -109,7 +109,7 @@ export default function Zapier() {
         <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Plug size={20} color="var(--accent-color)" /> Connect to Zapier
         </h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.5rem' }}>
+        <div className="zapier-setup-steps" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.5rem' }}>
           {[
             {
               n: 1,
@@ -127,7 +127,7 @@ export default function Zapier() {
               body: <>Paste the API key when Zapier prompts. Your Zap will then map any of the triggers / actions below.</>
             }
           ].map(s => (
-            <div key={s.n} style={{
+            <div key={s.n} className="zapier-setup-step" style={{
               padding: '1.5rem',
               background: 'var(--subtle-bg-2)',
               border: '1px solid var(--border-color)',
@@ -163,6 +163,7 @@ export default function Zapier() {
             ({triggers.length}) — events that start a Zap
           </span>
         </h3>
+        <div className="zapier-table-scroll">
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
@@ -197,6 +198,7 @@ export default function Zapier() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Section 3: Actions */}
@@ -207,6 +209,7 @@ export default function Zapier() {
             ({actions.length}) — operations Zapier can perform in your CRM
           </span>
         </h3>
+        <div className="zapier-table-scroll">
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
@@ -243,6 +246,7 @@ export default function Zapier() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Section 4: Active Subscriptions */}

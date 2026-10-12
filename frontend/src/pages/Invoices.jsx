@@ -1076,8 +1076,8 @@ export default function Invoices() {
       }`}
       style={{
         padding: "2rem",
-        height: "100%",
-        overflowY: "auto",
+        minHeight: "100%",
+        boxSizing: "border-box",
         animation: "fadeIn 0.5s ease-out",
       }}
     >
@@ -2228,7 +2228,7 @@ export default function Invoices() {
       )}
 
       {/* Invoice Table */}
-      <div className="card" style={{ padding: "1.5rem" }}>
+      <div className="card" style={{ padding: "1.5rem", minWidth: 0, overflowX: "hidden" }}>
         <h3
           style={{
             fontSize: "1.15rem",
@@ -2292,6 +2292,7 @@ export default function Invoices() {
           <>
             <div className="invoice-table-scroll">
               <TopScrollSync
+                hideTopBar
                 scrollWidth={`${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`}
               >
               {/* #243: table-layout fixed + per-column widths so the Contact

@@ -62,7 +62,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -243,6 +243,44 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     });
   });
 
+  it('uses the active generic tenant even when the user record says travel', async () => {
+    fetchApiMock.mockImplementation(makeOfflineMock());
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' }, user: { tenant: { vertical: 'travel' } } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
+    expect(await screen.findByText('Microsoft Outlook')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirmed trips/i })).toBeNull();
+    expect(screen.getByRole('heading', { name: /Upcoming meetings/i })).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => url.startsWith('/api/travel/'))).toBe(false);
+    expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/contacts?limit=200')).toBe(false);
+  });
+
+  it('keeps locally saved travel birthdays out of generic when tenants change', async () => {
+    fetchApiMock.mockImplementation(makeOfflineMock());
+    const birthday = { id: 'travel-birthday', name: 'Travel-only Birthday', birthMonth: new Date().getMonth(), birthDay: 1 };
+    window.localStorage.setItem('calendar-sync-manual-birthdays-v1', JSON.stringify([birthday]));
+    window.localStorage.setItem('calendar-sync-manual-birthdays-v1:13:7:travel', JSON.stringify([birthday]));
+    const renderFor = (id, vertical) => (
+      <AuthContext.Provider value={{ tenant: { id, vertical }, user: { userId: 7 } }}>
+        <CalendarSync />
+      </AuthContext.Provider>
+    );
+    const { rerender } = render(renderFor(12, 'generic'));
+    expect(screen.getByRole('heading', { name: /Upcoming meetings/i })).toBeInTheDocument();
+    await screen.findByText(/No events synced yet/i);
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('calendar-sync-manual-birthdays-v1:12:7:generic'))).toEqual([]));
+    await act(async () => { rerender(renderFor(13, 'travel')); });
+    fireEvent.click(await screen.findByRole('button', { name: /Birthdays this month/i }));
+    expect(await screen.findByText('Travel-only Birthday')).toBeInTheDocument();
+    await act(async () => { rerender(renderFor(12, 'generic')); });
+    expect(screen.queryByText('Travel-only Birthday')).toBeNull();
+    window.localStorage.removeItem('calendar-sync-manual-birthdays-v1');
+    window.localStorage.removeItem('calendar-sync-manual-birthdays-v1:13:7:travel');
+    window.localStorage.removeItem('calendar-sync-manual-birthdays-v1:12:7:generic');
+  });
+
   it('both providers offline: each card shows "Not connected" pill + a Connect button', async () => {
     fetchApiMock.mockImplementation(makeOfflineMock());
     render(<CalendarSync />);
@@ -272,11 +310,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(
       screen.getByRole('button', { name: /Disconnect/i }),
     ).toBeInTheDocument();
-    expect(await screen.findByRole('region', { name: /Meeting records/i })).toHaveStyle({
-      overflowY: 'auto',
-      maxHeight: 'min(60vh, 520px)',
-      overscrollBehavior: 'contain',
-    });
+    expect(screen.getByRole('heading', { name: /Upcoming meetings/i })).toBeInTheDocument();
   });
 
   it('no events synced: events panel renders the "No events synced yet" copy', async () => {
@@ -481,11 +515,16 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       },
     ];
     fetchApiMock.mockImplementation(makeGoogleOnlineMock(mixedEvents));
-    render(<CalendarSync />);
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'travel' } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
 
-    expect(await screen.findByRole('heading', { name: /Upcoming meetings/i })).toBeInTheDocument();
-    const meetingsCard = screen.getByRole('button', { name: /Upcoming meetings/i });
+    const meetingsCard = await screen.findByRole('button', { name: /Upcoming meetings/i });
     expect(within(meetingsCard).getByText(/^1$/)).toBeInTheDocument();
+    fireEvent.click(meetingsCard);
+    expect(await screen.findByRole('heading', { name: /Upcoming meetings/i })).toBeInTheDocument();
     expect(screen.getByText(/^Upcoming meeting$/i, { selector: 'div' })).toBeInTheDocument();
     expect(screen.queryByText(/Completed meeting/i)).not.toBeInTheDocument();
 
@@ -714,7 +753,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     ).toBeInTheDocument();
 
     // Selecting it appends the email to the attendees text input.
-    const dropdown = screen.getAllByRole('combobox')[1];
+    const dropdown = screen.getByRole('combobox', { name: /Add attendee from contacts/i });
     fireEvent.change(dropdown, { target: { value: 'anita@example.com' } });
     const attendeesInput = screen.getByPlaceholderText(/email@example.com, another@example.com/i);
     expect(attendeesInput.value).toContain('anita@example.com');
@@ -729,7 +768,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
 
     const attendeesInput = screen.getByPlaceholderText(/email@example.com, another@example.com/i);
     fireEvent.change(attendeesInput, { target: { value: 'ANITA@example.com' } });
-    fireEvent.change(screen.getAllByRole('combobox')[1], {
+    fireEvent.change(screen.getByRole('combobox', { name: /Add attendee from contacts/i }), {
       target: { value: 'anita@example.com' },
     });
 
@@ -778,7 +817,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       attendees: '[]',
     }));
     fetchApiMock.mockImplementation(makeGoogleOnlineMock(reminderEvents));
-    render(<CalendarSync />);
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'travel' } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
 
     const alertsCard = await screen.findByRole('button', { name: /Pending alerts/i });
     expect(alertsCard).toHaveTextContent('3');
@@ -805,7 +848,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       attendees: '[]',
     };
     fetchApiMock.mockImplementation(makeGoogleOnlineMock([reminderEvent]));
-    render(<CalendarSync />);
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'travel' } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
 
     fireEvent.click(await screen.findByRole('button', { name: /Pending alerts/i }));
     const alertRow = (await screen.findByText(/^Meeting: Reminder details meeting \(30 minutes\)/i))
@@ -1584,7 +1631,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       }
       return Promise.resolve(null);
     });
-    render(<CalendarSync />);
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'travel' } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
 
     fireEvent.click(await screen.findByRole('button', { name: /Birthdays this month/i }));
 

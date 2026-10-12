@@ -63,6 +63,13 @@ prisma.travelPaymentSchedule = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.brandKit = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.payment = { findMany: vi.fn().mockResolvedValue([]) };
+prisma.contact = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.tmcTrip = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.itinerary = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.tripParticipant = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.tripInstalmentPayment = { findMany: vi.fn().mockResolvedValue([]) };
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
@@ -151,6 +158,13 @@ beforeEach(() => {
   prisma.travelInvoice.findMany.mockReset();
   prisma.travelInvoiceLine.findMany.mockReset().mockResolvedValue([]);
   prisma.travelPaymentSchedule.findMany.mockReset().mockResolvedValue([]);
+  prisma.brandKit.findFirst.mockReset().mockResolvedValue(null);
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tmcTrip.findFirst.mockReset().mockResolvedValue(null);
+  prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -375,5 +389,102 @@ describe('GET /api/travel/invoices/:id/pdf', () => {
     // (45000 - 22500). Can't precisely extract from binary PDF, but we
     // verify that the render succeeds (if the balance calc threw an error,
     // it would fail above).
+  });
+
+  test('uses successful linked payments without counting a schedule receipt twice', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(sourceInvoice({ status: 'Paid' }));
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([{ receivedAmount: 20000 }]);
+    prisma.payment.findMany.mockResolvedValue([
+      { id: 1, invoiceId: 100, status: 'SUCCESS', amount: 45000,
+        metadata: JSON.stringify({ type: 'travel-invoice-manual-payment' }) },
+      { id: 2, invoiceId: 100, status: 'SUCCESS', amount: 999,
+        metadata: JSON.stringify({ type: 'generic-invoice' }) },
+    ]);
+    const render = vi.spyOn(pdfRenderer, 'generateTravelInvoicePdf').mockResolvedValue(Buffer.from('%PDF-test'));
+    try {
+      const res = await request(makeApp()).get('/api/travel/invoices/100/pdf')
+        .set('Authorization', `Bearer ${tokenFor('ADMIN')}`).buffer(true).parse(bufferParser);
+      expect(res.status).toBe(200);
+      expect(render.mock.calls[0][0].invoice.amountPaid).toBe(45000);
+      expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1 }),
+      }));
+    } finally { render.mockRestore(); }
+  });
+
+  test('uses TMC participant installment receipts when an invoice belongs to a trip', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(sourceInvoice({ tripId: 55, participantId: 77, status: 'Paid' }));
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{ paidAmount: 10000 }, { paidAmount: 15000 }]);
+    const render = vi.spyOn(pdfRenderer, 'generateTravelInvoicePdf').mockResolvedValue(Buffer.from('%PDF-test'));
+    try {
+      const res = await request(makeApp()).get('/api/travel/invoices/100/pdf')
+        .set('Authorization', `Bearer ${tokenFor('ADMIN')}`).buffer(true).parse(bufferParser);
+      expect(res.status).toBe(200);
+      expect(render.mock.calls[0][0].invoice.amountPaid).toBe(25000);
+      expect(prisma.tripInstalmentPayment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { invoiceId: 100, tripId: 55, participantId: 77 },
+      }));
+    } finally { render.mockRestore(); }
+  });
+
+  test('passes only tenant and sub-brand scoped identity and trip data to the renderer', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(sourceInvoice({ tripId: 55, participantId: 77 }));
+    prisma.contact.findFirst.mockImplementation(async ({ select }) => {
+      const validFields = new Set(['name', 'email', 'phone', 'company', 'gst', 'stateCode', 'billingStateCode']);
+      if (Object.keys(select).some((field) => !validFields.has(field))) {
+        throw new Error('Unknown Contact field selected');
+      }
+      return { name: 'School', email: 'school@example.com', gst: '29ABCDE1234F1Z5' };
+    });
+    prisma.brandKit.findFirst.mockResolvedValue({ logoUrl: '/uploads/brand-kits/1/tmc/logo.png' });
+    prisma.tmcTrip.findFirst.mockResolvedValue({ tripCode: 'TRIP55', destination: 'Jaipur', departDate: new Date('2026-11-01') });
+    prisma.tripParticipant.findFirst.mockResolvedValue({ fullName: 'Traveller' });
+    const render = vi.spyOn(pdfRenderer, 'generateTravelInvoicePdf').mockResolvedValue(Buffer.from('%PDF-test'));
+    try {
+      const res = await request(makeApp()).get('/api/travel/invoices/100/pdf')
+        .set('Authorization', `Bearer ${tokenFor('ADMIN')}`).buffer(true).parse(bufferParser);
+      expect(res.status).toBe(200);
+      expect(prisma.brandKit.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: { tenantId: 1, subBrand: 'tmc', isActive: true },
+      }));
+      expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 55, tenantId: 1 },
+      }));
+      expect(prisma.contact.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: sourceInvoice().contactId, tenantId: 1 },
+        select: expect.objectContaining({ name: true, gst: true }),
+      }));
+      expect(render.mock.calls[0][0]).toMatchObject({
+        branding: { thumbnailUrl: '/uploads/brand-kits/1/tmc/logo.png' },
+        invoice: { contactName: 'School', contactEmail: 'school@example.com', contactGstin: '29ABCDE1234F1Z5',
+          destination: 'Jaipur', travellerName: 'Traveller' },
+      });
+    } finally { render.mockRestore(); }
+  });
+
+  test('passes successful tenant-scoped payment references and methods to the PDF', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(sourceInvoice({ status: 'Paid' }));
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 901, invoiceId: 100, amount: 45000, currency: 'INR',
+      gateway: 'razorpay', gatewayId: 'pay_abc123', status: 'SUCCESS',
+      paidAt: new Date('2026-10-01'), createdAt: new Date('2026-10-01'),
+      metadata: JSON.stringify({ type: 'travel-invoice-manual-payment' }),
+    }]);
+    const render = vi.spyOn(pdfRenderer, 'generateTravelInvoicePdf').mockResolvedValue(Buffer.from('%PDF-test'));
+    try {
+      const res = await request(makeApp()).get('/api/travel/invoices/100/pdf')
+        .set('Authorization', `Bearer ${tokenFor('ADMIN')}`).buffer(true).parse(bufferParser);
+      expect(res.status).toBe(200);
+      expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1 }),
+        select: expect.objectContaining({ gateway: true, gatewayId: true }),
+      }));
+      expect(render.mock.calls[0][0].invoice).toMatchObject({
+        amountPaid: 45000,
+        paymentTransactions: [{
+          amount: 45000, currency: 'INR', method: 'razorpay', reference: 'pay_abc123',
+        }],
+      });
+    } finally { render.mockRestore(); }
   });
 });

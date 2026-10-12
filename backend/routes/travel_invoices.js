@@ -5786,29 +5786,20 @@ router.get(
       // rows → entire totalAmount is outstanding.
       const schedule = await prisma.travelPaymentSchedule.findMany({
         where: { invoiceId: id, tenantId: req.travelTenant.id },
-        select: { receivedAmount: true, expectedAmount: true, status: true },
+        select: { id: true, receivedAmount: true, expectedAmount: true, status: true },
       });
-      let schedulePaid = 0;
-      for (const s of schedule) {
-        const r = Number(s.receivedAmount != null ? s.receivedAmount : s.status === "paid" ? s.expectedAmount : 0);
-        if (Number.isFinite(r)) schedulePaid += r;
-      }
-      // Gateway/manual Payment rows can exist without a schedule. A receipt
-      // may also update both stores, so use the larger recorded total.
       const paymentTransactions = await successfulTravelInvoicePayments(req.travelTenant.id, id);
-      const paymentPaid = paymentTransactions.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-      let amountPaid = Math.max(schedulePaid, paymentPaid);
+      let installments = [];
       if (invoice.tripId && invoice.participantId) {
         // TMC participant invoices settle through installments. This model
         // has no tenantId; all three IDs come from the tenant-scoped invoice.
-        const installments = await prisma.tripInstalmentPayment.findMany({
+        installments = await prisma.tripInstalmentPayment.findMany({
           where: { invoiceId: id, tripId: invoice.tripId, participantId: invoice.participantId },
-          select: { paidAmount: true },
+          select: { id: true, paidAmount: true },
         });
-        if (installments.length) {
-          amountPaid = installments.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0);
-        }
       }
+      const { travelInvoiceReceiptTotal } = require('../lib/travelInvoiceReceiptTotal');
+      const amountPaid = travelInvoiceReceiptTotal(schedule, paymentTransactions, installments);
 
       // TravelInvoice stores only contactId. Resolve the tenant's Contact for
       // the PDF; a genuinely deleted contact can still render as unavailable.
@@ -5857,7 +5848,7 @@ router.get(
           invoice: {
             ...invoice,
             amountPaid,
-            paymentTransactions,
+            paymentTransactions: paymentTransactions.map(({ receiptMetadata: _receiptMetadata, ...payment }) => payment),
             contactName: contact?.name || null,
             contactEmail: contact?.email || null,
             contactPhone: contact?.phone || null,
@@ -7595,8 +7586,9 @@ async function successfulTravelInvoicePayments(tenantId, invoiceId) {
     return candidates
       .map((pmt) => ({ pmt, meta: parsePaymentMetadata(pmt.metadata) }))
       .filter(({ pmt, meta }) => isSuccessfulPaymentStatus(pmt.status) && isPaymentLinkedToTravelInvoice(pmt, meta, invoiceId))
-      .map(({ pmt }) => ({
+      .map(({ pmt, meta }) => ({
         id: pmt.id,
+        receiptMetadata: meta,
         amount: Number(pmt.amount || 0),
         currency: pmt.currency || null,
         method: pmt.gateway || null,

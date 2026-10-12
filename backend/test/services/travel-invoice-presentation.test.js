@@ -108,6 +108,12 @@ describe('travel invoice A4 presentation', () => {
   });
 
   test('prints configured seller details and actual place of supply without placeholders', async () => {
+    const addressPages = await readPdf(await generateTravelInvoicePdf({
+      invoice, lines: [line], tenant: { id: 1, name: 'Seller', subBrandConfigJson: JSON.stringify({
+        tmc: { registeredOffice: {}, address: '42 Fallback Street' },
+      }) },
+    }));
+    expect(addressPages.join(' ')).toContain('42 Fallback Street');
     const tenant = { id: 1, name: 'Example Travels Pvt Ltd', subBrandConfigJson: JSON.stringify({
       tmc: { displayName: 'TMC School Trips', gstin: '29ABCDE1234F1Z5', website: 'example.test',
         termsAndConditions: 'Booking terms apply.' },

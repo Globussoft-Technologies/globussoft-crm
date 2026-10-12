@@ -80,7 +80,7 @@ function invoiceFixture(overrides = {}) {
   return {
     id: 100,
     invoiceNum: 'TINV-2026-0042',
-    subBrand: 'tmc',
+    subBrand: 'travelstall', // Tax-document contract; TMC suppression is covered in presentation tests.
     status: 'Issued',
     totalAmount: '45000.00',
     currency: 'INR',
@@ -196,7 +196,7 @@ describe('renderTravelInvoicePdf — docType-aware header + legal footer', () =>
 
   test('docType=TravelVoucher → "TRAVEL VOUCHER" header + voucher legal line', async () => {
     const buf = await generateTravelInvoicePdf({
-      invoice: invoiceFixture({ docType: 'TravelVoucher' }),
+      invoice: invoiceFixture({ docType: 'TravelVoucher', subBrand: 'tmc' }),
       lines: sampleLines(),
     });
     const text = extractPdfText(buf);

@@ -87,7 +87,7 @@ function invoiceFixture(overrides = {}) {
   return {
     id: 200,
     invoiceNum: 'TINV-2026-0099',
-    subBrand: 'tmc',
+    subBrand: 'travelstall', // Taxable sub-brand; TMC deliberately omits GST/SAC presentation.
     status: 'Issued',
     totalAmount: '45000.00',
     currency: 'INR',

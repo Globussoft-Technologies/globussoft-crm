@@ -393,10 +393,10 @@ describe('GET /api/travel/invoices/:id/pdf', () => {
 
   test('uses successful linked payments without counting a schedule receipt twice', async () => {
     prisma.travelInvoice.findFirst.mockResolvedValue(sourceInvoice({ status: 'Paid' }));
-    prisma.travelPaymentSchedule.findMany.mockResolvedValue([{ receivedAmount: 20000 }]);
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([{ id: 71, receivedAmount: 20000 }]);
     prisma.payment.findMany.mockResolvedValue([
       { id: 1, invoiceId: 100, status: 'SUCCESS', amount: 45000,
-        metadata: JSON.stringify({ type: 'travel-invoice-manual-payment' }) },
+        metadata: JSON.stringify({ type: 'travel-payment-schedule', scheduleId: 71 }) },
       { id: 2, invoiceId: 100, status: 'SUCCESS', amount: 999,
         metadata: JSON.stringify({ type: 'generic-invoice' }) },
     ]);

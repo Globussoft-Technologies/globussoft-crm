@@ -57,7 +57,9 @@ function renderTravelInvoiceLayout({ invoice, lines, tenant, branding, logoBuffe
     cfg.companyLegalName || cfg.legalEntityName || legalEntity.legalName || legalEntity.name ||
     company.legalName || cfg.companyName || company.name || tenant?.name || cfg.displayName || brandLabel || "Travel CRM");
   const addressValue = cfg.registeredAddress || cfg.registeredOfficeAddress || cfg.legalAddress ||
-    cfg.companyAddress || registeredOffice.address || registeredOffice ||
+    cfg.companyAddress || registeredOffice.address ||
+    (['line1', 'addressLine1', 'line2', 'addressLine2', 'city', 'state', 'postalCode', 'pincode', 'country']
+      .some(key => String(registeredOffice[key] || '').trim()) ? registeredOffice : null) ||
     legalEntity.registeredAddress || legalEntity.address ||
     company.registeredAddress || company.address || cfg.address || cfg.addressLine;
   const sellerAddress = addressValue && typeof addressValue === "object"
@@ -217,11 +219,13 @@ function renderTravelInvoiceLayout({ invoice, lines, tenant, branding, logoBuffe
   section("Service details");
   const cols = [left, left + 356, left + 407];
   const widths = [348, 43, width - 407];
+  let freshTableY;
   const tableHeader = () => {
     doc.roundedRect(left, y, width, 23, 4).fill("#EAF0F6");
     ["DESCRIPTION", "QTY", "AMOUNT"].forEach((label, i) =>
       text(label, cols[i] + (i ? 0 : 9), y + 7, widths[i] - (i ? 0 : 9), 7.5, true, navy, i > 0 ? "right" : "left"));
     y += 23;
+    freshTableY = y;
   };
   tableHeader();
   let subtotal = 0;
@@ -281,7 +285,7 @@ function renderTravelInvoiceLayout({ invoice, lines, tenant, branding, logoBuffe
       doc.font("Helvetica").fontSize(8.5);
       const measure = (value) => doc.heightOfString(value, { width: widths[0] - 18, lineGap: 2 });
       const fullRowHeight = Math.max(27, measure(remaining) + 12);
-      if (y + fullRowHeight > bottom() && fullRowHeight <= bottom() - 49) {
+      if (y !== freshTableY && y + fullRowHeight > bottom() && fullRowHeight <= bottom() - 49) {
         page(true);
         tableHeader();
         continue;

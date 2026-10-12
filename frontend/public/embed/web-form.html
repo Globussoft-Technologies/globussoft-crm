@@ -2504,7 +2504,7 @@
             var raw = String(value || "");
             var invalid = /[^0-9+().\s-]/.test(raw);
             var digits = raw.replace(/\D/g, "");
-            var countryDigits = String(phoneCountry.value || "").replace(/\D/g, "");
+            var countryDigits = String(whatsappCountry.value || "").replace(/\D/g, "");
             if (
               raw.trim().charAt(0) === "+" &&
               countryDigits &&

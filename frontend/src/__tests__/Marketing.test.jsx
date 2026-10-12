@@ -155,6 +155,29 @@ beforeEach(() => {
 });
 
 describe('<Marketing /> — Generic campaign workflow', () => {
+  it('keeps the date filter available after empty results and reloads when cleared', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (String(url).includes('paginate=1')) {
+        return Promise.resolve({
+          items: String(url).includes('createdFrom=') ? [] : [SAMPLE_CAMPAIGNS[0]],
+          pagination: { page: 1, totalPages: 1 },
+        });
+      }
+      return Promise.resolve([]);
+    });
+    renderMarketing(GENERIC_USER);
+    expect(await screen.findByText(SAMPLE_CAMPAIGNS[0].name)).toBeInTheDocument();
+    const filter = screen.getByDisplayValue('All time');
+    fireEvent.change(filter, { target: { value: 'today' } });
+    expect(await screen.findByText('No sequences found')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Today')).toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue('Today'), { target: { value: 'all' } });
+    expect(await screen.findByText(SAMPLE_CAMPAIGNS[0].name)).toBeInTheDocument();
+    expect(screen.getByDisplayValue('All time')).toBeInTheDocument();
+    const requests = fetchApiMock.mock.calls.filter(([url]) => String(url).includes('paginate=1'));
+    expect(requests.at(-1)[0]).not.toContain('createdFrom=');
+    expect(requests.at(-1)[0]).not.toContain('createdTo=');
+  });
   it('ignores an older page response after returning to the first page', async () => {
     let resolveSecond;
     fetchApiMock.mockImplementation((url) => {

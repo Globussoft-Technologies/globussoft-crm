@@ -822,7 +822,7 @@ ${fields.map(f => {
       {(activeTab === 'campaigns' || (isGeneric && (activeTab === 'sms' || activeTab === 'whatsapp'))) && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
-            {campaigns.length > 0 ? (
+            {isGeneric || campaigns.length > 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <DateRangeFilter value={campaignDateFilter} onChange={(value) => { setCampaignDateFilter(value); if (isGeneric) setCampaignPage(1); }} label="Filter by created date" />
                     {displayedCampaigns.length !== campaigns.length && (

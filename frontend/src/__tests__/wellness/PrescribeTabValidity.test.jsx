@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../../utils/api', () => ({
@@ -93,6 +93,33 @@ beforeEach(() => {
 });
 
 describe('PrescribeTab — validity', () => {
+  it('cancels debounce and blur timers when the prescription tab unmounts', () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = renderTab();
+      const input = screen.getByPlaceholderText(/Drug name — start typing/);
+      fireEvent.change(input, { target: { value: 'Minoxidil' } });
+      fireEvent.blur(input);
+      unmount();
+      act(() => vi.advanceTimersByTime(1000));
+      expect(fetchApiMock.mock.calls.filter(([url]) => url.startsWith('/api/wellness/drugs?'))).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts an active catalogue request and ignores a late response after unmount', async () => {
+    let resolveSearch;
+    fetchApiMock.mockImplementation(() => new Promise(resolve => { resolveSearch = resolve; }));
+    const { unmount } = renderTab();
+    fireEvent.focus(screen.getByPlaceholderText(/Drug name — start typing/));
+    const signal = fetchApiMock.mock.calls.find(([url]) => url.startsWith('/api/wellness/drugs?'))[1].signal;
+    expect(signal.aborted).toBe(false);
+    unmount();
+    expect(signal.aborted).toBe(true);
+    await act(async () => resolveSearch({ items: [{ id: 1, name: 'Late result' }] }));
+  });
   it('renders the field as optional, with the reminder rationale on it', () => {
     renderTab();
     expect(screen.getByText('Validity')).toBeInTheDocument();

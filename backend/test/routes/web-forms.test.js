@@ -185,6 +185,28 @@ describe('web-form embed sizing', () => {
 });
 
 describe('Generic conditional fields', () => {
+  test('hydrates lead custom choice options from the tenant definition', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { id: 'business-type', sourceKind: 'lead_custom', sourceKey: 'business_type', fieldType: 'dropdown', label: 'Business type', options: [] },
+    ]), 'generic', [
+      { fieldKey: 'business_type', options: JSON.stringify(['SaaS', 'E-Commerce', 'Freelancer']) },
+    ]);
+
+    expect(fields[0].options).toEqual(['SaaS', 'E-Commerce', 'Freelancer']);
+  });
+
+  test('normalizes radio layout and defaults unsupported values to vertical', () => {
+    const horizontal = normalizeFields(JSON.stringify([
+      { id: 'platform', sourceKind: 'custom', sourceKey: 'platform', fieldType: 'radio', options: ['TikTok', 'Instagram'], choiceLayout: 'horizontal' },
+    ]), 'generic');
+    const vertical = normalizeFields(JSON.stringify([
+      { id: 'platform', sourceKind: 'custom', sourceKey: 'platform', fieldType: 'radio', options: ['TikTok', 'Instagram'], choiceLayout: 'diagonal' },
+    ]), 'generic');
+
+    expect(horizontal[0].choiceLayout).toBe('horizontal');
+    expect(vertical[0].choiceLayout).toBe('vertical');
+  });
+
   const configuredFields = [
     {
       id: 'interest',
@@ -740,6 +762,34 @@ describe('PUT /api/forms/:id', () => {
 });
 
 describe('GET /api/forms/public/:slug', () => {
+  test('includes current lead custom field options in the public form payload', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 3,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Business intake',
+      slug: 'business-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'business-type', sourceKind: 'lead_custom', sourceKey: 'business_type', fieldType: 'dropdown', label: 'Business type', options: [] },
+      ]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({}),
+    });
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { fieldKey: 'business_type', options: JSON.stringify(['SaaS', 'E-Commerce', 'Freelancer']) },
+    ]);
+
+    const res = await request(makeApp()).get('/api/forms/public/business-intake');
+
+    expect(res.status).toBe(200);
+    expect(res.body.fields[0].options).toEqual(['SaaS', 'E-Commerce', 'Freelancer']);
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID },
+      select: { fieldKey: true, options: true },
+    });
+  });
 
   test('returns the active form with embed code', async () => {
 

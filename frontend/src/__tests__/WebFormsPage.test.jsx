@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -142,7 +143,10 @@ const FORM_FIXTURE = {
 
 
 
-function installFetchMock(form = FORM_FIXTURE) {
+function installFetchMock(form = FORM_FIXTURE, leadFields = [
+  { id: 1, fieldKey: 'submit_source', label: 'Submit source', fieldType: 'text', options: null, placeholder: 'contact-us' },
+  { id: 2, fieldKey: 'keyword', label: 'Keyword', fieldType: 'text', options: null, placeholder: 'campaign keyword' },
+]) {
 
   fetchApiMock.mockImplementation((url, opts) => {
 
@@ -155,14 +159,7 @@ function installFetchMock(form = FORM_FIXTURE) {
     }
 
     if (url === '/api/lead-custom-fields' && method === 'GET') {
-
-      return Promise.resolve([
-
-        { id: 1, fieldKey: 'submit_source', label: 'Submit source', fieldType: 'text', options: null, placeholder: 'contact-us' },
-
-        { id: 2, fieldKey: 'keyword', label: 'Keyword', fieldType: 'text', options: null, placeholder: 'campaign keyword' },
-
-      ]);
+      return Promise.resolve(leadFields);
 
     }
 
@@ -222,9 +219,9 @@ function installFetchMock(form = FORM_FIXTURE) {
 
 
 
-function renderPage(form = FORM_FIXTURE) {
+function renderPage(form = FORM_FIXTURE, leadFields) {
 
-  installFetchMock(form);
+  installFetchMock(form, leadFields);
 
   return render(
 
@@ -254,6 +251,28 @@ function renderTravelPage(form = FORM_FIXTURE) {
   );
 }
 
+function NavigationProbe() {
+  const location = useLocation();
+  return (
+    <>
+      <a href="/dashboard">Leave Web Forms</a>
+      <span data-testid="navigation-probe-path">{location.pathname}</span>
+    </>
+  );
+}
+
+function renderRoutedPage(form = FORM_FIXTURE) {
+  installFetchMock(form);
+  return render(
+    <MemoryRouter initialEntries={['/forms']}>
+      <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'generic' } }}>
+        <WebForms />
+        <NavigationProbe />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
+}
+
 test('contact notification channel controls are limited to Generic web forms', async () => {
   renderTravelPage();
   await openBuilder();
@@ -275,6 +294,8 @@ async function openBuilder(formName = 'Brand intake') {
 beforeEach(() => {
 
   fetchApiMock.mockReset();
+
+  window.sessionStorage.clear();
 
   notifyError.mockReset();
 
@@ -348,6 +369,52 @@ describe('WebForms builder page', () => {
     expect(childCard).toHaveTextContent('Shopify');
     expect(childCard).toHaveTextContent('Shopify Store URL');
     expect(childCard.querySelector('[data-testid="wf-field-editor-grid"]')).toBeInTheDocument();
+    expect(childCard.querySelector('.wf-conditional-config')).toBeNull();
+  });
+
+  test('restores unsaved changes after refresh without a native unload alert', async () => {
+    const firstRender = renderPage();
+    await openBuilder();
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Changed name' } });
+
+    await waitFor(() => {
+      expect(Object.keys(window.sessionStorage).some((key) => window.sessionStorage.getItem(key)?.includes('Changed name'))).toBe(true);
+    });
+
+    const event = new Event('beforeunload', { cancelable: true });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    window.dispatchEvent(event);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+
+    firstRender.unmount();
+    renderPage();
+
+    expect(await screen.findByDisplayValue('Changed name')).toBeInTheDocument();
+    expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Unsaved changes restored',
+      message: expect.stringContaining('continue editing'),
+      confirmText: 'Continue editing',
+      cancelText: 'Discard changes',
+    }));
+  });
+
+  test('asks for confirmation before an internal navigation can discard changes', async () => {
+    renderRoutedPage();
+    await openBuilder();
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Changed name' } });
+
+    fireEvent.click(screen.getByRole('link', { name: 'Leave Web Forms' }));
+
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Unsaved changes',
+        message: expect.stringContaining('will be lost'),
+        confirmText: 'Continue',
+        cancelText: 'Stay',
+      }));
+    });
+    await waitFor(() => expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/dashboard'));
   });
 
   test('travel logo selection immediately sends a multipart upload request', async () => {
@@ -487,6 +554,18 @@ describe('WebForms builder page', () => {
 
     expect(screen.getByText('Keyword')).toBeInTheDocument();
 
+  });
+
+  test('loads configured options when a lead custom choice field is added', async () => {
+    renderPage(FORM_FIXTURE, [
+      { id: 7, fieldKey: 'business_type', label: 'Business type', fieldType: 'dropdown', options: ['SaaS', 'E-Commerce', 'Freelancer'], placeholder: 'Select one' },
+    ]);
+
+    await openBuilder();
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Business type.*custom/i }));
+
+    expect(await screen.findByDisplayValue('SaaS, E-Commerce, Freelancer')).toBeInTheDocument();
   });
 
   test('supports draft edits and save on the form name field', async () => {
@@ -700,6 +779,45 @@ describe('WebForms builder page', () => {
 
     expect(screen.getByDisplayValue('Male, Female')).toBeInTheDocument();
 
+  });
+
+  test('saves horizontal radio layout for choice fields', async () => {
+    const radioForm = {
+      ...FORM_FIXTURE,
+      name: 'Radio form',
+      slug: 'radio-form',
+      fields: [
+        {
+          id: 'field-radio',
+          sourceKind: 'custom',
+          sourceKey: 'platform',
+          fieldType: 'radio',
+          label: 'Which platform?',
+          placeholder: '',
+          helpText: '',
+          required: false,
+          hidden: false,
+          options: ['TikTok', 'Instagram', 'Both'],
+          width: 'full',
+        },
+      ],
+    };
+
+    renderPage(radioForm);
+    await openBuilder('Radio form');
+
+    const layoutSelect = screen.getByText('Radio layout').closest('label').querySelector('select');
+    expect(layoutSelect).toHaveValue('vertical');
+    fireEvent.change(layoutSelect, { target: { value: 'horizontal' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      expect(JSON.parse(saveCall[1].body).fields[0].choiceLayout).toBe('horizontal');
+    });
   });
 
 

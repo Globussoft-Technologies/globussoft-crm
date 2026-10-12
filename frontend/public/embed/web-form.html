@@ -464,6 +464,14 @@
         gap: 8px;
       }
 
+      .choices.horizontal {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        column-gap: 16px;
+        row-gap: 8px;
+      }
+
       .choices .check span {
         line-height: 1.35;
         color: var(--gbs-label, #34405e);
@@ -2278,7 +2286,9 @@
               '"><label>' +
               label +
               requiredMark +
-              '</label><div class="choices">' +
+              '</label><div class="choices ' +
+              (field.choiceLayout === "horizontal" ? "horizontal" : "") +
+              '">' +
               ropts
                 .map(function (o, i) {
                   var id = "r-" + name + "-" + i;

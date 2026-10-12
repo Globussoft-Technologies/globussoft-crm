@@ -115,8 +115,8 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
       expect(screen.getByText(/Quote #42/i)).toBeInTheDocument(),
     );
     expect(screen.getByText(/Aisha Khan/i)).toBeInTheDocument();
-    expect(screen.getByText(/Hotel — 3 nights/i)).toBeInTheDocument();
-    expect(screen.getByText(/Coach transfer/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Hotel\s+\u2014\s+3 nights$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Coach transfer$/i)).toBeInTheDocument();
     // Total displayed (some Intl runtimes render with NBSP). Use a regex
     // that tolerates either a plain space or non-breaking space between
     // currency symbol and digits.

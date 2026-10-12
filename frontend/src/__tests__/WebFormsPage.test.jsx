@@ -725,6 +725,30 @@ describe('WebForms builder page', () => {
     expect(notifySuccess).toHaveBeenCalledWith('Form saved');
   });
 
+  test('saves the title and description spacing controls', async () => {
+    renderPage({ ...FORM_FIXTURE, scope: 'generic' });
+    await openBuilder();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Layout' }));
+
+    const titleDescriptionGap = screen.getByText('Title to description gap (px)').closest('label').querySelector('input');
+    const descriptionFieldsGap = screen.getByText('Description to fields gap (px)').closest('label').querySelector('input');
+    fireEvent.change(titleDescriptionGap, { target: { value: '28' } });
+    fireEvent.change(descriptionFieldsGap, { target: { value: '36' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      expect(JSON.parse(saveCall[1].body).style).toEqual(expect.objectContaining({
+        titleDescriptionGap: 28,
+        descriptionFieldsGap: 36,
+      }));
+    });
+  });
+
   test('custom choice fields expose an editable options textarea', async () => {
 
     const customForm = {

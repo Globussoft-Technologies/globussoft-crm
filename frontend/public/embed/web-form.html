@@ -70,11 +70,11 @@
       }
 
       .form-header {
-        margin-bottom: 24px;
+        margin-bottom: var(--gbs-description-fields-gap, 24px);
       }
 
       h1 {
-        margin: 0 0 10px;
+        margin: 0 0 var(--gbs-title-description-gap, 10px);
         color: var(--gbs-title, #10132d);
         font-family: var(--gbs-title-font, var(--gbs-font));
         font-size: var(--gbs-title-size, clamp(1.55rem, 4vw, 2.15rem));
@@ -1952,6 +1952,14 @@
 
             "--gbs-column-gap:" +
               (generic ? number(style.columnGap, 9, 0, 64) : 9) +
+              "px",
+
+            "--gbs-title-description-gap:" +
+              number(style.titleDescriptionGap, 10, 0, 80) +
+              "px",
+
+            "--gbs-description-fields-gap:" +
+              number(style.descriptionFieldsGap, 24, 0, 80) +
               "px",
 
             "--gbs-full-span:" +

@@ -333,6 +333,8 @@ function defaultStyle() {
     customColumnWidth: 50,
     rowGap: 9,
     columnGap: 9,
+    titleDescriptionGap: 10,
+    descriptionFieldsGap: 24,
     mobileColumns: "one",
     tabletColumns: "one",
     containerBackgroundMode: "solid",
@@ -3320,6 +3322,8 @@ function GenericFormStyleControls({ group, form, style, updateStyle, applyDraft,
     {field("Custom column width (%)", style.customColumnWidth, (value) => updateStyle({ customColumnWidth: value }), 25, 75)}
     {field("Row gap (px)", style.rowGap, (value) => updateStyle({ rowGap: value }), 0, 64)}
     {field("Column gap (px)", style.columnGap, (value) => updateStyle({ columnGap: value }), 0, 64)}
+    {field("Title to description gap (px)", style.titleDescriptionGap, (value) => updateStyle({ titleDescriptionGap: value }), 0, 80)}
+    {field("Description to fields gap (px)", style.descriptionFieldsGap, (value) => updateStyle({ descriptionFieldsGap: value }), 0, 80)}
     <label style={{ display: "grid", gap: 6 }}><span>Tablet layout</span><select className="input-field" value={style.tabletColumns} onChange={(e) => updateStyle({ tabletColumns: e.target.value })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
     <label style={{ display: "grid", gap: 6 }}><span>Mobile layout</span><select className="input-field" value={style.mobileColumns} onChange={(e) => updateStyle({ mobileColumns: e.target.value })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
   </>;
@@ -19931,6 +19935,8 @@ function WebFormsContent({ scope = "generic" }) {
                             <StyleNumberField label="Custom column width (%)" value={selectedForm.style.customColumnWidth} min={25} max={75} onChange={(value) => applyDraft({ style: { ...selectedForm.style, customColumnWidth: value } })} />
                             <StyleNumberField label="Row gap (px)" value={selectedForm.style.rowGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, rowGap: value } })} />
                             <StyleNumberField label="Column gap (px)" value={selectedForm.style.columnGap} min={0} max={64} onChange={(value) => applyDraft({ style: { ...selectedForm.style, columnGap: value } })} />
+                            <StyleNumberField label="Title to description gap (px)" value={selectedForm.style.titleDescriptionGap} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, titleDescriptionGap: value } })} />
+                            <StyleNumberField label="Description to fields gap (px)" value={selectedForm.style.descriptionFieldsGap} min={0} max={80} onChange={(value) => applyDraft({ style: { ...selectedForm.style, descriptionFieldsGap: value } })} />
                             <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Tablet layout") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Tablet layout</span><select className="input-field" style={optionLengthStyle(["One column", "Two columns"])} value={selectedForm.style.tabletColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, tabletColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
                             <label style={{ display: "grid", gap: 6, ...labelLengthStyle("Mobile layout") }}><span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile layout</span><select className="input-field" style={optionLengthStyle(["One column", "Two columns"])} value={selectedForm.style.mobileColumns} onChange={(e) => applyDraft({ style: { ...selectedForm.style, mobileColumns: e.target.value } })}><option value="one">One column</option><option value="two">Two columns</option></select></label>
                           </div>

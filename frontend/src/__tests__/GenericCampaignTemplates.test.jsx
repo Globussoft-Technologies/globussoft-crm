@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -33,6 +33,20 @@ beforeEach(() => {
 });
 
 describe('Generic CRM template personalization', () => {
+  it('does not let an old channel response replace the newly selected channel', async () => {
+    let resolveEmail;
+    fetchApiMock.mockImplementation((url) => {
+      if (String(url).includes('paginate=1') && String(url).includes('channel=EMAIL')) return new Promise(resolve => { resolveEmail = resolve; });
+      if (String(url).includes('paginate=1')) return Promise.resolve({ items: [{ id: 2, name: 'Latest SMS', subject: 'SMS', channel: 'SMS' }], pagination: { totalPages: 1 } });
+      return Promise.resolve([]);
+    });
+    render(<GenericCampaignTemplates />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Template type' }), { target: { value: 'SMS' } });
+    expect(await screen.findByText('Latest SMS')).toBeInTheDocument();
+    await act(async () => resolveEmail({ items: [{ id: 1, name: 'Stale Email', subject: 'Email' }], pagination: { totalPages: 5 } }));
+    expect(screen.queryByText('Stale Email')).not.toBeInTheDocument();
+    expect(screen.getByText('Latest SMS')).toBeInTheDocument();
+  });
   it('loads templates by channel and preserves all personalization categories including Sender Details', async () => {
     render(<GenericCampaignTemplates />);
 

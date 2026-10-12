@@ -505,6 +505,14 @@ router.get("/campaigns", verifyToken, async (req, res) => {
     if (req.query.channel) where.channel = req.query.channel;
     if (req.query.status) where.status = req.query.status;
     const paginate = req.query.paginate === "1";
+    if (paginate && (req.query.createdFrom || req.query.createdTo)) {
+      const from = req.query.createdFrom ? new Date(req.query.createdFrom) : null;
+      const to = req.query.createdTo ? new Date(req.query.createdTo) : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime())) || (from && to && from > to)) {
+        return res.status(400).json({ error: "Invalid created date range", code: "INVALID_DATE_RANGE" });
+      }
+      where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) };
+    }
     if (!paginate) {
       const campaigns = await prisma.campaign.findMany({
         where,
@@ -520,7 +528,7 @@ router.get("/campaigns", verifyToken, async (req, res) => {
     const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 50) : 8;
     const [campaigns, total] = await Promise.all([
-      prisma.campaign.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.campaign.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * limit, take: limit }),
       prisma.campaign.count({ where }),
     ]);
     return res.json({

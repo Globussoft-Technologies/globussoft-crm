@@ -58,6 +58,7 @@ import prisma from '../../lib/prisma.js';
 // Stub the prisma surface the email_templates router touches.
 prisma.emailTemplate = {
   findMany: vi.fn(),
+  count: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -94,6 +95,28 @@ beforeEach(() => {
 });
 
 describe('GET /api/email_templates — list', () => {
+  test('paginates deterministically with tenant and channel scoped counts', async () => {
+    prisma.emailTemplate.findMany.mockResolvedValue([{ id: 12 }]);
+    prisma.emailTemplate.count.mockResolvedValue(24);
+    const response = await request(makeApp()).get('/api/email_templates?paginate=1&page=2&limit=10&channel=EMAIL');
+    expect(response.status).toBe(200);
+    expect(response.body.pagination).toMatchObject({ page: 2, total: 24, totalPages: 3 });
+    expect(prisma.emailTemplate.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, channel: 'EMAIL' }, skip: 10, take: 10,
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    }));
+    expect(prisma.emailTemplate.count).toHaveBeenCalledWith({ where: { tenantId: 1, channel: 'EMAIL' } });
+  });
+
+  test('preview uses the send renderer for organization aliases, fallbacks and HTML escaping', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', name: 'A & B' });
+    const response = await request(makeApp()).post('/api/email_templates/preview').send({
+      subject: '{{company_name}} {{unknown}}', body: '<p>{{company_name}}</p>',
+    });
+    expect(response.status).toBe(200);
+    expect(response.body.subject).toBe('A & B the requested information');
+    expect(response.body.body).toBe('<p>A &amp; B</p>');
+  });
   test('tenant-scoped findMany with updatedAt desc + returns rows', async () => {
     const rows = [
       { id: 11, name: 'Welcome', subject: 'Hi {{name}}', body: 'Hello', category: 'General', tenantId: 1, updatedAt: new Date('2026-05-01').toISOString() },
@@ -110,7 +133,7 @@ describe('GET /api/email_templates — list', () => {
     expect(prisma.emailTemplate.findMany).toHaveBeenCalledOnce();
     const args = prisma.emailTemplate.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 1 });
-    expect(args.orderBy).toEqual({ updatedAt: 'desc' });
+    expect(args.orderBy).toEqual([{ updatedAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('500 on prisma failure with "Failed to fetch" message', async () => {
@@ -386,7 +409,7 @@ describe('GET /api/email_templates?fields=summary — #920 slice 9 slim-shape op
 
     const args = prisma.emailTemplate.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 42 });
-    expect(args.orderBy).toEqual({ updatedAt: 'desc' });
+    expect(args.orderBy).toEqual([{ updatedAt: 'desc' }, { id: 'desc' }]);
     expect(args.select).toBeDefined(); // slim-shape branch fired
   });
 });

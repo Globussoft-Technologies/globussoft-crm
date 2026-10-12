@@ -37,7 +37,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -155,6 +155,22 @@ beforeEach(() => {
 });
 
 describe('<Marketing /> — Generic campaign workflow', () => {
+  it('ignores an older page response after returning to the first page', async () => {
+    let resolveSecond;
+    fetchApiMock.mockImplementation((url) => {
+      if (String(url).includes('paginate=1') && String(url).includes('page=2')) return new Promise(resolve => { resolveSecond = resolve; });
+      if (String(url).includes('paginate=1')) return Promise.resolve({ items: [SAMPLE_CAMPAIGNS[0]], pagination: { totalPages: 3, total: 20 } });
+      return Promise.resolve([]);
+    });
+    renderMarketing(GENERIC_USER);
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(resolveSecond).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+    await waitFor(() => expect(screen.getByText('Page 1 of 3')).toBeInTheDocument());
+    await act(async () => resolveSecond({ items: [{ ...SAMPLE_CAMPAIGNS[0], id: 999, name: 'Stale page' }], pagination: { totalPages: 9 } }));
+    expect(screen.queryByText('Stale page')).not.toBeInTheDocument();
+    expect(screen.getByText(SAMPLE_CAMPAIGNS[0].name)).toBeInTheDocument();
+  });
   const workflow = {
     ...SAMPLE_CAMPAIGNS[0],
     sequenceId: 12,

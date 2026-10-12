@@ -163,14 +163,12 @@ function buildContextForEnrollment(enrollment) {
     email: c.email,
     phone: c.phone,
     company: c.company,
-    first_name: names[0] || '',
-    last_name: names.slice(1).join(' '),
-    company_name: enrollment.sequence?.tenant?.name || '',
     status: c.status,
   };
   if (isGeneric) Object.assign(contact, {
     first_name: names[0] || '',
     last_name: names.slice(1).join(' '),
+    company_name: enrollment.sequence?.tenant?.name || '',
     whatsappPhone: c.whatsappPhone,
     title: c.title,
     source: c.source,
@@ -203,22 +201,22 @@ function buildContextForEnrollment(enrollment) {
     company: c.company,
     enrollmentId: enrollment.id,
     sequenceId: enrollment.sequenceId,
-    organization: { name: enrollment.sequence?.tenant?.name || '' },
-    tenant: { name: enrollment.sequence?.tenant?.name || '' },
-    companyName: enrollment.sequence?.tenant?.name || '',
-    company_name: enrollment.sequence?.tenant?.name || '',
-    organizationName: enrollment.sequence?.tenant?.name || '',
-    customFields,
   };
   if (isGeneric) {
     const deal = c.deals?.[0] || {};
     Object.assign(context, {
+      organization: { name: enrollment.sequence?.tenant?.name || '' },
+      tenant: { name: enrollment.sequence?.tenant?.name || '' },
+      companyName: enrollment.sequence?.tenant?.name || '',
+      company_name: enrollment.sequence?.tenant?.name || '',
+      organizationName: enrollment.sequence?.tenant?.name || '',
+      customFields,
       contact_name: c.name || '',
       sender_name: enrollment.sequence?.tenant?.name || '',
       sender: { name: enrollment.sequence?.tenant?.name || '', email: '', company: enrollment.sequence?.tenant?.name || '' },
     deal_name: deal.name || deal.title || deal.dealName || '',
     deal,
-    invoice: c.invoices?.[0] || {},
+    invoice: c.invoices?.[0] ? { ...c.invoices[0], number: c.invoices[0].invoiceNum } : {},
     task: c.tasks?.[0] || {},
     activity: c.activities?.[0] || {},
     expense: c.expenses?.[0] || {},
@@ -676,8 +674,8 @@ async function executeReceiverAction(action, enrollment, ctx) {
 
   const template = await prisma.emailTemplate.findFirst({ where: { id: Number(action.emailTemplateId), tenantId: enrollment.tenantId } });
   if (!template || !enrollment.contact?.email) return {};
-  const subject = renderTemplate(normalizeGenericTemplatePlaceholders(template.subject || 'Follow-up'), ctx);
-  const body = renderTemplate(normalizeGenericTemplatePlaceholders(template.body || ''), ctx);
+  const subject = renderGenericTemplate(normalizeGenericTemplatePlaceholders(template.subject || 'Follow-up'), ctx);
+  const body = renderGenericTemplate(normalizeGenericTemplatePlaceholders(template.body || ''), ctx, { html: true });
   const outbound = await prisma.emailMessage.create({
     data: { subject, body, from: FROM_EMAIL, to: enrollment.contact.email, direction: 'OUTBOUND', contactId: enrollment.contact.id, tenantId: enrollment.tenantId, threadId: `seq-${enrollment.id}`, read: true },
   });
@@ -712,8 +710,8 @@ async function processStep(step, enrollment) {
       const templateBody = isGenericSequence
         ? normalizeGenericTemplatePlaceholders(step.emailTemplate.body || '')
         : step.emailTemplate.body || '';
-      subject = renderGenericTemplate(templateSubject, ctx);
-      body = renderGenericTemplate(templateBody, ctx, { html: true });
+      subject = isGenericSequence ? renderGenericTemplate(templateSubject, ctx) : renderTemplate(templateSubject, ctx);
+      body = isGenericSequence ? renderGenericTemplate(templateBody, ctx, { html: true }) : renderTemplate(templateBody, ctx);
     }
     const to = enrollment.contact?.email;
     if (!to) {

@@ -75,25 +75,27 @@ export default function GenericCampaignTemplates() {
   const [personalizationGroup, setPersonalizationGroup] = useState('');
   const editorRef = useRef(null);
   const editorIdentityRef = useRef(null);
+  const templateRequest = useRef(0);
+  useEffect(() => () => { templateRequest.current += 1; }, []);
 
   const loadTemplates = async () => {
+    const requestId = ++templateRequest.current;
     setLoading(true);
     try {
       const result = await fetchApi(`/api/email-templates?paginate=1&page=${templatePage}&limit=10&channel=${templateChannel}`);
+      if (requestId !== templateRequest.current) return;
       setTemplates(Array.isArray(result) ? result : (result?.items || []));
       if (result?.pagination) setTemplatePagination(result.pagination);
     } catch (_error) {
+      if (requestId !== templateRequest.current) return;
       setTemplates([]);
     } finally {
-      setLoading(false);
+      if (requestId === templateRequest.current) setLoading(false);
     }
   };
 
   useEffect(() => { loadTemplates(); }, [templatePage, templateChannel]);
 
-  useEffect(() => {
-    setTemplatePage(1);
-  }, [templateChannel]);
 
   useEffect(() => {
     Promise.all([
@@ -241,7 +243,7 @@ export default function GenericCampaignTemplates() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <label style={{ ...fieldLabelStyle, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             Type
-            <select className="input-field" value={templateChannel} onChange={event => setTemplateChannel(event.target.value)} aria-label="Template type">
+            <select className="input-field" value={templateChannel} onChange={event => { templateRequest.current += 1; setTemplatePage(1); setTemplateChannel(event.target.value); }} aria-label="Template type">
               {TEMPLATE_CHANNELS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>

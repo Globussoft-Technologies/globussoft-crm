@@ -2,7 +2,7 @@ const express = require("express");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { renderTemplate } = require("../lib/microTemplate");
+const { renderGenericTemplate } = require("../lib/genericEmailTemplateRenderer");
 const { normalizeGenericTemplatePlaceholders } = require("../lib/genericCampaignAutomation");
 const { routeRequest } = require("../lib/llmRouter");
 
@@ -117,7 +117,7 @@ router.post("/preview", async (req, res) => {
           firstTouchSource: true, lastTouchSource: true, birthDate: true, anniversary: true, gst: true,
           stateCode: true, billingStateCode: true, externalId: true, aiScore: true,
           leadCustomFieldValues: {
-            include: { field: { select: { fieldKey: true } } },
+            include: { field: { select: { fieldKey: true, label: true } } },
           },
           deals: { orderBy: { createdAt: "desc" }, take: 1 },
           invoices: { orderBy: { issuedDate: "desc" }, take: 1 },
@@ -159,6 +159,12 @@ router.post("/preview", async (req, res) => {
       email: sample.email,
       phone: sample.phone,
       company: sample.company,
+      organization: { name: tenant.name || '' },
+      tenant: { name: tenant.name || '' },
+      customFields: (sample.leadCustomFieldValues || []).map(value => ({
+        key: value.field?.fieldKey, label: value.field?.label,
+        value: value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool ?? '',
+      })),
       sender: { name: tenant.name || '', email: '', company: tenant.name || '' },
       enrollmentId: null,
       sequenceId: null,
@@ -184,8 +190,8 @@ router.post("/preview", async (req, res) => {
       });
     }
     res.json({
-      subject: renderTemplate(normalizeGenericTemplatePlaceholders(req.body.subject || ""), context),
-      body: renderTemplate(normalizeGenericTemplatePlaceholders(req.body.body || ""), context),
+      subject: renderGenericTemplate(normalizeGenericTemplatePlaceholders(req.body.subject || ""), context),
+      body: renderGenericTemplate(normalizeGenericTemplatePlaceholders(req.body.body || ""), context, { html: true }),
       contact: { id: sample.id, name: sample.name, email: sample.email },
       isSample: !contact,
     });
@@ -261,7 +267,7 @@ router.get("/", async (req, res) => {
     }
     const findManyArgs = {
       where: { tenantId: req.user.tenantId, ...(channel ? { channel } : {}) },
-      orderBy: { updatedAt: "desc" },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     };
     if (isSummary) {
       findManyArgs.select = {

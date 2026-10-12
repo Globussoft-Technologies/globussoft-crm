@@ -45,7 +45,7 @@
  * ({ formId, fields }). This keeps everything within existing routes and
  * the existing sanitize-helper coverage, with no new model required.
  */
-import React, { useState, useEffect, useMemo, useContext } from 'react';
+import React, { useState, useEffect, useMemo, useContext, useRef } from 'react';
 import { Copy, Code, Layout, Blocks, CheckCircle2, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare, X, Save, Trash2, Edit3, Calendar, FileText, Pause, Play } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -221,6 +221,8 @@ export default function Marketing() {
 
   // ───── Campaigns State ─────
   const [campaigns, setCampaigns] = useState([]);
+  const campaignRequest = useRef(0);
+  useEffect(() => () => { campaignRequest.current += 1; }, []);
   const [campaignPage, setCampaignPage] = useState(1);
   const [campaignPagination, setCampaignPagination] = useState({ page: 1, pageSize: 8, total: 0, totalPages: 1 });
   const [showCreateCampaign, setShowCreateCampaign] = useState(false);
@@ -228,7 +230,9 @@ export default function Marketing() {
   const [editingCampaign, setEditingCampaign] = useState(null); // { id, name, subject, body, ... } open in detail modal
   const [campaignDateFilter, setCampaignDateFilter] = useState(EMPTY_DATE_FILTER);
   const [campaignRangeStart, campaignRangeEnd] = resolveDateRange(campaignDateFilter);
-  const visibleCampaigns = (campaignRangeStart && campaignRangeEnd)
+  const campaignRangeStartTime = campaignRangeStart?.getTime();
+  const campaignRangeEndTime = campaignRangeEnd?.getTime();
+  const visibleCampaigns = (!isGeneric && campaignRangeStart && campaignRangeEnd)
     ? campaigns.filter((c) => {
         const ts = new Date(c.createdAt).getTime();
         return ts >= campaignRangeStart.getTime() && ts <= campaignRangeEnd.getTime();
@@ -250,13 +254,18 @@ export default function Marketing() {
     if (activeTab === 'campaigns') loadCampaigns();
     if (activeTab === 'sms' && !isGeneric) loadSmsHistory();
     if (activeTab === 'forms') loadSavedForms();
-  }, [activeTab, campaignPage]);
+  }, [activeTab, campaignPage, campaignRangeStartTime, campaignRangeEndTime, isGeneric]);
 
   const loadCampaigns = async () => {
+    const requestId = ++campaignRequest.current;
     try {
+      const dateQuery = isGeneric && campaignRangeStart && campaignRangeEnd
+        ? `&createdFrom=${encodeURIComponent(campaignRangeStart.toISOString())}&createdTo=${encodeURIComponent(campaignRangeEnd.toISOString())}`
+        : '';
       const data = await fetchApi(isGeneric
-        ? `/api/marketing/campaigns?paginate=1&page=${campaignPage}&limit=8&campaignType=EMAIL`
+        ? `/api/marketing/campaigns?paginate=1&page=${campaignPage}&limit=8&campaignType=EMAIL${dateQuery}`
         : '/api/marketing/campaigns?channel=EMAIL');
+      if (requestId !== campaignRequest.current) return;
       const items = Array.isArray(data) ? data : data?.items;
       if (isGeneric && data?.pagination) setCampaignPagination(data.pagination);
       // Defensive — older rows may have channel=null (treat as EMAIL).

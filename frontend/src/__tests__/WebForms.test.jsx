@@ -119,8 +119,8 @@ describe('public web form embed footer', () => {
     expect(html).toContain('setupGenericWhatsappPhone');
     expect(html).toContain('Enter a valid WhatsApp number with ');
     expect(html).toContain('setupGenericCountryPicker(whatsappCountrySelect');
-    expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:0;padding-left:0}');
-    expect(html).toContain('line-height:1.2;font-weight:var(--gbs-form-weight,400)');
+    expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}');
+    expect(html).toContain('white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)');
     expect(html).toContain('.generic-whatsapp-phone{margin-bottom:0}');
     expect(html).toContain("phoneField.classList.add('generic-phone-with-whatsapp')");
     expect(html).toContain('generic-whatsapp-number');

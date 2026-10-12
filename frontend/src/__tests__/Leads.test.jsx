@@ -509,6 +509,23 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
+  it('hides both header and body cells for deselected workflow columns', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/table-column-prefs/leads' && !options) return Promise.resolve({
+        visible: ['name', 'phone', 'email', 'company', 'actions'], availableColumns: [],
+      });
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    await waitFor(() => expect(screen.queryByText('Interested plot area')).not.toBeInTheDocument());
+    expect(screen.queryByText('Pickup location')).not.toBeInTheDocument();
+    expect(screen.queryByText('Overall status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit pickup location for Alice Lead' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View all status for Alice Lead' })).not.toBeInTheDocument();
+  });
+
   it('shows the requested Pickup & Plot columns, edits the mapped location, and opens status details in Generic CRM', async () => {
     renderLeads(authValue);
 
@@ -731,7 +748,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
       const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
         th.textContent.replace(/\s+/g, ' ').trim(),
       );
-      expect(headers.slice(0, 16)).toEqual([
+      expect(headers.slice(0, 13)).toEqual([
         'Name',
         'Phone',
         'Company',
@@ -740,9 +757,6 @@ describe('Leads Freshsales-style list UI affordances', () => {
         'Created',
         'Source',
         'Lead Score',
-        'Interested plot area',
-        'Pickup location',
-        'Overall status',
         'Callified Campaign',
         'Call Status',
         'Callified AI call',

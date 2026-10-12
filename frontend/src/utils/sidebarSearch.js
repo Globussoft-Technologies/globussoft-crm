@@ -171,6 +171,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/transport-persons', label: 'Transport Persons', description: 'Manage drivers, vehicles, and pickup-location assignments', adminOnly: true },
   { path: '/plot-brokers', label: 'Sales Executives', description: 'Manage sales executive contacts, commissions, site visits, and plot assignments', adminOnly: true },
   { path: '/billing-persons', label: 'Billing Persons', description: 'Manage billing staff, customers, and plot assignments', adminOnly: true },
+  { path: '/pickup-customers', label: 'Customer Workflows', description: 'Track pickup and plot workflows including converted customers', adminOnly: true },
   { path: '/privacy', label: 'Privacy', description: 'GDPR / DSAR retention controls', adminOnly: true },
   { path: '/field-permissions', label: 'Field Permissions', description: 'Field-level access control', adminOnly: true },
   { path: '/admin/csp-violations', label: 'CSP Violations', description: 'Content security policy logs', adminOnly: true },

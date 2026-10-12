@@ -4424,7 +4424,8 @@ const Leads = () => {
           { key: "amount", label: "Amount" },
         ]
       : []),
-  ];
+  ].filter((column) => !isGeneric || !["interestedPlotArea", "pickupLocation", "overallPickupStatus"].includes(column.key)
+    || !Array.isArray(visibleColumns) || visibleColumns.includes(column.key));
   const isLeadFixedColumnVisible = (key) =>
     leadFixedExtraColumnDefs.some((column) => column.key === key);
   const getCustomFieldFilterKind = (fieldType) => {
@@ -8851,7 +8852,7 @@ const Leads = () => {
                       ["interestedPlotArea", "Interested plot area"],
                       ["pickupLocation", "Pickup location", { paddingRight: "1.5rem" }],
                       ["overallPickupStatus", "Overall status", { paddingLeft: "1.5rem" }],
-                    ].map(([key, label, spacing = {}]) => renderColumnHeaderCell(
+                    ].filter(([key]) => isLeadFixedColumnVisible(key)).map(([key, label, spacing = {}]) => renderColumnHeaderCell(
                       key,
                       label,
                       { paddingRight: "1rem", ...spacing },
@@ -9044,13 +9045,13 @@ const Leads = () => {
                           const pickupAddress = pickupStatus?.pickupAddress?.trim();
                           return (
                             <>
-                              <td
+                              {isLeadFixedColumnVisible("interestedPlotArea") && <td
                                 style={getBodyCellStyle("interestedPlotArea", { whiteSpace: "normal", overflowWrap: "anywhere" })}
                                 title={lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || undefined}
                               >
                                 {lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || "Not captured"}
-                              </td>
-                              <td
+                              </td>}
+                              {isLeadFixedColumnVisible("pickupLocation") && <td
                                 style={getBodyCellStyle("pickupLocation", { whiteSpace: "normal", overflowWrap: "anywhere", paddingRight: "1.5rem" })}
                                 onClick={(event) => event.stopPropagation()}
                               >
@@ -9099,8 +9100,8 @@ const Leads = () => {
                                     <Pencil size={14} />
                                   </button>
                                 </div>
-                              </td>
-                              <td
+                              </td>}
+                              {isLeadFixedColumnVisible("overallPickupStatus") && <td
                                 style={getBodyCellStyle("overallPickupStatus", { whiteSpace: "normal", overflow: "visible", paddingLeft: "1.5rem" })}
                                 onClick={(event) => event.stopPropagation()}
                               >
@@ -9121,7 +9122,7 @@ const Leads = () => {
                                     <Eye size={13} /> View status
                                   </button>
                                 )}
-                              </td>
+                              </td>}
                             </>
                           );
                         })()}

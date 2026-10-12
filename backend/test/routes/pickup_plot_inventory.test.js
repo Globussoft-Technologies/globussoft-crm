@@ -72,6 +72,7 @@ prisma.plotInvoiceItem.create = vi.fn();
 prisma.plotWorkflowEvent.create = vi.fn();
 prisma.plotWorkflowEvent.findMany = vi.fn();
 prisma.$transaction = vi.fn(async (callback) => callback(prisma));
+prisma.$queryRaw = vi.fn();
 
 const auth = requireCJS('../../middleware/auth');
 auth.verifyToken = (_req, _res, next) => next();
@@ -90,6 +91,7 @@ function makeApp({ tenantId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prisma.$queryRaw.mockResolvedValue([{ id: 41 }]);
   prisma.plotSite.updateMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
   prisma.customerPickup.findUnique.mockResolvedValue(null);
@@ -2192,7 +2194,7 @@ describe('customer pickup status', () => {
 
     expect(response.status).toBe(200);
     expect(prisma.contact.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 7, id: { in: [61, 62] }, status: 'Lead', deletedAt: null },
+      where: { tenantId: 7, id: { in: [61, 62] }, deletedAt: null },
       select: { id: true },
     });
     expect(prisma.customerPickup.findMany).toHaveBeenCalledWith(expect.objectContaining({
@@ -2221,13 +2223,40 @@ describe('customer pickup status', () => {
       where: {
         tenantId: 7,
         id: { in: [61] },
-        status: 'Lead',
         deletedAt: null,
         assignedToId: 3,
       },
       select: { id: true },
     });
     expect(prisma.customerPickup.findMany).not.toHaveBeenCalled();
+  });
+
+  test('projects converted customers with bounded, paginated history and scoped staff', async () => {
+    prisma.contact.findMany.mockResolvedValue([{ id: 61 }]);
+    prisma.customerPickup.findMany.mockResolvedValue([{ id: 91, contactId: 61, contact: { id: 61, status: 'Customer' } }]);
+    prisma.$queryRaw.mockResolvedValue([{ id: 41 }]);
+    prisma.plotWorkflowEvent.findMany.mockResolvedValue(Array.from({ length: 51 }, (_, index) => ({ id: index + 1, contactId: 61 })));
+    const response = await request(makeApp()).get('/api/pickup-plot-inventory/lead-status?contactIds=61&historyPage=2');
+    expect(response.status).toBe(200);
+    expect(response.body.customers[0].contact.status).toBe('Customer');
+    expect(response.body.customers[0].workflowHistory).toHaveLength(50);
+    expect(response.body.customers[0].workflowHistoryPagination).toEqual({ page: 2, pageSize: 50, hasMore: true });
+    expect(prisma.plotWorkflowEvent.findMany).toHaveBeenCalledWith({ where: { tenantId: 7, contactId: 61 }, orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], skip: 50, take: 51 });
+    expect(prisma.transportPerson.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 7, isActive: true, id: { in: [41] } } }));
+    const query = prisma.$queryRaw.mock.calls[0][0];
+    expect(query.sql).toContain('JSON_CONTAINS');
+    expect(query.sql).toContain('LIMIT 201');
+    expect(query.values).toContain(7);
+    expect(query.values).toContain('61');
+  });
+
+  test('rejects an oversized staff projection instead of silently truncating it', async () => {
+    prisma.contact.findMany.mockResolvedValue([{ id: 61 }]);
+    prisma.$queryRaw.mockResolvedValue(Array.from({ length: 201 }, (_, id) => ({ id })));
+    const response = await request(makeApp()).get('/api/pickup-plot-inventory/lead-status?contactIds=61');
+    expect(response.status).toBe(413);
+    expect(response.body.code).toBe('WORKFLOW_PROJECTION_TOO_LARGE');
+    expect(prisma.transportPerson.findMany).not.toHaveBeenCalled();
   });
 
   test('requires admin access to the customer status directory', async () => {

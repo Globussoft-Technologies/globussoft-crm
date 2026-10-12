@@ -66,6 +66,7 @@ const FEATURE_PROFILES = {
   "transport-persons": ["admin", "transport person", "transport persons", "edit login, vehicle, customer, plot, and service-area assignments"],
   "plot-brokers": ["admin", "sales executive", "sales executives", "edit login, customer, plot, agency, commission, and site visit assignments"],
   "billing-persons": ["admin", "billing person", "billing persons", "edit login, customer, and plot assignments"],
+  "pickup-customers": ["admin", "customer workflow", "customer workflows", "review pickup and billing progress, including converted customers"],
   privacy: ["admin", "privacy request", "privacy requests", "review retention and DSAR handling"],
   "field-permissions": ["admin", "field rule", "field rules", "edit role-level visibility and access"],
   "admin-csp-violations": ["analytics", "CSP violation", "CSP violations", "inspect blocked resources and directives"],

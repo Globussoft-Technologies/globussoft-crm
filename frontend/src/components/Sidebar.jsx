@@ -2810,6 +2810,7 @@ function renderGenericNav({
         <Link to="/transport-persons" icon={Truck} label="Transport Persons" adminOnly />
         <Link to="/plot-brokers" icon={Handshake} label="Sales Executives" adminOnly />
         <Link to="/billing-persons" icon={Receipt} label="Billing Persons" adminOnly />
+        <Link to="/pickup-customers" icon={MapPin} label="Customer Workflows" adminOnly />
       </>)}
 
       {renderGroup("Administration", <>

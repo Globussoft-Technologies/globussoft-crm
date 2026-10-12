@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
+const { Prisma } = require("@prisma/client");
 const { sendEmail } = require("../lib/emailSender");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
@@ -2165,7 +2166,6 @@ router.get("/lead-status", async (req, res) => {
     const contactWhere = {
       tenantId,
       id: { in: contactIds },
-      status: "Lead",
       deletedAt: null,
     };
     if (!["ADMIN", "MANAGER"].includes(req.user.role)) {
@@ -2185,7 +2185,24 @@ router.get("/lead-status", async (req, res) => {
     const visibleContactIds = visibleContacts.map((contact) => contact.id);
     if (!visibleContactIds.length) return res.json({ customers: [], pickupLocations });
 
-    const [pickups, transportPeople, brokers, workflowEvents, plots] = await Promise.all([
+    const historyPage = Math.max(1, Math.min(100000, parseInt(req.query.historyPage, 10) || 1));
+    // Filter JSON assignments in the database, not after downloading every
+    // employee. Tables are fixed server-side; IDs remain bound parameters.
+    const assignedIds = async (table) => {
+      const matches = visibleContactIds.map((id) => Prisma.sql`JSON_CONTAINS(
+        CASE WHEN JSON_VALID(customerIdsJson) THEN customerIdsJson ELSE '[]' END,
+        ${String(id)}, '$')`);
+      const rows = await prisma.$queryRaw(Prisma.sql`SELECT id FROM ${Prisma.raw(table)}
+        WHERE tenantId = ${tenantId} AND isActive = true AND (${Prisma.join(matches, ' OR ')}) LIMIT 201`);
+      if (rows.length > 200) {
+        const error = new Error("Too many assignments. Request fewer contacts.");
+        error.code = "WORKFLOW_PROJECTION_TOO_LARGE";
+        throw error;
+      }
+      return rows.map((row) => row.id);
+    };
+    const [transportIds, brokerIds] = await Promise.all([assignedIds('TransportPerson'), assignedIds('PlotBroker')]);
+    const [pickups, transportPeople, brokers, eventPages] = await Promise.all([
       prisma.customerPickup.findMany({
         where: { tenantId, contactId: { in: visibleContactIds } },
         orderBy: { updatedAt: "desc" },
@@ -2194,22 +2211,36 @@ router.get("/lead-status", async (req, res) => {
         },
       }),
       prisma.transportPerson.findMany({
-        where: { tenantId, isActive: true },
+        where: { tenantId, isActive: true, id: { in: transportIds } },
         select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, assignmentStatusJson: true, updatedAt: true },
       }),
       prisma.plotBroker.findMany({
-        where: { tenantId, isActive: true },
+        where: { tenantId, isActive: true, id: { in: brokerIds } },
         select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
       }),
-      prisma.plotWorkflowEvent.findMany({
-        where: { tenantId, contactId: { in: visibleContactIds } },
-        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-      }),
-      prisma.plotSite.findMany({
-        where: { tenantId },
-        select: { id: true, name: true, address: true, area: true, availability: true },
-      }),
+      Promise.all(visibleContactIds.map(async (contactId) => {
+        const events = await prisma.plotWorkflowEvent.findMany({
+          where: { tenantId, contactId },
+          orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+          skip: (historyPage - 1) * 50, take: 51,
+        });
+        return { contactId, events: events.slice(0, 50).reverse(), hasMore: events.length > 50 };
+      })),
     ]);
+    const plotIds = [...new Set([...transportPeople, ...brokers].flatMap((person) =>
+      assignmentPairs(person).filter((pair) => visibleContactIds.includes(pair.customerId))
+        .map((pair) => pair.plotSiteId),
+    ).filter((id) => Number.isInteger(id) && id > 0))];
+    if (plotIds.length > 200) {
+      const error = new Error("Too many plot assignments. Request fewer contacts.");
+      error.code = "WORKFLOW_PROJECTION_TOO_LARGE";
+      throw error;
+    }
+    const plots = plotIds.length ? await prisma.plotSite.findMany({
+      where: { tenantId, id: { in: plotIds } },
+      select: { id: true, name: true, address: true, area: true, availability: true },
+    }) : [];
+    const workflowEvents = eventPages.flatMap((page) => page.events);
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
     const historyByCustomer = new Map();
     for (const event of workflowEvents) {
@@ -2232,10 +2263,12 @@ router.get("/lead-status", async (req, res) => {
       pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
       ...findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap),
       workflowHistory: historyByCustomer.get(pickup.contactId) || [],
+      workflowHistoryPagination: { page: historyPage, pageSize: 50, hasMore: eventPages.find((page) => page.contactId === pickup.contactId)?.hasMore || false },
     }));
     return res.json({ customers, pickupLocations });
   } catch (error) {
     console.error("pickup-plot-inventory GET /lead-status error:", error);
+    if (error.code === "WORKFLOW_PROJECTION_TOO_LARGE") return res.status(413).json({ error: error.message, code: error.code });
     return res.status(500).json({ error: "Failed to load lead workflow status", code: "LEAD_STATUS_LOAD_FAILED" });
   }
 });

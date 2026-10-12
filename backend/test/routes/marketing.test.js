@@ -295,6 +295,25 @@ function makeApp() {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /api/marketing/campaigns — list', () => {
+  test('applies date scope and deterministic ordering before paging and counting', async () => {
+    fakePrisma.campaign.findMany.mockResolvedValue([{ id: 8 }]);
+    fakePrisma.campaign.count = vi.fn().mockResolvedValue(17);
+    const res = await request(makeApp()).get('/api/marketing/campaigns?paginate=1&page=2&limit=8&campaignType=EMAIL&createdFrom=2026-01-01&createdTo=2026-02-01');
+    expect(res.status).toBe(200);
+    const where = { tenantId: 1, channel: 'EMAIL', createdAt: { gte: new Date('2026-01-01'), lte: new Date('2026-02-01') } };
+    expect(fakePrisma.campaign.findMany).toHaveBeenCalledWith({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: 8, take: 8 });
+    expect(fakePrisma.campaign.count).toHaveBeenCalledWith({ where });
+    expect(res.body.pagination).toMatchObject({ page: 2, total: 17, totalPages: 3 });
+  });
+
+  test('rejects invalid or reversed dates instead of querying', async () => {
+    for (const query of ['createdFrom=invalid', 'createdFrom=2026-02-01&createdTo=2026-01-01']) {
+      const res = await request(makeApp()).get(`/api/marketing/campaigns?paginate=1&${query}`);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    }
+    expect(fakePrisma.campaign.findMany).not.toHaveBeenCalled();
+  });
   test('returns an array of campaigns scoped to req.user.tenantId', async () => {
     fakePrisma.state.campaigns.push(
       { id: 1, name: 'A', tenantId: 1, channel: 'EMAIL', status: 'Draft' },

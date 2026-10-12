@@ -20,15 +20,19 @@ const { resolveSendGridConfig } = mocks;
 
 const requireCJS = createRequire(import.meta.url);
 const { sendEmail } = requireCJS("../../lib/emailSender");
+const prisma = requireCJS("../../lib/prisma");
+const originalTenantFindUnique = prisma.tenant.findUnique;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   resolveSendGridConfig.mockReset();
   globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+  prisma.tenant.findUnique = vi.fn();
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  prisma.tenant.findUnique = originalTenantFindUnique;
 });
 
 describe("emailSender tenant SendGrid selection", () => {
@@ -105,5 +109,36 @@ describe("emailSender tenant SendGrid selection", () => {
       type: "application/pdf",
       disposition: "attachment",
     }]);
+  });
+
+  test("uses the configured Generic organization name when sender name is missing", async () => {
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: "SG.generic.key",
+      fromEmail: "verified@generic.test",
+      fromName: "",
+      source: "tenant",
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ id: 91, vertical: "generic", name: "Configured Organization" });
+
+    await sendEmail({ tenantId: 91, to: "lead@example.test", subject: "Hello", text: "Body", fromName: "" });
+
+    const payload = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(payload.from).toEqual({ email: "verified@generic.test", name: "Configured Organization" });
+    expect(payload.from.name).not.toBe("lead@example.test");
+  });
+
+  test("does not use contact data as the sender name", async () => {
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: "SG.generic.key",
+      fromEmail: "verified@generic.test",
+      fromName: "Configured Organization",
+      source: "tenant",
+    });
+
+    await sendEmail({ tenantId: 91, to: "lead@example.test", subject: "Hello", text: "Body", fromName: "Configured Organization" });
+
+    const payload = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(payload.from.name).toBe("Configured Organization");
+    expect(payload.from.name).not.toBe("Lead Person");
   });
 });

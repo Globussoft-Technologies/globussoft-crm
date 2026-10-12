@@ -357,6 +357,13 @@ describe('cron/sequenceEngine — Generic pickup and site-visit receiver conditi
 // ─── processStep — email branch ────────────────────────────────────────────
 
 describe('cron/sequenceEngine — processStep email', () => {
+  test.each(['travel', 'wellness'])('keeps the legacy renderer for %s templates', async (vertical) => {
+    await processStep(stepWith({ emailTemplate: { subject: '{{unknown}}', body: '{{contact.name}} {{unknown}}' } }),
+      enrollmentWith({ contact: { id: 7, name: '<Legacy>', email: 'test@example.test' }, sequence: { tenant: { vertical } } }));
+    const message = prisma.emailMessage.create.mock.calls[0][0].data;
+    expect(message.subject).toBe('{{unknown}}');
+    expect(message.body).toBe('<Legacy> {{unknown}}');
+  });
   test('Travel uses its tenant sender while Generic and Wellness keep the platform sender', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
     resolveSendGridConfig.mockResolvedValue({

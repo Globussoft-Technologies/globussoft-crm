@@ -1,0 +1,2 @@
+ALTER TABLE `EmailTemplate`
+  ADD COLUMN `channel` VARCHAR(191) NOT NULL DEFAULT 'EMAIL';

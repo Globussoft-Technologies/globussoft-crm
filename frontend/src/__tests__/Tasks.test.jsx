@@ -587,7 +587,7 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
   });
 });
 
-describe('<Tasks /> â€” wellness assignee source', () => {
+describe('<Tasks /> — wellness assignee source', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);

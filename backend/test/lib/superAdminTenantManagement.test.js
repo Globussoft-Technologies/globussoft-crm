@@ -37,6 +37,8 @@ require('node:module')._cache[auditPath] = {
 
 const {
   getSuperAdminTenantsOverview,
+  getSuperAdminRoleLimitsOverview,
+  setSuperAdminCustomRoleLimit,
   getSuperAdminTenantDetail,
   superAdminGrantSubscription,
   superAdminCancelPlatformSubscription,
@@ -52,7 +54,8 @@ const DEFAULT_AI_STATE = {
 };
 
 beforeEach(() => {
-  prisma.tenant = { findMany: vi.fn(), findUnique: vi.fn() };
+  prisma.tenant = { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() };
+  prisma.role = { count: vi.fn() };
   prisma.user = { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() };
   prisma.subscription = { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() };
   prisma.subscriptionPlan = { findUnique: vi.fn(), findMany: vi.fn() };
@@ -156,6 +159,106 @@ describe('getSuperAdminTenantsOverview', () => {
 });
 
 // ─── getSuperAdminTenantDetail ──────────────────────────────────────────────
+
+describe('getSuperAdminRoleLimitsOverview', () => {
+  test('returns role usage and limits across generic, wellness, and travel tenants', async () => {
+    prisma.tenant.findMany.mockResolvedValue([
+      tenantRow({ id: 1, name: 'Acme Generic', vertical: 'generic', maxCustomRoles: 5 }),
+      tenantRow({ id: 2, name: 'Acme Wellness', vertical: 'wellness', maxCustomRoles: null }),
+      tenantRow({ id: 3, name: 'Acme Travel', vertical: 'travel', maxCustomRoles: 2 }),
+    ]);
+    prisma.role.count
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(2);
+
+    const result = await getSuperAdminRoleLimitsOverview({});
+
+    expect(result.tenants).toHaveLength(3);
+    expect(result.tenants[0]).toMatchObject({
+      tenantId: 1,
+      vertical: 'generic',
+      customRoleCount: 3,
+      maxCustomRoles: 5,
+      remainingCustomRoles: 2,
+      roleLimitReached: false,
+    });
+    expect(result.tenants[1].remainingCustomRoles).toBeNull();
+    expect(result.tenants[2].roleLimitReached).toBe(true);
+    expect(result.summary).toEqual({
+      totalTenants: 3,
+      cappedTenants: 2,
+      totalCustomRoles: 6,
+      tenantsAtLimit: 1,
+    });
+    expect(prisma.role.count).toHaveBeenNthCalledWith(1, {
+      where: { tenantId: 1, isSystem: false, isActive: true },
+    });
+  });
+
+  test('search filters the cross-vertical organization list', async () => {
+    prisma.tenant.findMany.mockResolvedValue([
+      tenantRow({ id: 1, name: 'Acme Generic', vertical: 'generic' }),
+      tenantRow({ id: 2, name: 'Wellness House', vertical: 'wellness' }),
+    ]);
+    prisma.role.count.mockResolvedValue(0);
+
+    const result = await getSuperAdminRoleLimitsOverview({ search: 'wellness' });
+
+    expect(result.tenants).toHaveLength(1);
+    expect(result.tenants[0].organization).toBe('Wellness House');
+  });
+});
+
+describe('setSuperAdminCustomRoleLimit', () => {
+  test('updates the limit, returns usage, and writes a Super Admin audit entry', async () => {
+    prisma.tenant.findUnique.mockResolvedValue(tenantRow({ maxCustomRoles: 10 }));
+    prisma.tenant.update.mockResolvedValue({ id: 1, maxCustomRoles: 5 });
+    prisma.role.count.mockResolvedValue(4);
+
+    const result = await setSuperAdminCustomRoleLimit({
+      tenantId: 1,
+      maxCustomRoles: 5,
+      superAdminUsername: 'ops_role_admin',
+    });
+
+    expect(result).toMatchObject({
+      tenantId: 1,
+      organization: 'Acme Travel',
+      customRoleCount: 4,
+      maxCustomRoles: 5,
+      remainingCustomRoles: 1,
+    });
+    expect(prisma.tenant.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { maxCustomRoles: 5 },
+    });
+    expect(mockWriteAudit).toHaveBeenCalledWith(
+      'Tenant',
+      'SET_CUSTOM_ROLE_LIMIT',
+      1,
+      null,
+      1,
+      expect.objectContaining({
+        maxCustomRoles: 5,
+        previousMaxCustomRoles: 10,
+        performedBySuperAdmin: 'ops_role_admin',
+      }),
+    );
+  });
+
+  test('accepts null as unlimited and rejects invalid values', async () => {
+    prisma.tenant.findUnique.mockResolvedValue(tenantRow({ maxCustomRoles: 5 }));
+    prisma.tenant.update.mockResolvedValue({ id: 1, maxCustomRoles: null });
+    prisma.role.count.mockResolvedValue(5);
+
+    const unlimited = await setSuperAdminCustomRoleLimit({ tenantId: 1, maxCustomRoles: null, superAdminUsername: 'ops' });
+    expect(unlimited.maxCustomRoles).toBeNull();
+
+    await expect(setSuperAdminCustomRoleLimit({ tenantId: 1, maxCustomRoles: -1, superAdminUsername: 'ops' }))
+      .rejects.toMatchObject({ code: 'INVALID_CUSTOM_ROLE_LIMIT' });
+  });
+});
 
 describe('getSuperAdminTenantDetail', () => {
   test('throws TENANT_NOT_FOUND for a missing tenant', async () => {

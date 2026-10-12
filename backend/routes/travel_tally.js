@@ -163,7 +163,7 @@ const quoteTripName = (quote) => {
   }
   if (!cities.length) {
     for (const line of lines) {
-      const match = /(?:→|->|â†’|->)\s*([A-Za-z .]+?)(?:\s*\(|\s*\[|$)/.exec(String(line.description || ""));
+      const match = /(?:→|->|→|->)\s*([A-Za-z .]+?)(?:\s*\(|\s*\[|$)/.exec(String(line.description || ""));
       const city = match?.[1]?.trim();
       if (city) { cities.push(city); break; }
     }

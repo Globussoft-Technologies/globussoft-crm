@@ -484,7 +484,7 @@ export default function TravelContactProfilePanel({ contactId }) {
                 <FileText size={16} />
                 <div>
                   <div style={{ fontWeight: 600 }}>{doc.label || doc.originalName}</div>
-                  <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>{doc.category || "general"}{doc.documentType ? ` � ${doc.documentType}` : ""}{doc.expiresAt ? ` � expires ${dateInput(doc.expiresAt)}` : ""}</div>
+                  <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>{doc.category || "general"}{doc.documentType ? ` — ${doc.documentType}` : ""}{doc.expiresAt ? ` — expires ${dateInput(doc.expiresAt)}` : ""}</div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -503,8 +503,8 @@ export default function TravelContactProfilePanel({ contactId }) {
             {data.visaApplications.map((item) => (
               <div key={item.id} style={docRow}>
                 <div>
-                  <strong>{item.destinationCountry || "Visa"}</strong> {item.applicationType ? `� ${item.applicationType}` : ""}
-                  <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>Status: {item.status || "unknown"}{item.expiryDate ? ` � expiry ${dateInput(item.expiryDate)}` : ""}</div>
+                  <strong>{item.destinationCountry || "Visa"}</strong> {item.applicationType ? `— ${item.applicationType}` : ""}
+                  <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>Status: {item.status || "unknown"}{item.expiryDate ? ` — expiry ${dateInput(item.expiryDate)}` : ""}</div>
                 </div>
                 <a href={`/travel/visa/applications/${item.id}`} style={linkBtn}>Open</a>
               </div>

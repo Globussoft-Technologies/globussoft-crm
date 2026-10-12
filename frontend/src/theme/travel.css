@@ -1244,7 +1244,7 @@ html[data-theme="dark"][data-vertical="travel"],
   border: 1px solid rgba(200, 154, 78, 0.20) !important;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
 }
-/* Travel file pickers â€” style the native "Choose file" control so upload
+/* Travel file pickers — style the native "Choose file" control so upload
  * surfaces feel deliberate instead of browser-default. This hits every
  * visible file input in the travel vertical, including import modals and
  * ad-hoc document upload rows.

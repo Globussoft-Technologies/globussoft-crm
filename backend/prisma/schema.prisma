@@ -88,6 +88,9 @@ model Tenant {
   emailRetention                 Boolean   @default(true)
   productToursEnabled            Boolean   @default(true)
   isActive                       Boolean   @default(true)
+  // Platform-enforced maximum number of active tenant-managed RBAC roles.
+  // Null means unlimited. Tenant system roles do not consume this quota.
+  maxCustomRoles                 Int?
   ownerEmail                     String?
   adsgptLogin                    String? // AdsGPT aMember username or email for SSO
   // #921 slice S39 — per-tenant iframe-embed allowlist (FR-3.6). JSON array of
@@ -7041,6 +7044,9 @@ model Role {
   name              String // display name
   description       String?
   isSystem          Boolean  @default(false) // ADMIN, CUSTOMER, OWNER — immutable key
+  // True for roles created through the custom-role flow. The quota query also
+  // includes older non-system roles created before this flag was introduced.
+  isCustom          Boolean  @default(false)
   isActive          Boolean  @default(true)
   userType          String   @default("STAFF") // which user type this role applies to
   // Role-level data scope for routes that distinguish own/team/all data.
@@ -7063,6 +7069,7 @@ model Role {
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive])
+  @@index([tenantId, isCustom, isActive])
 }
 
 // RBAC Hardening Phase 4 — Immutable snapshot of a role's permission

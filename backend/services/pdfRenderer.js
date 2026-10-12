@@ -4621,7 +4621,7 @@ function renderTmcReportSection(doc, { num, title, body, accent }) {
   const contentW = pageW - pageMargin * 2;
   const contentBottom = doc.page.height - 78;
   const sectionSoft = "#F7FAFD";
-  const text = String(body || "").trim() || "�";
+  const text = String(body || "").trim() || "—";
   const textHeight = doc.heightOfString(text, {
     width: contentW - 66,
     align: "left",
@@ -6729,10 +6729,280 @@ async function renderReferenceWellnessInvoicePdf(invoice, contact, clinic, optio
   return bufPromise;
 }
 
+// Corporate invoice renderer. Generic CRM invoices intentionally have their
+// own layout instead of borrowing the wellness document: the source data is
+// shared, but the document language and information hierarchy are different.
+async function renderProfessionalInvoicePdf(invoice, contact, clinic, options = {}) {
+  const opts = options || {};
+  const doc = new PDFDocument({ size: "A4", margin: 42, bufferPages: true });
+  applyRupeeCapableFonts(doc);
+  const bufPromise = streamToBuffer(doc);
+  const c = safeClinic(clinic);
+  const tenant = opts.tenant || {};
+  const settings = opts.settings || {};
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const currency = opts.currency || tenant.defaultCurrency || "USD";
+  const locale = opts.locale || tenant.locale || "en-US";
+  const accent = professionalInvoiceColor(
+    tenant.brandColor
+      || professionalInvoiceSetting(settings, ["invoice.brandColor", "branding.color", "branding.primaryColor"])
+      || tenant.themeColor
+      || professionalInvoiceSetting(settings, ["invoice.themeColor", "branding.themeColor"]),
+    "#2856D6",
+  );
+  const navy = "#172A55";
+  const muted = "#61708E";
+  const pale = "#EDF4FF";
+  const border = "#CAD8EE";
+  const brandName = professionalInvoiceSetting(settings, ["invoice.brandName", "branding.name", "company.name"])
+    || tenant.name || c.name || "Organization";
+  const tagline = professionalInvoiceSetting(settings, ["invoice.tagline", "branding.tagline", "company.tagline"]);
+  const companyAddress = professionalInvoiceSetting(settings, [
+    "invoice.companyAddress", "invoice.address", "branding.address", "company.address", "businessAddress",
+  ]) || [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", "), c.country]
+    .filter(Boolean).join("\n");
+  const companyPhone = professionalInvoiceSetting(settings, ["invoice.companyPhone", "branding.phone", "company.phone"]) || c.phone;
+  const companyEmail = professionalInvoiceSetting(settings, ["invoice.companyEmail", "branding.email", "company.email"])
+    || c.email || tenant.ownerEmail;
+  const companyWebsite = professionalInvoiceSetting(settings, ["invoice.companyWebsite", "branding.website", "company.website"]);
+  const documentTitle = professionalInvoiceSetting(settings, ["invoice.documentTitle", "company.invoiceTitle"]) || "CRM Invoice";
+  const invoiceNumber = invoice?.invoiceNum || invoice?.id || "-";
+  const status = String(invoice?.status || "UNPAID").replace(/_/g, " ").toUpperCase();
+  const issueDate = professionalInvoiceDate(invoice?.issuedDate || invoice?.createdAt, locale);
+  const dueDate = professionalInvoiceDate(invoice?.dueDate, locale);
+  const customerName = invoice?.customerName || contact?.name || "Customer";
+  const customerCompany = contact?.company || invoice?.customerCompany || "";
+  const dealTitle = invoice?.deal?.title || invoice?.deal?.name || "";
+  const customerEmail = invoice?.customerEmail || contact?.email || "";
+  const customerPhone = invoice?.customerPhone || contact?.phone || "";
+  const customerAddress = invoice?.billingAddress || invoice?.customerAddress || contact?.address || "";
+  const lines = professionalInvoiceLines(invoice);
+  const symbol = { INR: "₹", USD: "$", GBP: "£", EUR: "€" }[currency] || currency;
+  const money = (value) => {
+    const amount = Number(value) || 0;
+    try {
+      return new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch (_e) {
+      return `${symbol}${amount.toFixed(2)}`;
+    }
+  };
+  const lineAmount = (line) => professionalInvoiceLineAmount(line);
+  const subtotal = lines.reduce((sum, line) => sum + lineAmount(line), 0);
+  const lineDiscount = lines.reduce((sum, line) => sum + (Number(line?.discount) || 0), 0);
+  const lineTax = lines.reduce((sum, line) => sum + (Number(line?.tax) || 0), 0);
+  const explicitDiscount = Number(invoice?.discountAmount);
+  const explicitTax = Number(invoice?.taxAmount);
+  const discount = Number.isFinite(explicitDiscount) ? explicitDiscount : lineDiscount;
+  const tax = Number.isFinite(explicitTax) ? explicitTax : lineTax;
+  const configuredTaxRate = Number(professionalInvoiceSetting(settings, ["invoice.taxRate", "tax.rate"]));
+  const taxRate = Number.isFinite(Number(invoice?.taxRate))
+    ? Number(invoice.taxRate)
+    : (Number.isFinite(configuredTaxRate) ? configuredTaxRate : 0);
+  const total = Number.isFinite(Number(invoice?.amount)) ? Number(invoice.amount) : subtotal - discount + tax;
+  // Prefer recorded financial values over status: an UNPAID invoice may
+  // already have partial payments. Legacy records without these fields
+  // retain the original paid/unpaid status fallback.
+  const recordedPaid = invoice?.amountPaid == null || invoice.amountPaid === ''
+    ? NaN : Number(invoice.amountPaid);
+  const recordedBalance = invoice?.balance == null || invoice.balance === ''
+    ? NaN : Number(invoice.balance);
+  const paid = Number.isFinite(recordedPaid)
+    ? Math.max(0, recordedPaid)
+    : Number.isFinite(recordedBalance)
+      ? Math.max(0, total - recordedBalance)
+      : /^(PAID|COMPLETED)$/i.test(status) ? total : 0;
+  const balance = Number.isFinite(recordedBalance)
+    ? Math.max(0, recordedBalance)
+    : Math.max(0, total - paid);
+
+  const metadataDividerX = left + 300;
+  const metadataContentLeft = metadataDividerX + 18;
+  const metadataContentRight = right - 18;
+  const metadataLabelWidth = 82;
+  const metadataValueX = metadataContentLeft + metadataLabelWidth;
+  const metadataValueWidth = Math.max(72, metadataContentRight - metadataValueX);
+  const drawMetadataRow = (label, value, y) => {
+    doc.font("Helvetica").fontSize(9.5).fillColor(navy).text(label, metadataContentLeft, y, {
+      width: metadataLabelWidth,
+      lineBreak: false,
+    });
+    const metadataValue = String(value || "-");
+    const valueFontSize = fitReferenceInvoiceMetadataFont(doc, metadataValue, metadataValueWidth, 9.5, 7.5);
+    doc.font("Helvetica-Bold").fontSize(valueFontSize).fillColor(navy).text(metadataValue, metadataValueX, y, {
+      width: metadataValueWidth,
+      align: "right",
+      lineBreak: false,
+      ellipsis: true,
+    });
+  };
+  const drawTableHeader = (y) => {
+    const columns = [
+      ["#", 28, "left"],
+      ["ITEM / DEAL", 255, "left"],
+      ["QTY", 48, "right"],
+      [`UNIT PRICE (${symbol})`, 90, "right"],
+      [`AMOUNT (${symbol})`, 90, "right"],
+    ];
+    doc.rect(left, y, width, 30).fill(pale);
+    let x = left;
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(navy);
+    for (const [label, columnWidth, align] of columns) {
+      doc.text(label, x + 6, y + 10, { width: columnWidth - 12, align });
+      x += columnWidth;
+    }
+    return { columns, y: y + 30 };
+  };
+
+  // Brand header: the logo, organization name and tagline are all tenant data.
+  const brandX = opts.logoBuffer ? left + 76 : left;
+  const brandMaxWidth = tagline ? 275 : 430;
+  if (opts.logoBuffer) {
+    try {
+      doc.image(opts.logoBuffer, left, 28, { fit: [58, 58] });
+    } catch (_e) {
+      // Invalid tenant logo: continue with the text-only brand header.
+    }
+  }
+  doc.font("Helvetica-Bold").fontSize(21).fillColor(navy).text(brandName, brandX, 31, {
+    width: brandMaxWidth,
+    lineBreak: false,
+  });
+  doc.font("Helvetica").fontSize(10.5).fillColor(muted).text(documentTitle, brandX, 59, { width: brandMaxWidth });
+  if (tagline) {
+    doc.font("Helvetica").fontSize(9.5).fillColor(navy).text(tagline, right - 175, 38, {
+      width: 175,
+      align: "right",
+    });
+    doc.moveTo(right - 42, 73).lineTo(right, 73).lineWidth(1.2).strokeColor(accent).stroke();
+  }
+  doc.moveTo(left, 101).lineTo(right, 101).lineWidth(0.7).strokeColor(border).stroke();
+
+  // Invoice metadata band.
+  const metadataTop = 116;
+  const metadataHeight = 94;
+  doc.roundedRect(left, metadataTop, width, metadataHeight, 5).fillAndStroke(pale, border);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(accent).text(documentTitle.toUpperCase(), left + 18, metadataTop + 17);
+  doc.font("Helvetica-Bold").fontSize(22).fillColor(navy).text(String(invoiceNumber), left + 18, metadataTop + 31, {
+    width: 240,
+    lineBreak: false,
+  });
+  const statusColor = /^(PAID|COMPLETED)$/i.test(status) ? "#14804A" : "#D64545";
+  const statusLabel = status || "UNPAID";
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(statusColor).text(statusLabel, left + 18, metadataTop + 71, {
+    width: 120,
+    lineBreak: false,
+  });
+  doc.moveTo(metadataDividerX, metadataTop + 14).lineTo(metadataDividerX, metadataTop + metadataHeight - 14).lineWidth(0.5).strokeColor(border).stroke();
+  drawMetadataRow("Issue Date", issueDate, metadataTop + 25);
+  drawMetadataRow("Due Date", dueDate, metadataTop + 47);
+  drawMetadataRow("Status", statusLabel, metadataTop + 69);
+
+  // From/Bill To section.
+  const partiesTop = 234;
+  const dividerX = left + width / 2;
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent).text("From", left, partiesTop);
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(navy).text(brandName, left, partiesTop + 20, { width: width / 2 - 20 });
+  let fromY = partiesTop + 42;
+  doc.font("Helvetica").fontSize(9.5).fillColor(muted);
+  for (const line of [companyAddress, companyPhone, companyEmail].filter(Boolean)) {
+    doc.text(String(line), left, fromY, { width: width / 2 - 22, lineGap: 1 });
+    fromY = doc.y + 3;
+  }
+  doc.moveTo(dividerX, partiesTop - 2).lineTo(dividerX, partiesTop + 112).lineWidth(0.5).strokeColor(border).stroke();
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent).text("Bill To", dividerX + 24, partiesTop);
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(navy).text(customerName, dividerX + 24, partiesTop + 20, { width: width / 2 - 24 });
+  let billY = partiesTop + 42;
+  doc.font("Helvetica").fontSize(9.5).fillColor(muted);
+  for (const line of [customerCompany, dealTitle ? `Deal: ${dealTitle}` : "", customerEmail, customerPhone, customerAddress].filter(Boolean)) {
+    doc.text(String(line), dividerX + 24, billY, { width: width / 2 - 30, lineGap: 1 });
+    billY = doc.y + 3;
+  }
+  doc.moveTo(left, partiesTop + 128).lineTo(right, partiesTop + 128).lineWidth(0.7).strokeColor(accent).stroke();
+
+  // Structured line-item table.
+  let tableY = drawTableHeader(partiesTop + 146).y;
+  const tableBottom = doc.page.height - 190;
+  lines.forEach((line, index) => {
+    const name = String(line?.name || line?.productName || line?.serviceName || invoice?.description || invoice?.deal?.title || invoice?.notes || "CRM service");
+    const description = String(line?.description || "");
+    const quantity = Number.isFinite(Number(line?.quantity)) ? Number(line.quantity) : 1;
+    const amount = lineAmount(line);
+    const unitPrice = Number.isFinite(Number(line?.unitPrice)) ? Number(line.unitPrice) : amount / (quantity || 1);
+    const rowHeight = Math.max(34, doc.heightOfString(`${name}${description ? `\n${description}` : ""}`, { width: 243, font: "Helvetica", fontSize: 9.5 }) + 14);
+    if (tableY + rowHeight > tableBottom) {
+      doc.addPage();
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(accent).text(`${brandName} - Invoice ${invoiceNumber}`, left, 28, { width });
+      tableY = drawTableHeader(52).y;
+    }
+    if (index % 2 === 0) doc.rect(left, tableY, width, rowHeight).fill("#FBFDFF");
+    doc.rect(left, tableY, width, rowHeight).lineWidth(0.35).strokeColor(border).stroke();
+    let x = left;
+    const values = [String(index + 1), `${name}${description ? `\n${description}` : ""}`, String(quantity), money(unitPrice), money(amount)];
+    const columns = [["#", 28, "left"], ["ITEM / DEAL", 255, "left"], ["QTY", 48, "right"], ["UNIT PRICE", 90, "right"], ["AMOUNT", 90, "right"]];
+    doc.font("Helvetica").fontSize(9.5).fillColor(navy);
+    columns.forEach(([, columnWidth, align], columnIndex) => {
+      doc.text(values[columnIndex], x + 6, tableY + 10, { width: columnWidth - 12, align, height: rowHeight - 12, ellipsis: true });
+      x += columnWidth;
+    });
+    tableY += rowHeight;
+  });
+
+  // Keep footer text clear of PDFKit's automatic bottom-margin pagination
+  // threshold so short invoices stay on one page.
+  const footerY = doc.page.height - doc.page.margins.bottom - 62;
+  if (tableY + 145 > footerY - 20) {
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent).text(`${brandName} - Invoice ${invoiceNumber}`, left, 28, { width });
+    tableY = 66;
+  }
+  const summaryTop = tableY + 20;
+  const summaryWidth = 218;
+  const summaryX = right - summaryWidth;
+  const summaryRows = [
+    ["Subtotal", money(subtotal)],
+    ...(discount ? [["Discount", money(discount)]] : []),
+    [`Tax (${taxRate}%)`, money(tax)],
+    ["Total", money(total)],
+  ];
+  let summaryY = summaryTop;
+  summaryRows.forEach(([label, value]) => {
+    const rowHeight = label === "Total" ? 34 : 24;
+    if (label === "Total") doc.rect(summaryX, summaryY, summaryWidth, rowHeight).fill(pale);
+    doc.moveTo(summaryX, summaryY + rowHeight).lineTo(right, summaryY + rowHeight).lineWidth(0.4).strokeColor(border).stroke();
+    doc.font(label === "Total" ? "Helvetica-Bold" : "Helvetica").fontSize(label === "Total" ? 13 : 9.5).fillColor(label === "Total" ? accent : navy).text(label, summaryX + 12, summaryY + (label === "Total" ? 9 : 6), { width: 105 });
+    doc.font("Helvetica-Bold").fontSize(label === "Total" ? 12 : 9.5).fillColor(navy).text(value, right - 92, summaryY + (label === "Total" ? 9 : 6), { width: 80, align: "right" });
+    summaryY += rowHeight;
+  });
+  doc.font("Helvetica").fontSize(8.5).fillColor(muted).text(`Paid ${money(paid)}  •  Balance ${money(balance)}`, summaryX, summaryY + 10, { width: summaryWidth, align: "right" });
+
+  const footerNote = professionalInvoiceSetting(settings, ["invoice.notes", "branding.invoiceNotes"]);
+  doc.moveTo(left, footerY - 10).lineTo(right, footerY - 10).lineWidth(0.7).strokeColor(border).stroke();
+  doc.font("Helvetica").fontSize(9).fillColor(navy).text(footerNote || "This is a system-generated CRM invoice.", left, footerY + 5, { width: 300 });
+  doc.font("Helvetica").fontSize(9).fillColor(navy).text("Thank you for your business.", left, footerY + 20, { width: 300 });
+  if (companyWebsite) doc.text(companyWebsite, right - 150, footerY + 5, { width: 150, align: "right" });
+  const pageRange = doc.bufferedPageRange();
+  for (let pageIndex = 0; pageIndex < pageRange.count; pageIndex += 1) {
+    doc.switchToPage(pageRange.start + pageIndex);
+    if (pageRange.count > 1) {
+      doc.font("Helvetica").fontSize(8).fillColor(muted).text(`Page ${pageIndex + 1} of ${pageRange.count}`, right - 150, footerY + 20, { width: 150, align: "right" });
+    }
+  }
+  doc.end();
+  return bufPromise;
+}
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
   renderBrandedInvoicePdf,
+  renderProfessionalInvoicePdf,
   renderProfessionalWellnessInvoicePdf: renderReferenceWellnessInvoicePdf,
   renderLegacyWellnessInvoicePdf: renderProfessionalWellnessInvoicePdf,
   fitReferenceInvoiceMetadataFont,
@@ -6792,4 +7062,3 @@ module.exports = {
   fetchLogoBuffer,
   _resetLogoCache,
 };
-

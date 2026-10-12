@@ -1172,7 +1172,7 @@ function ParentDocumentsView({ documents, visaApplications, trips, loading, toke
                 Choose visa document
                 <input key={fileInputKey} id={`parent-document-file-${fileInputKey}`} aria-label="Choose travel document" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={handleFileChange} style={styles.fileInput} />
               </label>
-              {file && <span style={styles.documentSelectedFile}>{file.name} Â· {formatFileSize(file.size)}</span>}
+              {file && <span style={styles.documentSelectedFile}>{file.name} · {formatFileSize(file.size)}</span>}
               <div style={styles.documentFormFooter}>
                 <button type="submit" disabled={saving} style={styles.primary}><Upload size={15} /> {saving ? "Uploading..." : "Upload visa document"}</button>
               </div>

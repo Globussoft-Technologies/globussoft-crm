@@ -25,9 +25,15 @@ const BACKEND_DIR = path.resolve(__dirname, '../../backend');
 
 let superAdminToken = null;
 let createdTenantId = null;
+let tenantOwnerToken = null;
 
 const superHeaders = () => ({
   Authorization: `Bearer ${superAdminToken}`,
+  'Content-Type': 'application/json',
+});
+
+const ownerHeaders = () => ({
+  Authorization: `Bearer ${tenantOwnerToken}`,
   'Content-Type': 'application/json',
 });
 
@@ -121,9 +127,9 @@ test.describe('POST /api/super-admin/tenant-management/organizations', () => {
       timeout: REQUEST_TIMEOUT,
     });
     expect(ownerLogin.status()).toBe(200);
-    const ownerToken = (await ownerLogin.json()).token;
+    tenantOwnerToken = (await ownerLogin.json()).token;
     const pages = await request.get(`${API}/pages/me`, {
-      headers: { Authorization: `Bearer ${ownerToken}` },
+      headers: { Authorization: `Bearer ${tenantOwnerToken}` },
       timeout: REQUEST_TIMEOUT,
     });
     expect(pages.status()).toBe(200);
@@ -131,6 +137,36 @@ test.describe('POST /api/super-admin/tenant-management/organizations', () => {
     const pageList = Array.isArray(pagesBody) ? pagesBody : pagesBody.pages;
     expect(Array.isArray(pageList)).toBe(true);
     expect(pageList.length).toBeGreaterThan(0);
+  });
+
+  test('sets a custom-role cap and blocks creation after the quota is consumed', async ({ request }) => {
+    const limitResponse = await request.put(`${API}/super-admin/tenant-management/tenants/${createdTenantId}/role-limit`, {
+      data: { maxCustomRoles: 1 },
+      headers: superHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(limitResponse.status()).toBe(200);
+    expect(await limitResponse.json()).toMatchObject({ maxCustomRoles: 1, customRoleCount: 0 });
+
+    const roleKey = `E2E_ROLE_${Date.now()}`;
+    const firstRole = await request.post(`${API}/roles`, {
+      data: { name: 'E2E Limited Role', key: roleKey, userType: 'STAFF' },
+      headers: ownerHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(firstRole.status()).toBe(201);
+
+    const secondRole = await request.post(`${API}/roles`, {
+      data: { name: 'E2E Blocked Role', key: `${roleKey}_TWO`, userType: 'STAFF' },
+      headers: ownerHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(secondRole.status()).toBe(409);
+    expect(await secondRole.json()).toMatchObject({
+      code: 'ROLE_LIMIT_REACHED',
+      customRoleCount: 1,
+      maxCustomRoles: 1,
+    });
   });
 
   test('rejects duplicate owner email within the same vertical', async ({ request }) => {

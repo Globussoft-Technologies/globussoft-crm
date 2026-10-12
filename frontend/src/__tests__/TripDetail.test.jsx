@@ -972,6 +972,29 @@ describe('<TripDetail /> — Payment plan tab', () => {
     ).toBeGreaterThanOrEqual(1);
   });
 
+  it('keeps an unsaved instalment when a background payment refresh arrives', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Create payment plan/i });
+    fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
+
+    const dueDate = await screen.findByLabelText(/Instalment 1 due date/i);
+    const amount = screen.getByLabelText(/Instalment 1 amount/i);
+    fireEvent.change(dueDate, { target: { value: '2099-09-20' } });
+    fireEvent.change(amount, { target: { value: '260000' } });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: window.location.origin,
+      data: { type: 'globus:travel-payment-complete', tripId: 101 },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Instalment 1 due date/i)).toHaveValue('2099-09-20');
+      expect(screen.getByLabelText(/Instalment 1 amount/i)).toHaveValue(260000);
+    });
+  });
+
   it('Save with no dueDate surfaces notify.error + no PUT fires', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');

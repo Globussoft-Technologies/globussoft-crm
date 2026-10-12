@@ -21,6 +21,10 @@
 const prisma = require("./prisma");
 const aiProviderManagement = require("./aiProviderManagement");
 const { writeAudit } = require("./audit");
+const {
+  normalizeCustomRoleLimit,
+  getCustomRoleSummary,
+} = require("./customRoleLimit");
 
 // ── date helpers (local copy — aiProviderManagement's normalizeAnalyticsDate
 // is not exported; this is a small pure utility, safe to duplicate) ────────
@@ -179,6 +183,106 @@ async function getSuperAdminTenantsOverview({ search = "", from, to } = {}) {
       from: fromDate ? fromDate.toISOString() : null,
       to: toDate ? toDate.toISOString() : null,
     },
+  };
+}
+
+// ── Cross-tenant custom-role quota management ───────────────────────────
+
+async function getSuperAdminRoleLimitsOverview({ search = "" } = {}) {
+  const searchTerm = String(search || "").trim().toLowerCase();
+  const tenants = await prisma.tenant.findMany({
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      ownerEmail: true,
+      vertical: true,
+      isActive: true,
+      maxCustomRoles: true,
+    },
+    orderBy: { name: "asc" },
+  });
+
+  const results = [];
+  for (const tenant of tenants) {
+    const row = {
+      tenantId: tenant.id,
+      organization: tenant.name,
+      slug: tenant.slug,
+      ownerEmail: tenant.ownerEmail || null,
+      vertical: tenant.vertical || "generic",
+      status: tenant.isActive ? "active" : "disabled",
+      ...(await getCustomRoleSummary(prisma, tenant.id, tenant)),
+    };
+
+    if (searchTerm) {
+      const haystack = [
+        row.organization,
+        row.slug,
+        row.ownerEmail,
+        row.vertical,
+        String(row.tenantId),
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(searchTerm)) continue;
+    }
+    results.push(row);
+  }
+
+  return {
+    tenants: results,
+    summary: {
+      totalTenants: results.length,
+      cappedTenants: results.filter((tenant) => tenant.maxCustomRoles != null).length,
+      totalCustomRoles: results.reduce((sum, tenant) => sum + tenant.customRoleCount, 0),
+      tenantsAtLimit: results.filter((tenant) => tenant.roleLimitReached).length,
+    },
+  };
+}
+
+async function setSuperAdminCustomRoleLimit({ tenantId, maxCustomRoles, superAdminUsername }) {
+  const normalizedLimit = normalizeCustomRoleLimit(maxCustomRoles);
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: {
+      id: true,
+      name: true,
+      maxCustomRoles: true,
+    },
+  });
+  if (!tenant) {
+    const error = new Error("Tenant not found");
+    error.code = "TENANT_NOT_FOUND";
+    throw error;
+  }
+
+  await prisma.tenant.update({
+    where: { id: tenantId },
+    data: { maxCustomRoles: normalizedLimit },
+  });
+
+  const summary = await getCustomRoleSummary(prisma, tenantId, {
+    id: tenant.id,
+    maxCustomRoles: normalizedLimit,
+  });
+
+  await writeAudit(
+    "Tenant",
+    "SET_CUSTOM_ROLE_LIMIT",
+    tenant.id,
+    null,
+    tenant.id,
+    {
+      maxCustomRoles: normalizedLimit,
+      previousMaxCustomRoles: tenant.maxCustomRoles ?? null,
+      customRoleCount: summary.customRoleCount,
+      performedBySuperAdmin: superAdminUsername,
+    },
+  );
+
+  return {
+    tenantId: tenant.id,
+    organization: tenant.name,
+    ...summary,
   };
 }
 
@@ -541,6 +645,8 @@ async function getSuperAdminRevenueSummary({ from, to } = {}) {
 
 module.exports = {
   getSuperAdminTenantsOverview,
+  getSuperAdminRoleLimitsOverview,
+  setSuperAdminCustomRoleLimit,
   getSuperAdminTenantDetail,
   superAdminGrantSubscription,
   superAdminCancelPlatformSubscription,

@@ -1,0 +1,740 @@
+.super-admin-role-management {
+  --role-limit-blue: #315cf5;
+  --role-limit-ink: #171b3e;
+  --role-limit-muted: #65708d;
+  --role-limit-border: #e1e6f0;
+  --role-limit-surface: #ffffff;
+  --role-limit-surface-raised: #f8f9fc;
+  --role-limit-surface-hover: #fbfcff;
+  --role-limit-panel: rgba(255, 255, 255, 0.84);
+  --role-limit-control-border: #d6deed;
+  --role-limit-placeholder: #8791aa;
+  --role-limit-table-border: #e8ecf4;
+  --role-limit-table-ink: #29314e;
+  --role-limit-help-border: #d9e2fa;
+  --role-limit-help-bg: #f5f8ff;
+  --role-limit-help-ink: #405071;
+  --role-limit-success-border: #b9efd5;
+  --role-limit-success-bg: #effcf5;
+  --role-limit-success-ink: #159660;
+  --role-limit-danger-border: #ffc5c9;
+  --role-limit-danger-bg: #fff2f3;
+  --role-limit-danger-ink: #d52b38;
+  --role-limit-neutral-border: #dce2ed;
+  --role-limit-neutral-bg: #f7f8fb;
+  --role-limit-neutral-ink: #68738d;
+  --role-limit-progress-bg: #e8ebf2;
+  --role-limit-shadow: 0 6px 18px rgba(42, 55, 95, 0.06);
+  display: grid;
+  gap: 1.1rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--role-limit-ink);
+}
+
+/* The super-admin shell follows the global document theme, but this page has
+ * its own dense controls and table surfaces. Keep both palettes explicit so
+ * a dark shell never inherits the light-only card colours below. */
+[data-theme="light"] .super-admin-role-management {
+  color-scheme: light;
+}
+
+[data-theme="dark"] .super-admin-role-management {
+  --role-limit-blue: #8aa8ff;
+  --role-limit-ink: #f1f5ff;
+  --role-limit-muted: #aab5ca;
+  --role-limit-border: #323b4c;
+  --role-limit-surface: #16181d;
+  --role-limit-surface-raised: #1d222b;
+  --role-limit-surface-hover: #222936;
+  --role-limit-panel: #171a21;
+  --role-limit-control-border: #3b465b;
+  --role-limit-placeholder: #8d99b0;
+  --role-limit-table-border: #30394a;
+  --role-limit-table-ink: #dce4f5;
+  --role-limit-help-border: #3e568d;
+  --role-limit-help-bg: #19243b;
+  --role-limit-help-ink: #dce7ff;
+  --role-limit-success-border: #256b50;
+  --role-limit-success-bg: #122b24;
+  --role-limit-success-ink: #6ee7b7;
+  --role-limit-danger-border: #7f3d48;
+  --role-limit-danger-bg: #321c24;
+  --role-limit-danger-ink: #ff9da8;
+  --role-limit-neutral-border: #3b4658;
+  --role-limit-neutral-bg: #202631;
+  --role-limit-neutral-ink: #bac5d9;
+  --role-limit-progress-bg: #364052;
+  --role-limit-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  color-scheme: dark;
+}
+
+.super-admin-role-management,
+.super-admin-role-management * {
+  box-sizing: border-box;
+}
+
+.role-limit-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.role-limit-page-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0;
+  color: var(--role-limit-ink);
+  font-size: clamp(1.55rem, 2vw, 2rem);
+  letter-spacing: -0.035em;
+}
+
+.role-limit-page-header h1 svg {
+  color: var(--role-limit-blue);
+}
+
+.role-limit-page-header p {
+  margin: 0.45rem 0 0;
+  color: var(--role-limit-muted);
+  font-size: 0.86rem;
+}
+
+.role-limit-help-button,
+.role-limit-clear-button,
+.role-limit-refresh-button,
+.role-limit-search-button,
+.role-limit-save-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 1px solid var(--role-limit-border);
+  border-radius: 0.65rem;
+  background: var(--role-limit-surface);
+  color: var(--role-limit-ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.role-limit-help-button {
+  min-height: 2.65rem;
+  padding: 0 0.95rem;
+  color: var(--role-limit-muted);
+  font-size: 0.8rem;
+}
+
+.role-limit-help-button:hover,
+.role-limit-clear-button:hover,
+.role-limit-refresh-button:hover,
+.role-limit-save-button:hover:not(:disabled) {
+  border-color: var(--role-limit-control-border);
+  background: var(--role-limit-surface-hover);
+  color: var(--role-limit-blue);
+}
+
+.role-limit-help-panel,
+.role-limit-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--role-limit-help-border);
+  border-radius: 0.75rem;
+  background: var(--role-limit-help-bg);
+  color: var(--role-limit-help-ink);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.role-limit-help-panel span {
+  color: var(--role-limit-muted);
+}
+
+.role-limit-message {
+  border-color: var(--role-limit-success-border);
+  background: var(--role-limit-success-bg);
+  color: var(--role-limit-success-ink);
+}
+
+.role-limit-message.is-error {
+  border-color: var(--role-limit-danger-border);
+  background: var(--role-limit-danger-bg);
+  color: var(--role-limit-danger-ink);
+}
+
+.role-limit-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.1fr) minmax(300px, 1.2fr) minmax(280px, 1fr) auto;
+  align-items: end;
+  gap: 1.1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--role-limit-border);
+  border-radius: 0.85rem;
+  background: var(--role-limit-panel);
+  box-shadow: var(--role-limit-shadow);
+}
+
+.role-limit-organization-filter,
+.role-limit-vertical-filter,
+.role-limit-search-filter {
+  min-width: 0;
+}
+
+.role-limit-organization-filter > span:first-child,
+.role-limit-vertical-filter legend {
+  display: block;
+  margin: 0 0 0.45rem;
+  padding: 0;
+  color: var(--role-limit-ink);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.role-limit-select-wrap,
+.role-limit-search-filter {
+  display: flex;
+  align-items: center;
+  min-height: 2.65rem;
+  border: 1px solid var(--role-limit-control-border);
+  border-radius: 0.7rem;
+  background: var(--role-limit-surface);
+  color: var(--role-limit-muted);
+}
+
+.role-limit-select-wrap {
+  gap: 0.55rem;
+  padding: 0 0.75rem;
+}
+
+.role-limit-select-wrap select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--role-limit-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.83rem;
+}
+
+.role-limit-vertical-filter {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.role-limit-filter-pills {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.role-limit-filter-pills button {
+  flex: 0 0 auto;
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--role-limit-control-border);
+  border-radius: 999px;
+  background: var(--role-limit-surface-raised);
+  color: var(--role-limit-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.77rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.role-limit-filter-pills button:hover {
+  border-color: var(--role-limit-blue);
+  color: var(--role-limit-blue);
+}
+
+.role-limit-filter-pills button.is-active {
+  border-color: var(--role-limit-blue);
+  background: color-mix(in srgb, var(--role-limit-blue) 16%, var(--role-limit-surface));
+  color: var(--role-limit-blue);
+  box-shadow: inset 0 0 0 1px rgba(49, 92, 245, 0.12);
+}
+
+.role-limit-search-filter {
+  gap: 0.55rem;
+  padding-left: 0.75rem;
+}
+
+.role-limit-search-control {
+  position: relative;
+  min-width: 0;
+}
+
+.role-limit-search-control .role-limit-search-filter {
+  width: 100%;
+}
+
+.role-limit-search-filter input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--role-limit-ink);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.role-limit-search-filter input::placeholder {
+  color: var(--role-limit-placeholder);
+}
+
+.role-limit-search-button {
+  width: 2.2rem;
+  height: 2.2rem;
+  margin-right: 0.2rem;
+  border: 0;
+  background: transparent;
+  color: var(--role-limit-blue);
+}
+
+.role-limit-search-suggestions {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  left: 0;
+  overflow: hidden;
+  border: 1px solid var(--role-limit-control-border);
+  border-radius: 0.7rem;
+  background: var(--role-limit-surface);
+  box-shadow: var(--role-limit-shadow);
+}
+
+.role-limit-search-suggestions button {
+  display: grid;
+  width: 100%;
+  gap: 0.2rem;
+  padding: 0.65rem 0.8rem;
+  border: 0;
+  border-bottom: 1px solid var(--role-limit-table-border);
+  background: var(--role-limit-surface);
+  color: var(--role-limit-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.role-limit-search-suggestions button:last-child {
+  border-bottom: 0;
+}
+
+.role-limit-search-suggestions button:hover,
+.role-limit-search-suggestions button:focus-visible {
+  outline: 0;
+  background: var(--role-limit-surface-hover);
+}
+
+.role-limit-suggestion-main {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.role-limit-suggestion-meta,
+.role-limit-no-suggestions {
+  color: var(--role-limit-muted);
+  font-size: 0.68rem;
+}
+
+.role-limit-no-suggestions {
+  padding: 0.75rem 0.8rem;
+}
+
+.role-limit-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.role-limit-clear-button {
+  min-height: 2.65rem;
+  padding: 0 0.8rem;
+  font-size: 0.77rem;
+}
+
+.role-limit-refresh-button {
+  width: 2.65rem;
+  height: 2.65rem;
+}
+
+.role-limit-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.role-limit-kpi {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+  min-height: 5.1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 0.8rem;
+}
+
+.role-limit-kpi-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid currentColor;
+  border-radius: 0.75rem;
+}
+
+.role-limit-kpi-label {
+  margin-bottom: 0.15rem;
+  color: var(--role-limit-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.role-limit-kpi-value {
+  color: var(--role-limit-ink);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.role-limit-kpi-blue { border-color: #e0e8ff; background: #f5f7ff; color: #315cf5; }
+.role-limit-kpi-green { border-color: #d8f0e3; background: #f2fbf6; color: #18a367; }
+.role-limit-kpi-purple { border-color: #e9ddff; background: #faf6ff; color: #8055e8; }
+.role-limit-kpi-red { border-color: #f8dada; background: #fff6f6; color: #e0313c; }
+
+[data-theme="dark"] .role-limit-kpi-blue {
+  border-color: #3c4f82;
+  background: #18233d;
+  color: #9db5ff;
+}
+
+[data-theme="dark"] .role-limit-kpi-green {
+  border-color: #27664f;
+  background: #122b24;
+  color: #68e0ae;
+}
+
+[data-theme="dark"] .role-limit-kpi-purple {
+  border-color: #563e7f;
+  background: #261c38;
+  color: #c3a0ff;
+}
+
+[data-theme="dark"] .role-limit-kpi-red {
+  border-color: #743d48;
+  background: #321c24;
+  color: #ff9da8;
+}
+
+.role-limit-table-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--role-limit-border);
+  border-radius: 0.85rem;
+  background: var(--role-limit-surface);
+  box-shadow: var(--role-limit-shadow);
+}
+
+.role-limit-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.super-admin-role-limits-table {
+  width: 100% !important;
+  min-width: 1120px;
+  max-width: none !important;
+  table-layout: fixed !important;
+  border-collapse: collapse;
+  color: var(--role-limit-ink);
+}
+
+.role-limit-organization-column { width: 19%; }
+.role-limit-vertical-column { width: 13%; }
+.role-limit-owner-column { width: 16%; }
+.role-limit-current-column { width: 20%; }
+.role-limit-limit-column { width: 13%; }
+.role-limit-status-column { width: 12%; }
+.role-limit-action-column { width: 7%; }
+
+.super-admin-role-limits-table th,
+.super-admin-role-limits-table td {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--role-limit-table-border);
+  text-align: left !important;
+  vertical-align: middle;
+  white-space: normal;
+}
+
+.super-admin-role-limits-table thead th {
+  background: var(--role-limit-surface-raised);
+  color: var(--role-limit-table-ink);
+  font-size: 0.73rem;
+  font-weight: 700;
+}
+
+.role-limit-sort-label {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.super-admin-role-limits-table tbody tr {
+  transition: background-color 120ms ease;
+}
+
+.super-admin-role-limits-table tbody tr:hover {
+  background: var(--role-limit-surface-hover);
+  transform: none !important;
+}
+
+.super-admin-role-limits-table tbody tr:hover td {
+  padding: 0.75rem 1rem !important;
+}
+
+.super-admin-role-limits-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.role-limit-organization-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.7rem;
+}
+
+.role-limit-organization-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2.45rem;
+  height: 2.45rem;
+  border-radius: 0.7rem;
+}
+
+.role-limit-organization-icon-generic { background: #f0edff; color: #7252e8; }
+.role-limit-organization-icon-wellness { background: #eaf8ef; color: #2eaa6c; }
+.role-limit-organization-icon-travel { background: #fff1e1; color: #c76b18; }
+
+[data-theme="dark"] .role-limit-organization-icon-generic { background: #2b2145; color: #c2a8ff; }
+[data-theme="dark"] .role-limit-organization-icon-wellness { background: #173a2f; color: #75e3b0; }
+[data-theme="dark"] .role-limit-organization-icon-travel { background: #3d2a1a; color: #ffc078; }
+
+.role-limit-organization-copy,
+.role-limit-owner-name,
+.role-limit-owner-email {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.role-limit-organization-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.role-limit-organization-copy strong,
+.role-limit-owner-name {
+  color: var(--role-limit-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.role-limit-organization-copy span,
+.role-limit-owner-email {
+  color: var(--role-limit-muted);
+  font-size: 0.69rem;
+}
+
+.role-limit-vertical-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.6rem;
+  padding: 0 0.65rem;
+  border-radius: 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.role-limit-vertical-generic { background: #edf3ff; color: #2e60c9; }
+.role-limit-vertical-wellness { background: #e8f8ed; color: #238557; }
+.role-limit-vertical-travel { background: #fff0df; color: #a65e13; }
+
+[data-theme="dark"] .role-limit-vertical-generic { background: #222f57; color: #a9c0ff; }
+[data-theme="dark"] .role-limit-vertical-wellness { background: #173a2f; color: #7ae2b2; }
+[data-theme="dark"] .role-limit-vertical-travel { background: #3d2a1a; color: #ffc078; }
+
+.role-limit-current-value {
+  margin-bottom: 0.4rem;
+  color: var(--role-limit-table-ink);
+  font-size: 0.78rem;
+}
+
+.role-limit-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.role-limit-progress {
+  display: block;
+  width: min(100%, 12rem);
+  height: 0.42rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--role-limit-progress-bg);
+}
+
+.role-limit-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #35bd8a;
+}
+
+.role-limit-progress.danger > span { background: #ee4652; }
+.role-limit-progress.neutral > span { background: #9ba5b9; }
+.role-limit-progress-row small { color: var(--role-limit-muted); font-size: 0.68rem; }
+
+.role-limit-input {
+  width: 100%;
+  max-width: 8rem;
+  height: 2.45rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--role-limit-control-border);
+  border-radius: 0.6rem;
+  background: var(--role-limit-surface);
+  color: var(--role-limit-ink);
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.role-limit-input:focus {
+  border-color: #9bb1f5;
+  outline: 3px solid rgba(49, 92, 245, 0.12);
+}
+
+.role-limit-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.8rem;
+  padding: 0 0.65rem;
+  border: 1px solid;
+  border-radius: 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.role-limit-status-badge.success { border-color: var(--role-limit-success-border); background: var(--role-limit-success-bg); color: var(--role-limit-success-ink); }
+.role-limit-status-badge.danger { border-color: var(--role-limit-danger-border); background: var(--role-limit-danger-bg); color: var(--role-limit-danger-ink); }
+.role-limit-status-badge.neutral { border-color: var(--role-limit-neutral-border); background: var(--role-limit-neutral-bg); color: var(--role-limit-neutral-ink); }
+
+.role-limit-action-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.role-limit-save-button {
+  min-width: 4.5rem;
+  height: 2.15rem;
+  padding: 0 0.75rem;
+  font-size: 0.72rem;
+}
+
+.role-limit-save-button {
+  border-color: var(--role-limit-blue);
+  background: var(--role-limit-blue);
+  color: #fff;
+}
+
+[data-theme="dark"] .role-limit-save-button {
+  color: #11182d;
+}
+
+.role-limit-save-button:hover:not(:disabled) {
+  border-color: #244bd2;
+  background: #244bd2;
+}
+
+[data-theme="dark"] .role-limit-save-button:hover:not(:disabled) {
+  border-color: #7698f5;
+  background: #7698f5;
+}
+
+.role-limit-save-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.role-limit-no-results {
+  padding: 2rem !important;
+  color: var(--role-limit-muted);
+  text-align: center !important;
+}
+
+.role-limit-empty-state {
+  padding: 3rem;
+  border: 1px solid var(--role-limit-border);
+  border-radius: 0.85rem;
+  background: var(--role-limit-surface);
+  color: var(--role-limit-muted);
+  text-align: center;
+}
+
+.role-limit-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  color: var(--role-limit-muted);
+  font-size: 0.72rem;
+}
+
+.role-limit-footer-hint {
+  color: var(--role-limit-placeholder);
+}
+
+@media (max-width: 1220px) {
+  .role-limit-filter-panel {
+    grid-template-columns: minmax(220px, 1fr) minmax(260px, 1fr);
+  }
+
+  .role-limit-search-filter { grid-column: span 1; }
+  .role-limit-filter-actions { justify-content: flex-end; }
+}
+
+@media (max-width: 760px) {
+  .role-limit-page-header { flex-direction: column; }
+  .role-limit-help-button { align-self: flex-start; }
+  .role-limit-filter-panel,
+  .role-limit-kpi-grid { grid-template-columns: 1fr; }
+  .role-limit-search-filter,
+  .role-limit-filter-actions { grid-column: auto; }
+  .role-limit-filter-actions { justify-content: flex-start; }
+  .role-limit-table-footer { align-items: flex-start; flex-direction: column; }
+  .super-admin-role-limits-table {
+    display: table !important;
+    width: 1120px !important;
+    min-width: 1120px !important;
+  }
+}

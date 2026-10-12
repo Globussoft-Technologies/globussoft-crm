@@ -780,6 +780,26 @@ describe('WebForms builder page', () => {
     });
   });
 
+  test('saves the selected desktop two-column layout', async () => {
+    renderPage({ ...FORM_FIXTURE, scope: 'generic' });
+    await openBuilder();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Layout' }));
+    const desktopColumns = screen.getByText('Desktop columns').closest('label').querySelector('select');
+    fireEvent.change(desktopColumns, { target: { value: 'two' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      expect(JSON.parse(saveCall[1].body).style).toEqual(expect.objectContaining({
+        layoutColumns: 'two',
+      }));
+    });
+  });
+
   test('custom choice fields expose an editable options textarea', async () => {
 
     const customForm = {

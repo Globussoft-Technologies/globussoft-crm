@@ -29,6 +29,317 @@
   width: calc(100% - var(--calendar-time-column-width));
 }
 
+@media (max-width: 600px) {
+  .zapier-page {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    padding: 1rem !important;
+    overflow-x: hidden;
+  }
+
+  .zapier-page-header {
+    align-items: flex-start !important;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 1.5rem !important;
+  }
+
+  .zapier-page-header > div {
+    align-items: flex-start !important;
+    min-width: 0;
+  }
+
+  .zapier-page-header h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .zapier-page-header > a {
+    box-sizing: border-box;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .zapier-page > .card {
+    box-sizing: border-box;
+    margin-bottom: 1rem !important;
+    padding: 1rem !important;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .zapier-setup-steps {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: .75rem !important;
+  }
+
+  .zapier-setup-step {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .zapier-table-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .zapier-table-scroll table {
+    display: table;
+    width: max-content !important;
+    min-width: 620px;
+    max-width: none;
+    overflow: visible;
+  }
+
+  .zapier-page th,
+  .zapier-page td {
+    min-width: 7rem;
+  }
+
+  .communication-channels-page {
+    padding: 1rem !important;
+    overflow-x: hidden;
+  }
+
+  .communication-channels-page > header {
+    align-items: flex-start !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .communication-channels-page > header h2 {
+    margin: 0;
+    font-size: 1.35rem !important;
+  }
+
+  .communication-channels-tabs {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .communication-channels-tabs > button {
+    justify-content: center;
+    min-width: 0;
+    padding: .55rem .25rem !important;
+    gap: .3rem !important;
+    font-size: .75rem !important;
+  }
+
+  .communication-provider-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 1rem !important;
+  }
+
+  .communication-provider-card {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .communication-provider-card input,
+  .communication-provider-card select {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .communication-secret-row {
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .communication-secret-row code {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .communication-secret-row > button {
+    flex-shrink: 0;
+  }
+
+  .pickup-customers-page {
+    padding: 1rem !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .pickup-customers-page > header {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .pickup-customers-page > header h1 {
+    font-size: 1.5rem;
+  }
+
+  .pickup-customers-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    justify-content: stretch !important;
+  }
+
+  .pickup-customers-controls > label {
+    grid-column: 1 / -1;
+    min-width: 0 !important;
+  }
+
+  .pickup-customers-controls > select {
+    min-width: 0;
+    width: 100%;
+    flex: none !important;
+  }
+
+  .pickup-customers-page .pickup-plot-table-scroll {
+    flex: 0 0 auto !important;
+    min-height: 12rem !important;
+    max-height: 55dvh;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .billing-directory-page {
+    padding: 1rem !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .billing-directory-page > header {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .billing-directory-page > header h1 {
+    font-size: 1.5rem;
+  }
+
+  .billing-directory-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    justify-content: stretch !important;
+  }
+
+  .billing-directory-controls > input,
+  .billing-directory-controls > select,
+  .billing-directory-controls > button {
+    width: 100%;
+    min-width: 0;
+    flex: none !important;
+  }
+
+  .billing-directory-page .pickup-plot-table-scroll {
+    flex: 0 0 auto !important;
+    min-height: 12rem !important;
+    max-height: 55dvh;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pickup-person-directory-page {
+    padding: 1rem !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .pickup-person-directory-page > header {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .pickup-person-directory-page > header h1 {
+    font-size: 1.5rem;
+  }
+
+  .pickup-person-directory-controls {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    justify-content: stretch !important;
+  }
+
+  .pickup-person-directory-controls > input,
+  .pickup-person-directory-controls > button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .pickup-person-directory-controls > select {
+    min-width: 0;
+    width: 100%;
+    flex: none !important;
+  }
+
+  .pickup-person-directory-page .pickup-plot-table-scroll {
+    flex: 0 0 auto !important;
+    min-height: 12rem !important;
+    max-height: 55dvh;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pickup-inventory-page {
+    padding: 1rem !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .pickup-inventory-page > header {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    margin-bottom: 1rem !important;
+  }
+
+  .pickup-inventory-page > header h1 {
+    font-size: 1.5rem;
+  }
+
+  .pickup-inventory-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    justify-content: stretch !important;
+  }
+
+  .pickup-inventory-controls > label:first-child,
+  .pickup-inventory-add {
+    grid-column: 1 / -1;
+  }
+
+  .pickup-inventory-controls > label {
+    min-width: 0 !important;
+  }
+
+  .pickup-inventory-controls > label:nth-child(2) {
+    flex: none !important;
+  }
+
+  .pickup-inventory-add {
+    width: 100%;
+  }
+
+  .pickup-inventory-page .pickup-plot-table-scroll {
+    flex: 0 0 auto !important;
+    min-height: 12rem !important;
+    max-height: 55dvh;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
 /* Wellness appointment/calendar layouts: keep the desktop two-column
    presentation, but make the narrow-screen controls readable. */
 @media (max-width: 600px) {
@@ -452,12 +763,60 @@
   }
 }
 
-/* ── Small laptop / large tablet (900-1024px): sidebar is static again
-   (drawer only kicks in below 900px), just tighten its width so the
-   main content gets enough horizontal room for grids + tables. */
-@media (min-width: 900px) and (max-width: 1024px) {
+/* On compact laptops the sidebar leaves too little room for forms and data
+   grids. Use the existing accessible drawer for every CRM vertical. */
+@media (min-width: 900px) and (max-width: 1439px) {
   .app-sidebar {
-    width: 220px !important;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px !important;
+    max-width: 85vw;
+    height: 100dvh !important;
+    z-index: 999;
+    transform: translateX(-100%);
+    transition: transform 240ms cubic-bezier(0.25, 0.8, 0.25, 1);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .app-sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    pointer-events: none;
+  }
+
+  .sidebar-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .app-main {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .sidebar-toggle {
+    display: inline-flex !important;
+    width: 44px !important;
+    height: 44px !important;
+    flex-shrink: 0;
+  }
+
+  .app-topbar {
+    flex-wrap: wrap !important;
+  }
+
+  .app-header-search {
+    flex: 1 1 280px;
+  }
+
+  .app-main > main > * {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 }
 
@@ -768,7 +1127,6 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 /* Page chrome needs deliberate rows. Blanket wrapping of every flex child
    makes filters and actions land at unrelated horizontal positions. */
 @media (max-width: 1100px) {
-  .app-main > main .crm-page-header,
   .app-main > main .contacts-page__header,
   .app-main > main .travel-audit-page__header {
     display: grid !important;
@@ -777,17 +1135,11 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     gap: 0.75rem !important;
   }
 
-  .crm-page-header__intro,
   .contacts-page__header > :first-child,
   .travel-audit-page__header > :first-child {
     min-width: 0;
   }
 
-  .app-main > main .crm-page-header {
-    padding: clamp(0.75rem, 2vw, 1.25rem) !important;
-  }
-
-  .app-main > main .crm-page-header__actions,
   .app-main > main .contacts-page__header-actions,
   .app-main > main .travel-audit-page__filters {
     display: grid !important;
@@ -798,14 +1150,12 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     gap: 0.5rem !important;
   }
 
-  .crm-page-header__actions > *,
   .contacts-page__header-actions > *,
   .travel-audit-page__filters > * {
     min-width: 0 !important;
     max-width: 100%;
   }
 
-  .crm-page-header__actions > :is(button, a, select),
   .contacts-page__header-actions > :is(button, a, select),
   .contacts-page__header-actions > div > button,
   .travel-audit-page__filters > :is(button, input, select) {
@@ -840,6 +1190,39 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   .invoices-admin-page__reconciliation-actions > input {
     min-width: 0;
     max-width: 100% !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .app-main > main .crm-page-header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: start !important;
+    gap: 0.75rem !important;
+    padding: clamp(0.75rem, 2vw, 1.25rem) !important;
+  }
+
+  .crm-page-header__intro {
+    min-width: 0;
+  }
+
+  .app-main > main .crm-page-header__actions {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    align-items: stretch !important;
+    width: 100%;
+    min-width: 0;
+    gap: 0.5rem !important;
+  }
+
+  .crm-page-header__actions > * {
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  .crm-page-header__actions > :is(button, a, select) {
+    width: 100%;
+    min-width: 0 !important;
   }
 }
 
@@ -1495,8 +1878,782 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 }
 
-/* Dashboard panels need to stack before the 2fr/1fr desktop split makes the
-   Recent Deals card unreadably narrow on phones. */
+/* Pipeline stages need their own phone layout. The generic narrow-grid rule
+   also matches this board, so release its fixed height and internal scroll. */
+.deals-pipeline-stage-toggle {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  div.deals-pipeline-board {
+    grid-template-columns: minmax(0, 1fr) !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding-bottom: 0 !important;
+  }
+
+  .deals-pipeline-stage {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .deals-pipeline-stage > .deals-kanban-list {
+    flex: none !important;
+    overflow: visible !important;
+    padding-right: 0 !important;
+  }
+
+  .deals-pipeline-stage-header {
+    position: relative;
+    padding-right: 40px !important;
+  }
+
+  .deals-pipeline-stage-toggle {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    padding-right: 4px !important;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .deals-pipeline-stage-toggle svg {
+    position: absolute;
+    top: 10px;
+    right: 4px;
+  }
+
+  .deals-pipeline-stage-toggle:focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
+  }
+
+  .deals-pipeline-stage.is-expanded .deals-pipeline-stage-toggle svg {
+    transform: rotate(180deg);
+  }
+
+  .deals-pipeline-stage:not(.is-expanded) > :is(.deals-pipeline-add-deal, .deals-kanban-list) {
+    display: none !important;
+  }
+}
+
+/* Calendar trip rows have three desktop columns. At phone widths, retain the
+   complete trip details without squeezing them into the card's 256px width. */
+@media (max-width: 600px) {
+  .calendar-sync-trip-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.5rem !important;
+    min-width: 0;
+  }
+
+  .calendar-sync-trip-row__dates {
+    display: none;
+  }
+
+  .calendar-sync-trip-row__details {
+    overflow-wrap: anywhere;
+  }
+
+  .calendar-sync-trip-row__brand {
+    justify-self: start;
+    padding-inline: 0 !important;
+    text-align: left !important;
+    white-space: normal !important;
+  }
+}
+
+/* Lead Intelligence cards and lead lists need tracks wide enough for labels. */
+@media (max-width: 900px) {
+  .lead-intelligence-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.75rem !important;
+  }
+
+  .lead-intelligence-kpi-card {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .lead-intelligence-kpi-card > div:first-child {
+    gap: 0.5rem;
+  }
+
+  .lead-intelligence-kpi-card > div:first-child > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .lead-intelligence-kpi-card > div:first-child > svg {
+    flex: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .lead-intelligence-header {
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .lead-intelligence-header > div {
+    min-width: 0;
+  }
+
+  .lead-intelligence-lead-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .lead-intelligence-kpi-card {
+    padding: 0.75rem !important;
+  }
+
+  .lead-intelligence-kpi-card > div:last-child {
+    font-size: 1.5rem !important;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Forecast controls need their own rows at phone widths. */
+@media (max-width: 600px) {
+  .sales-forecasting-title,
+  .sales-forecasting-title > div {
+    min-width: 0;
+  }
+
+  .sales-forecasting-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .sales-forecasting-actions > select {
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .sales-forecasting-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* Deal Insights needs readable KPI tiles when four desktop columns cannot fit. */
+@media (max-width: 900px) {
+  .deal-insights-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.75rem !important;
+  }
+
+  .deal-insights-kpi-card {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .deal-insights-kpi-card {
+    padding: 0.75rem !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .deal-insights-group-header {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 0.75rem;
+  }
+
+  .deal-insights-group-main {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .deal-insights-group-title {
+    align-items: flex-start !important;
+    gap: 0.5rem !important;
+  }
+
+  .deal-insights-group-title > span {
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+
+  .deal-insights-group-title > svg {
+    flex: none;
+    margin-top: 0.25rem;
+  }
+
+  .deal-insights-group-count {
+    align-self: flex-start;
+  }
+}
+
+.inbox-email-row__mobile-participant,
+.inbox-email-row__mobile-date,
+.inbox-email-row__avatar-letter {
+  display: none;
+}
+
+.inbox-page-shell--generic {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding-bottom: 0 !important;
+}
+
+.inbox-page-shell--generic > header {
+  flex: none;
+}
+
+.inbox-list-card--generic {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+  max-height: none !important;
+  overflow: hidden !important;
+}
+
+.inbox-list-card--generic > .inbox-list-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.inbox-toolbar--generic {
+  flex: none;
+  position: relative !important;
+  top: auto !important;
+}
+
+.inbox-message-scroll--generic {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-top: 1rem;
+}
+
+.generic-template-modal__group-trigger,
+.generic-template-modal__group-list {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .generic-template-backdrop {
+    box-sizing: border-box;
+    padding: 0.5rem !important;
+  }
+
+  .generic-template-modal {
+    box-sizing: border-box;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: calc(100dvh - 1rem) !important;
+    padding: 0.75rem !important;
+  }
+
+  .generic-template-modal__layout,
+  .generic-template-modal__fields {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+  }
+
+  .generic-template-modal__editor,
+  .generic-template-modal__personalization {
+    min-width: 0;
+  }
+
+  .generic-template-modal__fields .input-field,
+  .generic-template-modal__personalization .input-field {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .generic-template-modal__personalization,
+  .generic-template-modal__picker {
+    max-height: min(35dvh, 260px);
+    overflow-y: auto;
+  }
+
+  .generic-template-modal__editor [aria-label="Email body"] {
+    flex: none !important;
+    min-height: 140px !important;
+    max-height: 200px;
+  }
+
+  .generic-template-modal__group-select {
+    display: none;
+  }
+
+  .generic-template-modal__group-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .generic-template-modal__group-list {
+    display: block;
+    flex: 0 0 auto;
+    max-height: min(24dvh, 160px);
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 0.4rem;
+    background: var(--surface-color);
+  }
+
+  .generic-template-modal__group-list > button {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    padding: 0.5rem 0.65rem;
+    border: 0;
+    background: var(--surface-color);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .generic-template-modal__group-list > button[aria-selected="true"] {
+    background: var(--accent-color);
+    color: #fff;
+  }
+
+  .generic-template-modal__footer,
+  .generic-template-modal__footer > div {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 1000px) {
+  .landing-builder__toolbar {
+    flex-wrap: wrap;
+    gap: 0.5rem !important;
+    overflow: visible;
+    padding: 0.5rem !important;
+  }
+
+  .landing-builder__toolbar input[aria-label="Page title"] {
+    flex: 1 1 140px;
+    width: auto !important;
+    min-width: 0;
+  }
+
+  .landing-builder__slug,
+  .landing-builder__actions {
+    box-sizing: border-box;
+    flex: 1 1 100% !important;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .landing-builder__slug > div {
+    min-width: 0;
+  }
+
+  .landing-builder__slug input[aria-label="Page URL slug"] {
+    flex: 1 1 auto;
+    width: auto !important;
+    min-width: 0;
+  }
+
+  .landing-builder__actions {
+    justify-content: flex-start !important;
+  }
+
+  .landing-builder__actions > :is(button, a) {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .landing-builder__panels {
+    display: block !important;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .landing-builder__palette,
+  .landing-builder__canvas,
+  .landing-builder__properties {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0;
+  }
+
+  .landing-builder__palette {
+    max-height: 160px;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.75rem !important;
+  }
+
+  .landing-builder__canvas {
+    min-height: 320px;
+    overflow: visible !important;
+    padding: 0.75rem !important;
+  }
+
+  .landing-builder__phone-frame,
+  .landing-builder__phone-screen {
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0;
+  }
+
+  .landing-builder__properties {
+    overflow: visible !important;
+    border-left: 0 !important;
+    border-top: 1px solid var(--border-color);
+    padding: 0.75rem !important;
+  }
+}
+
+/* Compact message rows keep the sender and date visible on narrow phones. */
+@media (max-width: 600px) {
+  .tasks-queue-item {
+    box-sizing: border-box;
+    flex-direction: column;
+    align-items: stretch !important;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .tasks-queue-item__main,
+  .tasks-queue-item__title,
+  .tasks-queue-item__meta {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .tasks-queue-item__meta > svg {
+    flex: none;
+  }
+
+  .tasks-queue-item__actions {
+    width: 100%;
+    margin: 0.85rem 0 0 !important;
+    flex-wrap: wrap;
+  }
+
+  .tasks-queue-item__actions > button {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .inbox-list-card--generic {
+    min-height: 260px;
+  }
+
+  .inbox-toolbar--generic {
+    gap: 0.55rem !important;
+  }
+
+  .inbox-search--generic {
+    flex: 1 1 100% !important;
+    width: 100%;
+    min-width: 0;
+    margin-left: 0 !important;
+    order: 0 !important;
+  }
+
+  .inbox-date-filter--generic {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    width: 100%;
+    min-width: 0;
+    gap: 0.25rem !important;
+    order: 2 !important;
+  }
+
+  .inbox-date-filter--generic input {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0.2rem !important;
+  }
+
+  .inbox-list-content {
+    gap: 0 !important;
+  }
+
+  .inbox-message-scroll--generic {
+    gap: 0 !important;
+    padding-top: 0.5rem;
+  }
+
+  .inbox-email-row {
+    position: relative;
+    display: grid !important;
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 0.75rem !important;
+    align-items: start;
+    padding: 0.8rem 0.4rem !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--border-color) !important;
+    border-radius: 0 !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .inbox-email-row > div:nth-child(2) {
+    min-width: 0;
+  }
+
+  .inbox-email-row__avatar > svg,
+  .inbox-email-row__desktop-address,
+  .inbox-email-row__desktop-date {
+    display: none;
+  }
+
+  .inbox-email-row__avatar-letter {
+    display: inline;
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+
+  .inbox-email-row__meta {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.35rem !important;
+    margin-bottom: 0.15rem !important;
+  }
+
+  .inbox-email-row__address {
+    min-width: 0;
+    width: 100%;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.95rem !important;
+  }
+
+  .inbox-email-row__mobile-participant,
+  .inbox-email-row__mobile-date {
+    display: inline;
+  }
+
+  .inbox-email-row__date {
+    font-size: 0.75rem !important;
+  }
+
+  .inbox-email-row:not(.is-read) .inbox-email-row__date {
+    margin-right: 14px;
+  }
+
+  .inbox-email-row.is-read .inbox-email-row__address,
+  .inbox-email-row.is-read .inbox-email-row__subject {
+    font-weight: 500 !important;
+  }
+
+  .inbox-email-row__subject,
+  .inbox-email-row__preview {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal !important;
+    margin-bottom: 0 !important;
+  }
+
+  .inbox-email-row__subject {
+    font-size: 0.88rem;
+    line-height: 1.35;
+  }
+
+  .inbox-email-row__preview {
+    font-size: 0.8rem !important;
+    line-height: 1.35 !important;
+  }
+
+  .inbox-email-row__unread-dot {
+    position: absolute;
+    top: 1.05rem;
+    right: 0.35rem;
+    width: 7px !important;
+    height: 7px !important;
+  }
+}
+
+/* Routing conditions use two readable rows inside the phone dialog. */
+@media (max-width: 480px) {
+  .lead-routing-rule-modal {
+    box-sizing: border-box;
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .lead-routing-rule-fields,
+  .lead-routing-assign-fields {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .lead-routing-condition-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px !important;
+  }
+
+  .lead-routing-condition-row > :nth-child(2) {
+    grid-column: 2 / 4;
+  }
+
+  .lead-routing-condition-row > :nth-child(3) {
+    grid-column: 1 / 3;
+  }
+
+  .lead-routing-condition-row > :nth-child(4) {
+    grid-column: 3;
+  }
+
+  .lead-routing-condition-row > :is(input, select, button) {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+/* Keep the pipeline stage picker and action readable inside the phone modal. */
+@media (max-width: 480px) {
+  .pipelines-stage-heading {
+    display: block !important;
+  }
+
+  .pipelines-stage-heading > label {
+    margin-bottom: 0.5rem !important;
+  }
+
+  .pipelines-stage-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .pipelines-stage-controls > :is(select, button) {
+    width: 100%;
+    max-width: none !important;
+    min-width: 0;
+    box-sizing: border-box;
+    justify-content: center;
+  }
+}
+
+/* Generic Contacts keeps its existing split table and row actions. On phones,
+   give the scrollable fields more room and expose their horizontal scrollbar. */
+@media (max-width: 480px) {
+  body[data-vertical="generic"] .contacts-table-frozen-pane,
+  body[data-vertical="generic"] .contacts-table-frozen-pane > table {
+    width: 160px !important;
+    min-width: 160px !important;
+  }
+
+  body[data-vertical="generic"] .contacts-table-frozen-pane col:nth-child(1) {
+    width: 48px !important;
+  }
+
+  body[data-vertical="generic"] .contacts-table-frozen-pane col:nth-child(2) {
+    width: 112px !important;
+  }
+
+  body[data-vertical="generic"] .contacts-table-frozen-pane tbody td:last-child {
+    padding-inline: 8px !important;
+  }
+
+  body[data-vertical="generic"] .contacts-table-scroll-pane .top-scroll-sync__bottom--hidden-scrollbar {
+    scrollbar-width: thin !important;
+    -ms-overflow-style: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body[data-vertical="generic"] .contacts-table-scroll-pane .top-scroll-sync__bottom--hidden-scrollbar::-webkit-scrollbar {
+    display: block !important;
+    height: 8px !important;
+  }
+
+  body[data-vertical="generic"] .contacts-pagination-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem;
+  }
+
+  body[data-vertical="generic"] .contacts-pagination-summary {
+    width: auto;
+    font-size: 0.75rem;
+  }
+
+  body[data-vertical="generic"] .contacts-pagination-controls {
+    display: contents;
+  }
+
+  body[data-vertical="generic"] .contacts-pagination-page-size {
+    grid-column: 2;
+  }
+
+  body[data-vertical="generic"] .contacts-pagination-navigation {
+    grid-column: 1 / -1;
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+}
+
+/* Keep long deal and task names inside the Recent Deals card. Flex children
+   otherwise retain their min-content width and spill past a narrow card. */
+.dashboard-panels > .card {
+  min-width: 0;
+}
+
+.dashboard-recent-card .table-row-hover {
+  min-width: 0;
+}
+
+.dashboard-recent-card .table-row-hover > div:first-child {
+  flex-shrink: 0;
+}
+
+.dashboard-recent-card .table-row-hover > div:last-child {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dashboard-recent-card .table-row-hover p {
+  overflow-wrap: anywhere;
+}
+
+/* At tablet widths a two-column panel layout leaves the Recent Deals card
+   too narrow for readable names, even with the sidebar in drawer mode. */
+@media (max-width: 900px) {
+  .dashboard-page {
+    padding-bottom: 6rem !important;
+  }
+
+  .dashboard-panels {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Dashboard controls need tighter spacing on phones. */
 @media (max-width: 600px) {
   .dashboard-page {
     padding: 0.75rem !important;
@@ -1534,4 +2691,529 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     height: 220px !important;
   }
 
+}
+
+@media (max-width: 700px) {
+  .sequences-page {
+    box-sizing: border-box;
+    height: auto !important;
+    min-height: 100%;
+    padding: 1rem !important;
+  }
+
+  .sequences-page > header h1 {
+    font-size: 1.4rem !important;
+    line-height: 1.25;
+  }
+
+  .sequences-workspace {
+    flex: none !important;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .sequences-canvas {
+    flex: none !important;
+    width: 100%;
+    height: min(65dvh, 500px);
+    min-height: 360px;
+    min-width: 0;
+  }
+
+  .sequences-canvas-toolbar {
+    box-sizing: border-box;
+    width: calc(100% - 20px);
+    max-width: calc(100% - 20px) !important;
+    flex-wrap: nowrap !important;
+    gap: 0.5rem !important;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .sequences-canvas-toolbar > button,
+  .sequences-canvas-toolbar > select {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .sequences-canvas .react-flow__minimap {
+    display: none;
+  }
+
+  .sequences-workspace > .sequence-list {
+    box-sizing: border-box;
+    flex: none !important;
+    width: 100%;
+    max-width: none !important;
+    min-width: 0 !important;
+    border-left: 0 !important;
+    border-top: 1px solid var(--border-color);
+    padding: 1rem !important;
+    overflow: visible !important;
+  }
+
+  .sequences-name-modal {
+    box-sizing: border-box;
+    width: calc(100vw - 2rem) !important;
+    max-width: 380px;
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .estimates-ledger-scroll {
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .estimates-ledger-table {
+    min-width: 1240px;
+  }
+
+  .estimates-ledger-table td:last-child button {
+    padding-inline: 0.5rem !important;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 600px) {
+  .payment-gateway-grid,
+  .payment-gateway-card {
+    min-width: 0;
+  }
+
+  .payment-gateway-card {
+    box-sizing: border-box;
+    padding: 1rem !important;
+  }
+
+  .payment-gateway-keys li {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .payment-gateway-keys li > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .payment-gateway-key-value {
+    box-sizing: border-box;
+    flex: 0 0 calc(100% - 24px);
+    max-width: calc(100% - 24px);
+    margin-left: 24px !important;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 600px) {
+  .funnel-page {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .funnel-page > div > div {
+    min-width: 0;
+  }
+
+  .funnel-stage-row {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 0.45rem !important;
+  }
+
+  .funnel-stage-row > span {
+    overflow-wrap: anywhere;
+  }
+
+  .funnel-chart-stage-label {
+    display: none;
+  }
+
+  .funnel-rep-scroll {
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .funnel-rep-table {
+    min-width: 650px;
+  }
+
+  .funnel-rep-table th,
+  .funnel-rep-table td {
+    white-space: nowrap;
+  }
+}
+
+.reports-page {
+  box-sizing: border-box;
+}
+
+.reports-page__chart-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+@media (max-width: 600px) {
+  .reports-page {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .reports-page__header {
+    align-items: flex-start !important;
+  }
+
+  .reports-page__header h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .reports-page__header-actions,
+  .reports-page__date-group {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .reports-page__date-row {
+    display: grid !important;
+    grid-template-columns: 18px minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .reports-page__date-row input[type="date"] {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .reports-page__overview > .card {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .reports-page__chart-stage {
+    min-width: 440px !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .agent-reports-page {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .agent-reports-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .agent-reports-layout > * {
+    min-width: 0;
+  }
+
+  .agent-reports-table {
+    min-width: 900px;
+  }
+}
+
+@media (max-width: 600px) {
+  .agent-reports-page {
+    padding: 1rem !important;
+  }
+
+  .agent-reports-header {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 1rem;
+  }
+
+  .agent-reports-header h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .agent-reports-actions {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .agent-reports-dates {
+    display: grid !important;
+    grid-template-columns: 18px minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .agent-reports-dates input[type="date"] {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .agent-reports-leaderboard {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .agent-reports-leaderboard-header {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .agent-reports-leaderboard-header select {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .sales-teams-page {
+    min-width: 0;
+    padding: 0 1rem 1rem !important;
+  }
+
+  .sales-teams-intro {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .sales-teams-intro-row {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 1rem !important;
+  }
+
+  .sales-teams-intro-row > div {
+    min-width: 0;
+  }
+
+  .sales-teams-intro-row p {
+    overflow-wrap: anywhere;
+  }
+
+  .sales-teams-create-button {
+    align-self: flex-start;
+  }
+
+  .sales-teams-table {
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sales-teams-editor-overlay {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .sales-teams-editor {
+    position: relative !important;
+    top: auto !important;
+    right: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: calc(100dvh - 2rem);
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .staff-team-card {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .staff-team-controls {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .staff-team-search {
+    width: 100% !important;
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .staff-team-search input {
+    box-sizing: border-box;
+  }
+
+  .staff-team-filter-anchor {
+    position: static !important;
+  }
+
+  .staff-team-filter-panel {
+    box-sizing: border-box;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .staff-team-filter-panel select {
+    box-sizing: border-box;
+    min-width: 0;
+  }
+
+  .staff-team-table-scroll {
+    max-width: 100%;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .staff-team-table-scroll--generic {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .staff-team-table-scroll--generic .staff-generic-resizable-table,
+  .staff-team-table-scroll--generic .staff-generic-resizable-table tbody,
+  .staff-team-table-scroll--generic .staff-generic-resizable-table tr {
+    display: block;
+    box-sizing: border-box;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .staff-team-table-scroll--generic .staff-generic-resizable-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .staff-team-table-scroll--generic .staff-generic-resizable-table tbody tr {
+    margin-bottom: 0.75rem;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 0.65rem;
+    background: var(--surface-color);
+  }
+
+  .staff-team-table-scroll--generic .staff-generic-resizable-table td {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 0.45rem 0.25rem !important;
+    border: 0 !important;
+    overflow: visible !important;
+    overflow-wrap: anywhere;
+    white-space: normal !important;
+    text-overflow: clip;
+  }
+
+  .staff-team-table-scroll--generic .staff-generic-resizable-table td::before {
+    content: attr(data-label);
+    flex: 0 0 6.75rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+}
+
+@media (max-width: 600px) {
+  .territories-page {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .territories-header {
+    flex-direction: column;
+    align-items: flex-start !important;
+  }
+
+  .territories-header-main {
+    width: 100%;
+    min-width: 0;
+    align-items: flex-start !important;
+  }
+
+  .territories-header-icon {
+    flex: 0 0 44px;
+  }
+
+  .territories-header-copy {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .territories-header-copy h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .territories-header-copy p {
+    overflow-wrap: anywhere;
+  }
+
+  .territories-modal {
+    padding: 1rem !important;
+  }
+
+  .territories-modal > div:last-child {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 600px) {
+  .staff-directory-page {
+    box-sizing: border-box;
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  .staff-directory-page > header {
+    margin-bottom: 1rem !important;
+  }
+
+  .staff-directory-page > header h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .staff-directory-stats {
+    display: grid !important;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.5rem !important;
+  }
+
+  .staff-directory-stats > button {
+    grid-column: span 2;
+    min-width: 0;
+    justify-content: center;
+    padding: 0.4rem 0.5rem !important;
+    white-space: nowrap;
+  }
+
+  .staff-directory-stats > button:nth-of-type(4) {
+    grid-column: span 3;
+  }
+
+  .staff-directory-stats > button:last-child {
+    grid-column: span 6;
+  }
+
+  .staff-directory-availability-toggle {
+    grid-column: span 3;
+    margin-left: 0 !important;
+  }
+
+  .staff-directory-availability-toggle > button {
+    width: 100%;
+    padding: 0.4rem 0.5rem !important;
+  }
 }

@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { AuthContext, ThemeContext } from '../App';
 
 // Stub the heavy children — we care about Layout's wiring
-vi.mock('../components/Sidebar', () => ({ default: () => <div data-testid="sidebar-stub" /> }));
+vi.mock('../components/Sidebar', () => ({
+  default: ({ isMobileViewport }) => <div data-testid="sidebar-stub" data-drawer={String(isMobileViewport)} />,
+}));
 vi.mock('../components/Omnibar', () => ({ default: () => <div data-testid="omnibar-stub" /> }));
 vi.mock('../components/Presence', () => ({ default: () => <div data-testid="presence-stub" /> }));
 vi.mock('../components/Softphone', () => ({ default: () => <div data-testid="softphone-stub" /> }));
@@ -125,6 +127,26 @@ describe('Layout', () => {
     expect(screen.getByTestId('bell-stub')).toBeInTheDocument();
     expect(screen.getByTestId('outlet')).toBeInTheDocument();
   });
+
+  it.each(['generic', 'travel', 'wellness'])(
+    'uses the drawer at compact laptop widths for %s',
+    async (vertical) => {
+      const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+        matches: query === '(max-width: 1439px)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+
+      try {
+        renderLayout({ tenant: { vertical } });
+        await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'true'));
+        expect(matchMedia).toHaveBeenCalledWith('(max-width: 1439px)');
+      } finally {
+        matchMedia.mockRestore();
+      }
+    },
+  );
 
   it('keeps the shell viewport-sized and confines scrolling to the main region', () => {
     renderTravelLayout();

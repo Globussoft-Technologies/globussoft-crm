@@ -365,6 +365,7 @@ export default function PickupCustomers() {
 
   return (
     <div
+      className="pickup-customers-page"
       data-testid="pickup-customers-page"
       style={{
         display: "flex",
@@ -403,6 +404,7 @@ export default function PickupCustomers() {
           </p>
         </div>
         <div
+          className="pickup-customers-controls"
           style={{
             display: "flex",
             flexWrap: "wrap",

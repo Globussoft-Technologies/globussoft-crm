@@ -708,9 +708,9 @@ export default function LandingPageBuilder() {
   if (!page) return <div style={{ padding: '2rem' }}>Loading...</div>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+    <div className="landing-builder" style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       {/* Builder top bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.65rem 1rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--surface-color)' }}>
+      <div className="landing-builder__toolbar" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.65rem 1rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--surface-color)' }}>
         <Link to={builderBackTarget} state={backTrackState || undefined} title={`Back to ${builderBackLabel}`} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
         {backTrackState && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -720,7 +720,7 @@ export default function LandingPageBuilder() {
           </div>
         )}
         <input className="input-field" value={page.title} onChange={e => { setPage({ ...page, title: e.target.value }); setIsDirty(true); }} style={{ fontWeight: '600', fontSize: '0.95rem', padding: '0.35rem 0.65rem', width: '220px' }} aria-label="Page title" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+        <div className="landing-builder__slug" style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
           <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
             <input
               className="input-field"
@@ -752,7 +752,7 @@ export default function LandingPageBuilder() {
             {slugIsValid ? ((page.slug || '').length + ' of 50 - lowercase, digits, hyphens') : 'Invalid: lowercase / digits / hyphens only'}
           </span>
         </div>
-        <div style={{ flex: 1 }} />
+        <div className="landing-builder__actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.4rem', flex: '1 1 auto', flexWrap: 'wrap', minWidth: 0 }}>
         <div style={{ display: 'flex', gap: '0.2rem' }}>
           <button onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo last change" style={iconBarBtnStyle(canUndo)}><Undo2 size={14} /></button>
           <button onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" aria-label="Redo last undone change" style={iconBarBtnStyle(canRedo)}><Redo2 size={14} /></button>
@@ -905,6 +905,7 @@ export default function LandingPageBuilder() {
             </button>
           );
         })()}
+        </div>
       </div>
 
       {/* Phase D1: template-driven page editor takes over when the
@@ -1022,8 +1023,8 @@ export default function LandingPageBuilder() {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ width: '200px', borderRight: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
+        <div className="landing-builder__panels" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <div className="landing-builder__palette" style={{ width: '200px', borderRight: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
             {[
               { id: 'generic', label: 'Components' },
               { id: 'travel', label: 'Travel Destination' },
@@ -1051,13 +1052,13 @@ export default function LandingPageBuilder() {
             })}
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+          <div className="landing-builder__canvas" style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
             {previewMode === 'mobile' ? (
-              <div style={{ width: '395px', background: '#0f172a', borderRadius: '44px', padding: '18px 10px 14px', boxShadow: '0 30px 60px rgba(0,0,0,0.5), 0 0 0 1px #334155', flexShrink: 0 }}>
+              <div className="landing-builder__phone-frame" style={{ width: '395px', background: '#0f172a', borderRadius: '44px', padding: '18px 10px 14px', boxShadow: '0 30px 60px rgba(0,0,0,0.5), 0 0 0 1px #334155', flexShrink: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
                   <div style={{ width: '90px', height: '5px', background: '#334155', borderRadius: '3px' }} />
                 </div>
-                <div style={{ width: '375px', background: 'var(--surface-color)', borderRadius: '24px', overflow: 'hidden', maxHeight: '70vh', overflowY: 'auto' }}>
+                <div className="landing-builder__phone-screen" style={{ width: '375px', background: 'var(--surface-color)', borderRadius: '24px', overflow: 'hidden', maxHeight: '70vh', overflowY: 'auto' }}>
                   {(previewLogo || previewBrandKit?.tagline) && (
                     <div
                       data-testid="landing-builder-brand-kit-ribbon"
@@ -1147,7 +1148,7 @@ export default function LandingPageBuilder() {
             )}
           </div>
 
-          <div style={{ width: '300px', borderLeft: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
+          <div className="landing-builder__properties" style={{ width: '300px', borderLeft: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
             <section style={{ marginBottom: '1.5rem' }}>
               <h4 style={{ fontSize: '0.7rem', fontWeight: '700', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>
                 Component {selectedComp ? ('- ' + selectedComp.type) : ''}
@@ -1602,13 +1603,13 @@ function ComponentPreview({ comp }) {
       return <div style={{ textAlign: p.align }}><button type="button" onClick={handlePreviewButtonClick} style={{ padding: p.size === 'large' ? '1rem 2.5rem' : '0.8rem 1.7rem', background: isWellnessCta ? 'linear-gradient(135deg, var(--wellness-primary, #2f6b50), var(--wellness-primary-deep, #194a37))' : p.bgColor, color: isWellnessCta ? 'var(--wellness-inverse, #fff)' : p.color, border: 'none', borderRadius: isWellnessCta ? 999 : '6px', fontWeight: '800', letterSpacing: isWellnessCta ? '0.06em' : 0, textTransform: isWellnessCta ? 'uppercase' : 'none', fontSize: p.size === 'large' ? '1.1rem' : '1rem', cursor: 'pointer', boxShadow: isWellnessCta ? '0 12px 24px rgba(23,59,53,0.18)' : undefined }}>{p.text}</button></div>;
     }
     case 'form': return (
-      <div style={{ width: '100%', maxWidth: p.variant === 'wellness-consultation' ? '520px' : '400px', margin: '0 auto', padding: p.variant === 'wellness-consultation' ? '1.5rem' : 0, background: p.variant === 'wellness-consultation' ? 'var(--wellness-surface, #fffdf8)' : 'transparent', border: p.variant === 'wellness-consultation' ? '1px solid var(--wellness-border, #d7e2d0)' : 'none', borderTop: p.variant === 'wellness-consultation' ? '2px solid var(--wellness-primary, #2f6b50)' : 'none', borderRadius: p.variant === 'wellness-consultation' ? 20 : 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', boxSizing: 'border-box', overflow: 'visible', boxShadow: p.variant === 'wellness-consultation' ? '0 18px 42px rgba(23,59,53,0.1)' : undefined }}>
+      <div style={{ width: '100%', minWidth: 0, maxWidth: p.variant === 'wellness-consultation' ? '520px' : '400px', margin: '0 auto', padding: p.variant === 'wellness-consultation' ? 'clamp(16px, 5vw, 24px)' : 0, background: p.variant === 'wellness-consultation' ? 'var(--wellness-surface, #fffdf8)' : 'transparent', border: p.variant === 'wellness-consultation' ? '1px solid var(--wellness-border, #d7e2d0)' : 'none', borderTop: p.variant === 'wellness-consultation' ? '2px solid var(--wellness-primary, #2f6b50)' : 'none', borderRadius: p.variant === 'wellness-consultation' ? 20 : 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', boxSizing: 'border-box', overflow: 'visible', boxShadow: p.variant === 'wellness-consultation' ? '0 18px 42px rgba(23,59,53,0.1)' : undefined }}>
         {p.title && <h2 style={{ margin: '0 0 0.8rem', color: 'var(--wellness-ink, #173b2c)', fontFamily: "Georgia, 'Times New Roman', serif", fontWeight: 600 }}>{p.title}</h2>}
-        <div style={{ display: p.variant === 'wellness-consultation' ? 'flex' : 'block', flexWrap: 'wrap', gap: p.variant === 'wellness-consultation' ? '0 0.9rem' : 0 }}>
+        <div style={{ display: p.variant === 'wellness-consultation' ? 'grid' : 'block', gridTemplateColumns: p.variant === 'wellness-consultation' ? 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' : undefined, columnGap: p.variant === 'wellness-consultation' ? '0.9rem' : undefined }}>
         {getWellnessPreviewFormFields(p).map((f, i) => {
-          const inputStyle = { width: '100%', padding: p.variant === 'wellness-consultation' ? '0.8rem 0.9rem' : '0.6rem', border: '1px solid var(--wellness-border, #d7e2d0)', borderRadius: '10px', background: 'var(--wellness-bg, #f7fbf4)', backgroundColor: 'var(--wellness-bg, #f7fbf4)', color: 'var(--wellness-ink, #173b2c)', boxSizing: 'border-box', opacity: 1, colorScheme: 'light', WebkitTextFillColor: 'var(--wellness-ink, #173b2c)' };
+          const inputStyle = { width: '100%', minWidth: 0, fontSize: '16px', padding: p.variant === 'wellness-consultation' ? '0.8rem 0.9rem' : '0.6rem', border: '1px solid var(--wellness-border, #d7e2d0)', borderRadius: '10px', background: 'var(--wellness-bg, #f7fbf4)', backgroundColor: 'var(--wellness-bg, #f7fbf4)', color: 'var(--wellness-ink, #173b2c)', boxSizing: 'border-box', opacity: 1, colorScheme: 'light', WebkitTextFillColor: 'var(--wellness-ink, #173b2c)' };
           return (
-            <div key={i} style={{ flex: p.variant === 'wellness-consultation' && i < 2 ? '1 1 calc(50% - 0.45rem)' : '1 1 100%', minWidth: p.variant === 'wellness-consultation' && i < 2 ? 0 : '100%' }}>
+            <div key={i} style={{ gridColumn: p.variant === 'wellness-consultation' && i >= 2 ? '1 / -1' : undefined, minWidth: 0 }}>
               <label style={{ display: 'block', fontSize: p.variant === 'wellness-consultation' ? '0.7rem' : '0.85rem', fontWeight: '700', marginBottom: '0.35rem', color: 'var(--wellness-muted, #63766b)', letterSpacing: p.variant === 'wellness-consultation' ? '0.12em' : 0, textTransform: p.variant === 'wellness-consultation' ? 'uppercase' : 'none' }}>{f.label}{f.required && ' *'}</label>
               {f.type === 'textarea' ? (
                 <textarea rows={4} style={{ ...inputStyle, resize: 'vertical' }} disabled />
@@ -2099,6 +2100,10 @@ function TravelPreviewBox({ children, accent = '#b8893b', dark = false }) {
         background: dark ? '#1f1a17' : '#f4efe6',
         color: dark ? '#fff' : '#1f1a17',
         padding: '1.4rem 1.2rem',
+        boxSizing: 'border-box',
+        maxWidth: '100%',
+        minWidth: 0,
+        overflowWrap: 'anywhere',
         borderRadius: 4,
         borderLeft: `3px solid ${accent}`,
         fontFamily: '"Helvetica Neue", Arial, sans-serif',
@@ -2906,7 +2911,7 @@ function BrochureDownloadPreview({ p }) {
       <div style={{ textAlign: 'center' }}>
         <h3 style={{ fontFamily: 'Georgia, serif', margin: '0 0 0.4rem', fontWeight: 400 }}>{p.title || 'Download the Brochure'}</h3>
         {p.subtitle && <div style={{ fontSize: '0.75rem', color: '#6f655c', marginBottom: '0.7rem' }}>{p.subtitle}</div>}
-        <button style={{ background: '#b8893b', color: '#fff', padding: '0.55rem 1.2rem', border: 'none', borderRadius: 2, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: '0.7rem', cursor: 'default' }}>
+        <button style={{ background: '#b8893b', color: '#fff', padding: '0.55rem 0.65rem', maxWidth: '100%', whiteSpace: 'normal', overflowWrap: 'anywhere', border: 'none', borderRadius: 2, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: '0.7rem', cursor: 'default' }}>
           {p.ctaText || 'Get the Brochure'}
         </button>
         <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: p.fileUrl ? '#10b981' : '#f59e0b' }}>

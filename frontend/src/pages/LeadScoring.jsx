@@ -95,9 +95,9 @@ export default function LeadScoring() {
     : 0;
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="lead-intelligence-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
       {/* Header */}
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
+      <header className="lead-intelligence-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <Target size={28} color="var(--accent-color)" /> Lead Intelligence
@@ -125,14 +125,14 @@ export default function LeadScoring() {
       )}
 
       {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem', marginBottom: '2rem' }}>
+      <div className="lead-intelligence-kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.25rem', marginBottom: '2rem' }}>
         {[
           { label: 'Total Contacts', value: contacts.length, icon: <Users size={20} color="var(--accent-color)" />, color: 'var(--accent-color)' },
           { label: 'Average Score', value: avgScore + '/100', icon: <Target size={20} color="#f59e0b" />, color: '#f59e0b' },
           { label: 'Hot Leads (≥70)', value: hotLeads.length, icon: <TrendingUp size={20} color="var(--success-color)" />, color: 'var(--success-color)' },
           { label: 'Cold Leads (<30)', value: coldLeads.length, icon: <TrendingDown size={20} color="#ef4444" />, color: '#ef4444' },
         ].map(kpi => (
-          <div key={kpi.label} className="card" style={{ padding: '1.5rem' }}>
+          <div key={kpi.label} className="card lead-intelligence-kpi-card" style={{ padding: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{kpi.label}</span>
               {kpi.icon}
@@ -164,7 +164,7 @@ export default function LeadScoring() {
       </div>
 
       {/* Hot & Cold Leads Side-by-Side */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+      <div className="lead-intelligence-lead-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
 
         {/* Hot Leads */}
         <div className="card" style={{ padding: '1.5rem' }}>

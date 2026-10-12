@@ -173,13 +173,13 @@ export default function BillingPersons() {
   }), [rows, search, status]);
 
   return (
-    <div data-testid="billing-directory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem' }}>
+    <div className="billing-directory-page" data-testid="billing-directory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><Receipt size={28} /> Billing Persons</h1>
           <p style={{ color: 'var(--text-secondary)', margin: '0.4rem 0 0' }}>Create billing logins and manage the people responsible for invoices and payments.</p>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '1 1 500px', maxWidth: 720 }}>
+        <div className="billing-directory-controls" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '1 1 500px', maxWidth: 720 }}>
           <input className="input-field" type="search" aria-label="Search billing persons" placeholder="Search billing persons..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ flex: '1 1 220px', minWidth: 0, height: 44, boxSizing: 'border-box' }} />
           <select className="input-field" aria-label="Filter by status" value={status} onChange={(event) => setStatus(event.target.value)} style={{ flex: '0 0 140px', height: 44, boxSizing: 'border-box' }}>
             <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option>

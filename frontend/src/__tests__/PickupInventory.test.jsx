@@ -38,6 +38,15 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('<PickupInventory />', () => {
+  it('shows a load error without an empty inventory table', async () => {
+    fetchApi.mockRejectedValueOnce(new Error('Failed to load pickup and plot inventory'));
+    render(<PickupInventory />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load pickup and plot inventory');
+    expect(screen.queryByTestId('pickup-inventory-table-scroll')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+  });
+
   it('adds a pickup location from the inventory page', async () => {
     fetchApi.mockResolvedValueOnce(payload).mockResolvedValueOnce({ id: 5 }).mockResolvedValueOnce(payload);
     render(<PickupInventory />);

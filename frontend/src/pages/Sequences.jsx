@@ -264,7 +264,7 @@ export default function Sequences() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="sequences-page" style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
          <div>
            <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Marketing Automated Sequences</h1>
@@ -283,7 +283,7 @@ export default function Sequences() {
       {/* Name Modal */}
       {showNameModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card" style={{ padding: '2rem', width: '380px' }}>
+          <div className="card sequences-name-modal" style={{ padding: '2rem', width: '380px' }}>
             <h3 style={{ fontWeight: 'bold', marginBottom: '1rem' }}>Name Your Sequence</h3>
             <input
               type="text"
@@ -303,12 +303,12 @@ export default function Sequences() {
       )}
 
       {/* Adding minHeight: 0 to prevent flexbox boundary explosion that clips the React Flow layer */}
-      <div style={{ flex: 1, minHeight: 0, border: '1px solid var(--border-color)', borderRadius: '12px', overflow: 'hidden', background: 'var(--surface-color)', boxShadow: 'var(--glass-shadow)', display: 'flex' }}>
+      <div className="sequences-workspace" style={{ flex: 1, minHeight: 0, border: '1px solid var(--border-color)', borderRadius: '12px', overflow: 'hidden', background: 'var(--surface-color)', boxShadow: 'var(--glass-shadow)', display: 'flex' }}>
         
         {/* ReactFlow Graph Canvas */}
-        <div style={{ flex: 3, position: 'relative' }}>
+        <div className="sequences-canvas" style={{ flex: 3, position: 'relative' }}>
           <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} fitView>
-            <Panel position="top-left" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.8)', padding: '0.75rem', borderRadius: '8px', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)', maxWidth: '420px' }}>
+            <Panel position="top-left" className="sequences-canvas-toolbar" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.8)', padding: '0.75rem', borderRadius: '8px', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)', maxWidth: '420px' }}>
               <button onClick={() => addLogicNode('default', 'ACTION: Send Email', '#3b82f6')} className="btn-secondary" style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderColor: 'rgba(59,130,246,0.4)' }}>
                 <Mail size={16} color="#3b82f6"/> Add Email
               </button>

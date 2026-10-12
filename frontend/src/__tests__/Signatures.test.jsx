@@ -306,6 +306,21 @@ describe('<Signatures /> — page surface', () => {
     expect(screen.getAllByText('DECLINED').length).toBeGreaterThanOrEqual(1);
   });
 
+  it.each(['generic', 'wellness', 'travel'])(
+    'keeps one horizontal table scroll area and no nested page scroll in %s',
+    async (vertical) => {
+      const { container } = renderSignatures(vertical);
+      await screen.findByText('Anita Sharma');
+
+      const page = container.firstElementChild;
+      expect(page).toHaveStyle({ minHeight: '100%', boxSizing: 'border-box' });
+      expect(page.style.overflowY).toBe('');
+      expect(container.querySelector('.top-scroll-sync__top')).toBeNull();
+      expect(container.querySelectorAll('.top-scroll-sync__bottom')).toHaveLength(1);
+      expect(screen.getByRole('table')).toHaveStyle({ minWidth: '900px', tableLayout: 'fixed' });
+    },
+  );
+
   it('renders status counter pills with N counts per status', async () => {
     renderSignatures();
     // Wait until data settles so the pill counts reflect the seeded shape:

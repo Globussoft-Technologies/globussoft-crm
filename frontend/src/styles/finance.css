@@ -361,8 +361,8 @@ html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .inv
   }
 
   .finance-page .cost-master-table {
-    width: max(100%, 920px) !important;
-    min-width: 920px !important;
+    width: max(100%, 1200px) !important;
+    min-width: 1200px !important;
     table-layout: fixed !important;
   }
 
@@ -377,8 +377,8 @@ html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .inv
   }
 
   .payables-table {
-    width: max(100%, 980px) !important;
-    min-width: 980px !important;
+    width: max(100%, 1100px) !important;
+    min-width: 1100px !important;
     table-layout: fixed !important;
   }
 
@@ -395,22 +395,8 @@ html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .inv
 }
 
 @media (max-width: 600px) {
-  .finance-page .finance-page__filters.cost-master-filters {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    align-items: stretch !important;
-    gap: 8px !important;
-  }
-
   .finance-page .finance-page__filters.cost-master-filters > svg {
     display: none;
-  }
-
-  .finance-page .finance-page__filters.cost-master-filters > select,
-  .finance-page .finance-page__filters.cost-master-filters > button {
-    width: 100%;
-    min-width: 0 !important;
-    max-width: 100%;
   }
 
   .invoices-admin-page .finance-page__header-actions,
@@ -439,6 +425,29 @@ html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .inv
   .invoices-admin-page .finance-page__filters > input:not([type="checkbox"]) {
     grid-column: auto;
   }
+}
+
+.finance-page .finance-page__filters.cost-master-filters {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: flex-start;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.finance-page .finance-page__filters.cost-master-filters > svg {
+  flex: 0 0 15px;
+  align-self: center;
+  display: block;
+}
+
+.finance-page .finance-page__filters.cost-master-filters > :is(select, button) {
+  flex: 0 0 auto;
+  width: auto !important;
+  min-width: 140px !important;
+  max-width: none;
 }
 
 @media (max-width: 1100px) {

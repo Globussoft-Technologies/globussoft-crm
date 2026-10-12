@@ -439,13 +439,15 @@
         transform: none;
       }
 
-      .generic-phone-with-whatsapp{margin-bottom:16px}
+      .generic-phone-with-whatsapp{margin-bottom:0}
       .generic-whatsapp-phone{margin-bottom:0}
-      .generic-whatsapp-section{display:block;margin-top:0;padding-left:0}
-      .generic-whatsapp-section>.check{display:flex;align-items:center;gap:8px;width:100%;margin-bottom:0;white-space:nowrap;line-height:1.2;font-weight:var(--gbs-form-weight,400)}
+      .generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}
+      .generic-whatsapp-section>.check{display:flex;align-items:flex-start;gap:8px;width:100%;margin-bottom:10px;white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)}
       .generic-whatsapp-section>.check input{margin-top:0;accent-color:#4f6df5}
-      .generic-whatsapp-number{margin-top:16px}
+      .generic-whatsapp-number{margin-top:0}
       .generic-whatsapp-number>label{display:block;margin-bottom:4px}
+      .generic-whatsapp-sync{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:10px 14px;border:1px solid #dbe5f1;border-radius:12px;background:#f8fbff;color:#4b6077;font-size:.82rem;line-height:1.3}
+      .generic-whatsapp-sync[hidden]{display:none!important}
       html.generic-scope .generic-phone-with-whatsapp,
       html.generic-scope .generic-whatsapp-section{grid-column:1 / -1!important}
       html.generic-scope .generic-whatsapp-number .phone-input{grid-template-columns:minmax(0, 24%) minmax(0, 1fr)!important;gap:10px!important}
@@ -2471,6 +2473,13 @@
           numberWrapper.innerHTML =
             '<label for="f-whatsappPhone">WhatsApp number</label>';
           numberWrapper.appendChild(whatsappPhoneGroup);
+          var whatsappError = document.createElement("span");
+          whatsappError.className = "field-error";
+          whatsappError.id = "whatsapp-number-error";
+          whatsappError.setAttribute("role", "alert");
+          whatsappError.hidden = true;
+          whatsappError.textContent = "Only numbers are allowed.";
+          numberWrapper.appendChild(whatsappError);
           wrapper.appendChild(numberWrapper);
           phoneField.insertAdjacentElement("afterend", wrapper);
 
@@ -2480,14 +2489,49 @@
           var whatsappField = wrapper.querySelector(
             ".generic-whatsapp-number",
           );
+          var whatsappSyncNotice = document.createElement("div");
+          whatsappSyncNotice.className = "generic-whatsapp-sync";
+          whatsappSyncNotice.setAttribute("role", "status");
+          whatsappSyncNotice.setAttribute("aria-live", "polite");
+          whatsappSyncNotice.hidden = true;
+          whatsappSyncNotice.innerHTML = '<span aria-hidden="true">&#10003;</span><span></span>';
+          wrapper.insertBefore(whatsappSyncNotice, whatsappField);
+          function showWhatsappError(show) {
+            whatsappError.hidden = !show;
+            whatsappInput.setAttribute("aria-invalid", show ? "true" : "false");
+          }
+          function keepWhatsappNumeric(value) {
+            var raw = String(value || "");
+            var invalid = /[^0-9+().\s-]/.test(raw);
+            var digits = raw.replace(/\D/g, "");
+            var countryDigits = String(whatsappCountry.value || "").replace(/\D/g, "");
+            if (
+              raw.trim().charAt(0) === "+" &&
+              countryDigits &&
+              digits.indexOf(countryDigits) === 0
+            ) {
+              digits = digits.slice(countryDigits.length);
+            }
+            showWhatsappError(invalid);
+            whatsappInput.value = digits;
+          }
           function syncWhatsappField() {
             var same = Boolean(sameCheckbox.checked);
             whatsappField.hidden = same;
             whatsappInput.disabled = same;
+            whatsappSyncNotice.hidden = !same;
             if (same) {
               var syncedCountry = phoneCountry.value || "+91";
-              if (whatsappCountry.value !== syncedCountry) {
-                whatsappCountry.value = syncedCountry;
+              whatsappSyncNotice.querySelector("span:last-child").textContent =
+                "WhatsApp sync enabled (" +
+                syncedCountry +
+                " " +
+                (phoneInput.value || "") +
+                ")";
+            }
+            if (same) {
+              if (whatsappCountry.value !== (phoneCountry.value || "+91")) {
+                whatsappCountry.value = phoneCountry.value || "+91";
                 whatsappCountry.dispatchEvent(new Event("change"));
               }
               whatsappInput.value = phoneInput.value || "";
@@ -2495,11 +2539,28 @@
           }
           sameCheckbox.addEventListener("change", syncWhatsappField);
           phoneInput.addEventListener("input", syncWhatsappField);
+          whatsappInput.addEventListener("beforeinput", function (event) {
+            if (event.data && /[^0-9+().\s-]/.test(event.data)) {
+              event.preventDefault();
+              showWhatsappError(true);
+            }
+          });
+          whatsappInput.addEventListener("input", function () {
+            keepWhatsappNumeric(whatsappInput.value);
+          });
+          whatsappInput.addEventListener("paste", function (event) {
+            event.preventDefault();
+            var pasted = event.clipboardData
+              ? event.clipboardData.getData("text")
+              : "";
+            keepWhatsappNumeric(pasted);
+          });
           phoneCountry.addEventListener("change", function () {
             if (sameCheckbox.checked) {
               whatsappCountry.value = phoneCountry.value;
               whatsappCountry.dispatchEvent(new Event("change"));
             }
+            syncWhatsappField();
           });
           syncWhatsappField();
         }

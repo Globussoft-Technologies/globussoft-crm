@@ -248,14 +248,14 @@ export default function AgentReports() {
   );
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+    <div className="agent-reports-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="agent-reports-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Agent Reports</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Performance analytics by sales agent — deals, calls, tasks, and more.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div className="agent-reports-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div className="agent-reports-dates" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Calendar size={16} color="var(--text-secondary)" />
             <input type="date" className="input-field" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem' }} />
             <span style={{ color: 'var(--text-secondary)' }}>to</span>
@@ -298,7 +298,7 @@ export default function AgentReports() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '1.5rem', alignItems: 'start' }}>
+      <div className="agent-reports-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '1.5rem', alignItems: 'start' }}>
         {/* Agent Performance Table */}
         <div className="card" style={{ overflow: 'visible' }}>
           <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -307,7 +307,7 @@ export default function AgentReports() {
             </h3>
           </div>
           <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <table className="agent-reports-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                 <th style={thBaseStyle}>#</th>
@@ -364,8 +364,8 @@ export default function AgentReports() {
 
         {/* Right Panel: Leaderboard Chart */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div className="card" style={{ padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div className="card agent-reports-leaderboard" style={{ padding: '1.5rem' }}>
+            <div className="agent-reports-leaderboard-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Trophy size={18} color="#f59e0b" /> Leaderboard
               </h3>

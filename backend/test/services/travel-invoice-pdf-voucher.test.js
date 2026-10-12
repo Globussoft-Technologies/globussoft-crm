@@ -37,8 +37,22 @@
  */
 
 import { describe, test, expect } from 'vitest';
+import { createRequire } from 'node:module';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
+
+const requireCJS = createRequire(import.meta.url);
+const pdfjs = requireCJS('pdfjs-dist/legacy/build/pdf.js');
+
+async function extractPdfJsText(buffer) {
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
+  const pages = [];
+  for (let index = 1; index <= pdf.numPages; index++) {
+    const page = await pdf.getPage(index);
+    pages.push((await page.getTextContent()).items.map((item) => item.str).join(' '));
+  }
+  return { pageCount: pdf.numPages, text: pages.join(' ') };
+}
 
 const {
   generateTravelInvoicePdf,
@@ -351,11 +365,12 @@ describe('renderTravelInvoicePdf — voucher details block (slice 18)', () => {
       invoice: voucherInvoiceFixture({ docType: 'TaxInvoice' }),
       lines: hotelVoucherLines(),
     });
-    const text = extractPdfText(buf);
+    const { pageCount, text } = await extractPdfJsText(buf);
     // Block header MUST NOT appear on a tax invoice.
     expect(text).not.toMatch(/Voucher Details/);
     // But the standard tax-invoice header MUST still appear.
     expect(text).toMatch(/TAX INVOICE/);
+    expect(pageCount).toBe(1);
   });
 
   test('non-voucher docType (Proforma) → block is SKIPPED', async () => {

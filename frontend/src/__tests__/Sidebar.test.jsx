@@ -499,6 +499,24 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(document.querySelector('a[href="/landing-sites"]')).toBeTruthy();
     });
 
+    it('shows Settings after Admin instead of inside the Admin submenu', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Admin', path: '/settings/roles', label: 'Roles' },
+          { category: 'Admin', path: '/settings', label: 'Settings' },
+        ],
+      });
+
+      const admin = await screen.findByRole('button', { name: 'Admin' });
+      fireEvent.mouseEnter(admin.parentElement);
+      const submenu = screen.getByRole('menu', { name: 'Admin submodules' });
+      expect(within(submenu).getByRole('link', { name: 'Roles' })).toBeTruthy();
+      expect(within(submenu).queryByRole('link', { name: 'Settings' })).toBeNull();
+      expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings');
+    });
+
     it('Marketing section keeps only SMS / Email Blasts + Landing Sites', async () => {
       renderSidebar({
         vertical: 'wellness',

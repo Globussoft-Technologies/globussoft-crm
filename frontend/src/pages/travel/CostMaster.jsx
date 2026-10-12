@@ -933,19 +933,19 @@ export default function CostMaster() {
             style={{
               maxHeight: "calc(100vh - 475px)",
               overflowY: "auto",
-              overflowX: "hidden",
+              overflowX: "auto",
             }}
           >
-          <table className="cost-master-table" style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+          <table className="cost-master-table" style={{ width: "100%", minWidth: 1200, tableLayout: "fixed", borderCollapse: "collapse" }}>
             <colgroup>
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "24%" }} />
+              <col style={{ width: "13%" }} />
               <col style={{ width: "12%" }} />
-              <col style={{ width: "8%" }} />
               <col style={{ width: "20%" }} />
-              <col style={{ width: "7%" }} />
-              <col style={{ width: "9%" }} />
+              <col style={{ width: "13%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "8%" }} />
             </colgroup>
             <thead>
               <tr>
@@ -1049,7 +1049,7 @@ const input = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--b
 const inlineInput = { padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13, width: "100%" };
 const emptyStyle = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = { position: "sticky", top: 0, background: "var(--modal-bg, var(--bg-color))", zIndex: 3, textAlign: "left", padding: "14px 16px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", boxShadow: "inset 0 -1px 0 var(--border-color)", fontWeight: 600, whiteSpace: "nowrap" };
-const sortButtonStyle = { display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6, width: "100%", padding: "4px 8px", border: "none", borderRadius: 999, background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit", letterSpacing: "inherit", cursor: "pointer", textAlign: "left", transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease" };
+const sortButtonStyle = { display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6, width: "100%", padding: "4px 8px", border: "none", borderRadius: 999, background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit", letterSpacing: "inherit", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap", transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease" };
 const sortButtonActiveStyle = { color: "var(--primary-color)" };
 const td = { padding: "14px 16px", fontSize: 13.5, color: "var(--text-primary)", verticalAlign: "middle" };
 const brandBadge = { display: "inline-block", padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--subtle-bg-3, rgba(91,110,248,0.15))", color: "var(--primary-color, #5b6ef8)", textTransform: "uppercase", letterSpacing: 0.5 };

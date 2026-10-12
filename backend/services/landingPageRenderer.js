@@ -627,8 +627,8 @@ function renderComponent(component, slug, options = {}) {
       const isWellnessForm = props.variant === "wellness-consultation";
       const domFormId = isWellnessForm ? "lead-form" : formId;
       const controlStyle = isWellnessForm
-        ? "width:100%;padding:14px 16px;border:1px solid var(--wellness-border,#d7e2d0);border-radius:10px;font-size:15px;box-sizing:border-box;background:var(--wellness-bg,#f7fbf4);background-color:var(--wellness-bg,#f7fbf4);color:var(--wellness-ink,#173b2c);opacity:1;color-scheme:light;-webkit-text-fill-color:var(--wellness-ink,#173b2c);"
-        : "width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:15px;box-sizing:border-box;background:#ffffff;background-color:#ffffff;color:#1f2937;opacity:1;color-scheme:light;-webkit-text-fill-color:#1f2937;";
+        ? "width:100%;min-width:0;padding:14px 16px;border:1px solid var(--wellness-border,#d7e2d0);border-radius:10px;font-size:16px;box-sizing:border-box;background:var(--wellness-bg,#f7fbf4);background-color:var(--wellness-bg,#f7fbf4);color:var(--wellness-ink,#173b2c);opacity:1;color-scheme:light;-webkit-text-fill-color:var(--wellness-ink,#173b2c);"
+        : "width:100%;min-width:0;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:16px;box-sizing:border-box;background:#ffffff;background-color:#ffffff;color:#1f2937;opacity:1;color-scheme:light;-webkit-text-fill-color:#1f2937;";
       const labelStyle = isWellnessForm
         ? "display:block;margin-bottom:8px;font-weight:700;color:var(--wellness-muted,#63766b);font-size:12px;letter-spacing:0.12em;text-transform:uppercase;"
         : "display:block;margin-bottom:4px;font-weight:500;color:#333;font-size:14px;";
@@ -641,7 +641,7 @@ function renderComponent(component, slug, options = {}) {
           const name = escapeHtml(f.name);
           const placeholder = escapeHtml(f.placeholder || "");
           const fieldShellStyle = isWellnessForm
-            ? `margin-bottom:18px;flex:${fields.indexOf(f) < 2 ? "1 1 calc(50% - 8px)" : "1 1 100%"};min-width:${fields.indexOf(f) < 2 ? "0" : "100%"};box-sizing:border-box;`
+            ? `margin-bottom:18px;min-width:0;grid-column:${fields.indexOf(f) < 2 ? "auto" : "1 / -1"};box-sizing:border-box;`
             : "margin-bottom:12px;";
           if (inputType === "textarea") {
             return `<div style="${fieldShellStyle}"><label style="${labelStyle}">${label}${requiredMark}</label><textarea name="${name}" ${req} placeholder="${placeholder}" rows="4" style="${controlStyle}resize:vertical;min-height:98px;"></textarea></div>`;
@@ -663,7 +663,7 @@ function renderComponent(component, slug, options = {}) {
         ? `<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
         : "";
       const captchaHtml = enableCaptcha
-        ? `<div class="cf-turnstile" data-sitekey="${escapeHtml(turnstileSiteKey)}" data-callback="${formId}_onTurnstile" style="margin:0 0 12px;"></div>`
+        ? `<div class="cf-turnstile" data-size="compact" data-sitekey="${escapeHtml(turnstileSiteKey)}" data-callback="${formId}_onTurnstile" style="margin:0 0 12px;"></div>`
         : "";
 
       let successRedirectUrl = "";
@@ -684,15 +684,15 @@ function renderComponent(component, slug, options = {}) {
             document.getElementById("${formId}_thanks").style.display = "block";`;
       const formTitle = props.title ? `<h2 style="margin:0 0 28px;color:var(--wellness-ink,#173b2c);font-family:Georgia,'Times New Roman',serif;font-size:1.75rem;font-weight:600;">${escapeHtml(props.title)}</h2>` : "";
       const formStyle = isWellnessForm
-        ? "width:100%;max-width:520px;margin:0 auto 16px;padding:36px;background:var(--wellness-surface,#fffdf8);border-radius:20px;border:1px solid var(--wellness-border,#d7e2d0);border-top:2px solid var(--wellness-primary,#2f6b50);box-shadow:0 18px 55px rgba(23,59,53,0.10);box-sizing:border-box;"
-        : "max-width:480px;margin:0 auto 16px;padding:24px;background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;";
+        ? "width:100%;max-width:520px;min-width:0;margin:0 auto 16px;padding:clamp(16px,5vw,36px);background:var(--wellness-surface,#fffdf8);border-radius:20px;border:1px solid var(--wellness-border,#d7e2d0);border-top:2px solid var(--wellness-primary,#2f6b50);box-shadow:0 18px 55px rgba(23,59,53,0.10);box-sizing:border-box;"
+        : "width:100%;max-width:480px;min-width:0;margin:0 auto 16px;padding:clamp(16px,5vw,24px);background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;box-sizing:border-box;";
       const buttonStyle = isWellnessForm
         ? "width:100%;padding:16px;background:linear-gradient(135deg,var(--wellness-primary,#2f6b50),var(--wellness-primary-deep,#194a37));color:var(--wellness-inverse,#fff);border:none;border-radius:999px;font-size:15px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;"
         : "width:100%;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;";
 
       return `${captchaScript}<form id="${domFormId}" style="${formStyle}" onsubmit="return false;">
         ${formTitle}
-        <div style="${isWellnessForm ? 'display:flex;flex-wrap:wrap;gap:0 16px;' : ''}">${fieldsHtml}</div>
+        <div style="${isWellnessForm ? 'display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));column-gap:16px;' : ''}">${fieldsHtml}</div>
         ${captchaHtml}
         <button type="submit" style="${buttonStyle}">${submitText}</button>
         <div id="${formId}_thanks" style="display:none;text-align:center;padding:16px;color:#16a34a;font-weight:500;">${thankYouMessage}</div>

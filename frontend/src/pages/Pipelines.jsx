@@ -432,9 +432,9 @@ const Pipelines = () => {
               </label>
 
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <div className="pipelines-stage-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                   <label style={labelStyle}>Stages *</label>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <div className="pipelines-stage-controls" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     <select aria-label="Select Existing Stage" defaultValue="" onChange={addExistingStage} style={{ ...iconBtn, maxWidth: '180px' }}>
                       <option value="">Select Existing Stage</option>
                       {availableStages.filter((stage) => !stages.some((selected) => selected.id === stage.id)).map((stage) => (

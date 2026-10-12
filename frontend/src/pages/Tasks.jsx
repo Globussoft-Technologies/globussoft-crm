@@ -853,16 +853,16 @@ export default function Tasks() {
               const overdue = isOverdue(t);
               const decoded = decodeNotes(t.notes);
               return (
-                <div key={t.id} style={{
+                <div key={t.id} className="tasks-queue-item" style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   padding: '1.25rem', background: cfg.bg,
                   borderLeft: `4px solid ${cfg.border}`, borderRadius: '0 8px 8px 0',
                   transition: '0.2s', position: 'relative',
                   boxShadow: t.priority === 'Critical' ? `0 0 12px ${cfg.color}22` : 'none',
                 }}>
-                  <div style={{ flex: 1 }}>
+                  <div className="tasks-queue-item__main" style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
-                      <h4 style={{ fontWeight: '600', fontSize: '1rem', margin: 0 }}>{t.title}</h4>
+                      <h4 className="tasks-queue-item__title" style={{ fontWeight: '600', fontSize: '1rem', margin: 0 }}>{t.title}</h4>
                       <PriorityBadge priority={t.priority} />
                       {overdue && (
                         <span style={{ padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(239,68,68,0.15)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -871,16 +871,16 @@ export default function Tasks() {
                       )}
                     </div>
                     {t.contact && (
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0 0 0.2rem' }}>
+                      <p className="tasks-queue-item__meta" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0 0 0.2rem' }}>
                         <Search size={12} /> {t.contact.name} • {t.contact.email}
                       </p>
                     )}
                     {t.dueDate && (
-                      <p style={{ fontSize: '0.8rem', color: overdue ? '#ef4444' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+                      <p className="tasks-queue-item__meta" style={{ fontSize: '0.8rem', color: overdue ? '#ef4444' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
                         <Clock size={12} /> {new Date(t.dueDate).toLocaleString()}
                       </p>
                     )}
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0.2rem 0 0' }}>
+                    <p className="tasks-queue-item__meta" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0.2rem 0 0' }}>
                       <UserRound size={12} /> Assigned to {assigneeName(t)}
                     </p>
                     {isTravel && (
@@ -917,7 +917,7 @@ export default function Tasks() {
                       </p>
                     )}
                   </div>
-                  <div style={{ display: 'flex', gap: '0.5rem', marginLeft: '1rem', flexShrink: 0 }}>
+                  <div className="tasks-queue-item__actions" style={{ display: 'flex', gap: '0.5rem', marginLeft: '1rem', flexShrink: 0 }}>
                     <button
                       onClick={() => openTaskDetails(t)}
                       className="btn-secondary"

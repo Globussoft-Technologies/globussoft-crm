@@ -433,10 +433,10 @@ function normalizeManualBirthdayEntry(entry) {
   };
 }
 
-function readSeenAlertState() {
+function readSeenAlertState(storageKey) {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(CALENDAR_SYNC_SEEN_STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
@@ -444,10 +444,10 @@ function readSeenAlertState() {
   }
 }
 
-function readDismissedAlertState() {
+function readDismissedAlertState(storageKey) {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(CALENDAR_SYNC_DISMISSED_STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
@@ -455,10 +455,10 @@ function readDismissedAlertState() {
   }
 }
 
-function readManualBirthdayState() {
+function readManualBirthdayState(storageKey) {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(CALENDAR_SYNC_MANUAL_BIRTHDAYS_KEY);
+    const raw = window.localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed)
       ? parsed.map(normalizeManualBirthdayEntry).filter(Boolean)
@@ -546,10 +546,21 @@ function getAlertNotificationTime(alert) {
 }
 
 export default function CalendarSync() {
+  const { user, tenant } = useContext(AuthContext) || {};
+  const tenantVertical = tenant?.vertical || user?.tenant?.vertical || "generic";
+  const tenantId = tenant?.id || user?.tenantId || user?.tenant?.id || tenantVertical;
+  const userId = user?.userId || user?.id || "anonymous";
+  const storageScope = `${tenantId}:${userId}:${tenantVertical}`;
+
+  return <TenantCalendarSync key={storageScope} tenantVertical={tenantVertical} storageScope={storageScope} />;
+}
+
+function TenantCalendarSync({ tenantVertical, storageScope }) {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
-  const tenantVertical = user?.tenant?.vertical || "generic";
   const isTravelTenant = tenantVertical === "travel";
+  const manualBirthdaysKey = `${CALENDAR_SYNC_MANUAL_BIRTHDAYS_KEY}:${storageScope}`;
+  const seenAlertsKey = `${CALENDAR_SYNC_SEEN_STORAGE_KEY}:${storageScope}`;
+  const dismissedAlertsKey = `${CALENDAR_SYNC_DISMISSED_STORAGE_KEY}:${storageScope}`;
   // Travel tenants only use Google Calendar; generic + wellness keep both.
   const availableProviders = PROVIDERS.filter((p) =>
     tenantVertical === "travel" ? p.key === "google" : true,
@@ -594,7 +605,7 @@ export default function CalendarSync() {
   const [showBirthdayModal, setShowBirthdayModal] = useState(false);
   const [birthdaySaving, setBirthdaySaving] = useState(false);
   const [birthdayError, setBirthdayError] = useState("");
-  const [manualBirthdayEntries, setManualBirthdayEntries] = useState(() => readManualBirthdayState());
+  const [manualBirthdayEntries, setManualBirthdayEntries] = useState(() => readManualBirthdayState(manualBirthdaysKey));
   const [birthdayForm, setBirthdayForm] = useState(() => createBirthdayDraft());
   const [birthdayMonthFilter, setBirthdayMonthFilter] = useState(() => String(new Date().getMonth()));
   const [meetingStatusFilter, setMeetingStatusFilter] = useState("upcoming");
@@ -603,8 +614,8 @@ export default function CalendarSync() {
   const detailsSectionRef = useRef(null);
   const alertsSectionRef = useRef(null);
   const [openPanel, setOpenPanel] = useState("details");
-  const [seenAlertKeys, setSeenAlertKeys] = useState(() => readSeenAlertState());
-  const [dismissedAlertKeys, setDismissedAlertKeys] = useState(() => readDismissedAlertState());
+  const [seenAlertKeys, setSeenAlertKeys] = useState(() => readSeenAlertState(seenAlertsKey));
+  const [dismissedAlertKeys, setDismissedAlertKeys] = useState(() => readDismissedAlertState(dismissedAlertsKey));
   const [alertClock, setAlertClock] = useState(() => Date.now());
   // T18 slot-picker (Google only): pick a day → fetch free/busy slots →
   // click a slot to fill start/end. Purely additive; leaving it untouched
@@ -721,27 +732,29 @@ export default function CalendarSync() {
       }
     }
 
-    try {
-      const contactsRes = await fetchApi("/api/contacts?limit=200", { silent: true });
-      const contacts = Array.isArray(contactsRes)
-        ? contactsRes
-        : contactsRes?.data || contactsRes?.contacts || [];
-      contacts
-        .filter((contact) => contact && contact.birthDate)
-        .forEach((contact) => nextBirthdays.push(contact));
-      if (!contactOptions.length) {
-        setContactOptions(
-          contacts
-            .filter((c) => c && c.email)
-            .map((c) => ({
-              id: c.id,
-              name: c.name || c.email,
-              email: c.email,
-            })),
-        );
+    if (isTravelTenant) {
+      try {
+        const contactsRes = await fetchApi("/api/contacts?limit=200", { silent: true });
+        const contacts = Array.isArray(contactsRes)
+          ? contactsRes
+          : contactsRes?.data || contactsRes?.contacts || [];
+        contacts
+          .filter((contact) => contact && contact.birthDate)
+          .forEach((contact) => nextBirthdays.push(contact));
+        if (!contactOptions.length) {
+          setContactOptions(
+            contacts
+              .filter((c) => c && c.email)
+              .map((c) => ({
+                id: c.id,
+                name: c.name || c.email,
+                email: c.email,
+              })),
+          );
+        }
+      } catch {
+        // Best-effort only.
       }
-    } catch {
-      // Best-effort only.
     }
 
     collected.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
@@ -775,37 +788,37 @@ export default function CalendarSync() {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(
-        CALENDAR_SYNC_MANUAL_BIRTHDAYS_KEY,
+        manualBirthdaysKey,
         JSON.stringify(manualBirthdayEntries),
       );
     } catch {
       // Ignore localStorage write failures and keep the UI working.
     }
-  }, [manualBirthdayEntries]);
+  }, [manualBirthdayEntries, manualBirthdaysKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(
-        CALENDAR_SYNC_SEEN_STORAGE_KEY,
+        seenAlertsKey,
         JSON.stringify(seenAlertKeys),
       );
     } catch {
       // Best-effort only.
     }
-  }, [seenAlertKeys]);
+  }, [seenAlertKeys, seenAlertsKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(
-        CALENDAR_SYNC_DISMISSED_STORAGE_KEY,
+        dismissedAlertsKey,
         JSON.stringify(dismissedAlertKeys),
       );
     } catch {
       // Best-effort only.
     }
-  }, [dismissedAlertKeys]);
+  }, [dismissedAlertKeys, dismissedAlertsKey]);
 
   useEffect(() => {
     const timerId = window.setInterval(() => setAlertClock(Date.now()), 30 * 1000);
@@ -1301,8 +1314,8 @@ export default function CalendarSync() {
   };
 
   const renderAttendeePicker = (onSelect, pickerKey) => (
-    <div style={{ position: "relative", display: "flex", gap: "0.4rem", marginBottom: "0.5rem" }}>
-      <div style={{ position: "relative", flex: 1 }}>
+    <div style={{ position: "relative", display: "flex", alignItems: "stretch", gap: "0.4rem", marginBottom: "0.5rem", minWidth: 0 }}>
+      <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
         <input
         type="search"
         value={contactSearch}
@@ -1310,7 +1323,7 @@ export default function CalendarSync() {
         aria-label="Add attendee from contacts"
         aria-expanded={attendeePickerOpen === pickerKey}
         aria-controls={`${pickerKey}-attendee-options`}
-        placeholder="+ Add from contacts…"
+        placeholder="Search contacts…"
         onFocus={() => setAttendeePickerOpen(pickerKey)}
         onBlur={() => setAttendeePickerOpen("")}
         onKeyDown={(e) => {
@@ -1334,7 +1347,9 @@ export default function CalendarSync() {
         }}
         style={{
           width: "100%",
-          padding: "0.7rem",
+          height: 40,
+          minWidth: 0,
+          padding: "0 0.7rem",
           fontSize: "0.9rem",
           border: "1px solid var(--border-color)",
           borderRadius: "8px",
@@ -1401,7 +1416,7 @@ export default function CalendarSync() {
         aria-label={newAttendeeOpen === pickerKey ? "Close new attendee input" : "Add a new attendee"}
         title={newAttendeeOpen === pickerKey ? "Close new attendee input" : "Add a new attendee"}
         onClick={() => setNewAttendeeOpen((current) => current === pickerKey ? "" : pickerKey)}
-        style={{ width: 40, height: 40, borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--surface-hover)", color: "var(--text-primary)", fontSize: "1.2rem", cursor: "pointer" }}
+        style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--surface-hover)", color: "var(--text-primary)", fontSize: "1.2rem", cursor: "pointer" }}
       >
         {newAttendeeOpen === pickerKey ? "×" : "+"}
       </button>
@@ -1833,13 +1848,13 @@ export default function CalendarSync() {
   };
 
   const summaryCards = [
-    {
+    ...(isTravelTenant ? [{
       key: "trips",
       label: "Confirmed trips",
       value: travelTripRows.length,
       hint: "All confirmed travel-brand trips",
       newCount: unreadAlerts.filter((alert) => alert.kind === "Trip").length,
-    },
+    }] : []),
     {
       key: "birthdays",
       label: "Birthdays this month",
@@ -1861,7 +1876,9 @@ export default function CalendarSync() {
       key: "alerts",
       label: "Pending alerts",
       value: visiblePendingAlerts.length,
-      hint: "24h, 30m, and 10m reminders due",
+      hint: isTravelTenant
+        ? "24h, 30m, and 10m reminders due"
+        : "Upcoming meeting and birthday reminders",
       newCount: unreadAlerts.length,
     },
   ];
@@ -2138,6 +2155,7 @@ export default function CalendarSync() {
         return (
         <div
           key={`${trip._source}-${trip.id}`}
+          className="calendar-sync-trip-row"
           role="button"
           tabIndex={0}
           onClick={() => {
@@ -2163,13 +2181,13 @@ export default function CalendarSync() {
             border: CALENDAR_SYNC_ITEM_STYLE.border,
           }}
         >
-                      <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      <div className="calendar-sync-trip-row__dates" style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
                         {trip._startDate ? formatShortDate(trip._startDate) : "—"}
                         <div style={{ marginTop: 4 }}>
                           {trip._endDate ? formatShortDate(trip._endDate) : "—"}
                         </div>
                       </div>
-                      <div style={{ minWidth: 0 }}>
+                      <div className="calendar-sync-trip-row__details" style={{ minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: "0.95rem", display: "flex", alignItems: "center", gap: "0.45rem" }}>
                           {trip._title}
                           {isNew && (
@@ -2192,6 +2210,7 @@ export default function CalendarSync() {
                         </div>
                       </div>
                       <div
+                        className="calendar-sync-trip-row__brand"
                         style={{
                           padding: "0.35rem 0.65rem",
                           borderRadius: 999,
@@ -2816,6 +2835,7 @@ export default function CalendarSync() {
         })}
       </div>
 
+      {isTravelTenant ? <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.9rem", marginBottom: "1rem" }}>
         {summaryCards.map((card) => (
           <button
@@ -2886,7 +2906,11 @@ export default function CalendarSync() {
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.75rem" }}>
             <div style={{ fontWeight: 700 }}>Pending alerts</div>
-            <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>24h trip/birthday reminders plus 24h, 30m, and 10m meeting reminders</div>
+            <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+              {isTravelTenant
+                ? "24h trip/birthday reminders plus 24h, 30m, and 10m meeting reminders"
+                : "Birthday reminders plus 24h, 30m, and 10m meeting reminders"}
+            </div>
           </div>
           <div
             data-testid="pending-alerts-scroll-area"
@@ -3190,7 +3214,25 @@ export default function CalendarSync() {
         </div>
       )}
 
-      {renderTripDetailModal()}
+      </> : (
+        <div className="card" style={{ padding: "1.5rem", background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+            <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 600 }}>Upcoming meetings</h3>
+            <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+              {upcomingMeetingRows.length} event{upcomingMeetingRows.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          {loading ? (
+            <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>Loading events...</div>
+          ) : upcomingMeetingRows.length === 0 ? (
+            <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>
+              No events synced yet. Connect a calendar above and click &quot;Sync Now&quot;.
+            </div>
+          ) : renderMeetingRows(upcomingMeetingRows)}
+        </div>
+      )}
+
+      {isTravelTenant && renderTripDetailModal()}
 
       {showBirthdayModal && (
         <div
@@ -4304,10 +4346,13 @@ export default function CalendarSync() {
               border: "1px solid var(--border-color)",
               borderRadius: "12px",
               boxShadow: "0 10px 40px rgba(0,0,0,0.15)",
-              padding: "2rem",
-              maxWidth: "520px",
-              width: "90%",
-              maxHeight: "85vh",
+              padding: "clamp(1rem, 4vw, 2rem)",
+              width: "min(584px, calc(100vw - 1rem))",
+              maxWidth: "calc(100vw - 1rem)",
+              boxSizing: "border-box",
+              minWidth: 0,
+              maxHeight: "calc(100dvh - 1rem)",
+              overflowX: "hidden",
               overflowY: "auto",
             }}
           >
@@ -4427,11 +4472,11 @@ export default function CalendarSync() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 210px), 1fr))",
                   gap: "1rem",
                 }}
               >
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <label
                     style={{
                       display: "block",
@@ -4459,6 +4504,7 @@ export default function CalendarSync() {
                     }
                     style={{
                       width: "100%",
+                      minWidth: 0,
                       padding: "0.85rem",
                       fontSize: "0.92rem",
                       border: "1px solid var(--border-color)",
@@ -4483,7 +4529,7 @@ export default function CalendarSync() {
                   />
                 </div>
 
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <label
                     style={{
                       display: "block",
@@ -4511,6 +4557,7 @@ export default function CalendarSync() {
                     }
                     style={{
                       width: "100%",
+                      minWidth: 0,
                       padding: "0.85rem",
                       fontSize: "0.92rem",
                       border: "1px solid var(--border-color)",
@@ -4809,7 +4856,7 @@ export default function CalendarSync() {
                     >
                       Find available slots
                     </label>
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                       <input
                         type="date"
                         value={slotPicker.date}
@@ -4828,7 +4875,8 @@ export default function CalendarSync() {
                           }))
                         }
                         style={{
-                          flex: 1,
+                          flex: "1 1 160px",
+                          minWidth: 0,
                           padding: "0.6rem",
                           fontSize: "0.9rem",
                           border: "1px solid var(--border-color)",
@@ -4983,6 +5031,7 @@ export default function CalendarSync() {
               <div
                 style={{
                   display: "flex",
+                  flexWrap: "wrap",
                   gap: "0.75rem",
                   marginTop: "1.5rem",
                   justifyContent: "flex-end",

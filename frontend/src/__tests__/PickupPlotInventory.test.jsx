@@ -234,16 +234,20 @@ describe('<PickupPlotInventory />', () => {
       background: 'var(--modal-bg, #fff)',
       color: 'var(--text-primary)',
     });
-    expect(screen.getByText('Address', { selector: 'label' }).parentElement).toHaveStyle({ gridColumn: '1 / -1' });
+    expect(screen.getByText('Address *', { selector: 'label' }).parentElement).toHaveStyle({ gridColumn: '1 / -1' });
     expect(screen.queryByLabelText(/Reference code/i)).toBeNull();
     const labels = Array.from(
       screen.getByRole('dialog').querySelectorAll('label'),
       (label) => label.childNodes[0]?.textContent?.trim(),
     );
     expect(labels.slice(0, 10)).toEqual([
-      'Name *', 'Plot number', 'Block', 'Availability', 'Area', 'Area unit', 'Price',
-      'Road width', 'Facing', 'Residential / Commercial',
+      'Name *', 'Plot number *', 'Block *', 'Availability *', 'Area *', 'Area unit *', 'Price *',
+      'Road width *', 'Facing', 'Residential / Commercial *',
     ]);
+    [
+      'Name *', 'Plot number *', 'Block *', 'Availability *', 'Area *', 'Area unit *',
+      'Price *', 'Road width *', 'Residential / Commercial *', 'Address *',
+    ].forEach((label) => expect(screen.getByLabelText(label)).toBeRequired());
     expect(screen.queryByText('Exact plot boundary')).toBeNull();
     expect(screen.queryByTestId('boundary-editor')).toBeNull();
   });
@@ -280,6 +284,13 @@ describe('<PickupPlotInventory />', () => {
     await screen.findByText('Plot A-9');
     fireEvent.click(screen.getByRole('button', { name: /Add Plot \/ Site/i }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Name *' }), { target: { value: 'Plot B-10' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Plot number *' }), { target: { value: 'B-10' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Block *' }), { target: { value: 'B' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Area *' }), { target: { value: '1200' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Price *' }), { target: { value: '300000' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Road width *' }), { target: { value: '40 ft' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Residential / Commercial *' }), { target: { value: 'RESIDENTIAL' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Address *' }), { target: { value: '26 Lake Road' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'North Gate · 10 Market Road' }));
@@ -317,7 +328,7 @@ describe('<PickupPlotInventory />', () => {
     await screen.findByText('Plot A-9');
     fireEvent.click(screen.getByRole('button', { name: /Add Plot \/ Site/i }));
 
-    const addressInput = screen.getByRole('combobox', { name: 'Address' });
+    const addressInput = screen.getByRole('combobox', { name: 'Address *' });
     expect(addressInput).toHaveAttribute('autocomplete', 'off');
     fireEvent.change(addressInput, { target: { value: 'Koramangala' } });
 

@@ -25,6 +25,7 @@ export default function AddressAutocomplete({
   maxLength = 2000,
   label = 'Address',
   placeholder = 'Start typing an address...',
+  required = false,
 }) {
   const inputId = useId();
   const listId = `${inputId}-suggestions`;
@@ -130,6 +131,7 @@ export default function AddressAutocomplete({
           aria-controls={listId}
           aria-activedescendant={open && activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
           autoComplete="off"
+          required={required}
           maxLength={maxLength}
           placeholder={placeholder}
           style={{ width: '100%', marginTop: label ? 5 : 0, boxSizing: 'border-box', paddingRight: '2.25rem' }}

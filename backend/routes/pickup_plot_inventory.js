@@ -2141,6 +2141,105 @@ router.patch("/billing/me/assignments/:assignmentKey/status", async (req, res) =
   }
 });
 
+// Read-only workflow projection for the Generic CRM Leads table. Unlike the
+// admin Customer Status screen, USER callers may read only leads assigned to
+// them; ADMIN and MANAGER retain the same full-tenant visibility as /contacts.
+router.get("/lead-status", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const rawContactIds = typeof req.query.contactIds === "string"
+      ? req.query.contactIds.split(",").filter(Boolean)
+      : [];
+    const contactIds = [...new Set(rawContactIds.map(Number))];
+    if (
+      contactIds.length < 1
+      || contactIds.length > 100
+      || contactIds.some((id) => !Number.isInteger(id) || id <= 0)
+    ) {
+      return res.status(400).json({
+        error: "contactIds must contain 1 to 100 positive integers",
+        code: "INVALID_CONTACT_IDS",
+      });
+    }
+
+    const contactWhere = {
+      tenantId,
+      id: { in: contactIds },
+      status: "Lead",
+      deletedAt: null,
+    };
+    if (!["ADMIN", "MANAGER"].includes(req.user.role)) {
+      contactWhere.assignedToId = req.user.userId;
+    }
+    const [visibleContacts, pickupLocations] = await Promise.all([
+      prisma.contact.findMany({
+        where: contactWhere,
+        select: { id: true },
+      }),
+      prisma.pickupLocation.findMany({
+        where: { tenantId, isActive: true },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, address: true, googleMapsLink: true },
+      }),
+    ]);
+    const visibleContactIds = visibleContacts.map((contact) => contact.id);
+    if (!visibleContactIds.length) return res.json({ customers: [], pickupLocations });
+
+    const [pickups, transportPeople, brokers, workflowEvents, plots] = await Promise.all([
+      prisma.customerPickup.findMany({
+        where: { tenantId, contactId: { in: visibleContactIds } },
+        orderBy: { updatedAt: "desc" },
+        include: {
+          contact: { select: { id: true, name: true, phone: true, email: true, company: true, status: true, interestedPlotArea: true } },
+        },
+      }),
+      prisma.transportPerson.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, assignmentStatusJson: true, updatedAt: true },
+      }),
+      prisma.plotBroker.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
+      }),
+      prisma.plotWorkflowEvent.findMany({
+        where: { tenantId, contactId: { in: visibleContactIds } },
+        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      }),
+      prisma.plotSite.findMany({
+        where: { tenantId },
+        select: { id: true, name: true, address: true, area: true, availability: true },
+      }),
+    ]);
+    const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
+    const historyByCustomer = new Map();
+    for (const event of workflowEvents) {
+      const history = historyByCustomer.get(event.contactId) || [];
+      history.push({
+        id: event.id,
+        bookingId: event.plotBookingId,
+        plotSiteId: event.plotSiteId,
+        stage: event.stage,
+        eventType: event.eventType,
+        label: event.label,
+        fromStatus: event.fromStatus,
+        toStatus: event.toStatus,
+        occurredAt: event.occurredAt,
+      });
+      historyByCustomer.set(event.contactId, history);
+    }
+    const customers = pickups.map((pickup) => ({
+      ...pickup,
+      pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
+      ...findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap),
+      workflowHistory: historyByCustomer.get(pickup.contactId) || [],
+    }));
+    return res.json({ customers, pickupLocations });
+  } catch (error) {
+    console.error("pickup-plot-inventory GET /lead-status error:", error);
+    return res.status(500).json({ error: "Failed to load lead workflow status", code: "LEAD_STATUS_LOAD_FAILED" });
+  }
+});
+
 router.get("/customer-pickups", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -2224,8 +2323,12 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
       validateOptionalText(req.body?.sourceExcerpt, "Transcript excerpt", 4000),
     );
     if (validationError) return res.status(400).json({ error: validationError, code: "VALIDATION_ERROR" });
+    const contactWhere = { id: contactId, tenantId, deletedAt: null };
+    if (!["ADMIN", "MANAGER"].includes(req.user.role)) {
+      contactWhere.assignedToId = req.user.userId;
+    }
     const contact = await prisma.contact.findFirst({
-      where: { id: contactId, tenantId, deletedAt: null },
+      where: contactWhere,
       select: { id: true },
     });
     if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
@@ -2435,8 +2538,8 @@ async function validatePickupLocationIds(tenantId, input) {
 router.post("/plots", adminOnly, async (req, res) => {
   try {
     const name = text(req.body?.name, 150);
-    const availability = text(req.body?.availability, 20) || "AVAILABLE";
-    const areaUnit = text(req.body?.areaUnit, 20) || "SQ_FT";
+    const availability = text(req.body?.availability, 20);
+    const areaUnit = text(req.body?.areaUnit, 20);
     const facing = text(req.body?.facing, 30);
     const propertyType = text(req.body?.propertyType, 30);
     const price = parsePrice(req.body?.price);
@@ -2452,17 +2555,21 @@ router.post("/plots", adminOnly, async (req, res) => {
     }
     const validationError = firstError(
       validateName(req.body?.name, "Plot or site name"),
-      validateOptionalText(req.body?.plotNumber, "Plot number", 100),
-      validateOptionalText(req.body?.block, "Block", 100),
-      req.body?.address ? validateRequiredText(req.body.address, "Address", { min: 5, max: 2000 }) : null,
+      validateRequiredText(req.body?.plotNumber, "Plot number", { max: 100 }),
+      validateRequiredText(req.body?.block, "Block", { max: 100 }),
+      validateRequiredText(req.body?.address, "Address", { min: 5, max: 2000 }),
       validateOptionalText(req.body?.referenceCode, "Reference code", 100),
-      validateOptionalText(req.body?.area, "Area or size", 100),
+      validateRequiredText(req.body?.area, "Area or size", { max: 100 }),
+      validateRequiredText(req.body?.areaUnit, "Area unit", { max: 20 }),
       PLOT_AREA_UNITS.has(areaUnit) ? null : "Select a valid area unit.",
-      validateOptionalText(req.body?.roadWidth, "Road width", 100),
+      validateRequiredText(req.body?.price, "Price", { max: 30 }),
+      validateRequiredText(req.body?.roadWidth, "Road width", { max: 100 }),
       facing && !PLOT_FACINGS.has(facing) ? "Select a valid facing." : null,
-      propertyType && !PLOT_PROPERTY_TYPES.has(propertyType) ? "Select a valid property type." : null,
+      validateRequiredText(req.body?.propertyType, "Residential / Commercial", { max: 30 }),
+      PLOT_PROPERTY_TYPES.has(propertyType) ? null : "Select a valid property type.",
       validateMoney(req.body?.price),
       validateOptionalText(req.body?.notes, "Notes", 4000),
+      validateRequiredText(req.body?.availability, "Availability", { max: 20 }),
       AVAILABILITY.has(availability) ? null : "Select a valid availability.",
     );
     if (validationError || Number.isNaN(price)) {
@@ -2513,8 +2620,8 @@ router.put("/plots/:id", adminOnly, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Plot or site not found", code: "PLOT_NOT_FOUND" });
 
     const name = text(req.body?.name, 150);
-    const availability = text(req.body?.availability, 20) || existing.availability;
-    const areaUnit = text(req.body?.areaUnit, 20) || existing.areaUnit || "SQ_FT";
+    const availability = text(req.body?.availability, 20);
+    const areaUnit = text(req.body?.areaUnit, 20);
     const facing = text(req.body?.facing, 30);
     const propertyType = text(req.body?.propertyType, 30);
     const price = parsePrice(req.body?.price);
@@ -2524,17 +2631,21 @@ router.put("/plots/:id", adminOnly, async (req, res) => {
     );
     const validationError = firstError(
       validateName(req.body?.name, "Plot or site name"),
-      validateOptionalText(req.body?.plotNumber, "Plot number", 100),
-      validateOptionalText(req.body?.block, "Block", 100),
-      req.body?.address ? validateRequiredText(req.body.address, "Address", { min: 5, max: 2000 }) : null,
+      validateRequiredText(req.body?.plotNumber, "Plot number", { max: 100 }),
+      validateRequiredText(req.body?.block, "Block", { max: 100 }),
+      validateRequiredText(req.body?.address, "Address", { min: 5, max: 2000 }),
       validateOptionalText(req.body?.referenceCode, "Reference code", 100),
-      validateOptionalText(req.body?.area, "Area or size", 100),
+      validateRequiredText(req.body?.area, "Area or size", { max: 100 }),
+      validateRequiredText(req.body?.areaUnit, "Area unit", { max: 20 }),
       PLOT_AREA_UNITS.has(areaUnit) ? null : "Select a valid area unit.",
-      validateOptionalText(req.body?.roadWidth, "Road width", 100),
+      validateRequiredText(req.body?.price, "Price", { max: 30 }),
+      validateRequiredText(req.body?.roadWidth, "Road width", { max: 100 }),
       facing && !PLOT_FACINGS.has(facing) ? "Select a valid facing." : null,
-      propertyType && !PLOT_PROPERTY_TYPES.has(propertyType) ? "Select a valid property type." : null,
+      validateRequiredText(req.body?.propertyType, "Residential / Commercial", { max: 30 }),
+      PLOT_PROPERTY_TYPES.has(propertyType) ? null : "Select a valid property type.",
       validateMoney(req.body?.price),
       validateOptionalText(req.body?.notes, "Notes", 4000),
+      validateRequiredText(req.body?.availability, "Availability", { max: 20 }),
       AVAILABILITY.has(availability) ? null : "Select a valid availability.",
     );
     if (validationError || Number.isNaN(price)) {
@@ -2707,7 +2818,8 @@ async function transportPersonData(req, existing = null) {
     validatePersonName(req.body?.name),
     validatePhone(req.body?.phone),
     validatePhone(req.body?.alternatePhone, "Alternate phone", { required: false }),
-    validateOptionalText(req.body?.vehicleType, "Vehicle type", 100),
+    validateRequiredText(req.body?.vehicleType, "Vehicle type", { max: 100 }),
+    validateRequiredText(req.body?.vehicleNumber, "Vehicle number", { min: 3, max: 30 }),
     validateVehicleNumber(req.body?.vehicleNumber),
     validateOptionalText(req.body?.notes, "Notes", 4000),
   );

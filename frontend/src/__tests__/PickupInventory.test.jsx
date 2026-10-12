@@ -45,8 +45,10 @@ describe('<PickupInventory />', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add Pickup Location' }));
     expect(screen.getByRole('dialog', { name: 'Add pickup location' })).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Location name' }), { target: { value: 'South Gate' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Pickup address' }), { target: { value: '18 Residency Road, Bengaluru' } });
+    expect(screen.getByRole('textbox', { name: 'Location name *' })).toBeRequired();
+    expect(screen.getByRole('combobox', { name: 'Pickup address *' })).toBeRequired();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Location name *' }), { target: { value: 'South Gate' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Pickup address *' }), { target: { value: '18 Residency Road, Bengaluru' } });
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Maximum assignments' }), { target: { value: '12' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
 
@@ -78,8 +80,8 @@ describe('<PickupInventory />', () => {
     await screen.findByText('North Gate');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add Pickup Location' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Location name' }), { target: { value: 'South Gate' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Pickup address' }), { target: { value: 'Koramangala' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Location name *' }), { target: { value: 'South Gate' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Pickup address *' }), { target: { value: 'Koramangala' } });
     fireEvent.mouseDown(await screen.findByRole('option', { name: /CA-17, Koramangala/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
 
@@ -95,7 +97,7 @@ describe('<PickupInventory />', () => {
     );
   });
 
-  it('shows limits, dates, addresses, and Google Maps links without summary stats', async () => {
+  it('shows limits, dates, addresses, and row actions without summary stats', async () => {
     fetchApi.mockResolvedValueOnce(payload);
     render(<PickupInventory />);
 
@@ -113,17 +115,97 @@ describe('<PickupInventory />', () => {
     expect(screen.getByRole('columnheader', { name: 'Updated at' })).toBeInTheDocument();
     expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveClass('pickup-plot-table-scroll');
     expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveStyle({ overflowX: 'auto', overflowY: 'auto', minHeight: '0' });
-    expect(screen.getByTestId('pickup-inventory-table-width')).toHaveStyle({ width: '1200px', minWidth: '100%' });
+    expect(screen.getByTestId('pickup-inventory-table-width')).toHaveStyle({ width: '1265px', minWidth: '100%' });
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', tableLayout: 'fixed' });
     expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Pickup location' })).toHaveStyle({ position: 'sticky', top: '0px', color: 'var(--text-secondary)', background: '#f3f4f6' });
-    expect(screen.getByRole('link', { name: 'Open North Gate in Google Maps' })).toHaveAttribute('href', 'https://www.google.com/maps/search/?api=1&query=MG%20Road%2C%20Bengaluru');
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open North Gate in Google Maps' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open pickup address for North Gate in Google Maps' })).toHaveClass('pickup-inventory-address-link');
+    expect(screen.getByText('Active', { selector: '.pickup-inventory-status-badge' })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: 'Edit North Gate' })).toHaveClass('pickup-inventory-action--edit');
+    expect(screen.getByRole('button', { name: 'Edit North Gate' })).toHaveTextContent('Edit');
+    expect(screen.getByRole('button', { name: 'Disable North Gate' })).toHaveClass('pickup-inventory-action--disable');
+    expect(screen.getByRole('button', { name: 'Disable North Gate' })).toHaveTextContent('Disable');
 
     const resizeHandle = screen.getByRole('separator', { name: 'Resize Pickup location column' });
     fireEvent.mouseDown(resizeHandle, { button: 0, clientX: 100 });
     fireEvent.mouseMove(window, { clientX: 150 });
     fireEvent.mouseUp(window);
     expect(screen.getByRole('table').querySelectorAll('col')[1]).toHaveStyle({ width: '210px' });
+  });
+
+  it('disables a pickup location from the Actions column', async () => {
+    fetchApi.mockResolvedValueOnce(payload).mockResolvedValueOnce({
+      ...payload.pickupLocations[0], isActive: false,
+    });
+    render(<PickupInventory />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable North Gate' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
+      '/api/pickup-plot-inventory/locations/4/status',
+      { method: 'PATCH', body: JSON.stringify({ isActive: false }) },
+    ));
+    expect(screen.getByText('Inactive', { selector: '.pickup-inventory-status-badge' })).toHaveClass('is-inactive');
+    expect(screen.getByRole('button', { name: 'Activate North Gate' })).toHaveClass('pickup-inventory-action--activate');
+    expect(screen.getByRole('button', { name: 'Activate North Gate' })).toHaveTextContent('Activate');
+    expect(notify.success).toHaveBeenCalledWith('Pickup location disabled.');
+  });
+
+  it('shows a disabled updating state while a location status change is pending', async () => {
+    let resolveStatus;
+    const statusRequest = new Promise((resolve) => { resolveStatus = resolve; });
+    fetchApi.mockResolvedValueOnce(payload).mockReturnValueOnce(statusRequest);
+    render(<PickupInventory />);
+
+    const disableButton = await screen.findByRole('button', { name: 'Disable North Gate' });
+    fireEvent.click(disableButton);
+
+    expect(disableButton).toBeDisabled();
+    expect(disableButton).toHaveTextContent('Updating...');
+
+    resolveStatus({ ...payload.pickupLocations[0], isActive: false });
+    expect(await screen.findByRole('button', { name: 'Activate North Gate' })).toBeEnabled();
+  });
+
+  it('keeps the current status and reports an error when a status change fails', async () => {
+    fetchApi.mockResolvedValueOnce(payload).mockRejectedValueOnce(new Error('Status service unavailable'));
+    render(<PickupInventory />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable North Gate' }));
+
+    await waitFor(() => expect(notify.error).toHaveBeenCalledWith('Status service unavailable'));
+    expect(screen.getByText('Active', { selector: '.pickup-inventory-status-badge' })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: 'Disable North Gate' })).toBeEnabled();
+  });
+
+  it('edits a pickup location from the Actions column', async () => {
+    fetchApi.mockResolvedValueOnce(payload).mockResolvedValueOnce({
+      ...payload.pickupLocations[0],
+      name: 'North Gate Updated',
+      address: '12 Palace Road, Bengaluru',
+    });
+    render(<PickupInventory />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit North Gate' }));
+    expect(screen.getByRole('dialog', { name: 'Edit pickup location' })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit location name *' }), { target: { value: 'North Gate Updated' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Edit pickup address *' }), { target: { value: '12 Palace Road, Bengaluru' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
+      '/api/pickup-plot-inventory/locations/4',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const body = JSON.parse(fetchApi.mock.calls[1][1].body);
+    expect(body).toMatchObject({
+      name: 'North Gate Updated',
+      address: '12 Palace Road, Bengaluru',
+      maxAssignments: 10,
+      isActive: true,
+    });
+    expect(notify.success).toHaveBeenCalledWith('Pickup location updated.');
   });
 
   it('updates the maximum assignment limit without changing the location details', async () => {
@@ -152,7 +234,7 @@ describe('<PickupInventory />', () => {
     fetchApi.mockResolvedValueOnce(payload);
     render(<PickupInventory />);
 
-    fireEvent.click(await screen.findByRole('link', { name: 'Open North Gate in Google Maps' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Open pickup address for North Gate in Google Maps' }));
 
     await waitFor(() => expect(geocodeSuggestMock).toHaveBeenCalledWith('MG Road, Bengaluru', 1));
     expect(open).toHaveBeenCalledWith('about:blank', '_blank');
@@ -178,6 +260,9 @@ describe('<PickupInventory />', () => {
 
     expect(await screen.findByText('North Gate')).toBeInTheDocument();
     expect(screen.getByText('Closed Gate')).toBeInTheDocument();
+    expect(screen.getAllByText('Active', { selector: '.pickup-inventory-status-badge' })).toHaveLength(1);
+    expect(screen.getAllByText('Inactive', { selector: '.pickup-inventory-status-badge' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Activate Closed Gate' })).toHaveClass('pickup-inventory-action--activate');
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Filter pickup locations by status' }), { target: { value: 'inactive' } });
     expect(screen.queryByText('North Gate')).not.toBeInTheDocument();

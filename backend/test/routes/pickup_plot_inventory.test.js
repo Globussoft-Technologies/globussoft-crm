@@ -495,6 +495,8 @@ describe('self-service work profile', () => {
 });
 
 describe('transport person mutations', () => {
+  const vehicleDetails = { vehicleType: 'Mini truck', vehicleNumber: 'KA 01 AB 1234' };
+
   test('removes fully completed customers from assignment choices and existing person rows', async () => {
     prisma.customerPickup.findMany.mockResolvedValue([
       { contact: { id: 61, name: 'Completed Customer', phone: '9000011111' } },
@@ -715,6 +717,18 @@ describe('transport person mutations', () => {
     expect(prisma.transportPerson.create).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ['vehicleType', 'Vehicle type'],
+    ['vehicleNumber', 'Vehicle number'],
+  ])('rejects a blank required %s', async (field, label) => {
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/transport-persons').send({
+      name: 'Ravi Kumar', phone: '9000011111', ...vehicleDetails, [field]: '',
+    });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: `${label} is required.`, code: 'VALIDATION_ERROR' });
+    expect(prisma.transportPerson.create).not.toHaveBeenCalled();
+  });
+
   test('creates a staff login with the Transport Person role from the transport page', async () => {
     prisma.role.findMany.mockResolvedValue([{ id: 8, key: 'transport_person', name: 'Transport person' }]);
     prisma.user.findFirst.mockResolvedValue(null);
@@ -726,7 +740,7 @@ describe('transport person mutations', () => {
     });
 
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/transport-persons').send({
-      name: 'Ravi Kumar', phone: '9000011111', email: 'ravi@example.com', password: 'Secret123',
+      ...vehicleDetails, name: 'Ravi Kumar', phone: '9000011111', email: 'ravi@example.com', password: 'Secret123',
     });
 
     expect(response.status).toBe(201);
@@ -752,7 +766,7 @@ describe('transport person mutations', () => {
     prisma.transportPerson.create.mockResolvedValue({ id: 42, userId: 82, name: 'Mohan Das', phone: '9000022222' });
 
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/transport-persons').send({
-      name: 'Mohan Das', phone: '9000022222', staffUserId: 82,
+      ...vehicleDetails, name: 'Mohan Das', phone: '9000022222', staffUserId: 82,
     });
 
     expect(response.status).toBe(201);
@@ -773,7 +787,7 @@ describe('transport person mutations', () => {
     });
 
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/transport-persons').send({
-      name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [30], customerIds: [61],
+      ...vehicleDetails, name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [30], customerIds: [61],
     });
     expect(response.status).toBe(201);
     expect(prisma.transportPerson.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -793,7 +807,7 @@ describe('transport person mutations', () => {
     });
 
     const response = await request(makeApp()).put('/api/pickup-plot-inventory/transport-persons/41').send({
-      name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [30], customerIds: [61],
+      ...vehicleDetails, name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [30], customerIds: [61],
     });
     expect(response.status).toBe(200);
     expect(prisma.transportPerson.update).toHaveBeenCalled();
@@ -816,7 +830,7 @@ describe('transport person mutations', () => {
     });
 
     const response = await request(makeApp()).put('/api/pickup-plot-inventory/transport-persons/41').send({
-      name: 'Sant', phone: '9000011111', plotSiteIds: [31], customerIds: [62],
+      ...vehicleDetails, name: 'Sant', phone: '9000011111', plotSiteIds: [31], customerIds: [62],
       assignments: [{ customerId: 62, plotSiteId: 31 }],
     });
 
@@ -899,7 +913,7 @@ describe('transport person mutations', () => {
     });
 
     const response = await request(makeApp()).put('/api/pickup-plot-inventory/transport-persons/41').send({
-      name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [], customerIds: [],
+      ...vehicleDetails, name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [], customerIds: [],
     });
 
     expect(response.status).toBe(200);
@@ -1946,24 +1960,32 @@ describe('pickup location mutations', () => {
 });
 
 describe('plot/site mutations', () => {
-  test('accepts the UI default shape with no pickup location and a blank optional price', async () => {
-    prisma.plotSite.create.mockResolvedValue({ id: 29, name: 'plot-1', address: '25 Lake Road', price: null, pickupLocationId: null });
+  const requiredPlotFields = {
+    name: 'Plot A-1', plotNumber: 'A-1', block: 'A', address: '25 Lake Road',
+    area: '1200', areaUnit: 'SQ_FT', price: '250000', roadWidth: '30 ft',
+    propertyType: 'RESIDENTIAL', availability: 'AVAILABLE', notes: '', isActive: true,
+  };
+
+  test.each([
+    ['plotNumber', 'Plot number'], ['block', 'Block'], ['address', 'Address'],
+    ['area', 'Area or size'], ['areaUnit', 'Area unit'], ['price', 'Price'],
+    ['roadWidth', 'Road width'], ['propertyType', 'Residential / Commercial'],
+    ['availability', 'Availability'],
+  ])('rejects a blank required %s', async (field, label) => {
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
-      name: 'plot-1', address: '25 Lake Road', area: '', price: '',
-      availability: 'AVAILABLE', notes: '', isActive: true,
+      ...requiredPlotFields,
+      [field]: '',
     });
-    expect(response.status).toBe(201);
-    expect(prisma.plotSite.create).toHaveBeenCalledWith({ data: expect.objectContaining({
-      name: 'plot-1', address: '25 Lake Road', pickupLocationId: null, price: null, tenantId: 7,
-    }) });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: `${label} is required.`, code: 'VALIDATION_ERROR' });
+    expect(prisma.plotSite.create).not.toHaveBeenCalled();
   });
 
   test('creates an available plot linked only to a location in the same tenant', async () => {
     prisma.pickupLocation.findMany.mockResolvedValue([{ id: 4 }]);
     prisma.plotSite.create.mockResolvedValue({ id: 30, name: 'Plot 30' });
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
-      name: 'Plot 30', pickupLocationId: 4, referenceCode: 'P-30', area: '1200 sq ft',
-      price: '250000', availability: 'AVAILABLE',
+      ...requiredPlotFields, name: 'Plot 30', pickupLocationId: 4, referenceCode: 'P-30',
     });
     expect(response.status).toBe(201);
     expect(prisma.pickupLocation.findMany).toHaveBeenCalledWith({ where: { id: { in: [4] }, tenantId: 7 }, select: { id: true } });
@@ -1975,6 +1997,7 @@ describe('plot/site mutations', () => {
   test('stores interactive master-plan plot details and the new availability values', async () => {
     prisma.plotSite.create.mockImplementation(async ({ data }) => ({ id: 32, ...data }));
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
+      ...requiredPlotFields,
       name: 'Plot A-10', plotNumber: 'A-10', block: 'A', area: '2', areaUnit: 'KATHA',
       price: '350000', roadWidth: '30 ft', facing: 'EAST', propertyType: 'RESIDENTIAL',
       availability: 'BOOKED',
@@ -1996,7 +2019,7 @@ describe('plot/site mutations', () => {
       { latitude: 12.9351, longitude: 77.61 },
     ];
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
-      name: 'Surveyed Plot', availability: 'AVAILABLE', boundary,
+      ...requiredPlotFields, name: 'Surveyed Plot', boundary,
     });
 
     expect(response.status).toBe(201);
@@ -2018,7 +2041,9 @@ describe('plot/site mutations', () => {
   });
 
   test('rejects an invalid availability value', async () => {
-    const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({ name: 'Plot X', availability: 'HIDDEN' });
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
+      ...requiredPlotFields, name: 'Plot X', availability: 'HIDDEN',
+    });
     expect(response.status).toBe(400);
     expect(response.body.code).toBe('VALIDATION_ERROR');
   });
@@ -2051,7 +2076,7 @@ describe('customer pickup status', () => {
 
     expect(response.status).toBe(200);
     expect(prisma.contact.findFirst).toHaveBeenCalledWith({
-      where: { id: 61, tenantId: 7, deletedAt: null }, select: { id: true },
+      where: { id: 61, tenantId: 7, deletedAt: null, assignedToId: 3 }, select: { id: true },
     });
     expect(prisma.customerPickup.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId_contactId: { tenantId: 7, contactId: 61 } },
@@ -2061,6 +2086,20 @@ describe('customer pickup status', () => {
       }),
     }));
     expect(response.body.status).toBe('PICKUP_LOCATION_CAPTURED');
+  });
+
+  test('prevents a USER from changing another user\'s pickup location', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .put('/api/pickup-plot-inventory/customer-pickups/61')
+      .send({ pickupAddress: '42 Lake View Road, Bengaluru' });
+
+    expect(response.status).toBe(404);
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 61, tenantId: 7, deletedAt: null, assignedToId: 3 }, select: { id: true },
+    });
+    expect(prisma.customerPickup.upsert).not.toHaveBeenCalled();
   });
 
   test('lists the live transport status for captured customer pickup locations', async () => {
@@ -2130,6 +2169,65 @@ describe('customer pickup status', () => {
         expect.objectContaining({ id: 2, stage: 'PAYMENT', label: 'Payment received' }),
       ],
     });
+  });
+
+  test('projects pickup workflow data for the requested Generic Leads page', async () => {
+    prisma.contact.findMany.mockResolvedValue([{ id: 61 }]);
+    prisma.pickupLocation.findMany.mockResolvedValue([{
+      id: 4, name: 'Main Gate', address: '42 Lake View Road, Bengaluru',
+      googleMapsLink: 'https://maps.google.com/?q=42+Lake+View+Road',
+    }]);
+    prisma.customerPickup.findMany.mockResolvedValue([{
+      id: 91, tenantId: 7, contactId: 61, pickupAddress: '42 Lake View Road, Bengaluru',
+      contact: { id: 61, name: 'Priya Shah', status: 'Lead', interestedPlotArea: 'North Bengaluru' },
+    }]);
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41, name: 'Sant', customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED"}}',
+    }]);
+
+    const response = await request(makeApp())
+      .get('/api/pickup-plot-inventory/lead-status?contactIds=61,62');
+
+    expect(response.status).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: { in: [61, 62] }, status: 'Lead', deletedAt: null },
+      select: { id: true },
+    });
+    expect(prisma.customerPickup.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, contactId: { in: [61] } },
+    }));
+    expect(response.body.customers[0]).toMatchObject({
+      contactId: 61,
+      pickupAddress: '42 Lake View Road, Bengaluru',
+      status: 'COMPLETED',
+      transportPerson: { id: 41, name: 'Sant' },
+    });
+    expect(response.body.pickupLocations).toEqual([expect.objectContaining({
+      id: 4, name: 'Main Gate', address: '42 Lake View Road, Bengaluru',
+    })]);
+  });
+
+  test('limits a USER lead-status projection to their assigned leads', async () => {
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .get('/api/pickup-plot-inventory/lead-status?contactIds=61');
+
+    expect(response.status).toBe(200);
+    expect(response.body.customers).toEqual([]);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 7,
+        id: { in: [61] },
+        status: 'Lead',
+        deletedAt: null,
+        assignedToId: 3,
+      },
+      select: { id: true },
+    });
+    expect(prisma.customerPickup.findMany).not.toHaveBeenCalled();
   });
 
   test('requires admin access to the customer status directory', async () => {

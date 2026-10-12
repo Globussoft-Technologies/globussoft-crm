@@ -7,6 +7,8 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const {
   getSuperAdminTenantsOverview,
+  getSuperAdminRoleLimitsOverview,
+  setSuperAdminCustomRoleLimit,
   getSuperAdminTenantDetail,
   superAdminGrantSubscription,
   superAdminCancelPlatformSubscription,
@@ -227,6 +229,45 @@ router.put("/landing-form/emails", async (req, res) => {
     await landingFormConfig.writePublicConfig(prisma, { tenantId, activeWebFormId, emails });
     res.json({ emails });
   } catch (err) { res.status(500).json({ error: err.message || "Failed to update landing form permissions", code: "LANDING_FORM_EMAILS_UPDATE_FAILED" }); }
+});
+
+// ── Custom role limits ───────────────────────────────────────────────────
+
+router.get("/role-limits", async (req, res) => {
+  try {
+    const overview = await getSuperAdminRoleLimitsOverview({ search: req.query.search });
+    res.json(overview);
+  } catch (err) {
+    console.error("[super-admin-tenant-management] role-limit overview error:", err.message);
+    res.status(500).json({ error: "Failed to load custom role limits", code: "ROLE_LIMIT_OVERVIEW_FAILED" });
+  }
+});
+
+router.put("/tenants/:tenantId/role-limit", async (req, res) => {
+  try {
+    const tenantId = Number(req.params.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "Invalid tenant id", code: "INVALID_TENANT_ID" });
+    }
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, "maxCustomRoles")) {
+      return res.status(400).json({ error: "maxCustomRoles is required", code: "CUSTOM_ROLE_LIMIT_REQUIRED" });
+    }
+
+    const result = await setSuperAdminCustomRoleLimit({
+      tenantId,
+      maxCustomRoles: req.body.maxCustomRoles,
+      superAdminUsername: req.superAdmin.username,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("[super-admin-tenant-management] role-limit update error:", err.message);
+    const status = err.code === "TENANT_NOT_FOUND"
+      ? 404
+      : err.code === "INVALID_CUSTOM_ROLE_LIMIT"
+        ? 400
+        : 500;
+    res.status(status).json({ error: err.message || "Failed to update custom role limit", code: err.code || "ROLE_LIMIT_UPDATE_FAILED" });
+  }
 });
 
 router.get("/tenants/:tenantId", async (req, res) => {

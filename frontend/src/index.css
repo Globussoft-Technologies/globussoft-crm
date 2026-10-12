@@ -3256,6 +3256,31 @@ html[data-theme="dark"] .travel-flight-details-box {
   background-clip: padding-box;
 }
 
+/* Pickup & Plot management tables only: keep native horizontal scrolling,
+   but render a visible track and grab handle instead of a thin floating line. */
+.pickup-plot-table-scroll::-webkit-scrollbar:horizontal {
+  height: 14px;
+}
+
+.pickup-plot-table-scroll::-webkit-scrollbar-track:horizontal {
+  background: rgba(128, 128, 128, 0.14);
+  border-radius: 7px;
+}
+
+.pickup-plot-table-scroll::-webkit-scrollbar-thumb:horizontal {
+  min-width: 48px;
+  background: rgba(128, 128, 128, 0.68);
+  border: 3px solid transparent;
+  border-radius: 7px;
+  background-clip: padding-box;
+}
+
+.pickup-plot-table-scroll::-webkit-scrollbar-thumb:horizontal:hover {
+  background: rgba(128, 128, 128, 0.9);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
 .top-scroll-sync__bottom--hidden-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;

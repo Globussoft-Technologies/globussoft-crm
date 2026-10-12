@@ -57,6 +57,7 @@ beforeAll(() => {
   prisma.visaApplication = { findMany: vi.fn(), findUnique: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
   prisma.embassyRule = { findFirst: vi.fn() };
+  prisma.user = { findFirst: vi.fn() };
 });
 
 beforeEach(() => {
@@ -65,12 +66,14 @@ beforeEach(() => {
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
   prisma.embassyRule.findFirst.mockReset();
+  prisma.user.findFirst.mockReset();
 
   prisma.visaApplication.findMany.mockResolvedValue([]);
   prisma.visaApplication.findUnique.mockResolvedValue(null);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.embassyRule.findFirst.mockResolvedValue(null);
+  prisma.user.findFirst.mockResolvedValue({ id: 900 });
 });
 
 describe('cron/visaRiskFlagEngine — runRiskFlaggingForTenant', () => {
@@ -111,6 +114,7 @@ describe('cron/visaRiskFlagEngine — runRiskFlaggingForTenant', () => {
 
     const createArg = prisma.notification.create.mock.calls[0][0];
     expect(createArg.data.tenantId).toBe(1);
+    expect(createArg.data.userId).toBe(900);
     expect(createArg.data.entityType).toBe('VisaApplication');
     expect(createArg.data.entityId).toBe(100);
     expect(createArg.data.type).toBe('warning');
@@ -136,6 +140,28 @@ describe('cron/visaRiskFlagEngine — runRiskFlaggingForTenant', () => {
     const result = await runRiskFlaggingForTenant(1);
     expect(result.evaluated).toBe(1);
     expect(result.flagged).toBe(0);
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+
+  test('skips notification cleanly when the tenant has no active staff recipient', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.visaApplication.findMany.mockResolvedValue([
+      {
+        id: 100,
+        applicationType: 'work',
+        destinationCountry: 'US',
+        status: 'intake',
+        readinessLevel: 2,
+        complexCase: false,
+        rejectionHistoryJson: null,
+        advisorRiskFlag: null,
+        contactId: 200,
+      },
+    ]);
+
+    const result = await runRiskFlaggingForTenant(1);
+
+    expect(result).toEqual({ evaluated: 1, flagged: 0 });
     expect(prisma.notification.create).not.toHaveBeenCalled();
   });
 

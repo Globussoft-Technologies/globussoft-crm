@@ -121,7 +121,7 @@ async function ensureRole({ tenantId, key, name, description, isSystem, userType
     return existing;
   }
   const created = await prisma.role.create({
-    data: { tenantId, key, name, description, isSystem, isActive: true, userType },
+    data: { tenantId, key, name, description, isSystem, isCustom: false, isActive: true, userType },
   });
   stats.rolesCreated++;
   console.log(`  + Role created: tenant=${tenantId ?? 'null'} key=${key} (id=${created.id})`);

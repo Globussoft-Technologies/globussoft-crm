@@ -979,7 +979,7 @@ export default function CostMaster() {
                         <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: 13, whiteSpace: "normal", wordBreak: "break-word" }}>{r.routeOrSku}</code>
                         {(r.supplierName || r.seasonName) && (
                           <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-                            {[r.supplierName, r.seasonName].filter(Boolean).join(" � ")}
+                            {[r.supplierName, r.seasonName].filter(Boolean).join(" — ")}
                           </span>
                         )}
                       </div>

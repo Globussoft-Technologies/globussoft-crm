@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, useNavigate, NavLink, useLocation } from "react-router-dom";
-import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, TrendingUp, Key, PanelsTopLeft } from "lucide-react";
+import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, TrendingUp, Key, PanelsTopLeft, UsersRound } from "lucide-react";
 import {
   getSuperAdminToken,
   getSuperAdminUsername,
@@ -18,6 +18,7 @@ const MODULES = [
   { path: "/super-admin/ai-management/api-keys", label: "API Key Management", icon: Key },
   { path: "/super-admin/ai-management/plans", label: "AI Subscription Plans", icon: CreditCard },
   { path: "/super-admin/tenant-management", label: "Tenant Management", icon: Building2 },
+  { path: "/super-admin/role-management", label: "Role Management", icon: UsersRound },
   { path: "/super-admin/revenue", label: "Revenue Analytics", icon: TrendingUp },
   { path: "/super-admin/landing-form", label: "Landing Page Form", icon: PanelsTopLeft },
 ];
@@ -163,7 +164,7 @@ export default function SuperAdminLayout() {
         </div>
       </aside>
 
-      <main style={{ flex: 1, padding: "1.75rem", overflow: "auto" }}>
+      <main style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, padding: "1.75rem", overflow: "auto" }}>
         <Outlet />
       </main>
     </div>

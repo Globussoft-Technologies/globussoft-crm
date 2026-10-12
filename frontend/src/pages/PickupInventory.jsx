@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Filter, MapPin, Plus, RefreshCw, Save, Search, X } from 'lucide-react';
+import { Filter, MapPin, Pencil, Plus, Power, PowerOff, RefreshCw, Save, Search, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import AddressAutocomplete from '../components/AddressAutocomplete';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
 import { googleMapsCoordinateUrl, googleMapsSearchUrl, openPreciseGoogleMap } from '../utils/googleMaps';
+import './PickupInventory.css';
 
 const PICKUP_INVENTORY_COLUMNS = [
   { label: 'S.No.', width: 80, minWidth: 70 },
@@ -15,7 +16,7 @@ const PICKUP_INVENTORY_COLUMNS = [
   { label: 'Maximum limit', width: 180, minWidth: 145 },
   { label: 'Created at', width: 140, minWidth: 120 },
   { label: 'Updated at', width: 140, minWidth: 120 },
-  { label: 'Google Map', width: 125, minWidth: 110 },
+  { label: 'Actions', width: 190, minWidth: 180 },
 ];
 
 function mapsUrl(location) {
@@ -41,6 +42,9 @@ export default function PickupInventory() {
   const [addingLocation, setAddingLocation] = useState(false);
   const [savingLocation, setSavingLocation] = useState(false);
   const [newLocation, setNewLocation] = useState({ name: '', address: '', googleMapsLink: '', maxAssignments: '' });
+  const [editingLocation, setEditingLocation] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [changingStatusId, setChangingStatusId] = useState(null);
   const { columnWidths, resizeColumn, tableMinWidth } = useResizableColumnWidths(
     PICKUP_INVENTORY_COLUMNS,
     'pickup-inventory-column-widths',
@@ -146,6 +150,66 @@ export default function PickupInventory() {
     }
   };
 
+  const openEditLocation = (location) => {
+    setEditingLocation({
+      ...location,
+      name: location.name || '',
+      address: location.address || '',
+      googleMapsLink: location.googleMapsLink || '',
+    });
+  };
+
+  const saveEditedLocation = async (event) => {
+    event.preventDefault();
+    const name = editingLocation.name.trim();
+    const address = editingLocation.address.trim();
+    if (!name) return notify.error('Enter a pickup location name.');
+    if (address.length < 5) return notify.error('Enter a valid pickup address.');
+
+    setSavingEdit(true);
+    try {
+      const updated = await fetchApi(`/api/pickup-plot-inventory/locations/${editingLocation.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name,
+          address,
+          googleMapsLink: editingLocation.googleMapsLink || '',
+          maxAssignments: editingLocation.maxAssignments ?? null,
+          notes: editingLocation.notes || '',
+          isActive: editingLocation.isActive !== false,
+        }),
+      });
+      setLocations((current) => current.map((location) => (
+        location.id === editingLocation.id ? { ...location, ...updated } : location
+      )));
+      notify.success('Pickup location updated.');
+      setEditingLocation(null);
+    } catch (saveError) {
+      notify.error(saveError?.message || 'Could not update the pickup location.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const toggleLocationStatus = async (location) => {
+    const isActive = location.isActive === false;
+    setChangingStatusId(location.id);
+    try {
+      const updated = await fetchApi(`/api/pickup-plot-inventory/locations/${location.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isActive }),
+      });
+      setLocations((current) => current.map((row) => (
+        row.id === location.id ? { ...row, ...updated, isActive } : row
+      )));
+      notify.success(`Pickup location ${isActive ? 'activated' : 'disabled'}.`);
+    } catch (statusError) {
+      notify.error(statusError?.message || 'Could not change the pickup location status.');
+    } finally {
+      setChangingStatusId(null);
+    }
+  };
+
   return (
     <div data-testid="pickup-inventory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
@@ -208,7 +272,13 @@ export default function PickupInventory() {
                 const assignedCount = Number(location.assignedCount ?? location.plotCount ?? 0);
                 return <tr key={location.id}>
                   <td style={cellStyle}>{index + 1}</td>
-                  <td style={cellStyle}><strong>{location.name}</strong><small style={{ display: 'block', marginTop: 3, color: location.isActive ? '#047857' : 'var(--text-secondary)' }}>{location.isActive ? 'Active' : 'Inactive'}</small></td>
+                  <td style={cellStyle}>
+                    <strong>{location.name}</strong>
+                    <span className={`pickup-inventory-status-badge ${location.isActive === false ? 'is-inactive' : 'is-active'}`}>
+                      <span aria-hidden="true" />
+                      {location.isActive === false ? 'Inactive' : 'Active'}
+                    </span>
+                  </td>
                   <td style={{ ...cellStyle, minWidth: 280 }}>
                     <a
                       href={mapsUrl(location)}
@@ -217,7 +287,7 @@ export default function PickupInventory() {
                       rel="noreferrer"
                       aria-label={`Open pickup address for ${location.name} in Google Maps`}
                       title="Open pickup address in Google Maps"
-                      style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 7, color: 'inherit', textDecoration: 'none', lineHeight: 1.45 }}
+                      className="pickup-inventory-address-link"
                     >
                       <MapPin size={16} aria-hidden="true" style={{ flex: '0 0 auto', marginTop: 2, color: 'var(--primary-color, var(--accent-color))' }} />
                       <span style={{ overflowWrap: 'anywhere' }}>{location.address}</span>
@@ -232,7 +302,31 @@ export default function PickupInventory() {
                   </td>
                   <td style={cellStyle}>{formatDate(location.createdAt)}</td>
                   <td style={cellStyle}>{formatDate(location.updatedAt)}</td>
-                  <td style={{ ...cellStyle, textAlign: 'right' }}><a className="btn-secondary" href={mapsUrl(location)} onClick={(event) => { void openPreciseGoogleMap(event, location); }} target="_blank" rel="noreferrer" aria-label={`Open ${location.name} in Google Maps`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}><ExternalLink size={14} /> Open map</a></td>
+                  <td className="pickup-inventory-actions-cell" style={cellStyle}>
+                    <div className="pickup-inventory-actions">
+                      <button
+                        type="button"
+                        className="pickup-inventory-action pickup-inventory-action--edit"
+                        aria-label={`Edit ${location.name}`}
+                        title="Edit pickup location"
+                        onClick={() => openEditLocation(location)}
+                      >
+                        <Pencil size={14} aria-hidden="true" />
+                        <span>Edit</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`pickup-inventory-action ${location.isActive === false ? 'pickup-inventory-action--activate' : 'pickup-inventory-action--disable'}`}
+                        aria-label={`${location.isActive === false ? 'Activate' : 'Disable'} ${location.name}`}
+                        title={location.isActive === false ? 'Activate pickup location' : 'Disable pickup location'}
+                        disabled={changingStatusId === location.id}
+                        onClick={() => toggleLocationStatus(location)}
+                      >
+                        {location.isActive === false ? <Power size={14} aria-hidden="true" /> : <PowerOff size={14} aria-hidden="true" />}
+                        <span>{changingStatusId === location.id ? 'Updating...' : location.isActive === false ? 'Activate' : 'Disable'}</span>
+                      </button>
+                    </div>
+                  </td>
                 </tr>;
               })}
               {filteredLocations.length === 0 && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No pickup locations found.</td></tr>}
@@ -250,11 +344,12 @@ export default function PickupInventory() {
               <button type="button" className="btn-secondary" aria-label="Close add pickup location" onClick={() => setAddingLocation(false)} style={{ padding: '.4rem' }}><X size={17} /></button>
             </div>
             <div style={{ display: 'grid', gap: 14, marginTop: 18 }}>
-              <label style={{ display: 'grid', gap: 6, fontSize: '.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Location name
-                <input className="input-field" aria-label="Location name" required maxLength={150} value={newLocation.name} onChange={(event) => setNewLocation((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Bangalore Palace" />
+              <label style={{ display: 'grid', gap: 6, fontSize: '.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Location name *
+                <input className="input-field" aria-label="Location name *" required maxLength={150} value={newLocation.name} onChange={(event) => setNewLocation((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Bangalore Palace" />
               </label>
               <AddressAutocomplete
-                label="Pickup address"
+                label="Pickup address *"
+                required
                 placeholder="Start typing a pickup location address..."
                 value={newLocation.address}
                 onChange={(address) => setNewLocation((current) => ({ ...current, address, googleMapsLink: '' }))}
@@ -270,6 +365,40 @@ export default function PickupInventory() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button type="button" className="btn-secondary" onClick={() => setAddingLocation(false)}>Cancel</button>
               <button type="submit" className="btn-primary" disabled={savingLocation}>{savingLocation ? 'Saving…' : 'Add location'}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {editingLocation && (
+        <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>
+          <form role="dialog" aria-modal="true" aria-labelledby="edit-pickup-location-title" className="card" onSubmit={saveEditedLocation} style={{ width: 'min(560px, 100%)', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <h2 id="edit-pickup-location-title" style={{ margin: 0, fontSize: '1.2rem' }}>Edit pickup location</h2>
+                <p style={{ margin: '5px 0 0', color: 'var(--text-secondary)', fontSize: '.82rem' }}>Update the display name or mapped pickup address.</p>
+              </div>
+              <button type="button" className="btn-secondary" aria-label="Close edit pickup location" onClick={() => setEditingLocation(null)} disabled={savingEdit} style={{ padding: '.4rem' }}><X size={17} /></button>
+            </div>
+            <div style={{ display: 'grid', gap: 14, marginTop: 18 }}>
+              <label style={{ display: 'grid', gap: 6, fontSize: '.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Location name *
+                <input className="input-field" aria-label="Edit location name *" required maxLength={150} value={editingLocation.name} onChange={(event) => setEditingLocation((current) => ({ ...current, name: event.target.value }))} />
+              </label>
+              <AddressAutocomplete
+                label="Edit pickup address *"
+                required
+                placeholder="Start typing a pickup location address..."
+                value={editingLocation.address}
+                onChange={(address) => setEditingLocation((current) => ({ ...current, address, googleMapsLink: '' }))}
+                onSelect={(suggestion) => setEditingLocation((current) => ({
+                  ...current,
+                  googleMapsLink: googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
+                }))}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button type="button" className="btn-secondary" onClick={() => setEditingLocation(null)} disabled={savingEdit}>Cancel</button>
+              <button type="submit" className="btn-primary" disabled={savingEdit}>{savingEdit ? 'Saving…' : 'Save changes'}</button>
             </div>
           </form>
         </div>

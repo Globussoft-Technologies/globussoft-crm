@@ -426,6 +426,7 @@ function defaultSettings() {
   optInLinkUrl: "",
   createAccount: false,
   createDeal: false,
+    whatsappEnabled: false,
   phoneAllowAllCountries: true,
     phoneAllowedCountries: [],
     multiStepEnabled: false,
@@ -1167,6 +1168,9 @@ function normalizeForm(raw, leadFields = []) {
 
     settings: (() => {
       const merged = { ...defaultSettings(), ...(base.settings || {}) };
+      if ((base.settings || {}).whatsappEnabled == null && (base.settings || {}).showWhatsappSameAsPhone != null) {
+        merged.whatsappEnabled = base.settings.showWhatsappSameAsPhone === true;
+      }
       const steps = Array.isArray(merged.steps)
         ? merged.steps.map((step, index) => ({
           id: String(step?.id || `step-${index + 1}`),
@@ -19891,6 +19895,17 @@ function WebFormsContent({ scope = "generic" }) {
                           <span>Show “Powered By GlobusCRM” on this web form</span>
                         </label>
                       </div>
+                      {scope === "generic" ? <div className="wf-settings-block">
+                        <label className="wf-settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selectedForm.settings.whatsappEnabled)}
+                            onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, whatsappEnabled: e.target.checked } })}
+                          />
+                          <span>Enable WhatsApp number field and same-as-phone checkbox</span>
+                        </label>
+                        <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 6 }}>When enabled, visitors can provide a WhatsApp number or select the phone number for WhatsApp automation.</div>
+                      </div> : null}
                       {scope === "generic" ? <div className="wf-settings-block">
                         <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>Send an automatic message to all leads</div>
                         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>Choose each channel independently. Messages are sent automatically to all leads using the contact details submitted with the form.</div>

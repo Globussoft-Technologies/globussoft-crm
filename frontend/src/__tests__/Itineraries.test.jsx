@@ -920,7 +920,7 @@ describe("<Itineraries /> — money formatting (SUT-local fmtMoney with INR-comp
   });
 });
 
-describe("<Itineraries /> � navigation (row click ? /travel/itineraries/:id)", () => {
+describe("<Itineraries /> — navigation (row click ? /travel/itineraries/:id)", () => {
   it("clicking a row navigates to /travel/itineraries/:id via useNavigate", async () => {
     renderPage();
     const row = (await screen.findByText("Andaman Islands")).closest("tr");

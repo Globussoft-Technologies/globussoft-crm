@@ -330,6 +330,61 @@ afterEach(() => {
 
 // ─────────────── Bug 2 — System role identity ───────────────
 
+describe('POST /api/roles custom-role quota', () => {
+  const payload = {
+    name: 'Receptionist',
+    key: 'RECEPTIONIST',
+    userType: 'STAFF',
+  };
+
+  test('creates a custom role when the tenant is unlimited and marks it isCustom', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 11, maxCustomRoles: null }]);
+    prisma.role.count.mockResolvedValue(4);
+    prisma.role.findFirst.mockResolvedValue(null);
+    prisma.role.create.mockResolvedValue({
+      id: 31,
+      tenantId: 11,
+      key: 'RECEPTIONIST',
+      name: 'Receptionist',
+      description: null,
+      isSystem: false,
+      isCustom: true,
+      isActive: true,
+      userType: 'STAFF',
+      dataScope: 'ALL',
+      subBrandScopeJson: null,
+      landingPath: null,
+      permissions: [],
+    });
+
+    const res = await request(makeApp({ vertical: 'travel' }))
+      .post('/api/roles')
+      .send(payload);
+
+    expect(res.status).toBe(201);
+    expect(prisma.role.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ isCustom: true, tenantId: 11 }),
+    }));
+  });
+
+  test('blocks new custom roles at the tenant limit', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 11, maxCustomRoles: 5 }]);
+    prisma.role.count.mockResolvedValue(5);
+
+    const res = await request(makeApp({ vertical: 'generic' }))
+      .post('/api/roles')
+      .send(payload);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'ROLE_LIMIT_REACHED',
+      customRoleCount: 5,
+      maxCustomRoles: 5,
+    });
+    expect(prisma.role.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('Bug 2 — DELETE /api/roles/:id on a system role', () => {
   test('returns 403 with the spec-pinned error string', async () => {
     prisma.role.findUnique.mockResolvedValue({

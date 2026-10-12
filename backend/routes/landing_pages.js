@@ -139,7 +139,7 @@ async function removePromotionalLandingPage(page) {
 
 
 
-// -- #446 � image-upload multer config -----------------------------
+// -- #446 — image-upload multer config -----------------------------
 
 //
 
@@ -167,7 +167,7 @@ async function removePromotionalLandingPage(page) {
 
 //   - 5 MB hard limit (multer LIMIT_FILE_SIZE ? 400)
 
-//   - MIME-type allowlist: png / jpg / jpeg / webp / gif. SVG is OFF �
+//   - MIME-type allowlist: png / jpg / jpeg / webp / gif. SVG is OFF —
 
 //     SVG is a script-execution surface (XSS via inline <script> /
 
@@ -181,7 +181,7 @@ async function removePromotionalLandingPage(page) {
 
 //     helper (services/landingPageRenderer.js:67-69 only allows http/
 
-//     https/data:image/* � but not svg+xml).
+//     https/data:image/* — but not svg+xml).
 
 //   - File extension is derived from MIME, not the client's filename,
 
@@ -351,7 +351,7 @@ const videoUpload = multer({
 
 //
 
-// MIME allowlist is intentionally narrow � PDFs are the canonical
+// MIME allowlist is intentionally narrow — PDFs are the canonical
 
 // brochure format; DOC/DOCX/PPT/PPTX cover the small "ours is a Word
 
@@ -367,7 +367,7 @@ const videoUpload = multer({
 
 // renamed `.exe` masquerading as a PDF lands on disk with a `.pdf`
 
-// extension � but the static-serve content-type comes from the
+// extension — but the static-serve content-type comes from the
 
 // detected MIME anyway, so the worst case is a download prompt rather
 
@@ -445,7 +445,7 @@ const docUpload = multer({
 
 // public S3 URL. Why S3 and not a local /api/uploads path: an S3 URL is
 
-// served directly by AWS � it never touches Nginx OR the Node event loop on
+// served directly by AWS — it never touches Nginx OR the Node event loop on
 
 // download, so even a big video can't slow the site, and there's no auth-
 
@@ -473,7 +473,7 @@ async function uploadLandingMediaToS3(req, kind) {
 
   const originalName = file.originalname || path.basename(file.path);
 
-  // Documents (brochures) download instead of opening inline � set
+  // Documents (brochures) download instead of opening inline — set
 
   // Content-Disposition: attachment. Images/videos stay inline (no header) so
 
@@ -515,7 +515,7 @@ async function uploadLandingMediaToS3(req, kind) {
 
 
 
-// #378: slug validation � only lowercase a-z, 0-9, hyphens; max 50 chars.
+// #378: slug validation — only lowercase a-z, 0-9, hyphens; max 50 chars.
 
 // Anything else produces broken public URLs (spaces, uppercase, special chars).
 
@@ -547,11 +547,11 @@ router.get("/", verifyToken, async (req, res) => {
 
     // to landing page" form fields) doesn't need visits / submissions /
 
-    // templateType / createdAt / updatedAt either � only id + title + slug +
+    // templateType / createdAt / updatedAt either — only id + title + slug +
 
     // status. When the caller passes ?fields=summary we project to that
 
-    // minimal set. Opt-in additive � existing callers (no ?fields, or any
+    // minimal set. Opt-in additive — existing callers (no ?fields, or any
 
     // non-exact value) get the analytics-bearing shape unchanged so the
 
@@ -569,7 +569,7 @@ router.get("/", verifyToken, async (req, res) => {
 
     // the "? Featured" badge + the Feature/Unfeature action button. The
 
-    // summary shape stays minimal for slug-collision / dropdown callers �
+    // summary shape stays minimal for slug-collision / dropdown callers —
 
     // they only need id/title/slug/status.
 
@@ -639,7 +639,7 @@ router.get("/templates/list", verifyToken, (req, res) => {
 
 // routes rewrite the relative path to this absolute URL so the browser
 
-// can fetch the runtime. Served WITHOUT auth � the script is non-secret
+// can fetch the runtime. Served WITHOUT auth — the script is non-secret
 
 // and is required to render even the public /p/:slug page. Cached for
 
@@ -673,7 +673,7 @@ router.get("/wanderlux-static/support.js", (req, res) => {
 
 
 
-// -- Phase D1 � template-driven catalogue --------------------------
+// -- Phase D1 — template-driven catalogue --------------------------
 
 // Surfaces the educational-trip-v1 / travel-premium-v1 / religious-
 
@@ -697,7 +697,7 @@ router.get("/template-catalogue", verifyToken, (req, res) => {
 
   // luxury-tour-v1) stay registered in REGISTRY so legacy pages keep
 
-  // rendering, but they don't appear in the picker � the user asked for
+  // rendering, but they don't appear in the picker — the user asked for
 
   // "complete function like that" rather than "a template among many",
 
@@ -737,7 +737,7 @@ router.get("/template-catalogue", verifyToken, (req, res) => {
 
 
 
-// -- #446 � image upload for the builder's Image block -------------
+// -- #446 — image upload for the builder's Image block -------------
 
 //
 
@@ -749,9 +749,9 @@ router.get("/template-catalogue", verifyToken, (req, res) => {
 
 // Errors:
 
-//   400 � wrong MIME, missing file, multer LIMIT_FILE_SIZE
+//   400 — wrong MIME, missing file, multer LIMIT_FILE_SIZE
 
-//   401/403 � verifyToken (mounted in the global guard, but route-level
+//   401/403 — verifyToken (mounted in the global guard, but route-level
 
 //             verifyToken duplicated for explicit defence-in-depth)
 
@@ -763,13 +763,13 @@ router.get("/template-catalogue", verifyToken, (req, res) => {
 
 // `url` is `/api/uploads/landing-page-images/tenant-<id>/<file>` (the
 
-// `/api/*` prefix is required � Nginx on the deployed demo only proxies
+// `/api/*` prefix is required — Nginx on the deployed demo only proxies
 
 // `/api/*` to the backend, so a bare `/uploads/...` URL falls through to
 
 // the SPA catch-all and serves index.html instead of the file). We do
 
-// NOT persist a row in the DB � the URL is opaque and gets stored in
+// NOT persist a row in the DB — the URL is opaque and gets stored in
 
 // the parent LandingPage row's `content` JSON when the user saves.
 
@@ -863,15 +863,15 @@ router.post(
 
 // Errors:
 
-//   400 � wrong MIME, missing file, multer LIMIT_FILE_SIZE
+//   400 — wrong MIME, missing file, multer LIMIT_FILE_SIZE
 
-//   401/403 � verifyToken
+//   401/403 — verifyToken
 
 //
 
 // Tenant-segmented path: /api/uploads/landing-page-videos/tenant-<id>/<file>
 
-// (must be under /api/* � see the /upload comment above for why). Caller
+// (must be under /api/* — see the /upload comment above for why). Caller
 
 // stores the returned `url` directly in the video block's `url` prop; the
 
@@ -963,15 +963,15 @@ router.post(
 
 // Errors:
 
-//   400 � wrong MIME, missing file, multer LIMIT_FILE_SIZE
+//   400 — wrong MIME, missing file, multer LIMIT_FILE_SIZE
 
-//   401/403 � verifyToken
+//   401/403 — verifyToken
 
 //
 
 // Tenant-segmented path: /api/uploads/landing-page-documents/tenant-<id>/<file>
 
-// (must be under /api/* � see the /upload comment above for why). Caller
+// (must be under /api/* — see the /upload comment above for why). Caller
 
 // stores the returned `url` into `brochure.fileUrl` in the page config; the
 
@@ -1051,15 +1051,15 @@ router.post(
 
 
 
-// -- GET /api/landing-pages/stats � tenant-wide landing-page rollup -
+// -- GET /api/landing-pages/stats — tenant-wide landing-page rollup -
 
 //
 
-// Marketing polish � first /stats aggregate for LandingPage. Mirrors the
+// Marketing polish — first /stats aggregate for LandingPage. Mirrors the
 
 // posture of knowledge_base.js's /stats (sibling CRM-publishing surface)
 
-// and travel_suppliers.js's /suppliers/stats � read-only meta envelope,
+// and travel_suppliers.js's /suppliers/stats — read-only meta envelope,
 
 // auth-gated via verifyToken, no audit row written.
 
@@ -1083,7 +1083,7 @@ router.post(
 
 //   - lastCreatedAt: max(createdAt) ISO across selected rows, or null when empty.
 
-//   - NO audit row written � anodyne aggregate.
+//   - NO audit row written — anodyne aggregate.
 
 //
 
@@ -1109,7 +1109,7 @@ router.post(
 
 // Express route ordering: literal-path /stats MUST be declared BEFORE the
 
-// /:id family (line below) � otherwise the dynamic /:id matcher catches
+// /:id family (line below) — otherwise the dynamic /:id matcher catches
 
 // the literal "stats" string and treats it as a numeric id parse failure.
 
@@ -1273,7 +1273,7 @@ router.get("/stats", verifyToken, async (req, res) => {
 
 // Response shape: { id, slug, title, destination, subBrand, featuredAt }.
 
-// Content is NOT inlined � the resolver redirects to /p/<slug> and the
+// Content is NOT inlined — the resolver redirects to /p/<slug> and the
 
 // existing /:slug renderer reads the full row. Keeps this endpoint cheap
 
@@ -1281,7 +1281,7 @@ router.get("/stats", verifyToken, async (req, res) => {
 
 //
 
-// MUST be declared BEFORE router.get("/:id", ...) � Express literal vs.
+// MUST be declared BEFORE router.get("/:id", ...) — Express literal vs.
 
 // parametric ordering rule per CLAUDE.md standing rules.
 
@@ -1515,7 +1515,7 @@ function decoratePublishedPublicPayload(
 
 // Returns rendered HTML of the featured published page. Used by TripsResolver
 
-// to write into document at /trips � no redirect, no proxy dependency needed.
+// to write into document at /trips — no redirect, no proxy dependency needed.
 
 // Auth-exempt via the existing /landing-pages/public openPaths entry.
 
@@ -2050,7 +2050,7 @@ router.get("/public/featured-html", async (req, res) => {
 
 // Body: { destination, durationDays, audience, subBrand? }
 
-// Auth: verifyToken (admin / operator surface � not public)
+// Auth: verifyToken (admin / operator surface — not public)
 
 //
 
@@ -2084,7 +2084,7 @@ router.get("/public/featured-html", async (req, res) => {
 
 //     NO ratings, NO vendor / partner names
 
-//   - Pages auto-created here are ALWAYS DRAFT status � operator must
+//   - Pages auto-created here are ALWAYS DRAFT status — operator must
 
 //     review and publish manually
 
@@ -2102,7 +2102,7 @@ const VALID_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
 
 // `style` body param picks the destination shape for AI-generated pages:
 
-//   - "premium" (DEFAULT) � LLM emits the block array, the bridge maps
+//   - "premium" (DEFAULT) — LLM emits the block array, the bridge maps
 
 //     blocks ? semantic content slots, page is persisted with
 
@@ -2112,7 +2112,7 @@ const VALID_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
 
 //     microsite template.
 
-//   - "legacy"            � LLM block array persisted as-is with
+//   - "legacy"            — LLM block array persisted as-is with
 
 //     templateType="travel_destination". The block-based path stays
 
@@ -2302,7 +2302,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
         // render time. Was educational-trip-v1 (semantic-payload
 
-        // composer) � that path is kept available via the old template
+        // composer) — that path is kept available via the old template
 
         // ids but is no longer the AI-generate default. Pre-Road-A
 
@@ -2411,7 +2411,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
           if (!(fetched.hero && fetched.hero.url)) {
 
-            console.warn(`[wanderlux-images] hero slot UNFILLED � every provider in the chain returned null`);
+            console.warn(`[wanderlux-images] hero slot UNFILLED — every provider in the chain returned null`);
 
           }
 
@@ -2419,7 +2419,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
             if (!(m && m.image && m.image.url)) {
 
-              console.warn(`[wanderlux-images] marquee[${i}] UNFILLED � slot=${m && m.slot}`);
+              console.warn(`[wanderlux-images] marquee[${i}] UNFILLED — slot=${m && m.slot}`);
 
             }
 
@@ -2429,7 +2429,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
             if (!(c && c.image && c.image.url)) {
 
-              console.warn(`[wanderlux-images] cultural[${i}] UNFILLED � slot=${c && c.slot}`);
+              console.warn(`[wanderlux-images] cultural[${i}] UNFILLED — slot=${c && c.slot}`);
 
             }
 
@@ -2493,7 +2493,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
           // -- Pre-warm Pollinations URLs (2026-06-23) -----------------
 
-          // Pollinations generates images LAZILY on first GET � the URL
+          // Pollinations generates images LAZILY on first GET — the URL
 
           // returns immediately but the image is materialized server-side
 
@@ -2511,7 +2511,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
           // parallel; whole pre-warm is bounded by the longest single
 
-          // image (typically 10-15s). Best-effort � pre-warm failures
+          // image (typically 10-15s). Best-effort — pre-warm failures
 
           // don't abort the page generation.
 
@@ -2543,7 +2543,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
               try {
 
-                // GET (not HEAD) � Pollinations' lazy generation only fires
+                // GET (not HEAD) — Pollinations' lazy generation only fires
 
                 // on the GET path. HEAD returns 200 without generating.
 
@@ -2583,7 +2583,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
           // via the editor's Video section (upload or paste a URL).
 
-          // Best-effort � no video means video.enabled stays false.
+          // Best-effort — no video means video.enabled stays false.
 
           try {
 
@@ -2623,7 +2623,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
         } catch (imgErr) {
 
-          // Best-effort � empty image slots are OK; the reference
+          // Best-effort — empty image slots are OK; the reference
 
           // renderer hides any section whose data array is empty.
 
@@ -2773,7 +2773,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
 
 
-// -- PR-E Phase 2.3 � TEE-aware generation endpoint -----------------
+// -- PR-E Phase 2.3 — TEE-aware generation endpoint -----------------
 
 // Auto-creates a DRAFT LandingPage row via the Travel Experience Engine.
 
@@ -2972,11 +2972,11 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
       teeBrand.label ||
 
-      `${destClean} � ${days} day${days === 1 ? "" : "s"}`;
+      `${destClean} — ${days} day${days === 1 ? "" : "s"}`;
 
 
 
-    // Preview-only response � no DB write.
+    // Preview-only response — no DB write.
 
     if (!autoCreate) {
 
@@ -3056,7 +3056,7 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
         if (e.code !== "P2002") throw e;
 
-        // Slug collision � append a 4-char suffix and retry.
+        // Slug collision — append a 4-char suffix and retry.
 
         slug = `${baseSlug.slice(0, 45)}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -3122,7 +3122,7 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
 
 
-// -- PR-E Phase 2.3 � Regenerate Strategy (R3) ----------------------
+// -- PR-E Phase 2.3 — Regenerate Strategy (R3) ----------------------
 
 // Re-runs TEE classification without rebuilding the page content. Used
 
@@ -3132,7 +3132,7 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
 // would pick BEFORE deciding to regenerate the whole page. No LLM call,
 
-// no image fetch � pure classification.
+// no image fetch — pure classification.
 
 router.post("/:id/tee/reclassify", verifyToken, async (req, res) => {
 
@@ -3337,7 +3337,7 @@ router.post("/", verifyToken, async (req, res) => {
 
 
 
-    // #339: dedup-on-create � if a Draft landing page with the same title
+    // #339: dedup-on-create — if a Draft landing page with the same title
 
     // (case-insensitive trim) already exists for this tenant, reject with 409
 
@@ -3347,7 +3347,7 @@ router.post("/", verifyToken, async (req, res) => {
 
     // doesn't prevent starting a fresh draft to replace it). Fetch the tenant's
 
-    // drafts and JS-compare with toLowerCase().trim() � Prisma `equals` with
+    // drafts and JS-compare with toLowerCase().trim() — Prisma `equals` with
 
     // `mode: 'insensitive'` isn't portable across all MySQL collations, so the
 
@@ -3511,13 +3511,13 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     }
 
-    // tripId � links the landing page to a specific TMC trip so the
+    // tripId — links the landing page to a specific TMC trip so the
 
     // registration-draft branch of /api/pages/:slug/submit fires for
 
     // wizard submissions. The schema enforces 1:1 via LandingPage.tripId
 
-    // @unique � if another page already claims the same trip, Prisma
+    // @unique — if another page already claims the same trip, Prisma
 
     // surfaces P2002 which we translate to 409 here. Accepts:
 
@@ -3541,7 +3541,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
         }
 
-        // Verify the trip exists in this tenant � prevents cross-tenant
+        // Verify the trip exists in this tenant — prevents cross-tenant
 
         // tripId stuffing and surfaces a clean 404 instead of a P2003
 
@@ -3565,7 +3565,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
 
 
-        // Phase 6 � linking a Wanderlux page to a trip should default the
+        // Phase 6 — linking a Wanderlux page to a trip should default the
 
         // registration block to lead mode when no explicit mode is set.
 
@@ -3659,7 +3659,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
           } catch (_e) {
 
-            // Malformed content � leave it alone; don't block the link.
+            // Malformed content — leave it alone; don't block the link.
 
           }
 
@@ -3671,7 +3671,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     if (slug !== undefined) {
 
-      // #378: reject invalid slugs on update too � same rules as create.
+      // #378: reject invalid slugs on update too — same rules as create.
 
       if (!isValidSlug(slug)) {
 
@@ -3719,9 +3719,9 @@ router.put("/:id", verifyToken, async (req, res) => {
 
         // #456: slug change on a PUBLISHED page breaks every inbound link
 
-        // (ad campaigns, email links, QR codes). Don't block � the owner
+        // (ad campaigns, email links, QR codes). Don't block — the owner
 
-        // may legitimately need to rename � but require an explicit
+        // may legitimately need to rename — but require an explicit
 
         // ?confirmSlugChange=true query so an accidental autosave can't
 
@@ -3761,7 +3761,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     } catch (updateErr) {
 
-      // P2002 on tripId @unique � another landing page already claims
+      // P2002 on tripId @unique — another landing page already claims
 
       // this trip. Translate to a clean 409 so the picker UI can
 
@@ -3785,7 +3785,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     }
 
-    // Snapshot on MANUAL_SAVE only when content/title/slug changed �
+    // Snapshot on MANUAL_SAVE only when content/title/slug changed —
 
     // avoids flooding the version list with no-op autosaves that only
 
@@ -4072,7 +4072,7 @@ router.post("/:id/sync-investment", verifyToken, async (req, res) => {
 
 // A travel_destination page must satisfy a set of completeness checks
 
-// before going PUBLISHED � the user explicitly asked for this gate so
+// before going PUBLISHED — the user explicitly asked for this gate so
 
 // half-baked AI drafts (missing hero image, no itinerary, fewer than
 
@@ -4162,7 +4162,7 @@ function validateTemplatePublishReadiness(page) {
 
 
 
-  // Hero headline � Wanderlux stores titleLines[] (the bridge splits the
+  // Hero headline — Wanderlux stores titleLines[] (the bridge splits the
 
   // LLM's headline into multiple display lines); older templates store
 
@@ -4182,7 +4182,7 @@ function validateTemplatePublishReadiness(page) {
 
   }
 
-  // Hero image � Wanderlux uses hero.image.src (set by the route's
+  // Hero image — Wanderlux uses hero.image.src (set by the route's
 
   // image-fetcher) OR hero.backgroundImage (set by operator upload);
 
@@ -4196,13 +4196,13 @@ function validateTemplatePublishReadiness(page) {
 
   if (!hasHeroImage) {
 
-    issues.push({ code: "HERO_IMAGE_MISSING", message: "Upload a hero image � Publish is blocked without one." });
+    issues.push({ code: "HERO_IMAGE_MISSING", message: "Upload a hero image — Publish is blocked without one." });
 
   }
 
 
 
-  // Brand name � Wanderlux stores brand.name; older templates use
+  // Brand name — Wanderlux stores brand.name; older templates use
 
   // brand.programmeName. Accept either.
 
@@ -4220,7 +4220,7 @@ function validateTemplatePublishReadiness(page) {
 
 
 
-  // FAQ coverage � Wanderlux uses content.faqs.items (plural) and the
+  // FAQ coverage — Wanderlux uses content.faqs.items (plural) and the
 
   // bridge sets the whole `faqs` object to null when there are no
 
@@ -4294,13 +4294,13 @@ function validateTemplatePublishReadiness(page) {
 
 function validatePublishReadiness(page) {
 
-  // -- Phase D1 � template-driven page gate ----------------------
+  // -- Phase D1 — template-driven page gate ----------------------
 
   // Pages whose templateType is a registered template id store their
 
   // content as a SEMANTIC PAYLOAD object (not a block array). The
 
-  // legacy block checks below don't apply � instead we verify the
+  // legacy block checks below don't apply — instead we verify the
 
   // hero / programme-name / FAQ count slots that operators most
 
@@ -4392,7 +4392,7 @@ function validatePublishReadiness(page) {
 
 
 
-  // Hero � must exist, must have headline, posterUrl must be a non-null
+  // Hero — must exist, must have headline, posterUrl must be a non-null
 
   // string (manual upload required). Empty posterUrl OR the AI-stub
 
@@ -4402,7 +4402,7 @@ function validatePublishReadiness(page) {
 
   if (!hero) {
 
-    issues.push({ code: "MISSING_HERO", message: "Add a Destination Hero block � required for travel landing pages." });
+    issues.push({ code: "MISSING_HERO", message: "Add a Destination Hero block — required for travel landing pages." });
 
   } else {
 
@@ -4416,7 +4416,7 @@ function validatePublishReadiness(page) {
 
     if (!p.posterUrl || !String(p.posterUrl).trim()) {
 
-      issues.push({ code: "HERO_IMAGE_MISSING", message: "Upload a hero image � Reserve / Publish is blocked without one.", blockType: "destinationHero", blockIndex: hero.idx });
+      issues.push({ code: "HERO_IMAGE_MISSING", message: "Upload a hero image — Reserve / Publish is blocked without one.", blockType: "destinationHero", blockIndex: hero.idx });
 
     }
 
@@ -4424,7 +4424,7 @@ function validatePublishReadiness(page) {
 
 
 
-  // City cards � each card needs an image and a title. AI emits null
+  // City cards — each card needs an image and a title. AI emits null
 
   // images; user must upload before publishing.
 
@@ -4474,13 +4474,13 @@ function validatePublishReadiness(page) {
 
 
 
-  // Itinerary � must exist with =1 day.
+  // Itinerary — must exist with =1 day.
 
   const itin = (byType.itineraryTimeline || [])[0];
 
   if (!itin) {
 
-    issues.push({ code: "MISSING_ITINERARY", message: "Add an Itinerary Timeline block � required for travel landing pages." });
+    issues.push({ code: "MISSING_ITINERARY", message: "Add an Itinerary Timeline block — required for travel landing pages." });
 
   } else {
 
@@ -4520,7 +4520,7 @@ function validatePublishReadiness(page) {
 
 
 
-  // Highlights � at least 3.
+  // Highlights — at least 3.
 
   const highlights = (byType.highlightsGrid || [])[0];
 
@@ -4536,7 +4536,7 @@ function validatePublishReadiness(page) {
 
         code: "HIGHLIGHTS_INSUFFICIENT",
 
-        message: `Add at least ${MIN_HIGHLIGHT_COUNT} highlights � only ${filled} are filled in.`,
+        message: `Add at least ${MIN_HIGHLIGHT_COUNT} highlights — only ${filled} are filled in.`,
 
         blockType: "highlightsGrid",
 
@@ -4550,7 +4550,7 @@ function validatePublishReadiness(page) {
 
 
 
-  // Inclusions � at least 3.
+  // Inclusions — at least 3.
 
   const inclusions = (byType.inclusionsGrid || [])[0];
 
@@ -4566,7 +4566,7 @@ function validatePublishReadiness(page) {
 
         code: "INCLUSIONS_INSUFFICIENT",
 
-        message: `Add at least ${MIN_INCLUSIONS_COUNT} inclusion items � only ${filled} are filled in.`,
+        message: `Add at least ${MIN_INCLUSIONS_COUNT} inclusion items — only ${filled} are filled in.`,
 
         blockType: "inclusionsGrid",
 
@@ -4580,13 +4580,13 @@ function validatePublishReadiness(page) {
 
 
 
-  // FAQs � at least MIN_FAQ_COUNT entries, each non-empty.
+  // FAQs — at least MIN_FAQ_COUNT entries, each non-empty.
 
   const faq = (byType.faqAccordion || [])[0];
 
   if (!faq) {
 
-    issues.push({ code: "MISSING_FAQ", message: "Add an FAQ block � required for travel landing pages." });
+    issues.push({ code: "MISSING_FAQ", message: "Add an FAQ block — required for travel landing pages." });
 
   } else {
 
@@ -4600,7 +4600,7 @@ function validatePublishReadiness(page) {
 
         code: "FAQ_INSUFFICIENT",
 
-        message: `Add at least ${MIN_FAQ_COUNT} FAQs � only ${valid.length} are filled in.`,
+        message: `Add at least ${MIN_FAQ_COUNT} FAQs — only ${valid.length} are filled in.`,
 
         blockType: "faqAccordion",
 
@@ -4614,7 +4614,7 @@ function validatePublishReadiness(page) {
 
 
 
-  // Pricing � block must exist AND every tier must have a non-empty
+  // Pricing — block must exist AND every tier must have a non-empty
 
   // amount entered. AI never fills pricing; the operator must type each
 
@@ -4624,7 +4624,7 @@ function validatePublishReadiness(page) {
 
   if (!pricing) {
 
-    issues.push({ code: "MISSING_PRICING", message: "Add a Tier Pricing block � required for travel landing pages." });
+    issues.push({ code: "MISSING_PRICING", message: "Add a Tier Pricing block — required for travel landing pages." });
 
   } else {
 
@@ -4662,7 +4662,7 @@ function validatePublishReadiness(page) {
 
 
 
-  // Lead-capture surface � must have at least one block that submits a
+  // Lead-capture surface — must have at least one block that submits a
 
   // lead. THREE block types qualify (added across PR-A through PR-C):
 
@@ -4732,7 +4732,7 @@ function validatePublishReadiness(page) {
 
 
 
-// POST /api/landing-pages/:id/preview-token � mint a short-lived
+// POST /api/landing-pages/:id/preview-token — mint a short-lived
 
 // single-purpose JWT that authorises ONE landing-page preview.
 
@@ -4740,7 +4740,7 @@ function validatePublishReadiness(page) {
 
 // Why this exists: a `window.open("/api/.../preview")` new-tab cannot
 
-// carry an `Authorization` header � browsers never set Authorization on
+// carry an `Authorization` header — browsers never set Authorization on
 
 // top-level navigations. The auth_token cookie set on login (15-min
 
@@ -4758,7 +4758,7 @@ function validatePublishReadiness(page) {
 
 //   - Carries `previewLandingPageId: <id>` + `tenantId: <user.tenantId>`
 
-//   - Has `exp: now + 5 minutes` � short enough to make replay
+//   - Has `exp: now + 5 minutes` — short enough to make replay
 
 //     attractive only if the attacker is already on the operator's
 
@@ -4768,7 +4768,7 @@ function validatePublishReadiness(page) {
 
 //     accept it for anything other than the preview render (defence-
 
-//     in-depth � verifyToken rejects tokens missing `userId`)
+//     in-depth — verifyToken rejects tokens missing `userId`)
 
 //   - Is signed with the existing JWT_SECRET
 
@@ -4830,7 +4830,7 @@ router.post("/:id/preview-token", verifyToken, async (req, res) => {
 
 
 
-// GET /api/landing-pages/:id/preview � true draft preview.
+// GET /api/landing-pages/:id/preview — true draft preview.
 
 //
 
@@ -4846,7 +4846,7 @@ router.post("/:id/preview-token", verifyToken, async (req, res) => {
 
 // Auth (any of):
 
-//   1. `?previewToken=<jwt>` � short-lived (5 min) single-purpose token
+//   1. `?previewToken=<jwt>` — short-lived (5 min) single-purpose token
 
 //      minted by POST /:id/preview-token. The route opens in a new tab
 
@@ -4856,11 +4856,11 @@ router.post("/:id/preview-token", verifyToken, async (req, res) => {
 
 //      enough that URL-bar leakage doesn't expose a long-replay vector.
 
-//   2. `Authorization: Bearer <jwt>` header � for programmatic preview
+//   2. `Authorization: Bearer <jwt>` header — for programmatic preview
 
 //      callers (tests, future automation).
 
-//   3. `auth_token` cookie � same-tab navigations from an authenticated
+//   3. `auth_token` cookie — same-tab navigations from an authenticated
 
 //      builder session. Works when the cookie is still fresh.
 
@@ -4930,7 +4930,7 @@ async function previewAuth(req) {
 
   }
 
-  // 2. Authorization header / 3. cookie � defer to the existing
+  // 2. Authorization header / 3. cookie — defer to the existing
 
   //    verifyToken middleware. We invoke it inline so we can return
 
@@ -4978,7 +4978,7 @@ router.get("/:id/preview", async (req, res) => {
 
 
 
-    // PR-E Phase 2.3 � version-aware preview. ?version=N renders the
+    // PR-E Phase 2.3 — version-aware preview. ?version=N renders the
 
     // snapshot at versionNumber=N WITHOUT mutating the live page. Used
 
@@ -4986,7 +4986,7 @@ router.get("/:id/preview", async (req, res) => {
 
     // history list so operators can compare BEFORE restoring. Renders
 
-    // through the SAME production renderer � no preview-specific path.
+    // through the SAME production renderer — no preview-specific path.
 
     let rendered = page;
 
@@ -5038,7 +5038,7 @@ router.get("/:id/preview", async (req, res) => {
 
       // Render the historical snapshot through the SAME pipeline as
 
-      // the live page � same template renderer, same CSS, same JS.
+      // the live page — same template renderer, same CSS, same JS.
 
       // Preserve page-level metadata (templateType / cssOverrides /
 
@@ -5097,7 +5097,7 @@ router.get("/:id/preview", async (req, res) => {
 
     // The Wanderlux dc-runtime ships Babel-standalone (loaded from unpkg)
 
-    // and uses it to compile the `<x-dc>` template's JSX at runtime � a
+    // and uses it to compile the `<x-dc>` template's JSX at runtime — a
 
     // legitimate `new Function(...)` / `eval()` use that the global CSP
 
@@ -5111,7 +5111,7 @@ router.get("/:id/preview", async (req, res) => {
 
     // imports. media-src widened so operator-pasted video URLs (Pexels
 
-    // CDN .mp4 etc.) load � without this the <video> renders the poster
+    // CDN .mp4 etc.) load — without this the <video> renders the poster
 
     // but the play button stays disabled because the bytes never arrive.
 
@@ -5139,7 +5139,7 @@ router.get("/:id/preview", async (req, res) => {
 
           "connect-src 'self' https://image.pollinations.ai https://unpkg.com",
 
-          // frame-src � mirrors the public-page route so YouTube / Vimeo /
+          // frame-src — mirrors the public-page route so YouTube / Vimeo /
 
           // Wistia / Loom embed URLs render in the preview the same way
 
@@ -5183,7 +5183,7 @@ router.get("/:id/preview", async (req, res) => {
 
 
 
-// GET /api/landing-pages/:id/publish-check � non-mutating readiness
+// GET /api/landing-pages/:id/publish-check — non-mutating readiness
 
 // check. Used by the builder's Publish gate UI to show the user a
 
@@ -5291,7 +5291,7 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
 
         return res.status(409).json({
 
-          error: "Publish blocked � page is not ready.",
+          error: "Publish blocked — page is not ready.",
 
           code: "PUBLISH_GATE_FAILED",
 
@@ -5398,7 +5398,7 @@ router.post("/:id/unpublish", verifyToken, async (req, res) => {
 
 // /feature handler (un-feature any sibling in scope, then feature the
 
-// target), not by a schema constraint � MySQL doesn't support partial
+// target), not by a schema constraint — MySQL doesn't support partial
 
 // unique indexes and a hard unique([tenantId, subBrand]) wouldn't allow
 
@@ -5410,13 +5410,13 @@ router.post("/:id/unpublish", verifyToken, async (req, res) => {
 
 // page that /p/<slug> would 404 on. Unpublish auto-clears the flag
 
-// (above) � same invariant from the other direction.
+// (above) — same invariant from the other direction.
 
 //
 
 // Idempotency: re-featuring an already-featured page is a no-op (refresh
 
-// featuredAt? no � keeps the original timestamp so admin can see WHEN
+// featuredAt? no — keeps the original timestamp so admin can see WHEN
 
 // the current featured page was first activated). Unfeaturing a non-
 
@@ -5734,7 +5734,7 @@ router.post("/:id/versions/:versionId/restore", verifyToken, async (req, res) =>
 
     // Don't restore the slug if it would collide with another page in
 
-    // the same tenant � that would silently strand a sibling's public
+    // the same tenant — that would silently strand a sibling's public
 
     // URL. Keep the current slug in that case; surface a warning flag
 
@@ -5826,7 +5826,7 @@ router.get("/:id/analytics", verifyToken, async (req, res) => {
 
     const submissions = events.filter(e => e.eventType === "FORM_SUBMIT").length;
 
-    // #639 � return raw numeric so frontend's formatPercent can render
+    // #639 — return raw numeric so frontend's formatPercent can render
 
     // consistently. Pre-fix this returned a string ("12.3") which the FE then
 
@@ -6536,7 +6536,7 @@ publicRouter.get("/:slug", async (req, res) => {
 
     res.set("Content-Type", "text/html");
 
-    // Same per-response CSP override as the preview route � Wanderlux
+    // Same per-response CSP override as the preview route — Wanderlux
 
     // pages need 'unsafe-eval' for the dc-runtime's Babel-standalone
 
@@ -6564,7 +6564,7 @@ publicRouter.get("/:slug", async (req, res) => {
 
           "connect-src 'self' https://image.pollinations.ai https://unpkg.com",
 
-          // frame-src � required for the reference's "INTERACTIVE PREVIEW"
+          // frame-src — required for the reference's "INTERACTIVE PREVIEW"
 
           // video block. Allows iframe embeds from the major video CDNs
 
@@ -6602,7 +6602,7 @@ publicRouter.get("/:slug", async (req, res) => {
 
 
 
-// -- #451 � verify a Cloudflare Turnstile token ---------------------
+// -- #451 — verify a Cloudflare Turnstile token ---------------------
 
 //
 
@@ -6634,7 +6634,7 @@ async function verifyTurnstile(token, remoteIp) {
 
       console.warn(
 
-        "[LandingPage] TURNSTILE_SECRET_KEY not set � CAPTCHA verification skipped. Set this env var to enforce Cloudflare Turnstile."
+        "[LandingPage] TURNSTILE_SECRET_KEY not set — CAPTCHA verification skipped. Set this env var to enforce Cloudflare Turnstile."
 
       );
 
@@ -6686,7 +6686,7 @@ async function verifyTurnstile(token, remoteIp) {
 
 
 
-// -- #451 � apply a per-form lead-routing rule ----------------------
+// -- #451 — apply a per-form lead-routing rule ----------------------
 
 //
 
@@ -6696,7 +6696,7 @@ async function verifyTurnstile(token, remoteIp) {
 
 // belong to the same tenant), compute the assignee per rule type, and
 
-// set contact.assignedToId. Errors are swallowed � routing failure
+// set contact.assignedToId. Errors are swallowed — routing failure
 
 // shouldn't reject the lead.
 
@@ -6724,7 +6724,7 @@ async function pickFormFromContent(content, submittedAudience, isBrochureRequest
 
   if (!Array.isArray(arr)) return null;
 
-  // Three block types qualify as lead-capture surfaces � `form`,
+  // Three block types qualify as lead-capture surfaces — `form`,
 
   // `registrationForm`, and `brochureDownload` (when fileUrl is empty
 
@@ -6740,13 +6740,13 @@ async function pickFormFromContent(content, submittedAudience, isBrochureRequest
 
   //   1. Brochure submissions set `brochureRequest: true` in the body
 
-  //      � prefer the brochureDownload block when it's present so
+  //      — prefer the brochureDownload block when it's present so
 
   //      brochure-specific routing rules apply.
 
   //   2. Registration-form submissions set `audience: <preset>` in
 
-  //      the body � prefer the matching registrationForm block so
+  //      the body — prefer the matching registrationForm block so
 
   //      multi-audience pages route by audience.
 
@@ -7140,7 +7140,7 @@ async function applyLeadRouting(formProps, tenantId, contactId) {
 
       // Best-effort: pick the first ADMIN/MANAGER/USER on this tenant.
 
-      // Full round-robin counter lives in lead_routing.js � we don't
+      // Full round-robin counter lives in lead_routing.js — we don't
 
       // duplicate that complexity here for the inbound landing-page
 
@@ -7500,7 +7500,7 @@ function resolveRegistrationMode(page, formProps) {
 
     } catch (_e) {
 
-      // malformed wanderlux config � fall through to lead path
+      // malformed wanderlux config — fall through to lead path
 
     }
 
@@ -7526,7 +7526,7 @@ function resolveRegistrationMode(page, formProps) {
 
 // in the URL. Falls back to a thank-you response (no microsite
 
-// redirect) when the trip has no published microsite yet � gives
+// redirect) when the trip has no published microsite yet — gives
 
 // operators a graceful pre-publish state.
 
@@ -7805,7 +7805,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   // hasn't published a microsite yet, fall back to a thank-you
 
-  // response � the operator can ship the microsite later and the
+  // response — the operator can ship the microsite later and the
 
   // PendingTripRegistration row will still flow through the CRM
 
@@ -7823,7 +7823,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
     redirect: { type: "customer-registration", url: portalRedirect },
 
-    message: "Thank you � your registration has been received. We'll be in touch shortly.",
+    message: "Thank you — your registration has been received. We'll be in touch shortly.",
 
   });
 
@@ -8111,7 +8111,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
 
     if (!isValidPhoneOrEmpty(phone)) {
 
-      return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10�15 digits)", code: "INVALID_PHONE" });
+      return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10—15 digits)", code: "INVALID_PHONE" });
 
     }
 
@@ -8338,7 +8338,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     // props on the server side too. The renderer-side checks aren't
 
-    // sufficient � a malicious client could bypass the JS guard.
+    // sufficient — a malicious client could bypass the JS guard.
 
     // The `audience` body field (set by registrationForm hidden input)
 
@@ -8393,7 +8393,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 
 
-    // Phase 3 hybrid branch � when the page is trip-linked AND the
+    // Phase 3 hybrid branch — when the page is trip-linked AND the
 
     // form block (or the Wanderlux templatePayload) declares
 
@@ -8455,7 +8455,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     if (!isValidPhoneOrEmpty(phone)) {
 
-      return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10�15 digits)", code: "INVALID_PHONE" });
+      return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10—15 digits)", code: "INVALID_PHONE" });
 
     }
 
@@ -8495,7 +8495,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 
 
-    // Contact has @@unique([email, tenantId]) (schema.prisma:343) � Prisma's
+    // Contact has @@unique([email, tenantId]) (schema.prisma:343) — Prisma's
 
     // upsert requires the where clause to match a unique constraint exactly,
 
@@ -8801,7 +8801,7 @@ const TEMPLATES = [
 
   {
 
-    // Travel destination skeleton � used by both the "Travel Destination"
+    // Travel destination skeleton — used by both the "Travel Destination"
 
     // template-picker entry (manual flow) AND as the canonical block
 
@@ -8815,7 +8815,7 @@ const TEMPLATES = [
 
     name: "Travel Destination",
 
-    description: "Complete skeleton for a destination landing page � hero, cities, highlights, inclusions, itinerary, pricing, FAQ, registration.",
+    description: "Complete skeleton for a destination landing page — hero, cities, highlights, inclusions, itinerary, pricing, FAQ, registration.",
 
     content: [
 
@@ -8861,7 +8861,7 @@ const TEMPLATES = [
 
             { icon: "?", title: "Highlight two", body: "Add a second supporting reason." },
 
-            { icon: "�", title: "Highlight three", body: "And a third � operators recommend at least three." },
+            { icon: "?", title: "Highlight three", body: "And a third — operators recommend at least three." },
 
           ],
 
@@ -9027,7 +9027,7 @@ const TEMPLATES = [
 
           submitText: "Reserve Your Spot",
 
-          thankYouMessage: "Thank you � our team will reach out within 48 hours.",
+          thankYouMessage: "Thank you — our team will reach out within 48 hours.",
 
         },
 

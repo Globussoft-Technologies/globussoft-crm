@@ -8,17 +8,22 @@ vi.mock("../utils/api", () => ({
 }));
 
 const notifyError = vi.fn();
+const notifyConfirm = vi.fn();
+const notifySuccess = vi.fn();
 vi.mock("../utils/notify", () => ({
   useNotify: () => ({
     error: notifyError,
     info: vi.fn(),
-    success: vi.fn(),
+    success: notifySuccess,
+    confirm: notifyConfirm,
   }),
 }));
 
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
+  notifyConfirm.mockReset().mockResolvedValue(true);
+  notifySuccess.mockReset();
   fetchApiMock.mockImplementation((url, opts) => {
     if (url === "/api/table-column-prefs/leads" && !opts) {
       return Promise.resolve({
@@ -53,6 +58,57 @@ beforeEach(() => {
 });
 
 describe("ColumnPicker reorder", () => {
+  it("confirms and deletes a hidden custom field for generic CRM", async () => {
+    const onFieldDeleted = vi.fn();
+    render(
+      <ColumnPicker
+        tableKey="leads"
+        deletableColumns={[{ id: 44, key: "cf_priority", fieldKey: "priority" }]}
+        onFieldDeleted={onFieldDeleted}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Customize table/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Customize table columns" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Priority field" }));
+
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Delete this field?",
+        destructive: true,
+      }));
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields/44", {
+        method: "DELETE",
+      });
+    });
+    expect(screen.queryByText("Priority")).toBeNull();
+    expect(onFieldDeleted).toHaveBeenCalledWith({
+      id: 44,
+      key: "cf_priority",
+      fieldKey: "priority",
+    });
+    expect(notifySuccess).toHaveBeenCalledWith("Field deleted");
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it("does not show delete icons without a deletable custom-field definition", async () => {
+    render(<ColumnPicker tableKey="leads" />);
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Customize table/i }));
+    await screen.findByRole("dialog", { name: "Customize table columns" });
+
+    expect(screen.queryByRole("button", { name: /Delete Priority field/i })).toBeNull();
+  });
+
   it("lets users drag visible columns into a new order and saves that order", async () => {
     const onColumnsChange = vi.fn();
     render(<ColumnPicker tableKey="leads" onColumnsChange={onColumnsChange} />);

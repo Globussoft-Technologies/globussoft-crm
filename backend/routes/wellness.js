@@ -16430,6 +16430,25 @@ async function deleteOldBrandingLogo(oldLogoUrl) {
   }
 }
 
+function saveBrandingLogoLocally(file, tenantId) {
+  const dir = path.join(
+    __dirname,
+    "..",
+    "uploads",
+    "branding",
+    `tenant-${tenantId}`,
+  );
+  fs.mkdirSync(dir, { recursive: true });
+
+  const ext =
+    (path.extname(file.originalname || "") || ".png")
+      .toLowerCase()
+      .replace(/[^.a-z0-9]/g, "") || ".png";
+  const filename = `logo-${Date.now()}${ext}`;
+  fs.writeFileSync(path.join(dir, filename), file.buffer);
+  return `/api/uploads/branding/tenant-${tenantId}/${filename}`;
+}
+
 function requireTenantAdmin(req, res, next) {
   if (!req.user || req.user.role !== "ADMIN") {
     // Neutral copy + structured code  no internal role-taxonomy leakage.
@@ -16471,33 +16490,31 @@ router.post(
       });
       const oldLogoUrl = current ? current.logoUrl : null;
 
-      // S3-primary, local-FS fallback (same contract as visit photos).
+      // S3-primary, local-FS fallback (same contract as visit photos). A
+      // configured bucket is not enough to prove that local credentials have
+      // access to it; in local development an expired key, wrong region, or
+      // unavailable bucket should not make branding unusable. Production
+      // keeps the cloud-storage failure visible instead of persisting a logo
+      // to a disk that may not be shared by all application instances.
       let logoUrl;
       if (S3_BUCKET_NAME) {
-        logoUrl = await uploadImage(
-          req.file.buffer,
-          req.file.originalname || "logo.png",
-          req.file.mimetype,
-          `branding/tenant-${req.user.tenantId}`,
-        );
+        try {
+          logoUrl = await uploadImage(
+            req.file.buffer,
+            req.file.originalname || "logo.png",
+            req.file.mimetype,
+            `branding/tenant-${req.user.tenantId}`,
+          );
+        } catch (storageError) {
+          if (process.env.NODE_ENV === "production") throw storageError;
+          console.warn(
+            "[wellness] branding logo cloud upload failed; using local storage:",
+            storageError.message,
+          );
+          logoUrl = saveBrandingLogoLocally(req.file, req.user.tenantId);
+        }
       } else {
-        const dir = path.join(
-          __dirname,
-          "..",
-          "uploads",
-          "branding",
-          `tenant-${req.user.tenantId}`,
-        );
-        fs.mkdirSync(dir, { recursive: true });
-        const ext =
-          (path.extname(req.file.originalname || "") || ".png")
-            .toLowerCase()
-            .replace(/[^.a-z0-9]/g, "") || ".png";
-        // Timestamped name so each replacement is a distinct file  the old one
-        // is then explicitly deleted below, and cached URLs never serve stale art.
-        const filename = `logo-${Date.now()}${ext}`;
-        fs.writeFileSync(path.join(dir, filename), req.file.buffer);
-        logoUrl = `/api/uploads/branding/tenant-${req.user.tenantId}/${filename}`;
+        logoUrl = saveBrandingLogoLocally(req.file, req.user.tenantId);
       }
 
       await prisma.tenant.update({

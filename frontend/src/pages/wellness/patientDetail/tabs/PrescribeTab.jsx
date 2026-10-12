@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { FileText } from 'lucide-react';
 import { fetchApi } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
@@ -91,6 +91,11 @@ function DrugAutocomplete({ value, onChange, onPick, onQuickAdd }) {
   const debounceRef = useRef(null);
   const abortRef = useRef(null);
   const blurTimerRef = useRef(null);
+  useEffect(() => () => {
+    clearTimeout(debounceRef.current);
+    clearTimeout(blurTimerRef.current);
+    abortRef.current?.abort();
+  }, []);
 
   const search = (q, pageNumber = 1, append = false) => {
     if (abortRef.current) abortRef.current.abort();
@@ -132,6 +137,7 @@ function DrugAutocomplete({ value, onChange, onPick, onQuickAdd }) {
         // typeahead is best effort
       })
       .finally(() => {
+        if (ac.signal.aborted) return;
         setLoadingMore(false);
       });
   };

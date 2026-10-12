@@ -115,6 +115,12 @@ prisma.paymentGatewayConfig = {
 };
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.tenantSetting = {
+  findMany: vi.fn(),
+};
+prisma.location = {
+  findFirst: vi.fn(),
+};
 prisma.auditLog = {
   findFirst: vi.fn(),
   create: vi.fn(),
@@ -150,6 +156,7 @@ prisma.travelPaymentSchedule.count = vi.fn().mockResolvedValue(0);
 
 import express from "express";
 import request from "supertest";
+const pdfRenderer = requireCJS("../../services/pdfRenderer");
 const billingRouter = requireCJS("../../routes/billing");
 
 function makeApp({
@@ -190,6 +197,8 @@ beforeEach(() => {
   prisma.payment.aggregate.mockReset();
   prisma.paymentGatewayConfig.findFirst.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.tenantSetting.findMany.mockReset().mockResolvedValue([]);
+  prisma.location.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.findFirst.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.fieldPermission.findMany.mockReset();
@@ -223,6 +232,69 @@ beforeEach(() => {
   prisma.serviceConsumption.findMany.mockResolvedValue([]);
   prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
   eventBus.emitEvent.mockClear();
+});
+
+describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
+  test("uses the professional renderer with tenant settings for generic invoices", async () => {
+    const invoice = {
+      id: 101,
+      invoiceNum: "INV-GENERIC-101",
+      amount: 2499.5,
+      status: "UNPAID",
+      issuedDate: new Date("2026-10-01T00:00:00.000Z"),
+      dueDate: new Date("2026-10-15T00:00:00.000Z"),
+      contact: {
+        id: 7,
+        name: "Asha Customer",
+        email: "asha@example.com",
+        company: "Asha Trading",
+      },
+    };
+    const tenant = {
+      name: "Asha Trading Private Limited",
+      logoUrl: null,
+      brandColor: "#193B8C",
+      themeColor: null,
+      defaultCurrency: "INR",
+      locale: "en-IN",
+      ownerEmail: "accounts@asha.example",
+    };
+    const settings = [
+      { key: "invoice.tagline", value: "Business systems that scale" },
+      { key: "invoice.companyWebsite", value: "https://asha.example" },
+    ];
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue(tenant);
+    prisma.tenantSetting.findMany.mockResolvedValue(settings);
+
+    const renderSpy = vi
+      .spyOn(pdfRenderer, "renderProfessionalInvoicePdf")
+      .mockResolvedValue(Buffer.from("%PDF-tenant-branded"));
+
+    try {
+      const res = await request(makeApp()).get("/api/billing/101/pdf");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/application\/pdf/);
+      expect(res.headers["content-disposition"]).toContain(
+        'INV-GENERIC-101.pdf',
+      );
+      expect(renderSpy).toHaveBeenCalledWith(
+        invoice,
+        invoice.contact,
+        null,
+        expect.objectContaining({
+          tenant,
+          settings,
+          logoBuffer: null,
+          currency: "INR",
+          locale: "en-IN",
+        }),
+      );
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
 });
 
 describe("POST /api/billing/public/confirm-payment - payment-link statuses", () => {

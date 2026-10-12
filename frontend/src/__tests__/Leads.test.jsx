@@ -443,6 +443,41 @@ describe('Leads Freshsales-style list UI affordances', () => {
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
         return Promise.resolve(leadRows);
       }
+      if (typeof url === 'string' && url.startsWith('/api/pickup-plot-inventory/lead-status')) {
+        return Promise.resolve({
+          pickupLocations: [
+            { id: 4, name: 'Main Gate', address: '42 Lake View Road, Bengaluru' },
+            { id: 5, name: 'North Hub', address: '55 New Pickup Road, Bengaluru' },
+          ],
+          customers: [{
+            id: 501,
+            contactId: 101,
+            pickupAddress: '42 Lake View Road, Bengaluru',
+            status: 'COMPLETED',
+            statusUpdatedAt: '2026-10-08T09:00:00.000Z',
+            currentStage: 'broker',
+            currentStatus: 'PLOT_SHOWN',
+            currentStatusUpdatedAt: '2026-10-08T10:00:00.000Z',
+            contact: {
+              id: 101,
+              name: 'Alice Lead',
+              phone: '+1 5551112222',
+              email: 'alice@example.com',
+              company: 'Acme',
+              status: 'Lead',
+              interestedPlotArea: 'North Bengaluru',
+            },
+            transportPerson: { id: 41, name: 'Sant' },
+            assignedPlot: { id: 30, name: 'Plot 24', address: 'North Avenue' },
+            workflow: {
+              transport: { status: 'COMPLETED', assignee: { id: 41, name: 'Sant' } },
+              broker: { status: 'PLOT_SHOWN', assignee: { id: 51, name: 'Sanjeev' } },
+              billing: { status: 'PENDING' },
+            },
+            workflowHistory: [],
+          }],
+        });
+      }
       if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/tags')) {
         return Promise.resolve({
           values: [
@@ -472,6 +507,68 @@ describe('Leads Freshsales-style list UI affordances', () => {
     document.querySelectorAll('.leads-split-table thead').forEach((thead) => {
       expect(thead.querySelectorAll('tr')).toHaveLength(1);
     });
+  });
+
+  it('hides both header and body cells for deselected workflow columns', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/table-column-prefs/leads' && !options) return Promise.resolve({
+        visible: ['name', 'phone', 'email', 'company', 'actions'], availableColumns: [],
+      });
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    await waitFor(() => expect(screen.queryByText('Interested plot area')).not.toBeInTheDocument());
+    expect(screen.queryByText('Pickup location')).not.toBeInTheDocument();
+    expect(screen.queryByText('Overall status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit pickup location for Alice Lead' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View all status for Alice Lead' })).not.toBeInTheDocument();
+  });
+
+  it('shows the requested Pickup & Plot columns, edits the mapped location, and opens status details in Generic CRM', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    expect(screen.getByText('Interested plot area')).toBeInTheDocument();
+    expect(screen.getByText('Pickup location')).toBeInTheDocument();
+    expect(screen.queryByText('Trip status')).toBeNull();
+    expect(screen.queryByText('Transport person')).toBeNull();
+    expect(screen.getByText('Overall status')).toBeInTheDocument();
+
+    await screen.findByText('North Bengaluru');
+    const mapLink = screen.getByRole('link', { name: 'Open pickup location for Alice Lead in Google Maps' });
+    expect(mapLink).toHaveAttribute('href', expect.stringContaining('42%20Lake%20View%20Road%2C%20Bengaluru'));
+    expect(mapLink.closest('td')).toHaveStyle({ paddingRight: '1.5rem' });
+    expect(mapLink.closest('td').querySelector('[data-testid="generic-lead-pickup-location-content"]')).toHaveStyle({
+      margin: '.25rem .5rem .25rem 0',
+      padding: '.35rem .5rem',
+      boxSizing: 'border-box',
+    });
+    expect(screen.getByText('Pickup location').closest('th')).toHaveStyle({ paddingRight: '1.5rem' });
+    const overallStatus = screen.getByText('Sales Executive: Plot shown');
+    expect(overallStatus).toBeInTheDocument();
+    expect(overallStatus.closest('td')).toHaveStyle({ paddingLeft: '1.5rem' });
+    expect(screen.getByText('Overall status').closest('th')).toHaveStyle({ paddingLeft: '1.5rem' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit pickup location for Alice Lead' }));
+    const pickupInput = screen.getByRole('button', { name: 'Pickup location' });
+    expect(pickupInput).toHaveTextContent('Main Gate');
+    fireEvent.click(pickupInput);
+    fireEvent.click(screen.getByRole('option', { name: 'Select North Hub pickup location' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101',
+      expect.objectContaining({
+        method: 'PUT',
+        body: expect.stringContaining('55 New Pickup Road, Bengaluru'),
+      }),
+    ));
+    await screen.findByText('55 New Pickup Road, Bengaluru');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View all status for Alice Lead' }));
+    expect(screen.getByRole('dialog', { name: 'All customer statuses' })).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-timeline')).toBeInTheDocument();
   });
 
   it('renders the Name column as a profile link instead of an inline edit trigger', async () => {
@@ -819,6 +916,14 @@ describe('Leads Freshsales-style list UI affordances', () => {
         expect(scrollHeader).toHaveClass('leads-table-header-row');
         expect(scrollRows.length).toBeGreaterThan(0);
       });
+      expect(screen.queryByText('Interested plot area')).toBeNull();
+      expect(screen.queryByText('Pickup location')).toBeNull();
+      expect(screen.queryByText('Trip status')).toBeNull();
+      expect(screen.queryByText('Transport person')).toBeNull();
+      expect(screen.queryByText('Overall status')).toBeNull();
+      expect(fetchApiMock.mock.calls.some(([url]) => (
+        typeof url === 'string' && url.startsWith('/api/pickup-plot-inventory/lead-status')
+      ))).toBe(false);
     } finally {
       rectMock.mockRestore();
     }
@@ -1715,6 +1820,42 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     });
   });
 
+  it('keeps the header checkbox unchecked when selections belong to another API page', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page, name: `Lead page ${page}` }],
+          total: 30,
+          page,
+          limit: 25,
+          totalPages: 2,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Lead page 1')).toBeInTheDocument());
+
+    const pageOneHeaderCheckbox = screen.getAllByRole('checkbox', { name: 'Select all leads' })[0];
+    fireEvent.click(pageOneHeaderCheckbox);
+    expect(pageOneHeaderCheckbox).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(screen.getByText('Lead page 2')).toBeInTheDocument());
+
+    const pageTwoHeaderCheckbox = screen.getAllByRole('checkbox', { name: 'Select all leads' })[0];
+    expect(pageTwoHeaderCheckbox).not.toBeChecked();
+    const pageTwoRowCheckbox = screen.getAllByRole('checkbox', { name: 'Select Lead page 2' })[0];
+    expect(pageTwoRowCheckbox).not.toBeChecked();
+
+    fireEvent.click(pageTwoHeaderCheckbox);
+    expect(pageTwoHeaderCheckbox).toBeChecked();
+    expect(pageTwoRowCheckbox).toBeChecked();
+    expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
+  });
+
   it('Escape key closes the Create Lead drawer (#892)', async () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
@@ -2238,6 +2379,40 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
       expect(within(dropdownContainer).getByText('Globussoft outbound')).toBeInTheDocument();
       expect(within(dropdownContainer).getByText('RFU Umrah follow-up')).toBeInTheDocument();
     });
+  });
+
+  it('persists selected dial campaigns until the final campaign is removed', async () => {
+    const storageKey = 'globuscrm.leads.selectedDialCampaigns.v1.1.1';
+    const firstRender = renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Select campaigns to dial/i }));
+    fireEvent.click(screen.getByLabelText(/Globussoft outbound/i));
+    fireEvent.click(screen.getByLabelText(/RFU Umrah follow-up/i));
+
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem(storageKey))).toEqual(['101', '102']));
+    expect(screen.getByRole('button', { name: /2 campaigns selected/i })).toBeInTheDocument();
+    firstRender.unmount();
+
+    const secondRender = renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    const restoredTrigger = screen.getByRole('button', { name: /2 campaigns selected/i });
+    fireEvent.click(restoredTrigger);
+    expect(screen.getByLabelText(/Globussoft outbound/i)).toBeChecked();
+    expect(screen.getByLabelText(/RFU Umrah follow-up/i)).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText(/Globussoft outbound/i));
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem(storageKey))).toEqual(['102']));
+    expect(screen.getByRole('button', { name: /1 campaign selected/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(/RFU Umrah follow-up/i));
+    await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
+    expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeInTheDocument();
+    secondRender.unmount();
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeInTheDocument();
   });
 
   it('selecting campaigns and clicking Dial Campaigns queues calls one by one', async () => {

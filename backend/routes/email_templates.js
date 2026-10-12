@@ -2,7 +2,7 @@ const express = require("express");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { renderTemplate } = require("../lib/microTemplate");
+const { renderGenericTemplate } = require("../lib/genericEmailTemplateRenderer");
 const { normalizeGenericTemplatePlaceholders } = require("../lib/genericCampaignAutomation");
 const { routeRequest } = require("../lib/llmRouter");
 
@@ -71,6 +71,9 @@ router.get("/personalization-fields", async (req, res) => {
       { key: "contact.externalId", label: "External ID", group: "Contact" },
       { key: "contact.aiScore", label: "AI Score", group: "Contact" },
       { key: "contact.tags", label: "Tags", group: "Contact" },
+      { key: "sender.name", label: "Sender Name", group: "Sender Details" },
+      { key: "sender.email", label: "Sender Email", group: "Sender Details" },
+      { key: "sender.company", label: "Sender Company", group: "Sender Details" },
       { key: "enrollmentId", label: "Enrollment ID", group: "Campaign" },
       { key: "sequenceId", label: "Sequence ID", group: "Campaign" },
       ...relatedFields,
@@ -114,7 +117,7 @@ router.post("/preview", async (req, res) => {
           firstTouchSource: true, lastTouchSource: true, birthDate: true, anniversary: true, gst: true,
           stateCode: true, billingStateCode: true, externalId: true, aiScore: true,
           leadCustomFieldValues: {
-            include: { field: { select: { fieldKey: true } } },
+            include: { field: { select: { fieldKey: true, label: true } } },
           },
           deals: { orderBy: { createdAt: "desc" }, take: 1 },
           invoices: { orderBy: { issuedDate: "desc" }, take: 1 },
@@ -156,6 +159,13 @@ router.post("/preview", async (req, res) => {
       email: sample.email,
       phone: sample.phone,
       company: sample.company,
+      organization: { name: tenant.name || '' },
+      tenant: { name: tenant.name || '' },
+      customFields: (sample.leadCustomFieldValues || []).map(value => ({
+        key: value.field?.fieldKey, label: value.field?.label,
+        value: value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool ?? '',
+      })),
+      sender: { name: tenant.name || '', email: '', company: tenant.name || '' },
       enrollmentId: null,
       sequenceId: null,
     };
@@ -180,8 +190,8 @@ router.post("/preview", async (req, res) => {
       });
     }
     res.json({
-      subject: renderTemplate(normalizeGenericTemplatePlaceholders(req.body.subject || ""), context),
-      body: renderTemplate(normalizeGenericTemplatePlaceholders(req.body.body || ""), context),
+      subject: renderGenericTemplate(normalizeGenericTemplatePlaceholders(req.body.subject || ""), context),
+      body: renderGenericTemplate(normalizeGenericTemplatePlaceholders(req.body.body || ""), context, { html: true }),
       contact: { id: sample.id, name: sample.name, email: sample.email },
       isSample: !contact,
     });
@@ -234,6 +244,11 @@ router.post("/ai-draft", async (req, res) => {
 // List all email templates
 router.get("/", async (req, res) => {
   try {
+    const paginate = req.query.paginate === "1";
+    if (paginate) {
+      const tenant = await requireGenericTenant(req, res);
+      if (!tenant) return;
+    }
     // #920 slice 9: ?fields=summary slim-shape opt-in. Mirrors slice 1
     // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
     // badc9cca), slice 4 (tasks), slice 5 (projects), slice 6 (expenses),
@@ -244,9 +259,15 @@ router.get("/", async (req, res) => {
     // Opt-in additive — existing callers (no ?fields, or any non-exact
     // value) get the full row shape unchanged.
     const isSummary = req.query.fields === "summary";
+    const requestedChannel = String(req.query.channel || "").trim().toUpperCase();
+    const channel = ["EMAIL", "SMS", "WHATSAPP"].includes(requestedChannel) ? requestedChannel : null;
+    if (channel) {
+      const tenant = await requireGenericTenant(req, res);
+      if (!tenant) return;
+    }
     const findManyArgs = {
-      where: { tenantId: req.user.tenantId },
-      orderBy: { updatedAt: "desc" },
+      where: { tenantId: req.user.tenantId, ...(channel ? { channel } : {}) },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     };
     if (isSummary) {
       findManyArgs.select = {
@@ -254,13 +275,28 @@ router.get("/", async (req, res) => {
         name: true,
         subject: true,
         category: true,
+        channel: true,
         tenantId: true,
         createdAt: true,
         updatedAt: true,
       };
     }
-    const templates = await prisma.emailTemplate.findMany(findManyArgs);
-    res.json(templates);
+    if (!paginate) {
+      const templates = await prisma.emailTemplate.findMany(findManyArgs);
+      return res.json(templates);
+    }
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 50) : 10;
+    const [templates, total] = await Promise.all([
+      prisma.emailTemplate.findMany({ ...findManyArgs, skip: (page - 1) * limit, take: limit }),
+      prisma.emailTemplate.count({ where: findManyArgs.where }),
+    ]);
+    return res.json({
+      items: templates,
+      pagination: { page, pageSize: limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+    });
   } catch (err) {
     console.error("[EmailTemplates] List error:", err);
     res.status(500).json({ error: "Failed to fetch email templates" });
@@ -284,12 +320,18 @@ router.get("/:id", async (req, res) => {
 // Create template
 router.post("/", async (req, res) => {
   try {
-    const { name, subject, body, category } = req.body;
+    const { name, subject, body, category, channel } = req.body;
     if (!name || !subject || !body) {
       return res.status(400).json({ error: "name, subject, and body are required" });
     }
+    if (channel !== undefined) {
+      const tenant = await requireGenericTenant(req, res);
+      if (!tenant) return;
+    }
+    const normalizedChannel = String(channel || "EMAIL").trim().toUpperCase();
+    if (!["EMAIL", "SMS", "WHATSAPP"].includes(normalizedChannel)) return res.status(400).json({ error: "channel must be EMAIL, SMS, or WHATSAPP" });
     const template = await prisma.emailTemplate.create({
-      data: { name, subject, body, category: category || "General", tenantId: req.user.tenantId },
+      data: { name, subject, body, channel: normalizedChannel, category: category || "General", tenantId: req.user.tenantId },
     });
     res.status(201).json(template);
   } catch (err) {
@@ -301,9 +343,15 @@ router.post("/", async (req, res) => {
 // Update template
 router.put("/:id", async (req, res) => {
   try {
-    const { name, subject, body, category } = req.body;
+    const { name, subject, body, category, channel } = req.body;
     const existing = await prisma.emailTemplate.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Template not found" });
+    if (channel !== undefined) {
+      const tenant = await requireGenericTenant(req, res);
+      if (!tenant) return;
+    }
+    const normalizedChannel = channel === undefined ? undefined : String(channel || "").trim().toUpperCase();
+    if (normalizedChannel !== undefined && !["EMAIL", "SMS", "WHATSAPP"].includes(normalizedChannel)) return res.status(400).json({ error: "channel must be EMAIL, SMS, or WHATSAPP" });
     const template = await prisma.emailTemplate.update({
       where: { id: existing.id },
       data: {
@@ -311,6 +359,7 @@ router.put("/:id", async (req, res) => {
         ...(subject !== undefined && { subject }),
         ...(body !== undefined && { body }),
         ...(category !== undefined && { category }),
+        ...(normalizedChannel !== undefined && { channel: normalizedChannel }),
       },
     });
     res.json(template);

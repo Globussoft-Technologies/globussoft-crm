@@ -68,6 +68,30 @@ test('customer pickup status directory is tenant-admin only', async ({ request }
   expect(userResponse.status()).toBe(403);
 });
 
+test('generic lead users can read only the scoped pickup workflow projection', async ({ request }) => {
+  const contactsResponse = await request.get(`${BASE_URL}/api/contacts?status=Lead&limit=1`, {
+    headers: headers(adminToken),
+  });
+  expect(contactsResponse.ok()).toBeTruthy();
+  const contactsBody = await contactsResponse.json();
+  const contacts = Array.isArray(contactsBody) ? contactsBody : contactsBody.data;
+  test.skip(!contacts?.length, 'The seeded generic tenant has no Lead row to project.');
+
+  const contactId = contacts[0].id;
+  const [adminResponse, userResponse] = await Promise.all([
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/lead-status?contactIds=${contactId}`, {
+      headers: headers(adminToken),
+    }),
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/lead-status?contactIds=${contactId}`, {
+      headers: headers(userToken),
+    }),
+  ]);
+  expect(adminResponse.status()).toBe(200);
+  expect(await adminResponse.json()).toMatchObject({ customers: expect.any(Array) });
+  expect(userResponse.status()).toBe(200);
+  expect(await userResponse.json()).toMatchObject({ customers: expect.any(Array) });
+});
+
 test('an unlinked user cannot read another driver assignment workspace', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/transport-persons/me`, {
     headers: headers(userToken),
@@ -144,6 +168,22 @@ test('admin creates and edits a plot assigned to the pickup location', async ({ 
   });
 });
 
+test('plot creation rejects missing mandatory inventory fields', async ({ request }) => {
+  const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/plots`, {
+    headers: headers(adminToken),
+    data: {
+      name: `${RUN_TAG} Incomplete Plot`, plotNumber: '', block: 'A', address: '25 Lake Road',
+      area: '1200', areaUnit: 'SQ_FT', price: 250000, roadWidth: '30 ft',
+      propertyType: 'RESIDENTIAL', availability: 'AVAILABLE',
+    },
+  });
+  expect(response.status()).toBe(400);
+  expect(await response.json()).toMatchObject({
+    error: 'Plot number is required.',
+    code: 'VALIDATION_ERROR',
+  });
+});
+
 test('list returns the tagged tenant-scoped location, plot, and summary', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory`, { headers: headers(adminToken) });
   expect(response.status()).toBe(200);
@@ -169,6 +209,21 @@ test('admin creates a transport person with pickup, plot, and structured service
   expect(body.pickupLocationIds).toEqual([locationId]);
   expect(body.plotSiteIds).toEqual([plotId]);
   expect(body.serviceAreas).toEqual([{ plotSiteId: null, area: 'Koramangala', state: 'Karnataka', pincode: '560095' }]);
+});
+
+test('transport person creation requires vehicle details', async ({ request }) => {
+  const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/transport-persons`, {
+    headers: headers(adminToken),
+    data: {
+      name: `${RUN_TAG.replace(/[^a-z]/gi, 'a')} Driver`, phone: '9000011111',
+      vehicleType: '', vehicleNumber: 'KA 01 AB 1234',
+    },
+  });
+  expect(response.status()).toBe(400);
+  expect(await response.json()).toMatchObject({
+    error: 'Vehicle type is required.',
+    code: 'VALIDATION_ERROR',
+  });
 });
 
 test('admin creates a broker assigned to a plot', async ({ request }) => {

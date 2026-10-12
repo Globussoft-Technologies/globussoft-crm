@@ -160,6 +160,7 @@ jobs:
             tests/ci-smoke.spec.js \
             tests/sms-api.spec.js \
             tests/marketing-api.spec.js \
+            tests/generic-template-pagination-api.spec.js \
             tests/reports-api.spec.js \
             tests/sla-breach-api.spec.js \
             tests/treatment-plans-api.spec.js \

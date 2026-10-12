@@ -76,26 +76,27 @@ describe('public web form embed footer', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain('formData.settings.showPoweredBy === false');
-    expect(html).toContain("(footerLink ? '<div class=\"note powered-by\">' + footerLink + '</div>' : '')");
+    expect(html).toContain('var footerLink');
+    expect(html).toMatch(/footerLink\s*\?[\s\S]*note powered-by/);
   });
 
   test('combines a searchable country code with phone submissions for every web-form scope', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain("if (advanced && field.sourceKey === 'phone')");
-    expect(html).toContain("type=\"' + (field.fieldType === 'number' ? 'number' : 'tel') + '\"");
+    expect(html).toMatch(/if\s*\(advanced\s*&&\s*field\.sourceKey\s*===\s*["']phone["']\)/);
+    expect(html).toMatch(/field\.fieldType\s*===\s*["']number["']\s*\?\s*["']number["']\s*:\s*["']tel["']/);
     expect(html).toContain('name="phoneCountry"');
-    expect(html).toContain('.phone-country-picker.open{z-index:40}');
-    expect(html).toContain('.phone-country-picker>input:focus + .phone-country-options{display:block}');
-    expect(html).toContain("options.style.display = 'block'");
-    expect(html).toContain('trigger.addEventListener(\'keydown\', openCountryPicker)');
-    expect(html).toContain("trigger.addEventListener('pointerdown'");
-    expect(html).toContain("&& allowedCountries.length > 0");
-    expect(html).toContain("&& pickerAllowedCountries.length > 0");
-    expect(html).toContain("trigger.inputMode = 'numeric'");
+    expect(html).toMatch(/\.phone-country-picker\.open\s*\{\s*z-index:\s*40\s*;\s*\}/);
+    expect(html).toMatch(/\.phone-country-picker\s*>\s*input:focus\s*\+\s*\.phone-country-options\s*\{\s*display:\s*block\s*;\s*\}/);
+    expect(html).toMatch(/options\.style\.display\s*=\s*["']block["']/);
+    expect(html).toMatch(/trigger\.addEventListener\(["']keydown["']\s*,\s*openCountryPicker\)/);
+    expect(html).toMatch(/trigger\.addEventListener\(["']pointerdown["']/);
+    expect(html).toMatch(/allowedCountries\.length\s*>\s*0/);
+    expect(html).toMatch(/pickerAllowedCountries\.length\s*>\s*0/);
+    expect(html).toMatch(/trigger\.inputMode\s*=\s*["']numeric["']/);
     expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
-    expect(html).toContain("fd.set('phone', nationalDigits)");
-    expect(html).toContain("if (advanced && fd.get('phone') && fd.get('phoneCountry'))");
+    expect(html).toMatch(/fd\.set\(["']phone["']\s*,\s*nationalDigits\)/);
+    expect(html).toMatch(/if\s*\(\s*advanced\s*&&\s*fd\.get\(["']phone["']\)\s*&&\s*fd\.get\(["']phoneCountry["']\)\s*\)/);
   });
 
   test('renders the numeric phone control for the default phone field', () => {
@@ -104,6 +105,26 @@ describe('public web form embed footer', () => {
 
     expect(builder).toContain('{ value: "phone", label: "Phone", fieldType: "number"');
     expect(html).toContain("input[name=\"phone\"]");
+  });
+
+  test('keeps the WhatsApp implementation behind the opt-in setting', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('setupGenericWhatsapp');
+    expect(html).toContain('name="whatsappSameAsPhone"');
+    expect(html).toContain('WhatsApp number is the same as phone number');
+    expect(html).toContain("whatsappCountry.name = 'whatsappPhoneCountry'");
+    expect(html).toContain('name="whatsappPhone"');
+    expect(html).toContain('WhatsApp country code');
+    expect(html).toContain('setupGenericWhatsappPhone');
+    expect(html).toContain('Enter a valid WhatsApp number with ');
+    expect(html).toContain('setupGenericCountryPicker(whatsappCountrySelect');
+    expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:0;padding-left:0}');
+    expect(html).toContain('line-height:1.2;font-weight:var(--gbs-form-weight,400)');
+    expect(html).toContain('.generic-whatsapp-phone{margin-bottom:0}');
+    expect(html).toContain("phoneField.classList.add('generic-phone-with-whatsapp')");
+    expect(html).toContain('generic-whatsapp-number');
+    expect(html).toContain("formData.settings.whatsappEnabled !== true");
   });
 
   test('uses field-specific Enter placeholders instead of one email example for every field', () => {
@@ -118,13 +139,13 @@ describe('public web form embed footer', () => {
   test('prefers browser location and falls back to IP for Generic phone country detection', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain("country.value = '+91'");
+    expect(html).toMatch(/country\.value\s*=\s*["']\+91["']/);
     expect(html).toContain('function detectGenericCountryFromLocale');
     expect(html).toContain('function detectGenericCountryFromLocationOrIp');
     expect(html).toContain('navigator.geolocation.getCurrentPosition');
     expect(html).toContain('https://ipapi.co/json/');
     expect(html).toContain('new Intl.Locale(locale).region');
-    expect(html).toContain("detectGenericCountryFromLocationOrIp(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
+    expect(html).toMatch(/detectGenericCountryFromLocationOrIp\s*\(\s*country\s*,\s*input\s*,\s*allowedCountries\s*,\s*restrictedCountries\s*,\s*applyRule\s*,\s*phoneState\s*,?\s*\)/);
     expect(html).not.toContain("detectGenericCountryFromTimeZone(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
   });
 
@@ -132,8 +153,8 @@ describe('public web form embed footer', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain('phoneState.userEnteredPhone || phoneState.userSelectedCountry');
-    expect(html).toContain("if (!phoneState.applyingDetectedCountry) phoneState.userSelectedCountry = true;");
-    expect(html).toContain("detectGenericCountryFromLocale(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
+    expect(html).toMatch(/if\s*\(!phoneState\.applyingDetectedCountry\)\s*phoneState\.userSelectedCountry\s*=\s*true\s*;/);
+    expect(html).toMatch(/detectGenericCountryFromLocale\s*\(\s*country\s*,\s*input\s*,\s*allowedCountries\s*,\s*restrictedCountries\s*,\s*applyRule\s*,\s*phoneState\s*,?\s*\)/);
   });
 
   test('keeps the Generic CRM email-domain picker opaque across themes', () => {
@@ -163,7 +184,7 @@ describe('public web form embed footer', () => {
 
     expect(html).toContain('function multiStepConfig()');
     expect(html).toContain('function validateStep(stepIndex)');
-    expect(html).toContain("document.getElementById('step-next').addEventListener");
+    expect(html).toMatch(/document\s*\.\s*getElementById\(["']step-next["']\)\s*\.\s*addEventListener/);
     expect(html).toContain('showStep(currentStepIndex + 1)');
     expect(html).toContain('showStep(currentStepIndex - 1)');
   });
@@ -172,7 +193,7 @@ describe('public web form embed footer', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toContain('function showInlineError(text)');
-    expect(html).toContain('showInlineError(\'Please complete the "I\\\'m not a robot" verification.\')');
+    expect(html).toMatch(/Please complete the "I\\'m not a robot" verification\./);
     expect(html).not.toContain("if (!captchaToken) { setMessage('error'");
   });
 
@@ -182,7 +203,7 @@ describe('public web form embed footer', () => {
     expect(html).toContain('function updateGenericSubmitState(fields)');
     expect(html).toContain('button.disabled = false;');
     expect(html).toContain('updateGenericSubmitState(fields);');
-    expect(html).toContain("if (!flag && advanced) updateGenericSubmitState(formData.fields || []);");
+    expect(html).toMatch(/if\s*\(!flag\s*&&\s*advanced\)\s*updateGenericSubmitState\(formData\.fields\s*\|\|\s*\[\]\);/);
   });
 
   test('does not cap long forms in an internal scroll container', () => {
@@ -196,9 +217,9 @@ describe('public web form embed footer', () => {
   test('applies configured form and submit-button colors through CSS variables', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain('.panel{background:var(--gbs-form');
-    expect(html).toContain('.primary{background:var(--gbs-button');
-    expect(html).not.toContain('.primary{background:linear-gradient(135deg,#4f46e5,#7c3aed)');
+    expect(html).toMatch(/\.panel\s*\{\s*background:\s*var\(--gbs-form/);
+    expect(html).toMatch(/\.primary\s*\{\s*background:\s*var\(--gbs-button/);
+    expect(html).not.toMatch(/\.primary\s*\{\s*background:\s*linear-gradient\(135deg,#4f46e5,#7c3aed\)/);
   });
 
   test('normalizes Generic CRM phone fields without rejecting valid international lengths', () => {
@@ -206,8 +227,9 @@ describe('public web form embed footer', () => {
 
     expect(html).toContain('function nationalPhoneMaxLength()');
     expect(html).toContain('return Math.max(1, 15 - countryDigits.length)');
-    expect(html).toContain("genericPhoneInput.setAttribute('maxlength', '16')");
-    expect(html).toContain("genericPhoneInput.setAttribute('inputmode', 'numeric')");
+    expect(html).toContain('function setupGenericPhoneInputLimit(countrySelect, input)');
+    expect(html).toContain("input.setAttribute('maxlength', '16')");
+    expect(html).toContain("input.setAttribute('inputmode', 'numeric')");
     expect(html).toContain('slice(0, nationalPhoneMaxLength())');
     expect(html).toContain("rawPhoneInput.trim().charAt(0) === '+'");
     expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");

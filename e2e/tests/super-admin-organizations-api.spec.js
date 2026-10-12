@@ -140,13 +140,23 @@ test.describe('POST /api/super-admin/tenant-management/organizations', () => {
   });
 
   test('sets a custom-role cap and blocks creation after the quota is consumed', async ({ request }) => {
+    // Provisioning includes tenant-managed starter roles, which consume quota
+    // too. Measure them rather than assuming a freshly created tenant has zero.
+    const baselineResponse = await request.put(`${API}/super-admin/tenant-management/tenants/${createdTenantId}/role-limit`, {
+      data: { maxCustomRoles: null }, headers: superHeaders(), timeout: REQUEST_TIMEOUT,
+    });
+    expect(baselineResponse.status()).toBe(200);
+    const { customRoleCount: baselineCount } = await baselineResponse.json();
+    expect(Number.isInteger(baselineCount)).toBe(true);
+    expect(baselineCount).toBeGreaterThanOrEqual(0);
+    const limit = baselineCount + 1;
     const limitResponse = await request.put(`${API}/super-admin/tenant-management/tenants/${createdTenantId}/role-limit`, {
-      data: { maxCustomRoles: 1 },
+      data: { maxCustomRoles: limit },
       headers: superHeaders(),
       timeout: REQUEST_TIMEOUT,
     });
     expect(limitResponse.status()).toBe(200);
-    expect(await limitResponse.json()).toMatchObject({ maxCustomRoles: 1, customRoleCount: 0 });
+    expect(await limitResponse.json()).toMatchObject({ maxCustomRoles: limit, customRoleCount: baselineCount, remainingCustomRoles: 1 });
 
     const roleKey = `E2E_ROLE_${Date.now()}`;
     const firstRole = await request.post(`${API}/roles`, {
@@ -164,8 +174,8 @@ test.describe('POST /api/super-admin/tenant-management/organizations', () => {
     expect(secondRole.status()).toBe(409);
     expect(await secondRole.json()).toMatchObject({
       code: 'ROLE_LIMIT_REACHED',
-      customRoleCount: 1,
-      maxCustomRoles: 1,
+      customRoleCount: limit,
+      maxCustomRoles: limit,
     });
   });
 

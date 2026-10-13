@@ -196,6 +196,19 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument();
   });
 
+  it('uses one visible shared actions menu for generic staff rows', async () => {
+    renderStaff('ADMIN', {}, 'generic');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('staff-action-more-1'));
+    expect(screen.getByRole('menu', { name: 'Actions for Rishu Agarwal' })).toBeInTheDocument();
+    expect(screen.queryByRole('menu', { name: 'Actions for Dr. Harsh Kumar' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('staff-action-more-2'));
+    expect(screen.getByRole('menu', { name: 'Actions for Dr. Harsh Kumar' })).toBeInTheDocument();
+    expect(screen.queryByRole('menu', { name: 'Actions for Rishu Agarwal' })).not.toBeInTheDocument();
+  });
+
   it('expands the visible slice and scrolls a highlighted row into view even near the bottom', async () => {
     const scrollSpy = vi.spyOn(window.Element.prototype, 'scrollIntoView').mockImplementation(() => {});
     const longStaffList = Array.from({ length: 20 }, (_, idx) => {

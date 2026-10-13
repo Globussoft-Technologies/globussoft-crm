@@ -2586,10 +2586,8 @@ export default function App() {
                         path="marketing"
                         element={
                           <RoleGuard
-                            allow={["ADMIN", "MANAGER"]}
+                            requiredPermission={{ module: "marketing", action: "read" }}
                             feature="Marketing"
-                            roles="manager (or admin)"
-                            lockedInPlace
                           >
                             <Marketing />
                           </RoleGuard>
@@ -2600,10 +2598,8 @@ export default function App() {
                         element={
                           <GenericOnly>
                             <RoleGuard
-                              allow={["ADMIN", "MANAGER"]}
+                              requiredPermission={{ module: "marketing", action: "read" }}
                               feature="Marketing Campaign"
-                              roles="manager (or admin)"
-                              lockedInPlace
                             >
                               <Marketing />
                             </RoleGuard>
@@ -2658,8 +2654,8 @@ export default function App() {
                         element={
                           <GenericOnly>
                             <RoleGuard
-                              allow={["ADMIN"]}
-                              message="Channels requires admin access."
+                              requiredPermission={{ module: "integrations", action: "manage" }}
+                              feature="Channels"
                             >
                               <Channels />
                             </RoleGuard>
@@ -2789,8 +2785,28 @@ export default function App() {
                       <Route path="lead-scoring" element={<LeadScoring />} />
                       <Route path="projects" element={<Projects />} />
                       <Route path="clients" element={<Clients />} />
-                      <Route path="leads" element={<Leads />} />
-                      <Route path="sales-teams" element={<RoleGuard allow={["ADMIN", "MANAGER"]} message="Sales Teams requires manager access."><SalesTeams /></RoleGuard>} />
+                      <Route
+                        path="leads"
+                        element={
+                          <RoleGuard
+                            requiredPermission={{ module: "leads", action: "read" }}
+                            feature="Leads"
+                          >
+                            <Leads />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
+                        path="sales-teams"
+                        element={
+                          <RoleGuard
+                            requiredPermission={{ module: "staff", action: "manage" }}
+                            feature="Sales Teams"
+                          >
+                            <SalesTeams />
+                          </RoleGuard>
+                        }
+                      />
                       <Route
                         path="converted-leads"
                         element={<ConvertedLeads />}
@@ -2803,8 +2819,8 @@ export default function App() {
                         path="staff"
                         element={
                           <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Staff requires admin access."
+                            requiredPermission={{ module: "staff", action: "manage" }}
+                            feature="Staff"
                           >
                             <Staff />
                           </RoleGuard>
@@ -2883,8 +2899,8 @@ export default function App() {
                         path="audit-log"
                         element={
                           <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Audit Log requires admin access."
+                            requiredPermission={{ module: "audit", action: "read" }}
+                            feature="Audit Log"
                           >
                             <AuditLog />
                           </RoleGuard>
@@ -2953,8 +2969,8 @@ export default function App() {
                         path="field-permissions"
                         element={
                           <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Field Permissions requires admin access."
+                            requiredPermission={{ module: "field_permissions", action: "read" }}
+                            feature="Field Permissions"
                           >
                             <FieldPermissions />
                           </RoleGuard>
@@ -2968,8 +2984,8 @@ export default function App() {
                         element={
                           <TravelOnly>
                             <RoleGuard
-                              allow={["ADMIN"]}
-                              message="Brand Kits requires admin access."
+                              requiredPermission={{ module: "settings", action: "manage" }}
+                              feature="Brand Kits"
                             >
                               <BrandKits />
                             </RoleGuard>
@@ -3054,8 +3070,8 @@ export default function App() {
                         path="admin/embed-allowlist"
                         element={
                           <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Embed Allowlist requires admin access."
+                            requiredPermission={{ module: "settings", action: "manage" }}
+                            feature="Embed Allowlist"
                           >
                             <EmbedAllowlist />
                           </RoleGuard>
@@ -3078,8 +3094,8 @@ export default function App() {
                         path="commission-profiles"
                         element={
                           <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Commission Profiles requires admin access."
+                            requiredPermission={{ module: "staff", action: "manage" }}
+                            feature="Commission Profiles"
                           >
                             <CommissionProfiles />
                           </RoleGuard>
@@ -3090,8 +3106,8 @@ export default function App() {
                         element={
                           <GenericOnly>
                             <RoleGuard
-                              allow={["ADMIN"]}
-                              message="Commission Data requires admin access."
+                              requiredPermission={{ module: "payments", action: "read" }}
+                              feature="Commission Data"
                             >
                               <CommissionData />
                             </RoleGuard>

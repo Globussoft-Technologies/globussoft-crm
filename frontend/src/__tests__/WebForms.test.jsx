@@ -56,6 +56,8 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).toContain('allow="geolocation *"');
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
+    expect(code).toContain('type:"responsive-device"');
+    expect(code).toContain('window.innerWidth');
   });
 
   test('escapes the iframe title safely', () => {
@@ -157,6 +159,21 @@ describe('public web form embed footer', () => {
     expect(html.slice(responsiveRule)).toContain('grid-template-columns: minmax(68px, 42%) minmax(0, 1fr) !important;');
     expect(html).toContain('html.generic-preview-mobile.generic-scope .phone-input');
     expect(html).toContain('padding: 0 3px 0 34px;');
+    expect(html).toContain('grid-template-columns: minmax(104px, 30%) minmax(0, 1fr) !important;');
+    expect(html).toContain('padding: 0 8px 0 54px;');
+    expect(html).toContain('html.generic-preview-mobile.generic-scope .grid .full');
+    expect(html).toContain('html.generic-host-desktop.generic-scope .grid');
+    expect(html).toContain('html.generic-host-tablet.generic-scope .grid');
+    expect(html).toContain('html.generic-host-mobile.generic-scope .grid');
+    expect(html).toContain('type !== "responsive-device"');
+    expect(html).toContain('grid-template-columns: var(--gbs-columns) !important;');
+    expect(html).toContain('grid-template-columns: var(--gbs-tablet-columns) !important;');
+    expect(html).toContain('grid-template-columns: var(--gbs-mobile-columns) !important;');
+    expect(html).toContain('--gbs-tablet-full-span');
+    expect(html).toContain('--gbs-mobile-full-span');
+    expect(html).toContain('grid-column: var(--gbs-tablet-full-span, 1/-1) !important;');
+    expect(html).toContain('grid-column: var(--gbs-mobile-full-span, 1/-1) !important;');
+    expect(html.lastIndexOf('html.generic-preview-desktop.generic-scope .grid')).toBeGreaterThan(html.lastIndexOf('@media (min-width: 641px) and (max-width: 900px)'));
     expect(html).toContain('.choices.horizontal .check');
     expect(html).toContain('width: fit-content;');
     expect(html).toContain('flex: 0 1 auto;');
@@ -193,6 +210,10 @@ describe('public web form embed footer', () => {
     expect(html).toContain('setupGenericCountryPicker(whatsappCountrySelect');
     expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}');
     expect(html).toContain('white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)');
+    expect(html).toContain('.generic-whatsapp-section>.check span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}');
+    expect(html).toContain('function fitGenericRecaptcha()');
+    expect(html).toContain('widget.style.transformOrigin = "top left"');
+    expect(html).toContain('container.style.height = Math.ceil(widgetHeight * scale) + "px"');
     expect(html).toContain('.generic-whatsapp-phone{margin-bottom:0}');
     expect(html).toContain("phoneField.classList.add('generic-phone-with-whatsapp')");
     expect(html).toContain('generic-whatsapp-number');

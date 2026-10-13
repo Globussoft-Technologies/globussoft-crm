@@ -454,6 +454,26 @@ describe('WebForms builder page', () => {
     expect(childCard.querySelector('.wf-conditional-config')).toBeNull();
   });
 
+  test('preserves comma separators while editing conditional flow options', async () => {
+    const conditionalForm = {
+      ...FORM_FIXTURE,
+      scope: 'generic',
+      fields: [{
+        id: 'root-question', sourceKind: 'custom', sourceKey: 'root-question', fieldType: 'dropdown',
+        label: 'Interested in', optionsText: 'sea', options: ['sea'],
+        required: false, hidden: false, showWhen: null,
+      }],
+    };
+
+    renderPage(conditionalForm);
+    await openBuilder();
+
+    const options = screen.getByDisplayValue('sea');
+    fireEvent.change(options, { target: { value: 'sea,' } });
+
+    expect(options).toHaveValue('sea,');
+  });
+
   test('restores unsaved changes after refresh without a native unload alert', async () => {
     const firstRender = renderPage();
     await openBuilder();

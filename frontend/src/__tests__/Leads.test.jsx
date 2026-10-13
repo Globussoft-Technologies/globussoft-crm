@@ -818,6 +818,59 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Deleted "Strategic"/i));
   });
 
+  it('keeps the tag editor inside the viewport for a bottom table row', async () => {
+    const previousInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 700,
+    });
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+    const getBoundingClientRectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function getBoundingClientRect() {
+        if (this.classList?.contains('lead-tags-cell')) {
+          return {
+            top: 620,
+            bottom: 672,
+            left: 600,
+            right: 700,
+            width: 100,
+            height: 52,
+          };
+        }
+        if (this.classList?.contains('lead-tags-popover')) {
+          return {
+            top: 0,
+            bottom: 300,
+            left: 0,
+            right: 360,
+            width: 360,
+            height: 300,
+          };
+        }
+        return originalGetBoundingClientRect.call(this);
+      });
+
+    try {
+      renderLeads(authValue);
+      await screen.findByText('Alice Lead');
+      fireEvent.click(screen.getByText('Warm').closest('.lead-tags-cell'));
+
+      const dialog = await screen.findByRole('dialog', {
+        name: 'Edit Tags for Alice Lead',
+      });
+      expect(Number.parseInt(dialog.style.top, 10)).toBe(314);
+      expect(Number.parseInt(dialog.style.top, 10) + 300).toBeLessThanOrEqual(692);
+      expect(dialog.style.overflowY).toBe('auto');
+    } finally {
+      getBoundingClientRectSpy.mockRestore();
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: previousInnerHeight,
+      });
+    }
+  });
+
   it('opens an in-place lead preview drawer from the list actions', async () => {
     renderLeads(authValue);
 
@@ -2234,7 +2287,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
         ]);
       }
       if (url === '/api/staff' && !opts) return Promise.resolve([]);
-      if (url === '/api/lead-custom-fields' && !opts) {
+      if (url === '/api/lead-custom-fields') {
         return Promise.resolve([
           { id: 201, fieldKey: 'priority', label: 'Priority', fieldType: 'text', placeholder: 'Priority level' },
         ]);
@@ -2506,13 +2559,13 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     }
     if (url === '/api/staff' && !opts) return Promise.resolve([]);
     if (typeof url === 'string' && url.startsWith('/api/deals') && !opts) return Promise.resolve([]);
-    if (url === '/api/travel/trip-billing/paid-by-contact' && !opts) {
+    if (url === '/api/travel/trip-billing/paid-by-contact') {
       // Lily has paid via TMC instalments directly  keyed by her email
       return Promise.resolve({
         byEmail: { 'lily@parent.com': { paidTotal: 90000, currency: 'INR' } },
       });
     }
-    if (typeof url === 'string' && url.startsWith('/api/travel/itineraries') && !opts) {
+    if (typeof url === 'string' && url.startsWith('/api/travel/itineraries')) {
       return Promise.resolve({
         itineraries: [
           // Lily: 'sent' status, advancePaidAmount=0 (itinerary not updated yet)
@@ -2787,7 +2840,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
   it('warns when auto-assign is enabled but every saved rule is inactive', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/callified/auto-campaign-rules' && !opts) {
+      if (url === '/api/callified/auto-campaign-rules') {
         return Promise.resolve({
           enabled: true,
           rules: [{
@@ -2833,7 +2886,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
           ],
         });
       }
-      if (url === '/api/callified/auto-campaign-rules' && !opts) {
+      if (url === '/api/callified/auto-campaign-rules') {
         return Promise.resolve({
           enabled: true,
           rules: [{ id: 'rule-1', enabled: true, column: 'source', value: 'website-form', campaignId: 101 }],
@@ -3386,7 +3439,7 @@ describe('Leads Web Form column (generic CRM only)', () => {
           ],
         });
       }
-      if (url === '/api/lead-custom-fields' && !opts) return Promise.resolve([]);
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
         return Promise.resolve(webFormRows);
       }
@@ -3631,5 +3684,42 @@ describe('Leads extended Freshsales-parity columns', () => {
     expect(screen.getByText('IN-KA')).toBeInTheDocument();
     const websiteLink = screen.getByRole('link', { name: 'acme.test' });
     expect(websiteLink.getAttribute('href')).toBe('https://acme.test');
+  });
+});
+
+describe('Leads effective-permission visibility', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+  });
+
+  it('hides write and bulk controls when the user only has leads.read', async () => {
+    renderLeads({
+      tenant: { id: 1, vertical: 'generic' },
+      user: {
+        id: 7,
+        role: 'USER',
+        permissions: ['leads.read'],
+      },
+    });
+
+    await screen.findByText('Leads');
+    expect(screen.queryByRole('button', { name: /Create a new lead/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Bulk actions/i })).not.toBeInTheDocument();
+  });
+
+  it('shows bulk controls when the user has leads.update', async () => {
+    renderLeads({
+      tenant: { id: 1, vertical: 'generic' },
+      user: {
+        id: 7,
+        role: 'USER',
+        permissions: ['leads.read', 'leads.update'],
+      },
+    });
+
+    await screen.findByText('Leads');
+    expect(screen.getByRole('button', { name: /Bulk actions/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Create a new lead/i })).not.toBeInTheDocument();
   });
 });

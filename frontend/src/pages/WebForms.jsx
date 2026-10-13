@@ -656,6 +656,7 @@ function normalizeField(field, index, leadFields = [], scope = "generic") {
     ? leadFields.find((item) => item.fieldKey === sourceKey)
     : null;
   const leadOptions = Array.isArray(leadDefinition?.options) ? leadDefinition.options : [];
+  const hasOptionsText = typeof field?.optionsText === "string";
   const persistedOptions = Array.isArray(field?.options) && field.options.length
     ? field.options
     : splitOptions(field?.optionsText);
@@ -907,7 +908,11 @@ function normalizeField(field, index, leadFields = [], scope = "generic") {
 
     choiceLayout: fieldType === "radio" && field?.choiceLayout === "horizontal" ? "horizontal" : "vertical",
 
-    optionsText: (sourceKind === "lead_custom" && leadOptions.length ? leadOptions : persistedOptions).join(", ") || String(CONTACT_FIELD_DEFAULTS[sourceKey]?.options?.join(", ") || ""),
+    optionsText: sourceKind === "lead_custom" && leadOptions.length
+      ? leadOptions.join(", ")
+      : hasOptionsText
+        ? field.optionsText
+        : persistedOptions.join(", ") || String(CONTACT_FIELD_DEFAULTS[sourceKey]?.options?.join(", ") || ""),
 
 
 

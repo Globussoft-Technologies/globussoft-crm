@@ -129,7 +129,7 @@ const GENERIC_BASE_PERMS = [
   'roles.read', 'roles.manage', 'staff.read', 'staff.manage',
   'audit.read', 'developer.read', 'settings.read', 'settings.manage',
   'contacts.read', 'deals.read', 'pipeline.read', 'tickets.read',
-  'reports.read', 'leads.read',
+  'reports.read', 'reports.write', 'leads.read',
   'communications.read', 'tasks.read', 'projects.read', 'whatsapp.read',
   'live_chat.read', 'deal_insights.read', 'playbooks.read',
   'booking_pages.read', 'web_forms.read', 'marketing.read',
@@ -142,7 +142,7 @@ const GENERIC_BASE_PERMS = [
 ];
 const GENERIC_USER_PERMS = [
   'contacts.read', 'deals.read', 'leads.read', 'tasks.read', 'projects.read',
-  'pipeline.read', 'reports.read', 'communications.read', 'tickets.read',
+  'pipeline.read', 'reports.read', 'reports.write', 'communications.read', 'tickets.read',
   'surveys.read', 'documents.read', 'contracts.read', 'estimates.read',
 ];
 function permsForRole(role, vertical) {
@@ -891,11 +891,13 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Settings')).toBeTruthy();
     });
 
-    it('hides manager-only items (Forecasting, Quotas) for USER role under generic', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER' });
+    it('uses configured permissions instead of the legacy manager tier for generic reports', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', permissions: [...GENERIC_USER_PERMS, 'analytics.read'] });
       expect(screen.queryByText('Forecasting')).toBeNull();
       expect(screen.queryByText('Quotas')).toBeNull();
-      expect(screen.queryByText('Win/Loss')).toBeNull();
+      // USER's configured analytics.read grant is authoritative for this page,
+      // even though the legacy sidebar entry was managerOnly.
+      expect(screen.getByText('Win/Loss')).toBeTruthy();
     });
 
     it('shows manager-only items for MANAGER role but still hides admin-only', () => {
@@ -1603,17 +1605,16 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Funnel')).toBeTruthy();
     });
 
-    it('hides all five Reports cluster items for USER role under generic', () => {
+    it('shows only the Reports cluster items granted to USER under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
-      // Generic Reports cluster is uniformly managerOnly — USER should see
-      // zero of them.
-      expect(screen.queryByText('Agent Reports')).toBeNull();
+      // Permission grants are authoritative; this fixture grants
+      // reports.read, reports.write, pipeline.read, and reports.read-backed pages but not
+      // dashboards.read.
+      expect(screen.getByText('Agent Reports')).toBeTruthy();
       expect(screen.queryByText('Dashboards')).toBeNull();
-      expect(screen.queryByText('Custom Reports')).toBeNull();
-      expect(screen.queryByText('Funnel')).toBeNull();
-      // The bare "Reports" label is also managerOnly, so it should not
-      // appear for USER either.
-      expect(screen.queryByText('Reports')).toBeNull();
+      expect(screen.getByText('Custom Reports')).toBeTruthy();
+      expect(screen.getByText('Funnel')).toBeTruthy();
+      expect(screen.getByText('Reports')).toBeTruthy();
     });
   });
 
@@ -1644,11 +1645,11 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Territories')).toBeTruthy();
     });
 
-    it('hides Sequences / Marketing / Lead Routing for USER under generic', () => {
+    it('uses the configured permission for Lead Routing while hiding ungranted automation pages', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
       expect(screen.queryByText('Sequences')).toBeNull();
       expect(screen.queryByText('Marketing Campaign')).toBeNull();
-      expect(screen.queryByText('Lead Routing')).toBeNull();
+      expect(screen.getByText('Lead Routing')).toBeTruthy();
       expect(screen.queryByText('Territories')).toBeNull();
     });
   });
@@ -1681,9 +1682,9 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(devLink.getAttribute('href')).toBe('/developer');
     });
 
-    it('hides Zapier + Developers for MANAGER (admin-only integrations)', () => {
+    it('shows only explicitly granted integrations for MANAGER', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      expect(screen.queryByText('Zapier')).toBeNull();
+      expect(screen.getByText('Zapier')).toBeTruthy();
       expect(screen.queryByText('Developers')).toBeNull();
     });
   });

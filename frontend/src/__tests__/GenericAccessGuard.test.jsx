@@ -46,18 +46,59 @@ function renderDashboard(permissions) {
   );
 }
 
+function renderDataImportExport(permissions) {
+  const user = {
+    userId: 7,
+    role: 'USER',
+    permissions,
+  };
+
+  return render(
+    <AuthContext.Provider
+      value={{
+        user,
+        token: 'data-import-guard-token',
+        tenant: { vertical: 'generic' },
+        loading: false,
+      }}
+    >
+      <MemoryRouter initialEntries={['/data-import-export']}>
+        <Routes>
+          <Route
+            path="/data-import-export"
+            element={(
+              <GenericAccessGuard path="/data-import-export">
+                <div data-testid="data-import-page">Data import</div>
+              </GenericAccessGuard>
+            )}
+          />
+          <Route path="/dashboard" element={<div data-testid="dashboard-page">Dashboard</div>} />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
 describe('<GenericAccessGuard /> dashboard fallback', () => {
-  it('redirects a user without reports.read from /dashboard to /home', () => {
+  it('redirects a user without dashboards.read from /dashboard to /home', () => {
     renderDashboard([]);
 
     expect(screen.getByTestId('home-page')).toBeInTheDocument();
     expect(screen.queryByTestId('dashboard-page')).not.toBeInTheDocument();
   });
 
-  it('renders /dashboard when the user has reports.read', () => {
-    renderDashboard(['reports.read']);
+  it('renders /dashboard when the user has dashboards.read', () => {
+    renderDashboard(['dashboards.read']);
 
     expect(screen.getByTestId('dashboard-page')).toBeInTheDocument();
     expect(screen.queryByTestId('home-page')).not.toBeInTheDocument();
+  });
+});
+
+describe('<GenericAccessGuard /> permission precedence', () => {
+  it('allows a custom role with the configured permission even when the legacy role tier does not match', () => {
+    renderDataImportExport(['settings.manage']);
+
+    expect(screen.getByTestId('data-import-page')).toBeInTheDocument();
   });
 });

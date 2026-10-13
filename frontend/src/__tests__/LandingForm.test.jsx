@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Landing from '../pages/Landing';
-import { heroFormEmbedSrc, injectHeroForm, resizeHeroFormFrame } from '../utils/landingHeroForm';
+import { heroFormEmbedSrc, injectHeroForm, resizeHeroFormFrame, responsiveFormDevice } from '../utils/landingHeroForm';
 
 function renderLanding() {
   return render(
@@ -34,6 +34,14 @@ function lightDomFrame(container) {
 describe('heroFormEmbedSrc', () => {
   it('builds the embed URL for a form id', () => {
     expect(heroFormEmbedSrc(11)).toBe('/embed/web-form.html?id=11');
+  });
+});
+
+describe('responsiveFormDevice', () => {
+  it('uses the host page viewport instead of the iframe column width', () => {
+    expect(responsiveFormDevice(1280)).toBe('desktop');
+    expect(responsiveFormDevice(768)).toBe('tablet');
+    expect(responsiveFormDevice(390)).toBe('mobile');
   });
 });
 

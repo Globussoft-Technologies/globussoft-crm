@@ -185,6 +185,8 @@ describe('web-form embed sizing', () => {
     expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
+    expect(code).toContain('type:"responsive-device"');
+    expect(code).toContain('window.innerWidth');
   });
 
   test('uses the configured frontend base when no origin is supplied', () => {

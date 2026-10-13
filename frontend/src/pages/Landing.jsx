@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { injectHeroForm, resizeHeroFormFrame } from "../utils/landingHeroForm";
+import { injectHeroForm, resizeHeroFormFrame, responsiveFormDevice } from "../utils/landingHeroForm";
 import landingMarkup from "./landingMarkup.html?raw";
 
 // No hardcoded form fallback: an unavailable configuration fails closed.
@@ -27,6 +27,20 @@ function setupLandingInteractions(container, getHeroFrame) {
   const observers = [];
   const animationFrames = new Set();
 
+  const sendResponsiveDevice = () => {
+    const heroFormFrame = typeof getHeroFrame === "function" ? getHeroFrame() : null;
+    if (!heroFormFrame) return;
+    try {
+      heroFormFrame.contentWindow?.postMessage({
+        source: "gbs-web-form-host",
+        type: "responsive-device",
+        device: responsiveFormDevice(window.innerWidth),
+      }, "*");
+    } catch {
+      // The iframe may have been replaced while the landing page is resizing.
+    }
+  };
+
   const handleMessage = (event) => {
     const heroFormFrame = typeof getHeroFrame === "function" ? getHeroFrame() : null;
     if (
@@ -40,6 +54,7 @@ function setupLandingInteractions(container, getHeroFrame) {
     }
 
     resizeHeroFormFrame(heroFormFrame, event.data.height);
+    if (event.data.type === "ready") sendResponsiveDevice();
   };
 
   const handleScroll = () => {
@@ -48,6 +63,7 @@ function setupLandingInteractions(container, getHeroFrame) {
 
   window.addEventListener("message", handleMessage);
   window.addEventListener("scroll", handleScroll);
+  window.addEventListener("resize", sendResponsiveDevice);
 
   const revealElements = container.querySelectorAll(".reveal, .reveal-stagger");
   if (typeof window.IntersectionObserver === "function") {
@@ -116,6 +132,7 @@ function setupLandingInteractions(container, getHeroFrame) {
   return () => {
     window.removeEventListener("message", handleMessage);
     window.removeEventListener("scroll", handleScroll);
+    window.removeEventListener("resize", sendResponsiveDevice);
     hamburger?.removeEventListener("click", handleMenuToggle);
     observers.forEach((observer) => observer.disconnect());
     animationFrames.forEach((frameId) => window.cancelAnimationFrame(frameId));

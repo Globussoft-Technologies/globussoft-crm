@@ -25,7 +25,7 @@ import { useInRouterContext, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowDown, ArrowUp, ChevronDown, Code2, Copy, Eye, GripVertical, Hash,
   Link2, ListChecks, Paperclip, Plus, Save, Search, Trash2, Type,
-  Upload, Info, Monitor, Smartphone, Tablet, X, CheckCircle2,
+  Upload, Info, Monitor, Smartphone, Tablet, X, CheckCircle2, Folder, FolderPlus, Pencil, Home, Check,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -7174,13 +7174,23 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 export default function WebForms({ scope = "generic" }) {
   const auth = useContext(AuthContext);
+  const inRouterContext = useInRouterContext();
   if (scope !== "travel" && scope !== "generic") return null;
   // Remount editor state on identity changes so the previous account's
   // in-memory draft cannot be written into the new account's storage key.
-  return <WebFormsContent key={draftKeyForAuth(scope, auth) || `${scope}:unresolved`} scope={scope} />;
+  const contentKey = draftKeyForAuth(scope, auth) || `${scope}:unresolved`;
+  return inRouterContext
+    ? <RoutedWebFormsContent key={contentKey} scope={scope} />
+    : <WebFormsContent key={contentKey} scope={scope} />;
 }
 
-function UnsavedChangesGuard({ active, notifyRef, onDiscard }) {
+function RoutedWebFormsContent({ scope }) {
+  const formLocation = useLocation();
+  const navigateForm = useNavigate();
+  return <WebFormsContent scope={scope} formLocation={formLocation} navigateForm={navigateForm} />;
+}
+
+function UnsavedChangesGuard({ active, notifyRef, onDiscard, bypassRef }) {
   const navigate = useNavigate();
   const location = useLocation();
   const currentPathRef = useRef(`${location.pathname}${location.search}${location.hash}`);
@@ -7209,11 +7219,13 @@ function UnsavedChangesGuard({ active, notifyRef, onDiscard }) {
       if (confirmingRef.current) return;
       confirmingRef.current = true;
       Promise.resolve(notifyRef.current.confirm({
-        title: "Unsaved changes",
-        message: "Your unsaved changes will be lost if you leave this page. Do you want to continue?",
-        confirmText: "Continue",
-        cancelText: "Stay",
-        destructive: true,
+        title: "Leave this form?",
+        message: "You have unsaved changes. Leaving now will discard them.",
+        confirmText: "Continue editing",
+        cancelText: "Discard changes",
+        confirmValue: false,
+        cancelValue: true,
+        dismissValue: false,
       })).then((ok) => {
         if (ok) {
           onDiscard();
@@ -7260,7 +7272,7 @@ function UnsavedChangesGuard({ active, notifyRef, onDiscard }) {
     const originalPushState = window.history.pushState;
     const originalReplaceState = window.history.replaceState;
     const guardHistoryMethod = (originalMethod, replace, state, title, url) => {
-      if (bypassHistoryGuardRef.current || url == null) {
+      if (bypassHistoryGuardRef.current || bypassRef.current || url == null) {
         return originalMethod.call(window.history, state, title, url);
       }
 
@@ -7299,12 +7311,12 @@ function UnsavedChangesGuard({ active, notifyRef, onDiscard }) {
       document.removeEventListener("click", handleDocumentClick, true);
       window.removeEventListener("popstate", handlePopState, true);
     };
-  }, [active, navigate, notifyRef, onDiscard]);
+  }, [active, bypassRef, navigate, notifyRef, onDiscard]);
 
   return null;
 }
 
-function WebFormsContent({ scope = "generic" }) {
+function WebFormsContent({ scope = "generic", formLocation = null, navigateForm = null }) {
   const auth = useContext(AuthContext);
   const inRouterContext = useInRouterContext();
   const [leadsForm, setLeadsForm] = useState(null);
@@ -7410,6 +7422,60 @@ function WebFormsContent({ scope = "generic" }) {
 
 
   const [forms, setForms] = useState([]);
+  const [folders, setFolders] = useState([]);
+  const [activeFolderId, setActiveFolderId] = useState("all");
+  const [folderListOpen, setFolderListOpen] = useState(false);
+  const [folderSearch, setFolderSearch] = useState("");
+  const [folderEditor, setFolderEditor] = useState(null);
+  const [folderName, setFolderName] = useState("");
+  const [savingFolder, setSavingFolder] = useState(false);
+  const [folderToDelete, setFolderToDelete] = useState(null);
+  const [deletingFolder, setDeletingFolder] = useState(false);
+  const [movingFormId, setMovingFormId] = useState(null);
+  const [openFormMenuId, setOpenFormMenuId] = useState(null);
+  const [formMenuPlacement, setFormMenuPlacement] = useState("down");
+  const [creatingFolderForFormId, setCreatingFolderForFormId] = useState(null);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [savingFolderForFormId, setSavingFolderForFormId] = useState(null);
+  const [draggingFormId, setDraggingFormId] = useState(null);
+  const [dropFolderId, setDropFolderId] = useState(null);
+  const folderPickerListRef = useRef(null);
+
+  const autoScrollFolderList = useCallback((event) => {
+    if (draggingFormId == null || !folderPickerListRef.current) return;
+    const list = folderPickerListRef.current;
+    const bounds = list.getBoundingClientRect();
+    const edge = Math.min(48, bounds.height / 3);
+    let delta = 0;
+    if (event.clientY < bounds.top + edge) delta = -18;
+    else if (event.clientY > bounds.bottom - edge) delta = 18;
+    if (delta) list.scrollTop += delta;
+  }, [draggingFormId]);
+
+  useEffect(() => {
+    if (!folderListOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".wf-folder-picker")) {
+        setFolderListOpen(false);
+        setFolderSearch("");
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [folderListOpen]);
+
+  useEffect(() => {
+    if (openFormMenuId == null) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".wf-form-menu")) {
+        setOpenFormMenuId(null);
+        setCreatingFolderForFormId(null);
+        setNewFolderName("");
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [openFormMenuId]);
 
 
 
@@ -7480,6 +7546,45 @@ function WebFormsContent({ scope = "generic" }) {
 
   const [dirty, setDirty] = useState(false);
   const hasStoredDraft = Boolean(readWebFormDraft(draftStorageKey));
+  const bypassFormNavigationGuardRef = useRef(false);
+  const routeFormId = formLocation ? new URLSearchParams(formLocation.search).get("form") : null;
+  const formUrlFor = useCallback((formId) => {
+    const params = new URLSearchParams(formLocation?.search || "");
+    if (formId == null) params.delete("form");
+    else params.set("form", String(formId));
+    const search = params.toString();
+    return `${formLocation?.pathname || (scope === "travel" ? "/travel/forms" : "/forms")}${search ? `?${search}` : ""}${formLocation?.hash || ""}`;
+  }, [formLocation?.pathname, formLocation?.search, formLocation?.hash, scope]);
+  const openFormRoute = (formId) => {
+    if (!navigateForm) return;
+    bypassFormNavigationGuardRef.current = true;
+    try {
+      navigateForm(formUrlFor(formId));
+    } finally {
+      bypassFormNavigationGuardRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (!navigateForm || loading) return;
+    if (!routeFormId) {
+      const storedDraft = readWebFormDraft(draftStorageKey);
+      if (builderOpen && dirty && selectedForm?.id && String(storedDraft?.formId) === String(selectedForm.id)) {
+        navigateForm(formUrlFor(selectedForm.id), { replace: true });
+        return;
+      }
+      setBuilderOpen(false);
+      setDirty(false);
+      return;
+    }
+    const form = forms.find((item) => String(item.id) === routeFormId);
+    if (!form) {
+      navigateForm(formUrlFor(null), { replace: true });
+      return;
+    }
+    setSelectedForm((current) => String(current?.id) === routeFormId ? current : normalizeForm(form, leadFields));
+    setBuilderOpen(true);
+  }, [builderOpen, dirty, draftStorageKey, formUrlFor, forms, leadFields, loading, navigateForm, routeFormId, selectedForm?.id]);
 
   useEffect(() => {
     if (builderOpen && dirty && selectedForm?.id) writeWebFormDraft(draftStorageKey, selectedForm);
@@ -7776,7 +7881,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-      const [formData, leadData] = await Promise.all([
+      const [formData, leadData, folderData] = await Promise.all([
 
 
 
@@ -7809,6 +7914,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
         formScope === "generic" ? fetchApi("/api/lead-custom-fields").catch(() => []) : Promise.resolve([]),
+        canViewFormLeads ? fetchApi("/api/forms/folders").catch(() => []) : Promise.resolve([]),
 
 
 
@@ -7889,6 +7995,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
       setForms(normalizedForms);
+      setFolders(Array.isArray(folderData) ? folderData : []);
 
       const storedDraft = readWebFormDraft(draftStorageKey);
       const storedBase = storedDraft
@@ -7899,7 +8006,7 @@ function WebFormsContent({ scope = "generic" }) {
         setBuilderOpen(true);
         setDirty(true);
         Promise.resolve(notifyRef.current.confirm({
-          title: "Unsaved changes restored",
+          title: "Unsaved changes",
           message: "Your unsaved changes were restored. Do you want to continue editing this form?",
           confirmText: "Continue editing",
           cancelText: "Discard changes",
@@ -8120,7 +8227,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-  }, [draftStorageKey, formScope, scopeQuery]);
+  }, [canViewFormLeads, draftStorageKey, formScope, scopeQuery]);
 
 
 
@@ -9659,7 +9766,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-      const ok = await notify.confirm({ title: "Unsaved changes", message: "Your unsaved changes will be lost if you continue. Do you want to continue?", confirmText: "Continue", cancelText: "Stay", destructive: true });
+      const ok = await notify.confirm({ title: "Leave this form?", message: "You have unsaved changes. Leaving now will discard them.", confirmText: "Continue editing", cancelText: "Discard changes", confirmValue: false, cancelValue: true, dismissValue: false });
 
 
 
@@ -9729,6 +9836,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
     setDirty(false);
+    openFormRoute(form.id);
 
 
 
@@ -9777,10 +9885,14 @@ function WebFormsContent({ scope = "generic" }) {
 
 
   const showFormsLibrary = async () => {
+    if (navigateForm) {
+      navigateForm(formUrlFor(null));
+      return;
+    }
 
     if (dirty) {
 
-      const ok = await notify.confirm({ title: "Unsaved changes", message: "Your unsaved changes will be lost if you continue. Do you want to continue?", confirmText: "Continue", cancelText: "Stay", destructive: true });
+      const ok = await notify.confirm({ title: "Leave this form?", message: "You have unsaved changes. Leaving now will discard them.", confirmText: "Continue editing", cancelText: "Discard changes", confirmValue: false, cancelValue: true, dismissValue: false });
 
       if (!ok) return;
 
@@ -9810,11 +9922,13 @@ function WebFormsContent({ scope = "generic" }) {
 
     if (dirty) {
       const ok = await notify.confirm({
-        title: "Unsaved changes",
-        message: "Your unsaved changes will be lost if you continue. Do you want to continue?",
-        confirmText: "Continue",
-        cancelText: "Stay",
-        destructive: true,
+        title: "Leave this form?",
+        message: "You have unsaved changes. Leaving now will discard them.",
+        confirmText: "Continue editing",
+        cancelText: "Discard changes",
+        confirmValue: false,
+        cancelValue: true,
+        dismissValue: false,
       });
       if (!ok) return;
     }
@@ -9946,7 +10060,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-        body: JSON.stringify({ name, description: "", scope: formScope }),
+        body: JSON.stringify({ name, description: "", scope: formScope, ...(formScope === "generic" && activeFolderId !== "all" ? { folderId: Number(activeFolderId) } : {}) }),
 
 
 
@@ -10031,6 +10145,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
       setDirty(false);
+      openFormRoute(normalized.id);
 
 
 
@@ -10864,16 +10979,109 @@ function WebFormsContent({ scope = "generic" }) {
 
 
 
-  const filteredForms = forms.filter((form) => `${form.name} ${form.slug} ${form.description}`.toLowerCase().includes(search.trim().toLowerCase()));
-  const landingFormIndex = filteredForms.findIndex(
-    (form) => String(form.id) === String(landingFormId),
-  );
+  const saveFolder = async (event) => {
+    event.preventDefault();
+    const name = folderName.trim();
+    if (!name || name.length > 100) return;
+    setSavingFolder(true);
+    try {
+      const editing = folderEditor?.id != null;
+      const folder = await fetchApi(editing ? `/api/forms/folders/${folderEditor.id}${scopeQuery}` : `/api/forms/folders${scopeQuery}`, {
+        method: editing ? "PUT" : "POST",
+        body: JSON.stringify({ name }),
+      });
+      setFolders((current) => (editing ? current.map((item) => item.id === folder.id ? folder : item) : [...current, folder]).sort((a, b) => a.name.localeCompare(b.name)));
+      if (!editing) setActiveFolderId(String(folder.id));
+      setFolderEditor(null);
+      setFolderName("");
+      notify.success(editing ? "Folder renamed" : "Folder created");
+    } catch (err) {
+      notify.error(err.message || "Could not save folder");
+    } finally {
+      setSavingFolder(false);
+    }
+  };
+
+  const deleteFolder = async (folder, deleteForms) => {
+    const containedFormIds = new Set(forms.filter((form) => form.folderId === folder.id).map((form) => form.id));
+    setDeletingFolder(true);
+    try {
+      await fetchApi(`/api/forms/folders/${folder.id}${scopeQuery}`, { method: "DELETE", body: JSON.stringify({ deleteForms }) });
+      setFolders((current) => current.filter((item) => item.id !== folder.id));
+      setForms((current) => deleteForms
+        ? current.filter((form) => form.folderId !== folder.id)
+        : current.map((form) => form.folderId === folder.id ? { ...form, folderId: null } : form));
+      if (deleteForms && containedFormIds.has(selectedForm?.id)) {
+        setSelectedForm(null);
+        setBuilderOpen(false);
+        clearWebFormDraft(draftStorageKey);
+        setDirty(false);
+      }
+      setActiveFolderId("all");
+      setFolderToDelete(null);
+      notify.success(deleteForms ? "Folder and forms deleted" : "Folder deleted; forms kept in All forms");
+    } catch (err) {
+      notify.error(err.message || "Could not delete folder");
+    } finally {
+      setDeletingFolder(false);
+    }
+  };
+
+  const moveForm = async (form, folderId) => {
+    const nextFolderId = folderId ? Number(folderId) : null;
+    if (form.folderId === nextFolderId) return false;
+    setMovingFormId(form.id);
+    try {
+      await fetchApi(`/api/forms/${form.id}/folder${scopeQuery}`, { method: "PUT", body: JSON.stringify({ folderId: nextFolderId }) });
+      setForms((current) => current.map((item) => item.id === form.id ? { ...item, folderId: nextFolderId } : item));
+      notify.success("Form moved");
+      return true;
+    } catch (err) {
+      notify.error(err.message || "Could not move form");
+      return false;
+    } finally {
+      setMovingFormId(null);
+    }
+  };
+
+  const dropFormIntoFolder = async (event, folder) => {
+    event.preventDefault();
+    const formId = event.dataTransfer.getData("application/x-webform-id") || draggingFormId;
+    const form = forms.find((item) => String(item.id) === String(formId));
+    setDraggingFormId(null);
+    setDropFolderId(null);
+    if (!form || form.folderId === folder.id) return;
+    const moved = await moveForm(form, String(folder.id));
+    if (moved && activeFolderId !== "all") setActiveFolderId(String(folder.id));
+  };
+
+  const createFolderForForm = async (event, form) => {
+    event.preventDefault();
+    const name = newFolderName.trim();
+    if (!name || name.length > 100) return;
+    setSavingFolderForFormId(form.id);
+    let createdFolder = null;
+    try {
+      createdFolder = await fetchApi(`/api/forms/folders${scopeQuery}`, { method: "POST", body: JSON.stringify({ name }) });
+      setFolders((current) => [...current, createdFolder].sort((a, b) => a.name.localeCompare(b.name)));
+      await fetchApi(`/api/forms/${form.id}/folder${scopeQuery}`, { method: "PUT", body: JSON.stringify({ folderId: createdFolder.id }) });
+      setForms((current) => current.map((item) => item.id === form.id ? { ...item, folderId: createdFolder.id } : item));
+      setOpenFormMenuId(null);
+      setCreatingFolderForFormId(null);
+      setNewFolderName("");
+      notify.success("Folder created and form moved");
+    } catch (err) {
+      notify.error(createdFolder ? "Folder created, but the form could not be moved" : err.message || "Could not create folder");
+    } finally {
+      setSavingFolderForFormId(null);
+    }
+  };
+
+  const searchedForms = forms.filter((form) => `${form.name} ${form.slug} ${form.description}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const filteredForms = searchedForms.filter((form) => activeFolderId === "all" || String(form.folderId) === activeFolderId);
+  const landingFormIndex = filteredForms.findIndex((form) => String(form.id) === String(landingFormId));
   const displayedForms = landingFormIndex > 0
-    ? [
-        filteredForms[landingFormIndex],
-        ...filteredForms.slice(0, landingFormIndex),
-        ...filteredForms.slice(landingFormIndex + 1),
-      ]
+    ? [filteredForms[landingFormIndex], ...filteredForms.slice(0, landingFormIndex), ...filteredForms.slice(landingFormIndex + 1)]
     : filteredForms;
 
 
@@ -10989,6 +11197,7 @@ function WebFormsContent({ scope = "generic" }) {
           active={Boolean(builderOpen && (dirty || hasStoredDraft))}
           notifyRef={notifyRef}
           onDiscard={() => clearWebFormDraft(draftStorageKey)}
+          bypassRef={bypassFormNavigationGuardRef}
         />
       ) : null}
 
@@ -13405,15 +13614,71 @@ function WebFormsContent({ scope = "generic" }) {
           margin: 0.35rem 0 0;
           color: var(--text-secondary);
         }
+        .wf-folder-toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: min(100%, 540px); }
+        .wf-folder-toolbar .btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-width: 0; padding-inline: 6px; white-space: nowrap; }
+        .wf-folder-toolbar .wf-folder-active { border-color: var(--accent-color); color: var(--accent-color); }
+        .wf-folder-toolbar .wf-folder-drop-target { border-color: var(--accent-color); background: rgba(91, 107, 255, 0.16); box-shadow: 0 0 0 2px rgba(91, 107, 255, 0.18); }
+        .wf-folder-picker { position: relative; min-width: 0; }
+        .wf-folder-picker-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 12; width: min(320px, calc(100vw - 48px)); padding: 8px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-color); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25); }
+        .wf-folder-picker-panel .input-field { width: 100%; min-width: 0; box-sizing: border-box; }
+        .wf-folder-picker-list { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+        .wf-folder-picker-list button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; padding: 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+        .wf-folder-picker-list button:hover, .wf-folder-picker-list button.wf-folder-active { background: var(--surface-2, rgba(255,255,255,0.08)); }
+        .wf-folder-picker-list button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .wf-folder-picker-list button small { flex-shrink: 0; margin-left: auto; }
+        .wf-folder-picker-list p { padding: 8px; color: var(--text-secondary); }
+        @media (max-width: 480px) {
+          .wf-folder-toolbar .btn-secondary { padding-inline: 2px; font-size: 0.7rem; }
+          .wf-folder-toolbar .btn-secondary svg, .wf-folder-toolbar .wf-folder-count { display: none; }
+          .wf-form-menu-panel { max-height: min(240px, calc(100dvh - 24px)); overflow-y: auto; overscroll-behavior: contain; }
+        }
+        .wf-folder-editor { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .wf-folder-editor .input-field { width: min(100%, 260px); }
+        .wf-folder-manage { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .wf-folder-delete-overlay { position: fixed; inset: 0; z-index: 20010; display: grid; place-items: center; padding: 16px; background: rgba(3, 6, 16, 0.55); }
+        .wf-folder-delete-dialog { width: min(100%, 540px); padding: 24px; border: 1px solid var(--border-color); border-radius: 14px; background: var(--surface-color); color: var(--text-primary); box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28); }
+        .wf-folder-delete-dialog h3 { margin: 0 0 10px; }
+        .wf-folder-delete-dialog p { margin: 0 0 20px; color: var(--text-secondary); }
+        .wf-folder-delete-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+        .wf-folder-delete-actions .wf-delete-folder-and-forms { background: #e44b45; border-color: #e44b45; color: #fff; }
+        .wf-form-status-actions { display: flex; align-items: flex-start; gap: 6px; }
+        .wf-form-menu { position: relative; }
+        .wf-form-menu-trigger { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--surface-color); color: var(--text-primary); cursor: pointer; }
+        .wf-form-menu-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 10; width: 264px; max-height: min(420px, calc(100dvh - 24px)); overflow-y: auto; overscroll-behavior: contain; padding: 6px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--surface-color); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25); }
+        .wf-form-menu-panel.wf-form-menu-open-up { top: auto; bottom: calc(100% + 6px); }
+        .wf-form-menu-panel button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+        .wf-form-menu-panel button:hover:not(:disabled) { background: var(--surface-2, rgba(255,255,255,0.08)); }
+        .wf-form-menu-panel button:disabled { opacity: 0.55; cursor: default; }
+        .wf-form-menu-panel .wf-form-menu-current,
+        .wf-form-menu-panel .wf-form-menu-current:hover { background: rgba(121, 100, 190, 0.3); }
+        .wf-form-menu-panel .wf-form-menu-check { margin-left: auto; color: #a99bff; }
+        .wf-form-menu-divider { height: 1px; margin: 8px -6px; background: var(--border-color); }
+        .wf-form-menu-heading { display: block; padding: 10px 10px 6px; color: var(--text-secondary); font-size: 0.7rem; letter-spacing: 0.04em; }
+        .wf-form-menu-create { display: grid; gap: 6px; padding: 6px; }
+        .wf-form-menu-create input { min-width: 0; width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--surface-2, var(--surface-color)); color: var(--text-primary); }
+        .wf-form-menu-panel p { padding: 8px 10px; white-space: normal; }
+        @container (max-width: 320px) {
+          .wf-form-menu-panel { width: min(264px, calc(100cqw - 16px)); }
+        }
         .wf-library-grid {
+          container-type: inline-size;
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+          width: 100%;
+          grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 380px));
+          justify-content: start;
           gap: 14px;
         }
         .wf-library-card {
+          container-type: inline-size;
+          width: 100%;
+          max-width: 380px;
           display: grid;
+          grid-template-rows: auto auto 1fr;
           gap: 16px;
+          flex: 0 1 380px;
+          box-sizing: border-box;
           min-width: 0;
+          min-height: 306px;
           padding: 16px;
           border: 1px solid var(--border-color);
           border-radius: 16px;
@@ -13421,12 +13686,15 @@ function WebFormsContent({ scope = "generic" }) {
           color: var(--text-primary);
           transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
         }
+        .wf-library-card[draggable="true"] { cursor: grab; }
+        .wf-library-card.dragging { opacity: 0.55; cursor: grabbing; }
         .wf-library-card:hover,
         .wf-library-card.active {
           border-color: rgba(91, 107, 255, 0.72);
           box-shadow: 0 18px 40px rgba(91, 107, 255, 0.14);
           transform: translateY(-1px);
         }
+        .wf-library-card.menu-open { position: relative; z-index: 2; }
         .wf-library-card-top {
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto;
@@ -13459,23 +13727,60 @@ function WebFormsContent({ scope = "generic" }) {
           font-size: 0.82rem;
         }
         .wf-library-actions {
-          display: flex;
+          display: grid;
           gap: 8px;
-          flex-wrap: wrap;
+          align-self: end;
         }
-        /* Card action buttons share one row height with centered content.
-        Text buttons drive the height; icon-only buttons (Leads eye +
-        landing globe) stretch to match and stay square via aspect-ratio —
-        the lone svg would otherwise sit on the text baseline and look
-        shorter than its siblings. */
-        .wf-library-actions {
-          align-items: stretch;
+        .wf-library-primary-row {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 8px;
         }
-        .wf-library-actions > .btn-primary,
-        .wf-library-actions > .btn-secondary {
+        .wf-library-primary-row--with-landing {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .wf-library-action-buttons {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        .wf-library-primary-row > .btn-primary,
+        .wf-library-action-buttons > .btn-secondary {
           display: inline-flex;
           align-items: center;
           justify-content: center;
+          min-width: 0;
+          min-height: 40px;
+          padding: 0.55rem 0.6rem;
+          white-space: nowrap;
+          font-size: 0.85rem;
+        }
+        .wf-library-action-buttons > .wf-danger-action {
+          grid-column: 2;
+        }
+        .wf-library-action-buttons--no-leads {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        .wf-library-action-buttons--no-leads > .wf-danger-action {
+          grid-column: auto;
+        }
+        .wf-library-landing {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          min-width: 0;
+          min-height: 40px;
+          padding: 0.5rem;
+          color: var(--text-secondary);
+          font-size: 0.85rem;
+          white-space: nowrap;
+        }
+        .wf-landing-checkbox {
+          cursor: pointer;
+        }
+        .wf-library-landing input {
+          accent-color: var(--accent-color);
         }
         .wf-library-actions .wf-icon-btn {
           padding: 0.6rem;
@@ -19894,49 +20199,114 @@ function WebFormsContent({ scope = "generic" }) {
               <p>{loading ? "Loading forms..." : `${filteredForms.length} form${filteredForms.length === 1 ? "" : "s"} available`}</p>
             </div>
           </div>
-
+          {canViewFormLeads && !loading ? (
+            <>
+              <div className="wf-folder-toolbar" aria-label="Form folders">
+                <button type="button" className={`btn-secondary ${activeFolderId === "all" ? "wf-folder-active" : ""}`} onClick={() => { setActiveFolderId("all"); setFolderEditor(null); setFolderName(""); setFolderListOpen(false); setFolderSearch(""); }}>All Forms <span className="wf-folder-count">({forms.length})</span></button>
+                <button type="button" className="btn-secondary" onClick={() => { setFolderEditor({}); setFolderName(""); setFolderListOpen(false); setFolderSearch(""); }}><FolderPlus size={15} aria-hidden="true" />New Folder</button>
+                <div className="wf-folder-picker" onKeyDown={(event) => { if (event.key === "Escape") { setFolderListOpen(false); setFolderSearch(""); } }}>
+                  <button type="button" className={`btn-secondary ${activeFolderId !== "all" ? "wf-folder-active" : ""}`} aria-expanded={folderListOpen} aria-controls="wf-folder-picker-panel" onClick={() => { setFolderEditor(null); setFolderName(""); setFolderListOpen((open) => !open); setFolderSearch(""); }}><Folder size={15} aria-hidden="true" />All Folders<ChevronDown size={14} aria-hidden="true" /></button>
+                  {folderListOpen && (
+                    <div id="wf-folder-picker-panel" className="wf-folder-picker-panel" aria-label="Folder list">
+                      <input className="input-field" autoFocus aria-label="Search folders" placeholder="Search folders" value={folderSearch} onChange={(event) => setFolderSearch(event.target.value)} />
+                      <div ref={folderPickerListRef} className="wf-folder-picker-list" onDragOver={autoScrollFolderList}>
+                        {folders.filter((folder) => folder.name.toLowerCase().includes(folderSearch.trim().toLowerCase())).map((folder) => (
+                          <button key={folder.id} type="button" className={`${activeFolderId === String(folder.id) ? "wf-folder-active" : ""} ${dropFolderId === String(folder.id) ? "wf-folder-drop-target" : ""}`} aria-current={activeFolderId === String(folder.id) ? "true" : undefined} onClick={() => { setActiveFolderId(String(folder.id)); setFolderEditor(null); setFolderName(""); setFolderListOpen(false); setFolderSearch(""); }} onDragOver={(event) => { if (draggingFormId == null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropFolderId(String(folder.id)); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropFolderId(null); }} onDrop={(event) => { dropFormIntoFolder(event, folder); setFolderListOpen(false); setFolderSearch(""); }}>
+                            <Folder size={15} aria-hidden="true" /><span>{folder.name}</span><small>({forms.filter((form) => form.folderId === folder.id).length})</small>
+                          </button>
+                        ))}
+                        {folders.filter((folder) => folder.name.toLowerCase().includes(folderSearch.trim().toLowerCase())).length === 0 && <p>{folders.length ? "No matching folders" : "No folders yet"}</p>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {folderEditor && (
+                <form className="wf-folder-editor" onSubmit={saveFolder}>
+                  <input className="input-field" autoFocus maxLength={100} aria-label="Folder name" placeholder="Folder name" value={folderName} onChange={(event) => setFolderName(event.target.value)} />
+                  <button type="submit" className="btn-primary" disabled={savingFolder || !folderName.trim()}>{folderEditor.id ? "Save name" : "Create folder"}</button>
+                  <button type="button" className="btn-secondary" onClick={() => setFolderEditor(null)}>Cancel</button>
+                </form>
+              )}
+              {folders.some((folder) => String(folder.id) === activeFolderId) && (
+                <div className="wf-folder-manage">
+                  <strong>{folders.find((folder) => String(folder.id) === activeFolderId)?.name}</strong>
+                  <button type="button" className="btn-secondary" onClick={() => { const folder = folders.find((item) => String(item.id) === activeFolderId); setFolderEditor(folder); setFolderName(folder.name); }}><Pencil size={14} aria-hidden="true" /> Rename</button>
+                  <button type="button" className="btn-secondary" onClick={() => setFolderToDelete(folders.find((folder) => String(folder.id) === activeFolderId))}><Trash2 size={14} aria-hidden="true" /> Delete folder</button>
+                </div>
+              )}
+            </>
+          ) : null}
           {loading ? (
             <div className="wf-library-empty"><span className="wf-muted">Loading forms...</span></div>
           ) : filteredForms.length === 0 ? (
             <div className="wf-library-empty">
               <div style={{ width: 64, height: 64, borderRadius: 18, background: "rgba(91,107,255,0.16)", display: "grid", placeItems: "center", margin: "0 auto 12px", color: "#5b6bff" }}><ListChecks size={28} /></div>
-              <h3>Create your first form</h3>
-              <p>Add contact fields, lead fields, custom inputs, and styling rules. The builder generates an embed snippet you can paste anywhere.</p>
+              <h3>{search.trim() ? "No matching forms" : forms.length ? "No forms here yet" : "Create your first form"}</h3>
+              <p>{search.trim() ? "Try a different search term." : forms.length && canViewFormLeads ? "Move a form here using its folder menu, or create a new form here." : forms.length ? "Create a new form to get started." : "Add contact fields, lead fields, custom inputs, and styling rules. The builder generates an embed snippet you can paste anywhere."}</p>
               <button type="button" className="btn-primary" onClick={createForm}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />New form</button>
             </div>
           ) : (
             <div className="wf-library-grid">
               {displayedForms.map((form) => (
-                <article key={form.id} className={String(selectedForm?.id) === String(form.id) ? "wf-library-card active" : "wf-library-card"}>
+                <article key={form.id} className={`wf-library-card${String(selectedForm?.id) === String(form.id) ? " active" : ""}${openFormMenuId === form.id ? " menu-open" : ""}${draggingFormId === form.id ? " dragging" : ""}`} draggable={canViewFormLeads && folders.length > 0 && movingFormId !== form.id} onDragStart={(event) => { event.dataTransfer.setData("application/x-webform-id", String(form.id)); event.dataTransfer.effectAllowed = "move"; setDraggingFormId(form.id); setFolderListOpen(true); setOpenFormMenuId(null); }} onDragEnd={() => { setDraggingFormId(null); setDropFolderId(null); setFolderListOpen(false); }}>
                   <div className="wf-library-card-top">
                     <div>
                       <h4>{form.name}</h4>
                       <p>{form.description || "No description added"}</p>
                     </div>
-                    <span className={form.isActive ? "wf-status-pill active" : "wf-status-pill"}>{form.isActive ? "Active" : "Paused"}</span>
+                    <div className="wf-form-status-actions">
+                      <span className={form.isActive ? "wf-status-pill active" : "wf-status-pill"}>{form.isActive ? "Active" : "Paused"}</span>
+                      {canViewFormLeads && (
+                        <div className="wf-form-menu" onKeyDown={(event) => { if (event.key === "Escape") { setOpenFormMenuId(null); setCreatingFolderForFormId(null); setNewFolderName(""); } }}>
+                          <button type="button" className="wf-form-menu-trigger" aria-label={`Move ${form.name} to folder`} aria-haspopup="menu" aria-expanded={openFormMenuId === form.id} onClick={(event) => { const nextOpen = openFormMenuId !== form.id; setOpenFormMenuId(nextOpen ? form.id : null); if (nextOpen) setFormMenuPlacement(window.innerHeight - event.currentTarget.getBoundingClientRect().bottom < 360 ? "up" : "down"); setCreatingFolderForFormId(null); setNewFolderName(""); }}><FolderPlus size={17} aria-hidden="true" /></button>
+                          {openFormMenuId === form.id && (
+                            <div className={`wf-form-menu-panel${formMenuPlacement === "up" ? " wf-form-menu-open-up" : ""}`} role="menu" aria-label={`Folders for ${form.name}`}>
+                              <button type="button" role="menuitem" onClick={() => setCreatingFolderForFormId(form.id)}><FolderPlus size={16} aria-hidden="true" />New Folder</button>
+                              {creatingFolderForFormId === form.id && (
+                                <form className="wf-form-menu-create" onSubmit={(event) => createFolderForForm(event, form)}>
+                                  <input autoFocus maxLength={100} aria-label={`New folder name for ${form.name}`} placeholder="Folder name" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} />
+                                  <button type="submit" disabled={savingFolderForFormId === form.id || !newFolderName.trim()}>Create and move</button>
+                                </form>
+                              )}
+                              <button type="button" role="menuitem" disabled={movingFormId === form.id || form.folderId == null} onClick={() => { moveForm(form, ""); setOpenFormMenuId(null); }}><Home size={16} aria-hidden="true" />Move to All Forms</button>
+                              <div className="wf-form-menu-divider" role="separator" />
+                              <span className="wf-form-menu-heading">MOVE TO FOLDER</span>
+                              {folders.length === 0 && <p>No folders yet</p>}
+                              {folders.map((folder) => <button key={folder.id} type="button" role="menuitem" aria-current={form.folderId === folder.id ? "true" : undefined} className={form.folderId === folder.id ? "wf-form-menu-current" : ""} disabled={movingFormId === form.id} onClick={() => { moveForm(form, String(folder.id)); setOpenFormMenuId(null); }}><Folder size={16} aria-hidden="true" />{folder.name}{form.folderId === folder.id && <Check className="wf-form-menu-check" size={16} aria-hidden="true" />}</button>)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="wf-library-meta">
                     <span>{form.submissionCount || 0} submits</span>
                     <span>{form.slug}</span>
+                    {form.folderId != null && <span>Folder: {folders.find((folder) => folder.id === form.folderId)?.name || "Unknown folder"}</span>}
                   </div>
                   <div className="wf-library-actions">
-                    <button type="button" className="btn-primary" onClick={() => selectForm(form)}>Open builder</button>
-                    <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowEmbed(true); }}>Embed</button>
-                    <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowPreview(true); }}>Preview</button>
-                    <button type="button" className="btn-secondary wf-danger-action" onClick={() => deleteForm(form)}><Trash2 size={15} style={{ marginRight: 6, verticalAlign: "middle" }} />Delete</button>
-                    {canViewFormLeads && <button type="button" className="btn-secondary" onClick={() => setLeadsForm(form)}>View All Leads</button>}
-                    {isGenericScope && canManageLandingForm ? (
-                      String(landingFormId) === String(form.id) ? (
-                        <span className="wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 8 }} data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">
-                          On landing page<CheckCircle2 size={20} aria-hidden="true" style={{ color: "var(--success-color)", flexShrink: 0 }} />
-                        </span>
-                      ) : (
-                        <label className="wf-landing-checkbox wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} data-tip={`Use ${form.name} as the public landing page form`} title={`Use this form in landing page: ${form.name}`}>
-                          <input type="checkbox" checked={String(landingFormId) === String(form.id)} disabled={settingLandingFormId === form.id} onChange={() => setAsLandingForm(form)} aria-label={`Use this form in landing page: ${form.name}`} />
-                          <span>Landing page</span>
-                        </label>
-                      )
-                    ) : null}
+                    <div className={isGenericScope && canManageLandingForm ? "wf-library-primary-row wf-library-primary-row--with-landing" : "wf-library-primary-row"}>
+                      <button type="button" className="btn-primary" onClick={() => selectForm(form)}>Open builder</button>
+                      {isGenericScope && canManageLandingForm ? (
+                        String(landingFormId) === String(form.id) ? (
+                          <span className="wf-library-landing wf-tip" data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">
+                            On landing page<CheckCircle2 size={20} aria-hidden="true" style={{ color: "var(--success-color)", flexShrink: 0 }} />
+                          </span>
+                        ) : (
+                          <label className="wf-library-landing wf-landing-checkbox wf-tip" data-tip={`Use ${form.name} as the public landing page form`} title={`Use this form in landing page: ${form.name}`}>
+                            <input type="checkbox" checked={String(landingFormId) === String(form.id)} disabled={settingLandingFormId === form.id} onChange={() => setAsLandingForm(form)} aria-label={`Use this form in landing page: ${form.name}`} />
+                            <span>Landing page</span>
+                          </label>
+                        )
+                      ) : null}
+                    </div>
+                    <div className={canViewFormLeads ? "wf-library-action-buttons" : "wf-library-action-buttons wf-library-action-buttons--no-leads"}>
+                      <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowEmbed(true); }}>Embed</button>
+                      <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowPreview(true); }}>Preview</button>
+                      {canViewFormLeads && <button type="button" className="btn-secondary" onClick={() => setLeadsForm(form)}>View All Leads</button>}
+                      <button type="button" className="btn-secondary wf-danger-action" onClick={() => deleteForm(form)}><Trash2 size={15} style={{ marginRight: 6, verticalAlign: "middle" }} />Delete</button>
+                    </div>
                   </div>
                 </article>
               ))}
@@ -19946,6 +20316,18 @@ function WebFormsContent({ scope = "generic" }) {
       ) : null}
 
       {canViewFormLeads && leadsForm && <WebFormLeadsModal key={leadsForm.id} form={leadsForm} onClose={() => setLeadsForm(null)} />}
+      {folderToDelete && typeof document !== "undefined" ? createPortal(
+        <div className="wf-folder-delete-overlay">
+          <div className="wf-folder-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="wf-folder-delete-title" aria-describedby="wf-folder-delete-description" onKeyDown={(event) => { if (event.key === "Escape" && !deletingFolder) setFolderToDelete(null); }}>
+            <h3 id="wf-folder-delete-title">Delete folder?</h3>
+            <p id="wf-folder-delete-description">"{folderToDelete.name}" contains {forms.filter((form) => form.folderId === folderToDelete.id).length} {forms.filter((form) => form.folderId === folderToDelete.id).length === 1 ? "form" : "forms"}. Delete only the folder to keep its forms in All forms, or delete the folder and its forms. Deleting forms also removes their submissions and cannot be undone.</p>
+            <div className="wf-folder-delete-actions">
+              <button type="button" className="btn-secondary" autoFocus disabled={deletingFolder} onClick={() => setFolderToDelete(null)}>Cancel</button>
+              <button type="button" className="btn-secondary" disabled={deletingFolder} onClick={() => deleteFolder(folderToDelete, false)}>Delete folder only</button>
+              <button type="button" className="btn-primary wf-delete-folder-and-forms" disabled={deletingFolder} onClick={() => deleteFolder(folderToDelete, true)}>Delete folder and forms</button>
+            </div>
+          </div>
+        </div>, document.body) : null}
       {builderOpen ? (
         <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
   <main style={{ display: "grid", gap: 16, minWidth: 0 }}>

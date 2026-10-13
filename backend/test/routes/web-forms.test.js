@@ -422,84 +422,14 @@ describe('GET /api/forms', () => {
   });
 
 
-  test('creates a starter form when the tenant has no forms', async () => {
-
+  test('returns an empty list without creating a form', async () => {
     prisma.webForm.findMany.mockResolvedValue([]);
-
-    prisma.webFormSubmission.groupBy.mockResolvedValue([]);
-
-    prisma.webForm.findFirst.mockResolvedValueOnce(null);
-
-    prisma.webForm.create.mockResolvedValueOnce({
-
-      id: 9,
-
-      tenantId: TENANT_ID,
-
-      createdByUserId: USER_ID,
-
-      name: 'Untitled form - 06 Aug 2026, 18:18',
-
-      slug: 'untitled-form-06-aug-2026-18-18',
-
-      description: '',
-
-      isActive: true,
-
-      fieldsJson: JSON.stringify([]),
-
-      styleJson: JSON.stringify({}),
-
-      settingsJson: JSON.stringify({}),
-
-    });
-
 
     const res = await request(makeApp()).get('/api/forms');
 
-
     expect(res.status).toBe(200);
-
-    expect(res.body).toHaveLength(1);
-
-    expect(res.body[0]).toMatchObject({
-
-      id: 9,
-
-      tenantId: TENANT_ID,
-
-      createdByUserId: USER_ID,
-
-      slug: 'untitled-form-06-aug-2026-18-18',
-
-      submissionCount: 0,
-
-    });
-
-    expect(prisma.webForm.create).toHaveBeenCalledTimes(1);
-
-    expect(prisma.webForm.create).toHaveBeenCalledWith({
-
-      data: expect.objectContaining({
-
-        tenantId: TENANT_ID,
-
-        createdByUserId: USER_ID,
-
-        description: '',
-
-        isActive: true,
-
-        fieldsJson: expect.any(String),
-
-        styleJson: expect.any(String),
-
-        settingsJson: expect.any(String),
-
-      }),
-
-    });
-
+    expect(res.body).toEqual([]);
+    expect(prisma.webForm.create).not.toHaveBeenCalled();
   });
 
 });

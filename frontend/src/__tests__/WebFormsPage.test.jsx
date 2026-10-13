@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -253,10 +253,13 @@ function renderTravelPage(form = FORM_FIXTURE) {
 
 function NavigationProbe() {
   const location = useLocation();
+  const navigate = useNavigate();
   return (
     <>
       <a href="/dashboard">Leave Web Forms</a>
-      <span data-testid="navigation-probe-path">{location.pathname}</span>
+      <button type="button" onClick={() => navigate(-1)}>Browser back</button>
+      <button type="button" onClick={() => navigate(1)}>Browser forward</button>
+      <span data-testid="navigation-probe-path">{location.pathname}{location.search}</span>
     </>
   );
 }
@@ -290,6 +293,24 @@ async function openBuilder(formName = 'Brand intake') {
   fireEvent.click(screen.getByRole('button', { name: /Open builder/i }));
   await screen.findAllByDisplayValue(formName);
 }
+
+test('browser Back returns from a form builder to the forms list', async () => {
+  renderRoutedPage();
+  await openBuilder();
+  expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/forms?form=101');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Browser back' }));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'All web forms' })).toBeInTheDocument());
+  expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/forms');
+  expect(screen.queryByRole('button', { name: 'Back to all forms' })).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Browser forward' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Back to all forms' })).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back to all forms' }));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'All web forms' })).toBeInTheDocument());
+  expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/forms');
+});
 
 beforeEach(() => {
 
@@ -453,7 +474,7 @@ describe('WebForms builder page', () => {
 
     expect(await screen.findByDisplayValue('Changed name')).toBeInTheDocument();
     expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Unsaved changes restored',
+      title: 'Unsaved changes',
       message: expect.stringContaining('continue editing'),
       confirmText: 'Continue editing',
       cancelText: 'Discard changes',
@@ -469,10 +490,13 @@ describe('WebForms builder page', () => {
 
     await waitFor(() => {
       expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
-        title: 'Unsaved changes',
-        message: expect.stringContaining('will be lost'),
-        confirmText: 'Continue',
-        cancelText: 'Stay',
+        title: 'Leave this form?',
+        message: expect.stringContaining('will discard them'),
+        confirmText: 'Continue editing',
+        cancelText: 'Discard changes',
+        confirmValue: false,
+        cancelValue: true,
+        dismissValue: false,
       }));
     });
     await waitFor(() => expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/dashboard'));
@@ -1090,9 +1114,145 @@ test.each(['generic', 'wellness', 'travel'])('View All Leads is available only f
   render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical } }}><WebForms /></AuthContext.Provider>);
   await screen.findByText('Brand intake');
   expect(screen.queryByRole('button', { name: 'View All Leads' }) !== null).toBe(vertical === 'generic');
+  expect(screen.queryByRole('button', { name: 'New Folder' }) !== null).toBe(vertical === 'generic');
   if (vertical === 'generic') {
     fireEvent.click(screen.getByRole('button', { name: 'View All Leads' }));
     expect(screen.getByRole('dialog', { name: /Leads .* Brand intake/ })).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Close dialog'));
+  }
+});
+
+test('Changing folder views closes and resets the new folder editor', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([{ id: 9, name: 'Campaigns' }]);
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+
+  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Folder name' }), { target: { value: 'Unused draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'All Forms (1)' }));
+  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
+  expect(screen.getByRole('textbox', { name: 'Folder name' })).toHaveValue('');
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*0/ }));
+  expect(screen.getByText('Campaigns')).toBeInTheDocument();
+});
+
+test('Generic forms can be filed into a manually created folder', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([]);
+    if (url === '/api/forms/folders' && opts?.method === 'POST') {
+      const name = JSON.parse(opts.body).name;
+      return Promise.resolve({ id: name === 'Campaigns' ? 9 : 10, name });
+    }
+    if (url === '/api/forms/101/folder' && opts?.method === 'PUT') return Promise.resolve({ id: 101, folderId: JSON.parse(opts.body).folderId });
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+  expect(screen.queryByRole('button', { name: /Unfiled/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Folder name' }), { target: { value: 'Campaigns' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create folder' }));
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(await screen.findByRole('button', { name: /Campaigns.*0/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'All Forms (1)' }));
+  expect(screen.queryByRole('combobox', { name: 'Folder for Brand intake' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Move Brand intake to folder' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Campaigns' }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: 9 }) })));
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(await screen.findByRole('button', { name: /Campaigns.*1/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(screen.getByText('Folder: Campaigns')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Move Brand intake to folder' }));
+  expect(screen.getByRole('menuitem', { name: 'Move to All Forms' })).toBeEnabled();
+  expect(screen.getByRole('menuitem', { name: 'Campaigns' })).toHaveAttribute('aria-current', 'true');
+  fireEvent.click(screen.getByRole('menuitem', { name: 'New Folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New folder name for Brand intake' }), { target: { value: 'Projects' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create and move' }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: 10 }) })));
+  expect(await screen.findByText('Folder: Projects')).toBeInTheDocument();
+  const formCard = screen.getByText('Brand intake').closest('article');
+  const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => '101'), effectAllowed: '', dropEffect: '' };
+  const moveCallsBeforeDrop = fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/forms/101/folder' && opts?.method === 'PUT').length;
+  fireEvent.dragStart(formCard, { dataTransfer });
+  fireEvent.dragOver(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });
+  expect(screen.getByRole('button', { name: /Campaigns.*0/ })).toHaveClass('wf-folder-drop-target');
+  fireEvent.drop(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });
+  await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/forms/101/folder' && opts?.method === 'PUT').length).toBe(moveCallsBeforeDrop + 1));
+  expect(await screen.findByText('Folder: Campaigns')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Move Brand intake to folder' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Move to All Forms' }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: null }) })));
+  await waitFor(() => expect(screen.queryByText('Folder: Campaigns')).toBeNull());
+}, 15000);
+
+test('Travel forms do not show folder controls', async () => {
+  renderTravelPage();
+  await screen.findByText('Brand intake');
+  expect(screen.queryByRole('button', { name: 'New Folder' })).toBeNull();
+  expect(fetchApiMock).not.toHaveBeenCalledWith('/api/forms/folders');
+});
+
+test('All Folders searches folders without adding them to the toolbar', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([
+      { id: 9, name: 'Campaigns' },
+      { id: 10, name: 'Projects' },
+    ]);
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+  const toolbar = screen.getByLabelText('Form folders');
+  expect(toolbar.children).toHaveLength(3);
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search folders' }), { target: { value: 'proj' } });
+  expect(screen.getByRole('button', { name: /Projects.*0/ })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Campaigns.*0/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Projects.*0/ }));
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveClass('wf-folder-active');
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(screen.getByRole('textbox', { name: 'Search folders' })).toHaveValue('');
+  expect(screen.getByRole('button', { name: /Campaigns.*0/ })).toBeInTheDocument();
+});
+
+test.each([
+  [false, 'Delete folder only'],
+  [true, 'Delete folder and forms'],
+])('folder deletion offers whether to delete its forms (%s)', async (deleteForms, actionLabel) => {
+  installFetchMock({ ...FORM_FIXTURE, folderId: 9 });
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([{ id: 9, name: 'Campaigns' }]);
+    if (url === '/api/forms/folders/9' && opts?.method === 'DELETE') return Promise.resolve({ success: true });
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  fireEvent.click(await screen.findByRole('button', { name: 'All Folders' }));
+  await screen.findByRole('button', { name: /Campaigns.*1/ });
+  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*1/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Delete folder' }));
+  expect(screen.getByRole('dialog', { name: 'Delete folder?' })).toHaveTextContent('1 form');
+  fireEvent.click(screen.getByRole('button', { name: actionLabel }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/folders/9', expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ deleteForms }) })));
+  if (deleteForms) {
+    await waitFor(() => expect(screen.queryByText('Brand intake')).toBeNull());
+  } else {
+    expect(await screen.findByText('Brand intake')).toBeInTheDocument();
+    expect(screen.queryByText('Folder: Campaigns')).toBeNull();
   }
 });

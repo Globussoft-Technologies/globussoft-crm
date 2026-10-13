@@ -185,6 +185,11 @@ function getDefaultVisibleColumns(tableKey, vertical) {
 }
 
 const CUSTOM_FIELD_KEY_PREFIX = "cf_";
+const CUSTOM_FIELD_FILTER_KIND = {
+  date: "date",
+  number: "number",
+  checkbox: "boolean",
+};
 
 async function getAvailableColumns(tableKey, tenantId, vertical) {
   const builtin = getBuiltinColumns(tableKey, vertical);
@@ -197,6 +202,11 @@ async function getAvailableColumns(tableKey, tenantId, vertical) {
   const custom = customDefs.map((f) => ({
     key: `${CUSTOM_FIELD_KEY_PREFIX}${f.fieldKey}`,
     label: f.label,
+    // Filtering addresses custom fields by their tenant-scoped definition
+    // id. Returning that key with the column catalog keeps Customize Table
+    // and Filter By in lockstep without relying on a second request.
+    filterField: `custom_${f.id}`,
+    filterKind: CUSTOM_FIELD_FILTER_KIND[f.fieldType] || "text",
   }));
   return [...builtin, ...custom];
 }

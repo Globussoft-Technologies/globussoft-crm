@@ -36,7 +36,7 @@
  *      the form fields in a drawer.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Leads from '../pages/Leads';
 import { AuthContext } from '../App';
@@ -1320,7 +1320,7 @@ function leadsFetchMock(url, opts) {
   }
   if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
     return Promise.resolve({
-      visible: ['name', 'email', 'company', 'phone', 'aiScore', 'source', 'tags', 'assignedTo', 'createdAt'],
+      visible: ['name', 'email', 'company', 'phone', 'aiScore', 'source', 'status', 'tags', 'assignedTo', 'createdAt'],
       availableColumns: [
         { key: 'name', label: 'Name' },
         { key: 'email', label: 'Email' },
@@ -1328,6 +1328,7 @@ function leadsFetchMock(url, opts) {
         { key: 'phone', label: 'Phone' },
         { key: 'aiScore', label: 'Lead Score' },
         { key: 'source', label: 'Source' },
+        { key: 'status', label: 'Status' },
         { key: 'tags', label: 'Tags' },
         { key: 'assignedTo', label: 'Assigned To' },
         { key: 'createdAt', label: 'Created' },
@@ -1574,6 +1575,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
   });
 
   it('opens the new header Filter by drawer without changing the existing column filter flows', async () => {
+    let resolveEmailSearch;
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
         return Promise.resolve({
@@ -1603,10 +1605,12 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
         return Promise.resolve({ values: [{ value: '7', label: 'Sales Rep One' }] });
       }
       if (typeof url === 'string' && url.includes('/api/contacts/filter-values/email')) {
-        return Promise.resolve({ values: [
-          { value: 'ka2348319@gmail.com', label: 'ka2348319@gmail.com' },
-          { value: 'karen@example.com', label: 'karen@example.com' },
-        ] });
+        return new Promise((resolve) => {
+          resolveEmailSearch = () => resolve({ values: [
+            { value: 'ka2348319@gmail.com', label: 'ka2348319@gmail.com' },
+            { value: 'karen@example.com', label: 'karen@example.com' },
+          ] });
+        });
       }
       return leadsFetchMock(url, opts);
     });
@@ -1637,7 +1641,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Status' }));
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Sales Owner' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Assigned To' }));
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Email' }));
 
@@ -1645,10 +1649,10 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(within(dialog).getByText('Email')).toBeInTheDocument();
     expect(within(dialog).getByText('Source')).toBeInTheDocument();
     expect(within(dialog).getByText('Status')).toBeInTheDocument();
-    expect(within(dialog).getByText('Sales Owner')).toBeInTheDocument();
+    expect(within(dialog).getByText('Assigned To')).toBeInTheDocument();
     expect(
       Array.from(dialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
-    ).toEqual(['Email', 'Sales Owner', 'Status', 'Source']);
+    ).toEqual(['Email', 'Assigned To', 'Status', 'Source']);
     expect(within(dialog).getByRole('button', { name: /^Apply$/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /^Reset$/i })).toBeInTheDocument();
 
@@ -1666,19 +1670,56 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(within(sourceSection).getByRole('checkbox', { name: 'Email' }));
 
     expect(await within(dialog).findByText('Please enter 2 or more characters')).toBeInTheDocument();
-    fireEvent.change(await within(dialog).findByRole('textbox', { name: 'Search Email values' }), {
+    const emailValueSearch = await within(dialog).findByRole('textbox', { name: 'Search Email values' });
+    fireEvent.change(emailValueSearch, { target: { value: 'k' } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([url]) => typeof url === 'string' && url.includes('/api/contacts/filter-values/email'),
+      ),
+    ).toBe(false);
+    expect(within(dialog).getByText('Please enter 2 or more characters')).toBeInTheDocument();
+
+    fireEvent.change(emailValueSearch, {
       target: { value: 'ka' },
     });
+    expect(
+      await within(dialog).findByRole('status', { name: 'Fetching Email values' }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(resolveEmailSearch).toBeTypeOf('function'));
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts/filter-values/email?status=Lead&q=ka',
+      { silent: true },
+    );
+    await act(async () => resolveEmailSearch());
     fireEvent.click(await within(dialog).findByRole('button', { name: 'ka2348319@gmail.com' }));
     expect(within(dialog).getByText('ka2348319@gmail.com')).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
-    expect(within(dialog).queryByRole('button', { name: 'Email' })).toBeNull();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Name' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close filters' }));
+    expect(screen.queryByRole('dialog', { name: /Filters/i })).toBeNull();
     expect(
-      Array.from(dialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
-    ).toEqual(['Name', 'Email', 'Sales Owner', 'Status', 'Source']);
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Apply$/i }));
+      fetchApiMock.mock.calls.some(
+        ([url]) => typeof url === 'string' && url.includes('/api/contacts?') && url.includes('filters='),
+      ),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const draftDialog = await screen.findByRole('dialog', { name: /Filters/i });
+    const draftEmailSection = within(draftDialog).getByText('Email').closest('.filter-panel-section');
+    expect(await within(draftEmailSection).findByText('ka2348319@gmail.com')).toBeInTheDocument();
+    expect(
+      within(draftEmailSection).getByRole('button', { name: 'Remove ka2348319@gmail.com' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(draftDialog).getByRole('button', { name: /Add filter/i }));
+    expect(within(draftDialog).queryByRole('button', { name: 'Email' })).toBeNull();
+    fireEvent.click(within(draftDialog).getByRole('button', { name: 'Name' }));
+    expect(
+      Array.from(draftDialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
+    ).toEqual(['Name', 'Email', 'Assigned To', 'Status', 'Source']);
+    fireEvent.click(within(draftDialog).getByRole('button', { name: /^Apply$/i }));
 
     await waitFor(() => {
       const filteredCall = fetchApiMock.mock.calls.find(
@@ -1714,7 +1755,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       expect(within(reopenedDialog).getByRole('button', { name: 'Email' })).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Source' })).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Status' })).toBeInTheDocument();
-      expect(within(reopenedDialog).getByRole('button', { name: 'Sales Owner' })).toBeInTheDocument();
+      expect(within(reopenedDialog).getByRole('button', { name: 'Assigned To' })).toBeInTheDocument();
     });
 
     fireEvent.click(within(reopenedDialog).getByRole('button', { name: 'Close filters' }));
@@ -1723,11 +1764,158 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(emptyDialog.querySelectorAll('.filter-panel-section')).toHaveLength(0);
     expect(within(emptyDialog).queryByText('Source')).toBeNull();
     expect(within(emptyDialog).queryByText('Status')).toBeNull();
-    expect(within(emptyDialog).queryByText('Sales Owner')).toBeNull();
+    expect(within(emptyDialog).queryByText('Assigned To')).toBeNull();
     expect(within(emptyDialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
     expect(within(emptyDialog).getByRole('status')).toHaveTextContent(
       'Add filters to narrow down the contacts you want to see.',
     );
+  });
+
+  it('dynamically mirrors the full Generic CRM Customize Table catalog in Filter By', async () => {
+    const storageKey = 'globuscrm.leads.filters.v1.1.1';
+    window.sessionStorage.setItem(storageKey, JSON.stringify([
+      {
+        field: 'territoryId',
+        label: 'Territory',
+        kind: 'id',
+        operator: 'contains',
+        values: ['7'],
+      },
+    ]));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'companySize'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'companySize', label: 'No Of Employee' },
+            { key: 'description', label: 'Note' },
+            { key: 'assignedTo', label: 'Assigned To' },
+            {
+              key: 'cf_customer_id',
+              label: 'Customer ID',
+              filterField: 'custom_42',
+              filterKind: 'text',
+            },
+          ],
+        });
+      }
+      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+        return Promise.resolve({
+          fields: [
+            { field: 'name', label: 'Name', kind: 'text' },
+            { field: 'companySize', label: 'No Of Employee', kind: 'text' },
+            { field: 'description', label: 'Note', kind: 'text' },
+            { field: 'assignedToId', label: 'Sales Owner', kind: 'id' },
+            { field: 'territoryId', label: 'Territory', kind: 'id' },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No Of Employee')).toBeInTheDocument());
+    await waitFor(() => expect(window.sessionStorage.getItem(storageKey)).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+
+    expect(await within(dialog).findByRole('button', { name: 'No Of Employee' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Note' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Assigned To' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Customer ID' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Sales Owner' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Territory' })).toBeNull();
+  });
+
+  it('limits Wellness Filter By to fields that are columns in the Wellness Leads table', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+        return Promise.resolve({
+          fields: [
+            { field: 'name', label: 'Name', kind: 'text' },
+            { field: 'email', label: 'Email', kind: 'text' },
+            { field: 'company', label: 'Company', kind: 'text' },
+            { field: 'source', label: 'Source', kind: 'text' },
+            { field: 'status', label: 'Status', kind: 'text' },
+            { field: 'assignedToId', label: 'Sales Owner', kind: 'id' },
+            { field: 'createdAt', label: 'Created', kind: 'date' },
+            { field: 'treatmentOfInterest', label: 'Treatment Of Interest', kind: 'text' },
+          ],
+        });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/')) {
+        return Promise.resolve({ values: [] });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads({
+      ...ADMIN_AUTH,
+      tenant: { ...ADMIN_AUTH.tenant, vertical: 'wellness' },
+    });
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+
+    expect(await within(dialog).findByText('Source')).toBeInTheDocument();
+    expect(within(dialog).getByText('Assigned To')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Status')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    expect(await within(dialog).findByRole('button', { name: 'Name' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Company' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Treatment Of Interest' })).toBeNull();
+  });
+
+  it('limits Travel Filter By to the dynamic Travel Customize Table catalog', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'email', 'company', 'source', 'cf_school', 'actions'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'email', label: 'Email' },
+            { key: 'company', label: 'Category' },
+            { key: 'source', label: 'Source' },
+            { key: 'cf_school', label: 'School', filterField: 'custom_91', filterKind: 'text' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+        return Promise.resolve({
+          fields: [
+            { field: 'name', label: 'Name', kind: 'text' },
+            { field: 'email', label: 'Email', kind: 'text' },
+            { field: 'company', label: 'Company', kind: 'text' },
+            { field: 'source', label: 'Source', kind: 'text' },
+            { field: 'status', label: 'Status', kind: 'text' },
+            { field: 'territoryId', label: 'Territory', kind: 'id' },
+          ],
+        });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/')) {
+        return Promise.resolve({ values: [] });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads({
+      ...ADMIN_AUTH,
+      tenant: { ...ADMIN_AUTH.tenant, vertical: 'travel' },
+    });
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+
+    expect(await within(dialog).findByRole('button', { name: 'Category' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'School' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Status' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Territory' })).toBeNull();
   });
 
   it('closes the Generic CRM filter drawer when its outside backdrop is clicked', async () => {
@@ -3145,6 +3333,27 @@ describe('Leads Web Form column (generic CRM only)', () => {
     expect(screen.getAllByText('Contact Us')).toHaveLength(1);
     // Non-form lead renders the em-dash fallback.
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows the stored Source for a web-form lead so Source filtering and the table agree', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve([
+          {
+            ...webFormRows[0],
+            source: 'GlobusCRM',
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderLeads(genericAuth);
+    await screen.findByText('Form Lead');
+
+    expect(screen.getByText('GlobusCRM')).toBeInTheDocument();
+    expect(screen.queryByText('website-form')).toBeNull();
+    expect(screen.getByText('Contact Us')).toBeInTheDocument();
   });
 
   it('hides the Web Form column on non-generic verticals (wellness)', async () => {

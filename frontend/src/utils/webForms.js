@@ -32,6 +32,12 @@ export function buildWebFormPreviewUrl(form, origin, options = {}) {
   return base + '/embed/web-form.html?' + query.toString() + '#preview=' + preview;
 }
 
+export function getWebFormPreviewViewportWidth(device) {
+  if (device === 'mobile') return '440px';
+  if (device === 'tablet') return '768px';
+  return '100%';
+}
+
 export function buildPublicUrl(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
   // Prefer the stable numeric id so renames never break shared links.

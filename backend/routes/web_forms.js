@@ -19,6 +19,7 @@ const { resolveProviderConfig, sendSms } = require("../services/smsProvider");
 const { normalizeGenericCrmPhone, normalizeGenericCrmPhone: normalizeGenericPhone } = require("../lib/phoneFormatting");
 const axios = require("axios");
 const { DEFAULT_PERSONAL_DOMAINS, cleanDomains, validateEmail } = require("../lib/webFormEmailValidation");
+const { sanitizeCustomCss } = require("../lib/webFormCustomCss");
 
 const router = express.Router();
 
@@ -588,6 +589,7 @@ function defaultStyle() {
     buttonLoadingText: "Submitting...",
     successMessageColor: "#065F46",
     errorMessageColor: "#B91C1C",
+    customCss: "",
     elementTextStyles,
   };
 }
@@ -892,6 +894,7 @@ function normalizeStyle(raw) {
     buttonLoadingText: textOr(style.buttonLoadingText, "Submitting...").slice(0, 80),
     successMessageColor: safeColor(style.successMessageColor, "#065F46"),
     errorMessageColor: safeColor(style.errorMessageColor, "#B91C1C"),
+    customCss: sanitizeCustomCss(style.customCss),
     elementTextStyles,
   };
 }
@@ -1001,7 +1004,9 @@ function escapeHtml(value) {
 }
 
 function buildEmbedCode(form, origin) {
-  const base = String(origin || "https://crm.globusdemos.com").replace(
+  const configuredBase =
+    origin || process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "https://globuscrm.com";
+  const base = String(configuredBase).replace(
     /\/+$/,
     "",
   );
@@ -2477,6 +2482,8 @@ module.exports.buildEmbedCode = buildEmbedCode;
 module.exports.defaultFields = defaultFields;
 
 module.exports.defaultStyle = defaultStyle;
+
+module.exports.normalizeStyle = normalizeStyle;
 
 module.exports.defaultSettings = defaultSettings;
 

@@ -80,7 +80,7 @@ The page must be responsive. On mobile, use one recommendation card per row and 
 All URLs below use this base URL:
 
 ```text
-https://globuscrm.globussoft.com
+https://globuscrm.com
 ```
 
 The public diagnostic endpoints do not require a staff JWT or API key. They only expose a published form and reports protected by an unguessable report slug.
@@ -88,7 +88,7 @@ The public diagnostic endpoints do not require a staff JWT or API key. They only
 The complete browser-side sequence is:
 
 ```js
-const API_BASE = "https://globuscrm.globussoft.com";
+const API_BASE = "https://globuscrm.com";
 
 // Page load
 setPhase("loading-form");

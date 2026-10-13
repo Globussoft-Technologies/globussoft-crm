@@ -840,6 +840,282 @@
         padding-right: 4px;
         white-space: nowrap;
       }
+
+      /* Keep the Generic CRM phone field as one compact control. The country
+         picker remains a real, keyboard-accessible input; this is only the
+         visual treatment that joins it to the national-number input. */
+      html.generic-scope .phone-input,
+      html.generic-scope .generic-phone-with-whatsapp .phone-input,
+      html.generic-scope .generic-whatsapp-number .phone-input {
+        grid-template-columns: 100px minmax(0, 1fr) !important;
+        gap: 0 !important;
+        width: 100% !important;
+        border: var(--gbs-field-border-width, 1px) solid
+          var(--gbs-field-border, #d8ddec);
+        border-radius: var(--gbs-field-radius, 12px);
+        overflow: visible;
+        background: var(--gbs-field-bg, #fff);
+      }
+
+      html.generic-scope .phone-input:focus-within,
+      html.generic-scope .generic-phone-with-whatsapp .phone-input:focus-within,
+      html.generic-scope .generic-whatsapp-number .phone-input:focus-within {
+        border-color: var(--gbs-focus-border, #6366f1);
+        box-shadow: 0 0 0 4px
+          color-mix(in srgb, var(--gbs-focus-border, #6366f1) 13%, transparent);
+      }
+
+      html.generic-scope .phone-country-picker,
+      html.generic-scope .generic-phone-with-whatsapp .phone-country-picker,
+      html.generic-scope .generic-whatsapp-number .phone-country-picker {
+        border: 0;
+        border-right: var(--gbs-field-border-width, 1px) solid
+          var(--gbs-field-border, #d8ddec);
+        border-radius: var(--gbs-field-radius, 12px) 0 0
+          var(--gbs-field-radius, 12px);
+        background: var(--gbs-phone-country-bg, #eef2f7);
+        overflow: visible;
+      }
+
+      html.generic-scope .phone-country-picker::after,
+      html.generic-scope .generic-phone-with-whatsapp .phone-country-picker::after,
+      html.generic-scope .generic-whatsapp-number .phone-country-picker::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 47px;
+        width: 6px;
+        height: 6px;
+        border-right: 1.5px solid #667085;
+        border-bottom: 1.5px solid #667085;
+        transform: translateY(-70%) rotate(45deg);
+        pointer-events: none;
+      }
+
+      html.generic-scope .phone-country-picker > input,
+      html.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input,
+      html.generic-scope .generic-whatsapp-number .phone-country-picker > input {
+        border: 0 !important;
+        border-radius: var(--gbs-field-radius, 12px) 0 0
+          var(--gbs-field-radius, 12px);
+        background-color: var(--gbs-phone-country-bg, #eef2f7) !important;
+        background-position: 14px center;
+        padding: 0 8px 0 60px;
+        color: var(--gbs-field-text, #344054);
+        -webkit-text-fill-color: var(--gbs-field-text, #344054);
+        cursor: pointer;
+        transform: none;
+        box-shadow: none;
+      }
+
+      html.generic-scope .phone-country-picker > input:focus,
+      html.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input:focus,
+      html.generic-scope .generic-whatsapp-number .phone-country-picker > input:focus {
+        border: 0 !important;
+        box-shadow: none;
+        transform: none;
+      }
+
+      html.generic-scope .phone-input > input,
+      html.generic-scope .generic-phone-with-whatsapp .phone-input > input,
+      html.generic-scope .generic-whatsapp-number .phone-input > input {
+        min-width: 0;
+        width: 100%;
+        border: 0 !important;
+        border-radius: 0 var(--gbs-field-radius, 12px)
+          var(--gbs-field-radius, 12px) 0;
+        box-shadow: none;
+        transform: none;
+      }
+
+      html.generic-scope .phone-input > input:focus,
+      html.generic-scope .generic-phone-with-whatsapp .phone-input > input:focus,
+      html.generic-scope .generic-whatsapp-number .phone-input > input:focus {
+        border: 0 !important;
+        box-shadow: none;
+        transform: none;
+      }
+
+      /*
+       * The public URL must use the same responsive column variables as the
+       * builder preview. Keep these overrides after the desktop-column rules
+       * so embedded forms and direct public links follow the same cascade.
+       */
+      @media (min-width: 641px) and (max-width: 900px) {
+        html.generic-scope .grid,
+        html.travel-scope .grid {
+          grid-template-columns: var(--gbs-tablet-columns, minmax(0, 1fr)) !important;
+        }
+      }
+
+      @media (max-width: 640px) {
+        html,
+        body {
+          width: 100%;
+          min-width: 0;
+          overflow-x: hidden;
+        }
+
+        body {
+          padding: max(12px, env(safe-area-inset-top))
+            max(12px, env(safe-area-inset-right))
+            max(12px, env(safe-area-inset-bottom))
+            max(12px, env(safe-area-inset-left));
+        }
+
+        .wrap,
+        #app,
+        .panel,
+        form,
+        .grid,
+        .field {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .panel {
+          padding: 22px clamp(14px, 5vw, 18px);
+        }
+
+        html.generic-public-desktop-columns .grid,
+        html.generic-two-columns .grid,
+        html.generic-scope .grid,
+        html.travel-scope .grid {
+          grid-template-columns: var(--gbs-mobile-columns, minmax(0, 1fr)) !important;
+        }
+
+        html.generic-public-desktop-columns .grid .half,
+        html.generic-public-desktop-columns .grid .full,
+        html.generic-two-columns .grid .half,
+        html.generic-two-columns .grid .full,
+        html.generic-scope .grid .half,
+        html.generic-scope .grid .full,
+        html.travel-scope .grid .half,
+        html.travel-scope .grid .full {
+          grid-column: auto !important;
+        }
+
+        input,
+        select,
+        textarea {
+          min-width: 0;
+        }
+
+        label,
+        .check,
+        .choices .check,
+        .note,
+        .step-progress-item,
+        .desc,
+        h1 {
+          overflow-wrap: anywhere;
+        }
+
+        .check,
+        .choices .check {
+          width: 100%;
+        }
+
+        /* Preserve a radio field's horizontal setting on mobile. The
+           generic rule above is correct for vertical choices, but would
+           otherwise turn every horizontal option into a full-width row. */
+        .choices.horizontal {
+          width: 100%;
+          min-width: 0;
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: flex-start;
+        }
+
+        .choices.horizontal .check {
+          width: fit-content;
+          max-width: 100%;
+          min-width: 0;
+          flex: 0 1 auto;
+        }
+
+        .choices.horizontal .check span {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
+        .actions {
+          min-width: 0;
+        }
+
+        .primary {
+          max-width: 100%;
+        }
+      }
+
+      /* Keep the configured two-column layout on phones while making the
+         composite phone control compact enough to share a row with Company.
+         The number input gets the remaining width instead of being clipped
+         by a fixed country-picker column. */
+      @media (max-width: 480px) {
+        html.generic-scope .phone-input,
+        html.generic-scope .generic-phone-with-whatsapp .phone-input,
+        html.generic-scope .generic-whatsapp-number .phone-input {
+          grid-template-columns: minmax(68px, 42%) minmax(0, 1fr) !important;
+          gap: 0 !important;
+        }
+
+        html.generic-scope .phone-country-picker > input,
+        html.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input,
+        html.generic-scope .generic-whatsapp-number .phone-country-picker > input {
+          padding: 0 3px 0 34px;
+          font-size: max(12px, var(--gbs-field-font-size, 14px));
+        }
+
+        html.generic-scope .phone-country-picker::after,
+        html.generic-scope .generic-phone-with-whatsapp .phone-country-picker::after,
+        html.generic-scope .generic-whatsapp-number .phone-country-picker::after {
+          left: 42px;
+          width: 5px;
+          height: 5px;
+        }
+      }
+
+      /* At the smallest phone widths, two columns cannot provide usable
+         labels and controls even when that option is selected. */
+      @media (max-width: 359px) {
+        html.generic-scope .grid,
+        html.travel-scope .grid {
+          grid-template-columns: minmax(0, 1fr) !important;
+        }
+
+        html.generic-scope .grid .half,
+        html.generic-scope .grid .full,
+        html.travel-scope .grid .half,
+        html.travel-scope .grid .full {
+          grid-column: 1 / -1 !important;
+        }
+      }
+
+      /* A selected mobile preview must retain the same compact phone control
+         even if the editor canvas is wider than the simulated viewport. */
+      html.generic-preview-mobile.generic-scope .phone-input,
+      html.generic-preview-mobile.generic-scope .generic-phone-with-whatsapp .phone-input,
+      html.generic-preview-mobile.generic-scope .generic-whatsapp-number .phone-input {
+        grid-template-columns: minmax(68px, 42%) minmax(0, 1fr) !important;
+        gap: 0 !important;
+      }
+
+      html.generic-preview-mobile.generic-scope .phone-country-picker > input,
+      html.generic-preview-mobile.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input,
+      html.generic-preview-mobile.generic-scope .generic-whatsapp-number .phone-country-picker > input {
+        padding: 0 3px 0 34px;
+        font-size: max(12px, var(--gbs-field-font-size, 14px));
+      }
+
+      html.generic-preview-mobile.generic-scope .phone-country-picker::after,
+      html.generic-preview-mobile.generic-scope .generic-phone-with-whatsapp .phone-country-picker::after,
+      html.generic-preview-mobile.generic-scope .generic-whatsapp-number .phone-country-picker::after {
+        left: 42px;
+        width: 5px;
+        height: 5px;
+      }
     </style>
   </head>
 
@@ -848,6 +1124,7 @@
       <div id="app"></div>
     </div>
 
+    <script src="/embed/web-form-custom-css.js"></script>
     <script>
       (function () {
         var params = new URLSearchParams(location.search);
@@ -887,6 +1164,9 @@
               "'": "&#39;",
             }[c];
           });
+        }
+        function sanitizeCustomCss(value) {
+          return typeof gbsCustomCss === "undefined" ? "" : gbsCustomCss.sanitizeCustomCss(value);
         }
         function readCookie(name) {
           var prefix = name + "=";
@@ -2125,7 +2405,7 @@
 
           if (advanced && field.sourceKey === "phone") {
             return (
-              '<div class="field ' +
+              '<div class="field phone-field ' +
               widthClass +
               '"><label for="f-' +
               name +
@@ -3365,6 +3645,14 @@
             : "#EBEFF3";
 
           document.documentElement.style.cssText = styleVars(style);
+
+          var customCss = document.getElementById("gbs-custom-form-css");
+          if (!customCss) {
+            customCss = document.createElement("style");
+            customCss.id = "gbs-custom-form-css";
+            document.head.appendChild(customCss);
+          }
+          customCss.textContent = sanitizeCustomCss(style.customCss);
 
           var fields = Array.isArray(formData.fields) ? formData.fields : [];
           fields = orderGenericConditionalFields(fields);

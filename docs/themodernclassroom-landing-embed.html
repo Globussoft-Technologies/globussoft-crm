@@ -57,7 +57,7 @@
 
   <script>
     const params = new URLSearchParams(window.location.search);
-    const apiBase = (params.get('apiBase') || 'https://globuscrm.globussoft.com').replace(/\/+$/, '');
+    const apiBase = (params.get('apiBase') || 'https://globuscrm.com').replace(/\/+$/, '');
     const tripIdOverride = (params.get('tripId') || '').trim();
     const customerIdOverride = (params.get('customerId') || '').trim();
     const pageIdOverride = (params.get('pageId') || '').trim();
@@ -147,7 +147,7 @@
             'Run it through a local web server instead, for example:\n' +
             '1. cd docs\n' +
             '2. python -m http.server 8000\n' +
-            '3. Open http://localhost:8000/themodernclassroom-landing-embed.html?apiBase=https://globuscrm.globussoft.com&tripId=<trip-id>\n' +
+            '3. Open http://localhost:8000/themodernclassroom-landing-embed.html?apiBase=https://globuscrm.com&tripId=<trip-id>\n' +
             '   or, with a rewrite-capable web server, /landing/trips/<trip-id>'
           );
         }

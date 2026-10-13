@@ -18,7 +18,7 @@ const { Readable } = require('node:stream');
 const { renderPage } = require('./landingPageRenderer');
 
 const DEFAULT_REMOTE_PATH = '/';
-const DEFAULT_CRM_BASE_URL = 'https://globuscrm.globussoft.com';
+const DEFAULT_CRM_BASE_URL = 'https://globuscrm.com';
 const SUPPORTED_PROTOCOLS = ['ftp', 'ftps', 'sftp'];
 const DEFAULT_PORTS = { ftp: 21, ftps: 21, sftp: 22 };
 

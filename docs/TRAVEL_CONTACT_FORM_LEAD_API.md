@@ -3,7 +3,7 @@
 Use this API to send enquiries from a travel website contact form to the CRM.
 
 ```text
-POST https://globuscrm.globussoft.com/api/v1/external/leads
+POST https://globuscrm.com/api/v1/external/leads
 ```
 
 The API creates a CRM Contact with status `Lead`. The travel website should call it from its server/API route so the API key is not exposed in the browser.
@@ -21,7 +21,7 @@ The key must start with `glbs_`. Do not use the CRM webhook signing secret as th
 ## cURL example
 
 ```bash
-curl --request POST "https://globuscrm.globussoft.com/api/v1/external/leads" \
+curl --request POST "https://globuscrm.com/api/v1/external/leads" \
   --header "Content-Type: application/json" \
   --header "X-API-Key: glbs_<your-generated-key>" \
   --data '{
@@ -129,7 +129,7 @@ The full key is shown only when it is generated. It cannot be recovered from the
 Example website environment variables:
 
 ```env
-CRM_ORIGIN=https://globuscrm.globussoft.com
+CRM_ORIGIN=https://globuscrm.com
 CRM_EXTERNAL_API_KEY=glbs_<your-generated-key>
 TRAVEL_SOURCE=tmc-contact-us
 ```
@@ -141,7 +141,7 @@ Never use `NEXT_PUBLIC_CRM_EXTERNAL_API_KEY` or place the key in browser JavaScr
 After generating the key, verify it with:
 
 ```bash
-curl "https://globuscrm.globussoft.com/api/v1/external/me" \
+curl "https://globuscrm.com/api/v1/external/me" \
   --header "X-API-Key: glbs_<your-generated-key>"
 ```
 

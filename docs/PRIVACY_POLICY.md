@@ -2,13 +2,13 @@
 
 **Effective date:** 11 June 2026
 **Last updated:** 11 June 2026
-**Canonical URL:** https://globuscrm.globussoft.com/privacy-policy
+**Canonical URL:** https://globuscrm.com/privacy-policy
 
 Globus CRM ("the Service") is an enterprise customer-relationship-management platform operated by **Globussoft Technologies** ("Globussoft", "we", "us", "our"). This Privacy Policy explains what personal data we collect, how we use it, who we share it with, and the rights available to you.
 
 This policy applies to:
 
-- the Globus CRM web application (including the demo at `globuscrm.globussoft.com`),
+- the Globus CRM web application (including the demo at `globuscrm.com`),
 - the **Globus CRM mobile applications** for Android and iOS,
 - public pages served by the Service (booking pages, landing pages, surveys, quote-acceptance pages, patient and customer portals, knowledge-base articles, trip microsites),
 - our marketing website,
@@ -207,7 +207,7 @@ We do not discriminate against anyone for exercising privacy rights.
 You can delete your Globus CRM account and associated personal data at any time:
 
 - **In the app / web app:** go to **Settings → Privacy → Delete account** and follow the confirmation steps; or
-- **Online:** submit a deletion request at **https://globuscrm.globussoft.com/account-deletion**; or
+- **Online:** submit a deletion request at **https://globuscrm.com/account-deletion**; or
 - **By email:** write to **privacy@globussoft.com** from the email address on the account.
 
 On a verified deletion request we deactivate the account immediately and permanently delete the account's personal data within 30 days, except for records we are legally required to keep (e.g. invoices and tax records, which are retained for the statutory period and then deleted) and residual copies in backups, which are removed on the normal backup-rotation cycle. If your account belongs to an organisation's workspace, the workspace administrator may need to approve or initiate the deletion, since the organisation is the controller of workspace data.

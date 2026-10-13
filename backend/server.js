@@ -47,6 +47,10 @@ const { initSentry } = require("./lib/sentry");
 
 const express = require("express");
 const cors = require("cors");
+const {
+  buildAllowedOrigins,
+  isAllowedOrigin,
+} = require("./lib/corsOrigins");
 const http = require("http");
 const { Server } = require("socket.io");
 const swaggerUi = require("swagger-ui-express");
@@ -138,59 +142,10 @@ patchAsyncErrorHandling(express.Router, HTTP_METHODS);
 // Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)
 initSentry(app);
 
-// CORS — restrict to known origins
-//
-// The four hardcoded entries below are intentional fail-safes:
-//   - crm.globusdemos.com         → demo (always-on, never moves)
-//   - localhost:5173 / localhost:5000 → local dev (Vite + same-origin SSR)
-//   - globuscrm.globussoft.com    → production (added in PR #511; canonical
-//                                   prod hostname for the customer-facing
-//                                   deployment)
-// These exist as literals so a misconfigured deploy (missing env-var,
-// typo in CORS_ALLOWED_ORIGINS) can never lock the demo or production
-// out of CORS — which would brick the Inbox count poll, websocket
-// upgrade, and every fetch from the frontend. Additional origins are
-// env-driven via FRONTEND_URL (single) and CORS_ALLOWED_ORIGINS (CSV).
-const ALLOWED_ORIGINS = [
-  "https://crm.globusdemos.com",
-  "http://localhost:5173",
-  "http://tmc.localhost:5173",
-  "http://localhost:5000",
-  // #657 — keep 127.0.0.1 and localhost in lockstep. Some test runners
-  // (Playwright, supertest) resolve BASE_URL through 127.0.0.1 even when
-  // the caller typed `localhost`; without these entries the CORS layer
-  // 500s on legitimate per-push gate runs and the originCheck layer
-  // never gets to run.
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:5000",
-  "http://localhost:8000",
-  "http://127.0.0.1:8000",
-  "https://globuscrm.globussoft.com",
-  // EMP Cloud frontend — browser API calls into the CRM.
-  "https://empcloud.com",
-  "https://www.empcloud.com",
-  "https://app.empcloud.com",
-  // The Modern Classroom client site ? hosts a standalone landing-page shell
-  // that fetches the public CRM-rendered landing-page HTML from the browser.
-  "https://themodernclassroom.in",
-  "https://www.themodernclassroom.in",
-  "https://app.themodernclassroom.in",
-  // Dr. Enhance Wellness external marketing site — submits public enquiries
-  // and also consumes the public wellness catalog + payment endpoints.
-  // Hardcoded because it's part of the product surface, not a one-off env
-  // override.
-  "https://drenhance.com",
-  "https://www.drenhance.com",
-  "https://enhancewellness.globusdemos.com",
-  "http://localhost:8080",
-  "http://127.0.0.1:8080",
-  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
-  ...(process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : []),
-];
+// CORS — restrict to known origins. The canonical production origin is kept
+// as a safe fallback, while FRONTEND_URL and CORS_ALLOWED_ORIGINS allow a
+// domain move or additional deployment origin without a code change.
+const ALLOWED_ORIGINS = buildAllowedOrigins();
 // Public landing pages can be copied to a customer's domain over SFTP. Their
 // forms and availability gate call the CRM's public GET/POST endpoints from
 // that domain. These endpoints are already anonymous by design, so answer
@@ -215,7 +170,7 @@ app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (server-to-server, curl, Postman)
-      if (!origin || ALLOWED_ORIGINS.includes(origin))
+      if (!origin || isAllowedOrigin(origin, ALLOWED_ORIGINS))
         return callback(null, true);
       // GlobusCRM browser extension (2026-07-09) — chrome-extension://<id>
       // origins. The id is regenerated on every unpacked reload/reinstall
@@ -614,7 +569,21 @@ app.all("/ws/tally-connector", (_req, res) => {
   });
 });
 
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (
+        !origin
+        || isAllowedOrigin(origin, ALLOWED_ORIGINS)
+        || origin.startsWith("chrome-extension://")
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+    credentials: true,
+  },
+});
 const presenceColors = [
   "#ef4444",
   "#3b82f6",

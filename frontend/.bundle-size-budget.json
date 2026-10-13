@@ -39,7 +39,8 @@
     },
     {
       "pattern": "index-*.js",
-      "maxKB": 315,
+      "maxKB": 325,
+      "//pr1557-entry-bump": "315 → 325 KB: PR #1557 adds the always-mounted page-access guard, permission-catalog caching/invalidation, and permission-aware navigation. Run 38412233558 compiled successfully at 318.7 KB. No runtime dependency was added; retain about 6 KB of entry headroom.",
       "//2026-10-05-pickup-plot-pages": "The two admin-only lazy routes add only route declarations to the main shell. No dependency was added.",
       "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 300→315 on 2026-10-01: PR #1514 added tenant-wide subscription access resolution and richer notification-bell behavior to the always-loaded app shell, bringing the entry chunk to 308.8 KB. No runtime dependency was added and the cap retains about 6 KB headroom. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap. Bumped 260→270 on 2026-08-12: PR #1319 added the Omnibar global search component and sidebarSearch utility to the header, pushing the index chunk to 262.1 KB. Bumped 270→285 on 2026-08-21: concurrent uncommitted feature work (super-admin AI provider/managed-key management, multi-provider embeddings, travel diagnostic public-form + embed pages) pushed the chunk to 278.5 KB. Bumped 285→290 on 2026-09-04: PR #1401 added travel CRM sidebar collapsible sections and theme support (CSS in index.css), pushing the chunk to 285.4 KB. Bumped 290→295 on 2026-09-17: PR #1456 consolidated generic navigation access checks in the always-loaded sidebar and Omnibar, bringing the entry chunk to 291.3 KB. Bumped 295→300 on 2026-09-28: PR #1493 added session-bound permission-cache invalidation to the always-loaded App shell, bringing the entry chunk to 296.0 KB; no dependency was added and the cap retains 4.0 KB headroom."
     },
@@ -61,7 +62,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 9175,
+    "all-js-maxKB": 9200,
+    "//pr1557-total-bump": "9175 → 9200 KB: PR #1557 adds RBAC guards plus Leads/Staff actions and embedded-form host viewport messaging. Run 38412233558 measured 9181.4 KB. CSS and vendor/page caps remain unchanged; the size gate stays enforced.",
     "//pr1552-total-bump": "9150 → 9175 KB JS and 360 → 365 KB CSS: PR #1552 adds Generic Leads filtering/density UI and web-form field controls without new dependencies. Run 38380368904 compiled successfully but measured 9150.3 KB JS and 360.8 KB CSS. Small total-only headroom; individual chunk caps and the gate remain unchanged.",
     "//pr1540-total-bump": "9100 → 9150 KB: Generic Leads pickup/status controls and customer-workflow history paging. Run 38241443364 compiled successfully at 9110.5 KB. Individual chunk caps remain unchanged.",
     "//pr1535-total-bump": "9050 → 9100 KB: Generic Pickup inventory and operational workspaces added in PR #1535. Run 37892887744 measured 9066.2 KB (49.4 KB growth from PR #1533). All individual chunk caps remain unchanged.",

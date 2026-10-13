@@ -6,6 +6,10 @@ test('Generic derived filters separate names and use only tracking metadata', as
   expect(login.ok()).toBeTruthy();
   const headers = { Authorization: `Bearer ${(await login.json()).token}` };
   const tag = `DERIVED_${Date.now()}_${process.pid}_${test.info().workerIndex}`;
+  // Preserve the timestamp/process/worker discriminator using letters only:
+  // Generic contact names intentionally reject digits and underscores.
+  const nameToken = tag.replace(/\d/g, (digit) => String.fromCharCode(97 + Number(digit))).replace(/_/g, '');
+  expect(nameToken).toMatch(/^[A-Za-z]+$/);
   const contacts = [];
   let formId;
   try {
@@ -21,9 +25,9 @@ test('Generic derived filters separate names and use only tracking metadata', as
     const form = await created.json();
     formId = form.id;
     for (const [index, name, tracking] of [
-      [0, `John ${tag}`, { utm_source: tag }],
+      [0, `John ${nameToken}`, { utm_source: tag }],
       [1, 'Alice John', { utm_source: '' }],
-      [2, tag, {}],
+      [2, nameToken, {}],
     ]) {
       const submitted = await request.post(`${BASE_URL}/api/forms/public/${form.slug}/submit`, {
         headers: { 'x-gbs-tracking': JSON.stringify(tracking) },
@@ -45,9 +49,10 @@ test('Generic derived filters separate names and use only tracking metadata', as
     expect(await matches('utm_source', 'is_empty', [])).toEqual(contacts.slice(1).sort((a, b) => a - b));
     expect(await matches('utm_source', 'not_contains', [tag])).toEqual(contacts.slice(1).sort((a, b) => a - b));
     for (const field of ['lastName', 'utm_source']) {
-      const response = await request.get(`${BASE_URL}/api/contacts/filter-values/${field}?status=Lead&q=${tag}`, { headers });
+      const expectedValue = field === 'lastName' ? nameToken : tag;
+      const response = await request.get(`${BASE_URL}/api/contacts/filter-values/${field}?status=Lead&q=${expectedValue}`, { headers });
       expect(response.status()).toBe(200);
-      expect((await response.json()).values).toContainEqual({ value: tag, label: tag });
+      expect((await response.json()).values).toContainEqual({ value: expectedValue, label: expectedValue });
     }
   } finally {
     if (formId) await request.delete(`${BASE_URL}/api/forms/${formId}`, { headers });

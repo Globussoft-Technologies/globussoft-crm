@@ -37,6 +37,9 @@ s3Service.isLocalUrl = vi.fn();
 
 
 prisma.webForm = prisma.webForm || {};
+prisma.webFormFolder = {
+  findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(),
+};
 
 prisma.webFormSubmission = prisma.webFormSubmission || {};
 
@@ -101,7 +104,7 @@ const TENANT_ID = 11;
 const USER_ID = 22;
 
 
-function makeApp(vertical = 'generic') {
+function makeApp(vertical = 'generic', tenantId = TENANT_ID) {
 
   const app = express();
 
@@ -109,7 +112,7 @@ function makeApp(vertical = 'generic') {
 
   app.use((/** @type {any} */ req, /** @type {import('express').Response} */ _res, /** @type {import('express').NextFunction} */ next) => {
 
-    req.user = { userId: USER_ID, tenantId: TENANT_ID, role: 'ADMIN', vertical };
+    req.user = { userId: USER_ID, tenantId, role: 'ADMIN', vertical };
 
     next();
 
@@ -123,6 +126,7 @@ function makeApp(vertical = 'generic') {
 
 
 beforeEach(() => {
+  Object.values(prisma.webFormFolder).forEach((mock) => mock.mockReset());
 
   for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue, prisma.tenant, prisma.tenantSetting, prisma.user]) {
 
@@ -358,6 +362,37 @@ describe('Generic conditional fields', () => {
 });
 
 
+describe('folder tenant isolation', () => {
+  test.each(['rename', 'delete', 'deleteForms', 'assign', 'create'])('rejects a foreign Generic tenant attempting %s', async (action) => {
+    const ownerTenant = 42;
+    prisma.webFormFolder.findFirst.mockImplementation(({ where }) => Promise.resolve(
+      where.id === 501 && (where.tenantId == null || where.tenantId === ownerTenant)
+        ? { id: 501, tenantId: ownerTenant, scope: 'generic' } : null,
+    ));
+    prisma.webForm.findFirst.mockImplementation(({ where }) => Promise.resolve(
+      where.id === 601 ? { id: 601, tenantId: TENANT_ID, scope: 'generic' } : null,
+    ));
+    const app = makeApp('generic', TENANT_ID);
+    let response;
+    if (action === 'rename') response = await request(app).put('/api/forms/folders/501').send({ name: 'Hijacked' });
+    if (action === 'delete' || action === 'deleteForms') response = await request(app).delete('/api/forms/folders/501').send({ deleteForms: action === 'deleteForms' });
+    if (action === 'assign') response = await request(app).put('/api/forms/601/folder').send({ folderId: 501 });
+    if (action === 'create') response = await request(app).post('/api/forms').send({ name: 'Foreign folder', folderId: 501 });
+    expect(response.status).toBe(404);
+    expect(prisma.webFormFolder.findFirst).toHaveBeenCalledWith({ where: { id: 501, tenantId: TENANT_ID, scope: 'generic' } });
+    expect(prisma.webFormFolder.delete).not.toHaveBeenCalled();
+    expect(prisma.webFormFolder.update).not.toHaveBeenCalled();
+    expect(prisma.webForm.update).not.toHaveBeenCalled();
+    expect(prisma.webForm.create).not.toHaveBeenCalled();
+  });
+
+  test('folder lists filter by both tenant and scope', async () => {
+    prisma.webFormFolder.findMany.mockResolvedValue([]);
+    expect((await request(makeApp()).get('/api/forms/folders')).status).toBe(200);
+    expect(prisma.webFormFolder.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: TENANT_ID, scope: 'generic' } }));
+  });
+});
+
 describe('GET /api/forms', () => {
 
   test('isolates travel forms from generic forms for authenticated users', async () => {
@@ -422,84 +457,14 @@ describe('GET /api/forms', () => {
   });
 
 
-  test('creates a starter form when the tenant has no forms', async () => {
-
+  test('returns an empty list without creating a form', async () => {
     prisma.webForm.findMany.mockResolvedValue([]);
-
-    prisma.webFormSubmission.groupBy.mockResolvedValue([]);
-
-    prisma.webForm.findFirst.mockResolvedValueOnce(null);
-
-    prisma.webForm.create.mockResolvedValueOnce({
-
-      id: 9,
-
-      tenantId: TENANT_ID,
-
-      createdByUserId: USER_ID,
-
-      name: 'Untitled form - 06 Aug 2026, 18:18',
-
-      slug: 'untitled-form-06-aug-2026-18-18',
-
-      description: '',
-
-      isActive: true,
-
-      fieldsJson: JSON.stringify([]),
-
-      styleJson: JSON.stringify({}),
-
-      settingsJson: JSON.stringify({}),
-
-    });
-
 
     const res = await request(makeApp()).get('/api/forms');
 
-
     expect(res.status).toBe(200);
-
-    expect(res.body).toHaveLength(1);
-
-    expect(res.body[0]).toMatchObject({
-
-      id: 9,
-
-      tenantId: TENANT_ID,
-
-      createdByUserId: USER_ID,
-
-      slug: 'untitled-form-06-aug-2026-18-18',
-
-      submissionCount: 0,
-
-    });
-
-    expect(prisma.webForm.create).toHaveBeenCalledTimes(1);
-
-    expect(prisma.webForm.create).toHaveBeenCalledWith({
-
-      data: expect.objectContaining({
-
-        tenantId: TENANT_ID,
-
-        createdByUserId: USER_ID,
-
-        description: '',
-
-        isActive: true,
-
-        fieldsJson: expect.any(String),
-
-        styleJson: expect.any(String),
-
-        settingsJson: expect.any(String),
-
-      }),
-
-    });
-
+    expect(res.body).toEqual([]);
+    expect(prisma.webForm.create).not.toHaveBeenCalled();
   });
 
 });

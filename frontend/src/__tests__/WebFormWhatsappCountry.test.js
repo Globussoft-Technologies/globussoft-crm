@@ -7,7 +7,7 @@ test.each([
   ['+91', '+91 98765 43210', '9876543210'],
 ])('pasted WhatsApp numbers use the independently selected country %s', (country, pasted, expected) => {
   const html = readFileSync(resolve(process.cwd(), 'public/embed/web-form.html'), 'utf8');
-  const body = html.match(/function keepWhatsappNumeric\(value\) \{([\s\S]*?)\n\s*\}\n\s*function syncWhatsappField/)[1];
+  const body = html.match(/function keepWhatsappNumeric\(value\) \{([\s\S]*?)\r?\n\s*\}\r?\n\s*function syncWhatsappField/)[1];
   const input = { value: '' };
   const showError = vi.fn();
   // Execute the actual embedded handler. No phoneCountry binding is supplied:

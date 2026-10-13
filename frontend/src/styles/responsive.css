@@ -2146,6 +2146,16 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   padding-top: 1rem;
 }
 
+.inbox-email-row__preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  max-height: 3em;
+  overflow: hidden;
+  white-space: normal;
+}
+
 .generic-template-modal__group-trigger,
 .generic-template-modal__group-list {
   display: none;
@@ -2483,6 +2493,13 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 
   .inbox-email-row__preview {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    max-height: 2.7em;
+    white-space: normal;
+    overflow-wrap: anywhere !important;
     font-size: 0.8rem !important;
     line-height: 1.35 !important;
   }

@@ -102,6 +102,7 @@ export function NotifyProvider({ children }) {
         cancelText: cfg.cancelText || 'Cancel',
         confirmValue: cfg.confirmValue ?? true,
         cancelValue: cfg.cancelValue ?? false,
+        dismissValue: cfg.dismissValue,
         dismissible: !!cfg.dismissible,
         destructive: !!cfg.destructive,
       });
@@ -251,7 +252,7 @@ function ModalSlot({ modal, close }) {
   React.useEffect(() => {
     if (!modal) return;
     const onKey = (e) => {
-      if (e.key === 'Escape') close(modal.kind === 'confirm' ? false : null);
+      if (e.key === 'Escape') close(modal.dismissValue ?? (modal.kind === 'confirm' ? false : null));
       if (e.key === 'Enter' && modal.kind === 'prompt') close(value);
     };
     window.addEventListener('keydown', onKey);
@@ -269,7 +270,7 @@ function ModalSlot({ modal, close }) {
       aria-modal="true"
       aria-labelledby="notify-modal-title"
       data-notify-modal={modal.kind}
-      onClick={() => close(modal.dismissible ? false : cancelValue)}
+      onClick={() => close(modal.dismissValue ?? (modal.dismissible ? false : cancelValue))}
       style={{
         position: 'fixed', inset: 0, zIndex: 10001,
         boxSizing: 'border-box', maxWidth: 'none', maxHeight: 'none',

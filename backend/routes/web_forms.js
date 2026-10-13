@@ -2109,61 +2109,112 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
 // Authenticated CRUD -------------------------------------------------------
 
+router.get("/folders", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const folders = await prisma.webFormFolder.findMany({
+      where: { tenantId: req.user.tenantId, scope: requestedScope(req) },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
+    res.json(folders);
+  } catch (err) {
+    console.error("[web-forms] folder list error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to load folders" });
+  }
+});
+
+router.post("/folders", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const name = String(req.body?.name || "").trim();
+    if (!name || name.length > 100) return res.status(400).json({ error: "Folder name must be 1–100 characters", code: "INVALID_FOLDER_NAME" });
+    const folder = await prisma.webFormFolder.create({
+      data: { tenantId: req.user.tenantId, scope: requestedScope(req), name },
+    });
+    res.status(201).json(folder);
+  } catch (err) {
+    if (err.code === "P2002") return res.status(409).json({ error: "A folder with this name already exists", code: "FOLDER_EXISTS" });
+    console.error("[web-forms] folder create error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to create folder" });
+  }
+});
+
+router.put("/folders/:id", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const id = Number(req.params.id);
+    const scope = requestedScope(req);
+    const name = String(req.body?.name || "").trim();
+    if (!Number.isInteger(id) || id <= 0 || !name || name.length > 100) return res.status(400).json({ error: "Invalid folder", code: "INVALID_FOLDER" });
+    const existing = await prisma.webFormFolder.findFirst({ where: { id, tenantId: req.user.tenantId, scope } });
+    if (!existing) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    const folder = await prisma.webFormFolder.update({ where: { id }, data: { name } });
+    res.json(folder);
+  } catch (err) {
+    if (err.code === "P2002") return res.status(409).json({ error: "A folder with this name already exists", code: "FOLDER_EXISTS" });
+    console.error("[web-forms] folder update error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to rename folder" });
+  }
+});
+
+router.delete("/folders/:id", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const id = Number(req.params.id);
+    const scope = requestedScope(req);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid folder id", code: "INVALID_FOLDER_ID" });
+    const existing = await prisma.webFormFolder.findFirst({ where: { id, tenantId: req.user.tenantId, scope } });
+    if (!existing) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    if (req.body?.deleteForms === true) {
+      const deletedForms = await prisma.$transaction(async (tx) => {
+        const result = await tx.webForm.deleteMany({ where: { folderId: id, tenantId: req.user.tenantId, scope } });
+        await tx.webFormFolder.delete({ where: { id: existing.id } });
+        return result.count;
+      });
+      return res.json({ success: true, deletedForms });
+    }
+    await prisma.webFormFolder.delete({ where: { id } });
+    res.json({ success: true, deletedForms: 0 });
+  } catch (err) {
+    console.error("[web-forms] folder delete error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to delete folder" });
+  }
+});
+
+router.put("/:id/folder", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const id = Number(req.params.id);
+    const scope = requestedScope(req);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid form id", code: "INVALID_FORM_ID" });
+    const form = await prisma.webForm.findFirst({ where: { id, tenantId: req.user.tenantId, scope } });
+    if (!form) return res.status(404).json({ error: "Form not found", code: "FORM_NOT_FOUND" });
+    const folderId = req.body?.folderId == null ? null : Number(req.body.folderId);
+    if (folderId !== null) {
+      if (!Number.isInteger(folderId) || folderId <= 0) return res.status(400).json({ error: "Invalid folder id", code: "INVALID_FOLDER_ID" });
+      const folder = await prisma.webFormFolder.findFirst({ where: { id: folderId, tenantId: req.user.tenantId, scope } });
+      if (!folder) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    }
+    const updated = await prisma.webForm.update({ where: { id }, data: { folderId } });
+    res.json({ id: updated.id, folderId: updated.folderId });
+  } catch (err) {
+    console.error("[web-forms] move error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to move form" });
+  }
+});
+
 router.get("/", verifyToken, async (req, res) => {
   try {
     const scope = requestedScope(req);
     // Web forms remain tenant-owned. Cross-organisation landing selection is
     // handled by landing-form-config and must never copy or expose another
     // organisation's forms in this tenant's CRUD list.
-    let forms = await listWithCounts(req.user.tenantId, scope);
-
-    if (forms.length === 0) {
-      const now = new Date();
-
-      const date = now.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      });
-
-      const time = now.toLocaleTimeString("en-GB", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-
-      const name = `Untitled form - ${date}, ${time}`;
-
-      const slug = await ensureUniqueSlug(name, scope);
-
-      const form = await prisma.webForm.create({
-        data: {
-          tenantId: req.user.tenantId,
-
-          scope,
-
-          createdByUserId: req.user.userId,
-
-          name,
-
-          slug,
-
-          description: "",
-
-          isActive: true,
-
-          fieldsJson: JSON.stringify(defaultFields()),
-
-          styleJson: JSON.stringify(defaultStyle()),
-
-          settingsJson: JSON.stringify(defaultSettings()),
-        },
-      });
-
-      forms = [shapeForm(form, 0, `${req.protocol}://${req.get("host")}`)];
-    }
-
-    res.json(forms);
+    res.json(await listWithCounts(req.user.tenantId, scope));
   } catch (err) {
     console.error("[web-forms] list error:", err && err.message);
 
@@ -2188,6 +2239,13 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const slug = await ensureUniqueSlug(body.slug || name, scope);
+    const folderId = body.folderId == null ? null : Number(body.folderId);
+    if ((scope !== "generic" || (req.user?.vertical && req.user.vertical !== "generic")) && folderId !== null) return res.status(400).json({ error: "Folders are only available for Generic CRM", code: "INVALID_FOLDER_SCOPE" });
+    if (folderId !== null) {
+      if (!Number.isInteger(folderId) || folderId <= 0) return res.status(400).json({ error: "Invalid folder id", code: "INVALID_FOLDER_ID" });
+      const folder = await prisma.webFormFolder.findFirst({ where: { id: folderId, tenantId: req.user.tenantId, scope } });
+      if (!folder) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    }
     const leadFieldDefinitions = body.fields !== undefined
       ? await loadLeadFieldDefinitions(req.user.tenantId)
       : [];
@@ -2197,6 +2255,7 @@ router.post("/", verifyToken, async (req, res) => {
         tenantId: req.user.tenantId,
 
         scope,
+        folderId,
 
         createdByUserId: req.user.userId,
 

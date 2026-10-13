@@ -537,6 +537,10 @@ describe("<Inbox />", () => {
     const user = userEvent.setup();
     renderInbox({ tenant: { vertical } });
 
+    expect(screen.getByTestId("inbox-page-shell")).not.toHaveClass("inbox-page-shell--generic");
+    expect(screen.getByTestId("inbox-list-card")).not.toHaveClass("inbox-list-card--generic");
+    expect(document.querySelector(".inbox-message-scroll--generic")).toBeNull();
+
     expect(await screen.findByRole('searchbox', { name: 'Search mail' })).toBeInTheDocument();
     expect(screen.getByLabelText('From date')).toBeInTheDocument();
     expect(screen.getByLabelText('To date')).toBeInTheDocument();

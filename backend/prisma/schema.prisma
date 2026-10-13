@@ -415,6 +415,7 @@ model Tenant {
   leadCustomFieldDefinitions LeadCustomFieldDefinition[]
   leadCustomFieldValues      LeadCustomFieldValue[]
   webForms                   WebForm[]
+  webFormFolders             WebFormFolder[]
   webFormSubmissions         WebFormSubmission[]
   genericImportHistories     GenericImportHistory[]
   // Generic-vertical-only "Customize table" column-visibility picker.
@@ -1192,6 +1193,8 @@ model WebForm {
   slug        String
   description String? @db.Text
   isActive    Boolean @default(true)
+  folderId    Int?
+  folder      WebFormFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
   // JSON blobs:
   //   fieldsJson  - ordered field array used by the public embed renderer
@@ -1215,6 +1218,21 @@ model WebForm {
   @@unique([scope, slug])
   @@index([tenantId, scope, createdAt])
   @@index([tenantId, scope, isActive])
+  @@index([tenantId, scope, folderId])
+}
+
+model WebFormFolder {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scope     String   @default("generic")
+  name      String   @db.VarChar(100)
+  forms     WebForm[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, scope, name])
+  @@index([tenantId, scope])
 }
 
 // One row per public form submit. Stores the raw payload snapshot for the

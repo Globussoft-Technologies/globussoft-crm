@@ -20,7 +20,7 @@ import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
-import { isRichTextMarkup, RichText } from "../utils/richText";
+import { isRichTextMarkup, richTextToPlainText, RichText } from "../utils/richText";
 
 function getInboxPageSize() {
   // Keep the page size fixed so pagination represents a predictable batch.
@@ -36,6 +36,14 @@ function formatMobileInboxDate(value) {
   return date.toDateString() === today.toDateString()
     ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
     : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function getInboxPreviewText(body) {
+  const value = String(body ?? "");
+  const text = isRichTextMarkup(value)
+    ? richTextToPlainText(value.replace(/<\/(?:p|div|li|h[1-6]|tr|blockquote)>/gi, " ").replace(/<br\s*\/?\s*>/gi, " "))
+    : value;
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function mergeUniqueById(previous, next) {
@@ -687,7 +695,7 @@ export default function Inbox() {
         </div>
         <h4 className="inbox-email-row__subject" style={{ fontWeight: "600", marginBottom: "0.5rem", color: "var(--text-primary)", overflowWrap: "anywhere" }}>{email.subject}</h4>
         <p className="inbox-email-row__preview" style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "anywhere" }}>
-          {isGeneric && isRichTextMarkup(email.body) ? <RichText as="span" value={email.body} /> : email.body}
+          {isGeneric ? getInboxPreviewText(email.body) : email.body}
         </p>
       </div>
       {!email.read && <div className="inbox-email-row__unread-dot" style={{ width: "10px", height: "10px", borderRadius: "50%", background: "var(--accent-color)", alignSelf: "center" }} />}

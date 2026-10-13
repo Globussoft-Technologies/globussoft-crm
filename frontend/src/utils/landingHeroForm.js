@@ -19,6 +19,14 @@ export function resizeHeroFormFrame(frame, rawHeight) {
   return true;
 }
 
+export function responsiveFormDevice(width) {
+  const viewportWidth = Number(width);
+  if (!Number.isFinite(viewportWidth)) return "desktop";
+  if (viewportWidth <= 640) return "mobile";
+  if (viewportWidth <= 900) return "tablet";
+  return "desktop";
+}
+
 // Injects the hero web-form iframe into a closed shadow root under
 // #hero-form-mount so the iframe is absent from ordinary Elements queries.
 // Backend authorization remains the actual security boundary.

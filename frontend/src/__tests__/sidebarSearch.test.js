@@ -14,7 +14,6 @@ describe('filterSidebarPages', () => {
     expect(getGenericAccessByPath('/settings')).toMatchObject({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/settings')).toEqual({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/data-import-export')).toEqual({
-      allow: ['ADMIN', 'MANAGER'],
       requiredPermission: { module: 'settings', action: 'manage' },
     });
     expect(genericRoleGuardProps('/revenue-goals')).toEqual({});
@@ -25,20 +24,20 @@ describe('filterSidebarPages', () => {
     const regular = getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission });
     const manager = getGenericSidebarPages({ isAdmin: false, isManager: true, permissionsReady: true, hasPermission });
     expect(regular.some((page) => page.path === '/revenue-goals')).toBe(true);
-    expect(regular.some((page) => page.path === '/data-import-export')).toBe(false);
+    expect(regular.some((page) => page.path === '/data-import-export')).toBe(true);
     expect(manager.some((page) => page.path === '/data-import-export')).toBe(true);
     expect(manager.some((page) => page.path === '/settings')).toBe(true);
   });
 
-  it('requires both the role tier and assigned permission for manager pages', () => {
+  it('lets an explicit permission grant override a legacy manager tier', () => {
     const page = getGenericAccessByPath('/cpq');
     expect(canUseGenericSidebarPage(page, {
-      isManager: true,
+      isManager: false,
       permissionsReady: true,
       hasPermission: () => false,
     })).toBe(false);
     expect(canUseGenericSidebarPage(page, {
-      isManager: true,
+      isManager: false,
       permissionsReady: true,
       hasPermission: (module, action) => module === 'cpq' && action === 'read',
     })).toBe(true);

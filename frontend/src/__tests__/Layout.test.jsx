@@ -119,13 +119,13 @@ describe('Layout', () => {
     notifyMock.confirm.mockResolvedValue(true);
   });
 
-  it('renders Sidebar + Omnibar + Presence + NotificationBell + outlet', () => {
+  it('renders Sidebar + Omnibar + Presence + NotificationBell + outlet', async () => {
     renderLayout();
     expect(screen.getByTestId('sidebar-stub')).toBeInTheDocument();
     expect(screen.getByTestId('omnibar-stub')).toBeInTheDocument();
     expect(screen.getByTestId('presence-stub')).toBeInTheDocument();
     expect(screen.getByTestId('bell-stub')).toBeInTheDocument();
-    expect(screen.getByTestId('outlet')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('outlet')).toBeInTheDocument());
   });
 
   it.each(['generic', 'travel', 'wellness'])(

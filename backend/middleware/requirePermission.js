@@ -677,8 +677,19 @@ function requireAnyPermission(perms, opts = {}) {
           verifiedVertical,
         );
       } catch (err) {
-        if (process.env.NODE_ENV === 'test' && err && err.name === 'PrismaClientInitializationError') {
-          return next();
+        // Keep legacy route fixtures usable when they do not mock the RBAC
+        // junction table. This is test-only and never changes production
+        // authorization; real requests always use the effective role grants.
+        if (isVitestRuntime() && isUnmockedPrismaError(err)) {
+          const fallbackPerms = legacyTestPermissionsForRole(req.user?.role);
+          if (requiredKeys.some((key) => fallbackPerms.has(key))) {
+            return next();
+          }
+          return res.status(403).json({
+            error: `Access denied: requires one of ${requiredKeys.join(', ')}`,
+            code: 'RBAC_DENIED',
+            requiredAny: requiredKeys,
+          });
         }
         throw err;
       }

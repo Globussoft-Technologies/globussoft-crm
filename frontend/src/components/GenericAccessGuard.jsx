@@ -19,12 +19,13 @@ export default function GenericAccessGuard({ path, children, message }) {
   // those users, so use it only for this route.
   const redirectTo = resolvedPath === "/dashboard" ? "/home" : undefined;
   if (!guard.allow && !guard.requiredPermission) return children;
-  if (guard.allow && guard.requiredPermission) {
+  // A permission grant is authoritative. Applying the legacy role allow-list
+  // as a second check would reject a correctly configured custom role solely
+  // because its legacy User.role is not ADMIN or MANAGER.
+  if (guard.requiredPermission) {
     return (
-      <RoleGuard allow={guard.allow} message={message} redirectTo={redirectTo}>
-        <RoleGuard requiredPermission={guard.requiredPermission} message={message} redirectTo={redirectTo}>
-          {children}
-        </RoleGuard>
+      <RoleGuard requiredPermission={guard.requiredPermission} message={message} redirectTo={redirectTo}>
+        {children}
       </RoleGuard>
     );
   }

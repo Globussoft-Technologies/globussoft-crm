@@ -3,6 +3,13 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
+// These assertions check source contracts, not the formatter's quote style
+// or whitespace. Runtime/layout assertions below remain unchanged.
+function expectSourceContains(source, snippet) {
+  const normalize = (value) => value.replace(/\s+/g, '').replace(/'/g, '"').replace(/;(?=}|$)/g, '');
+  expect(normalize(source).includes(normalize(snippet)), `Missing embed source contract: ${snippet}`).toBe(true);
+}
+
 describe('webForms helpers', () => {
   test('keeps an explicitly cleared string blank', () => {
     expect(textOrBlank('')).toBe('');
@@ -56,6 +63,8 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).toContain('allow="geolocation *"');
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
+    expect(code).toContain('type:"responsive-device"');
+    expect(code).toContain('window.innerWidth');
   });
 
   test('escapes the iframe title safely', () => {
@@ -108,7 +117,7 @@ describe('public web form embed footer', () => {
 
     expect(html).toMatch(/if\s*\(advanced\s*&&\s*field\.sourceKey\s*===\s*["']phone["']\)/);
     expect(html).toMatch(/field\.fieldType\s*===\s*["']number["']\s*\?\s*["']number["']\s*:\s*["']tel["']/);
-    expect(html).toContain('name="phoneCountry"');
+    expectSourceContains(html, 'name="phoneCountry"');
     expect(html).toMatch(/\.phone-country-picker\.open\s*\{\s*z-index:\s*40\s*;\s*\}/);
     expect(html).toMatch(/\.phone-country-picker\s*>\s*input:focus\s*\+\s*\.phone-country-options\s*\{\s*display:\s*block\s*;\s*\}/);
     expect(html).toMatch(/options\.style\.display\s*=\s*["']block["']/);
@@ -117,17 +126,17 @@ describe('public web form embed footer', () => {
     expect(html).toMatch(/allowedCountries\.length\s*>\s*0/);
     expect(html).toMatch(/pickerAllowedCountries\.length\s*>\s*0/);
     expect(html).toMatch(/trigger\.inputMode\s*=\s*["']numeric["']/);
-    expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
+    expectSourceContains(html, "var numericQuery = trigger.value.replace(/\\D/g, '')");
     expect(html).toMatch(/fd\.set\(["']phone["']\s*,\s*nationalDigits\)/);
     expect(html).toMatch(/if\s*\(\s*advanced\s*&&\s*fd\.get\(["']phone["']\)\s*&&\s*fd\.get\(["']phoneCountry["']\)\s*\)/);
-    expect(html).toContain('grid-template-columns: minmax(96px, 24%) minmax(0, 1fr);');
-    expect(html).toContain('grid-template-columns: minmax(96px, 24%) minmax(0, 1fr)!important;');
-    expect(html).toContain('generic-public-desktop-columns');
-    expect(html).toContain('generic-two-columns');
-    expect(html).toContain('!isBuilderPreview');
-    expect(html).toContain('grid-template-columns: minmax(92px, 34%) minmax(0, 1fr) !important;');
-    expect(html).toContain('padding-left: 44px;');
-    expect(html).toContain('@media (max-width: 640px)');
+    expectSourceContains(html, 'grid-template-columns: minmax(96px, 24%) minmax(0, 1fr);');
+    expectSourceContains(html, 'grid-template-columns: minmax(96px, 24%) minmax(0, 1fr)!important;');
+    expectSourceContains(html, 'generic-public-desktop-columns');
+    expectSourceContains(html, 'generic-two-columns');
+    expectSourceContains(html, '!isBuilderPreview');
+    expectSourceContains(html, 'grid-template-columns: minmax(92px, 34%) minmax(0, 1fr) !important;');
+    expectSourceContains(html, 'padding-left: 44px;');
+    expectSourceContains(html, '@media (max-width: 640px)');
   });
 
   test('renders the Generic CRM phone selector as a single compact control', () => {
@@ -146,21 +155,36 @@ describe('public web form embed footer', () => {
 
     expect(desktopRule).toBeGreaterThan(-1);
     expect(responsiveRule).toBeGreaterThan(desktopRule);
-    expect(html).toContain('@media (min-width: 641px) and (max-width: 900px)');
-    expect(html).toContain('grid-template-columns: var(--gbs-tablet-columns, minmax(0, 1fr)) !important;');
-    expect(html.slice(responsiveRule)).toContain('grid-template-columns: var(--gbs-mobile-columns, minmax(0, 1fr)) !important;');
-    expect(html.slice(responsiveRule)).toContain('grid-column: auto !important;');
-    expect(html).toContain('class="field phone-field ');
-    expect(html).toContain('@media (max-width: 480px)');
-    expect(html).toContain('@media (max-width: 359px)');
-    expect(html).toContain('grid-column: 1 / -1 !important;');
-    expect(html.slice(responsiveRule)).toContain('grid-template-columns: minmax(68px, 42%) minmax(0, 1fr) !important;');
-    expect(html).toContain('html.generic-preview-mobile.generic-scope .phone-input');
-    expect(html).toContain('padding: 0 3px 0 34px;');
-    expect(html).toContain('.choices.horizontal .check');
-    expect(html).toContain('width: fit-content;');
-    expect(html).toContain('flex: 0 1 auto;');
-    expect(html.slice(responsiveRule)).toContain('overflow-wrap: anywhere;');
+    expectSourceContains(html, '@media (min-width: 641px) and (max-width: 900px)');
+    expectSourceContains(html, 'grid-template-columns: var(--gbs-tablet-columns, minmax(0, 1fr)) !important;');
+    expectSourceContains(html.slice(responsiveRule), 'grid-template-columns: var(--gbs-mobile-columns, minmax(0, 1fr)) !important;');
+    expectSourceContains(html.slice(responsiveRule), 'grid-column: auto !important;');
+    expectSourceContains(html, 'class="field phone-field ');
+    expectSourceContains(html, '@media (max-width: 480px)');
+    expectSourceContains(html, '@media (max-width: 359px)');
+    expectSourceContains(html, 'grid-column: 1 / -1 !important;');
+    expectSourceContains(html.slice(responsiveRule), 'grid-template-columns: minmax(68px, 42%) minmax(0, 1fr) !important;');
+    expectSourceContains(html, 'html.generic-preview-mobile.generic-scope .phone-input');
+    expectSourceContains(html, 'padding: 0 3px 0 34px;');
+    expectSourceContains(html, 'grid-template-columns: minmax(104px, 30%) minmax(0, 1fr) !important;');
+    expectSourceContains(html, 'padding: 0 8px 0 54px;');
+    expectSourceContains(html, 'html.generic-preview-mobile.generic-scope .grid .full');
+    expectSourceContains(html, 'html.generic-host-desktop.generic-scope .grid');
+    expectSourceContains(html, 'html.generic-host-tablet.generic-scope .grid');
+    expectSourceContains(html, 'html.generic-host-mobile.generic-scope .grid');
+    expectSourceContains(html, 'type !== "responsive-device"');
+    expectSourceContains(html, 'grid-template-columns: var(--gbs-columns) !important;');
+    expectSourceContains(html, 'grid-template-columns: var(--gbs-tablet-columns) !important;');
+    expectSourceContains(html, 'grid-template-columns: var(--gbs-mobile-columns) !important;');
+    expectSourceContains(html, '--gbs-tablet-full-span');
+    expectSourceContains(html, '--gbs-mobile-full-span');
+    expectSourceContains(html, 'grid-column: var(--gbs-tablet-full-span, 1/-1) !important;');
+    expectSourceContains(html, 'grid-column: var(--gbs-mobile-full-span, 1/-1) !important;');
+    expect(html.lastIndexOf('html.generic-preview-desktop.generic-scope .grid')).toBeGreaterThan(html.lastIndexOf('@media (min-width: 641px) and (max-width: 900px)'));
+    expectSourceContains(html, '.choices.horizontal .check');
+    expectSourceContains(html, 'width: fit-content;');
+    expectSourceContains(html, 'flex: 0 1 auto;');
+    expectSourceContains(html.slice(responsiveRule), 'overflow-wrap: anywhere;');
   });
 
   test('sizes the live preview iframe to the selected device viewport', () => {
@@ -182,21 +206,25 @@ describe('public web form embed footer', () => {
   test('keeps the WhatsApp implementation behind the opt-in setting', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain('setupGenericWhatsapp');
-    expect(html).toContain('name="whatsappSameAsPhone"');
-    expect(html).toContain('WhatsApp number is the same as phone number');
-    expect(html).toContain("whatsappCountry.name = 'whatsappPhoneCountry'");
-    expect(html).toContain('name="whatsappPhone"');
-    expect(html).toContain('WhatsApp country code');
-    expect(html).toContain('setupGenericWhatsappPhone');
-    expect(html).toContain('Enter a valid WhatsApp number with ');
-    expect(html).toContain('setupGenericCountryPicker(whatsappCountrySelect');
-    expect(html).toContain('.generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}');
-    expect(html).toContain('white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)');
-    expect(html).toContain('.generic-whatsapp-phone{margin-bottom:0}');
-    expect(html).toContain("phoneField.classList.add('generic-phone-with-whatsapp')");
-    expect(html).toContain('generic-whatsapp-number');
-    expect(html).toContain("formData.settings.whatsappEnabled !== true");
+    expectSourceContains(html, 'setupGenericWhatsapp');
+    expectSourceContains(html, 'name="whatsappSameAsPhone"');
+    expectSourceContains(html, 'WhatsApp number is the same as phone number');
+    expectSourceContains(html, "whatsappCountry.name = 'whatsappPhoneCountry'");
+    expectSourceContains(html, 'name="whatsappPhone"');
+    expectSourceContains(html, 'WhatsApp country code');
+    expectSourceContains(html, 'setupGenericWhatsappPhone');
+    expectSourceContains(html, 'Enter a valid WhatsApp number with ');
+    expectSourceContains(html, 'setupGenericCountryPicker(whatsappCountrySelect');
+    expectSourceContains(html, '.generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}');
+    expectSourceContains(html, 'white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)');
+    expectSourceContains(html, '.generic-whatsapp-section>.check span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}');
+    expectSourceContains(html, 'function fitGenericRecaptcha()');
+    expectSourceContains(html, 'widget.style.transformOrigin = "top left"');
+    expectSourceContains(html, 'container.style.height = Math.ceil(widgetHeight * scale) + "px"');
+    expectSourceContains(html, '.generic-whatsapp-phone{margin-bottom:0}');
+    expectSourceContains(html, "phoneField.classList.add('generic-phone-with-whatsapp')");
+    expectSourceContains(html, 'generic-whatsapp-number');
+    expectSourceContains(html, "formData.settings.whatsappEnabled !== true");
   });
 
   test('uses field-specific Enter placeholders instead of one email example for every field', () => {
@@ -316,17 +344,17 @@ describe('public web form embed footer', () => {
   test('normalizes Generic CRM phone fields without rejecting valid international lengths', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
-    expect(html).toContain('function nationalPhoneMaxLength()');
-    expect(html).toContain('return Math.max(1, 15 - countryDigits.length)');
-    expect(html).toContain('function setupGenericPhoneInputLimit(countrySelect, input)');
-    expect(html).toContain("input.setAttribute('maxlength', '16')");
-    expect(html).toContain("input.setAttribute('inputmode', 'numeric')");
-    expect(html).toContain('slice(0, nationalPhoneMaxLength())');
-    expect(html).toContain("rawPhoneInput.trim().charAt(0) === '+'");
-    expect(html).toContain("var numericQuery = trigger.value.replace(/\\D/g, '')");
-    expect(html).toContain("option.value.replace(/^\\+/, '') === numericQuery");
-    expect(html).toContain('/^\\+[1-9]\\d{7,14}$/.test(internationalPhone)');
-    expect(html).toContain('Enter a valid international phone number.');
+    expectSourceContains(html, 'function nationalPhoneMaxLength()');
+    expectSourceContains(html, 'return Math.max(1, 15 - countryDigits.length)');
+    expectSourceContains(html, 'function setupGenericPhoneInputLimit(countrySelect, input)');
+    expectSourceContains(html, "input.setAttribute('maxlength', '16')");
+    expectSourceContains(html, "input.setAttribute('inputmode', 'numeric')");
+    expectSourceContains(html, 'slice(0, nationalPhoneMaxLength())');
+    expectSourceContains(html, "rawPhoneInput.trim().charAt(0) === '+'");
+    expectSourceContains(html, "var numericQuery = trigger.value.replace(/\\D/g, '')");
+    expectSourceContains(html, "option.value.replace(/^\\+/, '') === numericQuery");
+    expectSourceContains(html, '/^\\+[1-9]\\d{7,14}$/.test(internationalPhone)');
+    expectSourceContains(html, 'Enter a valid international phone number.');
     expect(html).not.toContain("/^\\d{9,11}$/.test(nationalDigits)");
     expect(html).not.toContain("genericPhoneInput.setAttribute('pattern'");
   });

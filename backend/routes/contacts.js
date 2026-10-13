@@ -5,6 +5,10 @@ const {
   RBAC_DENIED_MESSAGE,
   RBAC_DENIED_CODE,
 } = require("../middleware/auth");
+const {
+  requirePermission,
+  requireAnyPermission,
+} = require("../middleware/requirePermission");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
@@ -2770,9 +2774,15 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Bulk assign agent to multiple contacts (must be before /:id routes)
-// Restricted to ADMIN only — only admins may reassign leads between staff.
-router.put("/bulk-assign", verifyRole(["ADMIN"]), async (req, res) => {
+// Bulk assign agent to multiple contacts (must be before /:id routes).
+// The shared endpoint accepts the Contacts or Leads update grant.
+router.put(
+  "/bulk-assign",
+  requireAnyPermission([
+    { module: "contacts", action: "update" },
+    { module: "leads", action: "update" },
+  ]),
+  async (req, res) => {
   try {
     const { contactIds, assignedToId } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -2856,7 +2866,10 @@ router.put("/bulk-assign", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-router.put("/bulk-assign-campaign", verifyRole(["ADMIN"]), async (req, res) => {
+router.put(
+  "/bulk-assign-campaign",
+  requirePermission("leads", "update"),
+  async (req, res) => {
   try {
     const { contactIds, callifiedCampaignId } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -2888,7 +2901,13 @@ router.put("/bulk-assign-campaign", verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // Bulk hard-delete multiple contacts (must stay before /:id routes).
-router.delete("/bulk-delete", verifyRole(["ADMIN"]), async (req, res) => {
+router.delete(
+  "/bulk-delete",
+  requireAnyPermission([
+    { module: "contacts", action: "delete" },
+    { module: "leads", action: "delete" },
+  ]),
+  async (req, res) => {
   try {
     const { contactIds } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {

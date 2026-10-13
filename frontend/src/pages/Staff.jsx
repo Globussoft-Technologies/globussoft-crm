@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { createPortal } from "react-dom";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import {
@@ -295,6 +296,118 @@ function actionButtonStyle(kind) {
     fontWeight: 500,
     whiteSpace: "nowrap",
   };
+}
+
+function GenericStaffActionsMenu({
+  member,
+  canManageStaff,
+  canViewPermissions,
+  anchor,
+  onClose,
+  onEdit,
+  onToggle,
+  onReset,
+  onInvite,
+  onDelete,
+  onPermissions,
+}) {
+  const run = (callback) => {
+    onClose();
+    callback();
+  };
+
+  return (
+    <div
+      role="menu"
+      aria-label={`Actions for ${member.name || member.email}`}
+      data-staff-generic-actions="true"
+      onMouseDown={(event) => event.stopPropagation()}
+      style={{
+        position: "fixed",
+        top: (anchor?.bottom || 0) + 4,
+        left: anchor?.left || 0,
+        zIndex: 2000,
+        minWidth: "9.5rem",
+        maxHeight: "min(70vh, 20rem)",
+        overflowY: "auto",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.3rem",
+        padding: "0.45rem",
+        alignItems: "stretch",
+        background: "var(--surface-color, #fff)",
+        border: "1px solid var(--border-color, #ddd)",
+        borderRadius: "0.5rem",
+        boxShadow: "0 10px 26px rgba(15, 23, 42, 0.2)",
+      }}
+    >
+      {canManageStaff && (
+        <>
+          <button
+            type="button"
+            onClick={() => run(() => onEdit(member))}
+            data-testid={`staff-action-edit-${member.id}`}
+            title="Edit user"
+            style={actionButtonStyle("edit")}
+          >
+            <Edit3 size={13} /> Edit
+          </button>
+          {member.role !== "ADMIN" && (
+            <button
+              type="button"
+              onClick={() => run(() => onToggle(member))}
+              data-testid={`staff-action-deactivate-${member.id}`}
+              title={member.deactivatedAt ? "Reactivate user" : "Deactivate user"}
+              style={actionButtonStyle(member.deactivatedAt ? "reactivate" : "deactivate")}
+            >
+              {member.deactivatedAt ? <UserCheck size={13} /> : <UserX size={13} />}
+              {member.deactivatedAt ? "Reactivate" : "Deactivate"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => run(() => onReset(member))}
+            data-testid={`staff-action-reset-password-${member.id}`}
+            title="Send password reset link"
+            style={actionButtonStyle("reset")}
+          >
+            <Key size={13} /> Reset Password
+          </button>
+          <button
+            type="button"
+            onClick={() => run(() => onInvite(member))}
+            data-testid={`staff-action-resend-invite-${member.id}`}
+            title="Re-send the original invite email"
+            style={actionButtonStyle("invite")}
+          >
+            <MailPlus size={13} /> Resend Invite
+          </button>
+          {member.role !== "ADMIN" && (
+            <button
+              type="button"
+              onClick={() => run(() => onDelete(member.id, member.name || member.email))}
+              data-testid={`staff-action-delete-${member.id}`}
+              title="Delete user"
+              style={actionButtonStyle("delete")}
+            >
+              <Trash2 size={13} /> Delete
+            </button>
+          )}
+        </>
+      )}
+      {canViewPermissions && (
+        <button
+          type="button"
+          onClick={() => run(() => onPermissions(member))}
+          data-testid={`staff-action-permissions-${member.id}`}
+          title="View effective permissions for this user"
+          style={actionButtonStyle("permissions")}
+        >
+          <ShieldCheck size={13} /> Permissions
+        </button>
+      )}
+    </div>
+  );
 }
 
 // Unified role badge. Prefers the assigned RBAC role's name (Doctor / Nurse /
@@ -627,6 +740,34 @@ export default function Staff() {
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [filterOpen]);
+
+  // Generic staff actions use one shared, row-aware menu. Keeping only the
+  // active row's menu open avoids the browser rendering a separate native
+  // select popup for every row and also lets the menu escape the table's
+  // overflow container.
+  useEffect(() => {
+    if (openGenericActions === null) return undefined;
+    const closeMenu = (event) => {
+      const target = event.target;
+      if (target?.closest?.("[data-staff-action-trigger], [data-staff-generic-actions]")) {
+        return;
+      }
+      setOpenGenericActions(null);
+      setGenericActionsAnchor(null);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setOpenGenericActions(null);
+        setGenericActionsAnchor(null);
+      }
+    };
+    document.addEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openGenericActions]);
 
   const loadCommissionProfiles = async () => {
     if (!canManageStaff) return;
@@ -1162,6 +1303,10 @@ export default function Staff() {
     [filteredStaff.length],
   );
   const visibleStaff = filteredStaff.slice(0, visibleStaffCount);
+  const activeGenericMember =
+    !isTravel && !isWellness
+      ? visibleStaff.find((member) => member.id === openGenericActions)
+      : null;
   const highlightedStaffIndex = highlightedStaffId
     ? filteredStaff.findIndex((member) => String(member.id) === highlightedStaffId)
     : -1;
@@ -2113,41 +2258,60 @@ export default function Staff() {
                       {canManageStaff || canViewPermissions ? (
                         <>
                           {!isTravel && !isWellness && (
-                            <select
-                              value=""
-                              onChange={(event) => {
-                                const action = event.target.value;
-                                if (action === "edit") openEdit(member);
-                                if (action === "toggle") toggleActive(member);
-                                if (action === "reset") resetPassword(member);
-                                if (action === "invite") resendInvite(member);
-                                if (action === "delete") deleteUser(member.id, member.name || member.email);
-                                if (action === "permissions") navigate(`/staff/${member.id}/permissions`);
-                                event.target.value = "";
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                const rect = event.currentTarget.getBoundingClientRect();
+                                if (openGenericActions === member.id) {
+                                  setOpenGenericActions(null);
+                                  setGenericActionsAnchor(null);
+                                } else {
+                                  setGenericActionsAnchor({
+                                    bottom: rect.bottom,
+                                    left: rect.left,
+                                  });
+                                  setOpenGenericActions(member.id);
+                                }
                               }}
                               data-testid={`staff-action-more-${member.id}`}
                               aria-label="More staff actions"
-                              style={{ ...actionButtonStyle("edit"), cursor: "pointer" }}
+                              aria-haspopup="menu"
+                              aria-expanded={openGenericActions === member.id}
+                              data-staff-action-trigger="true"
+                              style={{
+                                ...actionButtonStyle("edit"),
+                                minWidth: "7.5rem",
+                                justifyContent: "space-between",
+                              }}
                             >
-                              <option value="">More ▼</option>
-                              <option value="edit">Edit</option>
-                              {member.role !== "ADMIN" && <option value="toggle">{member.deactivatedAt ? "Reactivate" : "Deactivate"}</option>}
-                              <option value="reset">Reset Password</option>
-                              <option value="invite">Resend Invite</option>
-                              {member.role !== "ADMIN" && <option value="delete">Delete</option>}
-                              {canViewPermissions && <option value="permissions">Permissions</option>}
-                            </select>
+                              <span>More</span>
+                              <ChevronDown
+                                size={13}
+                                aria-hidden="true"
+                                style={{
+                                  transform: openGenericActions === member.id ? "rotate(180deg)" : "none",
+                                  transition: "transform 0.15s ease",
+                                }}
+                              />
+                            </button>
                           )}
+                        {(isTravel || isWellness) && (
                         <div
+                          role={!isTravel && !isWellness ? "menu" : undefined}
+                          aria-label={!isTravel && !isWellness ? `Actions for ${member.name || member.email}` : undefined}
+                          data-staff-generic-actions={!isTravel && !isWellness ? "true" : undefined}
+                          onMouseDown={(event) => {
+                            if (!isTravel && !isWellness) event.stopPropagation();
+                          }}
                           style={{
-                            display: !isTravel && !isWellness && openGenericActions !== member.id ? "none" : "flex",
+                            display: isTravel || isWellness ? "flex" : "none",
                             gap: "0.3rem",
                             flexWrap: "wrap",
                             ...(!isTravel && !isWellness ? {
                               top: genericActionsAnchor ? genericActionsAnchor.bottom + 4 : 0,
                               left: genericActionsAnchor ? genericActionsAnchor.left : 0,
                               position: "fixed",
-                              zIndex: 20,
+                              zIndex: 1000,
                               minWidth: "9.5rem",
                               padding: "0.45rem",
                               flexDirection: "column",
@@ -2162,7 +2326,11 @@ export default function Staff() {
                           {canManageStaff && (
                             <>
                               <button
-                                onClick={() => openEdit(member)}
+                                onClick={() => {
+                                  setOpenGenericActions(null);
+                                  setGenericActionsAnchor(null);
+                                  openEdit(member);
+                                }}
                                 data-testid={`staff-action-edit-${member.id}`}
                                 title="Edit user"
                                 style={actionButtonStyle("edit")}
@@ -2171,7 +2339,11 @@ export default function Staff() {
                               </button>
                               {member.role !== "ADMIN" && (
                                 <button
-                                  onClick={() => toggleActive(member)}
+                                  onClick={() => {
+                                    setOpenGenericActions(null);
+                                    setGenericActionsAnchor(null);
+                                    toggleActive(member);
+                                  }}
                                   data-testid={`staff-action-deactivate-${member.id}`}
                                   title={
                                     member.deactivatedAt
@@ -2195,7 +2367,11 @@ export default function Staff() {
                                 </button>
                               )}
                               <button
-                                onClick={() => resetPassword(member)}
+                                onClick={() => {
+                                  setOpenGenericActions(null);
+                                  setGenericActionsAnchor(null);
+                                  resetPassword(member);
+                                }}
                                 data-testid={`staff-action-reset-password-${member.id}`}
                                 title="Send password reset link"
                                 style={actionButtonStyle("reset")}
@@ -2203,7 +2379,11 @@ export default function Staff() {
                                 <Key size={13} /> Reset Password
                               </button>
                               <button
-                                onClick={() => resendInvite(member)}
+                                onClick={() => {
+                                  setOpenGenericActions(null);
+                                  setGenericActionsAnchor(null);
+                                  resendInvite(member);
+                                }}
                                 data-testid={`staff-action-resend-invite-${member.id}`}
                                 title="Re-send the original invite email"
                                 style={actionButtonStyle("invite")}
@@ -2212,12 +2392,14 @@ export default function Staff() {
                               </button>
                               {member.role !== "ADMIN" && (
                                 <button
-                                  onClick={() =>
+                                  onClick={() => {
+                                    setOpenGenericActions(null);
+                                    setGenericActionsAnchor(null);
                                     deleteUser(
                                       member.id,
                                       member.name || member.email,
-                                    )
-                                  }
+                                    );
+                                  }}
                                   data-testid={`staff-action-delete-${member.id}`}
                                   title="Delete user"
                                   style={actionButtonStyle("delete")}
@@ -2229,9 +2411,11 @@ export default function Staff() {
                           )}
                           {canViewPermissions && (
                             <button
-                              onClick={() =>
-                                navigate(`/staff/${member.id}/permissions`)
-                              }
+                              onClick={() => {
+                                setOpenGenericActions(null);
+                                setGenericActionsAnchor(null);
+                                navigate(`/staff/${member.id}/permissions`);
+                              }}
                               data-testid={`staff-action-permissions-${member.id}`}
                               title="View effective permissions for this user"
                               style={actionButtonStyle("permissions")}
@@ -2240,6 +2424,7 @@ export default function Staff() {
                             </button>
                           )}
                         </div>
+                        )}
                         </>
                       ) : (
                         <span
@@ -2259,6 +2444,28 @@ export default function Staff() {
           </div>
         )}
       </div>
+
+      {activeGenericMember &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <GenericStaffActionsMenu
+            member={activeGenericMember}
+            canManageStaff={canManageStaff}
+            canViewPermissions={canViewPermissions}
+            anchor={genericActionsAnchor}
+            onClose={() => {
+              setOpenGenericActions(null);
+              setGenericActionsAnchor(null);
+            }}
+            onEdit={openEdit}
+            onToggle={toggleActive}
+            onReset={resetPassword}
+            onInvite={resendInvite}
+            onDelete={deleteUser}
+            onPermissions={(member) => navigate(`/staff/${member.id}/permissions`)}
+          />,
+          document.body,
+        )}
 
       {/* Add-Staff modal. Mirrors the edit-modal shape so both share the
           same overlay/card chrome. On success the new user can log in with

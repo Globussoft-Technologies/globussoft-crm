@@ -450,24 +450,91 @@
         transform: none;
       }
 
-      .generic-phone-with-whatsapp{margin-bottom:0}
-      .generic-whatsapp-phone{margin-bottom:0}
-      .generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}
-      .generic-whatsapp-section>.check{display:flex;align-items:flex-start;gap:8px;width:100%;margin-bottom:10px;white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)}
-      .generic-whatsapp-section>.check input{margin-top:0;accent-color:#4f6df5}
-      .generic-whatsapp-section>.check span{flex:1 1 0;min-width:0;white-space:normal;overflow-wrap:anywhere}
-      .generic-whatsapp-number{margin-top:0}
-      .generic-whatsapp-number>label{display:block;margin-bottom:4px}
-      .generic-whatsapp-sync{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:10px 14px;border:1px solid #dbe5f1;border-radius:12px;background:#f8fbff;color:#4b6077;font-size:.82rem;line-height:1.3}
-      .generic-whatsapp-sync[hidden]{display:none!important}
+      .generic-phone-with-whatsapp {
+        margin-bottom: 0;
+      }
+      .generic-whatsapp-phone {
+        margin-bottom: 0;
+      }
+      .generic-whatsapp-section {
+        display: block;
+        margin-top: 8px;
+        padding-left: 0;
+      }
+      .generic-whatsapp-section > .check {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        width: 100%;
+        margin-bottom: 10px;
+        white-space: normal;
+        line-height: 1.35;
+        font-weight: var(--gbs-form-weight, 400);
+      }
+      .generic-whatsapp-section > .check input {
+        margin-top: 0;
+        accent-color: #4f6df5;
+      }
+      .generic-whatsapp-section > .check span {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .generic-whatsapp-number {
+        margin-top: 0;
+      }
+      .generic-whatsapp-number > label {
+        display: block;
+        margin-bottom: 4px;
+      }
+      .generic-whatsapp-sync {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 10px;
+        padding: 10px 14px;
+        border: 1px solid #dbe5f1;
+        border-radius: 12px;
+        background: #f8fbff;
+        color: #4b6077;
+        font-size: 0.82rem;
+        line-height: 1.3;
+      }
+      .generic-whatsapp-sync[hidden] {
+        display: none !important;
+      }
       html.generic-scope .generic-phone-with-whatsapp,
-      html.generic-scope .generic-whatsapp-section{grid-column:1 / -1!important}
-      html.generic-scope .generic-whatsapp-number .phone-input{grid-template-columns:minmax(0, 24%) minmax(0, 1fr)!important;gap:10px!important}
-      html.generic-scope .generic-whatsapp-number .phone-country-picker{border-right:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
-      html.generic-scope .generic-whatsapp-number .phone-input>input{border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
-      html.generic-scope .phone-input{grid-template-columns:minmax(0, 24%) minmax(0, 1fr)!important;gap:10px!important}
-      html.generic-scope .phone-country-picker{border-right:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
-      html.generic-scope .phone-input>input{border:var(--gbs-field-border-width,1px) solid var(--gbs-field-border,#d8ddec);border-radius:var(--gbs-field-radius,12px)}
+      html.generic-scope .generic-whatsapp-section {
+        grid-column: 1 / -1 !important;
+      }
+      html.generic-scope .generic-whatsapp-number .phone-input {
+        grid-template-columns: minmax(0, 24%) minmax(0, 1fr) !important;
+        gap: 10px !important;
+      }
+      html.generic-scope .generic-whatsapp-number .phone-country-picker {
+        border-right: var(--gbs-field-border-width, 1px) solid
+          var(--gbs-field-border, #d8ddec);
+        border-radius: var(--gbs-field-radius, 12px);
+      }
+      html.generic-scope .generic-whatsapp-number .phone-input > input {
+        border: var(--gbs-field-border-width, 1px) solid
+          var(--gbs-field-border, #d8ddec);
+        border-radius: var(--gbs-field-radius, 12px);
+      }
+      html.generic-scope .phone-input {
+        grid-template-columns: minmax(0, 24%) minmax(0, 1fr) !important;
+        gap: 10px !important;
+      }
+      html.generic-scope .phone-country-picker {
+        border-right: var(--gbs-field-border-width, 1px) solid
+          var(--gbs-field-border, #d8ddec);
+        border-radius: var(--gbs-field-radius, 12px);
+      }
+      html.generic-scope .phone-input > input {
+        border: var(--gbs-field-border-width, 1px) solid
+          var(--gbs-field-border, #d8ddec);
+        border-radius: var(--gbs-field-radius, 12px);
+      }
 
       .choices {
         display: flex;
@@ -702,6 +769,18 @@
 
       html.generic-scope #recaptcha-container {
         margin-top: 16px;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        overflow: visible;
+      }
+
+      html.generic-scope #recaptcha-container .g-recaptcha {
+        width: 304px;
+        min-width: 304px;
+        height: 78px;
+        max-width: none;
+        transform-origin: top left;
       }
 
       .success {
@@ -785,8 +864,8 @@
           gap: 8px;
         }
         html.generic-scope .phone-input {
-          grid-template-columns: minmax(96px, 24%) minmax(0, 1fr)!important;
-          gap: 10px!important;
+          grid-template-columns: minmax(96px, 24%) minmax(0, 1fr) !important;
+          gap: 10px !important;
         }
         html.generic-scope .phone-country-picker {
           border-right: var(--gbs-field-border-width, 1px) solid
@@ -899,7 +978,9 @@
       }
 
       html.generic-scope .phone-country-picker::after,
-      html.generic-scope .generic-phone-with-whatsapp .phone-country-picker::after,
+      html.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-country-picker::after,
       html.generic-scope .generic-whatsapp-number .phone-country-picker::after {
         content: "";
         position: absolute;
@@ -914,8 +995,14 @@
       }
 
       html.generic-scope .phone-country-picker > input,
-      html.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input,
-      html.generic-scope .generic-whatsapp-number .phone-country-picker > input {
+      html.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-country-picker
+        > input,
+      html.generic-scope
+        .generic-whatsapp-number
+        .phone-country-picker
+        > input {
         border: 0 !important;
         border-radius: var(--gbs-field-radius, 12px) 0 0
           var(--gbs-field-radius, 12px);
@@ -930,8 +1017,14 @@
       }
 
       html.generic-scope .phone-country-picker > input:focus,
-      html.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input:focus,
-      html.generic-scope .generic-whatsapp-number .phone-country-picker > input:focus {
+      html.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-country-picker
+        > input:focus,
+      html.generic-scope
+        .generic-whatsapp-number
+        .phone-country-picker
+        > input:focus {
         border: 0 !important;
         box-shadow: none;
         transform: none;
@@ -950,7 +1043,10 @@
       }
 
       html.generic-scope .phone-input > input:focus,
-      html.generic-scope .generic-phone-with-whatsapp .phone-input > input:focus,
+      html.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-input
+        > input:focus,
       html.generic-scope .generic-whatsapp-number .phone-input > input:focus {
         border: 0 !important;
         box-shadow: none;
@@ -965,7 +1061,18 @@
       @media (min-width: 641px) and (max-width: 900px) {
         html.generic-scope .grid,
         html.travel-scope .grid {
-          grid-template-columns: var(--gbs-tablet-columns, minmax(0, 1fr)) !important;
+          grid-template-columns: var(
+            --gbs-tablet-columns,
+            minmax(0, 1fr)
+          ) !important;
+        }
+
+        html.generic-scope .grid .half {
+          grid-column: span 1 !important;
+        }
+
+        html.generic-scope .grid .full {
+          grid-column: var(--gbs-tablet-full-span, 1/-1) !important;
         }
       }
 
@@ -1003,7 +1110,10 @@
         html.generic-two-columns .grid,
         html.generic-scope .grid,
         html.travel-scope .grid {
-          grid-template-columns: var(--gbs-mobile-columns, minmax(0, 1fr)) !important;
+          grid-template-columns: var(
+            --gbs-mobile-columns,
+            minmax(0, 1fr)
+          ) !important;
         }
 
         html.generic-public-desktop-columns .grid .half,
@@ -1015,6 +1125,14 @@
         html.travel-scope .grid .half,
         html.travel-scope .grid .full {
           grid-column: auto !important;
+        }
+
+        html.generic-scope .grid .half {
+          grid-column: span 1 !important;
+        }
+
+        html.generic-scope .grid .full {
+          grid-column: var(--gbs-mobile-full-span, 1/-1) !important;
         }
 
         input,
@@ -1083,15 +1201,25 @@
         }
 
         html.generic-scope .phone-country-picker > input,
-        html.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input,
-        html.generic-scope .generic-whatsapp-number .phone-country-picker > input {
+        html.generic-scope
+          .generic-phone-with-whatsapp
+          .phone-country-picker
+          > input,
+        html.generic-scope
+          .generic-whatsapp-number
+          .phone-country-picker
+          > input {
           padding: 0 3px 0 34px;
           font-size: max(12px, var(--gbs-field-font-size, 14px));
         }
 
         html.generic-scope .phone-country-picker::after,
-        html.generic-scope .generic-phone-with-whatsapp .phone-country-picker::after,
-        html.generic-scope .generic-whatsapp-number .phone-country-picker::after {
+        html.generic-scope
+          .generic-phone-with-whatsapp
+          .phone-country-picker::after,
+        html.generic-scope
+          .generic-whatsapp-number
+          .phone-country-picker::after {
           left: 42px;
           width: 5px;
           height: 5px;
@@ -1117,25 +1245,220 @@
       /* A selected mobile preview must retain the same compact phone control
          even if the editor canvas is wider than the simulated viewport. */
       html.generic-preview-mobile.generic-scope .phone-input,
-      html.generic-preview-mobile.generic-scope .generic-phone-with-whatsapp .phone-input,
-      html.generic-preview-mobile.generic-scope .generic-whatsapp-number .phone-input {
+      html.generic-preview-mobile.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-input,
+      html.generic-preview-mobile.generic-scope
+        .generic-whatsapp-number
+        .phone-input {
         grid-template-columns: minmax(68px, 42%) minmax(0, 1fr) !important;
         gap: 0 !important;
       }
 
       html.generic-preview-mobile.generic-scope .phone-country-picker > input,
-      html.generic-preview-mobile.generic-scope .generic-phone-with-whatsapp .phone-country-picker > input,
-      html.generic-preview-mobile.generic-scope .generic-whatsapp-number .phone-country-picker > input {
+      html.generic-preview-mobile.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-country-picker
+        > input,
+      html.generic-preview-mobile.generic-scope
+        .generic-whatsapp-number
+        .phone-country-picker
+        > input {
         padding: 0 3px 0 34px;
         font-size: max(12px, var(--gbs-field-font-size, 14px));
       }
 
       html.generic-preview-mobile.generic-scope .phone-country-picker::after,
-      html.generic-preview-mobile.generic-scope .generic-phone-with-whatsapp .phone-country-picker::after,
-      html.generic-preview-mobile.generic-scope .generic-whatsapp-number .phone-country-picker::after {
+      html.generic-preview-mobile.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-country-picker::after,
+      html.generic-preview-mobile.generic-scope
+        .generic-whatsapp-number
+        .phone-country-picker::after {
         left: 42px;
         width: 5px;
         height: 5px;
+      }
+
+      /* Full-width fields and composite phone controls need their own row on
+         mobile. Keeping them in a two-column grid makes native selects and
+         the country-code picker too narrow to use. */
+      @media (max-width: 640px) {
+        html.generic-scope .grid .phone-field,
+        html.travel-scope .grid .full,
+        html.travel-scope .grid .phone-field {
+          grid-column: 1 / -1 !important;
+        }
+
+        html.generic-scope .phone-input,
+        html.generic-scope .generic-phone-with-whatsapp .phone-input,
+        html.generic-scope .generic-whatsapp-number .phone-input {
+          grid-template-columns: minmax(104px, 30%) minmax(0, 1fr) !important;
+          gap: 0 !important;
+        }
+
+        html.generic-scope .phone-country-picker > input,
+        html.generic-scope
+          .generic-phone-with-whatsapp
+          .phone-country-picker
+          > input,
+        html.generic-scope
+          .generic-whatsapp-number
+          .phone-country-picker
+          > input {
+          padding: 0 8px 0 54px;
+          box-sizing: border-box;
+          background-position: 14px center;
+          background-size: 20px 14px;
+        }
+
+        html.generic-scope .phone-country-picker::after,
+        html.generic-scope
+          .generic-phone-with-whatsapp
+          .phone-country-picker::after,
+        html.generic-scope
+          .generic-whatsapp-number
+          .phone-country-picker::after {
+          left: 42px;
+        }
+
+        html.generic-scope .generic-whatsapp-section > .check {
+          gap: 8px;
+          align-items: flex-start;
+        }
+
+        html.generic-scope .generic-whatsapp-section > .check input {
+          width: 18px;
+          height: 18px;
+          flex: 0 0 18px;
+          margin-top: 1px;
+        }
+      }
+
+      /* The builder uses a wider iframe to preview a simulated phone. Apply
+         the same row and control sizing there, even when the iframe itself is
+         wider than the media-query breakpoint. */
+      html.generic-preview-mobile.generic-scope .grid .full,
+      html.generic-preview-mobile.generic-scope .grid .phone-field {
+        grid-column: 1 / -1 !important;
+      }
+
+      html.generic-preview-mobile.generic-scope .phone-input,
+      html.generic-preview-mobile.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-input,
+      html.generic-preview-mobile.generic-scope
+        .generic-whatsapp-number
+        .phone-input {
+        grid-template-columns: minmax(104px, 30%) minmax(0, 1fr) !important;
+        gap: 0 !important;
+      }
+
+      html.generic-preview-mobile.generic-scope .phone-country-picker > input,
+      html.generic-preview-mobile.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-country-picker
+        > input,
+      html.generic-preview-mobile.generic-scope
+        .generic-whatsapp-number
+        .phone-country-picker
+        > input {
+        padding: 0 8px 0 54px;
+      }
+
+      html.generic-preview-mobile.generic-scope .phone-country-picker::after,
+      html.generic-preview-mobile.generic-scope
+        .generic-phone-with-whatsapp
+        .phone-country-picker::after,
+      html.generic-preview-mobile.generic-scope
+        .generic-whatsapp-number
+        .phone-country-picker::after {
+        left: 42px;
+      }
+
+      /* Builder previews represent an explicitly selected device. Their
+         iframe can be narrower than the surrounding editor, so viewport
+         media queries must not replace the selected device's layout. Public
+         embeds do not have these classes and continue to use the responsive
+         rules above. */
+      html.generic-preview-desktop.generic-scope .grid,
+      html.generic-preview-desktop.travel-scope .grid {
+        grid-template-columns: var(--gbs-columns) !important;
+      }
+
+      html.generic-preview-tablet.generic-scope .grid,
+      html.generic-preview-tablet.travel-scope .grid {
+        grid-template-columns: var(--gbs-tablet-columns) !important;
+      }
+
+      html.generic-preview-mobile.generic-scope .grid,
+      html.generic-preview-mobile.travel-scope .grid {
+        grid-template-columns: var(--gbs-mobile-columns) !important;
+      }
+
+      html.generic-preview-desktop.generic-scope .grid .half,
+      html.generic-preview-tablet.generic-scope .grid .half,
+      html.generic-preview-mobile.generic-scope .grid .half {
+        grid-column: span 1 !important;
+      }
+
+      html.generic-preview-desktop.generic-scope .grid .full {
+        grid-column: var(--gbs-full-span, 1/-1) !important;
+      }
+
+      html.generic-preview-tablet.generic-scope .grid .full {
+        grid-column: var(--gbs-tablet-full-span, 1/-1) !important;
+      }
+
+      html.generic-preview-mobile.generic-scope .grid .full {
+        grid-column: var(--gbs-mobile-full-span, 1/-1) !important;
+      }
+
+      html.generic-preview-mobile.generic-scope .grid .phone-field {
+        grid-column: 1 / -1 !important;
+      }
+
+      /* Public embeds can receive the host page's viewport class. This keeps
+         a desktop page with a narrow form column from being mistaken for a
+         mobile page, while preserving iframe-width media-query fallback for
+         embeds without the host handshake. */
+      html.generic-host-desktop.generic-scope .grid {
+        grid-template-columns: var(--gbs-columns) !important;
+      }
+
+      html.generic-host-tablet.generic-scope .grid {
+        grid-template-columns: var(--gbs-tablet-columns) !important;
+      }
+
+      html.generic-host-mobile.generic-scope .grid {
+        grid-template-columns: var(--gbs-mobile-columns) !important;
+      }
+
+      html.generic-host-desktop.generic-scope .grid .half,
+      html.generic-host-tablet.generic-scope .grid .half,
+      html.generic-host-mobile.generic-scope .grid .half {
+        grid-column: span 1 !important;
+      }
+
+      html.generic-host-desktop.generic-scope .grid .full {
+        grid-column: var(--gbs-full-span, 1/-1) !important;
+      }
+
+      html.generic-host-tablet.generic-scope .grid .full {
+        grid-column: var(--gbs-tablet-full-span, 1/-1) !important;
+      }
+
+      html.generic-host-mobile.generic-scope .grid .full {
+        grid-column: var(--gbs-mobile-full-span, 1/-1) !important;
+      }
+
+      html.generic-host-desktop.generic-scope .grid .phone-field,
+      html.generic-host-tablet.generic-scope .grid .phone-field {
+        grid-column: span 1 !important;
+      }
+
+      html.generic-host-mobile.generic-scope .grid .phone-field {
+        grid-column: 1 / -1 !important;
       }
     </style>
   </head>
@@ -1161,6 +1484,7 @@
         var advanced = scope === "generic" || scope === "travel";
         var isBuilderPreview = location.hash.indexOf("preview=") === 1;
         var previewDevice = params.get("device") || "desktop";
+        var hostResponsiveDevice = "";
 
         var apiBase = (params.get("api") || location.origin).replace(
           /\/+$/,
@@ -1192,7 +1516,9 @@
           });
         }
         function sanitizeCustomCss(value) {
-          return typeof gbsCustomCss === "undefined" ? "" : gbsCustomCss.sanitizeCustomCss(value);
+          return typeof gbsCustomCss === "undefined"
+            ? ""
+            : gbsCustomCss.sanitizeCustomCss(value);
         }
         function readCookie(name) {
           var prefix = name + "=";
@@ -1887,6 +2213,25 @@
           if (
             !event.data ||
             event.data.source !== "gbs-web-form-host" ||
+            event.data.type !== "responsive-device" ||
+            !advanced ||
+            isBuilderPreview
+          )
+            return;
+          var device = String(event.data.device || "");
+          if (["desktop", "tablet", "mobile"].indexOf(device) === -1) return;
+          hostResponsiveDevice = device;
+          ["desktop", "tablet", "mobile"].forEach(function (name) {
+            document.documentElement.classList.toggle(
+              "generic-host-" + name,
+              hostResponsiveDevice === name,
+            );
+          });
+        });
+        window.addEventListener("message", function (event) {
+          if (
+            !event.data ||
+            event.data.source !== "gbs-web-form-host" ||
             event.data.type !== "preview-update" ||
             !event.data.form
           )
@@ -1926,14 +2271,39 @@
             );
           } catch (e) {}
         }
+
+        function fitGenericRecaptcha() {
+          var container = document.getElementById("recaptcha-container");
+          var widget = container && container.querySelector(".g-recaptcha");
+          if (!container || !widget) return;
+
+          var availableWidth =
+            container.clientWidth || container.getBoundingClientRect().width;
+          if (!availableWidth) return;
+
+          var widgetWidth = 304;
+          var widgetHeight = 78;
+          var scale = Math.min(1, availableWidth / widgetWidth);
+          widget.style.width = widgetWidth + "px";
+          widget.style.minWidth = widgetWidth + "px";
+          widget.style.height = widgetHeight + "px";
+          widget.style.transformOrigin = "top left";
+          widget.style.transform = scale < 1 ? "scale(" + scale + ")" : "none";
+          container.style.height = Math.ceil(widgetHeight * scale) + "px";
+          container.style.overflow = "visible";
+        }
+
         try {
           parent.postMessage({ source: "gbs-web-form", type: "ready" }, "*");
         } catch (e) {}
 
         function scheduleSize() {
+          fitGenericRecaptcha();
           clearTimeout(resizeTimer);
           resizeTimer = setTimeout(postSize, 20);
         }
+
+        window.addEventListener("resize", fitGenericRecaptcha);
 
         if (typeof ResizeObserver !== "undefined") {
           new ResizeObserver(scheduleSize).observe(document.body);
@@ -2294,6 +2664,12 @@
 
             "--gbs-full-span:" +
               (generic && style.layoutColumns === "two" ? "span 1" : "1/-1"),
+
+            "--gbs-tablet-full-span:" +
+              (generic && style.tabletColumns === "two" ? "span 1" : "1/-1"),
+
+            "--gbs-mobile-full-span:" +
+              (generic && style.mobileColumns === "two" ? "span 1" : "1/-1"),
 
             "--gbs-button:" + safeColor(style.buttonColor, "#12344D"),
 
@@ -2789,7 +3165,7 @@
           if (!phoneInput) return;
           var phoneField = phoneInput.closest(".field");
           if (!phoneField) return;
-          phoneField.classList.add('generic-phone-with-whatsapp');
+          phoneField.classList.add("generic-phone-with-whatsapp");
           var phoneGroup = phoneInput.closest(".phone-input");
           var phoneCountry =
             phoneGroup &&
@@ -2797,7 +3173,7 @@
           if (!phoneCountry) return;
 
           var whatsappCountry = phoneCountry.cloneNode(true);
-          whatsappCountry.name = 'whatsappPhoneCountry';
+          whatsappCountry.name = "whatsappPhoneCountry";
           whatsappCountry.setAttribute("aria-label", "WhatsApp country code");
           var whatsappInput = document.createElement("input");
           whatsappInput.id = "f-whatsappPhone";
@@ -2834,15 +3210,14 @@
           var sameCheckbox = wrapper.querySelector(
             'input[name="whatsappSameAsPhone"]',
           );
-          var whatsappField = wrapper.querySelector(
-            ".generic-whatsapp-number",
-          );
+          var whatsappField = wrapper.querySelector(".generic-whatsapp-number");
           var whatsappSyncNotice = document.createElement("div");
           whatsappSyncNotice.className = "generic-whatsapp-sync";
           whatsappSyncNotice.setAttribute("role", "status");
           whatsappSyncNotice.setAttribute("aria-live", "polite");
           whatsappSyncNotice.hidden = true;
-          whatsappSyncNotice.innerHTML = '<span aria-hidden="true">&#10003;</span><span></span>';
+          whatsappSyncNotice.innerHTML =
+            '<span aria-hidden="true">&#10003;</span><span></span>';
           wrapper.insertBefore(whatsappSyncNotice, whatsappField);
           function showWhatsappError(show) {
             whatsappError.hidden = !show;
@@ -2852,7 +3227,10 @@
             var raw = String(value || "");
             var invalid = /[^0-9+().\s-]/.test(raw);
             var digits = raw.replace(/\D/g, "");
-            var countryDigits = String(whatsappCountry.value || "").replace(/\D/g, "");
+            var countryDigits = String(whatsappCountry.value || "").replace(
+              /\D/g,
+              "",
+            );
             if (
               raw.trim().charAt(0) === "+" &&
               countryDigits &&
@@ -2929,22 +3307,20 @@
           var phoneCountry = root.querySelector('select[name="phoneCountry"]');
           if (
             phoneCountry &&
-            Array.from(country.options).some(
-              function (option) {
-                return option.value === phoneCountry.value;
-              },
-            )
+            Array.from(country.options).some(function (option) {
+              return option.value === phoneCountry.value;
+            })
           )
             country.value = phoneCountry.value;
-          input.setAttribute('inputmode', 'numeric');
-          input.setAttribute('pattern', '[0-9]*');
-          input.setAttribute('maxlength', '16');
+          input.setAttribute("inputmode", "numeric");
+          input.setAttribute("pattern", "[0-9]*");
+          input.setAttribute("maxlength", "16");
           input.addEventListener("input", function () {
             var raw = String(input.value || "").trim();
             var digits = raw.replace(/\D/g, "");
             var countryDigits = String(country.value || "").replace(/\D/g, "");
             if (
-              raw.charAt(0) === '+' &&
+              raw.charAt(0) === "+" &&
               countryDigits &&
               digits.indexOf(countryDigits) === 0
             )
@@ -2966,7 +3342,8 @@
             });
           var restrictedCountries =
             (settings.phoneAllowAllCountries === false ||
-              String(settings.phoneAllowAllCountries).toLowerCase() === "false") &&
+              String(settings.phoneAllowAllCountries).toLowerCase() ===
+                "false") &&
             allowedCountries.length > 0;
           if (
             restrictedCountries &&
@@ -2999,41 +3376,46 @@
           }
           updatePickerTrigger();
 
-          Array.prototype.forEach.call(countrySelect.options, function (option) {
-            var item = document.createElement("button");
-            item.type = "button";
-            var flag = document.createElement("img");
-            flag.className = "phone-country-flag";
-            flag.alt = "";
-            flag.setAttribute("aria-hidden", "true");
-            flag.loading = "lazy";
-            flag.src = phoneCountryFlagUrl(option.value);
-            var code = document.createElement("span");
-            code.textContent = String(option.value);
-            item.appendChild(flag);
-            item.appendChild(code);
-            item.className = option.value === countrySelect.value ? "selected" : "";
-            item.dataset.code = option.value;
-            item.style.display =
-              !restrictedCountries || allowedCountries.indexOf(option.value) !== -1
-                ? "block"
-                : "none";
-            item.addEventListener("click", function () {
-              countrySelect.value = option.value;
-              countrySelect.dispatchEvent(new Event("change"));
-              updatePickerTrigger();
-              picker.classList.remove("open");
-              options.style.display = "none";
-              options.querySelectorAll("button").forEach(function (node) {
-                node.classList.remove("selected");
+          Array.prototype.forEach.call(
+            countrySelect.options,
+            function (option) {
+              var item = document.createElement("button");
+              item.type = "button";
+              var flag = document.createElement("img");
+              flag.className = "phone-country-flag";
+              flag.alt = "";
+              flag.setAttribute("aria-hidden", "true");
+              flag.loading = "lazy";
+              flag.src = phoneCountryFlagUrl(option.value);
+              var code = document.createElement("span");
+              code.textContent = String(option.value);
+              item.appendChild(flag);
+              item.appendChild(code);
+              item.className =
+                option.value === countrySelect.value ? "selected" : "";
+              item.dataset.code = option.value;
+              item.style.display =
+                !restrictedCountries ||
+                allowedCountries.indexOf(option.value) !== -1
+                  ? "block"
+                  : "none";
+              item.addEventListener("click", function () {
+                countrySelect.value = option.value;
+                countrySelect.dispatchEvent(new Event("change"));
+                updatePickerTrigger();
+                picker.classList.remove("open");
+                options.style.display = "none";
+                options.querySelectorAll("button").forEach(function (node) {
+                  node.classList.remove("selected");
+                });
+                item.classList.add("selected");
               });
-              item.classList.add("selected");
-            });
-            item.addEventListener("pointerenter", function () {
-              preloadPhoneCountryFlag(option.value);
-            });
-            options.appendChild(item);
-          });
+              item.addEventListener("pointerenter", function () {
+                preloadPhoneCountryFlag(option.value);
+              });
+              options.appendChild(item);
+            },
+          );
 
           function openCountryPicker() {
             picker.classList.add("open");
@@ -3058,7 +3440,7 @@
           trigger.addEventListener("click", openCountryPicker);
           trigger.addEventListener("keydown", openCountryPicker);
           trigger.addEventListener("input", function () {
-            var numericQuery = trigger.value.replace(/\D/g, '');
+            var numericQuery = trigger.value.replace(/\D/g, "");
             if (trigger.value !== numericQuery) trigger.value = numericQuery;
             var query = numericQuery ? "+" + numericQuery : "";
             openCountryPicker();
@@ -3082,7 +3464,7 @@
               function (option) {
                 return (
                   option.value.toLowerCase() === query ||
-                  option.value.replace(/^\+/, '') === numericQuery
+                  option.value.replace(/^\+/, "") === numericQuery
                 );
               },
             );
@@ -3102,16 +3484,24 @@
         function setupGenericPhoneInputLimit(countrySelect, input) {
           if (!input) return;
           function nationalPhoneMaxLength() {
-            var countryDigits = String(countrySelect && countrySelect.value || '').replace(/\D/g, '');
+            var countryDigits = String(
+              (countrySelect && countrySelect.value) || "",
+            ).replace(/\D/g, "");
             return Math.max(1, 15 - countryDigits.length);
           }
-          input.setAttribute('maxlength', '16');
-          input.setAttribute('inputmode', 'numeric');
+          input.setAttribute("maxlength", "16");
+          input.setAttribute("inputmode", "numeric");
           input.addEventListener("input", function () {
             var rawPhoneInput = String(input.value || "");
             var digits = rawPhoneInput.replace(/\D/g, "");
-            var selectedCountryDigits = String(countrySelect && countrySelect.value || '').replace(/\D/g, '');
-            if (rawPhoneInput.trim().charAt(0) === '+' && selectedCountryDigits && digits.indexOf(selectedCountryDigits) === 0)
+            var selectedCountryDigits = String(
+              (countrySelect && countrySelect.value) || "",
+            ).replace(/\D/g, "");
+            if (
+              rawPhoneInput.trim().charAt(0) === "+" &&
+              selectedCountryDigits &&
+              digits.indexOf(selectedCountryDigits) === 0
+            )
               digits = digits.slice(selectedCountryDigits.length);
             digits = digits.slice(0, nationalPhoneMaxLength());
             if (input.value !== digits) input.value = digits;
@@ -3650,6 +4040,12 @@
             "generic-preview-mobile",
             isBuilderPreview && advanced && previewDevice === "mobile",
           );
+          ["desktop", "tablet", "mobile"].forEach(function (name) {
+            document.documentElement.classList.toggle(
+              "generic-host-" + name,
+              !isBuilderPreview && hostResponsiveDevice === name,
+            );
+          });
 
           var style = formData.style || {};
 
@@ -3825,8 +4221,9 @@
               });
             var pickerRestrictedCountries =
               (pickerPhoneSettings.phoneAllowAllCountries === false ||
-                String(pickerPhoneSettings.phoneAllowAllCountries).toLowerCase() ===
-                  "false") &&
+                String(
+                  pickerPhoneSettings.phoneAllowAllCountries,
+                ).toLowerCase() === "false") &&
               pickerAllowedCountries.length > 0;
             var countrySelect = root.querySelector(
               'select[name="phoneCountry"]',
@@ -3934,7 +4331,7 @@
               trigger.addEventListener("click", openCountryPicker);
               trigger.addEventListener("keydown", openCountryPicker);
               trigger.addEventListener("input", function () {
-            var numericQuery = trigger.value.replace(/\D/g, '');
+                var numericQuery = trigger.value.replace(/\D/g, "");
                 if (trigger.value !== numericQuery)
                   trigger.value = numericQuery;
                 var query = numericQuery ? "+" + numericQuery : "";
@@ -3961,7 +4358,7 @@
                   function (option) {
                     return (
                       option.value.toLowerCase() === query ||
-                  option.value.replace(/^\+/, '') === numericQuery
+                      option.value.replace(/^\+/, "") === numericQuery
                     );
                   },
                 );
@@ -4007,8 +4404,15 @@
             var whatsappPhoneInput = root.querySelector(
               'input[name="whatsappPhone"]',
             );
-            setupGenericCountryPicker(whatsappCountrySelect, pickerPhoneSettings, 'WhatsApp country code');
-            setupGenericPhoneInputLimit(whatsappCountrySelect, whatsappPhoneInput);
+            setupGenericCountryPicker(
+              whatsappCountrySelect,
+              pickerPhoneSettings,
+              "WhatsApp country code",
+            );
+            setupGenericPhoneInputLimit(
+              whatsappCountrySelect,
+              whatsappPhoneInput,
+            );
           }
 
           scheduleSize();

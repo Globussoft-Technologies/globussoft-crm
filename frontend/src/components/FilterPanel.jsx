@@ -1190,7 +1190,7 @@ export default function FilterPanel({
                                 color: "var(--text-secondary)",
                               }}
                             >
-                              Loading fieldsâ€¦
+                              Loading fields…
                             </div>
                           )}
                           {!fieldsLoading && fields.length === 0 && (
@@ -1469,7 +1469,7 @@ export default function FilterPanel({
                                 {fieldValuesLoading ? (
                                   <div className="filter-panel-typeahead-menu">
                                     <div className="filter-panel-typeahead-message">
-                                      Loading valuesâ€¦
+                                      Loading values…
                                     </div>
                                   </div>
                                 ) : normalizedFieldQuery.length < 2 &&

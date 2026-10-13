@@ -16,6 +16,7 @@ import TravelKeyboardShortcuts, {
 // Wellness Admin Support Chatbot — wellness-vertical counterpart to the
 // Softphone FAB (wellness hides the softphone; it gets the help widget).
 import SupportChatWidget from "./SupportChatWidget";
+import PageAccessGuard from "./PageAccessGuard";
 import NotificationBell from "./NotificationBell";
 import Avatar from "./Avatar";
 // SubscriptionExpiryModal removed — its dismissible "Remind Later" escape
@@ -613,10 +614,14 @@ const Layout = () => {
           <TravelKeyboardShortcuts enabled={isTravelShortcutPath} />
           {isTravel ? (
             <div className="travel-content-frame">
-              <Outlet />
+              <PageAccessGuard>
+                <Outlet />
+              </PageAccessGuard>
             </div>
           ) : (
-            <Outlet />
+            <PageAccessGuard>
+              <Outlet />
+            </PageAccessGuard>
           )}
         </main>
         {/* Hard subscription paywall — renders a non-dismissable overlay

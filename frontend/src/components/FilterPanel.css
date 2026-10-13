@@ -1,0 +1,367 @@
+.filter-panel-drawer--freshsales {
+  top: 78px !important;
+  width: 334px !important;
+  max-width: calc(100vw - 24px) !important;
+  background: var(--popover-bg, #fff) !important;
+  border: 1px solid var(--border-color) !important;
+  border-right: 0 !important;
+  box-shadow: -8px 10px 24px rgba(15, 23, 42, 0.16) !important;
+}
+
+.filter-panel-backdrop--freshsales {
+  top: 78px !important;
+  background: transparent !important;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-header {
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 0.65rem 0.9rem !important;
+  background: var(--popover-bg, #fff);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-add-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 0;
+  background: transparent;
+  color: var(--primary-color, var(--accent-color));
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-icon-button {
+  padding: 0.25rem !important;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-summary-search--hidden {
+  display: none;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-empty-state {
+  min-height: 320px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  box-sizing: border-box;
+  padding: 2rem 2.5rem 5rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-empty-state-art {
+  width: 116px;
+  height: 116px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 42% 58% 55% 45% / 47% 43% 57% 53%;
+  background: #f1f5f9;
+  color: #8fa0b4;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-empty-state p {
+  max-width: 240px;
+  margin: 0;
+  font-size: 0.94rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-search {
+  margin: 0.65rem 0.9rem 0;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-search svg {
+  display: none;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-search input {
+  height: 36px;
+  padding: 0.45rem 0.65rem !important;
+  border: 2px solid var(--primary-color, var(--accent-color)) !important;
+  border-radius: 5px !important;
+  background: var(--surface-color) !important;
+  font-weight: 500;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-picker-popover {
+  position: absolute;
+  top: 49px;
+  left: 0.9rem;
+  right: 0.9rem;
+  z-index: 5;
+  background: var(--popover-bg, #fff);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+.filter-panel-drawer--freshsales
+  .filter-panel-field-picker-popover
+  .filter-panel-field-search {
+  margin: 0;
+  padding: 0.55rem !important;
+  background: var(--popover-bg, #fff);
+}
+
+.filter-panel-drawer--freshsales
+  .filter-panel-field-picker-popover
+  .filter-panel-field-search
+  input {
+  height: 36px;
+}
+
+.filter-panel-drawer--freshsales
+  .filter-panel-field-picker-popover
+  .filter-panel-field-list {
+  max-height: 245px;
+  margin: 0;
+  padding: 0.15rem 0 0.4rem !important;
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  box-shadow: none;
+  overflow-y: auto;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-list {
+  margin: 0 0.9rem 0.75rem;
+  padding: 0.35rem 0 !important;
+  border: 1px solid var(--border-color);
+  border-top: 0;
+  background: var(--popover-bg, #fff);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.13);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-option {
+  margin: 0 0.45rem;
+  width: calc(100% - 0.9rem) !important;
+  border-radius: 4px;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-group-title {
+  display: block;
+  padding: 0.55rem 0.9rem 0.35rem;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-option:hover,
+.filter-panel-drawer--freshsales .filter-panel-field-option:focus-visible {
+  background: var(--surface-hover) !important;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-sections {
+  background: transparent;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-section {
+  padding: 0.9rem !important;
+  background: transparent;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-section-heading {
+  justify-content: flex-start;
+  gap: 0.35rem !important;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-section-heading strong {
+  flex: 0 1 auto !important;
+  color: var(--text-primary);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-operator {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--primary-color, var(--accent-color)) !important;
+  cursor: pointer;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-remove-filter {
+  margin-left: auto;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50% !important;
+  background: color-mix(in srgb, var(--text-secondary) 65%, transparent) !important;
+  color: var(--surface-color) !important;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-value-option {
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 0.35rem 0 !important;
+  background: transparent !important;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-value-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary-color, var(--accent-color));
+}
+
+.filter-panel-drawer--freshsales .filter-panel-field-header {
+  min-height: 48px;
+  padding: 0.7rem 0.9rem !important;
+  background: var(--surface-color);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-footer {
+  min-height: 54px;
+  box-sizing: border-box;
+  align-items: center;
+  padding: 0.55rem 0.9rem !important;
+  background: var(--surface-color);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-footer .btn-primary {
+  min-width: 80px;
+  border-radius: 4px;
+  background: #123354;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-reset {
+  min-width: 76px;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--popover-bg, #fff);
+  color: var(--primary-color, var(--accent-color));
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-reset:hover,
+.filter-panel-drawer--freshsales .filter-panel-reset:focus-visible {
+  background: var(--surface-hover);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-show-more {
+  display: inline-flex;
+  margin-top: 0.2rem;
+  padding: 0.25rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary-color, var(--accent-color));
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead {
+  position: relative;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead-control {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--popover-bg, #fff);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead-control:focus-within {
+  border-color: var(--primary-color, var(--accent-color));
+  box-shadow: 0 0 0 1px var(--primary-color, var(--accent-color));
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead-control input {
+  min-width: 72px;
+  flex: 1 1 72px;
+  padding: 0.15rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-value-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  padding: 0.2rem 0.35rem;
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--primary-color, var(--accent-color)) 10%,
+    var(--popover-bg, #fff)
+  );
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-value-chip button {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead-menu {
+  max-height: 190px;
+  margin-top: 0.4rem;
+  padding: 0.4rem;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--popover-bg, #fff);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.16);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead-menu > button {
+  display: block;
+  width: 100%;
+  padding: 0.5rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.84rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead-menu > button:hover,
+.filter-panel-drawer--freshsales
+  .filter-panel-typeahead-menu
+  > button:focus-visible {
+  background: var(--surface-hover);
+}
+
+.filter-panel-drawer--freshsales .filter-panel-typeahead-message {
+  padding: 0.45rem 0.55rem;
+  border-radius: 4px;
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 600px) {
+  .filter-panel-drawer--freshsales,
+  .filter-panel-backdrop--freshsales {
+    top: 0 !important;
+  }
+}

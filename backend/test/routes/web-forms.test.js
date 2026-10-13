@@ -201,6 +201,28 @@ describe('web-form embed sizing', () => {
   });
 });
 
+describe('web-form field types', () => {
+  test('pins Generic Name, Email, and Phone to their assigned input types', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { sourceKind: 'contact', sourceKey: 'name', fieldType: 'number' },
+      { sourceKind: 'contact', sourceKey: 'email', fieldType: 'text' },
+      { sourceKind: 'contact', sourceKey: 'phone', fieldType: 'number' },
+    ]), 'generic');
+
+    expect(fields.map((field) => field.fieldType)).toEqual(['text', 'email', 'tel']);
+  });
+
+  test('does not change Travel contact field types', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { sourceKind: 'contact', sourceKey: 'phone', fieldType: 'number' },
+      { sourceKind: 'contact', sourceKey: 'phone', fieldType: 'tel' },
+    ]), 'travel');
+
+    expect(fields[0].fieldType).toBe('number');
+    expect(fields[1].fieldType).toBe('text');
+  });
+});
+
 describe('Generic conditional fields', () => {
   test('hydrates lead custom choice options from the tenant definition', () => {
     const fields = normalizeFields(JSON.stringify([

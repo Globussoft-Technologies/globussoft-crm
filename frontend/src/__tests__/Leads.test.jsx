@@ -67,6 +67,7 @@ vi.mock('react-router-dom', async () => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('external lookup disabled in unit tests')));
 });
 
@@ -526,6 +527,112 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.queryByRole('button', { name: 'View all status for Alice Lead' })).not.toBeInTheDocument();
   });
 
+  it('centers the empty state in the visible table area for Generic CRM only', async () => {
+    const populatedFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve([]);
+      }
+      return populatedFetch(url, opts);
+    });
+
+    const genericRender = renderLeads(authValue);
+    const genericEmptyState = await screen.findByRole('status');
+    expect(genericEmptyState).toHaveClass('leads-generic-empty-state');
+    expect(genericEmptyState).toHaveTextContent('No leads found');
+    expect(genericRender.container.querySelector('.leads-split-table')).toHaveClass(
+      'leads-split-table--empty',
+    );
+    expect(genericRender.container.querySelector('.leads-split-table')).not.toHaveClass(
+      'leads-split-table--sparse',
+    );
+    expect(
+      genericRender.container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom'),
+    ).toBeInTheDocument();
+    genericRender.unmount();
+
+    const travelRender = renderLeads({
+      ...authValue,
+      tenant: { ...authValue.tenant, vertical: 'travel' },
+    });
+    await screen.findByText('No leads found');
+    expect(travelRender.container.querySelector('.leads-generic-empty-state')).toBeNull();
+    expect(travelRender.container.querySelector('.leads-split-table')).not.toHaveClass(
+      'leads-split-table--empty',
+    );
+  });
+
+  it('keeps a fixed Generic table viewport when only a few leads are shown', async () => {
+    const { container } = renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const tableShell = container.querySelector('.leads-split-table');
+    expect(tableShell).toHaveClass('leads-split-table--sparse');
+    expect(tableShell).not.toHaveClass('leads-split-table--empty');
+    expect(tableShell).toHaveStyle({ flex: '1 1 auto' });
+  });
+
+  it('switches and persists table density for Generic CRM leads', async () => {
+    const firstRender = renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+
+    await waitFor(() => {
+      const comfortableRows = Array.from(document.querySelectorAll('.leads-split-table tbody tr'));
+      const comfortableHeights = comfortableRows.map((row) => row.style.height);
+      expect(comfortableRows.length).toBeGreaterThan(0);
+      expect(new Set(comfortableHeights).size).toBe(1);
+      expect(Number.parseInt(comfortableHeights[0], 10)).toBeGreaterThanOrEqual(52);
+      expect(Number.parseInt(comfortableHeights[0], 10)).toBeLessThanOrEqual(64);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Table density: comfortable/i }));
+    const densityMenu = screen.getByRole('menu', { name: 'Table density' });
+    expect(within(densityMenu).getByRole('menuitemradio', { name: 'Comfortable' })).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(within(densityMenu).getByRole('menuitemradio', { name: 'Compact' }));
+    expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
+    expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--sparse');
+    expect(window.localStorage.getItem('globuscrm.leads.tableDensity.v1')).toBe('compact');
+    await waitFor(() => {
+      const bodyRows = Array.from(document.querySelectorAll('.leads-split-table tbody tr'));
+      expect(bodyRows.length).toBeGreaterThan(0);
+      const rowHeights = bodyRows.map((row) => row.style.height);
+      expect(new Set(rowHeights).size).toBe(1);
+      expect(Number.parseInt(rowHeights[0], 10)).toBeGreaterThanOrEqual(40);
+      expect(Number.parseInt(rowHeights[0], 10)).toBeLessThanOrEqual(48);
+    });
+
+    firstRender.unmount();
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    expect(screen.getByRole('button', { name: /Table density: compact/i })).toBeInTheDocument();
+    expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
+  });
+
+  it('does not show the density selector outside Generic CRM and keeps the reference filter drawer', async () => {
+    renderLeads({
+      ...authValue,
+      tenant: { ...authValue.tenant, vertical: 'travel' },
+    });
+
+    await screen.findByPlaceholderText('Search leads...');
+    expect(screen.queryByRole('button', { name: /Table density/i })).not.toBeInTheDocument();
+    expect(document.querySelector('.leads-split-table')).not.toHaveClass('leads-split-table--density-compact');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const travelFilterDialog = await screen.findByRole('dialog', { name: /Filters/i });
+    expect(travelFilterDialog).toHaveClass('filter-panel-drawer--freshsales');
+    expect(document.querySelector('.filter-panel-backdrop--freshsales')).toHaveStyle({
+      background: 'transparent',
+    });
+    expect(within(travelFilterDialog).getByRole('button', { name: /Add filter/i })).toBeInTheDocument();
+    expect(
+      within(travelFilterDialog).queryByText(
+        'Add filters to narrow down the contacts you want to see.',
+      ),
+    ).toBeNull();
+  });
+
   it('shows the requested Pickup & Plot columns, edits the mapped location, and opens status details in Generic CRM', async () => {
     renderLeads(authValue);
 
@@ -722,7 +829,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.getByText('Open full detail')).toBeInTheDocument();
   });
 
-  it('keeps the Name column movable and renders saved visible columns in order', async () => {
+  it('keeps the Name column fixed for generic CRM and renders saved visible columns in order', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
@@ -766,27 +873,25 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
 
     const nameHeader = screen.getByText('Name').closest('th');
-    expect(nameHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
+    expect(nameHeader.closest('.leads-table-frozen-pane')).toBeTruthy();
 
     const aliceNameCell = screen.getByText('Alice Smith').closest('td');
-    expect(aliceNameCell.closest('.leads-table-scroll-pane')).toBeTruthy();
+    expect(aliceNameCell.closest('.leads-table-frozen-pane')).toBeTruthy();
 
     const phoneHeader = screen.getByText('Phone').closest('th');
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const bottomScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__bottom');
-    // Generic CRM keeps the top bar synced, while the table itself remains
-    // natively scrollable for mobile swipes and Windows trackpads.
-    expect(bottomScroll).not.toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+    // Generic CRM mirrors Freshsales with one sticky scrollbar at the bottom
+    // of the records and no duplicate scrollbar above the header.
+    expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
     const topScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top');
-    expect(topScroll).toBeTruthy();
-    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom')).toBeNull();
-    bottomScroll.scrollLeft = 120;
-    fireEvent.scroll(bottomScroll);
-    expect(topScroll.scrollLeft).toBe(120);
-    topScroll.scrollLeft = 80;
-    fireEvent.scroll(topScroll);
-    expect(bottomScroll.scrollLeft).toBe(80);
+    const stickyBottom = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom');
+    expect(topScroll).toBeNull();
+    expect(stickyBottom).toBeTruthy();
+    stickyBottom.scrollLeft = 80;
+    fireEvent.scroll(stickyBottom);
+    expect(bottomScroll.firstElementChild.style.left).toBe('-80px');
 
     const genericPage = container.querySelector('.leads-page-root--generic');
     const actionsToolbar = container.querySelector('.leads-actions-toolbar');
@@ -794,6 +899,8 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(genericPage).toBeTruthy();
     expect(actionsToolbar.style.height).toBe('');
     expect(filtersToolbar.style.height).toBe('');
+    expect(filtersToolbar).toContainElement(actionsToolbar);
+    expect(screen.queryByRole('button', { name: 'Go back' })).toBeNull();
   });
 
   it('persists dragged column widths for the Leads table layout', async () => {
@@ -832,32 +939,49 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
-  it('keeps the Name column at least as wide as its content when resized', async () => {
-    renderLeads(authValue);
+  it('enforces readable minimum column widths only for Generic CRM', async () => {
+    window.localStorage.setItem('globuscrm.leads.columnLayout.v1', JSON.stringify({
+      widths: { email: 80 },
+      collapsed: {},
+    }));
+    const genericRender = renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
+    const genericEmailHeader = genericRender.container.querySelector('th[aria-label="Email column"]');
+    const genericEmailCol = genericRender.container.querySelectorAll('.leads-table--scrollable colgroup col')[genericEmailHeader.cellIndex];
+    expect(genericEmailCol.style.width).toBe('220px');
+
+    genericRender.unmount();
+    const travelRender = renderLeads({
+      ...authValue,
+      tenant: { ...authValue.tenant, vertical: 'travel' },
+    });
+    await screen.findByPlaceholderText('Search leads...');
+    const travelEmailHeader = travelRender.container.querySelector('th[aria-label="Email column"]');
+    const travelEmailCol = travelRender.container.querySelectorAll('.leads-table--scrollable colgroup col')[travelEmailHeader.cellIndex];
+    expect(travelEmailCol.style.width).toBe('80px');
+  });
+
+  it('starts the Generic Name pane at the reference width and allows resizing', async () => {
+    const { container } = renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const frozenPane = container.querySelector('.leads-table-frozen-pane');
     const nameResizeHandle = screen.getByRole('separator', { name: 'Resize Name column' });
+    const renderedStartWidth = nameResizeHandle.closest('th').getBoundingClientRect().width || 320;
+    expect(frozenPane.style.getPropertyValue('--leads-name-pane-width'))
+      .toBe('clamp(320px, 22%, 380px)');
 
-    fireEvent.mouseDown(nameResizeHandle, {
-      clientX: 200,
-    });
-    fireEvent.mouseMove(window, { clientX: 1200 });
+    fireEvent.mouseDown(nameResizeHandle, { clientX: 200 });
+    fireEvent.mouseMove(window, { clientX: 300 });
     fireEvent.mouseUp(window);
 
     await waitFor(() => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
-      expect(saved.widths.name).toBeGreaterThanOrEqual(220);
-    });
-
-    fireEvent.mouseDown(nameResizeHandle, {
-      clientX: 200,
-    });
-    fireEvent.mouseMove(window, { clientX: -200 });
-    fireEvent.mouseUp(window);
-
-    await waitFor(() => {
-      const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
-      expect(saved.widths.name).toBeGreaterThanOrEqual(220);
+      const expectedWidth = Math.min(renderedStartWidth + 100, 1400);
+      expect(saved.widths.name).toBe(expectedWidth);
+      expect(saved.genericNameWidthUserSet).toBe(true);
+      expect(frozenPane.style.getPropertyValue('--leads-name-pane-width')).toBe(`${expectedWidth}px`);
     });
   });
 
@@ -929,7 +1053,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('renders the Generic Leads table with Name in the scrollable pane', async () => {
+  it('renders the Generic Leads table with Name fixed beside the scrollable data', async () => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -981,12 +1105,19 @@ describe('Leads Freshsales-style list UI affordances', () => {
       await screen.findByText('Alice Lead');
 
       await waitFor(() => {
+        const frozenPane = container.querySelector('.leads-table-frozen-pane');
+        const frozenHeader = frozenPane?.querySelector('thead tr');
+        const frozenBody = frozenPane?.querySelector('tbody tr');
         const scrollHeader = container.querySelector('.leads-table-scroll-pane thead tr');
 
-        expect(container.querySelector('.leads-table-frozen-pane')).toBeNull();
+        expect(frozenPane).toBeTruthy();
+        expect(frozenHeader).toBeTruthy();
+        expect(frozenBody).toBeTruthy();
         expect(scrollHeader).toBeTruthy();
         const scrollBody = container.querySelector('.leads-table-scroll-pane tbody tr');
         expect(scrollBody).toBeTruthy();
+        expect(within(frozenPane).getByText('Name')).toBeInTheDocument();
+        expect(within(container.querySelector('.leads-table-scroll-pane')).queryByText('Name')).toBeNull();
       });
     } finally {
       rectMock.mockRestore();
@@ -1324,6 +1455,11 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
   it('opens the Source column menu and applies a source-only filter query', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    const filterButton = screen.getByRole('button', { name: /^Filter by$/i });
+    const filterButtonColors = {
+      background: filterButton.style.background,
+      color: filterButton.style.color,
+    };
     fetchApiMock.mockClear();
 
     fireEvent.click(screen.getByRole('button', { name: /Open Source column menu/i }));
@@ -1347,6 +1483,66 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
         { field: 'source', operator: 'contains', values: ['Organic'] },
       ]);
     });
+
+    expect(screen.getByRole('button', { name: /^Filter by$/i })).toHaveStyle(filterButtonColors);
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const filtersDialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+    const genericBackdrop = document.querySelector('.filter-panel-backdrop--freshsales');
+    expect(genericBackdrop).toHaveStyle({ background: 'transparent' });
+
+    fireEvent.click(within(filtersDialog).getByRole('button', { name: /Add filter/i }));
+    expect(within(filtersDialog).getByPlaceholderText('Add a field to filter')).toBeInTheDocument();
+
+    fireEvent.mouseDown(filtersDialog.querySelector('.filter-panel-sections'));
+    expect(within(filtersDialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
+    expect(filtersDialog).toBeInTheDocument();
+  });
+
+  it('restores Generic CRM lead filters after navigating away and returning', async () => {
+    const storageKey = 'globuscrm.leads.filters.v1.1.1';
+    const firstRender = renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Open Source column menu/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Add as filter/i }));
+    const sourceDialog = await screen.findByRole('dialog', { name: /Source filter/i });
+    fireEvent.click(within(sourceDialog).getByRole('checkbox', { name: 'Organic' }));
+    fireEvent.click(within(sourceDialog).getByRole('button', { name: /Apply/i }));
+
+    await waitFor(() => {
+      expect(JSON.parse(window.sessionStorage.getItem(storageKey))).toEqual([
+        expect.objectContaining({
+          field: 'source',
+          operator: 'contains',
+          values: ['Organic'],
+        }),
+      ]);
+    });
+
+    firstRender.unmount();
+    fetchApiMock.mockClear();
+    renderLeads(ADMIN_AUTH);
+
+    const restoredFilterButton = await screen.findByRole('button', { name: /^Filter by$/i });
+    expect(restoredFilterButton).toHaveTextContent('1');
+    await waitFor(() => {
+      const restoredCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          !opts &&
+          url.includes('filters='),
+      );
+      expect(restoredCall).toBeDefined();
+      const filtersParam = new URL(restoredCall[0], 'http://localhost').searchParams.get('filters');
+      expect(JSON.parse(filtersParam)).toEqual([
+        { field: 'source', operator: 'contains', values: ['Organic'] },
+      ]);
+    });
+
+    fireEvent.click(restoredFilterButton);
+    const restoredDialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+    expect(within(restoredDialog).getByRole('checkbox', { name: 'Organic' })).toBeChecked();
   });
 
   it('opens the Callified Campaign column menu and applies a campaign-only filter query', async () => {
@@ -1378,18 +1574,173 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
   });
 
   it('opens the new header Filter by drawer without changing the existing column filter flows', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+        return Promise.resolve({
+          fields: [
+            { field: 'status', label: 'Status', kind: 'text' },
+            { field: 'source', label: 'Source', kind: 'text' },
+            { field: 'assignedToId', label: 'Sales Owner', kind: 'id' },
+            { field: 'name', label: 'Name', kind: 'text' },
+            { field: 'email', label: 'Email', kind: 'text' },
+            { field: 'phone', label: 'Phone', kind: 'text' },
+            { field: 'whatsappPhone', label: 'WhatsApp Number', kind: 'text' },
+          ],
+        });
+      }
+      if (typeof url === 'string' && url.includes('/api/contacts/filter-values/source')) {
+        return Promise.resolve({ values: [
+          { value: 'Organic', label: 'Organic' },
+          { value: 'Referral', label: 'Referral' },
+          { value: 'Website', label: 'Website' },
+          { value: 'Email', label: 'Email' },
+        ] });
+      }
+      if (typeof url === 'string' && url.includes('/api/contacts/filter-values/status')) {
+        return Promise.resolve({ values: [{ value: 'Lead', label: 'Lead' }] });
+      }
+      if (typeof url === 'string' && url.includes('/api/contacts/filter-values/assignedToId')) {
+        return Promise.resolve({ values: [{ value: '7', label: 'Sales Rep One' }] });
+      }
+      if (typeof url === 'string' && url.includes('/api/contacts/filter-values/email')) {
+        return Promise.resolve({ values: [
+          { value: 'ka2348319@gmail.com', label: 'ka2348319@gmail.com' },
+          { value: 'karen@example.com', label: 'karen@example.com' },
+        ] });
+      }
+      return leadsFetchMock(url, opts);
+    });
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
     fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
-    expect(await screen.findByRole('dialog', { name: /Filters/i })).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: /Filters/i });
+    expect(dialog).toHaveClass('filter-panel-drawer--freshsales');
+    expect(within(dialog).getByRole('button', { name: /Add filter/i })).toBeInTheDocument();
+    expect(dialog.querySelectorAll('.filter-panel-section')).toHaveLength(0);
+    expect(within(dialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
+    expect(within(dialog).getByRole('status')).toHaveTextContent(
+      'Add filters to narrow down the contacts you want to see.',
+    );
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    expect(within(dialog).getByPlaceholderText('Add a field to filter')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Source' }));
+    expect(dialog.querySelectorAll('.filter-panel-section')).toHaveLength(1);
+    expect(
+      within(dialog).queryByText(
+        'Add filters to narrow down the contacts you want to see.',
+      ),
+    ).toBeNull();
+    expect(within(dialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Status' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Sales Owner' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Email' }));
+
+    expect(within(dialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
+    expect(within(dialog).getByText('Email')).toBeInTheDocument();
+    expect(within(dialog).getByText('Source')).toBeInTheDocument();
+    expect(within(dialog).getByText('Status')).toBeInTheDocument();
+    expect(within(dialog).getByText('Sales Owner')).toBeInTheDocument();
+    expect(
+      Array.from(dialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
+    ).toEqual(['Email', 'Sales Owner', 'Status', 'Source']);
+    expect(within(dialog).getByRole('button', { name: /^Apply$/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^Reset$/i })).toBeInTheDocument();
+
+    const sourceSection = within(dialog).getByText('Source').closest('.filter-panel-section');
+    expect(await within(sourceSection).findAllByRole('checkbox')).toHaveLength(3);
+    fireEvent.click(within(sourceSection).getByRole('button', { name: 'Show more' }));
+    expect(within(sourceSection).getAllByRole('checkbox')).toHaveLength(4);
+    fireEvent.click(within(sourceSection).getByRole('checkbox', { name: 'Email' }));
+    expect(
+      within(sourceSection).getAllByRole('checkbox').map((checkbox) => checkbox.parentElement.textContent.trim()),
+    ).toEqual(['Email', 'Organic', 'Referral', 'Website']);
+    fireEvent.click(within(sourceSection).getByRole('button', { name: 'Show less' }));
+    expect(within(sourceSection).getAllByRole('checkbox')).toHaveLength(3);
+    expect(within(sourceSection).getAllByRole('checkbox')[0]).toHaveAccessibleName('Email');
+    fireEvent.click(within(sourceSection).getByRole('checkbox', { name: 'Email' }));
+
+    expect(await within(dialog).findByText('Please enter 2 or more characters')).toBeInTheDocument();
+    fireEvent.change(await within(dialog).findByRole('textbox', { name: 'Search Email values' }), {
+      target: { value: 'ka' },
+    });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'ka2348319@gmail.com' }));
+    expect(within(dialog).getByText('ka2348319@gmail.com')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    expect(within(dialog).queryByRole('button', { name: 'Email' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Name' }));
+    expect(
+      Array.from(dialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
+    ).toEqual(['Name', 'Email', 'Sales Owner', 'Status', 'Source']);
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Apply$/i }));
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          !opts &&
+          url.includes('filters='),
+      );
+      expect(filteredCall).toBeDefined();
+      const filtersParam = new URL(filteredCall[0], 'http://localhost').searchParams.get('filters');
+      expect(JSON.parse(filtersParam)).toEqual([
+        { field: 'email', operator: 'contains', values: ['ka2348319@gmail.com'] },
+      ]);
+    });
 
     await waitFor(() => {
       const filterFieldsCall = fetchApiMock.mock.calls.find(
         ([url, opts]) => url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true,
       );
       expect(filterFieldsCall).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const reopenedDialog = await screen.findByRole('dialog', { name: /Filters/i });
+    expect(within(reopenedDialog).getByText('Email')).toBeInTheDocument();
+
+    fireEvent.click(within(reopenedDialog).getByRole('button', { name: /^Reset$/i }));
+
+    await waitFor(() => {
+      expect(within(reopenedDialog).queryByText('ka2348319@gmail.com')).toBeNull();
+      expect(within(reopenedDialog).getByPlaceholderText('Add a field to filter')).toBeInTheDocument();
+      expect(within(reopenedDialog).getByRole('button', { name: 'Email' })).toBeInTheDocument();
+      expect(within(reopenedDialog).getByRole('button', { name: 'Source' })).toBeInTheDocument();
+      expect(within(reopenedDialog).getByRole('button', { name: 'Status' })).toBeInTheDocument();
+      expect(within(reopenedDialog).getByRole('button', { name: 'Sales Owner' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(reopenedDialog).getByRole('button', { name: 'Close filters' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const emptyDialog = await screen.findByRole('dialog', { name: /Filters/i });
+    expect(emptyDialog.querySelectorAll('.filter-panel-section')).toHaveLength(0);
+    expect(within(emptyDialog).queryByText('Source')).toBeNull();
+    expect(within(emptyDialog).queryByText('Status')).toBeNull();
+    expect(within(emptyDialog).queryByText('Sales Owner')).toBeNull();
+    expect(within(emptyDialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
+    expect(within(emptyDialog).getByRole('status')).toHaveTextContent(
+      'Add filters to narrow down the contacts you want to see.',
+    );
+  });
+
+  it('closes the Generic CRM filter drawer when its outside backdrop is clicked', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    expect(await screen.findByRole('dialog', { name: /Filters/i })).toBeInTheDocument();
+
+    fireEvent.mouseDown(document.querySelector('.filter-panel-backdrop--freshsales'));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Filters/i })).toBeNull();
     });
   });
 
@@ -2379,6 +2730,19 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
       expect(within(dropdownContainer).getByText('Globussoft outbound')).toBeInTheDocument();
       expect(within(dropdownContainer).getByText('RFU Umrah follow-up')).toBeInTheDocument();
     });
+  });
+
+  it('opens the selected-leads campaign menu to the right in Generic CRM', async () => {
+    const { container } = renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    fireEvent.click(screen.getAllByRole('checkbox', { name: 'Select Alice Smith' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Assign Campaign \(1\)/i }));
+
+    const campaignMenu = container.querySelector('.leads-bulk-campaign-menu');
+    expect(campaignMenu).toBeInTheDocument();
+    expect(campaignMenu).toHaveStyle({ left: '0px', right: 'auto' });
+    expect(within(campaignMenu).getByText(/Globussoft outbound/i)).toBeInTheDocument();
   });
 
   it('persists selected dial campaigns until the final campaign is removed', async () => {

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Filter, X, ChevronLeft, Plus, Search } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import CalendarRangePicker from "./CalendarRangePicker";
+import "./FilterPanel.css";
 
 // ── FilterPanel — Freshsales-style "Filter by" panel ───────────────────
 // Trigger button opens a panel DOCKED TO THE RIGHT EDGE OF THE VIEWPORT
@@ -28,6 +29,13 @@ import CalendarRangePicker from "./CalendarRangePicker";
 // Sentinel `activeField` value for the stacked "all applied filters" view.
 // Never a real field key — `fieldsUrl`/`valuesUrl` are never called with it.
 const SUMMARY_VIEW = "__applied_filters__";
+const FRESHSALES_DEFAULT_FIELD_KEYS = ["source", "status", "assignedToId"];
+const SEARCHABLE_VALUE_FIELD_KEYS = new Set([
+  "name",
+  "email",
+  "phone",
+  "whatsappPhone",
+]);
 
 export default function FilterPanel({
   fieldsUrl,
@@ -48,8 +56,13 @@ export default function FilterPanel({
   buttonAriaLabel,
   buttonStyle,
   onClose,
+  layoutVariant = "default",
+  clearSectionsOnReset = false,
+  promoteAddedSections = false,
+  pinSelectedValues = false,
 }) {
   const isSingleFieldMode = Boolean(fieldKey);
+  const isFreshsalesLayout = layoutVariant === "freshsales";
   const [open, setOpen] = useState(Boolean(autoOpen));
   const [fields, setFields] = useState([]);
   const [fieldsLoading, setFieldsLoading] = useState(false);
@@ -67,16 +80,26 @@ export default function FilterPanel({
   const [dateRange, setDateRange] = useState({ from: "", to: "" }); // date-kind fields only
   const [summaryDrafts, setSummaryDrafts] = useState({}); // stacked view: { [field]: { label, kind, operator, checked, dateRange } }
   const [summaryValueSearch, setSummaryValueSearch] = useState(""); // shared option search for the stacked view
+  const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
+  const [expandedSummaryFields, setExpandedSummaryFields] = useState({});
+  const [summaryFieldSearches, setSummaryFieldSearches] = useState({});
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const panelRef = useRef(null);
   const autoOpenOnceRef = useRef(false);
+  const freshsalesFieldPickerRequestedRef = useRef(false);
+  const freshsalesDefaultsSeededRef = useRef(false);
 
   const closePanel = useCallback(() => {
     setOpen(false);
     setActiveField(null);
     setSummaryDrafts({});
     setSummaryValueSearch("");
+    setFieldPickerOpen(false);
+    setExpandedSummaryFields({});
+    setSummaryFieldSearches({});
+    freshsalesFieldPickerRequestedRef.current = false;
+    freshsalesDefaultsSeededRef.current = false;
     onClose?.();
   }, [onClose]);
 
@@ -85,7 +108,10 @@ export default function FilterPanel({
       setValuesLoading(true);
       try {
         const data = await fetchApi(valuesUrl(field), { silent: true });
-        setValuesByField((prev) => ({ ...prev, [field]: data.values || [] }));
+        setValuesByField((prev) => ({
+          ...prev,
+          [field]: Array.isArray(data?.values) ? data.values : [],
+        }));
       } catch {
         setValuesByField((prev) => ({ ...prev, [field]: [] }));
       } finally {
@@ -178,11 +204,22 @@ export default function FilterPanel({
 
   const openFieldPicker = useCallback(() => {
     setOpen(true);
+    setFieldPickerOpen(false);
+    freshsalesFieldPickerRequestedRef.current = false;
+    freshsalesDefaultsSeededRef.current = false;
     if (isSingleFieldMode) {
       chooseField(fieldKey, { kind: fieldKind });
       return;
     }
     const list = filters || [];
+    // The reference layout always reopens applied filters in the summary so
+    // its
+    // header-level "Add filter" action stays available, even when only one
+    // filter is active. Other layouts retain the direct single-field editor.
+    if (isFreshsalesLayout && list.length > 0) {
+      openSummary();
+      return;
+    }
     // Reopening with filters lands directly on the applied fields'
     // complete option lists instead of the field picker.
     if (list.length === 1) {
@@ -194,17 +231,80 @@ export default function FilterPanel({
       openSummary();
       return;
     }
+    // The reference layout opens on the filter stack, even before a
+    // value has been applied. The field catalog loads immediately after the
+    // drawer opens and seeds Source, Status, and Sales Owner as empty drafts.
+    // Empty drafts never reach `onChange`, so this is presentation-only and
+    // does not alter the lead query.
+    if (isFreshsalesLayout) {
+      setActiveField(SUMMARY_VIEW);
+      setSummaryDrafts({});
+      setSummaryValueSearch("");
+      return;
+    }
     setActiveField(null);
     setSummaryDrafts({});
     setFieldSearch("");
-  }, [chooseField, fieldKey, fieldKind, filters, isSingleFieldMode, openSummary]);
+  }, [chooseField, fieldKey, fieldKind, filters, isFreshsalesLayout, isSingleFieldMode, openSummary]);
 
   // "Add filter" always starts from the full field list.
   const openFieldList = useCallback(() => {
     setOpen(true);
-    setActiveField(null);
+    freshsalesFieldPickerRequestedRef.current = true;
+    if (isFreshsalesLayout) {
+      setActiveField(SUMMARY_VIEW);
+      setFieldPickerOpen(true);
+    } else {
+      setActiveField(null);
+    }
     setFieldSearch("");
-  }, []);
+  }, [isFreshsalesLayout]);
+
+  const addFieldToSummary = useCallback(
+    (fieldMeta) => {
+      const existing = (filters || []).find(
+        (filter) => filter.field === fieldMeta.field,
+      );
+      setSummaryDrafts((prev) => {
+        if (prev[fieldMeta.field]) return prev;
+        const nextOperator =
+          existing?.operator ||
+          (fieldMeta.kind === "date" ? "between" : "contains");
+        const draft = {
+          label: existing?.label || fieldMeta.label || fieldMeta.field,
+          kind: existing?.kind || fieldMeta.kind || "text",
+          operator: nextOperator,
+          checked:
+            Array.isArray(existing?.values) &&
+            (nextOperator === "contains" ||
+              nextOperator === "not_contains")
+              ? [...existing.values]
+              : [],
+          dateRange:
+            nextOperator === "between" && Array.isArray(existing?.values)
+              ? {
+                  from: existing.values[0] || "",
+                  to: existing.values[1] || "",
+                }
+              : { from: "", to: "" },
+        };
+        return promoteAddedSections
+          ? { [fieldMeta.field]: draft, ...prev }
+          : { ...prev, [fieldMeta.field]: draft };
+      });
+      setFieldPickerOpen(false);
+      setActiveField(SUMMARY_VIEW);
+      setFieldSearch("");
+      setSummaryFieldSearches((prev) => ({
+        ...prev,
+        [fieldMeta.field]: "",
+      }));
+      if ((fieldMeta.kind || "text") !== "date") {
+        fetchValuesFor(fieldMeta.field);
+      }
+    },
+    [fetchValuesFor, filters, promoteAddedSections],
+  );
 
   useEffect(() => {
     if (!open) return undefined;
@@ -248,6 +348,60 @@ export default function FilterPanel({
       .catch(() => setFields([]))
       .finally(() => setFieldsLoading(false));
   }, [open, fieldsUrl, isSingleFieldMode]);
+
+  // The reference layout starts with useful filter sections in view instead
+  // of the field catalog. They remain drafts until the user selects values
+  // and presses Apply, preserving the existing filter logic.
+  useEffect(() => {
+    if (
+      !open ||
+      !isFreshsalesLayout ||
+      isSingleFieldMode ||
+      clearSectionsOnReset ||
+      activeField !== SUMMARY_VIEW ||
+      (filters || []).length > 0 ||
+      fields.length === 0 ||
+      freshsalesFieldPickerRequestedRef.current ||
+      freshsalesDefaultsSeededRef.current
+    ) {
+      return;
+    }
+
+    const defaults = FRESHSALES_DEFAULT_FIELD_KEYS.map((key) =>
+      fields.find((field) => field.field === key),
+    ).filter(Boolean);
+    if (defaults.length === 0) return;
+
+    freshsalesDefaultsSeededRef.current = true;
+    setSummaryDrafts(
+      Object.fromEntries(
+        defaults.map((field) => [
+          field.field,
+          {
+            label: field.label || field.field,
+            kind: field.kind || "text",
+            operator: field.kind === "date" ? "between" : "contains",
+            checked: [],
+            dateRange: { from: "", to: "" },
+          },
+        ]),
+      ),
+    );
+    defaults.forEach((field) => {
+      if ((field.kind || "text") !== "date") {
+        fetchValuesFor(field.field);
+      }
+    });
+  }, [
+    activeField,
+    clearSectionsOnReset,
+    fields,
+    filters,
+    isFreshsalesLayout,
+    isSingleFieldMode,
+    open,
+    fetchValuesFor,
+  ]);
 
   useEffect(() => {
     if (!autoOpen || !isSingleFieldMode || autoOpenOnceRef.current) return;
@@ -380,6 +534,17 @@ export default function FilterPanel({
     );
   };
 
+  const setSummaryFieldSearch = (field, value) => {
+    setSummaryFieldSearches((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const toggleSummaryExpanded = (field) => {
+    setExpandedSummaryFields((prev) => ({
+      ...prev,
+      [field]: !prev[field],
+    }));
+  };
+
   const removeSummaryFilter = (field) => {
     onChange((filters || []).filter((f) => f.field !== field));
     setSummaryDrafts((prev) => {
@@ -428,7 +593,39 @@ export default function FilterPanel({
     setActiveField(null);
     setSummaryDrafts({});
     setSummaryValueSearch("");
+    setExpandedSummaryFields({});
+    setSummaryFieldSearches({});
     onClose?.();
+  };
+
+  const resetSummary = () => {
+    if (clearSectionsOnReset) {
+      setSummaryDrafts({});
+      setFieldPickerOpen(true);
+      freshsalesFieldPickerRequestedRef.current = true;
+      freshsalesDefaultsSeededRef.current = true;
+    } else {
+      setSummaryDrafts((prev) =>
+        Object.fromEntries(
+          Object.entries(prev).map(([field, draft]) => [
+            field,
+            {
+              ...draft,
+              operator: draft.kind === "date" ? "between" : "contains",
+              checked: [],
+              dateRange: { from: "", to: "" },
+            },
+          ]),
+        ),
+      );
+      setFieldPickerOpen(false);
+      freshsalesFieldPickerRequestedRef.current = false;
+      freshsalesDefaultsSeededRef.current = false;
+    }
+    setSummaryValueSearch("");
+    setSummaryFieldSearches({});
+    setExpandedSummaryFields({});
+    onChange([]);
   };
 
   const backToFieldList = () => setActiveField(null);
@@ -456,6 +653,7 @@ export default function FilterPanel({
   const buttonActive = isSingleFieldMode
     ? filters.some((f) => f.field === fieldKey)
     : filters.length > 0;
+  const useActiveButtonColors = buttonActive && !isFreshsalesLayout;
   const triggerText = isSingleFieldMode ? "" : triggerLabel;
   const triggerButtonTitle =
     buttonTitle ||
@@ -467,6 +665,127 @@ export default function FilterPanel({
       ? 1
       : 0
     : filters.length;
+  const showGenericEmptyState =
+    isFreshsalesLayout &&
+    clearSectionsOnReset &&
+    Object.keys(summaryDrafts).length === 0;
+
+  const renderFieldOptions = () => {
+    const term = fieldSearch.trim().toLowerCase();
+    const availableFields = isFreshsalesLayout
+      ? fields.filter(
+          (field) =>
+            !summaryDrafts[field.field] &&
+            !filters.some((filter) => filter.field === field.field),
+        )
+      : fields;
+    const visibleFields = term
+      ? availableFields.filter((field) =>
+          `${field.label || ""} ${field.field || ""}`
+            .toLowerCase()
+            .includes(term),
+        )
+      : availableFields;
+    if (
+      !fieldsLoading &&
+      availableFields.length > 0 &&
+      visibleFields.length === 0
+    ) {
+      return (
+        <div
+          style={{
+            padding: "0.6rem 0.9rem",
+            fontSize: "0.85rem",
+            color: "var(--text-secondary)",
+          }}
+        >
+          No matching fields.
+        </div>
+      );
+    }
+    if (!fieldsLoading && availableFields.length === 0) {
+      return (
+        <div
+          style={{
+            padding: "0.75rem 0.9rem",
+            fontSize: "0.85rem",
+            color: "var(--text-secondary)",
+          }}
+        >
+          All available filters have been added.
+        </div>
+      );
+    }
+
+    const renderFieldOption = (field) => {
+      const active =
+        filters.some((filter) => filter.field === field.field) ||
+        Boolean(summaryDrafts[field.field]);
+      return (
+        <button
+          key={field.field}
+          type="button"
+          className="filter-panel-field-option"
+          onClick={() =>
+            isFreshsalesLayout
+              ? addFieldToSummary(field)
+              : chooseField(field.field)
+          }
+          style={{
+            display: "block",
+            width: "100%",
+            textAlign: "left",
+            padding: "0.55rem 0.9rem",
+            background: active
+              ? "var(--subtle-bg, rgba(0,0,0,0.04))"
+              : "transparent",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "0.87rem",
+            color: "var(--text-primary)",
+          }}
+        >
+          {field.label}
+        </button>
+      );
+    };
+
+    if (!isFreshsalesLayout || term) {
+      return visibleFields.map(renderFieldOption);
+    }
+    const popularFieldKeys = new Set([
+      "source",
+      "status",
+      "assignedToId",
+      "territoryId",
+    ]);
+    const popularFields = visibleFields.filter((field) =>
+      popularFieldKeys.has(field.field),
+    );
+    const otherFields = visibleFields.filter(
+      (field) => !popularFieldKeys.has(field.field),
+    );
+    return (
+      <>
+        {popularFields.length > 0 && (
+          <div className="filter-panel-field-group">
+            <strong className="filter-panel-field-group-title">
+              Popular filters
+            </strong>
+            {popularFields.map(renderFieldOption)}
+          </div>
+        )}
+        {otherFields.length > 0 && (
+          <div className="filter-panel-field-group">
+            <strong className="filter-panel-field-group-title">
+              Other filters
+            </strong>
+            {otherFields.map(renderFieldOption)}
+          </div>
+        )}
+      </>
+    );
+  };
 
   return (
     <div
@@ -492,12 +811,12 @@ export default function FilterPanel({
               gap: compactTrigger || !triggerText ? "0.2rem" : "0.4rem",
               padding:
                 compactTrigger || !triggerText ? "0.35rem" : "0.5rem 0.85rem",
-              background: buttonActive
+              background: useActiveButtonColors
                 ? "var(--surface-hover, rgba(0,0,0,0.04))"
                 : "var(--surface-color, #fff)",
               border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
               borderRadius: 8,
-              color: buttonActive
+              color: useActiveButtonColors
                 ? "var(--accent-color)"
                 : "var(--text-primary)",
               fontSize: "0.85rem",
@@ -534,21 +853,44 @@ export default function FilterPanel({
         {open &&
           createPortal(
             <>
-              {/* Dim backdrop — click-through to the outside-click handler above,
-                but visually grounds the drawer as an overlay the way the
-                Freshsales reference UI dims the page behind the panel. */}
+              {/* The reference layout keeps the underlying list fully visible.
+                The default reusable layout retains its dimmed treatment. */}
               <div
+                className={
+                  isFreshsalesLayout
+                    ? "filter-panel-backdrop filter-panel-backdrop--freshsales"
+                    : "filter-panel-backdrop"
+                }
+                onMouseDown={isFreshsalesLayout ? closePanel : undefined}
                 style={{
                   position: "fixed",
                   inset: 0,
                   zIndex: 1099,
-                  background: "rgba(0,0,0,0.15)",
+                  background: isFreshsalesLayout
+                    ? "transparent"
+                    : "rgba(0,0,0,0.15)",
                 }}
               />
               <div
                 ref={panelRef}
+                className={
+                  isFreshsalesLayout
+                    ? "filter-panel-drawer filter-panel-drawer--freshsales"
+                    : "filter-panel-drawer"
+                }
                 role="dialog"
                 aria-modal="true"
+                onMouseDown={(event) => {
+                  if (!isFreshsalesLayout || !fieldPickerOpen) return;
+                  if (
+                    event.target.closest(".filter-panel-field-picker-popover") ||
+                    event.target.closest(".filter-panel-add-filter")
+                  ) {
+                    return;
+                  }
+                  setFieldPickerOpen(false);
+                  setFieldSearch("");
+                }}
                 aria-label={
                   isSingleFieldMode ? `${activeFieldLabel} filter` : "Filters"
                 }
@@ -571,6 +913,7 @@ export default function FilterPanel({
                 {!isSingleFieldMode && activeField === SUMMARY_VIEW ? (
                   <>
                     <div
+                      className="filter-panel-header"
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -580,25 +923,37 @@ export default function FilterPanel({
                           "1px solid var(--border-color, rgba(0,0,0,0.1))",
                       }}
                     >
-                      <button
-                        type="button"
-                        onClick={backToFieldList}
-                        aria-label="Back to field list"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                          color: "var(--text-secondary)",
-                          display: "flex",
-                        }}
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
+                      {!isFreshsalesLayout && (
+                        <button
+                          type="button"
+                          onClick={backToFieldList}
+                          aria-label="Back to field list"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "var(--text-secondary)",
+                            display: "flex",
+                          }}
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                      )}
                       <strong style={{ fontSize: "1rem", flex: 1 }}>
                         Filters
                       </strong>
+                      {isFreshsalesLayout && (
+                        <button
+                          type="button"
+                          className="filter-panel-add-filter"
+                          onClick={openFieldList}
+                        >
+                          <Plus size={14} /> Add filter
+                        </button>
+                      )}
                       <button
                         type="button"
+                        className="filter-panel-icon-button"
                         onClick={closePanel}
                         aria-label="Close filters"
                         style={{
@@ -612,7 +967,77 @@ export default function FilterPanel({
                         <X size={18} />
                       </button>
                     </div>
+                    {isFreshsalesLayout && fieldPickerOpen && (
+                      <div className="filter-panel-field-picker-popover">
+                        <div
+                          className="filter-panel-field-search"
+                          style={{ position: "relative" }}
+                        >
+                          <Search
+                            size={14}
+                            style={{
+                              position: "absolute",
+                              left: "1.4rem",
+                              top: "50%",
+                              transform: "translateY(-50%)",
+                              color: "var(--text-secondary)",
+                            }}
+                          />
+                          <input
+                            autoFocus
+                            value={fieldSearch}
+                            onChange={(event) =>
+                              setFieldSearch(event.target.value)
+                            }
+                            placeholder="Add a field to filter"
+                            aria-label="Search fields"
+                            style={{
+                              width: "100%",
+                              padding: "0.45rem 0.6rem 0.45rem 2rem",
+                              boxSizing: "border-box",
+                              border:
+                                "1px solid var(--border-color, rgba(0,0,0,0.12))",
+                              borderRadius: 6,
+                              background: "var(--surface-color, #fff)",
+                              color: "var(--text-primary)",
+                              fontSize: "0.85rem",
+                              outline: "none",
+                            }}
+                          />
+                        </div>
+                        <div className="filter-panel-field-list">
+                          {fieldsLoading && (
+                            <div
+                              style={{
+                                padding: "0.6rem 0.9rem",
+                                fontSize: "0.85rem",
+                                color: "var(--text-secondary)",
+                              }}
+                            >
+                              Loading fieldsâ€¦
+                            </div>
+                          )}
+                          {!fieldsLoading && fields.length === 0 && (
+                            <div
+                              style={{
+                                padding: "0.6rem 0.9rem",
+                                fontSize: "0.85rem",
+                                color: "var(--text-secondary)",
+                              }}
+                            >
+                              No filterable fields.
+                            </div>
+                          )}
+                          {renderFieldOptions()}
+                        </div>
+                      </div>
+                    )}
                     <div
+                      className={
+                        isFreshsalesLayout
+                          ? "filter-panel-summary-search filter-panel-summary-search--hidden"
+                          : "filter-panel-summary-search"
+                      }
                       style={{
                         padding: "0.6rem 0.9rem",
                         borderBottom:
@@ -650,17 +1075,40 @@ export default function FilterPanel({
                       />
                     </div>
                     <div
+                      className="filter-panel-sections"
                       style={{
                         overflowY: "auto",
                         flex: 1,
                         minHeight: 0,
                       }}
                     >
+                      {showGenericEmptyState && (
+                        <div
+                          className="filter-panel-empty-state"
+                          role="status"
+                        >
+                          <div className="filter-panel-empty-state-art" aria-hidden="true">
+                            <Filter size={68} strokeWidth={1.25} />
+                          </div>
+                          <p>
+                            Add filters to narrow down the contacts you want to
+                            see.
+                          </p>
+                        </div>
+                      )}
                       {Object.entries(summaryDrafts).map(([field, d]) => {
                         const labels = operatorLabelsFor(d.kind);
                         const isDate = d.kind === "date";
+                        const isSearchableValueField =
+                          SEARCHABLE_VALUE_FIELD_KEYS.has(field);
                         const showChecks =
                           !isDate &&
+                          !isSearchableValueField &&
+                          (d.operator === "contains" ||
+                            d.operator === "not_contains");
+                        const showSearchableValues =
+                          !isDate &&
+                          isSearchableValueField &&
                           (d.operator === "contains" ||
                             d.operator === "not_contains");
                         const showRange = d.operator === "between";
@@ -671,9 +1119,42 @@ export default function FilterPanel({
                               o.label.toLowerCase().includes(term),
                             )
                           : options;
+                        const orderedVisibleOptions = pinSelectedValues
+                          ? [
+                              ...visibleOptions.filter((option) =>
+                                d.checked.includes(option.value),
+                              ),
+                              ...visibleOptions.filter(
+                                (option) =>
+                                  !d.checked.includes(option.value),
+                              ),
+                            ]
+                          : visibleOptions;
+                        const displayedOptions =
+                          isFreshsalesLayout &&
+                          !expandedSummaryFields[field]
+                            ? orderedVisibleOptions.slice(0, 3)
+                            : orderedVisibleOptions;
+                        const fieldQuery = String(
+                          summaryFieldSearches[field] || "",
+                        );
+                        const normalizedFieldQuery = fieldQuery
+                          .trim()
+                          .toLowerCase();
+                        const searchableMatches =
+                          normalizedFieldQuery.length >= 2
+                            ? options.filter(
+                                (option) =>
+                                  !d.checked.includes(option.value) &&
+                                  option.label
+                                    .toLowerCase()
+                                    .includes(normalizedFieldQuery),
+                              )
+                            : [];
                         return (
                           <div
                             key={field}
+                            className="filter-panel-section"
                             style={{
                               padding: "0.7rem 0.9rem",
                               borderBottom:
@@ -681,12 +1162,15 @@ export default function FilterPanel({
                             }}
                           >
                             <div
+                              className="filter-panel-section-heading"
                               style={{
                                 display: "flex",
                                 alignItems: "center",
                                 gap: "0.4rem",
                                 marginBottom:
-                                  showChecks || showRange ? "0.5rem" : 0,
+                                  showChecks || showSearchableValues || showRange
+                                    ? "0.5rem"
+                                    : 0,
                               }}
                             >
                               <strong
@@ -695,6 +1179,7 @@ export default function FilterPanel({
                                 {d.label}
                               </strong>
                               <select
+                                className="filter-panel-operator"
                                 value={d.operator}
                                 onChange={(e) =>
                                   setSummaryOperator(field, e.target.value)
@@ -731,6 +1216,7 @@ export default function FilterPanel({
                               </select>
                               <button
                                 type="button"
+                                className="filter-panel-remove-filter"
                                 onClick={() => removeSummaryFilter(field)}
                                 aria-label={`Remove ${d.label} filter`}
                                 style={{
@@ -752,6 +1238,83 @@ export default function FilterPanel({
                                   setSummaryRange(field, range)
                                 }
                               />
+                            )}
+                            {showSearchableValues && (
+                              <div className="filter-panel-typeahead">
+                                <div className="filter-panel-typeahead-control">
+                                  {d.checked.map((value) => {
+                                    const label =
+                                      options.find(
+                                        (option) => option.value === value,
+                                      )?.label || value;
+                                    return (
+                                      <span
+                                        key={value}
+                                        className="filter-panel-value-chip"
+                                      >
+                                        {label}
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            toggleSummaryValue(field, value)
+                                          }
+                                          aria-label={`Remove ${label}`}
+                                        >
+                                          <X size={13} />
+                                        </button>
+                                      </span>
+                                    );
+                                  })}
+                                  <input
+                                    value={fieldQuery}
+                                    onChange={(event) =>
+                                      setSummaryFieldSearch(
+                                        field,
+                                        event.target.value,
+                                      )
+                                    }
+                                    aria-label={`Search ${d.label} values`}
+                                  />
+                                </div>
+                                {valuesLoading && options.length === 0 ? (
+                                  <div className="filter-panel-typeahead-menu">
+                                    <div className="filter-panel-typeahead-message">
+                                      Loading valuesâ€¦
+                                    </div>
+                                  </div>
+                                ) : normalizedFieldQuery.length < 2 &&
+                                  d.checked.length === 0 ? (
+                                  <div className="filter-panel-typeahead-menu">
+                                    <div className="filter-panel-typeahead-message">
+                                      Please enter 2 or more characters
+                                    </div>
+                                  </div>
+                                ) : normalizedFieldQuery.length >= 2 ? (
+                                  <div className="filter-panel-typeahead-menu">
+                                    {searchableMatches.length === 0 ? (
+                                      <div className="filter-panel-typeahead-message">
+                                        No matching values.
+                                      </div>
+                                    ) : (
+                                      searchableMatches.map((option) => (
+                                        <button
+                                          key={option.value}
+                                          type="button"
+                                          onClick={() => {
+                                            toggleSummaryValue(
+                                              field,
+                                              option.value,
+                                            );
+                                            setSummaryFieldSearch(field, "");
+                                          }}
+                                        >
+                                          {option.label}
+                                        </button>
+                                      ))
+                                    )}
+                                  </div>
+                                ) : null}
+                              </div>
                             )}
                             {showChecks && (
                               <>
@@ -789,9 +1352,10 @@ export default function FilterPanel({
                                       No matching values.
                                     </div>
                                   )}
-                                {visibleOptions.map((opt) => (
+                                {displayedOptions.map((opt) => (
                                   <label
                                     key={opt.value}
+                                    className="filter-panel-value-option"
                                     style={{
                                       display: "flex",
                                       alignItems: "center",
@@ -823,6 +1387,20 @@ export default function FilterPanel({
                                     </span>
                                   </label>
                                 ))}
+                                {isFreshsalesLayout &&
+                                  visibleOptions.length > 3 && (
+                                    <button
+                                      type="button"
+                                      className="filter-panel-show-more"
+                                      onClick={() =>
+                                        toggleSummaryExpanded(field)
+                                      }
+                                    >
+                                      {expandedSummaryFields[field]
+                                        ? "Show less"
+                                        : "Show more"}
+                                    </button>
+                                  )}
                               </>
                             )}
                           </div>
@@ -830,14 +1408,26 @@ export default function FilterPanel({
                       })}
                     </div>
                     <div
+                      className="filter-panel-footer"
                       style={{
                         padding: "0.6rem 0.9rem",
                         borderTop:
                           "1px solid var(--border-color, rgba(0,0,0,0.1))",
                         display: "flex",
-                        justifyContent: "flex-end",
+                        justifyContent: isFreshsalesLayout
+                          ? "space-between"
+                          : "flex-end",
                       }}
                     >
+                      {isFreshsalesLayout && (
+                        <button
+                          type="button"
+                          className="filter-panel-reset"
+                          onClick={resetSummary}
+                        >
+                          Reset
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="btn-primary"
@@ -854,6 +1444,7 @@ export default function FilterPanel({
                 ) : !isSingleFieldMode && activeField === null ? (
                   <>
                     <div
+                      className="filter-panel-header"
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -866,6 +1457,7 @@ export default function FilterPanel({
                       <strong style={{ fontSize: "1rem" }}>Filters</strong>
                       <button
                         type="button"
+                        className="filter-panel-icon-button"
                         onClick={closePanel}
                         aria-label="Close filters"
                         style={{
@@ -880,6 +1472,7 @@ export default function FilterPanel({
                       </button>
                     </div>
                     <div
+                      className="filter-panel-field-search"
                       style={{
                         padding: "0.6rem 0.9rem",
                         borderBottom:
@@ -900,7 +1493,11 @@ export default function FilterPanel({
                       <input
                         value={fieldSearch}
                         onChange={(e) => setFieldSearch(e.target.value)}
-                        placeholder="Search fields…"
+                        placeholder={
+                          isFreshsalesLayout
+                            ? "Add a field to filter"
+                            : "Search fields…"
+                        }
                         aria-label="Search fields"
                         style={{
                           width: "100%",
@@ -917,6 +1514,7 @@ export default function FilterPanel({
                       />
                     </div>
                     <div
+                      className="filter-panel-field-list"
                       style={{
                         overflowY: "auto",
                         padding: "0.3rem 0",
@@ -971,7 +1569,7 @@ export default function FilterPanel({
                             </div>
                           );
                         }
-                        return visibleFields.map((f) => {
+                        const renderFieldOption = (f) => {
                           const active = filters.some(
                             (flt) => flt.field === f.field,
                           );
@@ -979,6 +1577,7 @@ export default function FilterPanel({
                             <button
                               key={f.field}
                               type="button"
+                              className="filter-panel-field-option"
                               onClick={() => chooseField(f.field)}
                               style={{
                                 display: "block",
@@ -997,13 +1596,48 @@ export default function FilterPanel({
                               {f.label}
                             </button>
                           );
-                        });
+                        };
+                        if (!isFreshsalesLayout || term) {
+                          return visibleFields.map(renderFieldOption);
+                        }
+                        const popularFieldKeys = new Set([
+                          "source",
+                          "status",
+                          "assignedToId",
+                        ]);
+                        const popularFields = visibleFields.filter((f) =>
+                          popularFieldKeys.has(f.field),
+                        );
+                        const otherFields = visibleFields.filter(
+                          (f) => !popularFieldKeys.has(f.field),
+                        );
+                        return (
+                          <>
+                            {popularFields.length > 0 && (
+                              <div className="filter-panel-field-group">
+                                <strong className="filter-panel-field-group-title">
+                                  Popular filters
+                                </strong>
+                                {popularFields.map(renderFieldOption)}
+                              </div>
+                            )}
+                            {otherFields.length > 0 && (
+                              <div className="filter-panel-field-group">
+                                <strong className="filter-panel-field-group-title">
+                                  Other filters
+                                </strong>
+                                {otherFields.map(renderFieldOption)}
+                              </div>
+                            )}
+                          </>
+                        );
                       })()}
                     </div>
                   </>
                 ) : (
                   <>
                     <div
+                      className="filter-panel-field-header"
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -1036,6 +1670,7 @@ export default function FilterPanel({
                         const labels = operatorLabelsFor(activeKind);
                         return (
                           <select
+                            className="filter-panel-operator"
                             value={operator}
                             onChange={(e) => setOperator(e.target.value)}
                             style={{
@@ -1198,6 +1833,7 @@ export default function FilterPanel({
                               return visibleOptions.map((opt) => (
                                 <label
                                   key={opt.value}
+                                  className="filter-panel-value-option"
                                   style={{
                                     display: "flex",
                                     alignItems: "center",
@@ -1232,6 +1868,7 @@ export default function FilterPanel({
                       </>
                     )}
                     <div
+                      className="filter-panel-footer"
                       style={{
                         padding: "0.6rem 0.9rem",
                         borderTop:

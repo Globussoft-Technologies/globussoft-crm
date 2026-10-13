@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
@@ -346,6 +346,36 @@ describe('WebForms builder page', () => {
     expect(window.sessionStorage.getItem('globuscrm:web-form-draft:generic:15:9')).toBeNull();
   });
 
+  test('pins the selected landing-page form first without reordering the other forms', async () => {
+    const firstForm = { ...FORM_FIXTURE, id: 201, name: 'First form', slug: 'first-form' };
+    const landingForm = { ...FORM_FIXTURE, id: 202, name: 'Landing form', slug: 'landing-form' };
+    const thirdForm = { ...FORM_FIXTURE, id: 203, name: 'Third form', slug: 'third-form' };
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/forms' && method === 'GET') {
+        return Promise.resolve([firstForm, landingForm, thirdForm]);
+      }
+      if (url === '/api/lead-custom-fields' && method === 'GET') return Promise.resolve([]);
+      if (url === '/api/landing-form-config/access') return Promise.resolve({ canManage: true });
+      if (url === '/api/landing-form-config/mine') return Promise.resolve({ webFormId: landingForm.id });
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(
+      <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'generic' } }}>
+        <WebForms />
+      </AuthContext.Provider>,
+    );
+
+    await screen.findByText('Landing form');
+    await waitFor(() => {
+      const cardNames = Array.from(container.querySelectorAll('.wf-library-card h4'))
+        .map((heading) => heading.textContent);
+      expect(cardNames).toEqual(['Landing form', 'First form', 'Third form']);
+    });
+  });
+
   test('persists Generic multi-page definitions and field assignment', async () => {
     renderPage({ ...FORM_FIXTURE, scope: 'generic' });
     await openBuilder();
@@ -559,6 +589,43 @@ describe('WebForms builder page', () => {
 
 
 
+  test('locks Generic field types while keeping labels editable', async () => {
+    const fields = [
+      { ...FORM_FIXTURE.fields[0], id: 'name-field', sourceKey: 'name', label: 'Name', fieldType: 'number' },
+      { ...FORM_FIXTURE.fields[0], id: 'email-field', sourceKey: 'email', label: 'Email', fieldType: 'text' },
+      { ...FORM_FIXTURE.fields[0], id: 'phone-field', sourceKey: 'phone', label: 'Phone', fieldType: 'number' },
+    ];
+    renderPage({ ...FORM_FIXTURE, scope: 'generic', fields });
+    await openBuilder();
+
+    const nameType = screen.getByRole('combobox', { name: 'Field type for Name' });
+    const emailType = screen.getByRole('combobox', { name: 'Field type for Email' });
+    const phoneType = screen.getByRole('combobox', { name: 'Field type for Phone' });
+
+    expect(nameType).toBeDisabled();
+    expect(nameType).toHaveValue('text');
+    expect(emailType).toBeDisabled();
+    expect(emailType).toHaveValue('email');
+    expect(phoneType).toBeDisabled();
+    expect(phoneType).toHaveValue('tel');
+
+    const nameLabel = screen.getByDisplayValue('Name');
+    expect(nameLabel).not.toBeDisabled();
+    fireEvent.change(nameLabel, { target: { value: 'Full name' } });
+    expect(screen.getByDisplayValue('Full name')).toBeInTheDocument();
+  });
+
+  test('keeps Travel field types editable', async () => {
+    const phoneField = { ...FORM_FIXTURE.fields[0], sourceKey: 'phone', label: 'Phone', fieldType: 'number' };
+    renderTravelPage({ ...FORM_FIXTURE, scope: 'travel', fields: [phoneField] });
+    await openBuilder();
+
+    const phoneType = screen.getByRole('combobox', { name: 'Field type for Phone' });
+    expect(phoneType).not.toBeDisabled();
+    expect(phoneType).toHaveValue('number');
+    expect(within(phoneType).queryByRole('option', { name: 'Tel' })).toBeNull();
+  });
+
   test('opens contact picker with dynamic fields from Contacts and Leads pages', async () => {
 
     renderPage();
@@ -597,6 +664,70 @@ describe('WebForms builder page', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Business type.*custom/i }));
 
     expect(await screen.findByDisplayValue('SaaS, E-Commerce, Freelancer')).toBeInTheDocument();
+  });
+
+  test('creates a lead field from the Generic contact picker plus action', async () => {
+    renderPage();
+    const baseFetch = fetchApiMock.getMockImplementation();
+    let customFields = [
+      { id: 1, fieldKey: 'submit_source', label: 'Submit source', fieldType: 'text' },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/lead-custom-fields' && method === 'GET') {
+        return Promise.resolve(customFields);
+      }
+      if (url === '/api/lead-custom-fields' && method === 'POST') {
+        const body = JSON.parse(opts.body);
+        const created = { id: 91, fieldKey: 'referral_source', ...body };
+        customFields = [...customFields, created];
+        return Promise.resolve(created);
+      }
+      return baseFetch(url, opts);
+    });
+
+    await openBuilder();
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Add lead custom field/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    expect(within(dialog).getByLabelText('Field Type')).not.toBeDisabled();
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Referral Source'), {
+      target: { value: 'Referral Source' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/lead-custom-fields',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            label: 'Referral Source',
+            fieldType: 'text',
+            isRequired: false,
+          }),
+        }),
+      );
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Field created');
+    expect(screen.queryByPlaceholderText('Type to search')).toBeNull();
+    expect(await screen.findByDisplayValue('Referral Source')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    const reopenedPicker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+    const addedItem = within(reopenedPicker).getByText('Referral Source').closest('.wf-field-picker-item');
+    expect(addedItem).toHaveAttribute('title', 'Already added to form');
+    expect(within(addedItem).getByText('Added')).toBeInTheDocument();
+  });
+
+  test('does not show the lead-field plus action in the Travel form picker', async () => {
+    renderTravelPage();
+    await openBuilder();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    expect(await screen.findByText('CONTACT FIELDS')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add lead custom field/i })).toBeNull();
   });
 
   test('supports draft edits and save on the form name field', async () => {

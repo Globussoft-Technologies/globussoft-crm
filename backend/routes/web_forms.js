@@ -142,6 +142,7 @@ function uploadLogoOrReject(req, res, next) {
 const FIELD_TYPES = new Set([
   "text",
   "email",
+  "tel",
   "textarea",
   "number",
   "dropdown",
@@ -154,6 +155,11 @@ const FIELD_TYPES = new Set([
 ]);
 
 const CHOICE_TYPES = new Set(["dropdown", "radio", "multiselect"]);
+const GENERIC_LOCKED_CONTACT_FIELD_TYPES = {
+  name: "text",
+  email: "email",
+  phone: "tel",
+};
 
 const FILE_FORMATS = new Set([
   "CSV",
@@ -440,7 +446,7 @@ function parseFileFormats(raw) {
   return clean.length ? clean.slice(0, 20) : DEFAULT_FILE_FORMATS;
 }
 
-function defaultFields() {
+function defaultFields(scope = "generic") {
   return [
     {
       id: "contact-name",
@@ -493,7 +499,7 @@ function defaultFields() {
 
       sourceKey: "phone",
 
-      fieldType: "text",
+      fieldType: scope === "generic" ? "tel" : "text",
 
       label: "Phone",
 
@@ -642,7 +648,7 @@ function defaultSettings() {
   };
 }
 
-function normalizeField(field, index, leadFieldDefinitions = []) {
+function normalizeField(field, index, scope = "generic", leadFieldDefinitions = []) {
   const sourceKind = ["contact", "lead_custom", "custom"].includes(
     field?.sourceKind,
   )
@@ -650,9 +656,12 @@ function normalizeField(field, index, leadFieldDefinitions = []) {
     : "custom";
 
   const sourceKey = textOr(field?.sourceKey, field?.key || `custom_${index}`);
-  const fieldType = sourceKind === "contact" && sourceKey === "email"
-    ? "email"
-    : FIELD_TYPES.has(field?.fieldType)
+  const lockedContactFieldType = scope === "generic" && sourceKind === "contact"
+    ? GENERIC_LOCKED_CONTACT_FIELD_TYPES[sourceKey]
+    : null;
+  const fieldType = lockedContactFieldType
+    ? lockedContactFieldType
+    : FIELD_TYPES.has(field?.fieldType) && (scope === "generic" || field?.fieldType !== "tel")
       ? field.fieldType
       : "text";
   const leadDefinition = sourceKind === "lead_custom"
@@ -711,9 +720,9 @@ function normalizeField(field, index, leadFieldDefinitions = []) {
 function normalizeFields(raw, scope = "generic", leadFieldDefinitions = []) {
   const parsed = parseJson(raw, null);
 
-  if (!Array.isArray(parsed) || parsed.length === 0) return defaultFields();
+  if (!Array.isArray(parsed) || parsed.length === 0) return defaultFields(scope);
 
-  const fields = parsed.map((field, index) => normalizeField(field, index, leadFieldDefinitions));
+  const fields = parsed.map((field, index) => normalizeField(field, index, scope, leadFieldDefinitions));
 
   if (!supportsAdvancedWebFormFeatures(scope)) return fields.map((field) => ({ ...field, showWhen: null }));
 

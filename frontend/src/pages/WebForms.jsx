@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import WebFormLeadsModal from "../components/WebFormLeadsModal";
+import LeadFieldCreateModal from "../components/LeadFieldCreateModal";
 import { createPortal } from "react-dom";
 
 
@@ -30,6 +31,7 @@ import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, textOrBlank } from "../utils/webForms";
+import "./WebFormsLeadFieldAction.css";
 const CONTACT_FIELD_OPTIONS = [
   { value: "name", label: "Name", fieldType: "text", placeholder: "Enter name" },
   { value: "email", label: "Email", fieldType: "email", placeholder: "Enter email" },
@@ -160,6 +162,7 @@ function restrictToWebFormsFieldList({ transform, activeNodeRect, containerNodeR
 const FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text" },
   { value: "email", label: "Email" },
+  { value: "tel", label: "Tel" },
  { value: "textarea", label: "Textarea" },
 
 
@@ -176,6 +179,11 @@ const FIELD_TYPE_OPTIONS = [
 
  { value: "file", label: "File upload" },
 ];
+const GENERIC_LOCKED_CONTACT_FIELD_TYPES = {
+  name: "text",
+  email: "email",
+  phone: "tel",
+};
 const CHOICE_FIELD_TYPES = new Set(["dropdown", "radio", "multiselect"]);
 const FILE_FORMAT_OPTIONS = [
  { value: "CSV", accept: ".csv,text/csv" },
@@ -594,7 +602,7 @@ function contactLabelFor(key) {
 
 
 
-function normalizeField(field, index, leadFields = []) {
+function normalizeField(field, index, leadFields = [], scope = "generic") {
 
 
 
@@ -681,9 +689,12 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-  const fieldType = sourceKind === "contact" && sourceKey === "email"
-    ? "email"
-    : FIELD_TYPE_OPTIONS.some((item) => item.value === field?.fieldType)
+  const lockedContactFieldType = scope === "generic" && sourceKind === "contact"
+    ? GENERIC_LOCKED_CONTACT_FIELD_TYPES[sourceKey]
+    : null;
+  const fieldType = lockedContactFieldType
+    ? lockedContactFieldType
+    : FIELD_TYPE_OPTIONS.some((item) => item.value === field?.fieldType) && (scope === "generic" || field?.fieldType !== "tel")
       ? field.fieldType
       : (CONTACT_FIELD_DEFAULTS[sourceKey]?.fieldType || "text");
 
@@ -1146,7 +1157,7 @@ function normalizeForm(raw, leadFields = []) {
 
 
 
-    fields: Array.isArray(base.fields) && base.fields.length ? base.fields.map((field, index) => normalizeField(field, index, leadFields)) : [defaultField()],
+    fields: Array.isArray(base.fields) && base.fields.length ? base.fields.map((field, index) => normalizeField(field, index, leadFields, base.scope || "generic")) : [defaultField()],
 
 
 
@@ -3499,7 +3510,7 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
                 <div role="button" tabIndex={0} key={field.id} className={`wf-generic-live-field${isInputSelection ? " is-selected" : ""}`} onClick={(event) => { event.stopPropagation(); onSelectionChange("input"); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onSelectionChange("input"); } }}>
                   <span className={isLabelSelection ? "is-selected" : ""} style={{ fontFamily: labelTextStyle.fontFamily, fontSize: `${labelTextStyle.fontSize}px`, fontWeight: labelTextStyle.fontWeight, fontStyle: labelTextStyle.fontStyle, textDecoration: labelTextStyle.textDecoration, textAlign: labelTextStyle.textAlign }} onClick={(event) => { event.stopPropagation(); onSelectionChange("label"); }}>{field.label}</span>
                   <div className="wf-generic-live-field-control">
-                    {field.fieldType === "textarea" ? <textarea value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} placeholder={field.placeholder || ""} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign, "--wf-live-placeholder-font": placeholderTextStyle.fontFamily, "--wf-live-placeholder-size": `${placeholderTextStyle.fontSize}px`, "--wf-live-placeholder-weight": placeholderTextStyle.fontWeight, "--wf-live-placeholder-style": placeholderTextStyle.fontStyle, "--wf-live-placeholder-decoration": placeholderTextStyle.textDecoration, "--wf-live-placeholder-align": placeholderTextStyle.textAlign, "--wf-live-placeholder-color": style.placeholderColor }} onClick={(event) => { event.stopPropagation(); onSelectionChange("placeholder"); }} /> : field.fieldType === "dropdown" || field.fieldType === "radio" || field.fieldType === "multiselect" ? <select value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign }} onClick={(event) => { event.stopPropagation(); onSelectionChange("input"); }}><option value="">{field.placeholder || "Select an option"}</option>{previewOptionsFor(field).map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} type={field.fieldType === "email" ? "email" : field.fieldType === "number" ? "number" : field.fieldType === "url" ? "url" : field.fieldType === "date" ? "date" : "text"} placeholder={field.placeholder || ""} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign, "--wf-live-placeholder-font": placeholderTextStyle.fontFamily, "--wf-live-placeholder-size": `${placeholderTextStyle.fontSize}px`, "--wf-live-placeholder-weight": placeholderTextStyle.fontWeight, "--wf-live-placeholder-style": placeholderTextStyle.fontStyle, "--wf-live-placeholder-decoration": placeholderTextStyle.textDecoration, "--wf-live-placeholder-align": placeholderTextStyle.textAlign, "--wf-live-placeholder-color": style.placeholderColor }} onClick={(event) => { event.stopPropagation(); onSelectionChange("placeholder"); }} />}
+                    {field.fieldType === "textarea" ? <textarea value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} placeholder={field.placeholder || ""} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign, "--wf-live-placeholder-font": placeholderTextStyle.fontFamily, "--wf-live-placeholder-size": `${placeholderTextStyle.fontSize}px`, "--wf-live-placeholder-weight": placeholderTextStyle.fontWeight, "--wf-live-placeholder-style": placeholderTextStyle.fontStyle, "--wf-live-placeholder-decoration": placeholderTextStyle.textDecoration, "--wf-live-placeholder-align": placeholderTextStyle.textAlign, "--wf-live-placeholder-color": style.placeholderColor }} onClick={(event) => { event.stopPropagation(); onSelectionChange("placeholder"); }} /> : field.fieldType === "dropdown" || field.fieldType === "radio" || field.fieldType === "multiselect" ? <select value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign }} onClick={(event) => { event.stopPropagation(); onSelectionChange("input"); }}><option value="">{field.placeholder || "Select an option"}</option>{previewOptionsFor(field).map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input value={previewValueFor(field)} onChange={(event) => updatePreviewValue(field, event.target.value)} type={field.fieldType === "email" ? "email" : field.fieldType === "tel" ? "tel" : field.fieldType === "number" ? "number" : field.fieldType === "url" ? "url" : field.fieldType === "date" ? "date" : "text"} placeholder={field.placeholder || ""} style={{ fontFamily: inputTextStyle.fontFamily, fontSize: `${inputTextStyle.fontSize}px`, fontWeight: inputTextStyle.fontWeight, fontStyle: inputTextStyle.fontStyle, textDecoration: inputTextStyle.textDecoration, textAlign: inputTextStyle.textAlign, "--wf-live-placeholder-font": placeholderTextStyle.fontFamily, "--wf-live-placeholder-size": `${placeholderTextStyle.fontSize}px`, "--wf-live-placeholder-weight": placeholderTextStyle.fontWeight, "--wf-live-placeholder-style": placeholderTextStyle.fontStyle, "--wf-live-placeholder-decoration": placeholderTextStyle.textDecoration, "--wf-live-placeholder-align": placeholderTextStyle.textAlign, "--wf-live-placeholder-color": style.placeholderColor }} onClick={(event) => { event.stopPropagation(); onSelectionChange("placeholder"); }} />}
                   </div>
                 </div>
               ))}
@@ -3717,7 +3728,9 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
     return [];
   };
   const branchOptions = supportsAdvancedFeatures ? getConditionalOptions(field) : [];
-  const fieldTypeOptions = editableFieldTypes;
+  const fieldTypeOptions = formScope === "generic"
+    ? editableFieldTypes
+    : editableFieldTypes.filter((item) => item.value !== "tel");
 
 
 
@@ -5508,6 +5521,10 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
 
                 <input className="input-field" type="email" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
 
+              ) : field.fieldType === "tel" ? (
+
+                <input className="input-field" type="tel" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
+
               ) : (
 
                 <input className="input-field" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
@@ -5526,7 +5543,9 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
 
                 <select
                   className="input-field"
+                  aria-label={`Field type for ${field.label || field.sourceKey || `field ${index + 1}`}`}
                   value={field.fieldType}
+                  disabled={formScope === "generic"}
                   onChange={(e) => {
                     const nextType = e.target.value;
                     onChange(index, {
@@ -5997,7 +6016,7 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
 
 
 
-function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope = "generic", onPick, onClose }) {
+function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope = "generic", onPick, onAddLeadField, onClose }) {
 
 
 
@@ -6452,7 +6471,13 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
   const leadItems = (() => {
     const seen = new Set((leadFields || []).map((item) => item.fieldKey));
     const effective = [...(leadFields || []), ...FALLBACK_LEAD_CUSTOM_FIELDS.filter((item) => !seen.has(item.fieldKey))];
-    return effective.filter((item) => matches(item.label, item.fieldKey) && !existingFieldKeys.has(`lead_custom:${item.fieldKey}`));
+    return effective
+      .filter((item) => matches(item.label, item.fieldKey))
+      .map((item) => ({
+        ...item,
+        isAdded: existingFieldKeys.has(`lead_custom:${item.fieldKey}`),
+      }))
+      .filter((item) => scope === "generic" || !item.isAdded);
   })();
 
 
@@ -6651,7 +6676,20 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 
 
-        <div className="wf-field-picker-heading">CONTACT FIELDS</div>
+        <div className="wf-field-picker-heading wf-field-picker-heading-with-action">
+          <span>CONTACT FIELDS</span>
+          {scope === "generic" && onAddLeadField ? (
+            <button
+              type="button"
+              className="wf-field-picker-add-lead-field"
+              onClick={onAddLeadField}
+              aria-label="Add lead custom field"
+              title="Add lead custom field"
+            >
+              <Plus size={15} />
+            </button>
+          ) : null}
+        </div>
 
 
 
@@ -6795,7 +6833,14 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 
 
-            {leadItems.map((item) => (
+            {leadItems.map((item) => item.isAdded ? (
+
+              <div key={item.fieldKey} className="wf-field-picker-item" style={{ opacity: 0.62, cursor: "default" }} title="Already added to form">
+                <span>{item.label}</span>
+                <small>Added</small>
+              </div>
+
+            ) : (
 
 
 
@@ -7582,6 +7627,7 @@ function WebFormsContent({ scope = "generic" }) {
 
 
   const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
+  const [leadFieldModalOpen, setLeadFieldModalOpen] = useState(false);
 
 
 
@@ -9302,7 +9348,7 @@ function WebFormsContent({ scope = "generic" }) {
 
   const fieldExists = (kind, sourceKey = "") => (selectedForm?.fields || []).some((field) => field.sourceKind === kind && String(field.sourceKey || "") === String(sourceKey || ""));
 
-  const addField = (kind, sourceKey = "", fieldType = "text", label = "", options = []) => {
+  const addField = (kind, sourceKey = "", fieldType = "text", label = "", options = [], availableLeadFields = leadFields) => {
 
     if ((kind === "contact" || kind === "lead_custom") && fieldExists(kind, sourceKey)) {
       notifyRef.current?.error?.("That field is already added.");
@@ -9310,7 +9356,10 @@ function WebFormsContent({ scope = "generic" }) {
     }
 
     applyDraft((current) => {
-      const field = emptyFieldFor(kind, leadFields, sourceKey, fieldType, label);
+      const resolvedFieldType = (current?.scope || scope) === "generic" && kind === "contact"
+        ? (GENERIC_LOCKED_CONTACT_FIELD_TYPES[sourceKey] || fieldType)
+        : fieldType;
+      const field = emptyFieldFor(kind, availableLeadFields, sourceKey, resolvedFieldType, label);
       if (kind === "lead_custom" && Array.isArray(options) && options.length) {
         field.optionsText = options.join(", ");
       }
@@ -9375,6 +9424,29 @@ function WebFormsContent({ scope = "generic" }) {
 
     setFieldPickerOpen(false);
 
+  };
+
+  const openLeadFieldModal = () => {
+    setFieldPickerOpen(false);
+    setLeadFieldModalOpen(true);
+  };
+
+  const handleLeadFieldCreated = (created) => {
+    const nextLeadFields = [
+      ...leadFields.filter((field) => field.id !== created.id),
+      created,
+    ];
+    setLeadFields(nextLeadFields);
+    setLeadFieldModalOpen(false);
+    addField(
+      "lead_custom",
+      created.fieldKey,
+      created.fieldType || "text",
+      created.label || "",
+      created.options || [],
+      nextLeadFields,
+    );
+    setFieldPickerOpen(false);
   };
 
   const addConditionalChild = (parentFieldId, answer) => {
@@ -10793,6 +10865,16 @@ function WebFormsContent({ scope = "generic" }) {
 
 
   const filteredForms = forms.filter((form) => `${form.name} ${form.slug} ${form.description}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const landingFormIndex = filteredForms.findIndex(
+    (form) => String(form.id) === String(landingFormId),
+  );
+  const displayedForms = landingFormIndex > 0
+    ? [
+        filteredForms[landingFormIndex],
+        ...filteredForms.slice(0, landingFormIndex),
+        ...filteredForms.slice(landingFormIndex + 1),
+      ]
+    : filteredForms;
 
 
 
@@ -19824,7 +19906,7 @@ function WebFormsContent({ scope = "generic" }) {
             </div>
           ) : (
             <div className="wf-library-grid">
-              {filteredForms.map((form) => (
+              {displayedForms.map((form) => (
                 <article key={form.id} className={String(selectedForm?.id) === String(form.id) ? "wf-library-card active" : "wf-library-card"}>
                   <div className="wf-library-card-top">
                     <div>
@@ -19907,7 +19989,7 @@ function WebFormsContent({ scope = "generic" }) {
                           <button type="button" className="btn-secondary" onClick={addFormStep}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add page</button>
                         </div>
                       ) : null}
-               <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} existingFields={selectedForm?.fields || []} scope={selectedForm?.scope || "generic"} onPick={handlePickField} onClose={() => setFieldPickerOpen(false)} />
+               <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} existingFields={selectedForm?.fields || []} scope={selectedForm?.scope || "generic"} onPick={handlePickField} onAddLeadField={canViewFormLeads ? openLeadFieldModal : undefined} onClose={() => setFieldPickerOpen(false)} />
                  </div>
 
                     {leadFields.length === 0 ? <div style={{ marginBottom: 12, color: "var(--text-secondary)", fontSize: "0.88rem" }}>Lead custom fields are not configured yet. You can still build the form with contact and custom fields.</div> : null}
@@ -20345,6 +20427,13 @@ function WebFormsContent({ scope = "generic" }) {
             </div>
           </div>
         </div>
+      ) : null}
+      {leadFieldModalOpen && canViewFormLeads ? (
+        <LeadFieldCreateModal
+          onClose={() => setLeadFieldModalOpen(false)}
+          onCreated={handleLeadFieldCreated}
+          notify={notify}
+        />
       ) : null}
     </div>
   );

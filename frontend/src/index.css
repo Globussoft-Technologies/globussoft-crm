@@ -4126,7 +4126,7 @@ table.leads-table thead th {
   .leads-split-table--density-compact
   .generic-overall-status-cell {
   white-space: nowrap !important;
-  overflow: hidden !important;
+  overflow: visible !important;
 }
 
 .leads-page-root--generic
@@ -4151,13 +4151,14 @@ table.leads-table thead th {
   .leads-split-table--density-compact
   .generic-overall-status-content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  grid-template-areas: "status date action";
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "status action"
+    "date action";
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
-  max-height: 30px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .leads-page-root--generic

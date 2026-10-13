@@ -21,7 +21,8 @@ import { createPortal } from "react-dom";
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useInRouterContext, useLocation, useNavigate } from "react-router-dom";
+import { useInRouterContext, useLocation, useNavigate, UNSAFE_NavigationContext } from "react-router-dom";
+import { installFormNavigationGuard } from "../utils/formNavigationGuard";
 import {
   ArrowDown, ArrowUp, ChevronDown, Code2, Copy, Eye, GripVertical, Hash,
   Link2, ListChecks, Paperclip, Plus, Save, Search, Trash2, Type,
@@ -7191,34 +7192,11 @@ function RoutedWebFormsContent({ scope }) {
 }
 
 function UnsavedChangesGuard({ active, notifyRef, onDiscard, bypassRef }) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const currentPathRef = useRef(`${location.pathname}${location.search}${location.hash}`);
-  const confirmingRef = useRef(false);
-  const bypassHistoryGuardRef = useRef(false);
-
-  useEffect(() => {
-    currentPathRef.current = `${location.pathname}${location.search}${location.hash}`;
-  }, [location.pathname, location.search, location.hash]);
-
+  const { navigator } = useContext(UNSAFE_NavigationContext);
   useEffect(() => {
     if (!active) return undefined;
-
-    const navigateAfterConfirmation = (nextPath, replace) => {
-      bypassHistoryGuardRef.current = true;
-      try {
-        navigate(nextPath, { replace });
-      } finally {
-        window.setTimeout(() => {
-          bypassHistoryGuardRef.current = false;
-        }, 0);
-      }
-    };
-
-    const confirmNavigation = (nextPath, replace = false) => {
-      if (confirmingRef.current) return;
-      confirmingRef.current = true;
-      Promise.resolve(notifyRef.current.confirm({
+    return installFormNavigationGuard({ navigator, bypassRef, onDiscard, confirm: async () => {
+      const discard = await notifyRef.current.confirm({
         title: "Leave this form?",
         message: "You have unsaved changes. Leaving now will discard them.",
         confirmText: "Continue editing",
@@ -7226,92 +7204,10 @@ function UnsavedChangesGuard({ active, notifyRef, onDiscard, bypassRef }) {
         confirmValue: false,
         cancelValue: true,
         dismissValue: false,
-      })).then((ok) => {
-        if (ok) {
-          onDiscard();
-          navigateAfterConfirmation(nextPath, replace);
-        }
-      }).finally(() => {
-        confirmingRef.current = false;
       });
-    };
-
-    const handleDocumentClick = (event) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      const link = event.target instanceof Element ? event.target.closest("a") : null;
-      if (!link || link.target === "_blank" || link.hasAttribute("download")) return;
-
-      let targetUrl;
-      try {
-        targetUrl = new URL(link.href, window.location.href);
-      } catch {
-        return;
-      }
-
-      if (targetUrl.origin !== window.location.origin) return;
-      const nextPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
-      if (nextPath === currentPathRef.current) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      confirmNavigation(nextPath);
-    };
-
-    const handlePopState = () => {
-      const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      const currentPath = currentPathRef.current;
-      if (nextPath === currentPath) return;
-
-      // Restore the current entry while the async confirmation is open. If
-      // confirmed, replace it with the originally requested destination so
-      // the browser history does not gain an extra duplicate entry.
-      window.history.pushState(window.history.state, "", currentPath);
-      confirmNavigation(nextPath, true);
-    };
-
-    const originalPushState = window.history.pushState;
-    const originalReplaceState = window.history.replaceState;
-    const guardHistoryMethod = (originalMethod, replace, state, title, url) => {
-      if (bypassHistoryGuardRef.current || bypassRef.current || url == null) {
-        return originalMethod.call(window.history, state, title, url);
-      }
-
-      let targetUrl;
-      try {
-        targetUrl = new URL(url, window.location.href);
-      } catch {
-        return originalMethod.call(window.history, state, title, url);
-      }
-
-      if (targetUrl.origin !== window.location.origin) {
-        return originalMethod.call(window.history, state, title, url);
-      }
-
-      const nextPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
-      if (nextPath === currentPathRef.current) {
-        return originalMethod.call(window.history, state, title, url);
-      }
-
-      confirmNavigation(nextPath, replace);
-      return undefined;
-    };
-
-    window.history.pushState = function guardedPushState(state, title, url) {
-      return guardHistoryMethod(originalPushState, false, state, title, url);
-    };
-    window.history.replaceState = function guardedReplaceState(state, title, url) {
-      return guardHistoryMethod(originalReplaceState, true, state, title, url);
-    };
-
-    document.addEventListener("click", handleDocumentClick, true);
-    window.addEventListener("popstate", handlePopState, true);
-    return () => {
-      window.history.pushState = originalPushState;
-      window.history.replaceState = originalReplaceState;
-      document.removeEventListener("click", handleDocumentClick, true);
-      window.removeEventListener("popstate", handlePopState, true);
-    };
-  }, [active, bypassRef, navigate, notifyRef, onDiscard]);
+      return discard;
+    } });
+  }, [active, bypassRef, navigator, notifyRef, onDiscard]);
 
   return null;
 }

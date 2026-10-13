@@ -18,6 +18,7 @@ const {
   httpFromPrismaError,
 } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { matchingContactIds, distinctValues } = require("../lib/leadDerivedFilters");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const {
   normalizePhone,
@@ -985,54 +986,13 @@ function buildWebFormClause(operator, values) {
   return { webFormSubmissions: { some: { webForm: { name: { in: list } } } } };
 }
 
-function trackingJsonFragment(field, value) {
-  return `${JSON.stringify(field)}:${JSON.stringify(String(value))}`;
-}
-
 function buildTrackingFilterClause(field, operator, values) {
-  if (!TRACKING_FILTER_FIELDS[field]) return null;
-  if (field === "submittedAt") {
-    if (operator === "is_empty")
-      return { webFormSubmissions: { none: {} } };
-    if (operator === "is_not_empty")
-      return { webFormSubmissions: { some: {} } };
-    if (operator !== "between") return null;
-    const range = betweenRange((values || [])[0], (values || [])[1]);
-    return range
-      ? { webFormSubmissions: { some: { submittedAt: range } } }
-      : null;
-  }
-  const keyFragment = `${JSON.stringify(field)}:`;
-  if (operator === "is_empty") {
-    return {
-      NOT: {
-        webFormSubmissions: {
-          some: { payloadJson: { contains: keyFragment } },
-        },
-      },
-    };
-  }
-  if (operator === "is_not_empty") {
-    return {
-      webFormSubmissions: {
-        some: { payloadJson: { contains: keyFragment } },
-      },
-    };
-  }
-  const fragments = (values || [])
-    .filter((value) => value !== undefined && value !== null && value !== "")
-    .map((value) => trackingJsonFragment(field, value));
-  if (fragments.length === 0) return null;
-  const some = {
-    webFormSubmissions: {
-      some: {
-        OR: fragments.map((fragment) => ({
-          payloadJson: { contains: fragment },
-        })),
-      },
-    },
-  };
-  return operator === "not_contains" ? { NOT: some } : some;
+  if (field !== "submittedAt") return null;
+  if (operator === "is_empty") return { webFormSubmissions: { none: {} } };
+  if (operator === "is_not_empty") return { webFormSubmissions: { some: {} } };
+  if (operator !== "between") return null;
+  const range = betweenRange((values || [])[0], (values || [])[1]);
+  return range ? { webFormSubmissions: { some: { submittedAt: range } } } : null;
 }
 
 function canAccessLead(req, contact) {
@@ -1696,6 +1656,15 @@ router.get("/", async (req, res) => {
         }
         if (TRACKING_FILTER_FIELDS[f.field]) {
           if (vertical !== "generic") continue;
+          if (f.field !== "submittedAt") {
+            const ids = await matchingContactIds({
+              tenantId: req.user.tenantId, status: where.status,
+              assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+              trackingField: f.field, operator: f.operator, values: rawValues,
+            });
+            if (ids !== null) clauses.push({ id: { in: ids } });
+            continue;
+          }
           const clause = buildTrackingFilterClause(
             f.field,
             f.operator,
@@ -1708,6 +1677,15 @@ router.get("/", async (req, res) => {
         if (!fieldDef) continue;
         if (fieldDef.verticals && !fieldDef.verticals.includes(vertical))
           continue;
+        if (fieldDef.namePart) {
+          const ids = await matchingContactIds({
+            tenantId: req.user.tenantId, status: where.status,
+            assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+            namePart: fieldDef.namePart, operator: f.operator, values: rawValues,
+          });
+          if (ids !== null) clauses.push({ id: { in: ids } });
+          continue;
+        }
         const clause = buildFilterClause(fieldDef, f.operator, rawValues);
         if (clause) clauses.push(clause);
       }
@@ -2046,46 +2024,11 @@ router.get("/filter-values/:field", async (req, res) => {
           .status(404)
           .json({ error: "Unknown filter field", code: "UNKNOWN_FIELD" });
       }
-      const rows = await prisma.webFormSubmission.findMany({
-        where: {
-          tenantId,
-          ...(statusScope
-            ? { contact: { status: statusScope, deletedAt: null } }
-            : {}),
-        },
-        select: { payloadJson: true, submittedAt: true },
-        orderBy: { submittedAt: "desc" },
-        take: 1000,
+      const values = await distinctValues({
+        tenantId, status: statusScope,
+        assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+        trackingField: req.params.field, search: valueSearch,
       });
-      const field = req.params.field;
-      const rawValues = rows.map((row) => {
-        if (field === "submittedAt") return row.submittedAt;
-        try {
-          const payload =
-            typeof row.payloadJson === "string"
-              ? JSON.parse(row.payloadJson)
-              : row.payloadJson;
-          return payload?._meta?.tracking?.[field];
-        } catch {
-          return null;
-        }
-      });
-      const normalized = rawValues
-        .filter((value) => value !== null && value !== undefined && value !== "")
-        .map((value) =>
-          field === "submittedAt"
-            ? new Date(value).toISOString().slice(0, 10)
-            : String(value),
-        )
-        .filter(
-          (value) =>
-            !valueSearch ||
-            value.toLowerCase().includes(valueSearch.toLowerCase()),
-        );
-      const values = [...new Set(normalized)]
-        .sort((a, b) => a.localeCompare(b))
-        .slice(0, 200)
-        .map((value) => ({ value, label: value }));
       return res.json({ values });
     }
     const fieldDef = FILTERABLE_FIELDS[req.params.field];
@@ -2112,37 +2055,11 @@ router.get("/filter-values/:field", async (req, res) => {
       }
     }
     if (fieldDef.namePart) {
-      const rows = await prisma.contact.findMany({
-        where: {
-          tenantId,
-          deletedAt: null,
-          AND: [scopeWhere, { name: { not: "" } }],
-        },
-        select: { name: true },
-        distinct: ["name"],
-        orderBy: { name: "asc" },
-        take: 1000,
+      const values = await distinctValues({
+        tenantId, status: statusScope,
+        assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+        namePart: fieldDef.namePart, search: valueSearch,
       });
-      const values = [
-        ...new Set(
-          rows
-            .map((row) => String(row.name || "").trim().split(/\s+/))
-            .map((parts) =>
-              fieldDef.namePart === "first"
-                ? parts[0] || ""
-                : parts.slice(1).join(" "),
-            )
-            .filter(Boolean),
-        ),
-      ]
-        .filter(
-          (value) =>
-            !valueSearch ||
-            value.toLowerCase().includes(valueSearch.toLowerCase()),
-        )
-        .sort((a, b) => a.localeCompare(b))
-        .slice(0, 200)
-        .map((value) => ({ value, label: value }));
       return res.json({ values });
     }
     if (req.params.field === "assignedToId") {

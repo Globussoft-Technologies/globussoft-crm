@@ -53,6 +53,7 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.webFormSubmission = prisma.webFormSubmission || {};
 prisma.webFormSubmission.findMany = vi.fn();
+prisma.$queryRaw = vi.fn();
 const callifiedClient = requireCJS("../../services/callifiedClient");
 callifiedClient.listCampaigns = vi.fn();
 
@@ -86,6 +87,7 @@ function makeApp({ tenantId = 1, userId = 7, role = "ADMIN" } = {}) {
 }
 
 beforeEach(() => {
+  prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.contact.findMany.mockReset().mockResolvedValue([SAMPLE_CONTACT]);
   prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 1 });
   // /filter-fields no longer probes row counts at all (see the NOTE above
@@ -452,9 +454,9 @@ describe("GET /api/contacts/filter-values/:field", () => {
   });
 
   test("derived First Name values come from the Contact name column", async () => {
-    prisma.contact.findMany.mockResolvedValue([
-      { name: "Kanchan Gupta" },
-      { name: "Karan Singh" },
+    prisma.$queryRaw.mockResolvedValue([
+      { value: "Kanchan" },
+      { value: "Karan" },
     ]);
 
     const res = await request(makeApp()).get(
@@ -469,14 +471,7 @@ describe("GET /api/contacts/filter-values/:field", () => {
   });
 
   test("web-form tracking values are read from submission metadata", async () => {
-    prisma.webFormSubmission.findMany.mockResolvedValue([
-      {
-        payloadJson: JSON.stringify({
-          _meta: { tracking: { pageSource: "Google" } },
-        }),
-        submittedAt: new Date("2026-10-13T10:00:00Z"),
-      },
-    ]);
+    prisma.$queryRaw.mockResolvedValue([{ value: "Google" }]);
 
     const res = await request(makeApp()).get(
       "/api/contacts/filter-values/pageSource?status=Lead",
@@ -823,6 +818,7 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
   });
 
   test("web-form tracking filters are tenant-safe relation clauses", async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 9001 }]);
     const filters = [
       { field: "pageSource", operator: "contains", values: ["Google"] },
     ];
@@ -832,17 +828,12 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
 
     expect(res.status).toBe(200);
     const call = prisma.contact.findMany.mock.calls[0][0];
-    expect(call.where.AND).toEqual([
-      {
-        webFormSubmissions: {
-          some: {
-            OR: [
-              { payloadJson: { contains: '"pageSource":"Google"' } },
-            ],
-          },
-        },
-      },
-    ]);
+    expect(call.where.AND).toEqual([{ id: { in: [9001] } }]);
+    const query = prisma.$queryRaw.mock.calls[0][0];
+    expect(query.sql).toContain('JSON_EXTRACT');
+    expect(query.sql).toContain('s.tenantId = c.tenantId');
+    expect(query.values).toContain('$._meta.tracking.pageSource');
+    expect(query.values).toContain(1);
   });
 
   test('text field "not_contains" → AND of negated `contains` matches', async () => {

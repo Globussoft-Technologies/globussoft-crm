@@ -35,6 +35,11 @@ const SEARCHABLE_VALUE_FIELD_KEYS = new Set([
   "email",
   "phone",
   "whatsappPhone",
+  "firstName", "lastName",
+  "pageUrl", "pageTitle", "pageSource", "referrerUrl", "landingPageUrl",
+  "currentDomain", "formName", "utm_source", "utm_medium", "utm_campaign",
+  "utm_term", "utm_content", "gclid", "fbclid", "fbc", "fbp",
+  "browser", "operatingSystem", "deviceType",
 ]);
 
 export default function FilterPanel({

@@ -29,7 +29,7 @@ import {
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
-import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, textOrBlank } from "../utils/webForms";
+import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, textOrBlank } from "../utils/webForms";
 const CONTACT_FIELD_OPTIONS = [
   { value: "name", label: "Name", fieldType: "text", placeholder: "Enter name" },
   { value: "email", label: "Email", fieldType: "email", placeholder: "Enter email" },
@@ -362,6 +362,7 @@ function defaultStyle() {
     buttonLoadingText: "Submitting...",
     successMessageColor: "#065F46",
     errorMessageColor: "#B91C1C",
+    customCss: "",
   };
 }
 
@@ -3407,10 +3408,16 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
   const style = form.style;
   const livePreviewFrameRef = useRef(null);
   const [previewDevice, setPreviewDevice] = useState("desktop");
+  const [customCssDraft, setCustomCssDraft] = useState(String(style.customCss || ""));
   const livePreviewSrcRef = useRef(buildWebFormPreviewUrl(form, typeof window !== "undefined" ? window.location.origin : "", { previewDevice }));
   const livePreviewSrc = livePreviewSrcRef.current;
+  const previewViewportWidth = getWebFormPreviewViewportWidth(previewDevice);
   const formTitle = form.settings?.formTitle ?? form.formTitle ?? form.name ?? "";
   const [previewValues, setPreviewValues] = useState({});
+
+  useEffect(() => {
+    setCustomCssDraft(String(style.customCss || ""));
+  }, [form.id, style.customCss]);
 
   useEffect(() => {
     const handlePreviewMessage = (event) => {
@@ -3469,6 +3476,8 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
   const inputTextStyle = elementTextStyles.input;
   const buttonTextStyle = elementTextStyles.button;
   const updateSelectedTextStyle = (nextValue) => updateStyle({ elementTextStyles: { ...elementTextStyles, [selection]: nextValue } });
+  const applyCustomCss = () => updateStyle({ customCss: customCssDraft });
+  const resetCustomCssDraft = () => setCustomCssDraft(String(style.customCss || ""));
   const isLabelSelection = selection === "label";
   const isPlaceholderSelection = selection === "placeholder";
   const isInputSelection = selection === "input";
@@ -3479,7 +3488,7 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
         <div className="wf-generic-live-preview-wrap" style={{ background: style.backgroundColor }}>
           <div className="wf-generic-live-preview-label">Preview</div>
           <div className="wf-generic-live-preview">
-            <iframe ref={livePreviewFrameRef} title="Web form live preview" src={livePreviewSrc} style={{ width: "100%", height: "620px", minHeight: 0, border: 0, display: "block", background: "transparent" }} />
+            <iframe ref={livePreviewFrameRef} title="Web form live preview" src={livePreviewSrc} style={{ width: previewViewportWidth === "100%" ? "100%" : `min(100%, ${previewViewportWidth})`, height: "620px", minHeight: 0, margin: "0 auto", border: 0, display: "block", background: "transparent" }} />
           </div>
           <div hidden>
             {style.logoUrl ? <img src={style.logoUrl} alt="Form logo" className="wf-generic-live-logo" onClick={(event) => { event.stopPropagation(); onSelectionChange("form"); }} /> : null}
@@ -3511,6 +3520,15 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
             <button type="button" className={selection === "success" ? "is-selected" : ""} onClick={() => onSelectionChange("success")}>Success message</button>
             <button type="button" className={selection === "layout" ? "is-selected" : ""} onClick={() => onSelectionChange("layout")}>Layout</button>
             <button type="button" className={selection === "container" ? "is-selected" : ""} onClick={() => onSelectionChange("container")}>Form container</button>
+            <button
+              type="button"
+              className={`${selection === "customCss" ? "is-selected " : ""}wf-custom-css-toggle`}
+              onClick={() => onSelectionChange("customCss")}
+              aria-expanded={selection === "customCss"}
+              aria-controls="wf-custom-css-editor"
+            >
+              Custom CSS
+            </button>
           </div>
           {["title", "label", "placeholder", "input", "button", "error", "success"].includes(selection) ? <GenericElementTextControls element={selection} value={selectedTextStyle} onChange={updateSelectedTextStyle} /> : null}
           <div className="wf-generic-live-context-options">
@@ -3541,6 +3559,30 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
             </> : null}
             {selection === "error" ? <GenericFormStyleControls group="error" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
             {selection === "success" ? <GenericFormStyleControls group="success" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+            {selection === "customCss" ? <div id="wf-custom-css-editor" className="wf-custom-css-editor">
+              <div className="wf-custom-css-copy">
+                <strong>Custom CSS</strong>
+                <span>Override spacing, colors, gradients, padding, and other visual details. CSS runs inside the embedded form only.</span>
+              </div>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span>CSS code</span>
+                <textarea
+                  aria-label="Custom CSS"
+                  className="input-field wf-custom-css-textarea"
+                  value={customCssDraft}
+                  onChange={(event) => setCustomCssDraft(event.target.value)}
+                  placeholder={".panel {\n  padding: 40px;\n  background: linear-gradient(135deg, #ffffff, #eef1ff);\n}\n\n.primary {\n  border-radius: 999px;\n}"}
+                  maxLength={20000}
+                  spellCheck="false"
+                />
+              </label>
+              <div className="wf-custom-css-actions">
+                <button type="button" className="btn-primary" onClick={applyCustomCss} disabled={customCssDraft === String(style.customCss || "")}>Apply CSS</button>
+                <button type="button" className="btn-secondary" onClick={() => { setCustomCssDraft(""); updateStyle({ customCss: "" }); }} disabled={!customCssDraft && !style.customCss}>Clear CSS</button>
+                {customCssDraft !== String(style.customCss || "") ? <button type="button" className="btn-secondary" onClick={resetCustomCssDraft}>Discard edits</button> : null}
+              </div>
+              <small>Use the form classes such as <code>.panel</code>, <code>.field</code>, <code>input</code>, <code>.primary</code>, <code>h1</code>, and <code>.note</code>. Click Save above to keep the change on the public form.</small>
+            </div> : null}
           </div>
         </div>
       </div>
@@ -10807,8 +10849,8 @@ function WebFormsContent({ scope = "generic" }) {
 
   useEffect(() => {
     if (selectedForm?.scope !== "generic") return;
-    if (["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container"].includes(genericStyleSelection)) return;
-    if (!["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container"].includes(genericStyleSelection)) {
+    if (["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container", "customCss"].includes(genericStyleSelection)) return;
+    if (!["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container", "customCss"].includes(genericStyleSelection)) {
       setGenericStyleSelection("form");
     }
   }, [selectedForm?.scope, builderFields, genericStyleSelection]);
@@ -11476,13 +11518,13 @@ function WebFormsContent({ scope = "generic" }) {
           min-width: 0;
         }
 
-        .web-form-builder-generic .wf-generic-live-context-options > div:first-child > div {
+        .web-form-builder-generic .wf-generic-live-context-options > div:first-child:not(.wf-custom-css-editor) > div {
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
         }
 
-        .web-form-builder-generic .wf-generic-live-context-options > div:first-child > div > button {
+        .web-form-builder-generic .wf-generic-live-context-options > div:first-child:not(.wf-custom-css-editor) > div > button {
           width: 60px;
           min-width: 60px;
           height: 42px;
@@ -11496,6 +11538,85 @@ function WebFormsContent({ scope = "generic" }) {
         .web-form-builder-generic .wf-generic-live-context-options .wf-logo-upload-label {
           font-size: 0.8rem;
           line-height: 1.2;
+        }
+
+        .web-form-builder-generic .wf-custom-css-editor {
+          display: grid;
+          grid-column: 1 / -1;
+          gap: 12px;
+          min-width: 0;
+          padding: 16px;
+          border: 1px solid var(--border-color);
+          border-radius: 10px;
+          background: var(--surface-color);
+        }
+
+        .web-form-builder-generic .wf-custom-css-copy {
+          display: grid;
+          gap: 4px;
+          color: var(--text-secondary);
+          font-size: 0.78rem;
+          line-height: 1.4;
+        }
+
+        .web-form-builder-generic .wf-custom-css-copy strong {
+          color: var(--text-primary);
+          font-size: 0.88rem;
+        }
+
+        .web-form-builder-generic .wf-custom-css-textarea {
+          width: 100%;
+          height: 360px;
+          min-height: 360px;
+          max-height: 560px;
+          resize: vertical;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          font-size: 0.8rem;
+          line-height: 1.5;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          tab-size: 2;
+        }
+
+        .web-form-builder-generic .wf-custom-css-actions {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .web-form-builder-generic .wf-custom-css-actions > button {
+          display: inline-flex;
+          width: 100%;
+          min-width: 0;
+          align-items: center;
+          justify-content: center;
+          min-height: 40px;
+          padding: 0 16px;
+          border-radius: 8px;
+          font-size: 0.82rem;
+          font-weight: 700;
+          line-height: 1;
+          white-space: nowrap;
+        }
+
+        .web-form-builder-generic .wf-custom-css-actions > button:nth-child(3) {
+          grid-column: 1 / -1;
+        }
+
+        .web-form-builder-generic .wf-custom-css-actions > button:disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
+        }
+
+        .web-form-builder-generic .wf-custom-css-toggle {
+          border-color: var(--accent-color, #6366f1) !important;
+        }
+
+        .web-form-builder-generic .wf-custom-css-editor small {
+          color: var(--text-secondary);
+          font-size: 0.72rem;
+          line-height: 1.45;
         }
 
         .web-form-builder-generic .wf-generic-element-text-controls {
@@ -19855,7 +19976,7 @@ function WebFormsContent({ scope = "generic" }) {
                       </DndContext>
                  </div>
                   </Section>
-                 <Section id="wf-style" step={2} title="Customize text and colors" subtitle="Tune the copy, logo, font, and colors so the embedded form matches your brand.">
+                 <Section id="wf-style" step={2} title="Customize text and colors" subtitle="Tune the copy, logo, font, colors, or add your own CSS so the embedded form matches your brand.">
                     {selectedForm.scope === "generic" ? <GenericLiveCustomizationEditor form={selectedForm} fields={builderFields} selection={genericStyleSelection} onSelectionChange={setGenericStyleSelection} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={handleLogoUpload} /> : null}
                     {selectedForm.scope === "travel" ? <div className="web-form-builder-generic wf-travel-live-preview-scope"><GenericLiveCustomizationEditor form={selectedForm} fields={builderFields} selection={genericStyleSelection} onSelectionChange={setGenericStyleSelection} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={handleLogoUpload} /></div> : null}
                     {selectedForm.scope !== "generic" && selectedForm.scope !== "travel" ? <div className="wf-style-block">

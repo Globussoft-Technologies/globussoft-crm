@@ -37,8 +37,8 @@
       // Production client pages should be pinned to one CRM environment.
       // Falling back to another environment is unsafe because numeric page
       // IDs and tenant slugs can identify different customers there.
-      apiBase: 'https://globuscrm.globussoft.com',
-      formBase: 'https://globuscrm.globussoft.com',
+      apiBase: 'https://globuscrm.com',
+      formBase: 'https://globuscrm.com',
       subBrand: 'tmc',
       tenantSlug: 'travel-stall-2',
       customerId: '',
@@ -64,7 +64,7 @@
       } else if (pinnedApiBase) {
         candidateBases = [{ api: pinnedApiBase.replace(/\/+$/, ''), form: (pinnedFormBase || pinnedApiBase).replace(/\/+$/, '') }];
       } else {
-        var list = Array.isArray(config.bases) && config.bases.length ? config.bases : ['https://globuscrm.globussoft.com'];
+        var list = Array.isArray(config.bases) && config.bases.length ? config.bases : ['https://globuscrm.com'];
         candidateBases = list.map(function(base){
           var b = String(base).replace(/\/+$/, '');
           return { api: b, form: b };

@@ -8,7 +8,7 @@ servers:
     description: Local
   - url: https://crm.globusdemos.com/api
     description: Demo
-  - url: https://globuscrm.globussoft.com/api
+  - url: https://globuscrm.com/api
     description: Production
 security:
   - BearerAuth: []

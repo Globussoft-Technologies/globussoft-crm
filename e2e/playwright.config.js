@@ -7,7 +7,7 @@ const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 // Tests create, mutate, and delete DB rows — running against live would
 // flood real customer data with E2E fixtures (E2E_FLOW_*, Test Patient*, etc.).
 // Use BASE_URL=https://crm.globusdemos.com (demo) or BASE_URL=http://localhost:5000 (local).
-const PRODUCTION_HOSTS = ['globuscrm.globussoft.com'];
+const PRODUCTION_HOSTS = ['globuscrm.com'];
 const targetHost = new URL(BASE_URL).hostname;
 if (PRODUCTION_HOSTS.includes(targetHost)) {
   throw new Error(

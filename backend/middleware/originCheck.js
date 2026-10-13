@@ -66,6 +66,7 @@
 // runs as a structural assertion.
 
 const URL_TOKEN_RE = /^https?:\/\/[^/]+/i;
+const { buildAllowedOrigins } = require("../lib/corsOrigins");
 
 // Loopback origin with any (or no) port — http://localhost:5174,
 // http://127.0.0.1:5173, etc. Used for the non-production dev bypass in
@@ -78,30 +79,7 @@ const LOOPBACK_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|tmc\.localhost)(
  * Exported so tests can introspect it; route code never calls this directly.
  */
 function buildAllowlist() {
-  const defaults = [
-    "https://crm.globusdemos.com",
-    "http://localhost:5173",
-    "http://tmc.localhost:5173",
-    "http://localhost:5000",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5000",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "https://globuscrm.globussoft.com",
-    "https://drenhance.com",
-    "https://www.drenhance.com",
-    "https://empcloud.com",
-    "https://www.empcloud.com",
-    "https://app.empcloud.com",
-    "https://themodernclassroom.in",
-    "https://www.themodernclassroom.in",
-    "https://app.themodernclassroom.in",
-  ];
-  const envOne = process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [];
-  const envMany = process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
-    : [];
-  return Array.from(new Set([...defaults, ...envOne, ...envMany]));
+  return buildAllowedOrigins();
 }
 
 /**

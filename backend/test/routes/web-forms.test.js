@@ -182,6 +182,23 @@ describe('web-form embed sizing', () => {
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
   });
+
+  test('uses the configured frontend base when no origin is supplied', () => {
+    const previousFrontendUrl = process.env.FRONTEND_URL;
+    const previousPublicBaseUrl = process.env.PUBLIC_BASE_URL;
+    process.env.FRONTEND_URL = 'https://globuscrm.com/';
+    delete process.env.PUBLIC_BASE_URL;
+
+    try {
+      const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' });
+      expect(code).toContain('https://globuscrm.com/embed/web-form.html?id=7');
+    } finally {
+      if (previousFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previousFrontendUrl;
+      if (previousPublicBaseUrl === undefined) delete process.env.PUBLIC_BASE_URL;
+      else process.env.PUBLIC_BASE_URL = previousPublicBaseUrl;
+    }
+  });
 });
 
 describe('Generic conditional fields', () => {

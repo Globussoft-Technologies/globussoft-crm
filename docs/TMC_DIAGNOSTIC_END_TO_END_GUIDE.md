@@ -17,13 +17,13 @@ The diagnostic system has five connected parts:
 The production TMC public form is:
 
 ```text
-https://globuscrm.globussoft.com/diagnostic-form/travel-stall-2/tmc
+https://globuscrm.com/diagnostic-form/travel-stall-2/tmc
 ```
 
 The production API base URL is:
 
 ```text
-https://globuscrm.globussoft.com
+https://globuscrm.com
 ```
 
 ## Contents
@@ -568,7 +568,7 @@ Uploaded backgrounds should be tested on the form, loading state, and result pag
 The production URL must be:
 
 ```text
-https://globuscrm.globussoft.com/diagnostic-form/travel-stall-2/tmc
+https://globuscrm.com/diagnostic-form/travel-stall-2/tmc
 ```
 
 The separate HTML file installed on the client's domain is now pinned to `travel-stall-2`; it no longer falls back to the old `travel-stall` slug.
@@ -876,7 +876,7 @@ Check:
 2. the Public form tab shows **Published**;
 3. the URL uses `travel-stall-2/tmc`;
 4. the client-domain HTML has been replaced with the latest pinned version;
-5. the production API host is `https://globuscrm.globussoft.com`.
+5. the production API host is `https://globuscrm.com`.
 
 ### 17.8 Submission succeeds but recommendations are empty
 

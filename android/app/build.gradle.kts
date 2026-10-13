@@ -30,7 +30,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "BASE_URL", "\"https://globuscrm.globussoft.com/api/wellness/\"")
+        buildConfigField("String", "BASE_URL", "\"https://globuscrm.com/api/wellness/\"")
         buildConfigField("String", "TENANT_SLUG", "\"default\"")
         buildConfigField("int", "TENANT_ID", "1")
     }
@@ -50,7 +50,7 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "BASE_URL", "\"https://globuscrm.globussoft.com/api/wellness/\"")
+        buildConfigField("String", "BASE_URL", "\"https://globuscrm.com/api/wellness/\"")
             buildConfigField("String", "TENANT_SLUG", "\"enhanced-wellness\"")
             buildConfigField("int", "TENANT_ID", "1")
         }
@@ -62,7 +62,7 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
-            buildConfigField("String", "BASE_URL", "\"https://globuscrm.globussoft.com/api/wellness/\"")
+        buildConfigField("String", "BASE_URL", "\"https://globuscrm.com/api/wellness/\"")
             buildConfigField("String", "TENANT_SLUG", "\"enhanced-wellness\"")
             buildConfigField("int", "TENANT_ID", "1")
         }

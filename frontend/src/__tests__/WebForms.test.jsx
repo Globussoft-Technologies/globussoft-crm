@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { buildWebFormEmbedCode, buildWebFormPreviewUrl, slugifyWebFormName, textOrBlank } from '../utils/webForms';
+import { buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
 describe('webForms helpers', () => {
   test('keeps an explicitly cleared string blank', () => {
@@ -17,6 +17,13 @@ describe('webForms helpers', () => {
 });
 
 describe('buildWebFormPreviewUrl', () => {
+  test('uses representative viewport widths for device previews', () => {
+    expect(getWebFormPreviewViewportWidth('desktop')).toBe('100%');
+    expect(getWebFormPreviewViewportWidth('tablet')).toBe('768px');
+    expect(getWebFormPreviewViewportWidth('mobile')).toBe('440px');
+    expect(getWebFormPreviewViewportWidth('unknown')).toBe('100%');
+  });
+
   test('embeds the draft payload for previewing unsaved changes', () => {
     const url = buildWebFormPreviewUrl({ name: 'Draft Form', slug: 'draft-form' }, 'https://crm.example.com');
 
@@ -66,6 +73,22 @@ describe('buildWebFormEmbedCode', () => {
 });
 
 describe('public web form embed footer', () => {
+  test('supports saved custom CSS overrides in the embedded runtime', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const builder = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+
+    expect(builder).toContain('Custom CSS');
+    expect(builder).toContain('Apply CSS');
+    expect(builder).toContain('customCssDraft');
+    expect(builder).toContain('aria-expanded={selection === "customCss"}');
+    expect(builder).toContain('height: 360px');
+    expect(builder).toContain('> div:first-child:not(.wf-custom-css-editor) > div');
+    expect(builder).toContain('> div:first-child:not(.wf-custom-css-editor) > div > button');
+    expect(builder).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
+    expect(html).toContain('gbs-custom-form-css');
+    expect(html).toContain('customCss.textContent = sanitizeCustomCss(style.customCss)');
+  });
+
   test('links the powered-by footer to the home page', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
@@ -105,6 +128,47 @@ describe('public web form embed footer', () => {
     expect(html).toContain('grid-template-columns: minmax(92px, 34%) minmax(0, 1fr) !important;');
     expect(html).toContain('padding-left: 44px;');
     expect(html).toContain('@media (max-width: 640px)');
+  });
+
+  test('renders the Generic CRM phone selector as a single compact control', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('grid-template-columns: 100px minmax(0, 1fr) !important;');
+    expect(html).toContain('var(--gbs-phone-country-bg, #eef2f7)');
+    expect(html).toMatch(/.phone-country-picker::after/);
+    expect(html).toMatch(/.phone-input:focus-within/);
+  });
+
+  test('keeps public tablet and mobile layouts aligned with the builder preview', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const desktopRule = html.indexOf('html.generic-public-desktop-columns .grid {');
+    const responsiveRule = html.lastIndexOf('html.generic-public-desktop-columns .grid,');
+
+    expect(desktopRule).toBeGreaterThan(-1);
+    expect(responsiveRule).toBeGreaterThan(desktopRule);
+    expect(html).toContain('@media (min-width: 641px) and (max-width: 900px)');
+    expect(html).toContain('grid-template-columns: var(--gbs-tablet-columns, minmax(0, 1fr)) !important;');
+    expect(html.slice(responsiveRule)).toContain('grid-template-columns: var(--gbs-mobile-columns, minmax(0, 1fr)) !important;');
+    expect(html.slice(responsiveRule)).toContain('grid-column: auto !important;');
+    expect(html).toContain('class="field phone-field ');
+    expect(html).toContain('@media (max-width: 480px)');
+    expect(html).toContain('@media (max-width: 359px)');
+    expect(html).toContain('grid-column: 1 / -1 !important;');
+    expect(html.slice(responsiveRule)).toContain('grid-template-columns: minmax(68px, 42%) minmax(0, 1fr) !important;');
+    expect(html).toContain('html.generic-preview-mobile.generic-scope .phone-input');
+    expect(html).toContain('padding: 0 3px 0 34px;');
+    expect(html).toContain('.choices.horizontal .check');
+    expect(html).toContain('width: fit-content;');
+    expect(html).toContain('flex: 0 1 auto;');
+    expect(html.slice(responsiveRule)).toContain('overflow-wrap: anywhere;');
+  });
+
+  test('sizes the live preview iframe to the selected device viewport', () => {
+    const builder = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+
+    expect(builder).toContain('getWebFormPreviewViewportWidth(previewDevice)');
+    expect(builder).toContain('min(100%, ${previewViewportWidth})');
+    expect(builder).toContain('margin: "0 auto"');
   });
 
   test('renders the numeric phone control for the default phone field', () => {

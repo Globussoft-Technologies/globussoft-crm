@@ -4,12 +4,12 @@
 **Last updated:** 11 June 2026
 **Applies to:**
 
-- **GlobusCRM web app** — https://globuscrm.globussoft.com
+- **GlobusCRM web app** — https://globuscrm.com
 - **GlobusCRM Android app** — Google Play package `com.globussoft.crm` *(confirm before publishing)*
 - **GlobusCRM iOS app** — Apple App Store bundle ID `com.globussoft.crm` *(confirm before publishing)*
 - All sub-products operated by **Globussoft Technologies Pvt. Ltd.**
 
-This page describes how to delete your GlobusCRM account, how to delete your data without deleting your account, what we keep after deletion, and how long it takes. It is published at https://globuscrm.globussoft.com/deleted-account-policy and is publicly accessible without sign-in or app install.
+This page describes how to delete your GlobusCRM account, how to delete your data without deleting your account, what we keep after deletion, and how long it takes. It is published at https://globuscrm.com/deleted-account-policy and is publicly accessible without sign-in or app install.
 
 ---
 
@@ -38,7 +38,7 @@ Both options can be initiated from the web app, the Android app, the iOS app, or
 | **Android app** (`com.globussoft.crm`) | Open the app → **Profile (tap avatar, top-right) → Settings → Account → Delete Account** | Same confirmation flow. |
 | **iOS app** (`com.globussoft.crm`) | Open the app → **Profile (tap avatar, top-right) → Settings → Account → Delete Account** | Same confirmation flow. |
 | **Email** | Send "Delete my account" to **privacy@globussoft.com** from the address of record. | Acknowledged within 2 business days, actioned within 30 days. |
-| **Public web form** (no sign-in or app install required) | https://globuscrm.globussoft.com/account-deletion| Identity is verified by an emailed link before deletion is queued. |
+| **Public web form** (no sign-in or app install required) | https://globuscrm.com/account-deletion| Identity is verified by an emailed link before deletion is queued. |
 
 ### Option B — Delete my data only
 
@@ -182,7 +182,7 @@ GlobusCRM is a business-to-business product and is not directed at children unde
 
 ## 12. Changes to this policy
 
-We may update this policy from time to time. Material changes will be announced by email to active account holders at least **30 days** before they take effect. The current version is always available at https://globuscrm.globussoft.com/deleted-account-policy.
+We may update this policy from time to time. Material changes will be announced by email to active account holders at least **30 days** before they take effect. The current version is always available at https://globuscrm.com/deleted-account-policy.
 
 ---
 

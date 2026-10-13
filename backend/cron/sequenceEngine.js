@@ -557,7 +557,7 @@ async function latestSequenceEmail(enrollment) {
 }
 
 async function addGenericEmailTracking(emailId, body, tenantId) {
-  const baseUrl = process.env.FRONTEND_URL || 'https://crm.globusdemos.com';
+  const baseUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || 'https://globuscrm.com';
   const openTrackingId = crypto.randomUUID();
   await prisma.emailTracking.create({ data: { emailId, trackingId: openTrackingId, type: 'open', tenantId } }).catch(() => {});
   let trackedBody = String(body || '');

@@ -2,7 +2,7 @@
 
 **Effective date:** 11 June 2026
 **Last updated:** 11 June 2026
-**Canonical URL:** https://globuscrm.globussoft.com/terms-and-conditions
+**Canonical URL:** https://globuscrm.com/terms-and-conditions
 
 These Terms and Conditions ("Terms") are a binding agreement between you and **Globussoft Technologies** ("Globussoft", "we", "us", "our") governing your access to and use of Globus CRM — the web application, the Android and iOS mobile applications, public pages served by the platform (booking pages, landing pages, surveys, portals, microsites), the Partner API, and related services (together, "the Service").
 
@@ -62,7 +62,7 @@ We may investigate violations and may suspend or terminate accounts engaged in t
 
 1. **Ownership.** The Tenant retains all rights in Tenant Data. We claim no ownership of it.
 2. **Licence to operate.** The Tenant grants us a worldwide, non-exclusive licence to host, process, transmit, and display Tenant Data solely as needed to provide the Service, support it, and comply with law.
-3. **Controller/processor.** For Tenant Data about End Customers, the Tenant is the data controller and Globussoft the processor, as described in our [Privacy Policy](https://globuscrm.globussoft.com/privacy-policy). A data-processing agreement is available on request.
+3. **Controller/processor.** For Tenant Data about End Customers, the Tenant is the data controller and Globussoft the processor, as described in our [Privacy Policy](https://globuscrm.com/privacy-policy). A data-processing agreement is available on request.
 4. **Tenant compliance.** The Tenant is solely responsible for: the lawfulness of its data collection and messaging; obtaining consents from End Customers (including patients and parents/guardians for student records); honouring opt-outs; the accuracy of its content (including quotes, invoices, itineraries, prescriptions, and landing pages); and configuring retention policies appropriate to its obligations.
 5. **Health data.** Tenants in the wellness vertical acknowledge that the Service is a record-keeping and practice-management tool. It is **not a medical device** and provides no medical advice. Clinical decisions and the content of prescriptions, treatment plans, and consent forms are entirely the responsibility of the treating professional.
 6. **Backups and export.** We maintain routine backups for disaster recovery, but Tenants should export business-critical data regularly using the built-in export tools. On termination, Tenants have 30 days to export Tenant Data, after which we may delete it (Section 14).
@@ -85,7 +85,7 @@ The Service interoperates with third-party services you choose to connect — pa
 
 ## 10. Privacy
 
-Our collection and use of personal data is described in the [Privacy Policy](https://globuscrm.globussoft.com/privacy-policy), which is incorporated into these Terms by reference.
+Our collection and use of personal data is described in the [Privacy Policy](https://globuscrm.com/privacy-policy), which is incorporated into these Terms by reference.
 
 ## 11. Availability, support, and changes to the Service
 

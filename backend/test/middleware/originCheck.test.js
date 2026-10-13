@@ -327,6 +327,26 @@ describe('originCheck — browser callers with allowed Origin', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
+  test('current production origin passes', () => {
+    const { req, res, next } = makeReqRes({
+      headers: { origin: 'https://globuscrm.com' },
+    });
+    originCheck(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('current production web-form submission origin passes', () => {
+    const { req, res, next } = makeReqRes({
+      method: 'POST',
+      path: '/api/forms/public/contact-us/submit',
+      headers: { origin: 'https://globuscrm.com' },
+    });
+    originCheck(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
   test('localhost:5173 (Vite dev) passes', () => {
     const { req, res, next } = makeReqRes({
       headers: { origin: 'http://localhost:5173' },
@@ -494,7 +514,8 @@ describe('buildAllowlist', () => {
     expect(list).toContain('http://localhost:5000');
     expect(list).toContain('http://127.0.0.1:5173');
     expect(list).toContain('http://127.0.0.1:5000');
-    expect(list).toContain('https://globuscrm.globussoft.com');
+    expect(list).toContain('https://globuscrm.com');
+    expect(list).not.toContain('https://globuscrm.globussoft.com');
     expect(list).toContain('https://drenhance.com');
     expect(list).toContain('https://www.drenhance.com');
     expect(list).toContain('https://empcloud.com');
@@ -520,6 +541,13 @@ describe('buildAllowlist', () => {
     const list = buildAllowlist();
     expect(list).toContain('https://a.example.com');
     expect(list).toContain('https://b.example.com');
+  });
+
+  test('accepts JSON-array CORS configuration and normalizes trailing slashes', () => {
+    process.env.CORS_ALLOWED_ORIGINS = '["https://new.example.com/", "https://other.example.com"]';
+    const list = buildAllowlist();
+    expect(list).toContain('https://new.example.com');
+    expect(list).toContain('https://other.example.com');
   });
 
   test('drops empty entries in CORS_ALLOWED_ORIGINS', () => {

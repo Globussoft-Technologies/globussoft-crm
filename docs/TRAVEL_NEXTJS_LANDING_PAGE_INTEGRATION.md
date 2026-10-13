@@ -9,7 +9,7 @@ Example:
 
 ~~~text
 Client URL:  https://client.example.com/trips/77
-CRM data:   https://globuscrm.globussoft.com/api/landing-pages/public/by-id/77
+CRM data:   https://globuscrm.com/api/landing-pages/public/by-id/77
 ~~~
 
 The client URL uses the numeric landing-page ID. It does not use the landing-page
@@ -58,7 +58,7 @@ and needs to find its linked landing page.
 Set the public CRM origin in the backend environment:
 
 ~~~text
-PUBLIC_CRM_URL=https://globuscrm.globussoft.com
+PUBLIC_CRM_URL=https://globuscrm.com
 ~~~
 
 This must be the public origin that serves the CRM public APIs and the numeric
@@ -134,7 +134,7 @@ Accept: application/json
 Example:
 
 ~~~text
-GET https://globuscrm.globussoft.com/api/landing-pages/public/by-id/77?absoluteUrls=true
+GET https://globuscrm.com/api/landing-pages/public/by-id/77?absoluteUrls=true
 ~~~
 
 This endpoint:
@@ -184,13 +184,13 @@ Example:
   "content": {},
   "clientRoute": "/trips/77",
   "crmUrls": {
-    "page": "https://globuscrm.globussoft.com/trips/77",
-    "submit": "https://globuscrm.globussoft.com/p/europe-2026/submit",
-    "registrationDraft": "https://globuscrm.globussoft.com/p/europe-2026/registration-draft",
-    "registrationDocuments": "https://globuscrm.globussoft.com/p/europe-2026/registration-documents",
-    "paymentOrder": "https://globuscrm.globussoft.com/p/europe-2026/payment-order",
-    "paymentStatus": "https://globuscrm.globussoft.com/p/europe-2026/payment-status",
-    "track": "https://globuscrm.globussoft.com/p/europe-2026/track"
+    "page": "https://globuscrm.com/trips/77",
+    "submit": "https://globuscrm.com/p/europe-2026/submit",
+    "registrationDraft": "https://globuscrm.com/p/europe-2026/registration-draft",
+    "registrationDocuments": "https://globuscrm.com/p/europe-2026/registration-documents",
+    "paymentOrder": "https://globuscrm.com/p/europe-2026/payment-order",
+    "paymentStatus": "https://globuscrm.com/p/europe-2026/payment-status",
+    "track": "https://globuscrm.com/p/europe-2026/track"
   }
 }
 ~~~
@@ -217,7 +217,7 @@ Do not create one TSX file per landing page.
 In the client Next.js environment:
 
 ~~~text
-CRM_ORIGIN=https://globuscrm.globussoft.com
+CRM_ORIGIN=https://globuscrm.com
 ~~~
 
 Keep this server-side. The client does not need CRM payment credentials.
@@ -335,7 +335,7 @@ A successful response may contain a CRM parent/customer registration redirect:
   "message": "Thank you for your submission!",
   "redirect": {
     "type": "customer-registration",
-    "url": "https://globuscrm.globussoft.com/customer/register/..."
+    "url": "https://globuscrm.com/customer/register/..."
   }
 }
 ~~~

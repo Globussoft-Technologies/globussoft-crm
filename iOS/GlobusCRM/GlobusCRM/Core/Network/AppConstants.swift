@@ -6,7 +6,7 @@ import SwiftUI
 
 enum AppConstants {
     enum API {
-        static let baseURL = "https://globuscrm.globussoft.com"
+        static let baseURL = "https://globuscrm.com"
         static let apiPath = "/api/"
         static var fullBaseURL: URL { URL(string: "\(baseURL)\(apiPath)")! }
     }

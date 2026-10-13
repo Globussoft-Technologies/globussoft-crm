@@ -2,13 +2,13 @@
 
 **Date:** August 3, 2026  
 **Deployment Status:** Live  
-**Production URL:** [globuscrm.globussoft.com](https://globuscrm.globussoft.com)
+**Production URL:** [globuscrm.com](https://globuscrm.com)
 
 ---
 
 ## Overview
 
-The following features have been implemented and deployed to the live GlobusCRM environment at `globuscrm.globussoft.com`.
+The following features have been implemented and deployed to the live GlobusCRM environment at `globuscrm.com`.
 
 This document summarizes the completed work and captures the areas where ongoing refinement, monitoring, and additional improvements are still in progress.
 
@@ -77,7 +77,7 @@ The team is continuing to work on:
 
 These features are currently available in production at:
 
-**https://globuscrm.globussoft.com**
+**https://globuscrm.com**
 
 ---
 

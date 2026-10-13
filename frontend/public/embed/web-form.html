@@ -1124,6 +1124,7 @@
       <div id="app"></div>
     </div>
 
+    <script src="/embed/web-form-custom-css.js"></script>
     <script>
       (function () {
         var params = new URLSearchParams(location.search);
@@ -1165,15 +1166,7 @@
           });
         }
         function sanitizeCustomCss(value) {
-          return String(value == null ? "" : value)
-            .slice(0, 20000)
-            .replace(/<\/?\s*style\b[^>]*>/gi, "")
-            .replace(/@import\s+[^;{}]+;?/gi, "")
-            .replace(/url\s*\([^)]*\)/gi, "")
-            .replace(/expression\s*\([^)]*\)/gi, "")
-            .replace(/(?:-moz-binding|behavior)\s*:[^;{}]+;?/gi, "")
-            .replace(/javascript\s*:/gi, "")
-            .trim();
+          return typeof gbsCustomCss === "undefined" ? "" : gbsCustomCss.sanitizeCustomCss(value);
         }
         function readCookie(name) {
           var prefix = name + "=";

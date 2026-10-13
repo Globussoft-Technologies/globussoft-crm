@@ -17,7 +17,6 @@ import ReturnToBanner from "../components/ReturnToBanner";
 import {
   UserPlus,
   Search,
-  ArrowLeft,
   ArrowRightCircle,
   Eye,
   Plus,
@@ -38,6 +37,9 @@ import {
   Copy,
   Check,
   MapPin,
+  Table2,
+  Rows3,
+  AlignJustify,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import ColumnPicker from "../components/ColumnPicker";
@@ -190,8 +192,10 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
   "createdAt",
 ]);
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
+const LEADS_TABLE_DENSITY_STORAGE_KEY = "globuscrm.leads.tableDensity.v1";
 const LEADS_DIAL_CAMPAIGNS_STORAGE_PREFIX =
   "globuscrm.leads.selectedDialCampaigns.v1";
+const LEADS_FILTERS_STORAGE_PREFIX = "globuscrm.leads.filters.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
 const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
@@ -429,6 +433,11 @@ const compactToolbarDividerStyle = {
   margin: "0 0.1rem",
   flexShrink: 0,
 };
+
+function PortalWhenReady({ enabled, target, children }) {
+  if (!enabled) return children;
+  return target ? createPortal(children, target) : null;
+}
 
 const LEAD_TAG_LIMIT = 50;
 const LEAD_TAG_MAX_LENGTH = 80;
@@ -1797,13 +1806,24 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  const [leadTableDensity, setLeadTableDensity] = useState(() => {
+    if (!isGeneric || typeof window === "undefined") return "comfortable";
+    try {
+      return window.localStorage.getItem(LEADS_TABLE_DENSITY_STORAGE_KEY) === "compact"
+        ? "compact"
+        : "comfortable";
+    } catch {
+      return "comfortable";
+    }
+  });
+  const [leadTableDensityMenuOpen, setLeadTableDensityMenuOpen] = useState(false);
   // Generic and Travel share tenant-scoped lead custom fields and column
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
   const supportsColumnCustomization = isGeneric || isTravel;
-  // Generic CRM keeps synchronized top and sticky-bottom scrollbars available;
-  // other verticals retain their existing top-only presentation.
-  const showLeadsTopScrollbar = true;
+  // The Freshsales-style generic grid keeps horizontal movement at the bottom
+  // of the records. Other verticals retain their existing top scrollbar.
+  const showLeadsTopScrollbar = !isGeneric;
   // ADMINs always get the full assignment UI. Travel non-admins can also
   // reassign the leads they own, but only to non-admin staff targets.
   const isAdmin = auth?.user?.role === "ADMIN";
@@ -1812,6 +1832,7 @@ const Leads = () => {
     () => new Map(),
   );
   const [pickupLocationOptions, setPickupLocationOptions] = useState([]);
+  const [genericActionsToolbarHost, setGenericActionsToolbarHost] = useState(null);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
@@ -1840,6 +1861,15 @@ const Leads = () => {
   const genericQueryEffectInitializedRef = useRef(false);
   const [pageInput, setPageInput] = useState("1");
   const [selectedLeads, setSelectedLeads] = useState([]);
+
+  useEffect(() => {
+    if (!isGeneric || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(LEADS_TABLE_DENSITY_STORAGE_KEY, leadTableDensity);
+    } catch {
+      // Storage can be unavailable in privacy-restricted browser contexts.
+    }
+  }, [isGeneric, leadTableDensity]);
   const [columnLayout, setColumnLayout] = useState(() => {
     try {
       const saved = window.localStorage.getItem(
@@ -1855,9 +1885,10 @@ const Leads = () => {
           parsed?.collapsed && typeof parsed.collapsed === "object"
             ? parsed.collapsed
             : {},
+        genericNameWidthUserSet: parsed?.genericNameWidthUserSet === true,
       };
     } catch (_err) {
-      return { widths: {}, collapsed: {} };
+      return { widths: {}, collapsed: {}, genericNameWidthUserSet: false };
     }
   });
   const resizeStateRef = useRef(null);
@@ -1963,7 +1994,42 @@ const Leads = () => {
   // separate from the fixed dropdowns above. Applied server-side via
   // ?filters=<JSON> (backend/routes/contacts.js FILTERABLE_FIELDS) so it
   // isn't bounded by the same ?limit=500 cap fetchLeads already applies.
-  const [advancedFilters, setAdvancedFilters] = useState([]);
+  const leadFiltersStorageKey = `${LEADS_FILTERS_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const [advancedFilters, setAdvancedFilters] = useState(() => {
+    if (!isGeneric || typeof window === "undefined") return [];
+    try {
+      const saved = JSON.parse(
+        window.sessionStorage.getItem(leadFiltersStorageKey) || "[]",
+      );
+      return Array.isArray(saved)
+        ? saved.filter(
+            (filter) =>
+              filter &&
+              typeof filter.field === "string" &&
+              typeof filter.operator === "string" &&
+              Array.isArray(filter.values),
+          )
+        : [];
+    } catch (_err) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    if (!isGeneric) return;
+    try {
+      if (advancedFilters.length === 0) {
+        window.sessionStorage.removeItem(leadFiltersStorageKey);
+      } else {
+        window.sessionStorage.setItem(
+          leadFiltersStorageKey,
+          JSON.stringify(advancedFilters),
+        );
+      }
+    } catch (_err) {
+      // Session storage is an enhancement; filters still work on this mount.
+    }
+  }, [advancedFilters, isGeneric, leadFiltersStorageKey]);
   // Sequential one-by-one call queue
   const [callQueue, setCallQueue] = useState([]);
   const [callQueueActive, setCallQueueActive] = useState(false);
@@ -2136,7 +2202,9 @@ const Leads = () => {
       if (textWidth(phone) > textWidth(longest.phone)) longest.phone = phone;
     }
     const nameValueWidth =
-      textWidth(longest.name, 700) + 16 + 10 + 6 + 18 + 16 + 10;
+      textWidth(longest.name, 700)
+      + 16 + 10 + 6 + 18 + 16 + 10
+      + (isGeneric ? 40 : 0);
     const nameHeaderWidth = textWidth("Name", 500) + 16 + 16 + 13 + 8 + 28;
     const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
@@ -2148,37 +2216,48 @@ const Leads = () => {
         Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth),
       ),
     };
-  }, [leads]);
+  }, [isGeneric, leads]);
   useEffect(() => {
     setColumnLayout((current) => {
       const widths = current.widths || {};
-      if (
-        widths.name === autoFitLeadColumnWidths.name &&
-        widths.phone === autoFitLeadColumnWidths.phone
-      ) {
-        return current;
+      const nextWidths = { ...widths };
+      let changed = false;
+      // Generic CRM starts from the reference-sized percentage pane and only
+      // gets a stored pixel width after the user explicitly resizes it.
+      if (!isGeneric && widths.name !== autoFitLeadColumnWidths.name) {
+        nextWidths.name = autoFitLeadColumnWidths.name;
+        changed = true;
       }
+      if (widths.phone !== autoFitLeadColumnWidths.phone) {
+        nextWidths.phone = autoFitLeadColumnWidths.phone;
+        changed = true;
+      }
+      if (!changed) return current;
       return {
         ...current,
-        widths: {
-          ...widths,
-          name: autoFitLeadColumnWidths.name,
-          phone: autoFitLeadColumnWidths.phone,
-        },
+        widths: nextWidths,
       };
     });
-  }, [autoFitLeadColumnWidths]);
+  }, [autoFitLeadColumnWidths, isGeneric]);
   const getColumnWidth = (key) => {
     if (columnLayout.collapsed?.[key]) return LEADS_COLUMN_COLLAPSED_WIDTH;
     const configuredWidth =
       Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
     if (key === "name") {
       const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
-      return Math.max(autoFitLeadColumnWidths[key], manuallySizedWidth);
+      return Math.max(
+        autoFitLeadColumnWidths[key],
+        manuallySizedWidth,
+        isGeneric ? 320 : 0,
+      );
     }
     if (key === "phone") {
       const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
-      return Math.max(autoFitLeadColumnWidths[key], manuallySizedWidth);
+      return Math.max(
+        autoFitLeadColumnWidths[key],
+        manuallySizedWidth,
+        isGeneric ? getColumnDefaultWidth(key) : 0,
+      );
     }
     if (key === "actions") {
       return Math.max(configuredWidth, LEADS_ACTIONS_COLUMN_WIDTH);
@@ -2190,9 +2269,19 @@ const Leads = () => {
       return Math.max(configuredWidth, LEADS_ASSIGNED_COLUMN_MIN_WIDTH);
     }
     if (isGeneric && LEADS_GENERIC_LABEL_MIN_WIDTHS[key]) {
-      return Math.max(configuredWidth, LEADS_GENERIC_LABEL_MIN_WIDTHS[key]);
+      return Math.max(
+        configuredWidth,
+        getColumnDefaultWidth(key),
+        LEADS_GENERIC_LABEL_MIN_WIDTHS[key],
+      );
     }
-    return configuredWidth;
+    // Generic CRM columns keep their reference/default width as the minimum.
+    // This prevents saved or dragged widths from reducing fields such as
+    // Email to a few characters. Explicitly collapsed columns still return
+    // LEADS_COLUMN_COLLAPSED_WIDTH above; wellness and travel are unchanged.
+    return isGeneric
+      ? Math.max(configuredWidth, getColumnDefaultWidth(key))
+      : configuredWidth;
   };
   const setColumnWidth = (key, width) => {
     const minWidth =
@@ -2207,25 +2296,35 @@ const Leads = () => {
               : key === "assignedTo"
                 ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
                 : LEADS_COLUMN_MIN_WIDTH;
-    const maxWidth = Number.POSITIVE_INFINITY;
+    const maxWidth = isGeneric && key === "name"
+      ? 1400
+      : Number.POSITIVE_INFINITY;
     const genericLabelMinWidth = isGeneric
       ? LEADS_GENERIC_LABEL_MIN_WIDTHS[key] || 0
       : 0;
+    const genericColumnMinWidth = isGeneric ? getColumnDefaultWidth(key) : 0;
     const nextWidth = Math.max(
       minWidth,
       genericLabelMinWidth,
+      genericColumnMinWidth,
       Math.min(Math.round(width), maxWidth),
     );
     setColumnLayout((prev) => ({
+      ...prev,
       widths: { ...(prev.widths || {}), [key]: nextWidth },
       collapsed: { ...(prev.collapsed || {}), [key]: false },
+      genericNameWidthUserSet:
+        prev.genericNameWidthUserSet || (isGeneric && key === "name"),
     }));
   };
   const startColumnResize = (key, event) => {
     event.preventDefault();
     event.stopPropagation();
     const startX = event.clientX;
-    const startWidth = getColumnWidth(key);
+    const renderedNameWidth = isGeneric && key === "name"
+      ? event.currentTarget.closest("th")?.getBoundingClientRect().width
+      : 0;
+    const startWidth = renderedNameWidth || getColumnWidth(key);
     const onMove = (moveEvent) => {
       setColumnWidth(key, startWidth + moveEvent.clientX - startX);
     };
@@ -4624,6 +4723,7 @@ const Leads = () => {
   );
   const collapseColumn = (columnKey) => {
     setColumnLayout((prev) => ({
+      ...prev,
       widths: { ...(prev.widths || {}) },
       collapsed: {
         ...(prev.collapsed || {}),
@@ -4837,10 +4937,14 @@ const Leads = () => {
     ...leadFixedExtraColumnDefs,
     { key: "actions", label: "Actions", locked: true },
   ];
-  // Keep Name in the same scrollable table as every other column so users
-  // can move and resize it through the normal column controls.
-  const leadsFrozenColumnDefs = [];
-  const leadsScrollableColumnDefs = tableColumnDefs;
+  // Generic CRM keeps the complete lead name visible while the remaining
+  // columns move horizontally. Other verticals retain their existing table.
+  const leadsFrozenColumnDefs = isGeneric
+    ? tableColumnDefs.filter((column) => column.key === "name")
+    : [];
+  const leadsScrollableColumnDefs = isGeneric
+    ? tableColumnDefs.filter((column) => column.key !== "name")
+    : tableColumnDefs;
   const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
     (sum, column) => sum + getColumnWidth(column.key),
     0,
@@ -4861,7 +4965,14 @@ const Leads = () => {
     leadsScrollableTableWidth,
     leadsScrollableTableBaseWidth,
   )}px`;
-  const leadsFrozenTableWidthPx = `${leadsFrozenTableWidth}px`;
+  const savedGenericNameWidth = Number(columnLayout.widths?.name);
+  const leadsFrozenTableWidthCss = isGeneric
+    ? columnLayout.genericNameWidthUserSet
+      && Number.isFinite(savedGenericNameWidth)
+      && savedGenericNameWidth > 0
+      ? `${Math.min(Math.max(savedGenericNameWidth, 320), 1400)}px`
+      : "clamp(320px, 22%, 380px)"
+    : `${leadsFrozenTableWidth}px`;
   const leadsTableClassName = isTravel
     ? "leads-table leads-table--fit"
     : isGeneric
@@ -4871,7 +4982,7 @@ const Leads = () => {
     (column) => column.key === "phone",
   );
   const phoneColumnIndex =
-    phoneColumnOffset < 0 ? -1 : phoneColumnOffset + 1;
+    phoneColumnOffset < 0 ? -1 : phoneColumnOffset + (isGeneric ? 0 : 1);
   useLayoutEffect(() => {
     const table = leadsScrollableTableRef.current;
     if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
@@ -4912,11 +5023,15 @@ const Leads = () => {
     columnLayout.widths?.phone,
     columnLayout.collapsed?.phone,
   ]);
-  // Every vertical uses the split-table layout. Row-height sync is required
-  // so the frozen Name pane stays aligned with the scrollable columns.
-  const leadsRowSyncEnabled = true;
+  // Only generic CRM uses the frozen Name pane.
+  const leadsRowSyncEnabled = leadsFrozenColumnDefs.length > 0;
   const syncTablePairHeight = useCallback((leftRow, rightRow) => {
     if (!leftRow || !rightRow) return;
+    // Measure the rows at their current density instead of reusing a height
+    // written by a previous layout pass. Otherwise a formerly tall status
+    // cell can permanently inflate both sides of the split table.
+    leftRow.style.height = "";
+    rightRow.style.height = "";
     const height = Math.max(
       Math.ceil(leftRow.getBoundingClientRect().height),
       Math.ceil(rightRow.getBoundingClientRect().height),
@@ -4954,12 +5069,54 @@ const Leads = () => {
         .map((row) => [row.dataset.leadRowId, row])
         .filter(([leadId]) => leadId),
     );
-    frozenRows.forEach((frozenRow, index) => {
+    const rowPairs = frozenRows.map((frozenRow, index) => {
       const scrollRow =
         (frozenRow.dataset.leadRowId &&
           scrollRowsByLeadId.get(frozenRow.dataset.leadRowId)) ||
         scrollRows[index];
-      if (!scrollRow) return;
+      return [frozenRow, scrollRow];
+    }).filter(([, scrollRow]) => scrollRow);
+
+    const densityTable = frozenTable.closest(
+      ".leads-split-table--density-compact, .leads-split-table--density-comfortable",
+    );
+    if (densityTable) {
+      // Measure every density-controlled row without a previously assigned
+      // height, then use one bounded shared height for both panes. Unbounded
+      // measurements can feed expanded flex-table rows back into the next
+      // layout pass and progressively inflate comfortable rows.
+      rowPairs.forEach(([frozenRow, scrollRow]) => {
+        frozenRow.style.height = "";
+        scrollRow.style.height = "";
+      });
+      const measuredHeight = Math.max(
+        ...rowPairs.flatMap(([frozenRow, scrollRow]) => [
+          Math.ceil(frozenRow.getBoundingClientRect().height),
+          Math.ceil(scrollRow.getBoundingClientRect().height),
+        ]),
+      );
+      const isCompact = densityTable.classList.contains(
+        "leads-split-table--density-compact",
+      );
+      const minimumHeight = isCompact
+        ? densityTable.classList.contains("leads-split-table--sparse")
+          ? 48
+          : 40
+        : 52;
+      const maximumHeight = isCompact ? 48 : 64;
+      const uniformHeight = Math.min(
+        maximumHeight,
+        Math.max(minimumHeight, measuredHeight),
+      );
+      const nextHeight = `${uniformHeight}px`;
+      rowPairs.forEach(([frozenRow, scrollRow]) => {
+        frozenRow.style.height = nextHeight;
+        scrollRow.style.height = nextHeight;
+      });
+      return;
+    }
+
+    rowPairs.forEach(([frozenRow, scrollRow]) => {
       syncTablePairHeight(frozenRow, scrollRow);
     });
   }, [leadsRowSyncEnabled, syncTablePairHeight]);
@@ -5377,6 +5534,7 @@ const Leads = () => {
           isGeneric
             ? `::${genericHeaderSyncSignature}::${JSON.stringify(columnLayout)}`
             : "",
+          isGeneric ? leadTableDensity : "",
         )
     : "";
 
@@ -6469,28 +6627,6 @@ const Leads = () => {
             flex: "1 1 240px",
           }}
         >
-          {isGeneric && (
-            <button
-              type="button"
-              onClick={() => window.history.back()}
-              aria-label="Go back"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "7px 12px",
-                border: "1px solid var(--border-color)",
-                borderRadius: 7,
-                background: "var(--surface-color)",
-                color: "var(--text-primary)",
-                fontWeight: 600,
-                fontSize: 12,
-                cursor: "pointer",
-              }}
-            >
-              <ArrowLeft size={16} /> Back
-            </button>
-          )}
           <div
             style={{
               display: "flex",
@@ -6570,21 +6706,36 @@ const Leads = () => {
           </div>
         )}
       </header>
-      <div
-        className={isGeneric ? "leads-actions-toolbar" : isTravel ? "travel-leads-actions-toolbar" : undefined}
-        style={{
-          ...compactToolbarSurfaceStyle,
-          marginBottom: "1rem",
-          justifyContent: "flex-start",
-          ...(isGeneric
-            ? {
-                minHeight: "62px",
-                flex: "0 0 auto",
-                boxSizing: "border-box",
-              }
-            : {}),
-        }}
+      <PortalWhenReady
+        enabled={isGeneric}
+        target={genericActionsToolbarHost}
       >
+        <div
+          className={isGeneric ? "leads-actions-toolbar" : isTravel ? "travel-leads-actions-toolbar" : undefined}
+          style={{
+            ...compactToolbarSurfaceStyle,
+            marginBottom: isGeneric && genericActionsToolbarHost ? 0 : "1rem",
+            justifyContent: "flex-start",
+            ...(isGeneric
+              ? genericActionsToolbarHost
+                ? {
+                    minHeight: 0,
+                    flex: "1 1 auto",
+                    boxSizing: "border-box",
+                    padding: "0.75rem 0 0",
+                    border: 0,
+                    borderTop: "1px solid var(--border-color)",
+                    borderRadius: 0,
+                    boxShadow: "none",
+                  }
+                : {
+                    minHeight: "62px",
+                    flex: "0 0 auto",
+                    boxSizing: "border-box",
+                  }
+              : {}),
+          }}
+        >
         <button
           type="button"
           className="btn-secondary"
@@ -7583,11 +7734,12 @@ const Leads = () => {
                   onClick={() => setBulkCampaignDropdownOpen(false)}
                 />
                 <div
-                  className="card"
+                  className="card leads-bulk-campaign-menu"
                   style={{
                     position: "absolute",
                     top: "calc(100% + 4px)",
-                    right: 0,
+                    left: 0,
+                    right: "auto",
                     zIndex: 51,
                     minWidth: 260,
                     maxHeight: 320,
@@ -7665,7 +7817,8 @@ const Leads = () => {
             <Plus size={16} /> Create Lead
           </button>
         )}
-      </div>
+        </div>
+      </PortalWhenReady>
 
       {isTravel && (
         <div
@@ -7926,6 +8079,10 @@ const Leads = () => {
               showCountBadge
               buttonTitle="Filter leads"
               buttonAriaLabel="Filter by"
+              layoutVariant="freshsales"
+              clearSectionsOnReset={isGeneric}
+              promoteAddedSections={isGeneric}
+              pinSelectedValues={isGeneric}
               buttonStyle={{
                 ...compactToolbarButtonStyle,
                 height: 38,
@@ -7933,6 +8090,92 @@ const Leads = () => {
                 fontSize: "0.85rem",
               }}
             />
+            {isGeneric && (
+              <div style={{ position: "relative" }}>
+                <button
+                  type="button"
+                  className="btn-secondary leads-density-trigger"
+                  onClick={() => setLeadTableDensityMenuOpen((open) => !open)}
+                  aria-haspopup="menu"
+                  aria-expanded={leadTableDensityMenuOpen}
+                  aria-label={`Table density: ${leadTableDensity}`}
+                  style={{
+                    ...compactToolbarButtonStyle,
+                    height: 38,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                  }}
+                >
+                  <Table2 size={15} />
+                  Table density
+                  {leadTableDensityMenuOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+                {leadTableDensityMenuOpen && (
+                  <>
+                    <div
+                      aria-hidden="true"
+                      onClick={() => setLeadTableDensityMenuOpen(false)}
+                      style={{ position: "fixed", inset: 0, zIndex: 1088 }}
+                    />
+                    <div
+                      role="menu"
+                      aria-label="Table density"
+                      style={{
+                        position: "absolute",
+                        top: "calc(100% + 6px)",
+                        left: 0,
+                        zIndex: 1089,
+                        minWidth: 172,
+                        padding: "0.35rem",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 8,
+                        background: "var(--surface-color)",
+                        boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
+                      }}
+                    >
+                      {[
+                        { value: "compact", label: "Compact", icon: Rows3 },
+                        { value: "comfortable", label: "Comfortable", icon: AlignJustify },
+                      ].map(({ value, label, icon: DensityIcon }) => {
+                        const selected = leadTableDensity === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={selected}
+                            onClick={() => {
+                              setLeadTableDensity(value);
+                              setLeadTableDensityMenuOpen(false);
+                            }}
+                            style={{
+                              width: "100%",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.6rem",
+                              padding: "0.55rem 0.65rem",
+                              border: 0,
+                              borderRadius: 6,
+                              background: selected ? "var(--surface-hover)" : "transparent",
+                              color: "var(--text-primary)",
+                              font: "inherit",
+                              fontSize: "0.875rem",
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <DensityIcon size={15} />
+                            <span style={{ flex: 1 }}>{label}</span>
+                            {selected && <Check size={15} aria-hidden="true" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div
@@ -8602,15 +8845,27 @@ const Leads = () => {
               </>
             )}
           </div>
+          {isGeneric && (
+            <div
+              ref={setGenericActionsToolbarHost}
+              className="leads-generic-actions-host"
+              style={{
+                order: 3,
+                flex: "1 1 100%",
+                minWidth: 0,
+              }}
+            />
+          )}
         </div>
         <div
-          className={`leads-split-table${isGeneric ? " leads-split-table--no-topbar" : ""}`}
+          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${filteredLeads.length > 0 && filteredLeads.length <= 10 ? " leads-split-table--sparse" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
           style={
             isGeneric
               ? {
                   border: "1px solid var(--border-color)",
                   borderRadius: "16px",
                   background: "var(--surface-color)",
+                  flex: "1 1 auto",
                   // Let the complete generic table establish its natural
                   // height so the horizontal scrollbar sits at the table's
                   // actual bottom, not at the bottom of a nested viewport.
@@ -8623,7 +8878,9 @@ const Leads = () => {
         >
           {leadsFrozenColumnDefs.length > 0 && <div
             className="leads-table-frozen-pane"
-            style={{ width: leadsFrozenTableWidthPx }}
+            style={isGeneric
+              ? { "--leads-name-pane-width": leadsFrozenTableWidthCss }
+              : { width: leadsFrozenTableWidthCss }}
           >
             {/* Keep the frozen Name pane aligned with the top scrollbar. */}
             {showLeadsTopScrollbar && (
@@ -8633,11 +8890,11 @@ const Leads = () => {
               ref={leadsFrozenTableRef}
               className={`${leadsTableClassName} leads-table--frozen`}
               style={{
-                width: leadsFrozenTableWidthPx,
+                width: "100%",
                 borderCollapse: "separate",
                 borderSpacing: 0,
                 textAlign: "left",
-                minWidth: leadsFrozenTableWidthPx,
+                minWidth: "100%",
                 tableLayout: "fixed",
               }}
             >
@@ -8645,7 +8902,7 @@ const Leads = () => {
                 {leadsFrozenColumnDefs.map((column) => (
                   <col
                     key={column.key}
-                    style={{ width: `${getColumnWidth(column.key)}px` }}
+                    style={{ width: isGeneric ? "100%" : `${getColumnWidth(column.key)}px` }}
                   />
                 ))}
               </colgroup>
@@ -8723,6 +8980,12 @@ const Leads = () => {
                               style={LEAD_CHECKBOX_STYLE}
                             />
                           )}
+                          <span
+                            className="generic-lead-avatar"
+                            aria-hidden="true"
+                          >
+                            {String(lead.name || "?").trim().charAt(0).toUpperCase() || "?"}
+                          </span>
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <BuiltInInlineCellEditor
                               lead={lead}
@@ -8790,12 +9053,15 @@ const Leads = () => {
                 scrollWidth={leadsScrollableTableMinWidth}
                 topBarLeadingWidth={leadsFrozenTableWidth}
                 stickyTop
-              stickyTopOffset={0}
-              // Keep the native table scrollbar visible in every vertical so
-              // wide columns can be swiped or scrolled directly on the table.
-              hideBottomScrollbar={false}
-              verticalOverflow="visible"
-            >
+                stickyTopOffset={0}
+                hideTopBar={isGeneric}
+                stickyBottom={isGeneric}
+                // Generic CRM mirrors Freshsales: one scrollbar stays at the
+                // bottom of the record viewport while the header stays fixed.
+                // Other verticals retain their existing native table scroll.
+                hideBottomScrollbar={isGeneric}
+                verticalOverflow="visible"
+              >
               <table
                 ref={leadsScrollableTableRef}
                 className={`${leadsTableClassName} leads-table--scrollable`}
@@ -8823,7 +9089,7 @@ const Leads = () => {
                       backgroundColor: "var(--table-header-bg)",
                     }}
                   >
-                    {renderColumnHeaderCell(
+                    {!isGeneric && renderColumnHeaderCell(
                       "name",
                       "Name",
                       { paddingRight: "2rem" },
@@ -8954,7 +9220,7 @@ const Leads = () => {
                           color: "var(--text-secondary)",
                         }}
                       >
-                        No leads found
+                        {!isGeneric && "No leads found"}
                       </td>
                     </tr>
                   ) : (
@@ -8973,7 +9239,7 @@ const Leads = () => {
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
-                        <td
+                        {!isGeneric && <td
                           style={getBodyCellStyle("name", { fontWeight: "500" })}
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -9031,7 +9297,7 @@ const Leads = () => {
                               />
                             </div>
                           </div>
-                        </td>
+                        </td>}
                         {leadUserColumnDefs.map((column) => (
                           <Fragment key={column.key}>
                             {renderLeadUserBodyCell(lead, column)}
@@ -9046,12 +9312,14 @@ const Leads = () => {
                           return (
                             <>
                               {isLeadFixedColumnVisible("interestedPlotArea") && <td
+                                className="generic-interested-plot-cell"
                                 style={getBodyCellStyle("interestedPlotArea", { whiteSpace: "normal", overflowWrap: "anywhere" })}
                                 title={lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || undefined}
                               >
                                 {lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || "Not captured"}
                               </td>}
                               {isLeadFixedColumnVisible("pickupLocation") && <td
+                                className="generic-pickup-location-cell"
                                 style={getBodyCellStyle("pickupLocation", { whiteSpace: "normal", overflowWrap: "anywhere", paddingRight: "1.5rem" })}
                                 onClick={(event) => event.stopPropagation()}
                               >
@@ -9102,26 +9370,29 @@ const Leads = () => {
                                 </div>
                               </td>}
                               {isLeadFixedColumnVisible("overallPickupStatus") && <td
+                                className="generic-overall-status-cell"
                                 style={getBodyCellStyle("overallPickupStatus", { whiteSpace: "normal", overflow: "visible", paddingLeft: "1.5rem" })}
                                 onClick={(event) => event.stopPropagation()}
                               >
-                                <strong>{overallStatus}</strong>
-                                {pickupStatus && (
-                                  <div style={{ marginTop: 3, color: "var(--text-secondary)", fontSize: ".72rem" }}>
-                                    {formatPickupStatusDate(pickupStatus.currentStatusUpdatedAt || pickupStatus.statusUpdatedAt)}
-                                  </div>
-                                )}
-                                {pickupStatus && (
-                                  <button
-                                    type="button"
-                                    className="btn-secondary"
-                                    aria-label={`View all status for ${lead.name || "lead"}`}
-                                    onClick={() => setViewingPickupStatus(pickupStatus)}
-                                    style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 7, padding: ".32rem .5rem", fontSize: ".7rem" }}
-                                  >
-                                    <Eye size={13} /> View status
-                                  </button>
-                                )}
+                                <div className="generic-overall-status-content">
+                                  <strong>{overallStatus}</strong>
+                                  {pickupStatus && (
+                                    <div className="generic-overall-status-date" style={{ marginTop: 3, color: "var(--text-secondary)", fontSize: ".72rem" }}>
+                                      {formatPickupStatusDate(pickupStatus.currentStatusUpdatedAt || pickupStatus.statusUpdatedAt)}
+                                    </div>
+                                  )}
+                                  {pickupStatus && (
+                                    <button
+                                      type="button"
+                                      className="btn-secondary generic-overall-status-action"
+                                      aria-label={`View all status for ${lead.name || "lead"}`}
+                                      onClick={() => setViewingPickupStatus(pickupStatus)}
+                                      style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 7, padding: ".32rem .5rem", fontSize: ".7rem" }}
+                                    >
+                                      <Eye size={13} /> View status
+                                    </button>
+                                  )}
+                                </div>
                               </td>}
                             </>
                           );
@@ -9579,6 +9850,11 @@ const Leads = () => {
               </table>
             </TopScrollSync>
           </div>
+          {isGeneric && !loading && filteredLeads.length === 0 && (
+            <div className="leads-generic-empty-state" role="status">
+              No leads found
+            </div>
+          )}
         </div>
         {isGeneric && editingPickupLocation && (
           <div

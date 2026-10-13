@@ -104,6 +104,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ vertical: "generic" });
   prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
+  prisma.webFormSubmission.findMany.mockReset().mockResolvedValue([]);
   callifiedClient.listCampaigns.mockReset().mockResolvedValue([]);
 });
 
@@ -120,20 +121,58 @@ describe("GET /api/contacts/filter-fields", () => {
     expect(res.status).toBe(200);
     expect(res.body.fields.map((f) => f.field)).toEqual([
       "name",
+      "firstName",
+      "lastName",
       "email",
       "phone",
       "whatsappPhone",
       "company",
+      "title",
+      "website",
+      "linkedin",
+      "industry",
+      "companySize",
+      "description",
+      "stateCode",
       "status",
       "source",
       "webForm",
+      "medium",
+      "firstTouchSource",
+      "lastTouchSource",
       "callifiedCampaignId",
       "callifiedLeadStatus",
       "tags",
       "subBrand",
       "aiScore",
       "createdAt",
+      "updatedAt",
+      "treatmentOfInterest",
+      "birthDate",
+      "anniversary",
+      "gst",
+      "billingStateCode",
       "assignedToId",
+      "pageUrl",
+      "pageTitle",
+      "pageSource",
+      "referrerUrl",
+      "landingPageUrl",
+      "currentDomain",
+      "formName",
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "gclid",
+      "fbclid",
+      "fbc",
+      "fbp",
+      "submittedAt",
+      "browser",
+      "operatingSystem",
+      "deviceType",
     ]);
   });
 
@@ -165,18 +204,56 @@ describe("GET /api/contacts/filter-fields", () => {
     const fieldKeys = res.body.fields.map((f) => f.field);
     for (const key of [
       "name",
+      "firstName",
+      "lastName",
       "email",
       "phone",
       "company",
+      "title",
+      "website",
+      "linkedin",
+      "industry",
+      "companySize",
+      "description",
+      "stateCode",
       "aiScore",
       "source",
       "webForm",
+      "medium",
+      "firstTouchSource",
+      "lastTouchSource",
       "status",
       "callifiedCampaignId",
       "callifiedLeadStatus",
       "tags",
       "assignedToId",
       "createdAt",
+      "updatedAt",
+      "treatmentOfInterest",
+      "birthDate",
+      "anniversary",
+      "gst",
+      "billingStateCode",
+      "pageUrl",
+      "pageTitle",
+      "pageSource",
+      "referrerUrl",
+      "landingPageUrl",
+      "currentDomain",
+      "formName",
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "gclid",
+      "fbclid",
+      "fbc",
+      "fbp",
+      "submittedAt",
+      "browser",
+      "operatingSystem",
+      "deviceType",
     ]) {
       expect(fieldKeys).toContain(key);
     }
@@ -346,6 +423,68 @@ describe("GET /api/contacts/filter-values/:field", () => {
     expect(res.body.values).toEqual([
       { value: "Lead", label: "Lead" },
       { value: "Customer", label: "Customer" },
+    ]);
+  });
+
+  test("?q searches the complete text column before the DISTINCT result limit", async () => {
+    prisma.contact.findMany.mockResolvedValue([{ name: "Kanchan Gupta" }]);
+
+    const res = await request(makeApp({ tenantId: 3 })).get(
+      "/api/contacts/filter-values/name?status=Lead&q=kan",
+    );
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: 3,
+          deletedAt: null,
+          AND: [{ status: "Lead" }, { name: { contains: "kan" } }],
+        },
+        distinct: ["name"],
+        orderBy: { name: "asc" },
+        take: 200,
+      }),
+    );
+    expect(res.body.values).toEqual([
+      { value: "Kanchan Gupta", label: "Kanchan Gupta" },
+    ]);
+  });
+
+  test("derived First Name values come from the Contact name column", async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { name: "Kanchan Gupta" },
+      { name: "Karan Singh" },
+    ]);
+
+    const res = await request(makeApp()).get(
+      "/api/contacts/filter-values/firstName?status=Lead",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.values).toEqual([
+      { value: "Kanchan", label: "Kanchan" },
+      { value: "Karan", label: "Karan" },
+    ]);
+  });
+
+  test("web-form tracking values are read from submission metadata", async () => {
+    prisma.webFormSubmission.findMany.mockResolvedValue([
+      {
+        payloadJson: JSON.stringify({
+          _meta: { tracking: { pageSource: "Google" } },
+        }),
+        submittedAt: new Date("2026-10-13T10:00:00Z"),
+      },
+    ]);
+
+    const res = await request(makeApp()).get(
+      "/api/contacts/filter-values/pageSource?status=Lead",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.values).toEqual([
+      { value: "Google", label: "Google" },
     ]);
   });
 
@@ -679,6 +818,29 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
           { source: { contains: "Referral" } },
           { source: { contains: "Web" } },
         ],
+      },
+    ]);
+  });
+
+  test("web-form tracking filters are tenant-safe relation clauses", async () => {
+    const filters = [
+      { field: "pageSource", operator: "contains", values: ["Google"] },
+    ];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toEqual([
+      {
+        webFormSubmissions: {
+          some: {
+            OR: [
+              { payloadJson: { contains: '"pageSource":"Google"' } },
+            ],
+          },
+        },
       },
     ]);
   });

@@ -23,6 +23,7 @@ import { useNotify } from "../utils/notify";
 export default function ColumnPicker({
   tableKey,
   onColumnsChange,
+  onAvailableColumnsChange,
   deletableColumns = [],
   onFieldDeleted,
 }) {
@@ -71,7 +72,9 @@ export default function ColumnPicker({
         loadedOnce.current = true;
         return;
       }
-      setAvailable(Array.isArray(data.availableColumns) ? data.availableColumns : []);
+      const availableColumns = Array.isArray(data.availableColumns) ? data.availableColumns : [];
+      setAvailable(availableColumns);
+      onAvailableColumnsChange?.(availableColumns);
       setDraftVisible(data.visible);
       onColumnsChange?.(data.visible);
       loadedOnce.current = true;

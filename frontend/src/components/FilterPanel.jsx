@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { Filter, X, ChevronLeft, Plus, Search } from "lucide-react";
+import { Filter, X, ChevronLeft, Plus, Search, RefreshCw } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import CalendarRangePicker from "./CalendarRangePicker";
 import "./FilterPanel.css";
@@ -60,6 +60,10 @@ export default function FilterPanel({
   clearSectionsOnReset = false,
   promoteAddedSections = false,
   pinSelectedValues = false,
+  preserveDraftsOnClose = false,
+  allowedFieldKeys = null,
+  allowedFieldLabels = null,
+  allowedFieldDefinitions = null,
 }) {
   const isSingleFieldMode = Boolean(fieldKey);
   const isFreshsalesLayout = layoutVariant === "freshsales";
@@ -75,6 +79,7 @@ export default function FilterPanel({
   const [checked, setChecked] = useState([]); // selected values for activeField, string[]
   const [valuesByField, setValuesByField] = useState({}); // cache: { [field]: [{value,label}] }
   const [valuesLoading, setValuesLoading] = useState(false);
+  const [searchingValueFields, setSearchingValueFields] = useState({});
   const [fieldSearch, setFieldSearch] = useState(""); // filters the field-picker list
   const [valueSearch, setValueSearch] = useState(""); // filters the checkbox-value list
   const [dateRange, setDateRange] = useState({ from: "", to: "" }); // date-kind fields only
@@ -89,11 +94,17 @@ export default function FilterPanel({
   const autoOpenOnceRef = useRef(false);
   const freshsalesFieldPickerRequestedRef = useRef(false);
   const freshsalesDefaultsSeededRef = useRef(false);
+  const valueRequestSequenceRef = useRef({});
+  const allowedFieldKeySet = useMemo(
+    () =>
+      Array.isArray(allowedFieldKeys) ? new Set(allowedFieldKeys) : null,
+    [allowedFieldKeys],
+  );
 
   const closePanel = useCallback(() => {
     setOpen(false);
     setActiveField(null);
-    setSummaryDrafts({});
+    if (!preserveDraftsOnClose) setSummaryDrafts({});
     setSummaryValueSearch("");
     setFieldPickerOpen(false);
     setExpandedSummaryFields({});
@@ -101,25 +112,51 @@ export default function FilterPanel({
     freshsalesFieldPickerRequestedRef.current = false;
     freshsalesDefaultsSeededRef.current = false;
     onClose?.();
-  }, [onClose]);
+  }, [onClose, preserveDraftsOnClose]);
 
   const fetchValuesFor = useCallback(
-    async (field) => {
-      setValuesLoading(true);
+    async (field, searchTerm = "") => {
+      const normalizedSearch = String(searchTerm || "").trim();
+      const requestId = (valueRequestSequenceRef.current[field] || 0) + 1;
+      valueRequestSequenceRef.current[field] = requestId;
+      if (normalizedSearch) {
+        setSearchingValueFields((prev) => ({ ...prev, [field]: true }));
+      } else {
+        setValuesLoading(true);
+      }
       try {
-        const data = await fetchApi(valuesUrl(field), { silent: true });
+        const baseUrl = valuesUrl(field);
+        const requestUrl = normalizedSearch
+          ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}q=${encodeURIComponent(normalizedSearch)}`
+          : baseUrl;
+        const data = await fetchApi(requestUrl, { silent: true });
+        if (valueRequestSequenceRef.current[field] !== requestId) return;
         setValuesByField((prev) => ({
           ...prev,
           [field]: Array.isArray(data?.values) ? data.values : [],
         }));
       } catch {
+        if (valueRequestSequenceRef.current[field] !== requestId) return;
         setValuesByField((prev) => ({ ...prev, [field]: [] }));
       } finally {
-        setValuesLoading(false);
+        if (valueRequestSequenceRef.current[field] === requestId) {
+          if (normalizedSearch) {
+            setSearchingValueFields((prev) => ({ ...prev, [field]: false }));
+          } else {
+            setValuesLoading(false);
+          }
+        }
       }
     },
     [valuesUrl],
   );
+
+  const clearSearchedValuesFor = useCallback((field) => {
+    valueRequestSequenceRef.current[field] =
+      (valueRequestSequenceRef.current[field] || 0) + 1;
+    setSearchingValueFields((prev) => ({ ...prev, [field]: false }));
+    setValuesByField((prev) => ({ ...prev, [field]: [] }));
+  }, []);
 
   const chooseField = useCallback(
     async (field, meta = {}) => {
@@ -158,6 +195,7 @@ export default function FilterPanel({
       setValueSearch("");
       // Date fields never show a value list — there is nothing to fetch.
       if (chosenKind === "date") return;
+      if (SEARCHABLE_VALUE_FIELD_KEYS.has(field)) return;
       // Smart-open paths pass `force` because the open-effect clears the
       // value cache on every open — a stale closure hit would skip the
       // fetch and leave the options list empty.
@@ -197,7 +235,10 @@ export default function FilterPanel({
     // Always refetch — the open-effect wipes the value cache, so a
     // closure-cache hit here would render an empty options list.
     for (const f of list) {
-      if ((f.kind || "text") === "date") continue;
+      if (
+        (f.kind || "text") === "date" ||
+        SEARCHABLE_VALUE_FIELD_KEYS.has(f.field)
+      ) continue;
       fetchValuesFor(f.field);
     }
   }, [filters, fetchValuesFor]);
@@ -209,6 +250,21 @@ export default function FilterPanel({
     freshsalesDefaultsSeededRef.current = false;
     if (isSingleFieldMode) {
       chooseField(fieldKey, { kind: fieldKind });
+      return;
+    }
+    if (
+      isFreshsalesLayout &&
+      preserveDraftsOnClose &&
+      Object.keys(summaryDrafts).length > 0
+    ) {
+      setActiveField(SUMMARY_VIEW);
+      setFieldSearch("");
+      for (const [field, draft] of Object.entries(summaryDrafts)) {
+        if (
+          (draft.kind || "text") !== "date" &&
+          !SEARCHABLE_VALUE_FIELD_KEYS.has(field)
+        ) fetchValuesFor(field);
+      }
       return;
     }
     const list = filters || [];
@@ -245,7 +301,18 @@ export default function FilterPanel({
     setActiveField(null);
     setSummaryDrafts({});
     setFieldSearch("");
-  }, [chooseField, fieldKey, fieldKind, filters, isFreshsalesLayout, isSingleFieldMode, openSummary]);
+  }, [
+    chooseField,
+    fieldKey,
+    fieldKind,
+    filters,
+    fetchValuesFor,
+    isFreshsalesLayout,
+    isSingleFieldMode,
+    openSummary,
+    preserveDraftsOnClose,
+    summaryDrafts,
+  ]);
 
   // "Add filter" always starts from the full field list.
   const openFieldList = useCallback(() => {
@@ -299,12 +366,63 @@ export default function FilterPanel({
         ...prev,
         [fieldMeta.field]: "",
       }));
-      if ((fieldMeta.kind || "text") !== "date") {
+      if (
+        (fieldMeta.kind || "text") !== "date" &&
+        !SEARCHABLE_VALUE_FIELD_KEYS.has(fieldMeta.field)
+      ) {
         fetchValuesFor(fieldMeta.field);
       }
     },
     [fetchValuesFor, filters, promoteAddedSections],
   );
+
+  const summarySearchRequestKey = JSON.stringify(
+    Object.keys(summaryDrafts)
+      .filter((field) => SEARCHABLE_VALUE_FIELD_KEYS.has(field))
+      .sort()
+      .map((field) => [field, String(summaryFieldSearches[field] || "").trim()]),
+  );
+
+  useEffect(() => {
+    if (
+      !open ||
+      !activeField ||
+      activeField === SUMMARY_VIEW ||
+      !SEARCHABLE_VALUE_FIELD_KEYS.has(activeField)
+    ) return undefined;
+    const query = valueSearch.trim();
+    if (query.length < 2) {
+      clearSearchedValuesFor(activeField);
+      return undefined;
+    }
+    const timer = setTimeout(() => fetchValuesFor(activeField, query), 300);
+    return () => clearTimeout(timer);
+  }, [
+    activeField,
+    clearSearchedValuesFor,
+    fetchValuesFor,
+    open,
+    valueSearch,
+  ]);
+
+  useEffect(() => {
+    if (!open || activeField !== SUMMARY_VIEW) return undefined;
+    const timers = [];
+    for (const [field, query] of JSON.parse(summarySearchRequestKey)) {
+      if (query.length < 2) {
+        clearSearchedValuesFor(field);
+        continue;
+      }
+      timers.push(setTimeout(() => fetchValuesFor(field, query), 300));
+    }
+    return () => timers.forEach((timer) => clearTimeout(timer));
+  }, [
+    activeField,
+    clearSearchedValuesFor,
+    fetchValuesFor,
+    open,
+    summarySearchRequestKey,
+  ]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -344,10 +462,42 @@ export default function FilterPanel({
     setFieldsLoading(true);
     setValuesByField({});
     fetchApi(fieldsUrl, { silent: true })
-      .then((data) => setFields(data.fields || []))
+      .then((data) => {
+        const availableFields = Array.isArray(data?.fields) ? data.fields : [];
+        const filteredFields = allowedFieldKeySet
+          ? availableFields.filter((field) =>
+              allowedFieldKeySet.has(field.field),
+            )
+          : availableFields;
+        const normalizedFields = allowedFieldLabels
+          ? filteredFields.map((field) => ({
+              ...field,
+              label: allowedFieldLabels[field.field] || field.label,
+            }))
+          : filteredFields;
+        const receivedKeys = new Set(
+          normalizedFields.map((field) => field.field),
+        );
+        const supplementalFields = Array.isArray(allowedFieldDefinitions)
+          ? allowedFieldDefinitions.filter(
+              (field) =>
+                field?.field &&
+                field?.kind &&
+                !receivedKeys.has(field.field),
+            )
+          : [];
+        setFields([...normalizedFields, ...supplementalFields]);
+      })
       .catch(() => setFields([]))
       .finally(() => setFieldsLoading(false));
-  }, [open, fieldsUrl, isSingleFieldMode]);
+  }, [
+    allowedFieldKeySet,
+    allowedFieldLabels,
+    allowedFieldDefinitions,
+    open,
+    fieldsUrl,
+    isSingleFieldMode,
+  ]);
 
   // The reference layout starts with useful filter sections in view instead
   // of the field catalog. They remain drafts until the user selects values
@@ -433,6 +583,11 @@ export default function FilterPanel({
   const needsValues =
     !isDateField && (operator === "contains" || operator === "not_contains");
   const needsRange = operator === "between";
+  const activeFieldUsesServerSearch =
+    Boolean(activeField) && SEARCHABLE_VALUE_FIELD_KEYS.has(activeField);
+  const activeFieldIsSearching = Boolean(
+    activeField && searchingValueFields[activeField],
+  );
 
   const existingFilter = activeField
     ? (filters || []).find((f) => f.field === activeField)
@@ -993,7 +1148,9 @@ export default function FilterPanel({
                             aria-label="Search fields"
                             style={{
                               width: "100%",
-                              padding: "0.45rem 0.6rem 0.45rem 2rem",
+                              padding: activeFieldUsesServerSearch
+                                ? "0.45rem 2rem 0.45rem 2rem"
+                                : "0.45rem 0.6rem 0.45rem 2rem",
                               boxSizing: "border-box",
                               border:
                                 "1px solid var(--border-color, rgba(0,0,0,0.12))",
@@ -1004,6 +1161,20 @@ export default function FilterPanel({
                               outline: "none",
                             }}
                           />
+                          {activeFieldIsSearching && (
+                            <RefreshCw
+                              size={14}
+                              role="status"
+                              aria-label={`Fetching ${activeFieldLabel} values`}
+                              style={{
+                                position: "absolute",
+                                right: "1.4rem",
+                                top: "calc(50% - 7px)",
+                                color: "var(--text-secondary)",
+                                animation: "spin 0.8s linear infinite",
+                              }}
+                            />
+                          )}
                         </div>
                         <div className="filter-panel-field-list">
                           {fieldsLoading && (
@@ -1114,6 +1285,8 @@ export default function FilterPanel({
                         const showRange = d.operator === "between";
                         const term = summaryValueSearch.trim().toLowerCase();
                         const options = valuesByField[field] || [];
+                        const fieldValuesLoading =
+                          valuesLoading || Boolean(searchingValueFields[field]);
                         const visibleOptions = term
                           ? options.filter((o) =>
                               o.label.toLowerCase().includes(term),
@@ -1275,8 +1448,20 @@ export default function FilterPanel({
                                     }
                                     aria-label={`Search ${d.label} values`}
                                   />
+                                  {searchingValueFields[field] && (
+                                    <RefreshCw
+                                      size={14}
+                                      role="status"
+                                      aria-label={`Fetching ${d.label} values`}
+                                      style={{
+                                        flex: "0 0 auto",
+                                        color: "var(--text-secondary)",
+                                        animation: "spin 0.8s linear infinite",
+                                      }}
+                                    />
+                                  )}
                                 </div>
-                                {valuesLoading && options.length === 0 ? (
+                                {fieldValuesLoading ? (
                                   <div className="filter-panel-typeahead-menu">
                                     <div className="filter-panel-typeahead-message">
                                       Loading valuesâ€¦
@@ -1782,7 +1967,19 @@ export default function FilterPanel({
                             minHeight: 0,
                           }}
                         >
-                          {valuesLoading && (
+                          {activeFieldUsesServerSearch &&
+                            valueSearch.trim().length < 2 && (
+                              <div
+                                style={{
+                                  padding: "0.6rem 0.9rem",
+                                  fontSize: "0.85rem",
+                                  color: "var(--text-secondary)",
+                                }}
+                              >
+                                Please enter 2 or more characters
+                              </div>
+                            )}
+                          {(valuesLoading || activeFieldIsSearching) && (
                             <div
                               style={{
                                 padding: "0.6rem 0.9rem",
@@ -1794,6 +1991,9 @@ export default function FilterPanel({
                             </div>
                           )}
                           {!valuesLoading &&
+                            !activeFieldIsSearching &&
+                            (!activeFieldUsesServerSearch ||
+                              valueSearch.trim().length >= 2) &&
                             (valuesByField[activeField] || []).length === 0 && (
                               <div
                                 style={{
@@ -1806,6 +2006,9 @@ export default function FilterPanel({
                               </div>
                             )}
                           {!valuesLoading &&
+                            !activeFieldIsSearching &&
+                            (!activeFieldUsesServerSearch ||
+                              valueSearch.trim().length >= 2) &&
                             (() => {
                               const term = valueSearch.trim().toLowerCase();
                               const options = valuesByField[activeField] || [];

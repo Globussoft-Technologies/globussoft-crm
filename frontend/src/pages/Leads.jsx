@@ -901,9 +901,11 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
 }
 
 const leadSourceLabel = (lead, isGeneric = false) =>
-  // Submission provenance takes precedence over a form's configurable Source field.
-  (isGeneric && lead?.webFormSubmissions?.length ? "website-form" : "") ||
+  // Keep the displayed Source aligned with the field used by the Source
+  // filter. Web-form provenance is only a fallback for legacy rows without a
+  // stored source; the separate Web Form column identifies the submitted form.
   lead?.source ||
+  (isGeneric && lead?.webFormSubmissions?.length ? "website-form" : "") ||
   lead?.firstTouchSource ||
   lead?.submitSource ||
   lead?.submittedSource ||
@@ -2138,26 +2140,7 @@ const Leads = () => {
   useEffect(() => {
     if (!supportsColumnCustomization) {
       setLeadColumnCatalog([]);
-      return undefined;
     }
-    let cancelled = false;
-    fetchApi("/api/table-column-prefs/leads", { silent: true })
-      .then((data) => {
-        if (cancelled) return;
-        setLeadColumnCatalog(
-          Array.isArray(data?.availableColumns) ? data.availableColumns : [],
-        );
-        if (Array.isArray(data?.visible)) {
-          setVisibleColumns(data.visible);
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setLeadColumnCatalog([]);
-      });
-    return () => {
-      cancelled = true;
-    };
   }, [supportsColumnCustomization]);
   useEffect(
     () => () => {
@@ -4365,6 +4348,103 @@ const Leads = () => {
           ],
     [customFieldDefs, visibleColumns],
   );
+  const leadFilterFieldCatalog = useMemo(() => {
+    const wellnessTableColumns = [
+      { key: "name", label: "Name" },
+      { key: "email", label: "Email" },
+      { key: "company", label: "Company" },
+      { key: "phone", label: "Phone" },
+      { key: "aiScore", label: "Lead Score" },
+      { key: "source", label: "Source" },
+      { key: "tags", label: "Tags" },
+      { key: "assignedTo", label: "Assigned To" },
+      { key: "createdAt", label: "Created" },
+    ];
+    // Most table-column keys intentionally match their filter-field keys, so
+    // newly added built-in columns participate without another frontend
+    // allowlist change. Only legacy columns whose display key differs from
+    // the API field need an alias here.
+    const columnToFilterFieldAlias = {
+      campaign: "callifiedCampaignId",
+      callStatus: "callifiedLeadStatus",
+      assignedTo: "assignedToId",
+      lastUpdated: "updatedAt",
+    };
+    const catalogColumns = isWellness
+      ? wellnessTableColumns
+      : leadColumnCatalog.length
+        ? leadColumnCatalog
+        : preferredVisibleColumns.map((key) => ({ key, label: null }));
+    const verticalColumns = isTravel
+      ? catalogColumns.filter(
+          (column) =>
+            column.key === "name" ||
+            column.key === "actions" ||
+            TRAVEL_LEAD_COLUMN_KEYS.has(column.key) ||
+            column.key.startsWith("cf_"),
+        )
+      : catalogColumns;
+    const fieldsByKey = new Map();
+    for (const catalogColumn of verticalColumns) {
+      const columnKey = catalogColumn.key;
+      const filterFieldAlias = columnToFilterFieldAlias[columnKey];
+      const customField = customFieldByKey.get(columnKey);
+      const filterFieldKey =
+        catalogColumn?.filterField ||
+        (customField?.id
+          ? `custom_${customField.id}`
+          : filterFieldAlias || columnKey);
+      fieldsByKey.set(filterFieldKey, {
+        field: filterFieldKey,
+        label: catalogColumn?.label || customField?.label || null,
+        kind:
+          catalogColumn?.filterKind ||
+          (customField
+            ? customField.fieldType === "date"
+              ? "date"
+              : customField.fieldType === "number"
+                ? "number"
+                : customField.fieldType === "checkbox"
+                  ? "boolean"
+                  : "text"
+            : null),
+      });
+    }
+    return [...fieldsByKey.values()];
+  }, [
+    customFieldByKey,
+    isTravel,
+    isWellness,
+    leadColumnCatalog,
+    preferredVisibleColumns,
+  ]);
+  const visibleLeadFilterFieldKeys = useMemo(
+    () => leadFilterFieldCatalog?.map((field) => field.field) ?? null,
+    [leadFilterFieldCatalog],
+  );
+  const visibleLeadFilterFieldLabels = useMemo(
+    () =>
+      leadFilterFieldCatalog
+        ? Object.fromEntries(
+            leadFilterFieldCatalog
+              .filter((field) => field.label)
+              .map((field) => [field.field, field.label]),
+          )
+        : null,
+    [leadFilterFieldCatalog],
+  );
+  useEffect(() => {
+    if (
+      !leadFilterFieldCatalog?.length ||
+      !Array.isArray(visibleLeadFilterFieldKeys)
+    )
+      return;
+    const catalogFields = new Set(visibleLeadFilterFieldKeys);
+    setAdvancedFilters((current) => {
+      const next = current.filter((filter) => catalogFields.has(filter.field));
+      return next.length === current.length ? current : next;
+    });
+  }, [leadFilterFieldCatalog, visibleLeadFilterFieldKeys]);
   const leadUserColumnDefs = preferredVisibleColumns
     .filter((key) => key !== "name")
     .filter(
@@ -6576,7 +6656,22 @@ const Leads = () => {
       setLeadColumnCatalog((current) =>
         current.some((column) => column.key === columnKey)
           ? current
-          : [...current, { key: columnKey, label: createdField.label }],
+          : [
+              ...current,
+              {
+                key: columnKey,
+                label: createdField.label,
+                filterField: `custom_${createdField.id}`,
+                filterKind:
+                  createdField.fieldType === "date"
+                    ? "date"
+                    : createdField.fieldType === "number"
+                      ? "number"
+                      : createdField.fieldType === "checkbox"
+                        ? "boolean"
+                        : "text",
+              },
+            ],
       );
       setVisibleColumns((current) =>
         Array.isArray(current) && !current.includes(columnKey)
@@ -8083,6 +8178,10 @@ const Leads = () => {
               clearSectionsOnReset={isGeneric}
               promoteAddedSections={isGeneric}
               pinSelectedValues={isGeneric}
+              preserveDraftsOnClose={isGeneric}
+              allowedFieldKeys={visibleLeadFilterFieldKeys}
+              allowedFieldLabels={visibleLeadFilterFieldLabels}
+              allowedFieldDefinitions={leadFilterFieldCatalog}
               buttonStyle={{
                 ...compactToolbarButtonStyle,
                 height: 38,
@@ -8776,6 +8875,7 @@ const Leads = () => {
               <ColumnPicker
                 tableKey="leads"
                 onColumnsChange={setVisibleColumns}
+                onAvailableColumnsChange={setLeadColumnCatalog}
                 deletableColumns={
                   isGeneric && isAdmin
                     ? customFieldDefs.map((field) => ({

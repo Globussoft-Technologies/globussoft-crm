@@ -58,6 +58,24 @@ beforeEach(() => {
 });
 
 describe("ColumnPicker reorder", () => {
+  it("publishes the exact live catalog used by Customize table", async () => {
+    const onAvailableColumnsChange = vi.fn();
+    render(
+      <ColumnPicker
+        tableKey="leads"
+        onAvailableColumnsChange={onAvailableColumnsChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onAvailableColumnsChange).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          { key: "cf_priority", label: "Priority" },
+        ]),
+      );
+    });
+  });
+
   it("confirms and deletes a hidden custom field for generic CRM", async () => {
     const onFieldDeleted = vi.fn();
     render(

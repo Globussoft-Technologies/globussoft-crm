@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
@@ -236,7 +237,7 @@ describe('public web form embed footer', () => {
     expect(builder).toContain('function fieldPlaceholderHint(field)');
   });
 
-  test('uses only the native browser location prompt immediately on every web-form surface', () => {
+  test('uses the native browser location prompt automatically on Generic web-form surfaces', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toMatch(/country\.value\s*=\s*["']\+91["']/);
@@ -260,8 +261,39 @@ describe('public web form embed footer', () => {
     expect(html).toMatch(/if\s*\(phoneCountryDetectionStarted\)\s*return phoneCountryDetectionPromise\.then\(apply\)/);
     expect(html).toContain('if (scope === "generic" && !phoneCountryDetectionStarted)');
     expect(html).toContain('detectGenericCountryFromLocationOrIp();');
-    expect(html).not.toContain('phoneSettings.phoneAutoDetectCountry === true');
+    expect(html).toContain('scope === "generic" || phoneSettings.phoneAutoDetectCountry === true');
     expect(html).not.toContain("detectGenericCountryFromTimeZone(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
+  });
+
+  test.each([
+    ['generic', undefined, 1],
+    ['generic', false, 1],
+    ['travel', undefined, 0],
+    ['travel', false, 0],
+    ['travel', 'true', 0],
+    ['travel', true, 1],
+    ['wellness', true, 0],
+  ])('country detection respects %s opt-in %s', async (scope, optIn, expectedCalls) => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const start = html.indexOf('function detectGenericCountryFromLocationOrIp(');
+    const end = html.indexOf('function detectGenericCountryFromTimeZone(', start);
+    let calls = 0;
+    const context = {
+      scope,
+      advanced: scope === 'generic' || scope === 'travel',
+      formData: { settings: { phoneAutoDetectCountry: optIn } },
+      phoneCountryDetectionStarted: false,
+      phoneCountryDetectionPromise: Promise.resolve(false),
+      window: { isSecureContext: true },
+      navigator: { geolocation: { getCurrentPosition(_success, failure) {
+        calls += 1;
+        failure({ code: 1 });
+      } } },
+    };
+    runInNewContext(html.slice(start, end), context);
+    await context.detectGenericCountryFromLocationOrIp();
+    expect(calls).toBe(expectedCalls);
+    expect(context.phoneCountryDetectionStarted).toBe(expectedCalls > 0);
   });
 
   test('keeps Generic tracking cookies for exactly 90 days', () => {

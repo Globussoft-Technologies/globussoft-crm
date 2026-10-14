@@ -1974,6 +1974,9 @@
           phoneState,
         ) {
           if (!advanced) return Promise.resolve(false);
+          if (scope === "travel" &&
+              (!formData.settings || formData.settings.phoneAutoDetectCountry !== true))
+            return Promise.resolve(false);
           var apply = function (iso) {
             if (!country || !input || !phoneState) return false;
             return applyDetectedPhoneCountry(
@@ -2208,16 +2211,18 @@
             if (error) error.remove();
           });
           applyRule();
-          // Ask through the browser's native permission UI everywhere this
-          // shared web-form runtime is used: direct links and all embeds.
-          detectGenericCountryFromLocationOrIp(
-            country,
-            input,
-            allowedCountries,
-            restrictedCountries,
-            applyRule,
-            phoneState,
-          );
+          // Generic direct links and all embeds request location automatically.
+          // Travel keeps its existing explicit country-detection opt-in.
+          if (scope === "generic" || phoneSettings.phoneAutoDetectCountry === true) {
+            detectGenericCountryFromLocationOrIp(
+              country,
+              input,
+              allowedCountries,
+              restrictedCountries,
+              applyRule,
+              phoneState,
+            );
+          }
         }
         window.addEventListener("message", function (event) {
           if (

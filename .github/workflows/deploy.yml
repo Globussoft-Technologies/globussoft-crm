@@ -2,7 +2,7 @@ name: Deploy to demo server (crm.globusdemos.com)
 
 on:
   push:
-    branches: [main, staging_crm]
+    branches: [main]
     paths-ignore:
       # Skip the entire workflow when only docs / operator scripts change.
       # (paths-ignore does NOT support !negation  keep this as a flat list.)
@@ -132,7 +132,13 @@ jobs:
   api_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
+    name: API tests (${{ matrix.shard }}/4)
     timeout-minutes: 20
+    strategy:
+      # Each runner owns its MySQL service, seeded DB, and backend process.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       mysql:
         image: mysql:8.0
@@ -355,6 +361,7 @@ jobs:
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
           npx playwright test \
             --project=chromium \
+            --shard=${{ matrix.shard }}/4 \
             --reporter=list \
             --no-deps \
             --workers=4 \
@@ -583,7 +590,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: api-tests-failure
+          name: api-tests-failure-${{ matrix.shard }}
           path: |
             /tmp/backend.log
             e2e/test-results/
@@ -656,12 +663,18 @@ jobs:
   #  4. UNIT_TESTS: vitest unit tests for backend/lib + middleware + 
   # services + utils. Runs in parallel with api_tests; no MySQL, no
   # server boot, no Playwright  pure-fn assertions with prisma + fetch +
-  # web-push mocks. ~1-2s of test runtime; the install step dominates.
+  # web-push mocks. Four runners divide the unit suite; the small separate
+  # integration suite runs once on shard 1 and remains deployment-gated.
   # Promoted to mandatory same as api_tests on the deploy gate below.
   unit_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
+    name: Backend unit tests (${{ matrix.shard }}/4)
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
 
@@ -688,15 +701,25 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          npm test
+          npm test -- --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile=test-results/unit-${{ matrix.shard }}.json
           echo "::notice::Unit tests passed"
 
       - name: Run vitest (integration suite)
+        if: ${{ matrix.shard == 1 && !cancelled() }}
         working-directory: backend
         run: |
           set -euo pipefail
           npm run test:integration
           echo "::notice::Integration tests passed"
+
+      - name: Upload backend unit results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-unit-results-${{ matrix.shard }}
+          path: backend/test-results/unit-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   #  5. FRONTEND_UNIT_TESTS: vitest + RTL over frontend/src components + 
   # utils. G-21  first wave of frontend unit-test infra. Mirrors backend's
@@ -810,7 +833,7 @@ jobs:
   #  7. DEPLOY: only runs if every upstream gate passes. 
   deploy:
     needs:
-      [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check, deploy_staging]
+      [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
     # All six gates mandatory:
     #   - build               (vite + node syntax)
     #   - api_tests           (Playwright API specs against ephemeral MySQL + seeded backend)
@@ -818,13 +841,11 @@ jobs:
     #   - lint                (ESLint  semantic checks + project-specific req.user.id rule)
     #   - frontend_unit_tests (G-21  vitest + RTL over frontend/src/__tests__/)
     #   - migration_check     (G-23  dry-run prisma migrate diff vs HEAD~1)
-    #   - deploy_staging      (serializes staging before prod so the two jobs
-    #                          don't race on prisma db push against the same DB)
     # Any failure blocks deploy.
     # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
     # bypass for emergency hotfixes (still requires manual workflow_dispatch
     #  a regular push can never bypass).
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') && (needs.deploy_staging.result == 'success' || needs.deploy_staging.result == 'skipped') }}
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1274,142 +1295,3 @@ jobs:
             -o /tmp/telegram_response.json
           cat /tmp/telegram_response.json
           echo
-
-  #  8. DEPLOY_STAGING: mirrors deploy job but targets crm-staging 
-  # Runs in parallel with the production deploy. Uses the same SSH secrets
-  # (same server, different user home + vhost). No rollback on staging 
-  # a broken staging is not a prod incident.
-  deploy_staging:
-    needs:
-      [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Deploy backend to staging
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 10m
-          script: |
-            set -euo pipefail
-            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            cd /home/empcloud-development/globussoft-crm-staging
-
-            echo "=== git state before ==="
-            echo "before SHA: $(git rev-parse --short HEAD)"
-
-            git fetch origin main
-            git reset --hard origin/main
-            echo "after  SHA: $(git rev-parse --short HEAD)"
-            git log --oneline -3
-
-            cd "$HOME/globussoft-crm-staging/tally-connector"
-            echo "=== build Windows Tally connector ==="
-            npm ci --include=dev --no-audit --no-fund --loglevel=error 2>&1 | tail -5
-            npm run build:windows 2>&1 | tail -5
-            test -s dist/TallyConnector.exe
-
-            cd "$HOME/globussoft-crm-staging/backend"
-            echo "=== npm install ==="
-            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
-
-            echo "=== prisma generate ==="
-            npx prisma generate 2>&1 | tail -3
-
-            # Schema-hardening guard: if User.name was made non-nullable, any
-            # existing NULL values block `prisma db push`. Self-heal with raw SQL
-            # via prisma db execute (loads .env automatically, no client init needed).
-            echo "=== heal NULL User.name (schema-hardening guard) ==="
-            printf '%s\n' "UPDATE User SET name = '' WHERE name IS NULL;" > /tmp/fix-null-names.sql
-            npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
-
-            echo "=== prisma db push (schema sync) ==="
-            if ! npx prisma db push --skip-generate --accept-data-loss > /tmp/prisma-db-push.log 2>&1; then
-              echo "::error::prisma db push failed"
-              cat /tmp/prisma-db-push.log
-              exit 1
-            fi
-            tail -5 /tmp/prisma-db-push.log
-
-            if [ -f prisma/seed-travel.js ]; then
-              echo "=== seed-travel (always) ==="
-              node prisma/seed-travel.js 2>&1 | tail -20
-            fi
-
-            # Optional RBAC backfill. Keep this OFF for normal deploys so
-            # already-selected permissions remain unchanged across refreshes
-            # and restarts. Operators can opt in only when they are
-            # intentionally adding a newly-wide preset grant.
-            if [ "${{ github.event.inputs.rbac_backfill }}" = "true" ]; then
-              echo "=== backfill role-preset permissions (manual opt-in) ==="
-              node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
-            fi
-
-            echo "=== pm2 restart ==="
-            # If the process entry is stale (e.g. host rebooted and the old
-            # PID is gone), fall back to deleting the entry and starting fresh.
-            pm2 restart globussoft-crm-staging-backend --update-env 2>&1 | tail -3 || {
-              pm2 delete globussoft-crm-staging-backend 2>&1 || true
-              pm2 start server.js --name globussoft-crm-staging-backend 2>&1 | tail -3
-            }
-            echo "staging backend restarted"
-
-      - name: Deploy frontend to staging
-        if: ${{ inputs.skip_frontend != true }}
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 10m
-          script: |
-            set -euo pipefail
-            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
-            cd /home/empcloud-development/globussoft-crm-staging/frontend
-
-            echo "=== npm install ==="
-            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
-
-            echo "=== vite build ==="
-            npx vite build --logLevel=error 2>&1 | tail -8
-            du -sh dist
-
-            echo "=== rsync dist -> /var/www/crm-staging.globusdemos.com ==="
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S rsync -a --delete dist/ /var/www/crm-staging.globusdemos.com/ 2>&1 | tail -3
-
-            echo "=== fix ownership + perms ==="
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S chown -R www-data:www-data /var/www/crm-staging.globusdemos.com/
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S find /var/www/crm-staging.globusdemos.com/ -type d -exec chmod 755 {} +
-            echo '${{ secrets.SSH_PASSWORD }}' | sudo -S find /var/www/crm-staging.globusdemos.com/ -type f -exec chmod 644 {} +
-            echo "ok"
-
-      - name: Smoke check staging
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 2m
-          script: |
-            set -eo pipefail
-            echo "=== https://crm-staging.globusdemos.com/ ==="
-            code=$(curl -sk -o /dev/null -w '%{http_code}' 'https://crm-staging.globusdemos.com/')
-            echo "GET /  -> $code"
-            [ "$code" = "200" ] || { echo "[fail] expected 200"; exit 1; }
-
-            echo "=== https://crm-staging.globusdemos.com/api/health ==="
-            code=$(curl -sk -o /dev/null -w '%{http_code}' 'https://crm-staging.globusdemos.com/api/health')
-            echo "GET /api/health -> $code"
-            [ "$code" = "200" ] || { echo "[fail] expected 200"; exit 1; }
-            echo "ok"
-
-      - name: Staging deploy summary
-        run: |
-          echo "::notice title=Staging deploy complete::commit ${{ github.sha }} live on https://crm-staging.globusdemos.com"

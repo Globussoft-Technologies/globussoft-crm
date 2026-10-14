@@ -220,9 +220,10 @@ function installFetchMock(form = FORM_FIXTURE, leadFields = [
 
 
 
-function renderPage(form = FORM_FIXTURE, leadFields, authValue = { user: { id: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }) {
+function renderPage(form = FORM_FIXTURE, leadFields, authValue = { user: { id: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }, configureFetch) {
 
   installFetchMock(form, leadFields);
+  configureFetch?.(fetchApiMock.getMockImplementation());
 
   return render(
 
@@ -738,28 +739,31 @@ describe('WebForms builder page', () => {
   });
 
   test('creates a lead field from the Generic contact picker plus action', async () => {
-    renderPage();
-    const baseFetch = fetchApiMock.getMockImplementation();
     let customFields = [
       { id: 1, fieldKey: 'submit_source', label: 'Submit source', fieldType: 'text' },
     ];
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/lead-custom-fields' && method === 'GET') {
-        return Promise.resolve(customFields);
-      }
-      if (url === '/api/lead-custom-fields' && method === 'POST') {
-        const body = JSON.parse(opts.body);
-        const created = { id: 91, fieldKey: 'referral_source', ...body };
-        customFields = [...customFields, created];
-        return Promise.resolve(created);
-      }
-      return baseFetch(url, opts);
+    // Configure every response before mount so the initial effect cannot
+    // fetch a different field catalogue than the one this test owns.
+    renderPage(FORM_FIXTURE, customFields, undefined, (baseFetch) => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        const method = opts?.method || 'GET';
+        if (url === '/api/lead-custom-fields' && method === 'GET') {
+          return Promise.resolve(customFields);
+        }
+        if (url === '/api/lead-custom-fields' && method === 'POST') {
+          const body = JSON.parse(opts.body);
+          const created = { id: 91, fieldKey: 'referral_source', ...body };
+          customFields = [...customFields, created];
+          return Promise.resolve(created);
+        }
+        return baseFetch(url, opts);
+      });
     });
 
     await openBuilder();
     fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /Add lead custom field/i }));
+    const picker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+    fireEvent.click(within(picker).getByRole('button', { name: /Add lead custom field/i }));
 
     const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
     expect(within(dialog).getByLabelText('Field Type')).not.toBeDisabled();
@@ -790,7 +794,7 @@ describe('WebForms builder page', () => {
     const addedItem = within(reopenedPicker).getByText('Referral Source').closest('.wf-field-picker-item');
     expect(addedItem).toHaveAttribute('title', 'Already added to form');
     expect(within(addedItem).getByText('Added')).toBeInTheDocument();
-  });
+  }, 10000); // Multi-dialog integration flow needs headroom on loaded CI runners.
 
   test('does not show the lead-field plus action in the Travel form picker', async () => {
     renderTravelPage();

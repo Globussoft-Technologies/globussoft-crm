@@ -2282,6 +2282,7 @@
               hostResponsiveDevice === name,
             );
           });
+          updateGenericWhatsappLayout();
         });
         window.addEventListener("message", function (event) {
           if (
@@ -2457,6 +2458,7 @@
         }
 
         window.addEventListener("resize", fitRecaptcha);
+        window.addEventListener("resize", updateGenericWhatsappLayout);
 
         if (typeof ResizeObserver !== "undefined") {
           new ResizeObserver(scheduleSize).observe(document.body);
@@ -3307,6 +3309,35 @@
           });
         }
 
+        function updateGenericWhatsappLayout() {
+          if (scope !== "generic") return;
+          var wrapper = root.querySelector(".generic-whatsapp-section");
+          var phoneInput = root.querySelector('input[name="phone"]');
+          var phoneField = phoneInput && phoneInput.closest(".field");
+          var formGrid = phoneField && phoneField.closest(".grid");
+          if (!wrapper || !formGrid) return;
+          // Drop the old explicit column before measuring: a desktop column 2
+          // would otherwise create an implicit column in a mobile one-column grid.
+          wrapper.style.gridColumn = "";
+          var phoneRect = phoneField.getBoundingClientRect();
+          var gridRect = formGrid.getBoundingClientRect();
+          var columnLefts = Array.from(formGrid.children)
+            .filter(function (child) { return child !== wrapper && !child.hidden; })
+            .map(function (child) { return child.getBoundingClientRect().left; })
+            .filter(function (left, index, values) {
+              return values.findIndex(function (value) {
+                return Math.abs(value - left) < 1;
+              }) === index;
+            })
+            .sort(function (a, b) { return a - b; });
+          var phoneColumn = columnLefts.findIndex(function (left) {
+            return Math.abs(left - phoneRect.left) < 1;
+          });
+          wrapper.style.gridColumn = phoneRect.width >= gridRect.width - 1
+            ? "1 / -1"
+            : Math.max(phoneColumn + 1, 1) + " / span 1";
+        }
+
         function setupGenericWhatsapp() {
           if (
             scope !== "generic" ||
@@ -3362,29 +3393,9 @@
           whatsappError.textContent = "Only numbers are allowed.";
           numberWrapper.appendChild(whatsappError);
           wrapper.appendChild(numberWrapper);
-          var phoneRect = phoneField.getBoundingClientRect();
-          var gridRect = formGrid.getBoundingClientRect();
-          var columnLefts = Array.from(formGrid.children)
-            .map(function (child) {
-              return child.getBoundingClientRect().left;
-            })
-            .filter(function (left, index, values) {
-              return values.findIndex(function (value) {
-                return Math.abs(value - left) < 1;
-              }) === index;
-            })
-            .sort(function (a, b) {
-              return a - b;
-            });
-          var phoneColumn = columnLefts.findIndex(function (left) {
-            return Math.abs(left - phoneRect.left) < 1;
-          });
-          var phoneIsFullWidth = phoneRect.width >= gridRect.width - 1;
-          wrapper.style.gridColumn = phoneIsFullWidth
-            ? "1 / -1"
-            : Math.max(phoneColumn + 1, 1) + " / span 1";
           phoneField.insertAdjacentElement("afterend", wrapper);
           formGrid.classList.add("generic-whatsapp-grid");
+          updateGenericWhatsappLayout();
 
           var sameCheckbox = wrapper.querySelector(
             'input[name="whatsappSameAsPhone"]',

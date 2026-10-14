@@ -20,9 +20,12 @@ on:
   pull_request:
     branches: [main, staging_crm]
   workflow_dispatch:
+  # Preserve whole-suite memory-growth coverage outside per-PR/push shards.
+  schedule:
+    - cron: '0 2 * * 0'
 
 concurrency:
-  group: memory-leak-${{ github.event.pull_request.number || github.ref }}
+  group: memory-leak-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'schedule' && 'full-suite' || 'regular' }}
   cancel-in-progress: true
 
 jobs:
@@ -177,7 +180,16 @@ jobs:
   # ── FRONTEND: run vitest under a tight heap ceiling ────────────────────
   frontend_memory_regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Frontend memory regression (${{ github.event_name == 'schedule' && 'full suite' || format('shard {0}/4', matrix.shard) }})
+    timeout-minutes: ${{ github.event_name == 'schedule' && 30 || 15 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(github.event_name == 'schedule' && '[1]' || '[1,2,3,4]') }}
+    env:
+      # Also propagate the ceiling to Vitest worker processes. This is a
+      # per-process V8 old-space limit, not a total runner RSS limit.
+      NODE_OPTIONS: --max-old-space-size=1536
     steps:
       - uses: actions/checkout@v5
 
@@ -193,10 +205,39 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
-          # Run vitest with a 1.5 GB old-space ceiling. A component/test
-          # leak that grows unbounded will hit this and crash the runner.
-          node --max-old-space-size=1536 ./node_modules/.bin/vitest run
+          shard_args=()
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            shard_args+=(--shard=${{ matrix.shard }}/4)
+          fi
+          node --max-old-space-size=1536 ./node_modules/.bin/vitest run "${shard_args[@]}" --reporter=default --reporter=json --outputFile=test-results/memory-${{ matrix.shard }}.json
           echo "::notice::Frontend vitest completed within 1.5 GB heap ceiling"
+
+      - name: Upload frontend memory test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-memory-results-${{ matrix.shard }}
+          path: frontend/test-results/memory-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Build once per workflow, independently of the test shards.
+  frontend_memory_build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --max-old-space-size=1536
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend — install
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
 
       - name: Build frontend (also exercises transform memory)
         working-directory: frontend

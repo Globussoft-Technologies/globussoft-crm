@@ -299,7 +299,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     });
 
     await screen.findByText(
-      /Configure Google reCAPTCHA v2 for Travel web forms/i,
+      /Configure Google reCAPTCHA v2 checkbox keys for Travel web forms/i,
     );
     expect(
       screen.queryByTestId("generic-web-form-automatic-tracking"),

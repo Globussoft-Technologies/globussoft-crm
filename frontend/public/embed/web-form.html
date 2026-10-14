@@ -2415,7 +2415,25 @@
             });
           }
 
-          if (window.grecaptcha && window.grecaptcha.render) {
+          function waitForRecaptchaApi(attempt) {
+            if (!formData || !formData.settings || formData.settings.recaptchaEnabled !== true) return;
+            if (!String(formData.settings.recaptchaSiteKey || "").trim()) return;
+            if (window.grecaptcha && typeof window.grecaptcha.render === "function") {
+              renderCurrentWidget();
+              return;
+            }
+            if (attempt >= 100) {
+              showRecaptchaLoadError(
+                "Verification could not be loaded. Check your connection and allow Google reCAPTCHA in your browser.",
+              );
+              return;
+            }
+            setTimeout(function () {
+              waitForRecaptchaApi(attempt + 1);
+            }, 50);
+          }
+
+          if (window.grecaptcha && typeof window.grecaptcha.render === "function") {
             renderCurrentWidget();
             return;
           }
@@ -2423,6 +2441,10 @@
           if (!recaptchaApiPromise) {
             recaptchaApiPromise = new Promise(function (resolve, reject) {
               var script = document.getElementById("gbs-recaptcha-api");
+              if (script && window.grecaptcha) {
+                resolve();
+                return;
+              }
               if (!script) {
                 script = document.createElement("script");
                 script.id = "gbs-recaptcha-api";
@@ -2440,7 +2462,9 @@
             });
           }
 
-          recaptchaApiPromise.then(renderCurrentWidget).catch(function () {
+          recaptchaApiPromise.then(function () {
+            waitForRecaptchaApi(0);
+          }).catch(function () {
             showRecaptchaLoadError(
               "Verification could not be loaded. Check your connection and allow Google reCAPTCHA in your browser.",
             );
@@ -5048,13 +5072,16 @@
           }
 
           if (previewData) {
+            var initialPreviewSequence = ++previewUpdateSequence;
             try {
               var previewForm = JSON.parse(previewData);
               previewForm = await hydratePreviewRecaptcha(previewForm);
+              if (initialPreviewSequence !== previewUpdateSequence) return;
               renderForm(previewForm);
 
               return;
             } catch (err) {
+              if (initialPreviewSequence !== previewUpdateSequence) return;
               setMessage("error", err.message || "Invalid preview data");
 
               return;

@@ -190,10 +190,15 @@ describe('public web form embed footer', () => {
 
   test('sizes the live preview iframe to the selected device viewport', () => {
     const builder = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(builder).toContain('getWebFormPreviewViewportWidth(previewDevice)');
     expect(builder).toContain('min(100%, ${previewViewportWidth})');
     expect(builder).toContain('margin: "0 auto"');
+    expect(html).toContain('function hydratePreviewRecaptcha(previewForm)');
+    expect(html).toContain('previewForm = await hydratePreviewRecaptcha(previewForm)');
+    expect(html).toContain('hydratePreviewRecaptcha(event.data.form).then');
+    expect(html).toContain('previewForm.settings.recaptchaSiteKey');
   });
 
   test('renders the numeric phone control for the default phone field', () => {
@@ -217,9 +222,13 @@ describe('public web form embed footer', () => {
     expectSourceContains(html, 'Enter a valid WhatsApp number with ');
     expectSourceContains(html, 'setupGenericCountryPicker(whatsappCountrySelect');
     expectSourceContains(html, '.generic-whatsapp-section{display:block;margin-top:8px;padding-left:0}');
+    expectSourceContains(html, 'wrapper.className = "field generic-whatsapp-section"');
+    expectSourceContains(html, 'phoneField.insertAdjacentElement("afterend", wrapper)');
+    expectSourceContains(html, 'formGrid.classList.add("generic-whatsapp-grid")');
+    expectSourceContains(html, 'grid-auto-flow: row dense');
     expectSourceContains(html, 'white-space:normal;line-height:1.35;font-weight:var(--gbs-form-weight,400)');
     expectSourceContains(html, '.generic-whatsapp-section>.check span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}');
-    expectSourceContains(html, 'function fitGenericRecaptcha()');
+    expectSourceContains(html, 'function fitRecaptcha()');
     expectSourceContains(html, 'widget.style.transformOrigin = "top left"');
     expectSourceContains(html, 'container.style.height = Math.ceil(widgetHeight * scale) + "px"');
     expectSourceContains(html, '.generic-whatsapp-phone{margin-bottom:0}');
@@ -358,6 +367,19 @@ describe('public web form embed footer', () => {
     expect(html).toContain('function showInlineError(text)');
     expect(html).toMatch(/Please complete the "I\\'m not a robot" verification\./);
     expect(html).not.toContain("if (!captchaToken) { setMessage('error'");
+  });
+
+  test('explicitly renders reCAPTCHA in live preview updates and public forms', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('var recaptcha = recaptchaEnabled');
+    expect(html).toContain('function initializeRecaptcha()');
+    expect(html).toContain('https://www.google.com/recaptcha/api.js?render=explicit');
+    expect(html).toContain('window.grecaptcha.render(widget, {');
+    expect(html).toContain('data-gbs-rendered');
+    expect(html).toContain('window.grecaptcha.getResponse(');
+    expect(html).toContain('reCAPTCHA is enabled, but no site key is available.');
+    expect(html).not.toContain('document.createElement("script");\n            script.src = "https://www.google.com/recaptcha/api.js";');
   });
 
   test('keeps submit clickable so required-field validation can explain incomplete fields', () => {

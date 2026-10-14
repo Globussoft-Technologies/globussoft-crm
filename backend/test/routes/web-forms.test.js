@@ -768,6 +768,59 @@ describe('PUT /api/forms/:id', () => {
 });
 
 describe('GET /api/forms/public/:slug', () => {
+  test('returns the configured site key for an enabled draft preview', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 7,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Protected intake',
+      slug: 'protected-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ recaptchaEnabled: false }),
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'tenant-public-site-key' });
+
+    const res = await request(makeApp()).get('/api/forms/public/protected-intake');
+
+    expect(res.status).toBe(200);
+    expect(res.body.settings.recaptchaEnabled).toBe(false);
+    expect(res.body.settings.recaptchaSiteKey).toBe('tenant-public-site-key');
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.webForm.recaptcha.siteKey' } },
+      select: { value: true },
+    });
+  });
+
+  test('falls back to the server site key when a tenant override is blank', async () => {
+    const originalSiteKey = process.env.RECAPTCHA_SITE_KEY;
+    process.env.RECAPTCHA_SITE_KEY = 'server-public-site-key';
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 8,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Protected intake',
+      slug: 'protected-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ recaptchaEnabled: true }),
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: '' });
+
+    try {
+      const res = await request(makeApp()).get('/api/forms/public/protected-intake');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.recaptchaSiteKey).toBe('server-public-site-key');
+    } finally {
+      if (originalSiteKey === undefined) delete process.env.RECAPTCHA_SITE_KEY;
+      else process.env.RECAPTCHA_SITE_KEY = originalSiteKey;
+    }
+  });
+
   test('includes current lead custom field options in the public form payload', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 3,
@@ -973,6 +1026,35 @@ describe('POST /api/forms/public/:slug/submit', () => {
       expect.stringContaining('secret=travel-server-only-secret'),
       expect.any(Object),
     );
+  });
+
+  test('falls back to the server secret when a tenant override is blank', async () => {
+    const originalSecret = process.env.RECAPTCHA_SECRET_KEY;
+    process.env.RECAPTCHA_SECRET_KEY = 'server-secret-key';
+    mockCaptchaForm();
+    prisma.tenantSetting.findUnique.mockImplementation((params) => (
+      params.where?.tenantId_key?.key === 'generic.webForm.recaptcha.secretKey'
+        ? { value: '' }
+        : null
+    ));
+    axios.post.mockResolvedValue({ data: { success: true } });
+
+    try {
+      const response = await request(makeApp())
+        .post('/api/forms/public/protected-form/submit?scope=generic')
+        .field('name', 'Protected Customer')
+        .field('recaptchaToken', 'browser-token');
+
+      expect(response.status).toBe(201);
+      expect(axios.post).toHaveBeenCalledWith(
+        'https://www.google.com/recaptcha/api/siteverify',
+        expect.stringContaining('secret=server-secret-key'),
+        expect.any(Object),
+      );
+    } finally {
+      if (originalSecret === undefined) delete process.env.RECAPTCHA_SECRET_KEY;
+      else process.env.RECAPTCHA_SECRET_KEY = originalSecret;
+    }
   });
 
   test('rejects invalid CAPTCHA before persisting uploaded files or CRM records', async () => {

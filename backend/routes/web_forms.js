@@ -1375,14 +1375,22 @@ router.get("/public/:slug", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
     const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions);
-    if (supportsAdvancedWebFormFeatures(form.scope || "generic") && publicPayload.settings?.recaptchaEnabled) {
+    // The builder can enable reCAPTCHA in an unsaved preview draft. Return the
+    // public site key for advanced public forms even when the stored form has
+    // CAPTCHA disabled, so the preview can render the draft widget.
+    if (supportsAdvancedWebFormFeatures(form.scope || "generic")) {
       const recaptchaSiteKey = form.scope === "travel"
         ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
         : KEYS.GENERIC_RECAPTCHA_SITE_KEY;
       const recaptchaSiteFallback = form.scope === "travel"
         ? process.env.TRAVEL_RECAPTCHA_SITE_KEY || ""
         : process.env.RECAPTCHA_SITE_KEY || "";
-      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, { coerce: String, fallback: recaptchaSiteFallback }));
+      const tenantRecaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, {
+        coerce: String,
+        fallback: recaptchaSiteFallback,
+      }));
+      // An empty tenant override should not mask a valid server-level key.
+      publicPayload.settings.recaptchaSiteKey = tenantRecaptchaSiteKey || recaptchaSiteFallback;
     }
     res.json(publicPayload);
   } catch (err) {
@@ -1464,7 +1472,8 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       const recaptchaSecretFallback = formScope === "travel"
         ? process.env.TRAVEL_RECAPTCHA_SECRET_KEY || ""
         : process.env.RECAPTCHA_SECRET_KEY || "";
-      const secret = textOr(await getSetting(form.tenantId, recaptchaSecretKey, { coerce: String, fallback: recaptchaSecretFallback }));
+      const tenantSecret = textOr(await getSetting(form.tenantId, recaptchaSecretKey, { coerce: String, fallback: recaptchaSecretFallback }));
+      const secret = tenantSecret || recaptchaSecretFallback;
       let verified = false;
       if (token && secret) {
         try {

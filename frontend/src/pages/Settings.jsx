@@ -3675,7 +3675,10 @@ function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
         Web Form reCAPTCHA
       </h3>
       <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
-        Configure Google reCAPTCHA v2 for {verticalLabel} web forms. The secret key is never displayed.
+        Configure Google reCAPTCHA v2 checkbox keys for {verticalLabel} web forms. The secret key is never displayed.
+      </p>
+      <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
+        Use a matching Site Key and Secret Key from the same “I’m not a robot” checkbox registration, with your form host domain allowed. v3 score-based, invisible, Android, and Enterprise keys are not compatible with this checkbox and can produce Google’s “Invalid key type” error.
       </p>
       <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
         Register your website with Google reCAPTCHA to get the Site Key and Secret Key.{' '}

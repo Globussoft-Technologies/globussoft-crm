@@ -132,7 +132,13 @@ jobs:
   api_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
+    name: API tests (${{ matrix.shard }}/4)
     timeout-minutes: 20
+    strategy:
+      # Each runner owns its MySQL service, seeded DB, and backend process.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       mysql:
         image: mysql:8.0
@@ -355,6 +361,7 @@ jobs:
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
           npx playwright test \
             --project=chromium \
+            --shard=${{ matrix.shard }}/4 \
             --reporter=list \
             --no-deps \
             --workers=4 \
@@ -583,7 +590,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: api-tests-failure
+          name: api-tests-failure-${{ matrix.shard }}
           path: |
             /tmp/backend.log
             e2e/test-results/
@@ -656,12 +663,18 @@ jobs:
   #  4. UNIT_TESTS: vitest unit tests for backend/lib + middleware + 
   # services + utils. Runs in parallel with api_tests; no MySQL, no
   # server boot, no Playwright  pure-fn assertions with prisma + fetch +
-  # web-push mocks. ~1-2s of test runtime; the install step dominates.
+  # web-push mocks. Four runners divide the unit suite; the small separate
+  # integration suite runs once on shard 1 and remains deployment-gated.
   # Promoted to mandatory same as api_tests on the deploy gate below.
   unit_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
+    name: Backend unit tests (${{ matrix.shard }}/4)
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
 
@@ -688,15 +701,25 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          npm test
+          npm test -- --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile=test-results/unit-${{ matrix.shard }}.json
           echo "::notice::Unit tests passed"
 
       - name: Run vitest (integration suite)
+        if: ${{ matrix.shard == 1 && !cancelled() }}
         working-directory: backend
         run: |
           set -euo pipefail
           npm run test:integration
           echo "::notice::Integration tests passed"
+
+      - name: Upload backend unit results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-unit-results-${{ matrix.shard }}
+          path: backend/test-results/unit-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   #  5. FRONTEND_UNIT_TESTS: vitest + RTL over frontend/src components + 
   # utils. G-21  first wave of frontend unit-test infra. Mirrors backend's

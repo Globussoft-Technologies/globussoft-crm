@@ -1188,9 +1188,14 @@ router.get("/", async (req, res) => {
     }
 
     if (isCustomer(req)) {
+      const paginated = req.query.page !== undefined;
+      const page = Number(req.query.page);
+      if (paginated && (!Number.isSafeInteger(page) || page < 1 || page > 1000000)) {
+        return res.status(400).json({ error: "Invalid payment page", code: "INVALID_PAGE" });
+      }
       const scope = await customerPaymentScope(req);
-      if (!scope) return res.json([]);
-      const query = { ...scope, limit, createdAt };
+      if (!scope) return res.json(paginated ? { data: [], total: 0, page, limit, totalPages: 1, stats: { collected: 0, pending: 0, failed: 0 } } : []);
+      const query = { ...scope, limit, createdAt, offset: paginated ? (page - 1) * limit : 0, paymentDate: req.query.dateBasis === "payment" };
       if (status) query.status = String(status).toUpperCase();
       if (gateway) query.gateway = String(gateway).toLowerCase();
       if (invoiceId) {
@@ -1199,6 +1204,13 @@ router.get("/", async (req, res) => {
         query.invoiceId = requestedInvoiceId;
       }
       const payments = await prisma.$queryRaw(customerPaymentQuery(query));
+      if (paginated) {
+        const [totals] = await prisma.$queryRaw(customerPaymentQuery({ ...query, aggregate: true }));
+        const total = Number(totals?.total || 0);
+        return res.json({ data: payments.map(customerPaymentView), total, page, limit,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+          stats: { collected: Number(totals?.collected || 0), pending: Number(totals?.pending || 0), failed: Number(totals?.failed || 0) } });
+      }
       return res.json(payments.map(customerPaymentView));
     }
 

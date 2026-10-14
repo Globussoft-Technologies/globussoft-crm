@@ -13,19 +13,27 @@ describe('customer payment ownership SQL', () => {
     expect(query.sql).toContain('v.patientId = ?');
     expect(query.sql).toContain('i.tenantId = p.tenantId');
     expect(query.sql).toContain('v.tenantId = i.tenantId');
-    expect(query.values).toEqual([14, 7, 7, 200]);
+    expect(query.values).toEqual([14, 7, 7, 200, 0]);
   });
   test('uses bounded, deterministic database-side lookups with bound filters', () => {
     const from = new Date('2026-10-01T00:00:00Z');
     const query = customerPaymentQuery({ tenantId: 14, patientId: 7, invoiceId: 8, status: 'SUCCESS', gateway: 'stripe', createdAt: { gte: from }, limit: 50 });
     expect(query.sql).toContain('ORDER BY p.createdAt DESC, p.id DESC LIMIT ?');
-    expect(query.values).toEqual([14, 7, 7, 8, 'SUCCESS', 'stripe', from, 50]);
+    expect(query.values).toEqual([14, 7, 7, 8, 'SUCCESS', 'stripe', from, 50, 0]);
     expect(query.sql).not.toContain(' IN ');
     expect(query.sql).not.toContain('metadata');
   });
   test('detail lookup uses the same ownership predicate with a one-row limit', () => {
     const query = customerPaymentQuery({ tenantId: 14, patientId: 7, id: 9 });
-    expect(query.values).toEqual([14, 7, 7, 9, 1]);
+    expect(query.values).toEqual([14, 7, 7, 9, 1, 0]);
     expect(query.sql).toContain('AND p.id = ?');
+  });
+  test('aggregates the complete ownership-scoped dataset without page limits', () => {
+    const query = customerPaymentQuery({ tenantId: 14, patientId: 7, aggregate: true, limit: 10, offset: 200, paymentDate: true, createdAt: { gte: new Date('2026-10-01') } });
+    expect(query.sql).toContain('COUNT(*) AS total');
+    expect(query.sql).toContain('COALESCE(p.paidAt,p.createdAt)');
+    expect(query.sql).not.toContain('LIMIT');
+    expect(query.sql).not.toContain('OFFSET');
+    expect(query.sql).toContain('EXISTS');
   });
 });

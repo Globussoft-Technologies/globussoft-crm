@@ -3,6 +3,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
@@ -176,6 +177,8 @@ export default function Payments() {
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
+  const [customerLedger, setCustomerLedger] = useState({ total: 0, stats: { collected: 0, pending: 0, failed: 0 } });
+  const loadSequence = useRef(0);
   const [config, setConfig] = useState(null);
   const [tab, setTab] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -193,34 +196,47 @@ export default function Payments() {
     start: "",
     end: "",
   });
-  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  const [rangeStart, rangeEnd] = useMemo(() => resolveDateRange(dateFilter), [dateFilter]);
   const filterLabel = useMemo(() => {
     const o = DATE_FILTER_OPTIONS.find((x) => x.value === dateFilter.preset);
     return o ? o.label : "All time";
   }, [dateFilter.preset]);
 
-  useEffect(() => {
-    loadAll();
-    const refreshTimer = window.setInterval(() => loadAll({ silent: true }), 15000);
-    return () => window.clearInterval(refreshTimer);
-  }, []);
+  const paymentUrl = useMemo(() => {
+    if (!isCustomer) return "/api/payments";
+    const params = new URLSearchParams({ page: String(page), limit: String(pageSize), dateBasis: "payment" });
+    if (tab !== "all") params.set("gateway", tab);
+    if (rangeStart) params.set("from", rangeStart.toISOString());
+    if (rangeEnd) params.set("to", rangeEnd.toISOString());
+    return `/api/payments?${params}`;
+  }, [isCustomer, page, pageSize, tab, rangeStart, rangeEnd]);
 
-  async function loadAll({ silent = false } = {}) {
+  const loadAll = useCallback(async ({ silent = false } = {}) => {
+    const request = ++loadSequence.current;
     if (!silent) setLoading(true);
     setError("");
     try {
       const [list, cfg] = await Promise.all([
-        fetchApi("/api/payments").catch(() => []),
+        isCustomer ? fetchApi(paymentUrl) : fetchApi(paymentUrl).catch(() => []),
         isCustomer ? Promise.resolve(null) : fetchApi("/api/payments/config").catch(() => null),
       ]);
-      setPayments(Array.isArray(list) ? list : []);
+      if (request !== loadSequence.current) return;
+      setPayments(isCustomer ? (list?.data || []) : (Array.isArray(list) ? list : []));
+      if (isCustomer) setCustomerLedger({ total: list?.total || 0, stats: list?.stats || { collected: 0, pending: 0, failed: 0 } });
+      if (isCustomer && Number(list?.page) > (list?.totalPages || 1)) setPage(list?.totalPages || 1);
       setConfig(cfg);
     } catch (err) {
-      setError(err.message || "Failed to load payments");
+      if (request === loadSequence.current) setError(err.message || "Failed to load payments");
     } finally {
-      setLoading(false);
+      if (request === loadSequence.current) setLoading(false);
     }
-  }
+  }, [isCustomer, paymentUrl]);
+
+  useEffect(() => {
+    loadAll();
+    const refreshTimer = window.setInterval(() => loadAll({ silent: true }), 15000);
+    return () => { window.clearInterval(refreshTimer); loadSequence.current += 1; };
+  }, [loadAll]);
 
   // A travel BOOKING collection (advance / milestone / full-invoice link). These
   // refund through the booking's CANCELLATION flow so the retention policy
@@ -335,12 +351,13 @@ export default function Payments() {
   );
 
   const filtered = useMemo(() => {
+    if (isCustomer) return payments;
     return payments.filter((p) => {
       if (tab !== "all" && String(p.gateway || "").toLowerCase() !== tab)
         return false;
       return inDateRange(p);
     });
-  }, [payments, tab, inDateRange]);
+  }, [payments, tab, inDateRange, isCustomer]);
 
   // Reset to the first page whenever the filter changes so the user does not
   // land on an empty page after narrowing the result set.
@@ -349,16 +366,18 @@ export default function Payments() {
   }, [tab, dateFilter]);
 
   const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(filtered.length / pageSize)),
-    [filtered.length, pageSize],
+    () => Math.max(1, Math.ceil((isCustomer ? customerLedger.total : filtered.length) / pageSize)),
+    [filtered.length, pageSize, isCustomer, customerLedger.total],
   );
   const safePage = Math.min(page, totalPages);
   const paginated = useMemo(() => {
+    if (isCustomer) return payments;
     const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, safePage, pageSize]);
+  }, [filtered, safePage, pageSize, isCustomer, payments]);
 
   const stats = useMemo(() => {
+    if (isCustomer) return customerLedger.stats;
     let collected = 0,
       pending = 0,
       failed = 0;
@@ -371,7 +390,7 @@ export default function Payments() {
       else if (p.status === "FAILED") failed += 1;
     }
     return { collected, pending, failed };
-  }, [payments, inDateRange]);
+  }, [payments, inDateRange, isCustomer, customerLedger.stats]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -957,7 +976,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
               <strong style={{ color: "var(--text-primary)" }}>
                 {totalPages}
               </strong>{" "}
-              · {filtered.length.toLocaleString()} payments
+              · {(isCustomer ? customerLedger.total : filtered.length).toLocaleString()} payments
             </div>
             <div
               style={{

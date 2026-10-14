@@ -242,6 +242,29 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET / — list payments under tenant scope', () => {
+  test('customer pagination counts and aggregates all owned payments beyond the first 200', async () => {
+    prisma.patient.findFirst.mockResolvedValue({ id: 12 });
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 901, invoiceId: 78, amount: 10 }])
+      .mockResolvedValueOnce([{ total: 205n, collected: 9999, pending: 3n, failed: 2n }]);
+    const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
+      .get('/api/payments?page=21&limit=10&dateBasis=payment&from=2026-10-01&gateway=stripe');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ page: 21, limit: 10, total: 205, totalPages: 21,
+      stats: { collected: 9999, pending: 3, failed: 2 }, data: [{ id: 901 }] });
+    const [rows, totals] = prisma.$queryRaw.mock.calls.map(([sql]) => sql);
+    expect(rows.values.slice(-2)).toEqual([10, 200]);
+    expect(rows.sql).toContain('COALESCE(p.paidAt,p.createdAt)');
+    expect(totals.sql).toContain('COUNT(*)');
+    expect(totals.sql).not.toContain('LIMIT');
+    expect(totals.values).toContain('stripe');
+  });
+
+  test('returns a consistent empty customer pagination envelope and rejects invalid pages', async () => {
+    const app = makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' });
+    expect((await request(app).get('/api/payments?page=1&limit=10')).body)
+      .toMatchObject({ data: [], total: 0, page: 1, totalPages: 1, stats: { collected: 0 } });
+    expect((await request(app).get('/api/payments?page=-1')).status).toBe(400);
+  });
   test('returns an empty list when the customer has no linked patient', async () => {
     const res = await request(makeApp({ role: 'CUSTOMER', userType: 'CUSTOMER' }))
       .get('/api/payments');

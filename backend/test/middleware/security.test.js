@@ -122,6 +122,9 @@ describe('helmetMiddleware', () => {
     expect(csp.toLowerCase()).toContain("frame-ancestors 'none'");
     expect(csp.toLowerCase()).toContain("form-action 'self'");
     expect(csp.toLowerCase()).toContain("base-uri 'self'");
+    expect(csp).toContain('https://www.google.com/recaptcha/');
+    expect(csp).toContain('https://www.gstatic.com/recaptcha/');
+    expect(csp).toContain('https://recaptcha.google.com/recaptcha/');
   });
 });
 
@@ -167,6 +170,9 @@ describe('helmetStrictReportOnlyMiddleware (#917 slice 1)', () => {
     expect(reportOnly).toContain("object-src 'none'");
     expect(reportOnly).toContain("base-uri 'self'");
     expect(reportOnly).toContain("form-action 'self'");
+    expect(reportOnly).toContain('https://www.google.com/recaptcha/');
+    expect(reportOnly).toContain('https://www.gstatic.com/recaptcha/');
+    expect(reportOnly).toContain('https://recaptcha.google.com/recaptcha/');
   });
 
   test("frame-ancestors is 'none' (stricter than transitional 'self' — clickjacking lockdown)", () => {

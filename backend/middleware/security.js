@@ -78,6 +78,8 @@ const helmetMiddleware = helmet({
         "https://cdn.jsdelivr.net",
         "https://unpkg.com",
         "https://checkout.razorpay.com",
+        "https://www.google.com/recaptcha/",
+        "https://www.gstatic.com/recaptcha/",
       ],
       // 'unsafe-inline' on style-src is REQUIRED today because Vite/React
       // emit inline style attributes (style={{}}). Hash-based or nonce-based
@@ -107,6 +109,8 @@ const helmetMiddleware = helmet({
         // no CSP, which is why local "worked" (modulo Wikipedia's own rate limits).
         "https://en.wikipedia.org",
         "https://*.wikimedia.org",
+        "https://www.google.com/recaptcha/",
+        "https://www.gstatic.com/recaptcha/",
         "wss:",
       ],
       fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
@@ -120,6 +124,8 @@ const helmetMiddleware = helmet({
         "'self'",
         "https://api.razorpay.com",
         "https://checkout.razorpay.com",
+        "https://www.google.com/recaptcha/",
+        "https://recaptcha.google.com/recaptcha/",
       ],
       // object-src 'none' kills <object> / <embed> / Flash. Strict.
       objectSrc: ["'none'"],
@@ -258,6 +264,8 @@ function buildStrictCspHelmet(reportOnly) {
           "'self'",
           "https://cdn.jsdelivr.net",
           "https://checkout.razorpay.com",
+          "https://www.google.com/recaptcha/",
+          "https://www.gstatic.com/recaptcha/",
           nonceScriptSrc,
         ],
         styleSrc: ["'self'", "https://fonts.googleapis.com", nonceStyleSrc],
@@ -273,6 +281,8 @@ function buildStrictCspHelmet(reportOnly) {
           // photo fetches survive the eventual CSP_ENFORCE flip.
           "https://en.wikipedia.org",
           "https://*.wikimedia.org",
+          "https://www.google.com/recaptcha/",
+          "https://www.gstatic.com/recaptcha/",
           "wss:",
         ],
         fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
@@ -282,6 +292,8 @@ function buildStrictCspHelmet(reportOnly) {
           "'self'",
           "https://api.razorpay.com",
           "https://checkout.razorpay.com",
+          "https://www.google.com/recaptcha/",
+          "https://recaptcha.google.com/recaptcha/",
         ],
         objectSrc: ["'none'"],
         formAction: ["'self'"],

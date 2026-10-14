@@ -375,6 +375,9 @@ describe('public web form embed footer', () => {
     expect(html).toContain('var recaptcha = recaptchaEnabled');
     expect(html).toContain('function initializeRecaptcha()');
     expect(html).toContain('https://www.google.com/recaptcha/api.js?render=explicit');
+    expect(html).toContain('var initialPreviewSequence = ++previewUpdateSequence;');
+    expect(html).toContain('function waitForRecaptchaApi(attempt)');
+    expect(html).toContain('waitForRecaptchaApi(attempt + 1);');
     expect(html).toContain('window.grecaptcha.render(widget, {');
     expect(html).toContain('data-gbs-rendered');
     expect(html).toContain('window.grecaptcha.getResponse(');

@@ -335,7 +335,7 @@ test.describe('Field-Level Permissions — read enforcement on /api/contacts', (
 });
 
 test.describe('Field-Level Permissions — write enforcement on /api/contacts', () => {
-  test('USER PUT /api/contacts/:id silently drops email when canWrite=false', async ({ request }) => {
+  test('USER without update permission is denied before field-level write filtering', async ({ request }) => {
     const contact = await createContact(request, { name: 'put-write-strip' });
     const originalEmail = contact.email;
     const rule = await createRule(request, {
@@ -346,12 +346,15 @@ test.describe('Field-Level Permissions — write enforcement on /api/contacts', 
         email: `${RUN_TAG.toLowerCase()}.changed@example.test`,
         name: `${RUN_TAG} edited`,
       });
-      expect(r.status()).toBe(200);
-      const body = await r.json();
-      // email must NOT have been updated.
+      expect(r.status(), await r.text()).toBe(403);
+      const stored = await adminGet(request, `/api/contacts/${contact.id}`);
+      expect(stored.status()).toBe(200);
+      const body = await stored.json();
+      // Neither restricted nor unrestricted fields can change without the
+      // route's update grant. Authorized field filtering is covered using
+      // an isolated tenant in contact-assignees-api.spec.js.
       expect(body.email).toBe(originalEmail);
-      // name DID change.
-      expect(body.name).toContain('edited');
+      expect(body.name).toBe(contact.name);
     } finally {
       await deleteRule(request, rule.id);
       await adminDelete(request, `/api/contacts/${contact.id}`).catch(() => {});

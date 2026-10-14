@@ -155,7 +155,7 @@ test.describe('PUT /api/contacts/:id — callifiedCampaignId assignment', () => 
     expect(updated.callifiedCampaignId).toBeNull();
   });
 
-  test('regular USER can update a lead campaign (route contract)', async ({ request }) => {
+  test('regular USER without update permission cannot change a lead campaign', async ({ request }) => {
     const { token: adminTok } = await getAdmin(request);
     const { token: userTok, userId: uid } = await getUser(request);
     // USER can only access leads assigned to them (canAccessLead gate).
@@ -164,10 +164,10 @@ test.describe('PUT /api/contacts/:id — callifiedCampaignId assignment', () => 
     const putRes = await put(request, userTok, `/api/contacts/${lead.id}`, {
       callifiedCampaignId: 99,
     });
-    expect(putRes.status()).toBe(200);
+    expect(putRes.status(), await putRes.text()).toBe(403);
 
     const getRes = await get(request, adminTok, `/api/contacts/${lead.id}`);
-    expect((await getRes.json()).callifiedCampaignId).toBe(99);
+    expect((await getRes.json()).callifiedCampaignId).toBe(lead.callifiedCampaignId);
   });
 });
 

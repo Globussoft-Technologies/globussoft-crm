@@ -79,3 +79,30 @@ for (const vertical of ['generic', 'wellness']) {
     expect((await get(request, vertical)).status()).toBe(404);
   });
 }
+
+test('authorized contact updates still enforce field-level write restrictions', async ({ request }) => {
+  // Do not change the shared seeded USER role or any shared-tenant field rules.
+  const admin = await prisma.user.findUnique({ where: { id: identities.generic.id } });
+  const contact = await prisma.contact.create({ data: {
+    tenantId: admin.tenantId, name: `${tag}-field-write`, email: `${tag}-contact@example.test`,
+    status: 'Lead', assignedToId: admin.id,
+  } });
+  let rule;
+  try {
+    rule = await prisma.fieldPermission.create({ data: {
+      tenantId: admin.tenantId, role: 'ADMIN', entity: 'Contact', field: 'email',
+      action: 'WRITE', canRead: true, canWrite: false,
+    } });
+    const response = await request.put(`${BASE_URL}/api/contacts/${contact.id}`, {
+      headers: { Authorization: `Bearer ${identities.generic.token}` },
+      data: { email: `${tag}-changed@example.test`, name: `${tag}-edited` },
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    const stored = await prisma.contact.findUnique({ where: { id: contact.id } });
+    expect(stored.email).toBe(contact.email);
+    expect(stored.name).toBe(`${tag}-edited`);
+  } finally {
+    if (rule) await prisma.fieldPermission.delete({ where: { id: rule.id } });
+    await prisma.contact.delete({ where: { id: contact.id } });
+  }
+});

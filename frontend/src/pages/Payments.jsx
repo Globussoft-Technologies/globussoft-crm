@@ -3,6 +3,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
@@ -172,9 +173,12 @@ function formatPaidDate(value) {
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
+  const isCustomer = user?.role === "CUSTOMER" || user?.userType === "CUSTOMER";
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
+  const [customerLedger, setCustomerLedger] = useState({ total: 0, stats: { collected: 0, pending: 0, failed: 0 } });
+  const loadSequence = useRef(0);
   const [config, setConfig] = useState(null);
   const [tab, setTab] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -192,34 +196,47 @@ export default function Payments() {
     start: "",
     end: "",
   });
-  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  const [rangeStart, rangeEnd] = useMemo(() => resolveDateRange(dateFilter), [dateFilter]);
   const filterLabel = useMemo(() => {
     const o = DATE_FILTER_OPTIONS.find((x) => x.value === dateFilter.preset);
     return o ? o.label : "All time";
   }, [dateFilter.preset]);
 
-  useEffect(() => {
-    loadAll();
-    const refreshTimer = window.setInterval(() => loadAll({ silent: true }), 15000);
-    return () => window.clearInterval(refreshTimer);
-  }, []);
+  const paymentUrl = useMemo(() => {
+    if (!isCustomer) return "/api/payments";
+    const params = new URLSearchParams({ page: String(page), limit: String(pageSize), dateBasis: "payment" });
+    if (tab !== "all") params.set("gateway", tab);
+    if (rangeStart) params.set("from", rangeStart.toISOString());
+    if (rangeEnd) params.set("to", rangeEnd.toISOString());
+    return `/api/payments?${params}`;
+  }, [isCustomer, page, pageSize, tab, rangeStart, rangeEnd]);
 
-  async function loadAll({ silent = false } = {}) {
+  const loadAll = useCallback(async ({ silent = false } = {}) => {
+    const request = ++loadSequence.current;
     if (!silent) setLoading(true);
     setError("");
     try {
       const [list, cfg] = await Promise.all([
-        fetchApi("/api/payments").catch(() => []),
-        fetchApi("/api/payments/config").catch(() => null),
+        isCustomer ? fetchApi(paymentUrl) : fetchApi(paymentUrl).catch(() => []),
+        isCustomer ? Promise.resolve(null) : fetchApi("/api/payments/config").catch(() => null),
       ]);
-      setPayments(Array.isArray(list) ? list : []);
+      if (request !== loadSequence.current) return;
+      setPayments(isCustomer ? (list?.data || []) : (Array.isArray(list) ? list : []));
+      if (isCustomer) setCustomerLedger({ total: list?.total || 0, stats: list?.stats || { collected: 0, pending: 0, failed: 0 } });
+      if (isCustomer && Number(list?.page) > (list?.totalPages || 1)) setPage(list?.totalPages || 1);
       setConfig(cfg);
     } catch (err) {
-      setError(err.message || "Failed to load payments");
+      if (request === loadSequence.current) setError(err.message || "Failed to load payments");
     } finally {
-      setLoading(false);
+      if (request === loadSequence.current) setLoading(false);
     }
-  }
+  }, [isCustomer, paymentUrl]);
+
+  useEffect(() => {
+    loadAll();
+    const refreshTimer = window.setInterval(() => loadAll({ silent: true }), 15000);
+    return () => { window.clearInterval(refreshTimer); loadSequence.current += 1; };
+  }, [loadAll]);
 
   // A travel BOOKING collection (advance / milestone / full-invoice link). These
   // refund through the booking's CANCELLATION flow so the retention policy
@@ -334,12 +351,13 @@ export default function Payments() {
   );
 
   const filtered = useMemo(() => {
+    if (isCustomer) return payments;
     return payments.filter((p) => {
       if (tab !== "all" && String(p.gateway || "").toLowerCase() !== tab)
         return false;
       return inDateRange(p);
     });
-  }, [payments, tab, inDateRange]);
+  }, [payments, tab, inDateRange, isCustomer]);
 
   // Reset to the first page whenever the filter changes so the user does not
   // land on an empty page after narrowing the result set.
@@ -348,16 +366,18 @@ export default function Payments() {
   }, [tab, dateFilter]);
 
   const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(filtered.length / pageSize)),
-    [filtered.length, pageSize],
+    () => Math.max(1, Math.ceil((isCustomer ? customerLedger.total : filtered.length) / pageSize)),
+    [filtered.length, pageSize, isCustomer, customerLedger.total],
   );
   const safePage = Math.min(page, totalPages);
   const paginated = useMemo(() => {
+    if (isCustomer) return payments;
     const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, safePage, pageSize]);
+  }, [filtered, safePage, pageSize, isCustomer, payments]);
 
   const stats = useMemo(() => {
+    if (isCustomer) return customerLedger.stats;
     let collected = 0,
       pending = 0,
       failed = 0;
@@ -370,7 +390,7 @@ export default function Payments() {
       else if (p.status === "FAILED") failed += 1;
     }
     return { collected, pending, failed };
-  }, [payments, inDateRange]);
+  }, [payments, inDateRange, isCustomer, customerLedger.stats]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -395,7 +415,7 @@ export default function Payments() {
         <div className="finance-page__title-row" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <CreditCard className="finance-page__title-icon" size={28} style={{ color: "#635bff" }} />
           <h1 className="finance-page__title" style={{ margin: 0, fontSize: "1.75rem", fontWeight: 700 }}>
-            Payments Received
+            {isCustomer ? "Payments" : "Payments Received"}
           </h1>
         </div>
         <button
@@ -428,8 +448,9 @@ export default function Payments() {
           fontSize: "0.85rem",
         }}
       >
-        Customer payment UI is implemented at the invoice level (separate page)
-        — this dashboard is for tenants to track received payments.
+        {isCustomer
+          ? "Your invoice payments and payment status."
+          : "Customer payment UI is implemented at the invoice level (separate page) — this dashboard is for tenants to track received payments."}
       </p>
 
       {error && (
@@ -611,7 +632,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
       >
         <StatCard
           icon={<IndianRupee size={20} />}
-          label={`Total Collected (${filterLabel})`}
+          label={`${isCustomer ? "Total Paid" : "Total Collected"} (${filterLabel})`}
           value={formatMoney(stats.collected)}
           color="#10b981"
         />
@@ -708,7 +729,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                   borderBottom: "1px solid var(--border-color)",
                 }}
               >
-                <Th>Customer</Th>
+                <Th>{isCustomer ? "Payer" : "Customer"}</Th>
                 <Th>For</Th>
                 <Th>Amount</Th>
                 <Th>Gateway</Th>
@@ -758,11 +779,11 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                           No payments yet
                         </div>
                         <div style={{ fontSize: "0.82rem", maxWidth: 380 }}>
-                          Once a customer pays an invoice via Stripe or
-                          Razorpay, the transaction will appear here with
-                          status, amount, and gateway details.
+                          {isCustomer
+                            ? "Your invoice payments will appear here with their status and amount."
+                            : "Once a customer pays an invoice via Stripe or Razorpay, the transaction will appear here with status, amount, and gateway details."}
                         </div>
-                        <Link
+                        {!isCustomer && <Link
                           to="/invoices"
                           style={{
                             marginTop: "0.4rem",
@@ -780,7 +801,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                           }}
                         >
                           <Plus size={14} /> Process your first payment
-                        </Link>
+                        </Link>}
                       </div>
                     )}
                   </td>
@@ -803,7 +824,9 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                   }
                 >
                   <Td>
-                    {p.contact ? (
+                    {isCustomer ? (
+                      <span style={{ fontWeight: 600 }}>You</span>
+                    ) : p.contact ? (
                       <span style={{ fontWeight: 600 }}>
                         {p.contact.name || p.contact.email || `#${p.contactId}`}
                       </span>
@@ -953,7 +976,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
               <strong style={{ color: "var(--text-primary)" }}>
                 {totalPages}
               </strong>{" "}
-              · {filtered.length.toLocaleString()} payments
+              · {(isCustomer ? customerLedger.total : filtered.length).toLocaleString()} payments
             </div>
             <div
               style={{

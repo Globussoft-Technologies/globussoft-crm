@@ -70,12 +70,12 @@ import express from 'express';
 import request from 'supertest';
 const paymentsRouter = requireCJS('../../routes/payments');
 
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', injectUser = true } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', userType = 'STAFF', injectUser = true } = {}) {
   const app = express();
   app.use(express.json());
   if (injectUser) {
     app.use((req, _res, next) => {
-      req.user = { userId, tenantId, role };
+      req.user = { userId, tenantId, role, userType };
       next();
     });
   }
@@ -92,6 +92,13 @@ beforeEach(() => {
 });
 
 describe('GET /api/payments/stats — pin tenant-wide aggregate envelope', () => {
+  test('denies customer access to tenant-wide totals before querying', async () => {
+    const res = await request(makeApp({ role: 'USER', userType: 'CUSTOMER' }))
+      .get('/api/payments/stats');
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('RBAC_DENIED');
+    expect(prisma.payment.findMany).not.toHaveBeenCalled();
+  });
   test('1. 401 when verifyToken rejects (no Authorization header)', async () => {
     // Swap in a verifyToken that mirrors the real middleware's 401-on-
     // missing-header shape. The router captured the destructured ref at

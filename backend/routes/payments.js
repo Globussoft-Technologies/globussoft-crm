@@ -10,6 +10,7 @@ require("dotenv").config({
 });
 
 const prisma = require("../lib/prisma");
+const { customerPaymentQuery } = require("../lib/customerPaymentQuery");
 const { writeAudit } = require("../lib/audit");
 const { paymentLimiter } = require("../middleware/apiRateLimiters");
 const {
@@ -49,6 +50,45 @@ function getStripe() {
 // ── Helpers ──────────────────────────────────────────────────────
 function tenantOf(req) {
   return (req.user && req.user.tenantId) || 1;
+}
+
+function isCustomer(req) {
+  return req.user?.role === "CUSTOMER" || req.user?.userType === "CUSTOMER";
+}
+
+function requireStaffPaymentStats(req, res, next) {
+  if (isCustomer(req)) {
+    return res.status(403).json({ error: "Payment stats access denied", code: "RBAC_DENIED" });
+  }
+  next();
+}
+
+// A customer shares the tenant with staff, so resolve ownership from the
+// signed-in user's Patient record before reading any Payment rows.
+async function customerPaymentScope(req) {
+  const tenantId = tenantOf(req);
+  const patient = await prisma.patient.findFirst({
+    where: { tenantId, userId: req.user.userId },
+    select: { id: true },
+  });
+  if (!patient) return null;
+  // Standalone payments have no reliable per-patient owner in this schema.
+  // Fail closed rather than exposing a shared Contact's payment history.
+  return { tenantId, patientId: patient.id };
+}
+
+function customerPaymentView(payment) {
+  return {
+    id: payment.id,
+    invoiceId: payment.invoiceId,
+    description: payment.description,
+    amount: payment.amount,
+    currency: payment.currency,
+    gateway: payment.gateway,
+    status: payment.status,
+    paidAt: payment.paidAt,
+    createdAt: payment.createdAt,
+  };
 }
 
 function safeJsonParse(value, fallback = {}) {
@@ -1130,32 +1170,56 @@ router.get("/", async (req, res) => {
       ? Math.min(500, Math.max(1, requestedLimit))
       : 200;
 
+    const createdAt = {};
+    if (from) {
+      const fromDate = new Date(String(from));
+      if (!Number.isFinite(fromDate.getTime())) {
+        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE_RANGE" });
+      }
+      createdAt.gte = fromDate;
+    }
+    if (to) {
+      const toDate = new Date(String(to));
+      if (!Number.isFinite(toDate.getTime())) {
+        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE_RANGE" });
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(to))) toDate.setHours(23, 59, 59, 999);
+      createdAt.lte = toDate;
+    }
+
+    if (isCustomer(req)) {
+      const paginated = req.query.page !== undefined;
+      const page = Number(req.query.page);
+      if (paginated && (!Number.isSafeInteger(page) || page < 1 || page > 1000000)) {
+        return res.status(400).json({ error: "Invalid payment page", code: "INVALID_PAGE" });
+      }
+      const scope = await customerPaymentScope(req);
+      if (!scope) return res.json(paginated ? { data: [], total: 0, page, limit, totalPages: 1, stats: { collected: 0, pending: 0, failed: 0 } } : []);
+      const query = { ...scope, limit, createdAt, offset: paginated ? (page - 1) * limit : 0, paymentDate: req.query.dateBasis === "payment" };
+      if (status) query.status = String(status).toUpperCase();
+      if (gateway) query.gateway = String(gateway).toLowerCase();
+      if (invoiceId) {
+        const requestedInvoiceId = Number.parseInt(invoiceId, 10);
+        if (!Number.isInteger(requestedInvoiceId)) return res.json([]);
+        query.invoiceId = requestedInvoiceId;
+      }
+      const payments = await prisma.$queryRaw(customerPaymentQuery(query));
+      if (paginated) {
+        const [totals] = await prisma.$queryRaw(customerPaymentQuery({ ...query, aggregate: true }));
+        const total = Number(totals?.total || 0);
+        return res.json({ data: payments.map(customerPaymentView), total, page, limit,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+          stats: { collected: Number(totals?.collected || 0), pending: Number(totals?.pending || 0), failed: Number(totals?.failed || 0) } });
+      }
+      return res.json(payments.map(customerPaymentView));
+    }
+
     const where = { tenantId };
     if (status) where.status = String(status).toUpperCase();
     if (gateway) where.gateway = String(gateway).toLowerCase();
     if (invoiceId) where.invoiceId = parseInt(invoiceId);
 
-    if (from || to) {
-      const createdAt = {};
-      if (from) {
-        const fromDate = new Date(String(from));
-        if (!Number.isFinite(fromDate.getTime())) {
-          return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE_RANGE" });
-        }
-        createdAt.gte = fromDate;
-      }
-      if (to) {
-        const toDate = new Date(String(to));
-        if (!Number.isFinite(toDate.getTime())) {
-          return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE_RANGE" });
-        }
-        if (/^\d{4}-\d{2}-\d{2}$/.test(String(to))) {
-          toDate.setHours(23, 59, 59, 999);
-        }
-        createdAt.lte = toDate;
-      }
-      where.createdAt = createdAt;
-    }
+    if (from || to) where.createdAt = createdAt;
 
     const payments = await prisma.payment.findMany({
       where,
@@ -1606,7 +1670,7 @@ router.get("/config", async (req, res) => {
 //     lastPaymentAt }
 // ────────────────────────────────────────────────────────────────
 const { verifyToken } = require("../middleware/auth");
-router.get("/stats", verifyToken, async (req, res) => {
+router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => {
   try {
     // Validate optional date bounds. Independent validation so a bad
     // ?from doesn't get masked by a missing ?to and vice-versa.
@@ -1686,6 +1750,14 @@ router.get("/:id", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
     const id = parseInt(req.params.id);
+    if (isCustomer(req)) {
+      const scope = await customerPaymentScope(req);
+      if (!scope) return res.status(404).json({ error: "Payment not found" });
+      if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: "Payment not found" });
+      const [ownPayment] = await prisma.$queryRaw(customerPaymentQuery({ ...scope, id }));
+      if (!ownPayment) return res.status(404).json({ error: "Payment not found" });
+      return res.json(customerPaymentView(ownPayment));
+    }
     const payment = await prisma.payment.findFirst({ where: { id, tenantId } });
     if (!payment) return res.status(404).json({ error: "Payment not found" });
     res.json(serialize(payment));

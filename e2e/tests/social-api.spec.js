@@ -129,6 +129,7 @@ async function del(request, token, path) {
 // ── Cleanup tracking ───────────────────────────────────────────────
 const createdPostIds = new Set();
 const createdMentionIds = new Set();
+const createdContactIds = new Set();
 // Track which (tenant-scoped) account platforms we touched so afterAll can
 // soft-disconnect them. Connecting the same provider twice just upserts, so
 // this set is fine being small.
@@ -139,6 +140,9 @@ test.afterAll(async ({ request }) => {
   if (!token) return;
   for (const id of createdPostIds) {
     await del(request, token, `/api/social/posts/${id}`).catch(() => {});
+  }
+  for (const id of createdContactIds) {
+    await del(request, token, `/api/contacts/${id}`).catch(() => {});
   }
   // No DELETE /mentions/:id route — best we can do is leave them; they're
   // tagged with RUN_TAG so they're identifiable and cheap. (Comment retained
@@ -633,20 +637,24 @@ test.describe('Social API — POST /mentions/fetch/:platform (stub)', () => {
 });
 
 test.describe('Social API — POST /mentions/:id/link-contact', () => {
-  // Most tenants seeded by prisma/seed.js have at least one contact in the
-  // generic tenant. We look one up via /api/contacts; if none exists we skip.
-  async function findAnyContactId(request) {
+  // Own this fixture: a first-page/seeded contact may be deleted by another
+  // API spec running concurrently against the same shard's database.
+  async function createLinkContact(request) {
     const { token } = await getAdmin(request);
-    const res = await get(request, token, '/api/contacts?limit=1');
-    if (!res.ok()) return null;
+    const res = await post(request, token, '/api/contacts', {
+      name: `${RUN_TAG} social link fixture`,
+      email: `${RUN_TAG.toLowerCase()}@example.test`,
+      status: 'Lead',
+    });
+    expect(res.status(), `create link contact: ${await res.text()}`).toBe(201);
     const body = await res.json();
-    const list = Array.isArray(body) ? body : (body.contacts || body.data || []);
-    return list[0]?.id || null;
+    expect(Number.isInteger(body.id)).toBe(true);
+    createdContactIds.add(body.id);
+    return body.id;
   }
 
   test('200 links existing contact to existing mention', async ({ request }) => {
-    const contactId = await findAnyContactId(request);
-    if (!contactId) test.skip(true, 'no seeded contact in generic tenant');
+    const contactId = await createLinkContact(request);
 
     const fetched = await createMentionsViaStub(request, 'twitter', [`${RUN_TAG}_link1`]);
     const mentionId = fetched.mentions[0].id;
@@ -655,7 +663,7 @@ test.describe('Social API — POST /mentions/:id/link-contact', () => {
     const res = await post(request, token, `/api/social/mentions/${mentionId}/link-contact`, {
       contactId,
     });
-    expect(res.status()).toBe(200);
+    expect(res.status(), `link contact: ${await res.text()}`).toBe(200);
     const body = await res.json();
     expect(body.contactId).toBe(contactId);
     expect(body.id).toBe(mentionId);

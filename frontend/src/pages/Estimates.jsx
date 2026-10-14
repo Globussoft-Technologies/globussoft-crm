@@ -767,6 +767,7 @@ export default function Estimates() {
               tabIndex={0}
               style={{
                 overflowX: 'auto',
+                maxWidth: '100%',
                 border: '1px solid var(--border-color)',
                 borderRadius: 4,
                 background: 'var(--surface-color)',
@@ -774,19 +775,19 @@ export default function Estimates() {
             >
               <table
                 className="estimates-ledger-table"
-                style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
+                style={{ width: '100%', minWidth: 1120, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
                 role="table"
                 aria-label="Estimates table"
               >
                 <colgroup>
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '13%' }} />
                   <col style={{ width: '10%' }} />
-                  <col style={{ width: '8%' }} />
                   <col style={{ width: '12%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '24%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '32%' }} />
                 </colgroup>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
@@ -813,27 +814,27 @@ export default function Estimates() {
                       onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
                       onMouseOut={e => e.currentTarget.style.background = 'transparent'}
                     >
-                      <td style={{ padding: '1rem 0.5rem',fontSize: "0.75rem", fontWeight: '600', letterSpacing: '0.03em', overflowWrap: 'anywhere' }}>
+                      <td title={est.estimateNum} style={{ padding: '1rem 0.5rem', fontSize: '0.75rem', fontWeight: '600', letterSpacing: '0.03em' }}>
                         {est.estimateNum}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>{est.title}</td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+                      <td title={est.title} style={{ padding: '1rem 0.5rem' }}>{est.title}</td>
+                      <td title={est.contact?.name || '-'} style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {est.contact?.name || '-'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>
+                      <td style={{ padding: '1rem 0.5rem' }}>
                         {/* #256: removed the hardcoded $ IndianRupee — formatCurrency()
                             already prefixes the right symbol from tenant.defaultCurrency,
                             so wellness/India tenants no longer see '$ ₹100.00'. Mirrors
                             the same fix applied in Invoices.jsx (#242). */}
                         <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>{formatCurrency(est.totalAmount)}</span>
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>
+                      <td style={{ padding: '1rem 0.5rem' }}>
                         <StatusBadge status={est.status} />
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {est.validUntil ? formatDate(est.validUntil) : '-'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {est.lineItems?.length || 0}
                       </td>
                       <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
@@ -846,7 +847,7 @@ export default function Estimates() {
                             style={{
                               display: 'flex', alignItems: 'center', gap: '0.3rem',
                               background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
-                              padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
+                              padding: '0.4rem 0.5rem', fontSize: '0.8rem', borderRadius: '6px',
                               cursor: 'pointer',
                             }}
                             aria-label={`Download PDF for estimate ${est.estimateNum}`}
@@ -860,7 +861,7 @@ export default function Estimates() {
                             style={{
                               display: 'flex', alignItems: 'center', gap: '0.3rem',
                               background: 'rgba(16,185,129,0.12)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
-                              padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
+                              padding: '0.4rem 0.5rem', fontSize: '0.8rem', borderRadius: '6px',
                               cursor: est.contact?.email ? 'pointer' : 'not-allowed',
                               opacity: est.contact?.email ? 1 : 0.5,
                             }}
@@ -874,7 +875,7 @@ export default function Estimates() {
                               style={{
                                 display: 'flex', alignItems: 'center', gap: '0.3rem',
                                 background: 'rgba(168,85,247,0.15)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)',
-                                padding: '0.4rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px',
+                                padding: '0.4rem 0.5rem', fontSize: '0.8rem', borderRadius: '6px',
                                 cursor: 'pointer',
                               }}
                               aria-label={`Convert estimate ${est.estimateNum} to invoice`}
@@ -888,7 +889,7 @@ export default function Estimates() {
                               background: 'transparent', border: '1px solid rgba(239,68,68,0.3)',
                               color: 'var(--text-secondary)', cursor: 'pointer',
                               display: 'flex', alignItems: 'center', gap: '0.3rem',
-                              fontSize: '0.8rem', padding: '0.4rem 0.75rem', borderRadius: '6px',
+                              fontSize: '0.8rem', padding: '0.4rem 0.5rem', borderRadius: '6px',
                             }}
                             onMouseOver={e => e.currentTarget.style.color = '#ef4444'}
                             onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'}
@@ -941,6 +942,16 @@ export default function Estimates() {
         </div>
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .estimates-ledger-table th,
+        .estimates-ledger-table td {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .estimates-ledger-table td:last-child button {
+          flex-shrink: 0;
+          white-space: nowrap;
+        }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.
            Same pattern as #478 (Tickets) and #480 (Tasks). minmax(0, ...) on the
            desktop grid prevents form-field min-content from forcing the column

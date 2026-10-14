@@ -1254,7 +1254,7 @@ export default function Inbox() {
                   <div ref={inboxActionsRef} style={{ position: "relative" }}>
                     <button type="button" aria-label="More inbox actions" title="More" onClick={() => setShowInboxActions((visible) => !visible)} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><MoreVertical size={17} /></button>
                     {showInboxActions && (
-                      <div role="menu" style={{ position: "absolute", right: 0, top: "calc(100% + 0.25rem)", zIndex: 5, minWidth: 190, padding: "0.35rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--modal-bg)", boxShadow: "var(--glass-shadow)" }}>
+                      <div className="inbox-actions-menu" role="menu" style={{ position: "absolute", right: 0, top: "calc(100% + 0.25rem)", zIndex: 5, minWidth: 190, padding: "0.35rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--modal-bg)", boxShadow: "var(--glass-shadow)" }}>
                         <button type="button" role="menuitem" onClick={markAllInboxEmailsRead} disabled={markingAllRead} style={{ display: "block", width: "100%", padding: "0.55rem 0.65rem", border: "none", background: "transparent", color: "var(--text-primary)", textAlign: "left", cursor: "pointer" }}>Mark all as read</button>
                         <button type="button" role="menuitem" onClick={markAllInboxEmailsUnread} disabled={markingAllRead} style={{ display: "block", width: "100%", padding: "0.55rem 0.65rem", border: "none", background: "transparent", color: "var(--text-primary)", textAlign: "left", cursor: "pointer" }}>Mark all as unread</button>
                       </div>

@@ -310,7 +310,12 @@ export const fetchApi = async (url, options = {}) => {
       userMsg = 'AI setup is needed before new brochures can power trip recommendations. Your existing library is still available. Ask an administrator to add an AI provider in Settings.';
     }
 
-    if (!silent && _globalNotify) {
+    // The authenticated layout shows the renewal gate for subscription 402s.
+    // Polling pages can otherwise stack the same error toast on every request.
+    const isSubscriptionError = response.status === 402 &&
+      (serverMsg === 'NO_ACTIVE_SUBSCRIPTION' || serverMsg === 'TRIAL_EXPIRED' ||
+        errorCode === 'NO_ACTIVE_SUBSCRIPTION' || errorCode === 'TRIAL_EXPIRED');
+    if (!silent && _globalNotify && !isSubscriptionError) {
       // Append the error code in the toast for 5xx so a dev (or a user
       // screenshotting for support) can see it without opening DevTools —
       // it's a stable enum string, safe to show, and short enough to not

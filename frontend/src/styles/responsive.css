@@ -29,6 +29,55 @@
   width: calc(100% - var(--calendar-time-column-width));
 }
 
+/* Role permission details stay unobtrusive with a pointer and open by tap on touch devices. */
+.permission-touch-button,
+.permission-touch-hint,
+.permission-touch-detail {
+  display: none;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .permission-touch-hint {
+    display: block;
+    margin: 0.5rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+  }
+
+  .permission-touch-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 1rem;
+    cursor: pointer;
+  }
+
+  .permission-touch-button[aria-expanded='true'] {
+    background: var(--subtle-bg-3);
+    color: var(--text-primary);
+  }
+
+  .permission-touch-detail {
+    display: block;
+    margin: 0.2rem 0 0.45rem 1.45rem;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--subtle-bg-3);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+}
+
 @media (max-width: 600px) {
   .zapier-page {
     box-sizing: border-box;
@@ -470,6 +519,33 @@
   .app-main > main h3 {
     font-size: clamp(1rem, calc(0.85rem + 0.5vw), 1.25rem) !important;
     line-height: 1.35;
+  }
+}
+
+/* The compact laptop drawer runs through 1439px. Grow content spacing
+   gradually across the same range so 1024px screens do not jump straight
+   from tablet spacing to full desktop sizing. */
+@media (min-width: 900px) and (max-width: 1439px) {
+  .app-main > main {
+    --crm-laptop-padding: clamp(1rem, 2.2vw, 2rem);
+  }
+
+  .app-main > main > :is([style*="2rem"], [style*="24px"], [style*="32px"]):not([style*="padding: 0"]):not([style*="padding:0"]),
+  .app-main > main :is(.card, .glass):is([style*="1.5rem"], [style*="2rem"], [style*="24px"], [style*="28px"], [style*="32px"]):not([style*="padding: 0"]):not([style*="padding:0"]) {
+    padding: var(--crm-laptop-padding) !important;
+  }
+
+  .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, .input-field:not(.crm-search-input)) {
+    padding: clamp(0.5rem, 0.6vw, 0.65rem) clamp(0.75rem, 1vw, 1rem) !important;
+  }
+
+  .app-main > main table :is(th, td):not([style*="padding: 0"]) {
+    padding: clamp(0.5rem, 0.65vw, 0.75rem) clamp(0.625rem, 0.8vw, 0.75rem) !important;
+  }
+
+  .app-main > main :is(button, a.btn-primary, a.btn-secondary, a.btn-danger) > svg {
+    width: clamp(16px, 1.25vw, 18px) !important;
+    height: clamp(16px, 1.25vw, 18px) !important;
   }
 }
 
@@ -2376,6 +2452,13 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 
   .inbox-toolbar--generic {
     gap: 0.55rem !important;
+  }
+
+  .inbox-actions-menu {
+    left: 0 !important;
+    right: auto !important;
+    box-sizing: border-box;
+    max-width: calc(100vw - 2rem);
   }
 
   .inbox-search--generic {

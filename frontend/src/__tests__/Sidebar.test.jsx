@@ -705,6 +705,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(document.querySelector('a[href="/leads"]')).toBeNull();
     });
 
+    it('shows travel Reports inside Administration and opens that group on the reports route', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', path: '/travel/reports' });
+      const administration = screen.getByRole('button', { name: 'Administration' });
+      expect(administration).toHaveAttribute('aria-expanded', 'true');
+      const reportsLink = document.querySelector('#travel-nav-administration a[href="/travel/reports"]');
+      expect(reportsLink).toBeTruthy();
+      expect(reportsLink).toHaveTextContent('Reports');
+    });
+
     it('supports collapsing the travel sidebar chrome', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       const sidebar = document.querySelector('#app-sidebar');

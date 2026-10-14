@@ -7196,11 +7196,34 @@ function RoutedWebFormsContent({ scope }) {
   return <WebFormsContent scope={scope} formLocation={formLocation} navigateForm={navigateForm} />;
 }
 
+function setFormDragImage(event, formName) {
+  const preview = document.createElement("div");
+  preview.className = "wf-form-drag-preview";
+  preview.setAttribute("aria-hidden", "true");
+  preview.innerHTML = '<span class="wf-form-drag-preview-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg></span><span class="wf-form-drag-preview-copy"><small>Moving form</small><strong></strong></span>';
+  preview.querySelector("strong").textContent = formName;
+  document.body.appendChild(preview);
+  event.dataTransfer.setDragImage(preview, 20, 20);
+  window.setTimeout(() => preview.remove(), 0);
+}
+
 function UnsavedChangesGuard({ active, notifyRef, onDiscard, bypassRef }) {
   const { navigator } = useContext(UNSAFE_NavigationContext);
+  const activeRef = useRef(active);
+  const onDiscardRef = useRef(onDiscard);
+  activeRef.current = active;
+  onDiscardRef.current = onDiscard;
   useEffect(() => {
-    if (!active) return undefined;
-    return installFormNavigationGuard({ navigator, bypassRef, onDiscard, confirm: async () => {
+    return installFormNavigationGuard({ navigator, bypassRef, isActive: () => activeRef.current, onDiscard: () => onDiscardRef.current(), confirmSignOut: () => notifyRef.current.confirm({
+      title: "Unsaved changes",
+      message: "You have unsaved changes in this form. Discard them and sign out?",
+      confirmText: "Discard & sign out",
+      cancelText: "Continue editing",
+      confirmValue: true,
+      cancelValue: false,
+      dismissValue: false,
+      destructive: true,
+    }), confirm: async () => {
       const discard = await notifyRef.current.confirm({
         title: "Leave this form?",
         message: "You have unsaved changes. Leaving now will discard them.",
@@ -7212,7 +7235,7 @@ function UnsavedChangesGuard({ active, notifyRef, onDiscard, bypassRef }) {
       });
       return discard;
     } });
-  }, [active, bypassRef, navigator, notifyRef, onDiscard]);
+  }, [bypassRef, navigator, notifyRef]);
 
   return null;
 }
@@ -13589,6 +13612,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         }
         .wf-library-card[draggable="true"] { cursor: grab; }
         .wf-library-card.dragging { opacity: 0.55; cursor: grabbing; }
+        .wf-form-drag-preview { position: fixed; top: 0; left: 0; z-index: 9999; display: flex; align-items: center; gap: 10px; width: 240px; max-width: 240px; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--surface-color); color: var(--text-primary); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); pointer-events: none; }
+        .wf-form-drag-preview-icon { display: grid; flex: 0 0 34px; width: 34px; height: 34px; place-items: center; border-radius: 9px; background: rgba(91, 107, 255, 0.14); color: #5b6bff; }
+        .wf-form-drag-preview-copy { display: grid; min-width: 0; gap: 2px; }
+        .wf-form-drag-preview-copy small { color: var(--text-secondary); font-size: 0.7rem; line-height: 1.2; }
+        .wf-form-drag-preview-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; line-height: 1.2; }
         .wf-library-card:hover,
         .wf-library-card.active {
           border-color: rgba(91, 107, 255, 0.72);
@@ -20150,7 +20178,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           ) : (
             <div className="wf-library-grid">
               {displayedForms.map((form) => (
-                <article key={form.id} className={`wf-library-card${String(selectedForm?.id) === String(form.id) ? " active" : ""}${openFormMenuId === form.id ? " menu-open" : ""}${draggingFormId === form.id ? " dragging" : ""}`} draggable={canViewFormLeads && folders.length > 0 && movingFormId !== form.id} onDragStart={(event) => { event.dataTransfer.setData("application/x-webform-id", String(form.id)); event.dataTransfer.effectAllowed = "move"; setDraggingFormId(form.id); setFolderListOpen(true); setOpenFormMenuId(null); }} onDragEnd={() => { setDraggingFormId(null); setDropFolderId(null); setFolderListOpen(false); }}>
+                <article key={form.id} className={`wf-library-card${String(selectedForm?.id) === String(form.id) ? " active" : ""}${openFormMenuId === form.id ? " menu-open" : ""}${draggingFormId === form.id ? " dragging" : ""}`} draggable={canViewFormLeads && folders.length > 0 && movingFormId !== form.id} onDragStart={(event) => { event.dataTransfer.setData("application/x-webform-id", String(form.id)); event.dataTransfer.effectAllowed = "move"; setFormDragImage(event, form.name); setDraggingFormId(form.id); setFolderListOpen(true); setOpenFormMenuId(null); }} onDragEnd={() => { setDraggingFormId(null); setDropFolderId(null); setFolderListOpen(false); }}>
                   <div className="wf-library-card-top">
                     <div>
                       <h4>{form.name}</h4>

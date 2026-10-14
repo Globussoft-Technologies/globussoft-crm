@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Layout from '../components/Layout';
+import { installFormNavigationGuard } from '../utils/formNavigationGuard';
 import { AuthContext, ThemeContext } from '../App';
 
 // Stub the heavy children — we care about Layout's wiring
@@ -375,6 +376,42 @@ describe('Layout', () => {
       (c) => c[0] === '/api/auth/logout',
     );
     expect(logoutCalls).toHaveLength(0);
+  });
+
+  it('keeps the user signed in when they continue editing an unsaved form', async () => {
+    const setUser = vi.fn();
+    const setToken = vi.fn();
+    const discard = vi.fn();
+    const confirmFormExit = vi.fn().mockResolvedValue(false);
+    const cleanupGuard = installFormNavigationGuard({
+      navigator: { push: vi.fn(), replace: vi.fn(), go: vi.fn() },
+      confirm: vi.fn(),
+      confirmSignOut: confirmFormExit,
+      onDiscard: discard,
+      bypassRef: { current: false },
+      targetWindow: { history: { state: { idx: 0 } }, addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    });
+    try {
+      render(
+        <MemoryRouter>
+          <AuthContext.Provider value={{
+            user: { name: 'Alice', role: 'USER' }, setUser, token: 't-abc', setToken,
+            tenant: { vertical: 'generic' },
+          }}>
+            <Routes><Route path="/" element={<Layout />}><Route index element={<div>FORM</div>} /></Route></Routes>
+          </AuthContext.Provider>
+        </MemoryRouter>,
+      );
+      fireEvent.click(screen.getByLabelText(/Log out/i));
+      await waitFor(() => expect(confirmFormExit).toHaveBeenCalledOnce());
+      expect(notifyMock.confirm).not.toHaveBeenCalled();
+      expect(discard).not.toHaveBeenCalled();
+      expect(fetchApiMock).not.toHaveBeenCalledWith('/api/auth/logout', expect.anything());
+      expect(setToken).not.toHaveBeenCalled();
+      expect(setUser).not.toHaveBeenCalled();
+    } finally {
+      cleanupGuard();
+    }
   });
 
   // #862 -- theme toggle button is gated on ThemeContext.toggleTheme. With

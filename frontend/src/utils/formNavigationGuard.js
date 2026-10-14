@@ -1,7 +1,22 @@
 // Guard React Router's navigator, not the browser's push/replace methods.
 // POPs are reversed by their router index while confirmation is pending;
 // replaying the original delta preserves both backward and forward entries.
-export function installFormNavigationGuard({ navigator, confirm, onDiscard, bypassRef, targetWindow = window }) {
+const activeFormGuards = new Set();
+
+// A form-specific sign-out dialog replaces Layout's normal confirmation when
+// an editor has unsaved changes. null means no form guard is active.
+export async function confirmActiveFormExit() {
+  if (activeFormGuards.size === 0) return null;
+  let handled = false;
+  for (const confirmExit of activeFormGuards) {
+    const result = await confirmExit();
+    if (result === false) return false;
+    if (result === true) handled = true;
+  }
+  return handled ? true : null;
+}
+
+export function installFormNavigationGuard({ navigator, confirm, confirmSignOut = confirm, onDiscard, bypassRef, isActive = () => true, targetWindow = window }) {
   const originals = { push: navigator.push, replace: navigator.replace, go: navigator.go };
   let pending = false;
   let disposed = false;
@@ -9,6 +24,18 @@ export function installFormNavigationGuard({ navigator, confirm, onDiscard, bypa
   let restoring = false;
   let replaying = false;
   let afterRestore = null;
+  const confirmExit = async () => {
+    if (!isActive()) return null;
+    if (pending || disposed) return false;
+    pending = true;
+    try {
+      if (!(await confirmSignOut()) || disposed) return false;
+      onDiscard?.();
+      bypassRef.current = true;
+      return true;
+    } finally { pending = false; }
+  };
+  activeFormGuards.add(confirmExit);
   const ask = async (action) => {
     if (pending) return;
     pending = true;
@@ -21,7 +48,7 @@ export function installFormNavigationGuard({ navigator, confirm, onDiscard, bypa
   };
   for (const method of ["push", "replace", "go"]) {
     navigator[method] = (...args) => {
-      if (bypassRef.current) return originals[method].apply(navigator, args);
+      if (bypassRef.current || !isActive()) return originals[method].apply(navigator, args);
       return ask(() => {
         if (method === "go") replaying = true;
         originals[method].apply(navigator, args);
@@ -31,6 +58,10 @@ export function installFormNavigationGuard({ navigator, confirm, onDiscard, bypa
   }
   const onPop = (event) => {
     const nextIndex = event.state?.idx;
+    if (!isActive() && !restoring) {
+      index = nextIndex;
+      return;
+    }
     if (restoring) {
       event.stopImmediatePropagation();
       restoring = false;
@@ -58,7 +89,7 @@ export function installFormNavigationGuard({ navigator, confirm, onDiscard, bypa
   };
   targetWindow.addEventListener("popstate", onPop, true);
   const onClick = (event) => {
-    if (bypassRef.current || event.defaultPrevented || event.button !== 0
+    if (bypassRef.current || !isActive() || event.defaultPrevented || event.button !== 0
       || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const link = event.target.closest?.("a");
     if (!link || link.target === "_blank" || link.hasAttribute("download")) return;
@@ -76,6 +107,7 @@ export function installFormNavigationGuard({ navigator, confirm, onDiscard, bypa
   targetWindow.document?.addEventListener("click", onClick, true);
   return () => {
     disposed = true;
+    activeFormGuards.delete(confirmExit);
     for (const method of Object.keys(originals)) navigator[method] = originals[method];
     targetWindow.removeEventListener("popstate", onPop, true);
     targetWindow.document?.removeEventListener("click", onClick, true);

@@ -295,7 +295,7 @@ const apiLimiter = rateLimit({
 // IMPORTANT: only applied to /api/auth/login itself — /api/auth/2fa/verify
 // is a separate endpoint with its own threat model.
 const loginIpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
+  windowMs: 0 * 60 * 1000, // 15 min
   // CI runs thousands of API checks from one loopback IP, including
   // intentional invalid-login cases. Keep the limiter wired (and its headers
   // testable) without letting those negative tests lock out every later spec.

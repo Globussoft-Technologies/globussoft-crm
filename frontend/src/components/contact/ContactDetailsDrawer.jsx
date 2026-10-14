@@ -564,13 +564,13 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                           })}
                         </div>
                       ) : field.owner ? (
-                        <InlineField
+                        onOwnerChange ? <InlineField
                           value={contact?.assignedToId ?? ''}
                           display={field.value || <span className="cd-empty-value">Unassigned</span>}
                           type="select"
                           options={staff.map((user) => ({ value: user.id, label: user.name || user.email }))}
                           onSave={(value) => onOwnerChange?.(value)}
-                        />
+                        /> : displayValue(field.value || 'Unassigned')
                       ) : field.readOnly ? (
                         displayValue(field.value)
                       ) : (

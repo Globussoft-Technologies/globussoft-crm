@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Lock, CreditCard, AlertTriangle, LogOut } from 'lucide-react';
-import { AuthContext } from '../App';
+import { AuthContext } from '../appContexts';
 import { fetchApi } from '../utils/api';
 
 // Hard subscription paywall.
@@ -78,16 +78,10 @@ export default function SubscriptionGate({ children }) {
     }
   }, [token, user]);
 
+  // Re-check when the signed-in user or route changes.
   useEffect(() => {
     refresh();
-  }, [refresh]);
-
-  // Re-check on route change so navigating to /pricing → paying → coming
-  // back to /dashboard fires a fresh status fetch and lifts the gate.
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+  }, [refresh, location.pathname]);
 
   const handleLogout = async () => {
     try { await fetchApi('/api/auth/logout', { method: 'POST', silent: true }); } catch { /* keep going */ }
@@ -108,10 +102,10 @@ export default function SubscriptionGate({ children }) {
   if (!token || !user) return children;
   if (isPathAllowed(location.pathname)) return children;
 
-  // Wait for the first status fetch before deciding. A fast-rendered gate
-  // overlay that flashes for one frame then disappears is worse UX than
-  // a brief delay before any decision.
-  if (!loaded || !status) return children;
+  // Do not mount protected pages until the access check completes: their
+  // effects would otherwise retry blocked APIs while the gate is loading.
+  if (!loaded) return <div role="status" style={{ padding: 24 }}>Checking subscription...</div>;
+  if (!status) return children;
 
   const subStatus = status.subscriptionStatus;
   const days = typeof status.daysRemaining === 'number' ? status.daysRemaining : null;

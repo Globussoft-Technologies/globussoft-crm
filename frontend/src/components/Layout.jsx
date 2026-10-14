@@ -30,6 +30,7 @@ import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
+import { confirmActiveFormExit } from "../utils/formNavigationGuard";
 import { useProductTour } from "../tours/useProductTour";
 
 // #555 (HI-06) — Option C: lock to single tenant per session. The chip is
@@ -291,15 +292,18 @@ const Layout = () => {
   }, [tenant?.name]);
 
   const handleLogout = async () => {
-    const confirmed = await notify.confirm({
-      title: "Sign out?",
-      message: "Are you sure you want to sign out of your account?",
-      confirmText: "Sign out",
-      cancelText: "Cancel",
-      destructive: true,
-    });
-
-    if (!confirmed) return;
+    const formExit = await confirmActiveFormExit();
+    if (formExit === false) return;
+    if (formExit === null) {
+      const confirmed = await notify.confirm({
+        title: "Sign out?",
+        message: "Are you sure you want to sign out of your account?",
+        confirmText: "Sign out",
+        cancelText: "Cancel",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
 
     // #528 (CRIT-03 fix): revoke the JWT SERVER-SIDE before clearing local
     // state. POST /api/auth/logout reads req.user.jti and adds it to the

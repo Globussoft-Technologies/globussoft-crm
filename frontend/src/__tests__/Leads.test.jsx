@@ -2628,7 +2628,7 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
         return Promise.resolve(travelAgentLeads);
       }
-      if (url === '/api/staff' && !opts) return Promise.resolve(travelAgentStaff);
+      if (url === '/api/contacts/assignees' && !opts) return Promise.resolve(travelAgentStaff.filter(s => s.role !== 'ADMIN'));
       return travelFetchMock(url, opts);
     });
 
@@ -2636,6 +2636,7 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     await waitFor(() => expect(screen.getByText('Lily')).toBeInTheDocument());
 
     const assignSelect = screen.getByLabelText(/Assign Lily to staff/i);
+    await waitFor(() => expect(assignSelect).toHaveValue('7'));
     const optionTexts = Array.from(assignSelect.querySelectorAll('option')).map((option) => option.textContent || '');
     expect(optionTexts.some((text) => /Yasin Admin/i.test(text))).toBe(false);
 
@@ -2647,7 +2648,27 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
       );
       expect(putCall).toBeDefined();
       expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
+      expect(assignSelect).toHaveValue('8');
+      expect(notifySuccess).toHaveBeenCalledWith('Assigned to Sahil Agent');
     });
+  });
+
+  it('shows the owner as text for a travel coordinator with read permission only', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve([{ id: 50, name: 'Lily', email: 'lily@parent.com', subBrand: 'tmc', assignedToId: 7, assignedTo: { id: 7, name: 'TMC Operator' }, createdAt: '2026-07-17T10:00:00Z' }]);
+      }
+      return travelFetchMock(url, opts);
+    });
+    renderLeads({
+      tenant: { id: 3, vertical: 'travel', name: 'Travel Co' },
+      user: { id: 7, role: 'USER', permissions: ['contacts.read', 'leads.read'] },
+    });
+
+    await screen.findByText('Lily');
+    expect(screen.getByText('TMC Operator')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Assign Lily to staff/i)).not.toBeInTheDocument();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/contacts/assignees');
   });
 
   it('shows TMC paid-by-contact amount for a lead with no itinerary advancePaidAmount', async () => {

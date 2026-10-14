@@ -11,6 +11,7 @@ import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate, formatDateTime } from '../utils/date';
 import { AuthContext } from '../appContexts';
+import { usePermissions } from '../hooks/usePermissions';
 import { PROFILE_TABS, SOCIAL_NETWORKS, buildOverviewSections, normalizeSocialUrl } from '../components/contact/contactProfileConfig';
 import CustomizeFieldsDrawer, { ALL_OVERVIEW_FIELDS, DEFAULT_VISIBLE_FIELD_KEYS, normalizeVisibleKeys } from '../components/contact/CustomizeFieldsDrawer';
 import { assignOwner, fetchActivities, fetchStaff, patchContact, postActivity } from '../components/contact/contactActions';
@@ -215,9 +216,12 @@ export default function ContactDetail() {
   const location = useLocation();
   const navigate = useNavigate();
   const notify = useNotify();
-  const { tenant } = useContext(AuthContext);
+  const { tenant, user } = useContext(AuthContext);
   const isWellness = tenant?.vertical === 'wellness';
   const isTravel = tenant?.vertical === 'travel';
+  const { hasPermission, isReady: permissionsReady } = usePermissions();
+  const canAssignOwner = permissionsReady &&
+    (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   const isGeneric = !isWellness && !isTravel;
   const lifecycleSegments = isWellness ? WELLNESS_PIPELINE_SEGS : isTravel ? TRAVEL_PIPELINE_SEGS : PIPELINE_SEGS;
   const defaultListPath = location.pathname.startsWith('/leads/') ? '/leads' : '/contacts';
@@ -332,8 +336,16 @@ export default function ContactDetail() {
     setSeqPicker(false);
     setConfirmAction(null);
     loadContact();
-    fetchStaff().then(setStaff);
   }, [id, location.search, loadContact]);
+
+  useEffect(() => {
+    let current = true;
+    const path = isTravel && user?.role !== 'ADMIN' && canAssignOwner
+      ? '/api/contacts/assignees'
+      : '/api/staff?fields=summary';
+    fetchStaff(path).then((rows) => { if (current) setStaff(rows); });
+    return () => { current = false; };
+  }, [isTravel, user?.role, canAssignOwner]);
 
   const overviewContactId = contact?.id;
   const overviewActivityRefreshId = contact?.activities?.[0]?.id;
@@ -425,6 +437,7 @@ export default function ContactDetail() {
   };
 
   const changeOwner = async (userId) => {
+    if (!canAssignOwner) return;
     const prev = contact.assignedToId ?? null;
     const next = userId === '' ? null : parseInt(userId, 10);
     setContact({ ...contact, assignedToId: next });
@@ -963,6 +976,7 @@ export default function ContactDetail() {
 
   const renderField = (f) => {
     if (f.key === '__owner') {
+      if (!canAssignOwner) return ownerName || 'Unassigned';
       return (
         <select className="cp-input" value={contact.assignedToId ?? ''} onChange={(e) => changeOwner(e.target.value)} aria-label={isWellness ? 'Treatment owner' : 'Sales owner'}>
           <option value="">Unassigned</option>
@@ -1029,7 +1043,7 @@ export default function ContactDetail() {
     }
     if (key === 'owner') {
       return cell(
-        <select className="cp-input" value={contact.assignedToId ?? ''} onChange={(e) => changeOwner(e.target.value)} aria-label={isWellness ? 'Treatment owner' : 'Sales owner'}>
+        !canAssignOwner ? (ownerName || 'Unassigned') : <select className="cp-input" value={contact.assignedToId ?? ''} onChange={(e) => changeOwner(e.target.value)} aria-label={isWellness ? 'Treatment owner' : 'Sales owner'}>
           <option value="">Unassigned</option>
           {staff.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
         </select>,
@@ -1630,7 +1644,7 @@ export default function ContactDetail() {
             </div>
           )}
 
-          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={changeOwner} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
+          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
           {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel || isWellness} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} refreshKey={activitiesRefreshKey} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}

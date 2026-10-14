@@ -454,10 +454,7 @@ function PermissionSeverityBadge({ severity, module, action, onClick }) {
   );
 }
 
-// One-line description per action verb, surfaced as the hover tooltip on
-// each checkbox. Generic across modules — "read on patients" and "read on
-// deals" both grant the same shape of access, so a single canonical
-// description keeps the modal compact instead of N×6 per-cell strings.
+// Action effects are combined with the module's description in each tooltip.
 const ACTION_DESCRIPTIONS = {
   ai_call: 'Start a Callified AI call from an appointment.',
   manual_call: 'Start a Callified browser call and speak to the patient.',
@@ -469,6 +466,13 @@ const ACTION_DESCRIPTIONS = {
   export: 'Download or export module data to CSV / PDF / Excel.',
   manage: 'Full administrative control — settings, bulk ops, and destructive admin actions.',
 };
+
+function getPermissionTooltip(module, action, vertical, pages = []) {
+  const scope = getModuleDescription(module, vertical);
+  const effect = ACTION_DESCRIPTIONS[action] || `Perform ${action} actions in this module.`;
+  const pageImpact = pages.length ? ` Required for: ${pages.map((page) => page.label).join(', ')}.` : '';
+  return `${module}.${action}: ${effect}${scope ? ` ${scope}` : ''}${pageImpact}`;
+}
 
 const ACTION_LABELS = {
   ai_call: 'AI call',
@@ -1820,6 +1824,9 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
   // Filters DON'T touch `selected` — toggles on a search hit preserve
   // grants on filtered-out modules unchanged.
   const [searchQuery, setSearchQuery] = useState('');
+  const [reviewFilter, setReviewFilter] = useState('all');
+  const [collapsedDomains, setCollapsedDomains] = useState(new Set());
+  const [touchDetails, setTouchDetails] = useState(null);
   // SPEC §6a — when the admin clicks Save and the selection adds NET-
   // NEW sensitive grants, we stash them here and surface a confirmation
   // modal. Save only fires when the admin clicks Confirm. Cancel returns
@@ -1856,18 +1863,17 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
     };
   }, []);
 
-  // Build a `module → Set<pageLabel>` map by walking each catalog page's
-  // requiredPermissions. A page that requires `appointments.read` shows
-  // up under the "appointments" module hint — across ALL its actions —
-  // because granting that module's read action is what unlocks it.
-  const pagesByModule = useMemo(() => {
+  // A page depends on exact module.action grants. Keep the whole requirement
+  // list so the editor can distinguish access already granted from partial access.
+  const pagesByPermission = useMemo(() => {
     const map = new Map();
     for (const page of pageCatalog) {
       const reqs = Array.isArray(page?.requiredPermissions) ? page.requiredPermissions : [];
-      for (const { module } of reqs) {
-        if (!module) continue;
-        if (!map.has(module)) map.set(module, new Set());
-        map.get(module).add(page.label);
+      for (const { module, action } of reqs) {
+        if (!module || !action) continue;
+        const key = `${module}.${action}`;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push({ label: page.label, path: page.path, requiredPermissions: reqs });
       }
     }
     return map;
@@ -1885,13 +1891,15 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
         // Vertical-aware description — same source the tooltip + body
         // text below read from, so search hits stay consistent.
         getModuleDescription(module, vertical),
-        Array.from(pagesByModule.get(module) || []).join(' '),
+        (actions || []).flatMap((action) =>
+          (pagesByPermission.get(`${module}.${action}`) || []).map((page) => `${page.label} ${page.path}`)
+        ).join(' '),
         (actions || []).join(' '),
       ];
       map.set(module, parts.join(' ').toLowerCase());
     }
     return map;
-  }, [matrix, pagesByModule, vertical]);
+  }, [matrix, pagesByPermission, vertical]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const matchesQuery = (module) => {
@@ -1899,6 +1907,14 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
     const corpus = searchCorpusByModule.get(module);
     return Boolean(corpus && corpus.includes(normalizedQuery));
   };
+  const matchesReviewFilter = ({ module, actions }) => {
+    const keys = (actions || []).map((action) => `${module}.${action}`);
+    if (reviewFilter === 'selected') return keys.some((key) => selected.has(key));
+    if (reviewFilter === 'changed') return keys.some((key) => selected.has(key) !== initial.has(key));
+    return true;
+  };
+  const changedCount = [...new Set([...initial, ...selected])]
+    .filter((key) => selected.has(key) !== initial.has(key)).length;
 
   const notify = useNotify();
 
@@ -2097,6 +2113,41 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
             </button>
           )}
         </div>
+        <div role="group" aria-label="Review permissions" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.65rem' }}>
+          {[
+            ['all', 'All'],
+            ['selected', `Selected (${selected.size})`],
+            ['changed', `Changed (${changedCount})`],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={reviewFilter === value}
+              onClick={() => setReviewFilter(value)}
+              className={reviewFilter === value ? 'btn-primary' : 'btn-secondary'}
+              style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
+            >
+              {label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setCollapsedDomains(new Set(domainList.map((item) => item.domain)))}
+            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', marginLeft: 'auto' }}
+          >
+            Collapse all
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setCollapsedDomains(new Set())}
+            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
+          >
+            Expand all
+          </button>
+        </div>
+        <p className="permission-touch-hint">Tap ⓘ beside a permission to see what it does.</p>
       </div>
 
       <div
@@ -2120,14 +2171,14 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                 // Search filter — drop modules that don't match the
                 // current query. Empty query → matchesQuery returns
                 // true for all, so this no-ops.
-                .filter((m) => matchesQuery(m.module));
+                .filter((m) => matchesQuery(m.module) && matchesReviewFilter(m));
               items.forEach((m) => seen.add(m.module));
               return { domain, items };
             })
             .filter((s) => s.items.length > 0);
           const orphans = matrix
             .filter((m) => !seen.has(m.module))
-            .filter((m) => matchesQuery(m.module));
+            .filter((m) => matchesQuery(m.module) && matchesReviewFilter(m));
           if (orphans.length > 0) sections.push({ domain: 'Other', items: orphans });
 
           // Empty state — search returned zero hits across every domain.
@@ -2141,15 +2192,15 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                   fontSize: '0.85rem',
                 }}
               >
-                No permissions match <strong>“{searchQuery}”</strong>.
+                No permissions match the current search and review filter.
                 <div style={{ marginTop: '0.5rem' }}>
                   <button
                     type="button"
-                    onClick={() => setSearchQuery('')}
+                    onClick={() => { setSearchQuery(''); setReviewFilter('all'); }}
                     className="btn-secondary"
                     style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
                   >
-                    Clear search
+                    Show all permissions
                   </button>
                 </div>
               </div>
@@ -2158,8 +2209,22 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
 
           return sections.map(({ domain, items }) => (
             <div key={domain} style={{ marginBottom: '1.25rem' }}>
-              <div
+              <button
+                type="button"
+                aria-expanded={Boolean(normalizedQuery) || !collapsedDomains.has(domain)}
+                onClick={() => setCollapsedDomains((current) => {
+                  const next = new Set(current);
+                  if (next.has(domain)) next.delete(domain);
+                  else next.add(domain);
+                  return next;
+                })}
                 style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%',
+                  background: 'transparent',
+                  border: 0,
                   fontSize: '0.7rem',
                   fontWeight: 700,
                   textTransform: 'uppercase',
@@ -2170,9 +2235,10 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                   marginBottom: '0.6rem',
                 }}
               >
-                {domain}
-              </div>
-              <div
+                <span>{domain} · {items.length} modules</span>
+                <span>{collapsedDomains.has(domain) && !normalizedQuery ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</span>
+              </button>
+              {(!collapsedDomains.has(domain) || normalizedQuery) && <div
                 style={{
                   display: 'grid',
                   gridTemplateColumns:
@@ -2237,45 +2303,9 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                           </button>
                         )}
                       </div>
-                      {(() => {
-                        // Module description (always shown when known) +
-                        // "Unlocks: <pages>" (shown when the page catalog
-                        // pins a SPA page to this module). The description
-                        // covers every module — modules that no page
-                        // declares in requiredPermissions (deals, projects,
-                        // quotes, forecasting, quotas, …) would otherwise
-                        // render as bare checkbox grids.
-                        const description = getModuleDescription(module, vertical);
-                        const pages = pagesByModule.get(module);
-                        const labels = pages && pages.size > 0
-                          ? Array.from(pages).sort()
-                          : null;
-                        if (!description && !labels) return null;
-                        return (
-                          <div
-                            style={{
-                              fontSize: '0.7rem',
-                              color: 'var(--text-secondary)',
-                              marginBottom: '0.5rem',
-                              lineHeight: 1.35,
-                            }}
-                          >
-                            {description && (
-                              <div style={{ marginBottom: labels ? '0.25rem' : 0 }}>
-                                {description}
-                              </div>
-                            )}
-                            {labels && (
-                              <div title={`Pages requiring this permission: ${labels.join(', ')}`}>
-                                Unlocks:{' '}
-                                <span style={{ color: 'var(--text-primary)', opacity: 0.85 }}>
-                                  {labels.join(', ')}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', lineHeight: 1.35 }}>
+                        {getModuleDescription(module, vertical) || `Controls ${module.replaceAll('_', ' ')} records and actions.`}
+                      </div>
                       <div
                         style={{
                           display: 'flex',
@@ -2287,44 +2317,46 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                           const key = `${module}.${a}`;
                           const checked = selected.has(key);
                           const actionDesc = ACTION_DESCRIPTIONS[a];
-                          // Compose a contextual tooltip — the action verb
-                          // is generic, so prefix the module label to make
-                          // it scannable on hover ("Edit existing records
-                          // in this module." → "deals · Edit existing…").
-                          const tooltip = actionDesc
-                            ? `${module} · ${actionDesc}`
-                            : `${module}.${a}`;
+                           const pages = pagesByPermission.get(key) || [];
+                           const missingRequirements = pages
+                             .filter(() => checked)
+                             .map((page) => ({
+                               page,
+                               missing: page.requiredPermissions
+                                 .map((permission) => `${permission.module}.${permission.action}`)
+                                 .filter((requiredKey) => !selected.has(requiredKey)),
+                             }))
+                             .filter(({ missing }) => missing.length > 0);
+                            const tooltip = getPermissionTooltip(module, a, vertical, pages);
+                           const severity = getPermissionSeverity(key);
                           // RBAC Hardening Phase 2 — severity badge.
                           // Derived from CRITICAL_RBAC_KEYS +
                           // SENSITIVE_PERMISSIONS_CLIENT; no new
                           // UI-only allow-list. Renders nothing for
                           // ordinary perms (the vast majority of the
                           // catalogue).
-                          const severity = getPermissionSeverity(key);
                           return (
-                            <label
+                              <div
                               key={a}
-                              title={tooltip}
                               style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
                                 fontSize: '0.85rem',
-                                cursor: readOnly ? 'not-allowed' : 'pointer',
                                 opacity: readOnly ? 0.7 : 1,
                               }}
                             >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggle(module, a)}
-                                disabled={readOnly}
-                                aria-describedby={`perm-desc-${module}-${a}`}
-                                style={{
-                                  cursor: readOnly ? 'not-allowed' : 'pointer',
-                                }}
-                              />
-                              {ACTION_LABELS[a] || a}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                <label
+                                 title={tooltip}
+                                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1, cursor: readOnly ? 'not-allowed' : 'pointer' }}
+                               >
+                                 <input
+                                   type="checkbox"
+                                   checked={checked}
+                                   onChange={() => toggle(module, a)}
+                                   disabled={readOnly}
+                                   aria-describedby={`perm-desc-${module}-${a}`}
+                                   style={{ cursor: readOnly ? 'not-allowed' : 'pointer' }}
+                                 />
+                                 {ACTION_LABELS[a] || a}
                               {/* Severity badge — sits at the right
                                   edge via marginLeft:'auto' in its
                                   inline style. Renders only when the
@@ -2336,6 +2368,43 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                                 module={module}
                                 action={a}
                               />
+                               </label>
+                                <button
+                                  type="button"
+                                  className="permission-touch-button"
+                                  aria-label={`Details for ${module}.${a}`}
+                                  aria-expanded={touchDetails === key}
+                                  aria-controls={`touch-perm-detail-${module}-${a}`}
+                                  onClick={() => setTouchDetails(touchDetails === key ? null : key)}
+                                >
+                                  ⓘ
+                                </button>
+                                </div>
+                                {touchDetails === key && (
+                                  <div id={`touch-perm-detail-${module}-${a}`} className="permission-touch-detail" role="note">
+                                    {tooltip}
+                                    {severity && (
+                                      <div style={{ marginTop: '0.35rem', whiteSpace: 'pre-line' }}>
+                                        {severity === 'critical' ? CRITICAL_BADGE_TOOLTIP : CAUTION_BADGE_TOOLTIP}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                               {pages.length > 0 && (
+                                 <div style={{ marginLeft: '1.45rem', color: 'var(--text-secondary)', fontSize: '0.7rem', lineHeight: 1.3 }}>
+                                   Required for: {pages.map((page) => page.label).join(', ')}
+                                 </div>
+                               )}
+                               {missingRequirements.map(({ page, missing }) => (
+                                 <div key={page.path} style={{ marginLeft: '1.45rem', color: 'var(--warning-color, #d97706)', fontSize: '0.7rem', lineHeight: 1.3 }}>
+                                   {page.label} also needs {missing.map((requiredKey, index) => (
+                                     <span key={requiredKey}>
+                                       {index > 0 ? ', ' : ''}
+                                       <button type="button" disabled={readOnly} onClick={() => setSelected((current) => new Set(current).add(requiredKey))} style={{ color: 'inherit', background: 'none', border: 0, padding: 0, textDecoration: 'underline', cursor: readOnly ? 'default' : 'pointer' }}>{requiredKey}</button>
+                                     </span>
+                                   ))}
+                                 </div>
+                               ))}
                               <span
                                 id={`perm-desc-${module}-${a}`}
                                 style={{
@@ -2349,17 +2418,17 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                                   whiteSpace: 'nowrap',
                                   border: 0,
                                 }}
-                              >
-                                {tooltip}
+                               >
+                                 {actionDesc || `Perform ${a} actions in this module.`}
                               </span>
-                            </label>
+                             </div>
                           );
                         })}
                       </div>
                     </div>
                   );
                 })}
-              </div>
+              </div>}
             </div>
           ));
         })()}
@@ -3479,13 +3548,14 @@ function ModalShell({ title, subtitle, onClose, width = 480, children }) {
       style={{
         position: 'fixed',
         inset: 0,
+        width: '100vw',
+        height: '100dvh',
         background: 'rgba(0,0,0,0.75)',
         backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
         zIndex: 1000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        display: 'grid',
+        placeItems: 'center',
         padding: '1rem',
       }}
     >
@@ -3494,7 +3564,7 @@ function ModalShell({ title, subtitle, onClose, width = 480, children }) {
         style={{
           width: '100%',
           maxWidth: width,
-          maxHeight: '90vh',
+          maxHeight: '90dvh',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

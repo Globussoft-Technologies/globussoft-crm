@@ -23,7 +23,6 @@ import Avatar from "./Avatar";
 // violated the hard-paywall contract. Once the trial / subscription is
 // actually expired the new SubscriptionGate component takes over and the
 // user cannot dismiss it until they pay (or sign out).
-import SubscriptionGate from "./SubscriptionGate";
 import { AuthContext, ThemeContext } from "../App";
 import { getDomainBranding } from "../utils/domainBranding";
 import { useSearchQuery } from "./search/SearchQueryContext";
@@ -628,13 +627,6 @@ const Layout = () => {
             </PageAccessGuard>
           )}
         </main>
-        {/* Hard subscription paywall — renders a non-dismissable overlay
-            over the entire app when the trial has ended or the paid
-            subscription has expired/been cancelled. Mounted via position:
-            fixed + z-index, so it visually sits above header/sidebar/main.
-            Allow-listed routes (/pricing, /payment-success, /payment-failed)
-            render through it so the admin can actually complete checkout. */}
-        <SubscriptionGate />
         {/* #634: build identifier — small, low-contrast, app-shell footer.
             Version is sourced from backend/package.json at build time (see
             vite.config.js define block) so it stays aligned with /api/health.

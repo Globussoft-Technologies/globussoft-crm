@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Layout from '../components/Layout';
+import SubscriptionGate from '../components/SubscriptionGate';
 import { installFormNavigationGuard } from '../utils/formNavigationGuard';
 import { AuthContext, ThemeContext } from '../App';
 
@@ -37,7 +38,7 @@ const setupPushMock = vi.fn(() => Promise.resolve(true));
 vi.mock('../utils/pushSetup', () => ({ setupPush: (...args) => setupPushMock(...args) }));
 
 function renderLayout(args = {}) {
-  const { user, initialRoute = '/' } = args;
+  const { user, initialRoute = '/', withSubscription = false } = args;
   // Honor explicit `tenant: null` (the "missing-tenant state" test passes this).
   // Pre-fix, the `|| { vertical: 'generic' }` fallthrough ate the null and the
   // test couldn't reach the no-tenant branch.
@@ -53,7 +54,7 @@ function renderLayout(args = {}) {
         setTenant: vi.fn(),
       }}>
         <Routes>
-          <Route path="/" element={<Layout />}>
+          <Route path="/" element={withSubscription ? <SubscriptionGate><Layout /></SubscriptionGate> : <Layout />}>
             <Route index element={<div data-testid="outlet">HOME</div>} />
           </Route>
         </Routes>
@@ -111,7 +112,8 @@ describe('Layout', () => {
   beforeEach(() => {
     setupPushMock.mockClear();
     fetchApiMock.mockReset();
-    fetchApiMock.mockResolvedValue({});
+    fetchApiMock.mockImplementation((url) => Promise.resolve(url === '/api/subscriptions/access'
+      ? { subscriptionStatus: 'ACTIVE' } : {}));
     notifyMock.success.mockReset();
     notifyMock.error.mockReset();
     notifyMock.info.mockReset();
@@ -498,13 +500,26 @@ describe('Layout', () => {
   // silent:true + endpoint to prevent a future refactor from flipping it
   // to a noisy fetch on every render.
   it('fetches /api/subscriptions/access when user is present', async () => {
-    renderLayout();
+    renderLayout({ withSubscription: true });
     await new Promise((r) => setTimeout(r, 10));
     const subCalls = fetchApiMock.mock.calls.filter(
       (c) => c[0] === '/api/subscriptions/access',
     );
-    expect(subCalls.length).toBeGreaterThanOrEqual(1);
+    expect(subCalls.length).toBe(1);
     expect(subCalls[0][1]).toMatchObject({ silent: true });
+  });
+
+  it('does not mount the authenticated layout or outlet before the single access check resolves', async () => {
+    let resolveAccess;
+    fetchApiMock.mockImplementation((url) => url === '/api/subscriptions/access'
+      ? new Promise((resolve) => { resolveAccess = resolve; }) : Promise.resolve({}));
+    renderLayout({ withSubscription: true });
+    expect(screen.queryByTestId('sidebar-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('outlet')).not.toBeInTheDocument();
+    resolveAccess({ subscriptionStatus: 'ACTIVE' });
+    expect(await screen.findByTestId('outlet')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-stub')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.filter(([url]) => url === '/api/subscriptions/access')).toHaveLength(1);
   });
 
   it('blocks a wellness doctor when the clinic subscription has expired', async () => {
@@ -513,6 +528,7 @@ describe('Layout', () => {
         ? { subscriptionStatus: 'EXPIRED', daysRemaining: 0 }
         : {}));
     renderLayout({
+      withSubscription: true,
       user: { name: 'Doctor', role: 'USER', wellnessRole: 'doctor' },
       tenant: { vertical: 'wellness' },
     });

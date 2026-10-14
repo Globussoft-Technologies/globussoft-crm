@@ -25,6 +25,25 @@ import './ContactDetailsDrawer.css';
 
 const GROUPS = [{ key: 'basic', label: 'Basic information', openByDefault: true }];
 
+const GENERIC_DETAIL_TABS = [
+  { key: 'all', label: 'All details' },
+  { key: 'basic', label: 'Basic information' },
+  { key: 'utm', label: 'UTM Tracker' },
+  { key: 'custom', label: 'Custom Tracking' },
+  { key: 'ad', label: 'Ad Information' },
+];
+
+const GENERIC_TRACKING_KEYS = new Set([
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+  'utm_lander', 'utmLander', 'utm_keyword', 'utmKeyword', 'utm_id', 'utmId',
+  'utm_click_id', 'utmClickId', 'gclid', 'gbraid', 'wbraid', 'fbclid', 'fbc', 'fbp',
+  'metaEventId', 'meta_event_id', 'clientIp', 'client_ip', 'ipAddress',
+  'userAgent', 'user_agent', 'eventSourceUrl', 'event_source_url',
+  'pageUrl', 'pageTitle', 'pageSource', 'referrerUrl', 'landingPageUrl',
+  'currentDomain', 'formName', 'submittedAt', 'browser', 'operatingSystem',
+  'deviceType', 'location',
+]);
+
 const ACTIONS = [
   { key: 'email', label: 'Email', Icon: Mail },
   { key: 'call', label: 'Call', Icon: Phone },
@@ -79,6 +98,16 @@ export function dedupeTags(values) {
   }, []);
 }
 
+function latestWebFormTracking(contact) {
+  const raw = contact?.webFormSubmissions?.[0]?.payloadJson;
+  try {
+    const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return payload?._meta?.tracking || {};
+  } catch (_error) {
+    return {};
+  }
+}
+
 export function ContactDetailsGroup({ label, open, onToggle, children, showHeader = true }) {
   return (
     <section className={`cd-group${open ? ' is-open' : ''}`}>
@@ -102,6 +131,8 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   ));
   const [showEmpty, setShowEmpty] = useState(true);
   const [query, setQuery] = useState('');
+  const [activeDetailTab, setActiveDetailTab] = useState('all');
+  const [openDetailSections, setOpenDetailSections] = useState({ basic: true, utm: true, custom: true, ad: true });
   const [customDefinitions, setCustomDefinitions] = useState([]);
   const [tagDraft, setTagDraft] = useState('');
   const tags = Array.isArray(contact?.tags) ? contact.tags : [];
@@ -149,7 +180,15 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   }, [isGenericTagManager]);
 
   const customFields = contact?.customFields || {};
+  const webFormTracking = isGeneric ? latestWebFormTracking(contact) : {};
   const customKey = (keys) => keys.find((key) => Object.prototype.hasOwnProperty.call(customFields, key));
+  const trackingValue = (...keys) => {
+    for (const key of keys) {
+      if (webFormTracking[key] !== null && webFormTracking[key] !== undefined && webFormTracking[key] !== '') return webFormTracking[key];
+      if (customFields[key] !== null && customFields[key] !== undefined && customFields[key] !== '') return customFields[key];
+    }
+    return undefined;
+  };
   const basicFields = [
     { label: 'Email', key: 'email', value: contact?.email },
     { label: 'First name', key: 'firstName', value: contact?.firstName || nameParts[0] },
@@ -161,14 +200,15 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Note', key: customKey(['note']) || 'note', value: contact?.note ?? customFields.note, custom: true },
     { label: 'Medium', key: 'source', value: contact?.medium || contact?.source },
     { label: 'Description', key: customKey(['description']) || 'description', value: contact?.description ?? customFields.description, custom: true },
-    { label: 'Website URL', key: 'website', value: contact?.website },
+    ...(isGeneric ? [] : [
+      { label: 'Website URL', key: 'website', value: contact?.website },
+    ]),
     { label: 'Monthly Budget', key: customKey(['monthly_budget', 'monthlyBudget']) || 'monthly_budget', value: contact?.monthlyBudget ?? customFields.monthly_budget ?? customFields.monthlyBudget, custom: true, type: 'number' },
     { label: 'Telegram / WhatsApp / Teams', key: customKey(['telegram', 'whatsapp', 'teams', 'messenger']) || 'messenger', value: contact?.telegram || contact?.whatsapp || contact?.teams || contact?.messenger || customFields.telegram || customFields.whatsapp || customFields.teams || customFields.messenger, custom: true },
     { label: 'Advertising Platform', key: customKey(['advertising_platform', 'advertisingPlatform', 'ad_platform']) || 'advertising_platform', value: contact?.advertisingPlatform || contact?.adPlatform || customFields.advertising_platform || customFields.advertisingPlatform || customFields.ad_platform, custom: true },
-    ...(isGeneric ? [{ label: 'Tags', key: 'tags', value: tags }] : []),
   ];
   const dynamicFields = customDefinitions
-    .filter((definition) => !basicFields.some((field) => field.key === definition.fieldKey))
+    .filter((definition) => !basicFields.some((field) => field.key === definition.fieldKey) && !(isGeneric && GENERIC_TRACKING_KEYS.has(definition.fieldKey)))
     .map((definition) => {
       let options = definition.options;
       if (typeof options === 'string') {
@@ -183,9 +223,47 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
         options: Array.isArray(options) ? options.map((option) => typeof option === 'object' ? option : ({ value: option, label: option })) : [],
       };
     });
-  const allBasicFields = [...basicFields, ...dynamicFields];
+  const utmFields = [
+    { label: 'UTM Medium', key: 'utm_medium', value: trackingValue('utm_medium', 'utmMedium') || contact?.medium, readOnly: true },
+    { label: 'UTM Source', key: 'utm_source', value: trackingValue('utm_source', 'utmSource'), readOnly: true },
+    { label: 'UTM Lander', key: 'utm_lander', value: trackingValue('utm_lander', 'utmLander'), readOnly: true },
+    { label: 'UTM Campaign', key: 'utm_campaign', value: trackingValue('utm_campaign', 'utmCampaign'), readOnly: true },
+    { label: 'UTM Keyword', key: 'utm_keyword', value: trackingValue('utm_keyword', 'utmKeyword'), readOnly: true },
+    { label: 'UTM ID', key: 'utm_id', value: trackingValue('utm_id', 'utmId'), readOnly: true },
+    { label: 'UTM Term', key: 'utm_term', value: trackingValue('utm_term', 'utmTerm'), readOnly: true },
+    { label: 'UTM Click ID', key: 'utm_click_id', value: trackingValue('utm_click_id', 'utmClickId'), readOnly: true },
+    { label: 'UTM Content', key: 'utm_content', value: trackingValue('utm_content', 'utmContent'), readOnly: true },
+    { label: 'Meta Event ID', key: 'metaEventId', value: trackingValue('metaEventId', 'meta_event_id'), readOnly: true },
+    { label: 'FBP', key: 'fbp', value: trackingValue('fbp'), readOnly: true },
+    { label: 'FBC', key: 'fbc', value: trackingValue('fbc'), readOnly: true },
+    { label: 'Client IP', key: 'clientIp', value: trackingValue('clientIp', 'client_ip', 'ipAddress'), readOnly: true },
+    { label: 'User Agent', key: 'userAgent', value: trackingValue('userAgent', 'user_agent'), readOnly: true },
+    { label: 'Event Source URL', key: 'eventSourceUrl', value: trackingValue('eventSourceUrl', 'event_source_url'), readOnly: true },
+    { label: 'Google Click ID', key: 'gclid', value: trackingValue('gclid'), readOnly: true },
+    { label: 'Google Braid ID', key: 'gbraid', value: trackingValue('gbraid'), readOnly: true },
+    { label: 'Google Wbraid ID', key: 'wbraid', value: trackingValue('wbraid'), readOnly: true },
+    { label: 'Meta Click ID', key: 'fbclid', value: trackingValue('fbclid'), readOnly: true },
+  ];
+  const adFields = [
+    { label: 'Page URL', key: 'pageUrl', value: trackingValue('pageUrl'), readOnly: true },
+    { label: 'Page Title', key: 'pageTitle', value: trackingValue('pageTitle'), readOnly: true },
+    { label: 'Page Source', key: 'pageSource', value: trackingValue('pageSource'), readOnly: true },
+    { label: 'Landing Page URL', key: 'landingPageUrl', value: trackingValue('landingPageUrl'), readOnly: true },
+    { label: 'Current Domain', key: 'currentDomain', value: trackingValue('currentDomain'), readOnly: true },
+    { label: 'Form Name / ID', key: 'formName', value: trackingValue('formName'), readOnly: true },
+    { label: 'Location', key: 'location', value: trackingValue('location'), readOnly: true },
+    { label: 'Submission Timestamp', key: 'submittedAt', value: trackingValue('submittedAt') || contact?.webFormSubmissions?.[0]?.submittedAt, readOnly: true },
+    { label: 'Browser', key: 'browser', value: trackingValue('browser'), readOnly: true },
+    { label: 'Operating System', key: 'operatingSystem', value: trackingValue('operatingSystem'), readOnly: true },
+    { label: 'Device Type', key: 'deviceType', value: trackingValue('deviceType'), readOnly: true },
+  ];
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleBasicFields = allBasicFields.filter((field) => !(isTravel && field.key === 'keyword') && (showEmpty || field.value !== null && field.value !== undefined && field.value !== '') && (!normalizedQuery || field.label.toLowerCase().includes(normalizedQuery)));
+  const fieldIsVisible = (field) => (showEmpty || field.value !== null && field.value !== undefined && field.value !== '')
+    && (!normalizedQuery || field.label.toLowerCase().includes(normalizedQuery));
+  const visibleBasicFields = [...basicFields, ...(isGeneric ? [] : dynamicFields)].filter((field) => !(isTravel && field.key === 'keyword') && fieldIsVisible(field));
+  const visibleUtmFields = utmFields.filter(fieldIsVisible);
+  const visibleCustomFields = dynamicFields.filter(fieldIsVisible);
+  const visibleAdFields = adFields.filter(fieldIsVisible);
   const displayValue = (value) => value === null || value === undefined || value === ''
     ? <span className="cd-empty-value">Click to add</span>
     : <span className="cd-filled-value">{String(value)}</span>;
@@ -293,6 +371,57 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     }
   };
 
+  const renderDetailField = (field) => <div className="cd-basic-field" key={field.key}><span>{field.label}</span>{field.key === 'tags' ? (
+    <div className="cd-tag-values">
+      {tags.map((tag) => {
+        const nameValue = String(tag);
+        const color = tagColorMap.get(tagKey(nameValue)) || fallbackTagColor(nameValue);
+        return <span className="cd-tag-chip" key={nameValue} style={{ background: color, borderColor: color, color: tagTextColor(color) }}>{nameValue}<button type="button" aria-label={`Remove tag ${nameValue}`} onClick={() => removeGenericTag(nameValue)} disabled={tagRemoving === nameValue}>×</button></span>;
+      })}
+    </div>
+  ) : field.owner ? (
+    <InlineField
+      value={contact?.assignedToId ?? ''}
+      display={field.value || <span className="cd-empty-value">Unassigned</span>}
+      type="select"
+      options={staff.map((user) => ({ value: user.id, label: user.name || user.email }))}
+      onSave={(value) => onOwnerChange?.(value)}
+    />
+  ) : field.readOnly ? (
+    displayValue(field.value)
+  ) : (
+    <InlineField value={field.value ?? ''} display={displayValue(field.value)} type={field.type === 'number' ? 'number' : 'text'} options={field.options || []} onSave={(value) => onFieldSave?.(field, value)} />
+  )}</div>;
+
+  const renderFieldSection = (key, label, fields, { telephone = false } = {}) => {
+    const mobileVisible = !normalizedQuery || 'mobile'.includes(normalizedQuery);
+    const workPhoneValue = contact?.workPhone ?? customFields.workPhone;
+    const workPhoneVisible = (!normalizedQuery || 'work phone'.includes(normalizedQuery)) && (showEmpty || workPhoneValue !== null && workPhoneValue !== undefined && workPhoneValue !== '');
+    const filteredMobileVisible = mobileVisible && (showEmpty || contact?.phone !== null && contact?.phone !== undefined && contact?.phone !== '');
+    if (!fields.length && !(telephone && (filteredMobileVisible || workPhoneVisible))) return null;
+    const open = openDetailSections[key] !== false;
+    return <section className={`cd-detail-section${open ? ' is-open' : ''}`} data-detail-section={key} key={key}>
+      <h4><button
+        type="button"
+        className="cd-detail-section-toggle"
+        aria-expanded={open}
+        aria-label={`${open ? 'Collapse' : 'Expand'} ${label}`}
+        onClick={() => setOpenDetailSections((current) => ({ ...current, [key]: !open }))}
+      >
+        <span className="cd-group-toggle" aria-hidden="true">{open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
+        <span>{label}</span>
+      </button></h4>
+      {open && fields.length > 0 && <div className="cd-basic-grid">{fields.map(renderDetailField)}</div>}
+      {open && telephone && (filteredMobileVisible || workPhoneVisible) && <div className="cd-telephone-group">
+        <div className="cd-telephone-label">Telephone numbers</div>
+        <div className="cd-basic-grid">
+          {filteredMobileVisible && <div className="cd-basic-field"><span>Mobile</span><InlineField value={contact?.phone ?? ''} display={displayValue(contact?.phone)} onSave={(value) => onFieldSave?.({ key: 'phone' }, value)} /></div>}
+          {workPhoneVisible && <div className="cd-basic-field"><span>Work phone</span><InlineField value={workPhoneValue ?? ''} display={displayValue(workPhoneValue)} onSave={(value) => onFieldSave?.({ key: customKey(['workPhone', 'work_phone']) || 'workPhone', custom: true }, value)} /></div>}
+        </div>
+      </div>}
+    </section>;
+  };
+
   const drawer = (
     <div className={inline ? 'cd-inline' : 'cd-overlay'} role={inline ? undefined : 'dialog'} aria-modal={inline ? undefined : 'true'} aria-label={inline ? undefined : (isWellness ? 'Patient details' : 'Contact details')} onMouseDown={(event) => { if (!inline && event.target === event.currentTarget) onClose(); }}>
       <aside className="cd-drawer">
@@ -342,7 +471,18 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
             <h3>{isWellness ? 'Patient details' : 'Contact details'}</h3>
           </div>
 
-          {!isTravel && (
+          {isGeneric ? (
+            <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
+              {GENERIC_DETAIL_TABS.map((tab) => <button
+                type="button"
+                className={activeDetailTab === tab.key ? 'is-active' : ''}
+                role="tab"
+                aria-selected={activeDetailTab === tab.key}
+                key={tab.key}
+                onClick={() => setActiveDetailTab(tab.key)}
+              >{tab.label}</button>)}
+            </div>
+          ) : !isTravel && (
             <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
               <button type="button" className="is-active" role="tab" aria-selected="true">All details</button>
             </div>
@@ -356,7 +496,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
             <label className="cd-toggle"><input type="checkbox" checked={showEmpty} onChange={(event) => setShowEmpty(event.target.checked)} /><span aria-hidden="true" /> Show empty fields</label>
           </div>
 
-          <section className="cd-all-details">
+          {(!isGeneric || activeDetailTab === 'all') && <section className="cd-all-details">
             <h4>All details</h4>
             {isGenericTagManager ? (
               <div className="cd-tags cd-tag-manager">
@@ -402,9 +542,14 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
             ) : (
               <div className="cd-tags"><Tag size={13} /><span>Tags</span><div className="cd-tag-values">{tags.map((tag) => <button type="button" className="cd-tag-value" key={String(tag)} onClick={() => onFieldSave?.({ key: 'tags' }, tags.filter((item) => String(item) !== String(tag)))} title={`Remove ${String(tag)}`}>{String(tag)} ×</button>)}<form className="cd-tag-form" onSubmit={(event) => { event.preventDefault(); const next = tagDraft.trim(); if (!next || tags.some((tag) => String(tag).toLowerCase() === next.toLowerCase())) return; onFieldSave?.({ key: 'tags' }, [...tags, next]); setTagDraft(''); }}><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add tag" aria-label="Add tag" /></form></div></div>
             )}
-          </section>
+          </section>}
 
-          <div className="cd-groups">
+          {isGeneric ? <div className="cd-generic-sections">
+            {(activeDetailTab === 'all' || activeDetailTab === 'basic') && renderFieldSection('basic', 'Basic information', visibleBasicFields, { telephone: true })}
+            {(activeDetailTab === 'all' || activeDetailTab === 'utm') && renderFieldSection('utm', 'UTM Tracker', visibleUtmFields)}
+            {(activeDetailTab === 'all' || activeDetailTab === 'custom') && renderFieldSection('custom', 'Custom Tracking', visibleCustomFields)}
+            {(activeDetailTab === 'all' || activeDetailTab === 'ad') && renderFieldSection('ad', 'Ad Information', visibleAdFields)}
+          </div> : <div className="cd-groups">
             {GROUPS.map((group) => (
               <div id={`cd-${group.key}`} key={group.key}>
                 <ContactDetailsGroup label={group.label} open={openGroups[group.key]} onToggle={() => toggleGroup(group.key)} showHeader={false}>
@@ -443,7 +588,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                 </ContactDetailsGroup>
               </div>
             ))}
-          </div>
+          </div>}
         </div>
       </aside>
     </div>

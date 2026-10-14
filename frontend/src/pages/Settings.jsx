@@ -2647,6 +2647,10 @@ export default function Settings() {
             <GenericRecaptchaSettingsCard notify={notify} isTravel={ctxTenant?.vertical === "travel"} />
           )}
 
+          {hasPermission("settings", "manage") && isGenericVertical && (
+            <GenericWebFormAutomaticTrackingCard />
+          )}
+
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
               webhooks (GlobusPhone lead-sync). Self-contained admin component;
               ADMIN-only + subscription-gated server-side. */}
@@ -3717,6 +3721,52 @@ function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
           {hasSecretKey && <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Secret key configured</span>}
         </div>
       </form>
+    </div>
+  );
+}
+
+function GenericWebFormAutomaticTrackingCard() {
+  const cookieKeys = [
+    ["UTM Source", "utm_source"],
+    ["UTM Medium", "utm_medium"],
+    ["UTM Campaign", "utm_campaign"],
+    ["UTM Term", "utm_term"],
+    ["UTM Content", "utm_content"],
+    ["Google Click ID", "gclid"],
+    ["Meta Click ID", "fbclid"],
+    ["Meta Click Cookie", "fbc"],
+    ["Meta Browser ID", "fbp"],
+  ];
+  return (
+    <div
+      className="card"
+      data-testid="generic-web-form-automatic-tracking"
+      style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
+    >
+      <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "0.35rem" }}>
+        Cookie Setup Required
+      </h3>
+      <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", lineHeight: 1.55, marginBottom: "1rem" }}>
+        Add these keys to the page URL. Generic CRM saves their values to internal cookies and attaches them to the lead.
+      </p>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
+          gap: "0.6rem 1rem",
+        }}
+      >
+        {cookieKeys.map(([label, key]) => (
+          <div key={key} style={{ minWidth: 0, border: "1px solid var(--border-color)", borderRadius: "8px", padding: "0.75rem", background: "var(--bg-secondary)" }}>
+            <code style={{ display: "block", color: "var(--text-primary)", fontSize: "0.85rem", fontWeight: 600, overflowWrap: "anywhere", marginBottom: "0.25rem" }}>{key}</code>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>{label}</span>
+          </div>
+        ))}
+      </div>
+      <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.5, margin: "1rem 0 0" }}>
+        Page URL, page source, referrer, current domain, form name, submission time, browser, operating system, device type,
+        and permitted location are fetched automatically and do not need cookie keys.
+      </p>
     </div>
   );
 }

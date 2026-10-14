@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { injectHeroForm, resizeHeroFormFrame, responsiveFormDevice } from "../utils/landingHeroForm";
+import {
+  injectHeroForm,
+  resizeHeroFormFrame,
+  responsiveFormDevice,
+  sendHeroFormContext,
+} from "../utils/landingHeroForm";
 import landingMarkup from "./landingMarkup.html?raw";
 
 // No hardcoded form fallback: an unavailable configuration fails closed.
@@ -53,8 +58,13 @@ function setupLandingInteractions(container, getHeroFrame) {
       return;
     }
 
-    resizeHeroFormFrame(heroFormFrame, event.data.height);
-    if (event.data.type === "ready") sendResponsiveDevice();
+    if (event.data.type === "ready") {
+      sendHeroFormContext(heroFormFrame);
+      sendResponsiveDevice();
+    }
+    if (event.data.type === "size") {
+      resizeHeroFormFrame(heroFormFrame, event.data.height);
+    }
   };
 
   const handleScroll = () => {

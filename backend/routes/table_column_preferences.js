@@ -66,6 +66,7 @@ const BUILTIN_COLUMNS = {
     { key: "source", label: "Source" },
     { key: "webForm", label: "Web Form" },
     { key: "medium", label: "Medium" }, // Contact.medium — web-form Medium, kept separate from Source
+    { key: "location", label: "Location" },
     { key: "tags", label: "Tags" },
     { key: "assignedTo", label: "Assigned To" },
     { key: "createdAt", label: "Created" },
@@ -177,7 +178,7 @@ function getDefaultVisibleColumns(tableKey, vertical) {
   if (vertical === "generic" && tableKey === "leads") {
     return [
       "name", "email", "company", "phone", "whatsappPhone", "aiScore", "source", "webForm",
-      "medium", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
+      "medium", "location", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
       "callStatus", "callifiedAi", "callifiedScore",
     ];
   }

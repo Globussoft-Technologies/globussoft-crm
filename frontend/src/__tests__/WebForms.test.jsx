@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
@@ -236,17 +237,79 @@ describe('public web form embed footer', () => {
     expect(builder).toContain('function fieldPlaceholderHint(field)');
   });
 
-  test('prefers browser location and falls back to IP for Generic phone country detection', () => {
+  test('uses the native browser location prompt automatically on Generic web-form surfaces', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
     expect(html).toMatch(/country\.value\s*=\s*["']\+91["']/);
     expect(html).toContain('function detectGenericCountryFromLocale');
     expect(html).toContain('function detectGenericCountryFromLocationOrIp');
     expect(html).toContain('navigator.geolocation.getCurrentPosition');
-    expect(html).toContain('https://ipapi.co/json/');
-    expect(html).toContain('new Intl.Locale(locale).region');
+    expect(html).toContain('addressdetails=1&zoom=18');
+    expect(html).toContain('address.neighbourhood');
+    expect(html).toContain('locationPostalCode: String(address.postcode || "")');
+    expect(html).toContain('locationLatitude: Number(coords.latitude).toFixed(6)');
+    expect(html).toContain('if (scope === "generic")');
+    expect(html).toContain('await phoneCountryDetectionPromise.catch');
+    expect(html).toContain('tracking[key] = detectedLocationMetadata[key]');
+    expect(html).not.toContain('https://ipapi.co/json/');
+    expect(html).toContain("keep the form's configured/default country code");
+    expect(html).not.toContain('location-permission');
+    expect(html).not.toContain('var requestBrowserLocation = function ()');
+    expect(html).toContain('direct links and all embeds');
     expect(html).toMatch(/detectGenericCountryFromLocationOrIp\s*\(\s*country\s*,\s*input\s*,\s*allowedCountries\s*,\s*restrictedCountries\s*,\s*applyRule\s*,\s*phoneState\s*,?\s*\)/);
+    expect(html).toMatch(/if\s*\(!advanced\)\s*return Promise\.resolve\(false\)/);
+    expect(html).toMatch(/if\s*\(phoneCountryDetectionStarted\)\s*return phoneCountryDetectionPromise\.then\(apply\)/);
+    expect(html).toContain('if (scope === "generic" && !phoneCountryDetectionStarted)');
+    expect(html).toContain('detectGenericCountryFromLocationOrIp();');
+    expect(html).toContain('scope === "generic" || phoneSettings.phoneAutoDetectCountry === true');
     expect(html).not.toContain("detectGenericCountryFromTimeZone(country, input, allowedCountries, restrictedCountries, applyRule, phoneState);");
+  });
+
+  test.each([
+    ['generic', undefined, 1],
+    ['generic', false, 1],
+    ['travel', undefined, 0],
+    ['travel', false, 0],
+    ['travel', 'true', 0],
+    ['travel', true, 1],
+    ['wellness', true, 0],
+  ])('country detection respects %s opt-in %s', async (scope, optIn, expectedCalls) => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const start = html.indexOf('function detectGenericCountryFromLocationOrIp(');
+    const end = html.indexOf('function detectGenericCountryFromTimeZone(', start);
+    let calls = 0;
+    const context = {
+      scope,
+      advanced: scope === 'generic' || scope === 'travel',
+      formData: { settings: { phoneAutoDetectCountry: optIn } },
+      phoneCountryDetectionStarted: false,
+      phoneCountryDetectionPromise: Promise.resolve(false),
+      window: { isSecureContext: true },
+      navigator: { geolocation: { getCurrentPosition(_success, failure) {
+        calls += 1;
+        failure({ code: 1 });
+      } } },
+    };
+    runInNewContext(html.slice(start, end), context);
+    await context.detectGenericCountryFromLocationOrIp();
+    expect(calls).toBe(expectedCalls);
+    expect(context.phoneCountryDetectionStarted).toBe(expectedCalls > 0);
+  });
+
+  test('keeps Generic tracking cookies for exactly 90 days', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('var TRACKING_COOKIE_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;');
+    expect(html).toContain('TRACKING_COOKIE_MAX_AGE_SECONDS +');
+  });
+
+  test('stores a clean submission page URL while preserving query attribution', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('function pageUrlWithoutQueryOrHash(value)');
+    expect(html).toContain('var pageUrl = pageUrlWithoutQueryOrHash(capturedPageUrl);');
+    expect(html).toContain('pageUrlObject = new URL(capturedPageUrl);');
+    expect(html).toContain('var query = pageUrlObject');
   });
 
   test('preserves Generic phone country choices made by the visitor', () => {

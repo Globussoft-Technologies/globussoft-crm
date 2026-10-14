@@ -3505,7 +3505,7 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
         <div className="wf-generic-live-preview-wrap" style={{ background: style.backgroundColor }}>
           <div className="wf-generic-live-preview-label">Preview</div>
           <div className="wf-generic-live-preview">
-            <iframe ref={livePreviewFrameRef} title="Web form live preview" src={livePreviewSrc} style={{ width: previewViewportWidth === "100%" ? "100%" : `min(100%, ${previewViewportWidth})`, height: "620px", minHeight: 0, margin: "0 auto", border: 0, display: "block", background: "transparent" }} />
+            <iframe ref={livePreviewFrameRef} title="Web form live preview" src={livePreviewSrc} allow="geolocation *" style={{ width: previewViewportWidth === "100%" ? "100%" : `min(100%, ${previewViewportWidth})`, height: "620px", minHeight: 0, margin: "0 auto", border: 0, display: "block", background: "transparent" }} />
           </div>
           <div hidden>
             {style.logoUrl ? <img src={style.logoUrl} alt="Form logo" className="wf-generic-live-logo" onClick={(event) => { event.stopPropagation(); onSelectionChange("form"); }} /> : null}

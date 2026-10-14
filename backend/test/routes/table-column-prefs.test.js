@@ -79,6 +79,10 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.visible).toContain('webForm');
+    expect(res.body.visible).toContain('location');
+    expect(res.body.availableColumns.find((c) => c.key === 'location')).toMatchObject({
+      label: 'Location',
+    });
   });
 
   test('an existing preference can intentionally keep Tags hidden', async () => {

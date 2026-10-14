@@ -225,6 +225,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "source",
   "webForm",
   "medium",
+  "location",
   "subBrand",
   "tags",
   "assignedTo",
@@ -248,6 +249,10 @@ const TRAVEL_LEAD_COLUMN_KEYS = new Set([
   "assignedTo",
   "createdAt",
 ]);
+// Keep collecting Referrer URL in web-form tracking, but do not expose it as
+// a Generic CRM Leads-table column. This also strips stale saved preferences
+// that may still contain the formerly visible key.
+const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set(["referrerUrl"]);
 // These columns are system-populated and must not be offered as CSV import
 // destinations. The remaining Customize Table catalog entries are valid CRM
 // field choices for generic lead imports.
@@ -259,6 +264,7 @@ const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
   "landingPageUrl",
   "currentDomain",
   "formName",
+  "location",
   "utm_source",
   "utm_medium",
   "utm_campaign",
@@ -303,6 +309,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   landingPageUrl: 200,
   currentDomain: 190,
   formName: 180,
+  location: 280,
   utm_source: 150,
   utm_medium: 150,
   utm_campaign: 170,
@@ -4773,14 +4780,18 @@ const Leads = () => {
     [leadColumnCatalog],
   );
   const preferredVisibleColumns = useMemo(
-    () =>
-      Array.isArray(visibleColumns)
+    () => {
+      const preferred = Array.isArray(visibleColumns)
         ? visibleColumns
         : [
             ...LEADS_DEFAULT_VISIBLE_COLUMNS,
             ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
-          ],
-    [customFieldDefs, visibleColumns],
+          ];
+      return isGeneric
+        ? preferred.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+        : preferred;
+    },
+    [customFieldDefs, isGeneric, visibleColumns],
   );
   const leadFilterFieldCatalog = useMemo(() => {
     const wellnessTableColumns = [
@@ -4931,6 +4942,7 @@ const Leads = () => {
             "landingPageUrl",
             "currentDomain",
             "formName",
+            "location",
             "utm_source",
             "utm_medium",
             "utm_campaign",
@@ -4988,6 +5000,7 @@ const Leads = () => {
         landingPageUrl: "Landing Page",
         currentDomain: "Current Domain",
         formName: "Form Name",
+        location: "Location",
         utm_source: "UTM Source",
         utm_medium: "UTM Medium",
         utm_campaign: "UTM Campaign",
@@ -6476,6 +6489,7 @@ const Leads = () => {
       "landingPageUrl",
       "currentDomain",
       "formName",
+      "location",
       "utm_source",
       "utm_medium",
       "utm_campaign",
@@ -9544,8 +9558,12 @@ const Leads = () => {
             {supportsColumnCustomization && (
               <ColumnPicker
                 tableKey="leads"
-                onColumnsChange={setVisibleColumns}
-                onAvailableColumnsChange={setLeadColumnCatalog}
+                onColumnsChange={(columns) => setVisibleColumns(isGeneric
+                  ? columns.filter((column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column))
+                  : columns)}
+                onAvailableColumnsChange={(columns) => setLeadColumnCatalog(isGeneric
+                  ? columns.filter((column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key))
+                  : columns)}
                 deletableColumns={
                   isGeneric && isAdmin
                     ? customFieldDefs.map((field) => ({

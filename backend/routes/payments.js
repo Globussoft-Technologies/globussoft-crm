@@ -10,6 +10,7 @@ require("dotenv").config({
 });
 
 const prisma = require("../lib/prisma");
+const { customerPaymentQuery } = require("../lib/customerPaymentQuery");
 const { writeAudit } = require("../lib/audit");
 const { paymentLimiter } = require("../middleware/apiRateLimiters");
 const {
@@ -68,23 +69,12 @@ async function customerPaymentScope(req) {
   const tenantId = tenantOf(req);
   const patient = await prisma.patient.findFirst({
     where: { tenantId, userId: req.user.userId },
-    select: { id: true, contactId: true },
+    select: { id: true },
   });
   if (!patient) return null;
-  const visits = await prisma.visit.findMany({
-    where: { tenantId, patientId: patient.id }, select: { id: true },
-  });
-  const invoiceOr = [{ patientId: patient.id }];
-  if (visits.length) invoiceOr.push({ visitId: { in: visits.map((visit) => visit.id) } });
-  const invoices = await prisma.invoice.findMany({
-    where: { tenantId, OR: invoiceOr }, select: { id: true },
-  });
-  const paymentOr = [];
-  if (invoices.length) paymentOr.push({ invoiceId: { in: invoices.map((invoice) => invoice.id) } });
-  // A Contact can represent a family. Do not let its id grant access to
-  // another patient's invoice payments; use it only for standalone rows.
-  if (patient.contactId) paymentOr.push({ contactId: patient.contactId, invoiceId: null });
-  return paymentOr.length ? { tenantId, OR: paymentOr } : null;
+  // Standalone payments have no reliable per-patient owner in this schema.
+  // Fail closed rather than exposing a shared Contact's payment history.
+  return { tenantId, patientId: patient.id };
 }
 
 function customerPaymentView(payment) {
@@ -1200,20 +1190,15 @@ router.get("/", async (req, res) => {
     if (isCustomer(req)) {
       const scope = await customerPaymentScope(req);
       if (!scope) return res.json([]);
-      const where = { ...scope };
-      if (status) where.status = String(status).toUpperCase();
-      if (gateway) where.gateway = String(gateway).toLowerCase();
+      const query = { ...scope, limit, createdAt };
+      if (status) query.status = String(status).toUpperCase();
+      if (gateway) query.gateway = String(gateway).toLowerCase();
       if (invoiceId) {
         const requestedInvoiceId = Number.parseInt(invoiceId, 10);
         if (!Number.isInteger(requestedInvoiceId)) return res.json([]);
-        where.invoiceId = requestedInvoiceId;
+        query.invoiceId = requestedInvoiceId;
       }
-      if (from || to) where.createdAt = createdAt;
-      const payments = await prisma.payment.findMany({
-        where,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: limit,
-      });
+      const payments = await prisma.$queryRaw(customerPaymentQuery(query));
       return res.json(payments.map(customerPaymentView));
     }
 
@@ -1756,7 +1741,8 @@ router.get("/:id", async (req, res) => {
     if (isCustomer(req)) {
       const scope = await customerPaymentScope(req);
       if (!scope) return res.status(404).json({ error: "Payment not found" });
-      const ownPayment = await prisma.payment.findFirst({ where: { ...scope, id } });
+      if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: "Payment not found" });
+      const [ownPayment] = await prisma.$queryRaw(customerPaymentQuery({ ...scope, id }));
       if (!ownPayment) return res.status(404).json({ error: "Payment not found" });
       return res.json(customerPaymentView(ownPayment));
     }

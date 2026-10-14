@@ -49,6 +49,10 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   if (!prisma) return;
   try {
+    if (!tenants.length) return;
+    // Contact updates create AuditLog rows. Its Tenant FK intentionally uses
+    // Restrict, so drain only our CI-local fixture tenants before deleting them.
+    await prisma.auditLog.deleteMany({ where: { tenantId: { in: tenants } } });
     await prisma.role.deleteMany({ where: { tenantId: { in: tenants } } });
     await prisma.user.deleteMany({ where: { tenantId: { in: tenants } } });
     await prisma.tenant.deleteMany({ where: { id: { in: tenants } } });

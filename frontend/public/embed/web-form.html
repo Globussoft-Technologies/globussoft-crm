@@ -503,10 +503,6 @@
       .generic-whatsapp-sync[hidden] {
         display: none !important;
       }
-      html.generic-scope .generic-phone-with-whatsapp,
-      html.generic-scope .generic-whatsapp-section {
-        grid-column: 1 / -1 !important;
-      }
       html.generic-scope .generic-whatsapp-number .phone-input {
         grid-template-columns: minmax(0, 24%) minmax(0, 1fr) !important;
         gap: 10px !important;
@@ -767,7 +763,7 @@
         display: none !important;
       }
 
-      html.generic-scope #recaptcha-container {
+      #recaptcha-container {
         margin-top: 16px;
         width: 100%;
         min-width: 0;
@@ -775,12 +771,27 @@
         overflow: visible;
       }
 
-      html.generic-scope #recaptcha-container .g-recaptcha {
+      #recaptcha-container .g-recaptcha {
         width: 304px;
         min-width: 304px;
         height: 78px;
         max-width: none;
         transform-origin: top left;
+      }
+
+      #recaptcha-container .recaptcha-status {
+        display: flex;
+        align-items: center;
+        box-sizing: border-box;
+        width: min(100%, 304px);
+        min-height: 78px;
+        padding: 12px 14px;
+        border: 1px solid #d1d5db;
+        border-radius: 3px;
+        background: #f9fafb;
+        color: #4b5563;
+        font-size: 13px;
+        line-height: 1.4;
       }
 
       .success {
@@ -1460,6 +1471,17 @@
       html.generic-host-mobile.generic-scope .grid .phone-field {
         grid-column: 1 / -1 !important;
       }
+
+      /* Keep WhatsApp in the Phone column while allowing the next field to
+         use the open column beside it. */
+      html.generic-scope .grid.generic-whatsapp-grid {
+        grid-auto-flow: row dense;
+      }
+      html.generic-scope .grid.generic-whatsapp-grid > .generic-whatsapp-section {
+        width: 100%;
+        min-width: 0;
+        margin-top: 0;
+      }
     </style>
   </head>
 
@@ -1498,6 +1520,12 @@
         var busy = false;
 
         var currentStepIndex = 0;
+
+        var previewRecaptchaRef = "";
+        var previewRecaptchaSiteKey = "";
+        var previewUpdateSequence = 0;
+        var recaptchaApiPromise = null;
+        var recaptchaWidgetId = null;
 
         var resizeTimer = null;
         var hostContext = {};
@@ -2270,7 +2298,11 @@
             ) >= 0
           )
             previewDevice = String(event.data.previewDevice);
-          renderForm(event.data.form);
+          var updateSequence = ++previewUpdateSequence;
+          hydratePreviewRecaptcha(event.data.form).then(function (previewForm) {
+            if (updateSequence !== previewUpdateSequence) return;
+            renderForm(previewForm);
+          });
         });
 
         function getFieldOptions(field) {
@@ -2299,7 +2331,7 @@
           } catch (e) {}
         }
 
-        function fitGenericRecaptcha() {
+        function fitRecaptcha() {
           var container = document.getElementById("recaptcha-container");
           var widget = container && container.querySelector(".g-recaptcha");
           if (!container || !widget) return;
@@ -2320,17 +2352,111 @@
           container.style.overflow = "visible";
         }
 
+        function showRecaptchaLoadError(message) {
+          var container = document.getElementById("recaptcha-container");
+          if (!container) return;
+          var status = document.createElement("div");
+          status.className = "recaptcha-status";
+          status.setAttribute("role", "alert");
+          status.textContent = message;
+          container.replaceChildren(status);
+          container.style.height = "";
+          scheduleSize();
+        }
+
+        function initializeRecaptcha() {
+          var currentSettings = formData && formData.settings;
+          if (
+            !advanced ||
+            !currentSettings ||
+            currentSettings.recaptchaEnabled !== true ||
+            !String(currentSettings.recaptchaSiteKey || "").trim()
+          )
+            return;
+
+          function renderCurrentWidget() {
+            var latestSettings = formData && formData.settings;
+            var siteKey = String(
+              (latestSettings && latestSettings.recaptchaSiteKey) || "",
+            ).trim();
+            var widget = document.querySelector(
+              "#recaptcha-container .g-recaptcha",
+            );
+            if (
+              !siteKey ||
+              !latestSettings ||
+              latestSettings.recaptchaEnabled !== true ||
+              !widget ||
+              !widget.isConnected ||
+              widget.getAttribute("data-gbs-rendered") === "true" ||
+              !window.grecaptcha ||
+              !window.grecaptcha.render
+            )
+              return;
+
+            window.grecaptcha.ready(function () {
+              if (
+                !widget.isConnected ||
+                widget.getAttribute("data-gbs-rendered") === "true"
+              )
+                return;
+              widget.setAttribute("data-gbs-rendered", "true");
+              try {
+                recaptchaWidgetId = window.grecaptcha.render(widget, {
+                  sitekey: siteKey,
+                });
+                scheduleSize();
+              } catch (err) {
+                showRecaptchaLoadError(
+                  "Verification could not be displayed. Check the reCAPTCHA site key and allowed domains.",
+                );
+              }
+            });
+          }
+
+          if (window.grecaptcha && window.grecaptcha.render) {
+            renderCurrentWidget();
+            return;
+          }
+
+          if (!recaptchaApiPromise) {
+            recaptchaApiPromise = new Promise(function (resolve, reject) {
+              var script = document.getElementById("gbs-recaptcha-api");
+              if (!script) {
+                script = document.createElement("script");
+                script.id = "gbs-recaptcha-api";
+                script.src =
+                  "https://www.google.com/recaptcha/api.js?render=explicit";
+                script.async = true;
+                script.defer = true;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+                return;
+              }
+              script.addEventListener("load", resolve, { once: true });
+              script.addEventListener("error", reject, { once: true });
+            });
+          }
+
+          recaptchaApiPromise.then(renderCurrentWidget).catch(function () {
+            showRecaptchaLoadError(
+              "Verification could not be loaded. Check your connection and allow Google reCAPTCHA in your browser.",
+            );
+          });
+        }
+
         try {
           parent.postMessage({ source: "gbs-web-form", type: "ready" }, "*");
         } catch (e) {}
 
         function scheduleSize() {
-          fitGenericRecaptcha();
+          fitRecaptcha();
           clearTimeout(resizeTimer);
           resizeTimer = setTimeout(postSize, 20);
         }
 
-        window.addEventListener("resize", fitGenericRecaptcha);
+        window.addEventListener("resize", fitRecaptcha);
 
         if (typeof ResizeObserver !== "undefined") {
           new ResizeObserver(scheduleSize).observe(document.body);
@@ -3192,6 +3318,8 @@
           if (!phoneInput) return;
           var phoneField = phoneInput.closest(".field");
           if (!phoneField) return;
+          var formGrid = phoneField.closest(".grid");
+          if (!formGrid) return;
           phoneField.classList.add("generic-phone-with-whatsapp");
           var phoneGroup = phoneInput.closest(".phone-input");
           var phoneCountry =
@@ -3216,7 +3344,9 @@
           whatsappPhoneGroup.appendChild(whatsappInput);
 
           var wrapper = document.createElement("div");
-          wrapper.className = "field full generic-whatsapp-section";
+          // Keep WhatsApp in the same grid column as Phone, but make it a
+          // separate grid item so later fields can fill the adjacent column.
+          wrapper.className = "field generic-whatsapp-section";
           wrapper.innerHTML =
             '<label class="check"><input type="checkbox" name="whatsappSameAsPhone" value="true" /><span>WhatsApp number is the same as phone number</span></label>';
           var numberWrapper = document.createElement("div");
@@ -3232,7 +3362,29 @@
           whatsappError.textContent = "Only numbers are allowed.";
           numberWrapper.appendChild(whatsappError);
           wrapper.appendChild(numberWrapper);
+          var phoneRect = phoneField.getBoundingClientRect();
+          var gridRect = formGrid.getBoundingClientRect();
+          var columnLefts = Array.from(formGrid.children)
+            .map(function (child) {
+              return child.getBoundingClientRect().left;
+            })
+            .filter(function (left, index, values) {
+              return values.findIndex(function (value) {
+                return Math.abs(value - left) < 1;
+              }) === index;
+            })
+            .sort(function (a, b) {
+              return a - b;
+            });
+          var phoneColumn = columnLefts.findIndex(function (left) {
+            return Math.abs(left - phoneRect.left) < 1;
+          });
+          var phoneIsFullWidth = phoneRect.width >= gridRect.width - 1;
+          wrapper.style.gridColumn = phoneIsFullWidth
+            ? "1 / -1"
+            : Math.max(phoneColumn + 1, 1) + " / span 1";
           phoneField.insertAdjacentElement("afterend", wrapper);
+          formGrid.classList.add("generic-whatsapp-grid");
 
           var sameCheckbox = wrapper.querySelector(
             'input[name="whatsappSameAsPhone"]',
@@ -4045,6 +4197,16 @@
         }
 
         function renderForm(data) {
+          if (
+            recaptchaWidgetId != null &&
+            window.grecaptcha &&
+            window.grecaptcha.reset
+          ) {
+            try {
+              window.grecaptcha.reset(recaptchaWidgetId);
+            } catch (e) {}
+          }
+          recaptchaWidgetId = null;
           formData = data || {};
 
           document.documentElement.classList.toggle(
@@ -4160,15 +4322,27 @@
               "</span></label></div>";
           }
 
-          var recaptcha =
+          var recaptchaEnabled = Boolean(
             advanced &&
-            formData.settings &&
-            formData.settings.recaptchaEnabled &&
-            formData.settings.recaptchaSiteKey
-              ? '<div id="recaptcha-container" class="field"><div class="g-recaptcha" data-sitekey="' +
-                esc(formData.settings.recaptchaSiteKey) +
-                '"></div></div>'
-              : "";
+              formData.settings &&
+              formData.settings.recaptchaEnabled,
+          );
+          var recaptchaSiteKey = String(
+            (formData.settings && formData.settings.recaptchaSiteKey) || "",
+          ).trim();
+          var recaptcha = recaptchaEnabled
+            ? '<div id="recaptcha-container" class="field">' +
+              (recaptchaSiteKey
+                ? '<div class="g-recaptcha" data-sitekey="' +
+                  esc(recaptchaSiteKey) +
+                  '"></div>'
+                : '<div class="recaptcha-status" role="status">' +
+                  (isBuilderPreview
+                    ? "reCAPTCHA is enabled, but no site key is available. Check the reCAPTCHA site key in tenant settings."
+                    : "Verification is unavailable. Please contact the form owner.") +
+                  "</div>") +
+              "</div>"
+            : "";
           var footerLink =
             formData.settings && formData.settings.showPoweredBy === false
               ? ""
@@ -4229,13 +4403,7 @@
             detectGenericCountryFromLocationOrIp();
           setupGenericWhatsappPhone();
           setupGenericFieldTypeValidation(fields);
-          if (recaptcha) {
-            var script = document.createElement("script");
-            script.src = "https://www.google.com/recaptcha/api.js";
-            script.async = true;
-            script.defer = true;
-            document.head.appendChild(script);
-          }
+          initializeRecaptcha();
 
           if (advanced) {
             var pickerPhoneSettings = formData.settings || {};
@@ -4543,7 +4711,9 @@
           ) {
             var captchaToken =
               window.grecaptcha && window.grecaptcha.getResponse
-                ? window.grecaptcha.getResponse()
+                ? window.grecaptcha.getResponse(
+                    recaptchaWidgetId == null ? undefined : recaptchaWidgetId,
+                  )
                 : "";
             if (!captchaToken) {
               showInlineError(
@@ -4562,7 +4732,12 @@
             formData.settings.recaptchaEnabled &&
             window.grecaptcha
           )
-            fd.set("recaptchaToken", window.grecaptcha.getResponse());
+            fd.set(
+              "recaptchaToken",
+              window.grecaptcha.getResponse(
+                recaptchaWidgetId == null ? undefined : recaptchaWidgetId,
+              ),
+            );
 
           // Generic CRM attribution metadata. These values are informational
           // only; the server remains the source of truth for tenant/form IDs.
@@ -4783,7 +4958,9 @@
               window.grecaptcha &&
               window.grecaptcha.reset
             )
-              window.grecaptcha.reset();
+              window.grecaptcha.reset(
+                recaptchaWidgetId == null ? undefined : recaptchaWidgetId,
+              );
 
             showFieldErrors(err.fieldErrors || {});
             var msg = document.getElementById("msg");
@@ -4800,6 +4977,58 @@
           }
         }
 
+        async function hydratePreviewRecaptcha(previewForm) {
+          if (
+            !advanced ||
+            !previewForm ||
+            !previewForm.settings ||
+            !previewForm.settings.recaptchaEnabled ||
+            previewForm.settings.recaptchaSiteKey
+          )
+            return previewForm;
+
+          var previewRef = previewForm.id || previewForm.slug || slug;
+          if (!previewRef) return previewForm;
+          var normalizedRef = String(previewRef);
+          if (
+            previewRecaptchaRef === normalizedRef &&
+            previewRecaptchaSiteKey
+          ) {
+            return Object.assign({}, previewForm, {
+              settings: Object.assign({}, previewForm.settings, {
+                recaptchaSiteKey: previewRecaptchaSiteKey,
+              }),
+            });
+          }
+
+          try {
+            var previewRes = await fetch(
+              apiBase +
+                "/api/forms/public/" +
+                encodeURIComponent(previewRef) +
+                "?scope=" +
+                encodeURIComponent(scope),
+            );
+            if (!previewRes.ok) return previewForm;
+            var publicPreview = await previewRes.json();
+            var siteKey = String(
+              (publicPreview.settings &&
+                publicPreview.settings.recaptchaSiteKey) ||
+                "",
+            ).trim();
+            if (!siteKey) return previewForm;
+            previewRecaptchaRef = normalizedRef;
+            previewRecaptchaSiteKey = siteKey;
+            return Object.assign({}, previewForm, {
+              settings: Object.assign({}, previewForm.settings, {
+                recaptchaSiteKey: siteKey,
+              }),
+            });
+          } catch (err) {
+            return previewForm;
+          }
+        }
+
         async function load() {
           var previewData = "";
 
@@ -4810,33 +5039,7 @@
           if (previewData) {
             try {
               var previewForm = JSON.parse(previewData);
-              if (
-                advanced &&
-                previewForm.settings &&
-                previewForm.settings.recaptchaEnabled &&
-                !previewForm.settings.recaptchaSiteKey
-              ) {
-                var previewRef = previewForm.id || previewForm.slug || slug;
-                var previewRes = await fetch(
-                  apiBase +
-                    "/api/forms/public/" +
-                    encodeURIComponent(previewRef) +
-                    "?scope=" +
-                    encodeURIComponent(scope),
-                );
-                if (previewRes.ok) {
-                  var publicPreview = await previewRes.json();
-                  previewForm.settings = Object.assign(
-                    {},
-                    previewForm.settings,
-                    {
-                      recaptchaSiteKey:
-                        publicPreview.settings &&
-                        publicPreview.settings.recaptchaSiteKey,
-                    },
-                  );
-                }
-              }
+              previewForm = await hydratePreviewRecaptcha(previewForm);
               renderForm(previewForm);
 
               return;

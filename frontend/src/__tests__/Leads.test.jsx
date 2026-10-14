@@ -3339,7 +3339,17 @@ describe('Leads Web Form column (generic CRM only)', () => {
       assignedTo: null,
       createdAt: '2026-08-12T09:00:00.000Z',
       customFields: {},
-      webFormSubmissions: [{ id: 5, webForm: { id: 2, name: 'Contact Us' } }],
+      webFormSubmissions: [{
+        id: 5,
+        webForm: { id: 2, name: 'Contact Us' },
+        payloadJson: JSON.stringify({
+          _meta: {
+            tracking: {
+              location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
+            },
+          },
+        }),
+      }],
     },
     {
       id: 202,
@@ -3382,6 +3392,8 @@ describe('Leads Web Form column (generic CRM only)', () => {
 
     // Header from the default visible columns.
     expect(screen.getByText('Web Form')).toBeInTheDocument();
+    expect(screen.getByText('Location')).toBeInTheDocument();
+    expect(screen.getByText('Koramangala, Bengaluru, Karnataka, 560034, India')).toBeInTheDocument();
     // Exactly one row came through a form — single placement, right row.
     expect(screen.getAllByText('Contact Us')).toHaveLength(1);
     // Non-form lead renders the em-dash fallback.
@@ -3418,6 +3430,43 @@ describe('Leads Web Form column (generic CRM only)', () => {
 
     expect(screen.queryByText('Web Form')).toBeNull();
     expect(screen.queryByText('Contact Us')).toBeNull();
+  });
+
+  it('hides Referrer URL from Generic Leads even when a saved preference still contains it', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'pageUrl', 'referrerUrl'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'pageUrl', label: 'Page URL' },
+            { key: 'referrerUrl', label: 'Referrer URL' },
+          ],
+        });
+      }
+      if (url === '/api/lead-custom-fields' && !opts) return Promise.resolve([]);
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve([{
+          ...webFormRows[0],
+          webFormSubmissions: [{
+            id: 6,
+            webForm: { id: 2, name: 'Contact Us' },
+            payloadJson: JSON.stringify({
+              _meta: { tracking: { pageUrl: 'https://example.com/lead', referrerUrl: 'https://search.example/referrer' } },
+            }),
+          }],
+        }]);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderLeads(genericAuth);
+    await screen.findByText('Form Lead');
+
+    expect(screen.getByText('Page URL')).toBeInTheDocument();
+    expect(screen.getByText('https://example.com/lead')).toBeInTheDocument();
+    expect(screen.queryByText('Referrer URL')).toBeNull();
+    expect(screen.queryByText('https://search.example/referrer')).toBeNull();
   });
 
   it('does not render stale Generic extended columns in Travel', async () => {

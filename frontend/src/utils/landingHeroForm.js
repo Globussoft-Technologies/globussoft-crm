@@ -27,6 +27,22 @@ export function responsiveFormDevice(width) {
   return "desktop";
 }
 
+export function sendHeroFormContext(
+  frame,
+  pageUrl = window.location.href,
+  pageTitle = document.title,
+  targetOrigin = window.location.origin,
+) {
+  if (!frame?.contentWindow) return false;
+  frame.contentWindow.postMessage({
+    source: "gbs-web-form-host",
+    type: "context",
+    pageUrl,
+    pageTitle,
+  }, targetOrigin);
+  return true;
+}
+
 // Injects the hero web-form iframe into a closed shadow root under
 // #hero-form-mount so the iframe is absent from ordinary Elements queries.
 // Backend authorization remains the actual security boundary.
@@ -45,6 +61,7 @@ export function injectHeroForm(mount, formId) {
   const frame = document.createElement("iframe");
   frame.setAttribute("src", heroFormEmbedSrc(formId));
   frame.setAttribute("title", "Globus CRM");
+  frame.setAttribute("allow", "geolocation *");
   frame.setAttribute("loading", "lazy");
   frame.setAttribute("style", "width:100%;max-width:100%;height:auto;min-height:0;border:0;display:block;box-sizing:border-box;");
   root.appendChild(frame);

@@ -1503,6 +1503,8 @@
         var hostContext = {};
         var localeCountryDetectionStarted = false;
         var phoneCountryDetectionStarted = false;
+        var phoneCountryDetectionPromise = Promise.resolve(false);
+        var detectedLocationMetadata = {};
 
         function esc(v) {
           return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) {
@@ -1534,13 +1536,24 @@
             ? decodeURIComponent(found.substring(prefix.length))
             : "";
         }
+        var TRACKING_COOKIE_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
         function rememberCookie(name, value) {
           if (!value || readCookie(name)) return;
           document.cookie =
             name +
             "=" +
             encodeURIComponent(String(value).slice(0, 2000)) +
-            "; Max-Age=7776000; Path=/; SameSite=Lax";
+            "; Max-Age=" +
+            TRACKING_COOKIE_MAX_AGE_SECONDS +
+            "; Path=/; SameSite=Lax";
+        }
+        function pageUrlWithoutQueryOrHash(value) {
+          try {
+            var parsed = new URL(String(value || ""), window.location.href);
+            return parsed.origin + parsed.pathname;
+          } catch (e) {
+            return String(value || "").split(/[?#]/)[0];
+          }
         }
         function normalizeBrowser(ua) {
           if (/Edg\//i.test(ua)) return "Edge";
@@ -1960,9 +1973,9 @@
           applyRule,
           phoneState,
         ) {
-          if (scope !== "generic" || phoneCountryDetectionStarted) return;
-          phoneCountryDetectionStarted = true;
+          if (!advanced) return Promise.resolve(false);
           var apply = function (iso) {
+            if (!country || !input || !phoneState) return false;
             return applyDetectedPhoneCountry(
               country,
               iso,
@@ -1973,13 +1986,9 @@
               phoneState,
             );
           };
-          var lookupIp = function () {
-            return fetchJsonWithTimeout("https://ipapi.co/json/", 2500).then(
-              function (result) {
-                return result && result.country_code;
-              },
-            );
-          };
+          if (phoneCountryDetectionStarted)
+            return phoneCountryDetectionPromise.then(apply);
+          phoneCountryDetectionStarted = true;
           var lookupLocation = function () {
             return new Promise(function (resolve, reject) {
               if (
@@ -1993,15 +2002,58 @@
                 function (position) {
                   var coords = position.coords;
                   fetchJsonWithTimeout(
-                    "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=3&lat=" +
+                    "https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&lat=" +
                       encodeURIComponent(coords.latitude) +
                       "&lon=" +
                       encodeURIComponent(coords.longitude),
                     3000,
                   ).then(function (result) {
-                    resolve(
-                      result && result.address && result.address.country_code,
-                    );
+                    var address = (result && result.address) || {};
+                    if (scope === "generic") {
+                      var area =
+                        address.neighbourhood ||
+                        address.suburb ||
+                        address.quarter ||
+                        address.city_district ||
+                        address.borough ||
+                        address.residential ||
+                        "";
+                      var city =
+                        address.city ||
+                        address.town ||
+                        address.municipality ||
+                        address.village ||
+                        address.county ||
+                        "";
+                      var locationParts = [
+                        area,
+                        city,
+                        address.state || "",
+                        address.postcode || "",
+                        address.country || "",
+                      ].filter(function (value, index, values) {
+                        return value && values.indexOf(value) === index;
+                      });
+                      detectedLocationMetadata = {
+                        location:
+                          locationParts.join(", ") ||
+                          String((result && result.display_name) || ""),
+                        locationArea: String(area),
+                        locationCity: String(city),
+                        locationState: String(address.state || ""),
+                        locationPostalCode: String(address.postcode || ""),
+                        locationCountry: String(address.country || ""),
+                        locationCountryCode: String(
+                          address.country_code || "",
+                        ).toUpperCase(),
+                        locationLatitude: Number(coords.latitude).toFixed(6),
+                        locationLongitude: Number(coords.longitude).toFixed(6),
+                        locationAccuracy: String(
+                          Math.round(Number(coords.accuracy) || 0),
+                        ),
+                      };
+                    }
+                    resolve(address.country_code);
                   }, reject);
                 },
                 reject,
@@ -2009,41 +2061,13 @@
               );
             });
           };
-          lookupLocation()
-            .then(function (iso) {
-              if (!apply(iso))
-                detectGenericCountryFromLocale(
-                  country,
-                  input,
-                  allowedCountries,
-                  restrictedCountries,
-                  applyRule,
-                  phoneState,
-                );
-            })
+          phoneCountryDetectionPromise = lookupLocation()
             .catch(function () {
-              return lookupIp().then(function (iso) {
-                if (!apply(iso))
-                  detectGenericCountryFromLocale(
-                    country,
-                    input,
-                    allowedCountries,
-                    restrictedCountries,
-                    applyRule,
-                    phoneState,
-                  );
-              });
-            })
-            .catch(function () {
-              detectGenericCountryFromLocale(
-                country,
-                input,
-                allowedCountries,
-                restrictedCountries,
-                applyRule,
-                phoneState,
-              );
+              // Permission denied, location unavailable, or reverse lookup
+              // failed: keep the form's configured/default country code.
+              return "";
             });
+          return phoneCountryDetectionPromise.then(apply);
         }
         function detectGenericCountryFromTimeZone(
           country,
@@ -2184,18 +2208,16 @@
             if (error) error.remove();
           });
           applyRule();
-          // Do not let a background IP/geolocation lookup silently replace the
-          // form's explicit default (+91). It is opt-in for forms that need it.
-          if (phoneSettings.phoneAutoDetectCountry === true) {
-            detectGenericCountryFromLocationOrIp(
-              country,
-              input,
-              allowedCountries,
-              restrictedCountries,
-              applyRule,
-              phoneState,
-            );
-          }
+          // Ask through the browser's native permission UI everywhere this
+          // shared web-form runtime is used: direct links and all embeds.
+          detectGenericCountryFromLocationOrIp(
+            country,
+            input,
+            allowedCountries,
+            restrictedCountries,
+            applyRule,
+            phoneState,
+          );
         }
         window.addEventListener("message", function (event) {
           if (
@@ -4198,6 +4220,8 @@
           setupGenericWhatsapp();
           setupGenericConditionalFields(fields);
           setupGenericPhone();
+          if (scope === "generic" && !phoneCountryDetectionStarted)
+            detectGenericCountryFromLocationOrIp();
           setupGenericWhatsappPhone();
           setupGenericFieldTypeValidation(fields);
           if (recaptcha) {
@@ -4538,13 +4562,20 @@
           // Generic CRM attribution metadata. These values are informational
           // only; the server remains the source of truth for tenant/form IDs.
           if (scope === "generic") {
-            var pageUrl =
+            // If the visitor submits while the native location lookup is still
+            // resolving, wait for that bounded lookup so its address is stored
+            // on the same web-form submission. Denial/failure remains a no-op.
+            await phoneCountryDetectionPromise.catch(function () {
+              return false;
+            });
+            var capturedPageUrl =
               hostContext.pageUrl || document.referrer || window.location.href;
+            var pageUrl = pageUrlWithoutQueryOrHash(capturedPageUrl);
             var pageTitle =
               hostContext.pageTitle || document.title || formData.name || "";
             var pageUrlObject = null;
             try {
-              pageUrlObject = new URL(pageUrl);
+              pageUrlObject = new URL(capturedPageUrl);
             } catch (e) {}
             var query = pageUrlObject
               ? pageUrlObject.searchParams
@@ -4602,6 +4633,9 @@
                 ? "mobile"
                 : "desktop",
             };
+            Object.keys(detectedLocationMetadata).forEach(function (key) {
+              tracking[key] = detectedLocationMetadata[key];
+            });
             // Internal transport header: this is not a form field and is never
             // exposed in the form builder or rendered in the visitor form.
             event._gbsTrackingMetadata = tracking;

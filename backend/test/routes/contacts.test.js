@@ -838,6 +838,21 @@ describe('GET /api/contacts/:id — read', () => {
     });
     const args = prisma.contact.findFirst.mock.calls[0][0];
     expect(args.where).toEqual({ id: 9001, tenantId: TENANT_ID });
+    expect(args.include.webFormSubmissions).toMatchObject({
+      take: 1,
+      orderBy: { submittedAt: 'desc' },
+      select: { id: true, payloadJson: true, submittedAt: true },
+    });
+  });
+
+  test('does not add Generic web-form tracking data to another vertical', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+
+    const res = await request(makeApp({ vertical: 'travel' })).get('/api/contacts/9001');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findFirst.mock.calls[0][0];
+    expect(args.include.webFormSubmissions).toBeUndefined();
   });
 
   test('unknown / cross-tenant id → 404 Contact not found', async () => {

@@ -640,6 +640,7 @@ const TRACKING_FILTER_FIELDS = Object.freeze({
   landingPageUrl: { label: "Landing Page URL", kind: "text" },
   currentDomain: { label: "Current Domain", kind: "text" },
   formName: { label: "Form Name / ID", kind: "text" },
+  location: { label: "Location", kind: "text" },
   utm_source: { label: "UTM Source", kind: "text" },
   utm_medium: { label: "UTM Medium", kind: "text" },
   utm_campaign: { label: "UTM Campaign", kind: "text" },
@@ -2392,6 +2393,13 @@ router.get("/:id", async (req, res) => {
         tasks: true,
         deals: true,
         assignedTo: { select: { id: true, name: true, email: true } },
+        ...(isGenericCrmRequest(req) ? {
+          webFormSubmissions: {
+            select: { id: true, payloadJson: true, submittedAt: true },
+            orderBy: { submittedAt: "desc" },
+            take: 1,
+          },
+        } : {}),
       },
     });
     if (!contact) return res.status(404).json({ error: "Contact not found" });

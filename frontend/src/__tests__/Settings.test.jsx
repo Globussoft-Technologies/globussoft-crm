@@ -227,6 +227,58 @@ describe("<Settings /> — page shell + representative card pin", () => {
     );
   });
 
+  it("lists the Generic CRM lead-tracking cookie keys below reCAPTCHA", async () => {
+    renderSettings({
+      authValue: { tenant: baseTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+    });
+
+    const recaptchaHeading = await screen.findByRole("heading", { name: "Web Form reCAPTCHA" });
+    const trackingCard = screen.getByTestId("generic-web-form-automatic-tracking");
+    expect(trackingCard).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Cookie Setup Required" })).toBeInTheDocument();
+    expect(screen.getByText(/add these keys to the page url/i)).toBeInTheDocument();
+    expect(screen.getByText("utm_source")).toBeInTheDocument();
+    expect(screen.getByText("utm_medium")).toBeInTheDocument();
+    expect(screen.getByText("utm_campaign")).toBeInTheDocument();
+    expect(screen.getByText("utm_term")).toBeInTheDocument();
+    expect(screen.getByText("utm_content")).toBeInTheDocument();
+    expect(screen.getByText("gclid")).toBeInTheDocument();
+    expect(screen.getByText("fbclid")).toBeInTheDocument();
+    expect(screen.getByText("fbc")).toBeInTheDocument();
+    expect(screen.getByText("fbp")).toBeInTheDocument();
+    expect(screen.queryByText("gbs_utm_source")).not.toBeInTheDocument();
+    expect(screen.queryByText("gbs_landing_url")).not.toBeInTheDocument();
+    expect(screen.queryByText("gbs_landing_title")).not.toBeInTheDocument();
+    expect(screen.getByText(/fetched automatically and do not need cookie keys/i)).toBeInTheDocument();
+    expect(
+      recaptchaHeading.closest(".card").compareDocumentPosition(trackingCard)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("does not show Generic CRM tracking cookie keys for travel tenants", async () => {
+    const travelTenant = { ...baseTenant, vertical: "travel" };
+    fetchApiMock.mockImplementation(buildDefaultFetch({ tenant: travelTenant }));
+
+    renderSettings({
+      authValue: { tenant: travelTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+    });
+
+    await screen.findByText(/Configure Google reCAPTCHA v2 for Travel web forms/i);
+    expect(screen.queryByTestId("generic-web-form-automatic-tracking")).not.toBeInTheDocument();
+  });
+
+  it("keeps the Generic WhatsApp configuration together as one settings card", async () => {
+    renderSettings({
+      authValue: { tenant: baseTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+    });
+
+    const heading = await screen.findByRole("heading", { name: /WhatsApp \/ Meta Configuration/i });
+    const card = heading.closest(".card");
+    expect(card).toBeInTheDocument();
+    expect(card?.parentElement).toHaveClass("settings-grid");
+  });
+
   it("keeps Callified fallback credentials blank and opts out of login autofill", async () => {
     const defaultFetch = buildDefaultFetch();
     fetchApiMock.mockImplementation((url, opts) => {

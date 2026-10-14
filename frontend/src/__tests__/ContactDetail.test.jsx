@@ -30,6 +30,19 @@ const BASE_CONTACT = {
   status: 'Customer',
   aiScore: 85,
   source: 'Website',
+  website: 'https://company.example.com',
+  webFormSubmissions: [{
+    id: 91,
+    submittedAt: '2026-10-14T04:30:00.000Z',
+    payloadJson: JSON.stringify({
+      _meta: {
+        tracking: {
+          pageUrl: 'https://example.com/pricing',
+          location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
+        },
+      },
+    }),
+  }],
   deals: [
     { id: 11, title: 'Q3 Renewal', amount: 145000, currency: 'INR', stage: 'won' },
     { id: 12, title: 'Add-on package', amount: 60000, currency: 'INR', stage: 'negotiation' },
@@ -169,6 +182,33 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getAllByRole('button', { name: 'Add deal' }).length).toBeGreaterThan(0);
   });
 
+  it('shows Generic web-form Page URL and Location in Contact details', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+    const profile = await getProfile();
+
+    fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
+
+    expect(profile.getByText('Page URL')).toBeInTheDocument();
+    expect(profile.getByText('https://example.com/pricing')).toBeInTheDocument();
+    expect(profile.getByText('Location')).toBeInTheDocument();
+    expect(profile.getByText('Koramangala, Bengaluru, Karnataka, 560034, India')).toBeInTheDocument();
+    expect(profile.queryByText('Website URL')).toBeNull();
+  });
+
+  it.each(['wellness', 'travel'])('preserves Website URL outside Generic CRM (%s)', async (vertical) => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical });
+    const profile = await getProfile();
+
+    fireEvent.click(profile.getByRole('button', {
+      name: vertical === 'wellness' ? 'Patient details' : 'Contact details',
+    }));
+
+    expect(profile.getByText('Website URL')).toBeInTheDocument();
+    expect(profile.queryByText('Page URL')).toBeNull();
+  });
+
   it('renders actual SMS and email messages in the Conversation tab with the person name', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();
@@ -206,7 +246,67 @@ describe('ContactDetail — current profile contract', () => {
   });
 });
 
-describe('Generic CRM contact tags', () => {
+describe('Generic CRM contact details', () => {
+  it('filters contact data into Basic, UTM, Custom Tracking, and Ad Information tabs', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve({ fields: [{ id: 1, label: 'Service Type', fieldKey: 'service_type', fieldType: 'text' }] });
+      if (url === '/api/contacts/tags') return Promise.resolve({ tags: [] });
+      return Promise.resolve({});
+    });
+    const contact = {
+      ...BASE_CONTACT,
+      customFields: { service_type: 'SEO' },
+      webFormSubmissions: [{
+        id: 92,
+        submittedAt: '2026-10-14T04:30:00.000Z',
+        payloadJson: JSON.stringify({
+          _meta: { tracking: { pageUrl: 'https://example.com/offer', referrerUrl: 'https://search.example/referrer', utm_source: 'meta', utm_campaign: 'October leads' } },
+        }),
+      }],
+    };
+
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer inline genericTagsEnabled contact={contact} />
+      </AuthContext.Provider>,
+    );
+
+    const tabs = await screen.findByRole('tablist', { name: 'Contact detail groups' });
+    for (const label of ['All details', 'Basic information', 'UTM Tracker', 'Custom Tracking', 'Ad Information']) {
+      expect(within(tabs).getByRole('tab', { name: label })).toBeInTheDocument();
+    }
+
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'UTM Tracker' }));
+    expect(screen.getByText('meta')).toBeInTheDocument();
+    expect(screen.getByText('October leads')).toBeInTheDocument();
+    expect(screen.queryByText('UTM Referrer')).toBeNull();
+    expect(screen.queryByText('https://search.example/referrer')).toBeNull();
+    expect(screen.queryByText('Priya Sharma', { selector: '.cd-filled-value' })).toBeNull();
+    expect(screen.queryByText('https://example.com/offer')).toBeNull();
+
+    const utmSection = screen.getByRole('button', { name: 'Collapse UTM Tracker' }).closest('.cd-detail-section');
+    expect(utmSection).toHaveClass('is-open');
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse UTM Tracker' }));
+    expect(utmSection).not.toHaveClass('is-open');
+    expect(screen.queryByText('October leads')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand UTM Tracker' }));
+    expect(screen.getByText('October leads')).toBeInTheDocument();
+
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'Custom Tracking' }));
+    expect(await screen.findByText('Service Type')).toBeInTheDocument();
+    expect(screen.getByText('SEO')).toBeInTheDocument();
+    expect(screen.queryByText('October leads')).toBeNull();
+
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'Ad Information' }));
+    expect(screen.getByText('https://example.com/offer')).toBeInTheDocument();
+    expect(screen.queryByText('SEO')).toBeNull();
+
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'All details' }));
+    expect(screen.getByText('October leads')).toBeInTheDocument();
+    expect(screen.getByText('SEO')).toBeInTheDocument();
+    expect(screen.getByText('https://example.com/offer')).toBeInTheDocument();
+  });
+
   it('selects an existing tag and creates a new tag without duplicates', async () => {
     const saveTags = vi.fn().mockResolvedValue(undefined);
     fetchApiMock.mockImplementation((url, options = {}) => {

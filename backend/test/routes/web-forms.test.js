@@ -1456,7 +1456,13 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
       .post('/api/forms/public/contact-us/submit')
 
-      .set('X-GBS-Tracking', JSON.stringify({ pageUrl: 'https://example.com/pricing', utm_source: 'newsletter' }))
+      .set('X-GBS-Tracking', JSON.stringify({
+        pageUrl: 'https://example.com/pricing',
+        utm_source: 'newsletter',
+        location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
+        locationLatitude: '12.935200',
+        locationLongitude: '77.624500',
+      }))
 
       .field('name', 'Jane Doe')
 
@@ -1491,6 +1497,9 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(JSON.parse(submissionArg.payloadJson)._meta.tracking).toEqual(expect.objectContaining({
       pageUrl: 'https://example.com/pricing',
       utm_source: 'newsletter',
+      location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
+      locationLatitude: '12.935200',
+      locationLongitude: '77.624500',
       formName: 'Contact Us',
       formId: '1',
     }));

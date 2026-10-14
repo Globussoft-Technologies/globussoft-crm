@@ -23,13 +23,13 @@ import Avatar from "./Avatar";
 // violated the hard-paywall contract. Once the trial / subscription is
 // actually expired the new SubscriptionGate component takes over and the
 // user cannot dismiss it until they pay (or sign out).
-import SubscriptionGate from "./SubscriptionGate";
 import { AuthContext, ThemeContext } from "../App";
 import { getDomainBranding } from "../utils/domainBranding";
 import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
+import { confirmActiveFormExit } from "../utils/formNavigationGuard";
 import { useProductTour } from "../tours/useProductTour";
 
 // #555 (HI-06) — Option C: lock to single tenant per session. The chip is
@@ -291,15 +291,18 @@ const Layout = () => {
   }, [tenant?.name]);
 
   const handleLogout = async () => {
-    const confirmed = await notify.confirm({
-      title: "Sign out?",
-      message: "Are you sure you want to sign out of your account?",
-      confirmText: "Sign out",
-      cancelText: "Cancel",
-      destructive: true,
-    });
-
-    if (!confirmed) return;
+    const formExit = await confirmActiveFormExit();
+    if (formExit === false) return;
+    if (formExit === null) {
+      const confirmed = await notify.confirm({
+        title: "Sign out?",
+        message: "Are you sure you want to sign out of your account?",
+        confirmText: "Sign out",
+        cancelText: "Cancel",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
 
     // #528 (CRIT-03 fix): revoke the JWT SERVER-SIDE before clearing local
     // state. POST /api/auth/logout reads req.user.jti and adds it to the
@@ -624,13 +627,6 @@ const Layout = () => {
             </PageAccessGuard>
           )}
         </main>
-        {/* Hard subscription paywall — renders a non-dismissable overlay
-            over the entire app when the trial has ended or the paid
-            subscription has expired/been cancelled. Mounted via position:
-            fixed + z-index, so it visually sits above header/sidebar/main.
-            Allow-listed routes (/pricing, /payment-success, /payment-failed)
-            render through it so the admin can actually complete checkout. */}
-        <SubscriptionGate />
         {/* #634: build identifier — small, low-contrast, app-shell footer.
             Version is sourced from backend/package.json at build time (see
             vite.config.js define block) so it stays aligned with /api/health.

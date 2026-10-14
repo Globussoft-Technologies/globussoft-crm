@@ -175,7 +175,7 @@ describe('filterSidebarPages', () => {
     expect(TRAVEL_SIDEBAR_PAGE_SPECS.map((page) => page.path)).toEqual([
       '/travel',
       '/leads',
-      '/travel/pipeline',
+      // '/travel/pipeline',
       '/contacts',
       '/travel/diagnostics',
       '/travel/trip-knowledge',
@@ -211,7 +211,7 @@ describe('filterSidebarPages', () => {
       '/gmail',
       '/travel/invoices-admin',
       '/travel/tally',
-      '/travel/milestones',
+      // '/travel/milestones',
       '/travel/payables',
       '/payments',
       '/expenses',

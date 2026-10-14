@@ -1,7 +1,7 @@
 export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel', label: 'Dashboard' },
   { path: '/leads', label: 'Leads' },
-  { path: '/travel/pipeline', label: 'Pipeline' },
+  // { path: '/travel/pipeline', label: 'Pipeline' },
   { path: '/contacts', label: 'Contacts' },
   { path: '/travel/diagnostics', label: 'Diagnostics' },
   { path: '/travel/trip-knowledge', label: 'Travel Knowledge', description: 'Travel knowledge base admin' },
@@ -38,7 +38,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/gmail', label: 'Gmail' },
   { path: '/travel/invoices-admin', label: 'Invoices' },
   { path: '/travel/tally', label: 'Tally', description: 'Tally accounting, XML and CA exports' },
-  { path: '/travel/milestones', label: 'Milestones' },
+  // { path: '/travel/milestones', label: 'Milestones' },
   { path: '/travel/payables', label: 'Payables' },
   { path: '/payments', label: 'Payments Received' },
   { path: '/expenses', label: 'Expense Management' },

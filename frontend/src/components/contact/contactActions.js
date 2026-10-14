@@ -48,9 +48,9 @@ export const updateDeal = (dealId, data) =>
 export const fetchScore = (contactId) =>
   fetchApi(`/api/ai_scoring/contact/${contactId}`, { silent: true });
 
-export async function fetchStaff() {
+export async function fetchStaff(path = '/api/staff?fields=summary') {
   try {
-    const d = await fetchApi('/api/staff?fields=summary', { silent: true });
+    const d = await fetchApi(path, { silent: true });
     if (Array.isArray(d)) return d;
     return d?.staff || d?.users || d?.data || [];
   } catch {

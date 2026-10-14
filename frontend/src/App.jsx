@@ -23,6 +23,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
 import Layout from "./components/Layout";
+import SubscriptionGate from "./components/SubscriptionGate";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
 import GenericAccessGuard from "./components/GenericAccessGuard";
@@ -1816,7 +1817,7 @@ export default function App() {
                     />
                     <Route
                       path="/*"
-                      element={token ? <GenericAccessGuard><Layout /></GenericAccessGuard> : <Navigate to="/login" />}
+                      element={token ? <SubscriptionGate><GenericAccessGuard><Layout /></GenericAccessGuard></SubscriptionGate> : <Navigate to="/login" />}
                     >
                       <Route
                         path="dashboard"

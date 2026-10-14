@@ -2290,7 +2290,7 @@ function renderTravelNav({
 
       {group("Sales", ["/leads", "/travel/pipeline", "/contacts", "/travel/quotes-admin", "/travel/flights/quote", "/travel/quotes/builder", "/travel/quote-templates"], <>
         <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
-        <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+        {/* <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} /> */}
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         {activeSubBrand !== "tmc" && <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />}
         {activeSubBrand !== "tmc" && <Link to="/travel/flights/quote" icon={Plane} label="Flight Quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />}
@@ -2333,7 +2333,7 @@ function renderTravelNav({
       {group("Finance", ["/travel/invoices-admin", "/travel/tally", "/travel/milestones", "/travel/payables", "/payments", "/expenses", "/travel/cost-master", "/travel/pricing-rules"], <>
         <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
         <Link to="/travel/tally" icon={Calculator} label="Tally" requiredPermission={{ module: "invoices", action: "export" }} />
-        <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
+        {/* <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} /> */}
         <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
         <Link to="/payments" icon={IndianRupee} label="Payments Received" requiredPermission={{ module: "payments", action: "read" }} />
         <Link to="/expenses" icon={WalletIcon} label="Expense Management" requiredPermission={{ module: "expenses", action: "read" }} />
@@ -2341,10 +2341,11 @@ function renderTravelNav({
         <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" requiredPermission={{ module: "pricing", action: "manage" }} />
       </>)}
 
-      {group("Administration", ["/staff", "/settings/roles", "/audit-log"], <>
+      {group("Administration", ["/staff", "/settings/roles", "/audit-log", "/travel/reports"], <>
         <Link to="/staff" icon={UsersRound} label="Staff" requiredPermission={{ module: "staff", action: "read" }} />
         <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
         <Link to="/audit-log" icon={ScrollText} label="Audit Log" requiredPermission={{ module: "audit", action: "read" }} />
+        <Link to="/travel/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
       </>)}
 
       {group("Platform", ["/developer", "/privacy"], <>

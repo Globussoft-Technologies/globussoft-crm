@@ -28,7 +28,7 @@
  *   6. Switching to Cross-brand tab: fires GET
  *      /api/travel/reports/cross-brand.
  *   7. TMC populated: KPI tiles render (Total revenue + Schools),
- *      "Trip status" + "Deal funnel" + "Diagnostics by classification"
+ *      "Trip status" + "Quote pipeline" + "Diagnostics by classification"
  *      + "Top destinations by revenue" cards render with mocked data.
  *      ₹-formatted revenue uses en-IN locale (1,23,456 grouping).
  *   8. TMC empty: zero destinations → "No revenue recorded yet."
@@ -95,7 +95,7 @@
  *     clicks, not concurrent.
  *   - Brief mentioned "Empty-state per report section: backend
  *     returns zero data". SUT has multiple empty-state copies — they
- *     differ per card (No trips yet / No deals yet / No revenue
+ *     differ per card (No trips yet / No revenue
  *     recorded / No itineraries yet / etc.). Tests cover several to
  *     pin the per-card branches.
  *
@@ -389,7 +389,8 @@ describe('<TravelReports /> — TMC tab content', () => {
     expect(screen.getByText(/^Schools$/i)).toBeInTheDocument();
     // Cards.
     expect(screen.getByText(/Trip status/i)).toBeInTheDocument();
-    expect(screen.getByText(/Deal funnel/i)).toBeInTheDocument();
+    expect(screen.getByText(/Quote pipeline/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Deal funnel/i)).not.toBeInTheDocument();
     expect(
       screen.getByText(/Diagnostics by lead type/i),
     ).toBeInTheDocument();
@@ -405,9 +406,7 @@ describe('<TravelReports /> — TMC tab content', () => {
   it('renders en-IN ₹-formatted revenue (12,34,567 grouping)', async () => {
     render(<TravelReports />);
     // 1234567 → "12,34,567" (en-IN grouping: lakh-and-crore grouping).
-    // The value appears in BOTH the KPI tile (Total revenue) AND the
-    // Closed_Won row of the Deal funnel — use findAllByText per the
-    // RTL standing rule (label appears in multiple chrome layers).
+    // Revenue is shown in the KPI tile and destination breakdown.
     await screen.findByText(/Sales funnel/i);
     fireEvent.click(screen.getByRole('tab', { name: /TMC/i }));
     await screen.findByText(/Total revenue/i);
@@ -428,8 +427,7 @@ describe('<TravelReports /> — TMC tab content', () => {
     expect(screen.getByText(/no schools yet/i)).toBeInTheDocument();
     // Trip status KeyValueList empty.
     expect(screen.getByText(/No trips yet\./i)).toBeInTheDocument();
-    // Deal funnel empty row.
-    expect(screen.getByText(/No deals yet\./i)).toBeInTheDocument();
+    expect(screen.queryByText(/Deal funnel/i)).not.toBeInTheDocument();
   });
 });
 
@@ -447,6 +445,8 @@ describe('<TravelReports /> — RFU tab content', () => {
     expect(screen.getByText(/Revenue health/i)).toBeInTheDocument();
     expect(screen.getByText(/Diagnostics intelligence/i)).toBeInTheDocument();
     expect(screen.getByText(/Diagnostics by lead type/i)).toBeInTheDocument();
+    expect(screen.getByText(/Quote pipeline/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Deal funnel/i)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Standard readiness/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Confident readiness/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Premium readiness/i).length).toBeGreaterThanOrEqual(1);

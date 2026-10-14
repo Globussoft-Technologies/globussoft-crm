@@ -2105,6 +2105,10 @@ const Leads = () => {
   const canLeadUpdate =
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "update"));
+  const canAssignLead =
+    hasLegacyRenderAccess ||
+    (permissionsReady &&
+      (hasPermission("leads", "update") || hasPermission("contacts", "update")));
   const canLeadDelete =
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "delete"));
@@ -2121,6 +2125,7 @@ const Leads = () => {
     useState(null);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
+  const staffRequestId = useRef(0);
   const [services, setServices] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2183,6 +2188,7 @@ const Leads = () => {
   const resizeStateRef = useRef(null);
   const leadsFrozenTableRef = useRef(null);
   const leadsScrollableTableRef = useRef(null);
+  const leadsHorizontalTouchRef = useRef(null);
   const [bulkAgent, setBulkAgent] = useState("");
   const [, setBulkCampaignId] = useState("");
   const [bulkCampaignDropdownOpen, setBulkCampaignDropdownOpen] =
@@ -2821,14 +2827,18 @@ const Leads = () => {
     }
   }, []);
 
-  const fetchStaff = async () => {
+  const fetchStaff = useCallback(async () => {
+    const requestId = ++staffRequestId.current;
     try {
-      const data = await fetchApi("/api/staff");
-      setStaff(Array.isArray(data) ? data : []);
+      const endpoint = isTravel && !isAdmin && canAssignLead ? "/api/contacts/assignees" : "/api/staff";
+      const data = await fetchApi(endpoint);
+      if (requestId === staffRequestId.current) setStaff(Array.isArray(data) ? data : []);
     } catch {
-      setStaff([]);
+      if (requestId === staffRequestId.current) setStaff([]);
     }
-  };
+  }, [isTravel, isAdmin, canAssignLead]);
+
+  useEffect(() => { fetchStaff(); }, [fetchStaff]);
 
   const staffBrandSuffix = (member) => {
     if (!isTravel) return "";
@@ -3263,7 +3273,6 @@ const Leads = () => {
       }
     });
     loadLeadTagCatalog();
-    fetchStaff();
     loadAutoCampaignRules();
     if (isTravel) {
       fetchApi("/api/pipeline_stages", { silent: true })
@@ -4259,12 +4268,23 @@ const Leads = () => {
   };
 
   const handleAssign = async (contactId, assignedToId) => {
-    await fetchApi(`/api/contacts/${contactId}/assign`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ assignedToId: assignedToId || null }),
-    });
-    fetchLeads({ background: true });
+    try {
+      const updated = await fetchApi(`/api/contacts/${contactId}/assign`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignedToId: assignedToId || null }),
+      });
+      const ownerId = updated?.assignedToId ?? (assignedToId ? Number(assignedToId) : null);
+      const owner = updated?.assignedTo ?? staff.find((member) => String(member.id) === String(ownerId)) ?? null;
+      setLeads((rows) => rows.map((lead) => lead.id === contactId
+        ? { ...lead, assignedToId: ownerId, assignedTo: owner }
+        : lead));
+      notify.success(ownerId ? `Assigned to ${owner?.name || owner?.email || "staff member"}` : "Assignment cleared");
+      if (assigneeFilter) fetchLeads({ background: true });
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to assign lead");
+      fetchLeads({ background: true });
+    }
   };
 
   const handleBulkAssign = async () => {
@@ -6685,7 +6705,7 @@ const Leads = () => {
             style={getBodyCellStyle("assignedTo")}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAdmin || isTravel ? (
+            {canAssignLead && (isAdmin || isTravel) ? (
               <div className="leads-assignee-control">
                 <select
                   className="input-field"
@@ -6702,6 +6722,11 @@ const Leads = () => {
                   aria-label={`Assign ${lead.name || "lead"} to staff`}
                 >
                   <option value="">Unassigned</option>
+                  {lead.assignedToId && !assignableStaff(lead).some((s) => String(s.id) === String(lead.assignedToId)) && (
+                    <option value={lead.assignedToId}>
+                      {lead.assignedTo?.name || lead.assignedTo?.email || `Staff #${lead.assignedToId}`}
+                    </option>
+                  )}
                   {assignableStaff(lead).map((s) => (
                     <option key={s.id} value={s.id}>
                       {staffOptionLabel(s)}
@@ -9647,6 +9672,28 @@ const Leads = () => {
         </div>
         <div
           className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${filteredLeads.length > 0 && filteredLeads.length <= 10 ? " leads-split-table--sparse" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          onTouchStart={isGeneric ? (event) => {
+            const touch = event.touches[0];
+            const scrollbar = event.currentTarget.querySelector(".top-scroll-sync__sticky-bottom");
+            if (!touch || !scrollbar) return;
+            leadsHorizontalTouchRef.current = {
+              x: touch.clientX,
+              y: touch.clientY,
+              scrollLeft: scrollbar.scrollLeft,
+              scrollbar,
+            };
+          } : undefined}
+          onTouchMove={isGeneric ? (event) => {
+            const gesture = leadsHorizontalTouchRef.current;
+            const touch = event.touches[0];
+            if (!gesture || !touch) return;
+            const deltaX = gesture.x - touch.clientX;
+            const deltaY = gesture.y - touch.clientY;
+            if (Math.abs(deltaX) < 8 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+            gesture.scrollbar.scrollLeft = gesture.scrollLeft + deltaX;
+            if (event.cancelable) event.preventDefault();
+          } : undefined}
+          onTouchEnd={isGeneric ? () => { leadsHorizontalTouchRef.current = null; } : undefined}
           style={
             isGeneric
               ? {

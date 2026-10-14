@@ -1,7 +1,7 @@
 // Travel CRM — Reports page (PRD §4.9 / §7).
 //
 // Lives at /travel/reports. Three tabs:
-//   - TMC          revenue by destination, repeat schools, deal funnel
+//   - TMC          revenue by destination, repeat schools, quote pipeline
 //   - RFU          itinerary revenue by status, diagnostic tier mix, repeat customers
 //   - Cross-brand  side-by-side won-revenue + conversion across all
 //                  sub-brands the caller can see
@@ -528,28 +528,6 @@ function TmcTab({ dateParams }) {
 
           <QuoteFunnelCard quotes={data.quotes} onStatusClick={(status) => openTmcQuotes(status)} />
 
-          <Card title="Deal funnel">
-            <TopScrollSync>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr><th style={th}>Stage</th><th style={thRight}>Count</th><th style={thRight}>Amount</th></tr>
-              </thead>
-              <tbody>
-                {Object.keys(data.deals.byStage).length === 0 && (
-                  <tr><td colSpan="3" style={emptyCell}>No deals yet.</td></tr>
-                )}
-                {Object.entries(data.deals.byStage).map(([stage, count]) => (
-                  <tr key={stage} style={trStyle}>
-                    <td style={td}>{stage}</td>
-                    <td style={tdRight}>{count}</td>
-                    <td style={tdRight}>₹{Number(data.deals.amountByStage[stage] || 0).toLocaleString("en-IN")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </TopScrollSync>
-          </Card>
-
           <Card title="Diagnostics by lead type">
             <KeyValueList
               obj={data.diagnostics.byClassification}
@@ -729,31 +707,7 @@ function RfuTab({ dateParams }) {
             </TopScrollSync>
           </Card>
 
-          <div style={gridStyle}>
-            <QuoteFunnelCard quotes={data.quotes} onStatusClick={(status) => openRfuQuotes(status)} />
-
-            <Card title="Deal funnel">
-              <TopScrollSync>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr><th style={th}>Stage</th><th style={thRight}>Count</th><th style={thRight}>Amount</th></tr>
-                </thead>
-                <tbody>
-                  {Object.keys(data.deals.byStage).length === 0 && (
-                    <tr><td colSpan="3" style={emptyCell}>No deals yet.</td></tr>
-                  )}
-                  {Object.entries(data.deals.byStage).map(([stage, count]) => (
-                    <tr key={stage} style={trStyle}>
-                      <td style={td}>{stage}</td>
-                      <td style={tdRight}>{count}</td>
-                      <td style={tdRight}>{money(data.deals.amountByStage[stage] || 0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              </TopScrollSync>
-            </Card>
-          </div>
+          <QuoteFunnelCard quotes={data.quotes} onStatusClick={(status) => openRfuQuotes(status)} />
 
           <Card title="Diagnostics by lead type" wide>
             <KeyValueList
@@ -1174,8 +1128,7 @@ function Card({ title, children, wide, interactive, onClick, actionLabel }) {
 }
 
 // The real travel sales funnel — TravelQuote by status (count + ₹). Travel
-// never creates generic Deal rows, so the legacy "Deal funnel" was always
-// empty; this surfaces the actual quote pipeline that DOES have data.
+// never creates generic Deal rows, so this shows the quote pipeline that has data.
 
 
 function TmcRevenueDetail({ rows = [], onOpenTrip, title = "TMC revenue source detail" }) {

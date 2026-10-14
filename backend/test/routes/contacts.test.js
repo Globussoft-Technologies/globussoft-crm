@@ -230,8 +230,10 @@ prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.contact.updateMany = vi.fn();
 prisma.user = prisma.user || {};
+prisma.user.findMany = vi.fn();
 prisma.user.findFirst = vi.fn().mockResolvedValue(null);
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.userRole = prisma.userRole || {};
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.wallet = prisma.wallet || {};
@@ -316,6 +318,7 @@ beforeEach(() => {
   prisma.contact.update.mockReset();
   prisma.contact.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.user.findFirst.mockReset().mockResolvedValue(null);
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
@@ -602,6 +605,70 @@ describe('GET /api/contacts — list', () => {
 });
 
 describe('PUT /api/contacts/:id/assign - travel agent reassignment', () => {
+  test('travel assignment picker returns usable IDs with only eligible staff fields', async () => {
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 42, name: 'TMC Operator', role: 'MANAGER', subBrandAccess: '["tmc"]' },
+    ]);
+    const res = await request(makeApp({ role: 'MANAGER', userId: 42, vertical: 'travel' }))
+      .get('/api/contacts/assignees');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      { id: 42, name: 'TMC Operator', role: 'MANAGER', subBrandAccess: '["tmc"]' },
+    ]);
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: TENANT_ID,
+        userType: { in: ['STAFF', 'OWNER'] },
+        role: { notIn: ['ADMIN', 'CUSTOMER'] },
+        deactivatedAt: null,
+      },
+      select: { id: true, name: true, role: true, subBrandAccess: true },
+      orderBy: { name: 'asc' },
+    });
+  });
+
+  test('repeat assignment is rejected without writing or notifying', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      assignedToId: 42,
+      subBrand: 'tmc',
+    });
+    const res = await request(makeApp({ role: 'MANAGER', userId: 42, vertical: 'travel' }))
+      .put('/api/contacts/9001/assign')
+      .send({ assignedToId: '42' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_ASSIGNED');
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  test('read-only travel role cannot list assignees, reassign, or update its own lead', async () => {
+    const originalFindMany = prisma.userRole.findMany;
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([{
+      role: { permissions: [
+        { module: 'contacts', action: 'read' },
+        { module: 'leads', action: 'read' },
+      ] },
+    }]);
+    prisma.contact.findFirst.mockResolvedValue({ ...SAMPLE_CONTACT, assignedToId: 901 });
+    const app = makeApp({ role: 'USER', userId: 901, vertical: 'travel' });
+    try {
+      const [picker, assignment, update] = await Promise.all([
+        request(app).get('/api/contacts/assignees'),
+        request(app).put('/api/contacts/9001/assign').send({ assignedToId: '8' }),
+        request(app).put('/api/contacts/9001').send({ assignedToId: 8 }),
+      ]);
+      expect([picker.status, assignment.status, update.status]).toEqual([403, 403, 403]);
+      expect(prisma.contact.update).not.toHaveBeenCalled();
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    } finally {
+      prisma.userRole.findMany = originalFindMany;
+      requireCJS('../../middleware/requirePermission').clearUserCache(901, TENANT_ID);
+    }
+  });
+
   test('travel agent can reassign their own lead to a non-admin staff member and notifies only that staff member', async () => {
     prisma.contact.findFirst.mockResolvedValueOnce({
       ...SAMPLE_CONTACT,

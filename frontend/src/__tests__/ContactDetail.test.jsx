@@ -86,7 +86,7 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42, state, vertical } = {}) {
+function renderPage({ contactId = 42, state, vertical, user } = {}) {
   const page = (
     <MemoryRouter initialEntries={[state ? { pathname: `/contacts/${contactId}`, state } : `/contacts/${contactId}`]}>
       <Routes>
@@ -96,8 +96,8 @@ function renderPage({ contactId = 42, state, vertical } = {}) {
       </Routes>
     </MemoryRouter>
   );
-  return render(vertical
-    ? <AuthContext.Provider value={{ tenant: { vertical } }}>{page}</AuthContext.Provider>
+  return render(vertical || user
+    ? <AuthContext.Provider value={{ tenant: { vertical }, user }}>{page}</AuthContext.Provider>
     : page);
 }
 
@@ -106,6 +106,18 @@ async function getProfile() {
 }
 
 describe('ContactDetail — current profile contract', () => {
+  it('shows the owner without a reassignment control for a read-only travel role', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, assignedToId: 7, assignedTo: { id: 7, name: 'TMC Operator' } } },
+    }));
+    renderPage({ vertical: 'travel', user: { role: 'USER', permissions: ['contacts.read', 'leads.read'] } });
+
+    await getProfile();
+    expect(screen.getAllByText('TMC Operator').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('combobox', { name: 'Sales owner' })).not.toBeInTheDocument();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/contacts/assignees', expect.anything());
+  });
+
   it('renders the loading placeholder before the contact GET resolves', () => {
     fetchApiMock.mockImplementation((url) => (
       /^\/api\/contacts\/\d+$/.test(url) ? new Promise(() => {}) : Promise.resolve([])

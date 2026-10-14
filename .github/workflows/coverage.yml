@@ -186,6 +186,7 @@ jobs:
             tests/wellness-location-assignments-api.spec.js \
             tests/wellness-geofence-zones-api.spec.js \
             tests/contacts-api.spec.js \
+            tests/contact-assignees-api.spec.js \
             tests/lead-derived-filters-api.spec.js \
             tests/deals-api.spec.js \
             tests/pipelines.spec.js \

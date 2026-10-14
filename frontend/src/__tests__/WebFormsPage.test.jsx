@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { AuthContext } from '../App';
 
 import WebForms from '../pages/WebForms';
+import { confirmActiveFormExit } from '../utils/formNavigationGuard';
 
 
 
@@ -520,6 +521,32 @@ describe('WebForms builder page', () => {
       }));
     });
     await waitFor(() => expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/dashboard'));
+  });
+
+  test('offers one form-specific sign-out decision and preserves edits when cancelled', async () => {
+    renderRoutedPage();
+    await openBuilder();
+    expect(await confirmActiveFormExit()).toBeNull();
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Changed name' } });
+    const draftKey = 'globuscrm:web-form-draft:generic:14:1';
+    await waitFor(() => expect(window.sessionStorage.getItem(draftKey)).toContain('Changed name'));
+
+    notifyConfirm.mockResolvedValueOnce(false);
+    let canSignOut;
+    await act(async () => { canSignOut = await confirmActiveFormExit(); });
+    expect(canSignOut).toBe(false);
+    expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Unsaved changes',
+      confirmText: 'Discard & sign out',
+      cancelText: 'Continue editing',
+      destructive: true,
+    }));
+    expect(screen.getByDisplayValue('Changed name')).toBeInTheDocument();
+    expect(window.sessionStorage.getItem(draftKey)).toContain('Changed name');
+
+    await act(async () => { canSignOut = await confirmActiveFormExit(); });
+    expect(canSignOut).toBe(true);
+    expect(window.sessionStorage.getItem(draftKey)).toBeNull();
   });
 
   test('travel logo selection immediately sends a multipart upload request', async () => {
@@ -1203,9 +1230,16 @@ test('Generic forms can be filed into a manually created folder', async () => {
   await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: 10 }) })));
   expect(await screen.findByText('Folder: Projects')).toBeInTheDocument();
   const formCard = screen.getByText('Brand intake').closest('article');
-  const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => '101'), effectAllowed: '', dropEffect: '' };
+  const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => '101'), setDragImage: vi.fn(), effectAllowed: '', dropEffect: '' };
   const moveCallsBeforeDrop = fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/forms/101/folder' && opts?.method === 'PUT').length;
   fireEvent.dragStart(formCard, { dataTransfer });
+  expect(dataTransfer.setDragImage).toHaveBeenCalledOnce();
+  const [dragPreview] = dataTransfer.setDragImage.mock.calls[0];
+  expect(dragPreview).not.toBe(formCard);
+  expect(dragPreview).toHaveClass('wf-form-drag-preview');
+  expect(dragPreview).toHaveTextContent('Moving form');
+  expect(dragPreview).toHaveTextContent('Brand intake');
+  expect(dragPreview.querySelector('svg')).toBeInTheDocument();
   fireEvent.dragOver(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });
   expect(screen.getByRole('button', { name: /Campaigns.*0/ })).toHaveClass('wf-folder-drop-target');
   fireEvent.drop(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });

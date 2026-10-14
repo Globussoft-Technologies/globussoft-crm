@@ -1385,6 +1385,31 @@ async function writeLeadCustomFieldValues(contactId, tenantId, customFields) {
 router.use(verifyToken);
 router.get("/by-status", audienceController.getContactsByStatus);
 
+// Travel agents need real staff IDs for the assignment picker. The general
+// staff directory deliberately masks those IDs for low-trust viewers.
+router.get("/assignees", requireAnyPermission([
+  { module: "contacts", action: "update" },
+  { module: "leads", action: "update" },
+]), async (req, res) => {
+  if (req.user.vertical !== "travel") return res.status(404).json({ error: "Not found" });
+  try {
+    const where = {
+      tenantId: req.user.tenantId,
+      userType: { in: ["STAFF", "OWNER"] },
+      role: req.user.role === "ADMIN" ? { not: "CUSTOMER" } : { notIn: ["ADMIN", "CUSTOMER"] },
+      deactivatedAt: null,
+    };
+    const users = await prisma.user.findMany({
+      where,
+      select: { id: true, name: true, role: true, subBrandAccess: true },
+      orderBy: { name: "asc" },
+    });
+    return res.json(users);
+  } catch (_err) {
+    return res.status(500).json({ error: "Failed to fetch assignees" });
+  }
+});
+
 router.get("/", async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
@@ -3463,8 +3488,12 @@ const updateContactById = async (req, res) => {
   }
 };
 
-router.put("/:id", updateContactById);
-router.patch("/:id", updateContactById);
+const requireContactOrLeadUpdate = requireAnyPermission([
+  { module: "contacts", action: "update" },
+  { module: "leads", action: "update" },
+]);
+router.put("/:id", requireContactOrLeadUpdate, updateContactById);
+router.patch("/:id", requireContactOrLeadUpdate, updateContactById);
 
 // CSV Import — accepts pre-parsed rows
 // #154: validation hardening
@@ -3620,7 +3649,7 @@ router.post("/import-csv", async (req, res) => {
 // The dropdowns on the travel pages are filtered to non-admin staff, and
 // this route keeps the validation in place so a forged request can't assign
 // a lead to an admin.
-router.put("/:id/assign", async (req, res) => {
+router.put("/:id/assign", requireContactOrLeadUpdate, async (req, res) => {
   try {
     const { assignedToId } = req.body;
     const existing = await prisma.contact.findFirst({
@@ -3643,6 +3672,9 @@ router.put("/:id/assign", async (req, res) => {
       return res
         .status(400)
         .json({ error: "Invalid staff member", code: "INVALID_ASSIGNEE" });
+    }
+    if (nextAssignedToId !== null && nextAssignedToId === existing.assignedToId) {
+      return res.status(409).json({ error: "Lead is already assigned to this staff member", code: "ALREADY_ASSIGNED" });
     }
     const targetUser =
       nextAssignedToId !== null

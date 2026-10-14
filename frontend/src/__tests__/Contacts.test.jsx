@@ -32,8 +32,8 @@ vi.mock('../utils/api', () => ({
 // <AuthContext.Provider value={{ user: { role: 'USER' }, tenant: {...} }}>
 // using the same AuthContext exported from this mock.
 vi.mock('../App', async () => {
-  const { createContext } = await import('react');
-  return { AuthContext: createContext({ user: { role: 'ADMIN' }, tenant: { vertical: 'generic' } }) };
+  const { AuthContext } = await import('../appContexts');
+  return { AuthContext };
 });
 
 // Stable mock-object reference — see CLAUDE.md cron-learning on infinite-
@@ -62,6 +62,7 @@ vi.mock('../components/DuplicateContactModal', () => ({
 }));
 
 import Contacts from '../pages/Contacts';
+import { AuthContext } from '../App';
 
 const SEEDED_CONTACTS = [
   { id: 1, name: 'Aarav Sharma', email: 'aarav@acme.in', phone: '+91 98000 12345', company: 'Acme Logistics', title: 'CEO', status: 'Lead', aiScore: 82, assignedToId: null },
@@ -131,9 +132,11 @@ beforeEach(() => {
 
 function renderContacts() {
   return render(
-    <MemoryRouter>
-      <Contacts />
-    </MemoryRouter>,
+    <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { vertical: 'generic' } }}>
+      <MemoryRouter>
+        <Contacts />
+      </MemoryRouter>
+    </AuthContext.Provider>,
   );
 }
 
@@ -490,6 +493,8 @@ describe('Contacts.jsx — top-level page contract', () => {
       );
       expect(putCall).toBeTruthy();
       expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
+      expect(select).toHaveValue('8');
+      expect(notifyObj.success).toHaveBeenCalledWith('Assigned to Vikram Sales');
     });
   });
 
@@ -512,7 +517,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     ];
     fetchApiMock.mockImplementation((url) => {
       if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope(travelContacts));
-      if (url === '/api/staff') return Promise.resolve(travelStaff);
+      if (url === '/api/contacts/assignees') return Promise.resolve(travelStaff.filter(s => s.role !== 'ADMIN'));
       return Promise.resolve(null);
     });
 
@@ -528,6 +533,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
     const priyaRow = getScrollableContactRowByName('Priya Iyer');
     const assignSelect = within(priyaRow).getByRole('combobox');
+    await waitFor(() => expect(assignSelect).toHaveValue('7'));
     const optionTexts = Array.from(assignSelect.querySelectorAll('option')).map(option => option.textContent || '');
     expect(optionTexts.some((text) => /Yasin Admin/i.test(text))).toBe(false);
 
@@ -537,7 +543,33 @@ describe('Contacts.jsx — top-level page contract', () => {
       const putCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/2/assign' && opts?.method === 'PUT');
       expect(putCall).toBeTruthy();
       expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
+      expect(assignSelect).toHaveValue('8');
+      expect(notifyObj.success).toHaveBeenCalledWith('Assigned to Sahil Agent');
     });
+  });
+
+  it('shows the current owner without an assignment control for a read-only travel role', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (isContactsListRequest(url)) return Promise.resolve(contactsEnvelope([
+        { ...SEEDED_CONTACTS[1], assignedTo: { id: 7, name: 'TMC Operator' } },
+      ]));
+      if (url === '/api/staff') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    render(
+      <AuthContext.Provider value={{
+        user: { userId: 7, role: 'USER', permissions: ['contacts.read', 'leads.read'] },
+        tenant: { vertical: 'travel' },
+      }}>
+        <MemoryRouter><Contacts /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    await screen.findByText('Priya Iyer');
+    const row = getScrollableContactRowByName('Priya Iyer');
+    expect(within(row).getByText('TMC Operator')).toBeInTheDocument();
+    expect(within(row).queryByRole('combobox')).not.toBeInTheDocument();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/contacts/assignees');
   });
 
   it('bulk actions menu assigns the selected contacts and shows the selected-count badge', async () => {

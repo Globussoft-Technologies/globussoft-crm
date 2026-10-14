@@ -712,7 +712,14 @@ jobs:
   frontend_unit_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Frontend unit tests (${{ matrix.shard }}/4)
+    timeout-minutes: 15
+    strategy:
+      # Keep sibling results available even when one shard fails. Downstream
+      # deploy jobs still require the aggregate frontend_unit_tests result.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
 
@@ -733,8 +740,17 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
-          npm test
-          echo "::notice::Frontend unit tests passed"
+          npm test -- --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile=test-results/frontend-${{ matrix.shard }}.json
+          echo "::notice::Frontend unit test shard ${{ matrix.shard }}/4 passed"
+
+      - name: Upload frontend test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-unit-results-${{ matrix.shard }}
+          path: frontend/test-results/frontend-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   #  6. MIGRATION_CHECK: dry-run prisma migrate diff between HEAD~1 and 
   # the proposed schema, flag prod-outage risk patterns (G-23). The

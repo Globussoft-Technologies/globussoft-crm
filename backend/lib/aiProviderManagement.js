@@ -268,6 +268,9 @@ function normalizeGeminiResponse(data) {
         id: `gemini-${toolCalls.length + 1}-${Date.now()}`,
         name: p.functionCall.name,
         args: p.functionCall.args || {},
+        // Gemini 3/2.5 may attach this opaque value to functionCall parts.
+        // It must be echoed back unchanged on the next generateContent call.
+        thoughtSignature: p.thoughtSignature || p.thought_signature || null,
       });
     }
   }
@@ -464,7 +467,9 @@ function toAnthropicMessages(messages) {
 function toGeminiContents(messages) {
   let systemInstruction;
   const contents = [];
-  for (const m of messages || []) {
+  const input = messages || [];
+  for (let index = 0; index < input.length; index += 1) {
+    const m = input[index];
     if (!m || !isValidContent(m.content)) continue;
     if (m.role === "system") {
       if (typeof m.content === "string")
@@ -472,22 +477,47 @@ function toGeminiContents(messages) {
       continue;
     }
     if (m.role === "tool") {
-      contents.push({
-        role: "function",
-        parts: [
-          {
+      const functionResponseParts = [];
+      let toolIndex = index;
+      while (toolIndex < input.length && input[toolIndex]?.role === "tool") {
+        const toolMessage = input[toolIndex];
+        if (isValidContent(toolMessage.content)) {
+          functionResponseParts.push({
             functionResponse: {
-              name: m.name || "tool",
+              name: toolMessage.name || "tool",
               response: {
-                result: typeof m.content === "string" ? m.content : "",
+                result: typeof toolMessage.content === "string" ? toolMessage.content : "",
               },
             },
-          },
-        ],
+          });
+        }
+        toolIndex += 1;
+      }
+      contents.push({
+        // Gemini accepts only `user` and `model` roles in contents. Function
+        // responses are sent as a user turn containing functionResponse parts.
+        role: "user",
+        parts: functionResponseParts,
       });
+      index = toolIndex - 1;
       continue;
     }
     const role = m.role === "assistant" ? "model" : "user";
+    if (m.role === "assistant" && Array.isArray(m.toolCalls) && m.toolCalls.length) {
+      const parts = [];
+      if (typeof m.content === "string" && m.content) parts.push({ text: m.content });
+      for (const call of m.toolCalls) {
+        if (!call?.name) continue;
+        const functionCall = { name: call.name, args: call.args || {} };
+        const part = { functionCall };
+        // thoughtSignature belongs to the Gemini Part, alongside functionCall,
+        // not inside the FunctionCall object.
+        if (call.thoughtSignature) part.thoughtSignature = call.thoughtSignature;
+        parts.push(part);
+      }
+      if (parts.length) contents.push({ role, parts });
+      continue;
+    }
     if (typeof m.content === "string") {
       contents.push({ role, parts: [{ text: m.content }] });
       continue;
@@ -688,6 +718,13 @@ async function callAnthropic(config, { messages, tools }, fetchImpl) {
   };
 }
 
+function shouldTryProviderFallback(error) {
+  const status = Number(error?.status);
+  if (status === 404) return true;
+  if (status !== 400) return false;
+  return /(model|model name).*(not found|not available|unsupported|invalid)/i.test(String(error?.message || ""));
+}
+
 async function generateChatCompletion(config, payload, fetchImpl) {
   if (!config || !config.apiKey) {
     const err = new Error("AI provider not configured for this tenant.");
@@ -715,6 +752,11 @@ async function generateChatCompletion(config, payload, fetchImpl) {
       throw err;
     } catch (err) {
       lastErr = err;
+      // A fallback model cannot repair a quota, authentication, or provider
+      // outage error. Trying the same key against every fallback model only
+      // burns more requests and can make the quota problem worse. Fallbacks
+      // are reserved for an unavailable/invalid model configuration.
+      if (!shouldTryProviderFallback(err)) break;
     }
   }
 
@@ -768,6 +810,10 @@ function withGeminiModelFallbacks(config, existingFallbacks = []) {
     return true;
   });
   return { ...config, fallbacks };
+}
+
+function requestedModelForLabel(modelLabel) {
+  return modelLabel === "gemini-flash-lite" ? DEFAULT_GEMINI_MODEL : null;
 }
 
 async function readByokConfig(tenantId) {
@@ -926,6 +972,7 @@ async function resolveProviderConfig(
   tenantId,
   { requestedModelLabel = null } = {},
 ) {
+  const requestedGeminiModel = requestedModelForLabel(requestedModelLabel);
   const byok = await readByokConfig(tenantId);
   if (byok && byok.apiKey) {
     const providerMeta = getProviderMeta(byok.providerId);
@@ -934,7 +981,9 @@ async function resolveProviderConfig(
       providerLabel: providerMeta.label,
       family: providerMeta.family,
       apiKey: byok.apiKey,
-      model: byok.model || defaultModelForProvider(providerMeta.id),
+      model: requestedGeminiModel && providerMeta.family === "gemini"
+        ? requestedGeminiModel
+        : byok.model || defaultModelForProvider(providerMeta.id),
       baseUrl: validateProviderBaseUrl(providerMeta.id, byok.baseUrl, {
         source: "byok",
       }),
@@ -959,6 +1008,7 @@ async function resolveProviderConfig(
     );
     return withGeminiModelFallbacks({
       ...primary,
+      ...(requestedGeminiModel && primary.family === "gemini" ? { model: requestedGeminiModel } : {}),
       source: "internal",
       accessType: "crm-managed",
     }, fallbacks.map((candidate) => ({ ...candidate, accessType: "crm-managed" })));
@@ -974,15 +1024,18 @@ async function resolveProviderConfig(
   if (!primary && fallbacks.length === 0) return null;
 
   const config = primary || fallbacks[0];
+  const selectedConfig = requestedGeminiModel && config.family === "gemini"
+    ? { ...config, model: requestedGeminiModel }
+    : config;
   return withGeminiModelFallbacks({
-    ...config,
+    ...selectedConfig,
     source: "internal",
     accessType: "crm-managed",
   }, fallbacks
       .filter(
         (candidate) =>
-          candidate.providerId !== config.providerId ||
-          candidate.model !== config.model,
+          candidate.providerId !== selectedConfig.providerId ||
+          candidate.model !== selectedConfig.model,
       )
       .map((candidate) => ({ ...candidate, accessType: "crm-managed" })));
 }
@@ -1867,5 +1920,6 @@ module.exports = {
   testProviderConnection,
   discoverModels,
   requestedFamilyForLabel,
+  requestedModelForLabel,
   withGeminiModelFallbacks,
 };

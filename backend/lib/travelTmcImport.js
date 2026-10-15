@@ -4,6 +4,23 @@ const { parseCsv, parseXlsxBuffer } = require("./csvIO");
 const { toE164 } = require("../utils/deduplication");
 
 const PARTICIPANT_IMPORT_STATUS = new Set(["pending", "approved", "rejected", "waitlisted"]);
+const PARTICIPANT_IMPORT_HEADERS = [
+  "fullName",
+  "parentName",
+  "parentPhone",
+  "parentEmail",
+  "applicationStatus",
+  "passportNumber",
+  "passportExpiry",
+  "aadhaarLast4",
+  "medicalNotes",
+  "consentCapturedAt",
+  "passportExtractedAt",
+  "passportVerifiedAt",
+  "passportRejectedAt",
+  "passportDocId",
+  "reviewNotes",
+];
 
 function isXlsxUpload(file) {
   if (!file) return false;
@@ -23,6 +40,18 @@ function parseSpreadsheetBuffer(buffer, file) {
   return isXlsxUpload(file)
     ? parseXlsxBuffer(buffer)
     : parseCsv(buffer.toString("utf8"));
+}
+
+function buildParticipantImportTemplate(format) {
+  if (format === "xlsx") {
+    const { toXlsxBuffer } = require("./csvIO");
+    return toXlsxBuffer(PARTICIPANT_IMPORT_HEADERS, [], "Participants");
+  }
+  const { serializeRows } = require("./csvHelpers");
+  return serializeRows(
+    PARTICIPANT_IMPORT_HEADERS.map((header) => ({ key: header, header })),
+    [],
+  );
 }
 
 function normalizeText(value) {
@@ -135,8 +164,10 @@ function parseParticipantImportRow(raw, rowNumber) {
 }
 
 module.exports = {
+  PARTICIPANT_IMPORT_HEADERS,
   isXlsxUpload,
   parseSpreadsheetBuffer,
+  buildParticipantImportTemplate,
   normalizeText,
   normalizeEmail,
   parseDateValue,

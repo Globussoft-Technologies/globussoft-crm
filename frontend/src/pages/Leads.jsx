@@ -65,6 +65,8 @@ import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer
 import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
 import DuplicateContactModal from "../components/DuplicateContactModal";
+import GenericLeadsAssistant from "../components/GenericLeadsAssistant";
+import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
 import {
@@ -2266,6 +2268,7 @@ const Leads = () => {
   const [leadFieldModalOpen, setLeadFieldModalOpen] = useState(false);
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
+  const [nameStartsWith, setNameStartsWith] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [subBrandFilter, setSubBrandFilter] = useState(
     isTravel ? activeSubBrand || "" : "",
@@ -2284,6 +2287,8 @@ const Leads = () => {
   const [campaignFilter, setCampaignFilter] = useState("");
   const [leadStatusFilter, setLeadStatusFilter] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("");
+  const [scoreMin, setScoreMin] = useState("");
+  const [scoreMax, setScoreMax] = useState("");
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
   // dynamic field-picker + operator + checkbox-values panel that also
   // surfaces admin-defined Lead custom fields (Settings > Lead Fields),
@@ -2659,25 +2664,34 @@ const Leads = () => {
     phone: "",
   });
 
-  const fetchLeads = async ({ background = false, pageOverride } = {}) => {
+  const fetchLeads = async ({ background = false, pageOverride, filterOverrides = null } = {}) => {
     const requestSequence = ++leadRequestSequenceRef.current;
     if (!background) setLoading(true);
     try {
+      const effectiveAdvancedFilters = filterOverrides?.advancedFilters ?? advancedFilters;
+      const effectiveSearchTerm = filterOverrides?.searchTerm ?? searchTerm;
+      const effectiveNameStartsWith = filterOverrides?.nameStartsWith ?? nameStartsWith;
+      const effectiveSourceFilter = filterOverrides?.sourceFilter ?? sourceFilter;
+      const effectiveCampaignFilter = filterOverrides?.campaignFilter ?? campaignFilter;
+      const effectiveLeadStatusFilter = filterOverrides?.leadStatusFilter ?? leadStatusFilter;
+      const effectiveAssigneeFilter = filterOverrides?.assigneeFilter ?? assigneeFilter;
+      const effectiveScoreMin = filterOverrides?.scoreMin ?? scoreMin;
+      const effectiveScoreMax = filterOverrides?.scoreMax ?? scoreMax;
       const filtersQs =
-        advancedFilters.length > 0
-          ? `&filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
+        effectiveAdvancedFilters.length > 0
+          ? `&filters=${encodeURIComponent(JSON.stringify(effectiveAdvancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
           : "";
       const genericSearchQs =
-        isGeneric && searchTerm.trim()
-          ? `&q=${encodeURIComponent(searchTerm.trim())}`
+        isGeneric && effectiveSearchTerm.trim()
+          ? `&q=${encodeURIComponent(effectiveSearchTerm.trim())}`
           : "";
       const matchingCampaignIds =
-        isGeneric && searchTerm.trim()
+        isGeneric && effectiveSearchTerm.trim()
           ? callifiedCampaigns
               .filter((campaign) =>
                 String(campaign?.name || "")
                   .toLowerCase()
-                  .includes(searchTerm.trim().toLowerCase()),
+                  .includes(effectiveSearchTerm.trim().toLowerCase()),
               )
               .map((campaign) => Number(campaign.id))
               .filter(
@@ -2689,7 +2703,7 @@ const Leads = () => {
         ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
         : "";
       const genericFilterQs = isGeneric
-        ? `${sourceFilter ? `&leadSource=${encodeURIComponent(sourceFilter)}` : ""}${campaignFilter ? `&callifiedCampaignId=${encodeURIComponent(campaignFilter)}` : ""}${leadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(leadStatusFilter)}` : ""}${assigneeFilter === "unassigned" ? "&unassigned=true" : assigneeFilter ? `&assignedToId=${encodeURIComponent(assigneeFilter)}` : ""}`
+        ? `${effectiveNameStartsWith ? `&nameStartsWith=${encodeURIComponent(effectiveNameStartsWith)}` : ""}${effectiveSourceFilter ? `&leadSource=${encodeURIComponent(effectiveSourceFilter)}` : ""}${effectiveCampaignFilter ? `&callifiedCampaignId=${encodeURIComponent(effectiveCampaignFilter)}` : ""}${effectiveLeadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(effectiveLeadStatusFilter)}` : ""}${effectiveAssigneeFilter === "unassigned" ? "&unassigned=true" : effectiveAssigneeFilter ? `&assignedToId=${encodeURIComponent(effectiveAssigneeFilter)}` : ""}${effectiveScoreMin !== "" ? `&scoreMin=${encodeURIComponent(effectiveScoreMin)}` : ""}${effectiveScoreMax !== "" ? `&scoreMax=${encodeURIComponent(effectiveScoreMax)}` : ""}`
         : "";
       const genericSortQs =
         isGeneric &&
@@ -4656,12 +4670,15 @@ const Leads = () => {
   };
 
   const resetFilters = () => {
+    setNameStartsWith("");
     setSourceFilter("");
     setSubBrandFilter("");
     setStageFilter("");
     setCampaignFilter("");
     setLeadStatusFilter("");
     setAssigneeFilter("");
+    setScoreMin("");
+    setScoreMax("");
     setSearchTerm("");
     setAdvancedFilters([]);
     setLeadsPage(0);
@@ -4679,14 +4696,47 @@ const Leads = () => {
       { replace: true },
     );
   };
+  const applyAssistantFilters = (spec = {}) => {
+    const next = buildAssistantFilterState(spec);
+    setSearchTerm(next.searchTerm);
+    setNameStartsWith(next.nameStartsWith);
+    setSourceFilter(next.sourceFilter);
+    setSubBrandFilter("");
+    setStageFilter("");
+    setCampaignFilter("");
+    setLeadStatusFilter(next.leadStatusFilter);
+    setAssigneeFilter(next.assigneeFilter);
+    setScoreMin(next.scoreMin);
+    setScoreMax(next.scoreMax);
+    setAdvancedFilters(next.advancedFilters);
+    setLeadsPage(0);
+    fetchLeads({
+      background: true,
+      pageOverride: 1,
+      filterOverrides: {
+        searchTerm: next.searchTerm,
+        nameStartsWith: next.nameStartsWith,
+        sourceFilter: next.sourceFilter,
+        campaignFilter: "",
+        leadStatusFilter: next.leadStatusFilter,
+        assigneeFilter: next.assigneeFilter,
+        scoreMin: next.scoreMin,
+        scoreMax: next.scoreMax,
+        advancedFilters: next.advancedFilters,
+      },
+    });
+  };
   const hasActiveLeadFilters = Boolean(
     searchTerm.trim() ||
+    nameStartsWith ||
     sourceFilter ||
     subBrandFilter ||
     stageFilter ||
     campaignFilter ||
     leadStatusFilter ||
     assigneeFilter ||
+    scoreMin ||
+    scoreMax ||
     advancedFilters.length > 0,
   );
 
@@ -4905,7 +4955,14 @@ const Leads = () => {
       !Array.isArray(visibleLeadFilterFieldKeys)
     )
       return;
-    const catalogFields = new Set(visibleLeadFilterFieldKeys);
+    // Assistant-applied filters must remain active even when a user hides the
+    // corresponding table column. They are real server filters, not merely
+    // values selected in the FilterPanel UI.
+    const catalogFields = new Set([
+      ...visibleLeadFilterFieldKeys,
+      "email",
+      "createdAt",
+    ]);
     setAdvancedFilters((current) => {
       const next = current.filter((filter) => catalogFields.has(filter.field));
       return next.length === current.length ? current : next;
@@ -12716,6 +12773,26 @@ const Leads = () => {
           onClose={() => setCallStatusDrawerOpen(false)}
         />
       )}
+
+      <GenericLeadsAssistant
+        isGeneric={isGeneric}
+        selectedLeadId={selectedLeads.length === 1 ? selectedLeads[0] : null}
+        activeFilters={{
+          search: searchTerm,
+          nameStartsWith,
+          source: sourceFilter,
+          campaign: campaignFilter,
+          callStatus: leadStatusFilter,
+          assignee: assigneeFilter,
+          scoreMin,
+          scoreMax,
+          advancedFilters,
+        }}
+        onApplyFilters={isGeneric ? applyAssistantFilters : undefined}
+        onRefresh={() => fetchLeads({ background: true })}
+        positionStorageKey={`generic-leads-assistant-position.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
+        sessionStorageKey={`generic-leads-assistant-session.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
+      />
     </div>
   );
 };

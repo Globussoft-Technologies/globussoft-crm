@@ -183,6 +183,11 @@ describe('Layout', () => {
     expect(screen.queryByTestId('softphone-stub')).not.toBeInTheDocument();
   });
 
+  it('hides Softphone on the generic Leads route for the Leads assistant FAB', () => {
+    renderLayoutAtRoute('/leads');
+    expect(screen.queryByTestId('softphone-stub')).not.toBeInTheDocument();
+  });
+
   it('shows user name + email initial', () => {
     renderLayout({ user: { name: 'Bob', email: 'bob@x.test', role: 'USER' } });
     expect(screen.getByText('Bob')).toBeInTheDocument();

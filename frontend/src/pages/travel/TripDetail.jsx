@@ -51,6 +51,24 @@ const TABS = [
   // operational portal). Tab key stays "microsite" for URL back-compat.
 ];
 
+const PARTICIPANT_IMPORT_SCHEMA = [
+  { key: "fullName", required: true, description: "Student / participant name" },
+  { key: "parentName", description: "Parent or guardian name" },
+  { key: "parentPhone", description: "10-digit Indian mobile or E.164 number" },
+  { key: "parentEmail", description: "Parent email; used when matching rows" },
+  { key: "applicationStatus", description: "pending, approved, rejected, or waitlisted" },
+  { key: "passportNumber", description: "Passport number (international trips)" },
+  { key: "passportExpiry", description: "ISO date, e.g. 2027-02-21" },
+  { key: "aadhaarLast4", description: "Exactly 4 digits; never upload full Aadhaar" },
+  { key: "medicalNotes", description: "Medical notes" },
+  { key: "consentCapturedAt", description: "ISO date/time" },
+  { key: "passportExtractedAt", description: "ISO date/time" },
+  { key: "passportVerifiedAt", description: "ISO date/time" },
+  { key: "passportRejectedAt", description: "ISO date/time" },
+  { key: "passportDocId", description: "Existing ContactAttachment ID" },
+  { key: "reviewNotes", description: "Operator review notes" },
+];
+
 function buildLandingPagesReturnState(trip, tripState = {}) {
   return {
     returnTo: { label: "TMC Trips", path: `/travel/trips/${trip.id}?tab=overview` },
@@ -761,6 +779,41 @@ function ParticipantsTab({ trip, onChange, notify }) {
     if (importInputRef.current) importInputRef.current.value = "";
   };
 
+  const downloadImportTemplate = async (format) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(
+        `/api/travel/trips/${trip.id}/participants/import-template?format=${format}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+      );
+      if (!response.ok) {
+        let message = "Failed to download participant template";
+        try {
+          const payload = await response.json();
+          message = payload?.error || message;
+        } catch {
+          // Keep the generic message when the server did not return JSON.
+        }
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = format === "xlsx"
+        ? "travel-participants-template.xlsx"
+        : "travel-participants-template.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      notify.success(`Downloaded ${format.toUpperCase()} participant template`);
+    } catch (e) {
+      notify.error(e?.message || "Failed to download participant template");
+    }
+  };
+
   const bulkImport = async () => {
     if (!bulkFile) {
       notify.error("Choose a CSV or XLSX file first");
@@ -1066,7 +1119,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   Import Participants from CSV / Excel
                 </h2>
                 <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
-                  Upload a CSV or Excel (XLSX) file with columns like fullName and parentPhone.
+                  Upload a CSV or Excel (XLSX) file using the exact column names below.
                   Existing rows are updated additively and blank cells never clear stored data.
                 </p>
               </div>
@@ -1080,7 +1133,68 @@ function ParticipantsTab({ trip, onChange, notify }) {
               </button>
             </div>
 
-            <div style={{ display: "grid", gap: 8 }}>
+            <div
+              data-testid="participant-import-schema"
+              style={{
+                border: "1px solid var(--border-color)",
+                borderRadius: 10,
+                padding: 12,
+                display: "grid",
+                gap: 10,
+                background: "var(--surface-color, var(--subtle-bg))",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Download a starter template</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => downloadImportTemplate("csv")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}>
+                    <Download size={13} /> CSV template
+                  </button>
+                  <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}>
+                    <Download size={13} /> XLSX template
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                <code style={{ color: "var(--text-primary)" }}>fullName</code> is required. Use the exact headers shown; aliases <code style={{ color: "var(--text-primary)" }}>name</code> and <code style={{ color: "var(--text-primary)" }}>status</code> are also accepted.
+              </div>
+              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 7 }}>
+                <table aria-label="Participant import columns" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ position: "sticky", top: 0, background: "var(--surface-color, var(--bg-color))", zIndex: 1 }}>
+                      <th scope="col" style={importSchemaTh}>Column</th>
+                      <th scope="col" style={importSchemaTh}>Required</th>
+                      <th scope="col" style={importSchemaTh}>What to enter</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {PARTICIPANT_IMPORT_SCHEMA.map((column) => (
+                      <tr key={column.key}>
+                        <td style={importSchemaTd}><code>{column.key}</code></td>
+                        <td style={{ ...importSchemaTd, color: column.required ? "var(--primary-color, var(--accent-color))" : "var(--text-secondary)", fontWeight: column.required ? 700 : 400 }}>
+                          {column.required ? "Yes" : "Optional"}
+                        </td>
+                        <td style={importSchemaTd}>{column.description}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                Matching uses <code style={{ color: "var(--text-primary)" }}>fullName + parentPhone + parentEmail</code>. Leave unused optional cells blank. Never include a full Aadhaar number; only the last four digits are accepted.
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                padding: "14px 16px",
+                border: "1px dashed var(--border-color)",
+                borderRadius: 10,
+                background: "var(--subtle-bg, var(--surface-color))",
+              }}
+            >
               <label style={{ color: "var(--text-secondary)", fontSize: 13, fontWeight: 500 }}>
                 Choose file
               </label>
@@ -3618,6 +3732,22 @@ const iconBtn = {
   padding: 6, borderRadius: 4,
   background: "transparent", color: "var(--text-secondary)",
   border: "none", cursor: "pointer",
+};
+const importSchemaTh = {
+  padding: "7px 9px",
+  textAlign: "left",
+  color: "var(--text-secondary)",
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: 0.3,
+  borderBottom: "1px solid var(--border-color)",
+};
+const importSchemaTd = {
+  padding: "7px 9px",
+  textAlign: "left",
+  color: "var(--text-primary)",
+  borderBottom: "1px solid var(--border-light, var(--border-color))",
+  verticalAlign: "top",
 };
 // Visually hidden but still in the accessibility tree (display:none would
 // drop it for screen readers AND RTL label queries).

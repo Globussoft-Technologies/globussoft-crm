@@ -144,9 +144,11 @@ describe('#343 — setAuthToken must not touch localStorage', () => {
 
   test('clearAuthToken() removes sessionStorage["token"] without populating localStorage', () => {
     setAuthToken('xyz');
+    localStorage.setItem('generic-leads-assistant-session.1.7', 'previous conversation');
     clearAuthToken();
     expect(sessionStorage.getItem('token')).toBeNull();
     expect(localStorage.getItem('token')).toBeNull();
+    expect(localStorage.getItem('generic-leads-assistant-session.1.7')).toBeNull();
   });
 
   test('getAuthToken() rehydrates from sessionStorage, not localStorage', () => {

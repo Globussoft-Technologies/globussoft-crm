@@ -1051,6 +1051,44 @@ describe('Participants', () => {
     );
   });
 
+  test('GET participant import template returns the parser headers as CSV', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/participants/import-template?format=csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toContain('travel-participants-template.csv');
+    expect(res.text.replace(/^\uFEFF/, '').trim()).toBe([
+      'fullName',
+      'parentName',
+      'parentPhone',
+      'parentEmail',
+      'applicationStatus',
+      'passportNumber',
+      'passportExpiry',
+      'aadhaarLast4',
+      'medicalNotes',
+      'consentCapturedAt',
+      'passportExtractedAt',
+      'passportVerifiedAt',
+      'passportRejectedAt',
+      'passportDocId',
+      'reviewNotes',
+    ].join(','));
+  });
+
+  test('GET participant import template returns an XLSX workbook', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/participants/import-template?format=xlsx')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+    expect(res.headers['content-disposition']).toContain('travel-participants-template.xlsx');
+    expect(Number(res.headers['content-length'])).toBeGreaterThan(100);
+  });
+
   test('POST participant returns 201 + persisted row', async () => {
     prisma.tripParticipant.create.mockResolvedValue({
       id: 50, tripId: 100, fullName: 'Bob Patel', aadhaarLast4: '1234',

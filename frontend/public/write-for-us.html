@@ -8,33 +8,216 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; }
+    :root {
+      --bg-soft: #f6f8fd;
+      --text: #10132a;
+      --text-muted: #6a7189;
+      --border: #e6e9f5;
+      --primary: #3457f0;
+      --primary-dark: #2743c4;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
-    body { margin: 0; background: #ffffff; color: #14213d; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
-    .gcrm-site-header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid #e4eaf3; background: rgba(255, 255, 255, .94); backdrop-filter: blur(18px); }
-    .gcrm-site-header-inner { width: min(1180px, calc(100% - 48px)); min-height: 74px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-    .gcrm-site-logo { display: block; width: auto; height: 36px; max-width: 170px; }
-    .gcrm-site-home { color: #1d4ed8; font-size: 14px; font-weight: 650; text-decoration: none; }
-    .gcrm-site-home:hover { text-decoration: underline; text-underline-offset: 4px; }
-    .gcrm-site-home:focus-visible { outline: 3px solid #60a5fa; outline-offset: 5px; }
-    .gcrm-site-footer { padding: 28px 24px; border-top: 1px solid #e4eaf3; color: #57647a; background: #f5f8ff; font-size: 13px; }
-    .gcrm-site-footer-inner { width: min(1180px, 100%); margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
-    .gcrm-site-footer a { color: #1d4ed8; text-decoration: none; }
-    .gcrm-site-footer a:hover { text-decoration: underline; text-underline-offset: 3px; }
+    body {
+      margin: 0;
+      background: #ffffff;
+      color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    h1, h2, h3, h4 { font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif; }
+    a { color: inherit; text-decoration: none; }
+    img { max-width: 100%; display: block; }
+    button { font-family: inherit; cursor: pointer; border: none; }
+    .container { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+    /* Shared with the main CRM landing page. */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid transparent;
+      transition: box-shadow .3s ease, border-color .3s ease;
+    }
+    header.scrolled {
+      box-shadow: 0 4px 24px rgba(16, 19, 42, 0.06);
+      border-color: var(--border);
+    }
+    .nav-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 72px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 19px;
+    }
+    .logo-img {
+      height: 38px;
+      width: 125px;
+      object-fit: contain;
+      transition: transform .35s ease;
+    }
+    .logo:hover .logo-img { transform: scale(1.06); }
+    nav ul {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 34px;
+    }
+    nav a.nav-link {
+      position: relative;
+      padding: 4px 0;
+      color: var(--text);
+      font-size: 14.5px;
+      font-weight: 500;
+    }
+    nav a.nav-link::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      bottom: -2px;
+      width: 0;
+      height: 2px;
+      background: var(--primary);
+      transition: width .25s ease;
+    }
+    nav a.nav-link:hover::after { width: 100%; }
+    .nav-right { display: flex; align-items: center; gap: 22px; }
+    .icon-btn {
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      transition: background .2s ease, transform .2s ease;
+    }
+    .icon-btn:hover { background: var(--bg-soft); transform: translateY(-2px); }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 22px;
+      border-radius: 10px;
+      font-size: 14.5px;
+      font-weight: 600;
+      transition: transform .25s cubic-bezier(.2, .9, .3, 1.3), box-shadow .25s ease, background .25s ease;
+    }
+    .btn-primary {
+      color: #fff;
+      background: var(--primary);
+      box-shadow: 0 6px 16px rgba(52, 87, 240, 0.3);
+    }
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 24px rgba(52, 87, 240, 0.4);
+    }
+    .btn-sm { padding: 9px 18px; font-size: 13.5px; }
+    .hamburger {
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+      padding: 6px;
+      background: none;
+    }
+    .hamburger span { width: 22px; height: 2px; background: var(--text); border-radius: 2px; }
+
+    footer { border-top: 1px solid var(--border); background: var(--bg-soft); }
+    footer p { color: var(--text-muted); font-size: 13.5px; line-height: 1.6; }
+    .footer-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 40px;
+      padding: 56px 24px 44px;
+    }
+    .footer-brand { max-width: 340px; }
+    footer .f-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      color: var(--text);
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .footer-nav { display: flex; gap: 72px; flex-wrap: wrap; }
+    .footer-col { display: flex; flex-direction: column; }
+    .footer-col h5 {
+      margin-bottom: 14px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .06em;
+    }
+    .footer-col a {
+      position: relative;
+      width: fit-content;
+      margin-bottom: 11px;
+      color: #64748b;
+      font-size: 14px;
+      transition: color .2s ease;
+    }
+    .footer-col a::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      bottom: -2px;
+      width: 0;
+      height: 1px;
+      background: var(--primary);
+      transition: width .25s ease;
+    }
+    .footer-col a:hover { color: var(--primary-dark); }
+    .footer-col a:hover::after { width: 100%; }
+    .footer-bottom { border-top: 1px solid var(--border); }
+    .footer-bottom .container { padding: 20px 24px; }
+    .footer-bottom p { font-size: 13px; text-align: left; }
+
+    @media (max-width: 760px) {
+      nav ul { display: none; }
+      .hamburger { display: flex; }
+    }
     @media (max-width: 640px) {
-      .gcrm-site-header-inner { width: min(100% - 32px, 1180px); min-height: 64px; }
-      .gcrm-site-logo { height: 32px; max-width: 150px; }
-      .gcrm-site-home { font-size: 13px; }
+      .footer-top { flex-direction: column; }
+      .footer-nav { gap: 40px; }
     }
   </style>
 </head>
 <body>
-  <header class="gcrm-site-header">
-    <div class="gcrm-site-header-inner">
-      <a href="index.html" aria-label="GlobusCRM home">
-        <img class="gcrm-site-logo" src="/globussoft-logo.png" alt="GlobusCRM">
+  <header id="site-header">
+    <div class="container nav-wrap">
+      <a href="/" class="logo" aria-label="GlobusCRM home">
+        <img src="/globussoft-logo.png" alt="Globus CRM" class="logo-img"
+          onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
       </a>
-      <a class="gcrm-site-home" href="index.html">Back to GlobusCRM</a>
+      <nav aria-label="Primary navigation">
+        <ul>
+          <li><a class="nav-link" href="/#features">Features</a></li>
+          <li><a class="nav-link" href="/#tour">Screenshots</a></li>
+          <li><a class="nav-link" href="/pricing">Pricing</a></li>
+          <li><a class="nav-link" href="/login">Login</a></li>
+        </ul>
+      </nav>
+      <div class="nav-right">
+        <a class="icon-btn" href="https://github.com/Globussoft-Technologies/globussoft-crm" aria-label="GitHub" title="GitHub">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.09 3.29 9.4 7.86 10.93.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.87-1.54-3.87-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.26-1.28-5.26-5.7 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.64 1.58.24 2.75.12 3.04.74.8 1.18 1.83 1.18 3.09 0 4.43-2.7 5.4-5.28 5.69.42.36.78 1.08.78 2.18 0 1.57-.02 2.84-.02 3.23 0 .31.21.67.8.56A10.52 10.52 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z" />
+          </svg>
+        </a>
+        <a href="/get-started" class="btn btn-primary btn-sm">Get Started Free</a>
+        <button class="hamburger" type="button" aria-label="Menu" aria-expanded="false"><span></span><span></span><span></span></button>
+      </div>
     </div>
   </header>
 
@@ -454,12 +637,78 @@
 
   </main>
 
+  <footer>
+    <div class="container footer-top">
+      <div class="footer-brand">
+        <div class="f-logo">
+          <img src="/globussoft-logo.png" alt="Globus CRM" class="logo-img"
+            style="width:125px;height:38px;"
+            onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+        </div>
+        <p>Enterprise sales intelligence platform built by Globussoft Technologies.</p>
+      </div>
+
+      <div class="footer-nav">
+        <div class="footer-col">
+          <h5>Product</h5>
+          <a href="/#features">Features</a>
+          <a href="/#tour">Screenshots</a>
+          <a href="/pricing">Pricing</a>
+          <a href="https://github.com/Globussoft-Technologies/globussoft-crm.git">Open Source on GitHub</a>
+        </div>
+        <div class="footer-col">
+          <h5>Account</h5>
+          <a href="/login">Login</a>
+          <a href="/get-started">Sign Up</a>
+          <a href="/portal">Support Portal</a>
+          <a href="/write-for-us.html">Write for us</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      <div class="container">
+        <p>&copy; 2026 Globussoft Technologies. All rights reserved.</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Legacy compact footer retained below only as a migration reference.
   <footer class="gcrm-site-footer">
     <div class="gcrm-site-footer-inner">
       <span>&copy; 2026 Globussoft Technologies. All rights reserved.</span>
       <span><a href="index.html">GlobusCRM home</a> &nbsp;·&nbsp; <a href="write-for-us.html">Write for us</a></span>
     </div>
-  </footer>
+  </footer> -->
+  <script>
+    const header = document.querySelector("#site-header");
+    const hamburger = document.querySelector(".hamburger");
+    const navList = document.querySelector("#site-header nav ul");
+
+    window.addEventListener("scroll", () => {
+      header?.classList.toggle("scrolled", window.scrollY > 8);
+    });
+
+    hamburger?.addEventListener("click", () => {
+      if (!navList) return;
+      const open = navList.style.display === "flex";
+      navList.style.display = open ? "none" : "flex";
+      hamburger.setAttribute("aria-expanded", String(!open));
+      if (!open) {
+        Object.assign(navList.style, {
+          flexDirection: "column",
+          position: "absolute",
+          top: "72px",
+          left: "0",
+          right: "0",
+          background: "#fff",
+          padding: "20px 24px",
+          gap: "16px",
+          boxShadow: "0 12px 24px rgba(16,19,42,0.08)",
+        });
+      }
+    });
+  </script>
 </body>
 </html>
 

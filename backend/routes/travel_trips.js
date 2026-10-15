@@ -12,6 +12,7 @@
 //
 //   GET    /api/travel/trips/:id/participants                  — list participants
 //   POST   /api/travel/trips/:id/participants                  — add participant
+//   GET    /api/travel/trips/:id/participants/import-template  — CSV/XLSX starter file
 //   PATCH  /api/travel/trips/:id/participants/:pid             — amend participant
 //   DELETE /api/travel/trips/:id/participants/:pid             — remove participant
 //
@@ -68,6 +69,7 @@ const {
 } = require("../lib/tmcParticipantInvoice");
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 const {
+  buildParticipantImportTemplate,
   parseSpreadsheetBuffer,
   parseParticipantImportRow,
 } = require("../lib/travelTmcImport");
@@ -2297,6 +2299,57 @@ async function loadStaffParentDocument({ tenantId, tripId, parentEmail, document
 }
 
 const PARTICIPANT_IMPORT_MAX_ROWS = 5000;
+
+// GET /api/travel/trips/:id/participants/import-template
+// Download a header-only starter file. Keeping the template on the server
+// means its columns stay aligned with the parser used by the import route.
+router.get(
+  "/trips/:id/participants/import-template",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      await loadTrip(req);
+      const format = String(req.query.format || "csv").toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({
+          error: "format must be csv or xlsx",
+          code: "INVALID_FORMAT",
+        });
+      }
+
+      const template = buildParticipantImportTemplate(format);
+      if (format === "xlsx") {
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="travel-participants-template.xlsx"',
+        );
+        return res.end(template);
+      }
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="travel-participants-template.csv"',
+      );
+      return res.end(template);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-trips] participant import template error:", e.message);
+      return res.status(500).json({
+        error: "Failed to build participant import template",
+        code: "PARTICIPANT_TEMPLATE_FAILED",
+      });
+    }
+  },
+);
 
 // POST /api/travel/trips/:id/participants/import
 // Additive bulk import for TMC rosters / historical participant sheets.

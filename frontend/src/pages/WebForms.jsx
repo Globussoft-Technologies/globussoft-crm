@@ -31,7 +31,7 @@ import {
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
-import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, textOrBlank } from "../utils/webForms";
+import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, textOrBlank } from "../utils/webForms";
 import "./WebFormsLeadFieldAction.css";
 const CONTACT_FIELD_OPTIONS = [
   { value: "name", label: "Name", fieldType: "text", placeholder: "Enter name" },
@@ -11040,6 +11040,10 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
   const embedCode = selectedForm ? buildWebFormEmbedCode(selectedForm, origin) : "";
 
+  const isGenericSelectedForm = Boolean(selectedForm && (!selectedForm.scope || selectedForm.scope === "generic"));
+
+  const scriptEmbedCode = isGenericSelectedForm ? buildWebFormScriptEmbedCode(selectedForm, origin) : "";
+
 
 
 
@@ -20634,6 +20638,8 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
                       <button type="button" className="btn-secondary" onClick={() => copyText(embedCode, "Embed code")}><Copy size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Copy embed code</button>
 
+                      {isGenericSelectedForm ? <button type="button" className="btn-secondary" onClick={() => copyText(scriptEmbedCode, "Script embed code")}><Copy size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Copy script code</button> : null}
+
 
                     </div>
 
@@ -20717,8 +20723,15 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                 <span>Embed snippet</span>
                 <textarea className="input-field wf-embed-textarea" rows={8} readOnly value={embedCode} />
               </label>
+              {isGenericSelectedForm ? (
+                <label className="wf-copy-field">
+                  <span>Script-only embed</span>
+                  <textarea className="input-field wf-embed-textarea" rows={8} readOnly value={scriptEmbedCode} />
+                </label>
+              ) : null}
               <div className="wf-embed-modal-actions">
                 <button type="button" className="btn-secondary" onClick={() => copyText(embedCode, "Embed code")}>Copy embed code</button>
+                {isGenericSelectedForm ? <button type="button" className="btn-secondary" onClick={() => copyText(scriptEmbedCode, "Script embed code")}>Copy script code</button> : null}
                 <button type="button" className="btn-primary" onClick={() => setShowEmbed(false)}>Done</button>
               </div>
             </div>

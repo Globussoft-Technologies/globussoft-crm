@@ -2689,6 +2689,56 @@ router.delete("/me/profile-picture", verifyToken, async (req, res) => {
   }
 });
 
+async function transferAdminOwnedData(tx, { tenantId, fromUserId, toUserId }) {
+  const adminRole = await tx.role.findFirst({
+    where: { tenantId, key: "ADMIN", isActive: true },
+    select: { id: true },
+  });
+  if (adminRole) {
+    await tx.userRole.upsert({
+      where: { userId_roleId: { userId: toUserId, roleId: adminRole.id } },
+      update: {},
+      create: { userId: toUserId, roleId: adminRole.id },
+    });
+  }
+
+  const transfers = await Promise.all([
+    tx.user.updateMany({ where: { tenantId, reportingToId: fromUserId }, data: { reportingToId: toUserId } }),
+    tx.contact.updateMany({ where: { tenantId, assignedToId: fromUserId }, data: { assignedToId: toUserId } }),
+    tx.webForm.updateMany({ where: { tenantId, createdByUserId: fromUserId }, data: { createdByUserId: toUserId } }),
+    tx.savedContactView.updateMany({ where: { tenantId, createdByUserId: fromUserId }, data: { createdByUserId: toUserId } }),
+    tx.deal.updateMany({ where: { tenantId, ownerId: fromUserId }, data: { ownerId: toUserId } }),
+    tx.ticket.updateMany({ where: { tenantId, assigneeId: fromUserId }, data: { assigneeId: toUserId } }),
+    tx.task.updateMany({ where: { tenantId, userId: fromUserId }, data: { userId: toUserId } }),
+    tx.expense.updateMany({ where: { tenantId, userId: fromUserId }, data: { userId: toUserId } }),
+    tx.expense.updateMany({ where: { tenantId, approvedById: fromUserId }, data: { approvedById: toUserId } }),
+    tx.project.updateMany({ where: { tenantId, ownerId: fromUserId }, data: { ownerId: toUserId } }),
+    tx.reportSchedule.updateMany({ where: { tenantId, userId: fromUserId }, data: { userId: toUserId } }),
+    tx.whatsAppThread.updateMany({ where: { tenantId, assignedToId: fromUserId }, data: { assignedToId: toUserId } }),
+    tx.landingPage.updateMany({ where: { tenantId, userId: fromUserId }, data: { userId: toUserId } }),
+    tx.travelQuote.updateMany({ where: { tenantId, assignedToUserId: fromUserId }, data: { assignedToUserId: toUserId } }),
+    tx.salesTeam.updateMany({ where: { tenantId, createdById: fromUserId }, data: { createdById: toUserId } }),
+    tx.salesTeam.updateMany({ where: { tenantId, updatedById: fromUserId }, data: { updatedById: toUserId } }),
+    // Preserve organization integrations and financial history: these owner
+    // relations cascade on User deletion (including a shift's petty cash).
+    tx.webhookCredential.updateMany({ where: { tenantId, createdById: fromUserId }, data: { createdById: toUserId } }),
+    tx.shift.updateMany({ where: { tenantId, userId: fromUserId }, data: { userId: toUserId } }),
+  ]);
+
+  const memberships = await tx.salesTeamMember.findMany({
+    where: { tenantId, userId: fromUserId },
+    select: { teamId: true },
+  });
+  if (memberships.length) {
+    await tx.salesTeamMember.createMany({
+      data: memberships.map(({ teamId }) => ({ tenantId, teamId, userId: toUserId })),
+      skipDuplicates: true,
+    });
+  }
+
+  return transfers.reduce((total, result) => total + Number(result?.count || 0), 0);
+}
+
 // DELETE /api/auth/me/account — self-service account deletion (all verticals).
 //
 // Privacy policy §10.1 promises in-app account deletion; this is that
@@ -2698,12 +2748,13 @@ router.delete("/me/profile-picture", verifyToken, async (req, res) => {
 // so a bare user.delete is safe and leaves tenant business data intact.
 //
 // Scope rules:
-//   - sole user of the tenant     → delete the whole TENANT (every model
-//     carries tenant onDelete: Cascade, so this erases all workspace data —
-//     a personal workspace with no remaining members must not orphan data)
-//   - last ADMIN, others remain   → 409 LAST_ADMIN (transfer admin first;
-//     deleting would orphan the workspace for the remaining members)
+//   - last active ADMIN           → 409 LAST_ADMIN (add/promote another
+//     active admin before deleting this account)
 //   - everyone else               → delete the USER row only
+//
+// This endpoint never deletes the Tenant. Organization deletion is a
+// separate administrative concern and must not be coupled to self-service
+// account deletion.
 //
 // Re-authentication (mirrors the 2FA-disable bar in auth_2fa.js):
 //   - password accounts must present the current password
@@ -2712,7 +2763,7 @@ router.delete("/me/profile-picture", verifyToken, async (req, res) => {
 //   - 2FA-enabled accounts must also present a valid TOTP code
 router.delete("/me/account", verifyToken, async (req, res) => {
   try {
-    const { password, code, confirmDestructive } = req.body || {};
+    const { password, code, confirmDestructive, successorAdminId } = req.body || {};
 
     // Same explicit-confirmation gate as the GDPR retention endpoints —
     // a stray scripted DELETE without the flag must not erase an account.
@@ -2762,33 +2813,37 @@ router.delete("/me/account", verifyToken, async (req, res) => {
       }
     }
 
-    const otherUsers = await prisma.user.count({
-      where: { tenantId: req.user.tenantId, id: { not: user.id } },
-    });
-    const deleteScope = otherUsers === 0 ? "tenant" : "user";
-
-    if (deleteScope === "user" && user.role === "ADMIN") {
-      const otherAdmins = await prisma.user.count({
+    let successorAdmin = null;
+    if (user.role === "ADMIN") {
+      const successorId = Number(successorAdminId);
+      if (!Number.isInteger(successorId) || successorId <= 0) {
+        return res.status(400).json({
+          error: "Select another active admin to receive your permissions and assigned data before deleting your account.",
+          code: "SUCCESSOR_ADMIN_REQUIRED",
+        });
+      }
+      successorAdmin = await prisma.user.findFirst({
         where: {
+          id: successorId,
           tenantId: req.user.tenantId,
-          id: { not: user.id },
           role: "ADMIN",
           deactivatedAt: null,
         },
+        select: { id: true, name: true, email: true },
       });
-      if (otherAdmins === 0) {
+      if (!successorAdmin || successorAdmin.id === user.id) {
         return res.status(409).json({
           error:
-            "You are the only admin of this organization. Promote another member to admin before deleting your account.",
-          code: "LAST_ADMIN",
+            "The selected successor must be another active admin in this organization. Add or promote another admin before deleting your account. The organization will not be deleted.",
+          code: "SUCCESSOR_ADMIN_INVALID",
         });
       }
     }
 
+    const deleteScope = "user";
+
     // Audit BEFORE the destructive delete (mirrors DELETE /users/:id) so a
-    // mid-cascade failure still leaves a trail. For tenant-scope deletions
-    // the audit row itself is cascaded away with the tenant — full erasure
-    // is the intent there, so that is correct, not a gap.
+    // mid-cascade failure still leaves a trail.
     await writeAudit(
       "User",
       "DELETE_ACCOUNT_SELF",
@@ -2800,12 +2855,40 @@ router.delete("/me/account", verifyToken, async (req, res) => {
         name: user.name,
         role: user.role,
         scope: deleteScope,
+        successorAdminId: successorAdmin?.id || null,
+        successorAdminEmail: successorAdmin?.email || null,
         ssoProvider: user.ssoProvider || null,
       },
     );
 
-    if (deleteScope === "tenant") {
-      await prisma.tenant.delete({ where: { id: req.user.tenantId } });
+    let transferredRecords = 0;
+    if (successorAdmin) {
+      transferredRecords = await prisma.$transaction(async (tx) => {
+        // Serialize self-service admin deletions within the organization.
+        // Lock both users as well so concurrent demotion/deactivation cannot
+        // invalidate the successor between this check and commit. Locking
+        // reads see current committed state, not an earlier RR snapshot.
+        await tx.$queryRaw`SELECT id FROM Tenant WHERE id = ${req.user.tenantId} FOR UPDATE`;
+        const lockedUsers = await tx.$queryRaw`
+          SELECT id, role, deactivatedAt FROM User
+          WHERE tenantId = ${req.user.tenantId}
+            AND id IN (${user.id}, ${successorAdmin.id})
+          ORDER BY id FOR UPDATE`;
+        const validAdmin = (id) => lockedUsers.some((row) =>
+          row.id === id && row.role === "ADMIN" && row.deactivatedAt === null);
+        if (!validAdmin(user.id) || !validAdmin(successorAdmin.id)) {
+          const conflict = new Error("The deleting account and successor must still be active admins. Refresh and select another active admin.");
+          conflict.code = "SUCCESSOR_ADMIN_INVALID";
+          throw conflict;
+        }
+        const count = await transferAdminOwnedData(tx, {
+          tenantId: req.user.tenantId,
+          fromUserId: user.id,
+          toUserId: successorAdmin.id,
+        });
+        await tx.user.delete({ where: { id: user.id } });
+        return count;
+      });
     } else {
       await prisma.user.delete({ where: { id: user.id } });
     }
@@ -2828,10 +2911,8 @@ router.delete("/me/account", verifyToken, async (req, res) => {
           },
         });
       } catch (revokeErr) {
-        // Tenant-scope deletions cascade RevokedToken's tenant FK away, so
-        // this insert can fail — the tenant (and all its data) is already
-        // gone, so the orphaned-but-signed JWT can only reach empty scopes
-        // until its natural expiry. Non-fatal by design.
+        // The account is already gone, so revocation failure is non-fatal;
+        // the deleted user cannot resolve through authenticated routes.
         console.warn(
           "[auth/me/account] post-delete jti revoke failed:",
           revokeErr.message,
@@ -2839,9 +2920,18 @@ router.delete("/me/account", verifyToken, async (req, res) => {
       }
     }
 
-    res.json({ ok: true, deleted: deleteScope });
+    res.json({
+      ok: true,
+      deleted: deleteScope,
+      ...(successorAdmin
+        ? { successorAdminId: successorAdmin.id, transferredRecords }
+        : {}),
+    });
   } catch (err) {
     console.error("[auth/me/account] delete error:", err && err.message);
+    if (err.code === "SUCCESSOR_ADMIN_INVALID") {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     res.status(500).json({ error: "Failed to delete account" });
   }
 });

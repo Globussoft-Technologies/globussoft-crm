@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { buildWebFormEmbedCode, buildWebFormPreviewUrl, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
+import { buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
 // These assertions check source contracts, not the formatter's quote style
 // or whitespace. Runtime/layout assertions below remain unchanged.
@@ -66,6 +66,10 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).toContain('source!=="gbs-web-form"');
     expect(code).toContain('type:"responsive-device"');
     expect(code).toContain('window.innerWidth');
+    expect(code).toContain('Max-Age="+maxAge');
+    expect(code).toContain('attribution:savedAttribution');
+    expect(code).toContain('"utm_source"');
+    expect(code).toContain('"hsa_ver"');
   });
 
   test('escapes the iframe title safely', () => {
@@ -79,6 +83,138 @@ describe('buildWebFormEmbedCode', () => {
 
     expect(code).toContain('https://crm.example.com/embed/web-form.html?id=101');
     expect(code).not.toContain('?slug=contact-us');
+  });
+
+  test('keeps host attribution cookies scoped to Generic CRM forms', () => {
+    const code = buildWebFormEmbedCode(
+      { id: 102, name: 'Travel Enquiry', slug: 'travel-enquiry', scope: 'travel' },
+      'https://crm.example.com',
+    );
+
+    expect(code).not.toContain('Max-Age="+maxAge');
+    expect(code).not.toContain('attribution:savedAttribution');
+    expect(code).toContain('type:"responsive-device"');
+  });
+
+  test('captures and forwards first-touch attribution from the external page', () => {
+    const code = buildWebFormEmbedCode(
+      { id: 103, name: 'External Contact', slug: 'external-contact', scope: 'generic' },
+      'https://crm.example.com',
+    );
+    const scriptBody = code.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    const messages = [];
+    const frameListeners = {};
+    const frame = {
+      contentWindow: { postMessage: (message) => messages.push(message) },
+      addEventListener: (name, callback) => { frameListeners[name] = callback; },
+      style: {},
+    };
+    const originalUrl = window.location.href;
+
+    document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
+    document.cookie = 'gbs_utm_medium=; Max-Age=0; Path=/';
+    document.cookie = 'gbs_gclid=; Max-Age=0; Path=/';
+    window.history.replaceState({}, '', '/contact?utm_source=adwords&utm_medium=ppc&gclid=click-123');
+    globalThis.__gbsEmbedTestFrame = frame;
+
+    try {
+      const executable = scriptBody.replace(
+        'document.currentScript.previousElementSibling',
+        'globalThis.__gbsEmbedTestFrame',
+      );
+      Function(executable)();
+      frameListeners.load();
+
+      expect(document.cookie).toContain('gbs_utm_source=adwords');
+      expect(document.cookie).toContain('gbs_utm_medium=ppc');
+      expect(document.cookie).toContain('gbs_gclid=click-123');
+      expect(messages).toContainEqual(expect.objectContaining({
+        source: 'gbs-web-form-host',
+        type: 'context',
+        attribution: expect.objectContaining({
+          utm_source: 'adwords',
+          utm_medium: 'ppc',
+          gclid: 'click-123',
+        }),
+      }));
+    } finally {
+      delete globalThis.__gbsEmbedTestFrame;
+      document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_utm_medium=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_gclid=; Max-Age=0; Path=/';
+      window.history.replaceState({}, '', originalUrl);
+    }
+  });
+
+  test('preserves first-touch attribution when a later visit has new campaign parameters', () => {
+    const code = buildWebFormEmbedCode(
+      { id: 106, name: 'External Contact', scope: 'generic' },
+      'https://crm.example.com',
+    );
+    const scriptBody = code.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    const messages = [];
+    const frameListeners = {};
+    const frame = {
+      contentWindow: { postMessage: (message) => messages.push(message) },
+      addEventListener: (name, callback) => { frameListeners[name] = callback; },
+      style: {},
+    };
+    const originalUrl = window.location.href;
+
+    document.cookie = 'gbs_utm_source=first-campaign; Path=/';
+    document.cookie = 'gbs_utm_campaign=launch-one; Path=/';
+    window.history.replaceState({}, '', '/contact?utm_source=later-campaign&utm_campaign=launch-two');
+    globalThis.__gbsEmbedTestFrame = frame;
+
+    try {
+      Function(scriptBody.replace(
+        'document.currentScript.previousElementSibling',
+        'globalThis.__gbsEmbedTestFrame',
+      ))();
+      frameListeners.load();
+
+      expect(document.cookie).toContain('gbs_utm_source=first-campaign');
+      expect(document.cookie).toContain('gbs_utm_campaign=launch-one');
+      expect(messages).toContainEqual(expect.objectContaining({
+        source: 'gbs-web-form-host',
+        type: 'context',
+        attribution: expect.objectContaining({
+          utm_source: 'first-campaign',
+          utm_campaign: 'launch-one',
+        }),
+      }));
+    } finally {
+      delete globalThis.__gbsEmbedTestFrame;
+      document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_utm_campaign=; Max-Age=0; Path=/';
+      window.history.replaceState({}, '', originalUrl);
+    }
+  });
+});
+
+describe('buildWebFormScriptEmbedCode', () => {
+  test('builds a script-only Generic CRM embed that creates the iframe and retains tracking', () => {
+    const code = buildWebFormScriptEmbedCode(
+      { id: 104, name: 'Contact </script> Form', scope: 'generic' },
+      'https://crm.example.com',
+    );
+
+    expect(code).toMatch(/^<script>/);
+    expect(code).toContain('document.createElement("iframe")');
+    expect(code).toContain('https://crm.example.com/embed/web-form.html?id=104');
+    expect(code).toContain('frame.allow="geolocation *"');
+    expect(code).toContain('attribution:savedAttribution');
+    expect(code).toContain('Max-Age="+maxAge');
+    expect(code).not.toContain('Contact </script> Form');
+    expect(code).toContain('Contact \\u003c/script> Form');
+    expect(() => Function(code.slice('<script>'.length, -'</script>'.length))).not.toThrow();
+  });
+
+  test('does not generate the script-only option for non-Generic CRM forms', () => {
+    expect(buildWebFormScriptEmbedCode(
+      { id: 105, name: 'Travel Enquiry', scope: 'travel' },
+      'https://crm.example.com',
+    )).toBe('');
   });
 });
 

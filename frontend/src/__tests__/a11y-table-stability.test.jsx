@@ -278,6 +278,12 @@ describe("Leads split-table surface contract", () => {
     );
   });
 
+  it("does not clip Generic CRM Leads toolbar button highlights", () => {
+    expect(css).toMatch(
+      /\.leads-page-root--generic\s+\.leads-actions-toolbar\s+\.btn-secondary,\s*\.leads-page-root--generic\s+\.leads-toolbar-shell\s+\.btn-secondary\s*\{[^}]*clip-path:\s*none/s,
+    );
+  });
+
   it("allows Generic CRM split rows to stay aligned at every density", () => {
     const compactRowRule = css.match(
       /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+table\.leads-table\s+tbody\s+tr\s*\{([^}]*)\}/s,

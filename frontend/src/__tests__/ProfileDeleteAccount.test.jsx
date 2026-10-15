@@ -18,7 +18,8 @@
  *   6. SSO accounts (ssoProvider set) see NO password input and can delete
  *      with just the modal confirmation.
  *   7. 2FA accounts must fill the TOTP code input before the modal opens.
- *   8. API failure (wrong password, LAST_ADMIN, …) does NOT log the user
+ *   8. Admins must select another active admin as the successor.
+ *   9. API failure (wrong password, invalid successor, …) does NOT log the user
  *      out — fetchApi's auto-toast surfaces the error and the page stays.
  */
 import React from 'react';
@@ -64,7 +65,7 @@ const BASE_PROFILE = {
 };
 
 function renderProfile(meResponse = BASE_PROFILE, opts = {}) {
-  const { setUser = vi.fn(), setToken = vi.fn(), deleteResult } = opts;
+  const { setUser = vi.fn(), setToken = vi.fn(), deleteResult, successorAdmins = [] } = opts;
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url, fetchOpts) => {
     if (url === '/api/auth/me/account' && fetchOpts?.method === 'DELETE') {
@@ -74,6 +75,7 @@ function renderProfile(meResponse = BASE_PROFILE, opts = {}) {
       return deleteResult ? deleteResult() : Promise.resolve(true);
     }
     if (url === '/api/auth/me') return Promise.resolve(meResponse);
+    if (url === '/api/staff?fields=summary') return Promise.resolve(successorAdmins);
     return Promise.resolve({});
   });
   render(
@@ -118,10 +120,63 @@ describe('<Profile /> — danger zone account deletion', () => {
     expect(screen.queryByTestId('profile-delete-account-confirm')).not.toBeInTheDocument();
   });
 
+  it('tells admins to add another admin and confirms that the organization remains', async () => {
+    renderProfile({ ...BASE_PROFILE, role: 'ADMIN' }, {
+      successorAdmins: [{ id: 8, name: 'Neha Admin', email: 'neha@acme.test', role: 'ADMIN', deactivatedAt: null }],
+    });
+    await waitFor(() => expect(screen.getByTestId('profile-danger-zone')).toBeInTheDocument());
+
+    expect(screen.getByTestId('profile-danger-zone')).toHaveTextContent('organization and its shared data will remain');
+    expect(screen.getByTestId('profile-danger-zone')).toHaveTextContent('add and select another active admin');
+
+    await armDangerZone();
+    await waitFor(() => expect(screen.getByLabelText('Successor admin')).toHaveValue('8'));
+    fireEvent.change(screen.getByPlaceholderText('Current password'), {
+      target: { value: 'hunter2hunter2' },
+    });
+    fireEvent.click(screen.getByTestId('profile-delete-account-submit'));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('Only your user account'),
+      }),
+    ));
+    expect(notifyObj.confirm.mock.calls[0][0].message).toContain('transferred to Neha Admin');
+    await waitFor(() => expect(getDeleteCalls()).toHaveLength(1));
+    expect(JSON.parse(getDeleteCalls()[0][1].body)).toEqual({
+      confirmDestructive: true,
+      password: 'hunter2hunter2',
+      successorAdminId: 8,
+    });
+  });
+
+  it('blocks an admin when no successor admin exists', async () => {
+    renderProfile({ ...BASE_PROFILE, role: 'ADMIN' });
+    await armDangerZone();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Create or promote another active admin'));
+
+    fireEvent.change(screen.getByPlaceholderText('Current password'), {
+      target: { value: 'hunter2hunter2' },
+    });
+    fireEvent.click(screen.getByTestId('profile-delete-account-submit'));
+
+    await waitFor(() => expect(notifyObj.error).toHaveBeenCalledWith(expect.stringContaining('another active admin')));
+    expect(notifyObj.confirm).not.toHaveBeenCalled();
+    expect(getDeleteCalls()).toHaveLength(0);
+  });
+
   it('arming reveals the current-password input for password accounts', async () => {
     renderProfile();
     await armDangerZone();
-    expect(screen.getByPlaceholderText('Current password')).toBeInTheDocument();
+    const passwordInput = screen.getByPlaceholderText('Current password');
+    expect(passwordInput).toBeInTheDocument();
+    expect(passwordInput).toHaveAttribute('name', 'delete-account-current-password');
+    expect(passwordInput).toHaveAttribute('autocomplete', 'section-delete-account current-password');
+
+    const usernameInput = document.querySelector('input[name="delete-account-username"]');
+    expect(usernameInput).toHaveValue(BASE_PROFILE.email);
+    expect(usernameInput).toHaveAttribute('autocomplete', 'section-delete-account username');
+    expect(usernameInput).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('blocks submission without a password and does not call the API', async () => {

@@ -553,6 +553,7 @@ jobs:
             tests/approvals-api.spec.js \
             tests/sso-api.spec.js \
             tests/auth-profile-picture-api.spec.js \
+            tests/auth-account-deletion-api.spec.js \
             tests/wellness-my-transactions-api.spec.js \
             tests/staff-api.spec.js \
             tests/portal-appointments-api.spec.js \

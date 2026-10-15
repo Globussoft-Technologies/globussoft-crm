@@ -3931,6 +3931,14 @@ table.leads-table thead th {
   box-shadow: none;
 }
 
+/* The shared secondary-button clip path trims external focus outlines down to
+   disconnected edge segments. Keep complete hover/focus highlights on the
+   Generic CRM Leads toolbars without changing buttons on other surfaces. */
+.leads-page-root--generic .leads-actions-toolbar .btn-secondary,
+.leads-page-root--generic .leads-toolbar-shell .btn-secondary {
+  clip-path: none;
+}
+
 .leads-page-root--generic .leads-toolbar-shell .crm-search-input {
   height: 34px !important;
   border-radius: 6px;

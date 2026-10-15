@@ -713,6 +713,33 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
   });
 });
 
+describe('tenant page visibility in the permission matrix', () => {
+  it('does not render a module whose page is disabled for the tenant', async () => {
+    const catalog = {
+      ...CATALOG,
+      modules: [
+        ...CATALOG.modules,
+        { module: 'lead_scoring', actions: ['read', 'write'] },
+      ],
+      catalog: {
+        ...CATALOG.catalog,
+        lead_scoring: ['read', 'write'],
+      },
+      domains: [
+        ...CATALOG.domains,
+        { domain: 'Generic CRM Pages', modules: [{ module: 'lead_scoring', actions: ['read', 'write'] }] },
+      ],
+      hiddenModules: ['lead_scoring'],
+    };
+
+    renderPage([ADMIN_ROLE], { '/api/roles/catalog': catalog });
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    await screen.findByText(/Permissions: Administrator/i);
+
+    expect(screen.queryByText('lead_scoring')).toBeNull();
+  });
+});
+
 describe('TMC teacher registration roster', () => {
   it('shows teachers who completed the shared registration profile', async () => {
     renderPage([], {

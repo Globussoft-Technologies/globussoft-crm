@@ -148,7 +148,7 @@ import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
-import { getGenericAccessByPath } from "../utils/sidebarSearch";
+import { getGenericAccessByPath, isTenantPageHidden } from "../utils/sidebarSearch";
 // Branding refactor (2026-07-08): the sidebar shows exactly ONE logo, driven
 // by the fallback-resolved effective brand for the active sub-brand  never
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
@@ -665,6 +665,7 @@ const Sidebar = ({
     matchPaths = [],
     end = false,
   }) => {
+    if (isTenantPageHidden(to, hiddenPagePaths)) return null;
     const canonicalAccess = !isTravel && !isWellness
       ? getGenericAccessByPath(to)
       : null;
@@ -800,11 +801,13 @@ const Sidebar = ({
   // useMemo identity-stability dance as Link so React doesn't unmount /
   // remount the subtree on every re-render.
   const wouldLinkRender = ({
+    to,
     adminOnly,
     managerOnly,
     wellnessRoles: linkWellnessRoles,
     requiredPermission,
   }) => {
+    if (isTenantPageHidden(to, hiddenPagePaths)) return false;
     const hasConfiguredPermission = Boolean(requiredPermission);
     if (!hasConfiguredPermission && adminOnly && !isAdmin) return false;
     if (!hasConfiguredPermission && managerOnly && !isManager) return false;
@@ -938,6 +941,7 @@ const Sidebar = ({
   //     (RolesAdmin, the assign-roles flow on Staff, etc.) and wants
   //     the sidebar to pick up the change immediately
   const [accessiblePages, setAccessiblePages] = useState([]);
+  const [hiddenPagePaths, setHiddenPagePaths] = useState([]);
   // Permissions from the shared usePermissions hook. Stable key avoids
   // re-fetching on every render  only when the actual permission set
   // changes (different membership, not same content).
@@ -949,10 +953,12 @@ const Sidebar = ({
         .then((res) => {
           if (cancelled) return;
           setAccessiblePages(Array.isArray(res?.pages) ? res.pages : []);
+          setHiddenPagePaths(Array.isArray(res?.hiddenPaths) ? res.hiddenPaths : []);
         })
         .catch(() => {
           if (cancelled) return;
           setAccessiblePages([]);
+          setHiddenPagePaths([]);
         });
     };
     refresh();
@@ -1292,6 +1298,7 @@ const Sidebar = ({
                 isMobileViewport,
                 openGenericGroup,
                 onOpenGenericGroup: setOpenGenericGroup,
+                hiddenPagePaths,
               })}
         </nav>
       </aside>
@@ -2627,6 +2634,7 @@ function renderGenericNav({
   isMobileViewport = false,
   openGenericGroup = null,
   onOpenGenericGroup = () => { },
+  hiddenPagePaths = [],
 }) {
   const isTransportPerson = roles.some((value) => {
     const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2659,6 +2667,7 @@ function renderGenericNav({
     </>;
   }
   const canRenderLink = (props) => {
+    if (isTenantPageHidden(props.to, hiddenPagePaths)) return false;
     const canonical = getGenericAccessByPath(props.to);
     const adminOnly = canonical ? Boolean(canonical.adminOnly) : props.adminOnly;
     const managerOnly = canonical ? Boolean(canonical.managerOnly) : props.managerOnly;

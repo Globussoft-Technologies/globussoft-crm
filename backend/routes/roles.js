@@ -123,6 +123,13 @@ function coerceRoleSubBrandScope(input) {
 }
 const { isValidWidgetKey } = require("../lib/widgetCatalog");
 const { getAccessiblePages, canAccessPath } = require("../lib/pageCatalog");
+const {
+  getTenantPageVisibility,
+  filterPagesByTenantVisibility,
+  filterPermissionCatalogForTenant,
+  getUnavailablePermissionModulesForTenant,
+  filterPermissionDomainsForTenant,
+} = require("../lib/tenantPageVisibility");
 const { getNewlyGrantedSensitive } = require("../lib/sensitivePermissions");
 const { assertCustomRoleCreationAllowed } = require("../lib/customRoleLimit");
 
@@ -468,22 +475,32 @@ router.get(
       // Post-cleanup, the two values are equal and the warning hover
       // text disappears naturally.
       const visibleCatalog = getCatalogForVertical(tenantVertical);
+      const visibility = await getTenantPageVisibility(tenantId, { vertical: tenantVertical });
+      const enabledCatalog = filterPermissionCatalogForTenant(
+        visibleCatalog,
+        tenantVertical,
+        visibility.hiddenPaths,
+      );
       const isVisible = (module, action) => {
-        if (!visibleCatalog) return true;
         const actions = visibleCatalog[module];
         return !!(actions && actions.includes(action));
       };
+      const isTenantAvailable = (module) => Object.prototype.hasOwnProperty.call(enabledCatalog, module);
 
       res.json({
         roles: roles.map((role) => {
           const visible = (role.permissions || []).filter((p) =>
             isVisible(p.module, p.action),
           );
+          const unavailable = (role.permissions || []).filter((p) =>
+            isVisible(p.module, p.action) && !isTenantAvailable(p.module),
+          );
           const { subBrandScopeJson, dataScope, ...roleClean } = role;
           delete roleClean.permissions;
           return {
             ...roleClean,
             permissions: visible,
+            unavailablePermissions: unavailable,
             dataScope: normalizeDataScope(dataScope),
             subBrandScope: parseSubBrandScope(subBrandScopeJson),
             userCount: tenantVertical === "travel" && role.key === "CUSTOMER" && role.userType === "CUSTOMER"
@@ -533,13 +550,26 @@ router.get(
         code: "TENANT_VERTICAL_UNAVAILABLE",
       });
     }
-    const catalog = getCatalogForVertical(vertical);
+    const visibility = await getTenantPageVisibility(req.user.tenantId, { vertical });
+    const catalog = filterPermissionCatalogForTenant(
+      getCatalogForVertical(vertical),
+      vertical,
+      visibility.hiddenPaths,
+    );
+    const hiddenModules = getUnavailablePermissionModulesForTenant(
+      getCatalogForVertical(vertical),
+      vertical,
+      visibility.hiddenPaths,
+    );
     const modules = Object.entries(catalog).map(([module, actions]) => ({
       module,
       actions,
     }));
-    const domains = getGroupedCatalogForVertical(vertical);
-    res.json({ catalog, modules, domains, vertical });
+    const domains = filterPermissionDomainsForTenant(
+      getGroupedCatalogForVertical(vertical),
+      catalog,
+    );
+    res.json({ catalog, modules, domains, vertical, hiddenPaths: visibility.hiddenPaths, hiddenModules });
   },
 );
 
@@ -2195,8 +2225,12 @@ router.get(
       // vertical filter used by GET /api/pages/catalog for the
       // Create-role dropdown — both surfaces stay consistent.
       const vertical = await getTenantVertical(role.tenantId);
-      const pages = getAccessiblePages(perms, { isOwner: false, vertical });
-      res.json({ roleId, pages });
+      const visibility = await getTenantPageVisibility(role.tenantId, { vertical });
+      const pages = filterPagesByTenantVisibility(
+        getAccessiblePages(perms, { isOwner: false, vertical }),
+        visibility,
+      );
+      res.json({ roleId, pages, hiddenPaths: visibility.hiddenPaths });
     } catch (err) {
       console.error("[roles] accessible-pages error:", err);
       res.status(500).json({ error: "Failed to compute accessible pages" });

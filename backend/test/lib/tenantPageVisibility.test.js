@@ -1,0 +1,118 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const prisma = require('../../lib/prisma');
+const visibility = require('../../lib/tenantPageVisibility');
+
+const originalSettingFindUnique = prisma.tenantSetting.findUnique;
+const originalTenantFindUnique = prisma.tenant.findUnique;
+
+beforeEach(() => {
+  visibility.clearTenantPageVisibilityCache(77);
+  prisma.tenantSetting.findUnique = vi.fn().mockResolvedValue(null);
+  prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
+});
+
+afterEach(() => {
+  prisma.tenantSetting.findUnique = originalSettingFindUnique;
+  prisma.tenant.findUnique = originalTenantFindUnique;
+  visibility.clearTenantPageVisibilityCache(77);
+});
+
+describe('tenant page visibility normalization', () => {
+  it('keeps only valid vertical pages and never hides the safe /home fallback', () => {
+    expect(visibility.normalizeHiddenPaths([
+      '/wellness/patients',
+      '/wellness/patients',
+      '/home',
+      '/travel/trips',
+      '/not-a-page',
+    ], 'wellness')).toEqual(['/wellness/patients']);
+  });
+
+  it('treats descendants as hidden when their parent page is disabled', () => {
+    expect(visibility.isPathHidden('/travel/tally/company-setup', ['/travel/tally'])).toBe(true);
+    expect(visibility.isPathHidden('/travel/tallying', ['/travel/tally'])).toBe(false);
+  });
+
+  it('includes legacy generic sidebar routes in the visibility catalog', () => {
+    expect(visibility.normalizeHiddenPaths([
+      '/invoices',
+      '/admin/status',
+      '/pickup-inventory',
+      '/wellness/patients',
+    ], 'generic')).toEqual([
+      '/admin/status',
+      '/invoices',
+      '/pickup-inventory',
+    ]);
+    expect(visibility.getTenantPageVisibilityCatalog('wellness')
+      .some((page) => page.path === '/pickup-inventory')).toBe(false);
+  });
+});
+
+describe('tenant page visibility resolution', () => {
+  it('defaults to all pages enabled when no setting exists', async () => {
+    const result = await visibility.getTenantPageVisibility(77, { vertical: 'generic' });
+    expect(result.hiddenPaths).toEqual([]);
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledOnce();
+  });
+
+  it('parses hidden paths and filters page and permission catalogs', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify({ hiddenPaths: ['/wellness/patients'] }),
+    });
+    const result = await visibility.getTenantPageVisibility(77, { vertical: 'wellness' });
+    expect(result.hiddenPaths).toEqual(['/wellness/patients']);
+
+    const pages = visibility.filterPagesByTenantVisibility([
+      { path: '/wellness/patients' },
+      { path: '/wellness/calendar' },
+    ], result);
+    expect(pages.map((page) => page.path)).toEqual(['/wellness/calendar']);
+
+    const catalog = visibility.filterPermissionCatalogForTenant(
+      { patients: ['read'], calendar: ['read'] },
+      'wellness',
+      result.hiddenPaths,
+    );
+    expect(catalog.patients).toBeUndefined();
+    expect(catalog.calendar).toEqual(['read']);
+  });
+
+  it('keeps a shared permission module when another page still uses it', () => {
+    const catalog = visibility.filterPermissionCatalogForTenant(
+      { marketing: ['read'] },
+      'generic',
+      ['/marketing'],
+    );
+    expect(catalog.marketing).toEqual(['read']);
+  });
+
+  it('removes permission modules owned by hidden legacy generic pages', () => {
+    const catalog = visibility.filterPermissionCatalogForTenant(
+      { invoices: ['read'], signatures: ['read'], settings: ['manage'] },
+      'generic',
+      ['/invoices'],
+    );
+    expect(catalog.invoices).toBeUndefined();
+    expect(catalog.signatures).toEqual(['read']);
+    expect(catalog.settings).toEqual(['manage']);
+  });
+
+  it('reports hidden permission modules separately for the role editor', () => {
+    expect(visibility.getUnavailablePermissionModulesForTenant(
+      { lead_scoring: ['read'], reports: ['read'] },
+      'generic',
+      ['/lead-scoring'],
+    )).toEqual(['lead_scoring']);
+  });
+
+  it('makes a permission unavailable only when every matching page is hidden', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify({ hiddenPaths: ['/wellness/patients'] }),
+    });
+    await expect(visibility.isPermissionAvailableForTenant(77, 'patients', 'read')).resolves.toBe(false);
+  });
+});
+

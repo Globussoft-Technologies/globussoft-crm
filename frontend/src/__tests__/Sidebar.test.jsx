@@ -173,6 +173,7 @@ function permsForRole(role, vertical) {
 // impl, which handles their specific URL and returns [] for everything
 // else, including /api/pages/me, which is exactly what those tests want.
 let currentAccessiblePages = [];
+let currentHiddenPagePaths = [];
 const { fetchApiMock } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
 }));
@@ -220,6 +221,7 @@ function renderSidebar({
   accessiblePages = null, // null → empty catalog (back-compat default)
   permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
   userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
+  hiddenPagePaths = [],
   expandTravelGroups = true, // legacy fixture convenience; production defaults collapsed
 } = {}) {
   // Capture the catalog into a closure variable read by the default
@@ -227,6 +229,7 @@ function renderSidebar({
   // Counter badges) replace the impl entirely without losing the
   // wellness catalog seeding mechanism.
   currentAccessiblePages = accessiblePages || [];
+  currentHiddenPagePaths = hiddenPagePaths;
   // RBAC migration — every permission-gated <Link> consults
   // usePermissions().hasPermission. Capture the per-render permission
   // set so the closure-backed mock returns role-appropriate grants.
@@ -307,13 +310,14 @@ beforeEach(() => {
   // overrides return [] for /api/pages/me — which is fine since those
   // tests don't depend on the catalog.
   currentAccessiblePages = [];
+  currentHiddenPagePaths = [];
   window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
   window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
   window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/pages/me') {
-      return Promise.resolve({ pages: currentAccessiblePages });
+      return Promise.resolve({ pages: currentAccessiblePages, hiddenPaths: currentHiddenPagePaths });
     }
     return Promise.resolve([]);
   });
@@ -345,6 +349,17 @@ describe('Sidebar — load-bearing render surface', () => {
       const link = screen.getByText('Web Forms').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/forms');
+    });
+
+    it('hides legacy generic links when the tenant disables their page path', async () => {
+      renderSidebar({
+        vertical: 'generic',
+        role: 'ADMIN',
+        hiddenPagePaths: ['/lead-scoring', '/invoices'],
+      });
+
+      await waitFor(() => expect(screen.queryByText('Lead Scoring')).toBeNull());
+      expect(screen.queryByText('Invoices')).toBeNull();
     });
 
     it('shows Pickup & Plot as its own module only to generic CRM admins', () => {

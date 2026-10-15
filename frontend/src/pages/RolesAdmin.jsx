@@ -562,34 +562,50 @@ export default function RolesAdmin() {
     );
   }, [tenantVertical]);
 
+  const applyPermissionCatalog = useCallback((res) => {
+    // The server returns hiddenModules in addition to the filtered matrix.
+    // Keep this client-side guard too so a stale/rolling-deploy response
+    // cannot put a tenant-disabled module back into the permission modal.
+    if (res?.vertical !== tenantVertical) return;
+    const hiddenModules = new Set(
+      Array.isArray(res?.hiddenModules) ? res.hiddenModules : [],
+    );
+    const list = Array.isArray(res?.modules) ? res.modules : null;
+    if (list) {
+      setPermissionModules(list.filter((module) => !hiddenModules.has(module.module)));
+    }
+    const domains = Array.isArray(res?.domains) ? res.domains : null;
+    if (domains) {
+      setPermissionDomains(
+        domains
+          .map((domain) => ({
+            domain: domain.domain,
+            modules: (domain.modules || [])
+              .map((module) => (typeof module === 'string' ? module : module.module))
+              .filter((module) => module && !hiddenModules.has(module)),
+          }))
+          .filter((domain) => domain.modules.length > 0),
+      );
+    }
+  }, [tenantVertical]);
+
+  const refreshPermissionCatalog = useCallback(() => {
+    if (permLoading || !canRead) return Promise.resolve();
+    return fetchApi('/api/roles/catalog')
+      .then((res) => applyPermissionCatalog(res))
+      .catch(() => {
+        // The existing empty/fallback state remains safer than rendering
+        // permissions from a failed tenant catalog request.
+      });
+  }, [applyPermissionCatalog, canRead, permLoading]);
+
   useEffect(() => {
     if (permLoading || !canRead) return;
     let cancelled = false;
     fetchApi('/api/roles/catalog')
       .then((res) => {
         if (cancelled) return;
-        // The backend is authoritative for vertical scoping. Do not render a
-        // response that is missing its tenant vertical or belongs to another
-        // vertical; the local fallback is intentionally safer than showing a
-        // cross-product permission matrix during a stale/failed session.
-        if (res?.vertical !== tenantVertical) return;
-        const list = Array.isArray(res?.modules) ? res.modules : null;
-        if (list && list.length) setPermissionModules(list);
-        // Server-authoritative domain grouping — fall through to the
-        // fallback constant when the server is on an older deploy that
-        // doesn't return the `domains` field yet.
-        const domains = Array.isArray(res?.domains) ? res.domains : null;
-        if (domains && domains.length) {
-          // Server returns [{ domain, modules: [{module, actions}] }]. The
-          // modal only needs the domain → moduleNames mapping; the action
-          // shape comes from `permissionModules` (which is keyed by name).
-          setPermissionDomains(
-            domains.map((d) => ({
-              domain: d.domain,
-              modules: (d.modules || []).map((m) => m.module),
-            })),
-          );
-        }
+        applyPermissionCatalog(res);
       })
       .catch(() => {
         // Stay on the fallback; fetchApi already surfaced any toast.
@@ -597,7 +613,20 @@ export default function RolesAdmin() {
     return () => {
       cancelled = true;
     };
-  }, [permLoading, canRead, tenantVertical]);
+  }, [applyPermissionCatalog, canRead, permLoading]);
+
+  useEffect(() => {
+    const refresh = () => { refreshPermissionCatalog(); };
+    const onStorage = (event) => {
+      if (event.key === 'globuscrm:tenant-page-visibility-updated') refresh();
+    };
+    window.addEventListener('tenant:page-visibility-changed', refresh);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('tenant:page-visibility-changed', refresh);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [refreshPermissionCatalog]);
 
   useEffect(() => {
     if (!permLoading && canRead) loadRoles();
@@ -1805,12 +1834,17 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
   // write endpoint, so this can never affect another tenant.
   const initial = useMemo(() => {
     const visible = new Set();
-    (role.permissions || []).forEach((p) => {
+    // Tenant-hidden permissions are intentionally preserved in the submitted
+    // set even though their module is not shown in this matrix. Super Admin
+    // can re-enable the page later without forcing every role to be rebuilt.
+    [...(role.permissions || []), ...(role.unavailablePermissions || [])].forEach((p) => {
       const m = p?.module;
       const a = p?.action;
       if (!m || !a) return;
       const key = `${m}.${a}`;
-      if (catalogKeys.has(key)) visible.add(key);
+      if (catalogKeys.has(key) || (role.unavailablePermissions || []).some((item) => item?.module === m && item?.action === a)) {
+        visible.add(key);
+      }
     });
     return visible;
   }, [role, catalogKeys]);

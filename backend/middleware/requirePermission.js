@@ -21,6 +21,7 @@ const {
   getCatalogForVertical,
 } = require('../lib/permissionCatalog');
 const { resolveTenantVerticalDetailed } = require('../lib/tenantVertical');
+const { isPermissionAvailableForTenant } = require('../lib/tenantPageVisibility');
 
 // REVERTED v3.8.x ADMIN runtime shortcut. Earlier work added a
 // short-circuit that returned the entire catalogue whenever the user
@@ -448,6 +449,31 @@ function requirePermission(module, action, opts = {}) {
 
   return async (req, res, next) => {
     try {
+      // Tenant page availability is an upper bound over RBAC. Existing role
+      // grants remain stored so Super Admin can re-enable a page later, but a
+      // permission whose entire page surface is hidden must not authorize an
+      // API request in the meantime. If the optional visibility setting cannot
+      // be read, keep the pre-existing RBAC path authoritative so a transient
+      // feature-setting outage cannot take down the application.
+      if (req.user?.tenantId) {
+        try {
+          const available = await isPermissionAvailableForTenant(
+            req.user.tenantId,
+            module,
+            action,
+          );
+          if (!available) {
+            return res.status(403).json({
+              error: 'This page is unavailable for the current organization',
+              code: 'TENANT_PAGE_DISABLED',
+              permission: requiredPerm,
+            });
+          }
+        } catch (visibilityError) {
+          console.error('[requirePermission] tenant page visibility check failed:', visibilityError);
+        }
+      }
+
       // OWNER role short-circuit: unrestricted access across all tenants
       if (req.user?.isOwner) {
         return next();

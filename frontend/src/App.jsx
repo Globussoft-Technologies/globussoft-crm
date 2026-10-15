@@ -140,6 +140,9 @@ const SuperAdminTenantManagement = lazy(
 const SuperAdminRoleManagement = lazy(
   () => import("./pages/superadmin/SuperAdminRoleManagement"),
 );
+const SuperAdminPageVisibility = lazy(
+  () => import("./pages/superadmin/SuperAdminPageVisibility"),
+);
 const SuperAdminLandingForm = lazy(() => import("./pages/superadmin/SuperAdminLandingForm"));
 const SuperAdminRevenue = lazy(
   () => import("./pages/superadmin/SuperAdminRevenue"),
@@ -1646,6 +1649,7 @@ export default function App() {
                     <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
                     <Route path="tenant-management/:tenantId" element={<SuperAdminTenantManagement />} />
                     <Route path="role-management" element={<SuperAdminRoleManagement />} />
+                    <Route path="page-visibility" element={<SuperAdminPageVisibility />} />
                     <Route path="landing-form" element={<SuperAdminLandingForm />} />
                     <Route path="revenue" element={<SuperAdminRevenue />} />
                   </Route>

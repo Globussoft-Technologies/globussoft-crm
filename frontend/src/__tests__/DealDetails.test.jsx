@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -95,6 +95,25 @@ describe('<DealDetails />', () => {
     expect((await screen.findAllByText('Existing tag')).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
     expect(await screen.findByRole('textbox', { name: 'Add tag' })).toBeInTheDocument();
+  });
+
+  it('keeps the tag selector usable across a delayed catalogue response and reopening', async () => {
+    let resolveCatalog;
+    const catalog = new Promise((resolve) => { resolveCatalog = resolve; });
+    const defaultFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, ...args) => url === '/api/contacts/tags'
+      ? catalog : defaultFetch(url, ...args));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add tag' }));
+    const input = await screen.findByRole('textbox', { name: 'Add tag' });
+    fireEvent.change(input, { target: { value: 'New prospect' } });
+    await act(async () => { resolveCatalog([{ name: 'VIP', color: '#112233' }]); });
+    expect(screen.getByRole('textbox', { name: 'Add tag' })).toHaveValue('New prospect');
+    expect(screen.getByRole('dialog', { name: 'Tag selector' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Tag selector' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
+    expect(await screen.findByRole('textbox', { name: 'Add tag' })).toHaveValue('');
   });
 
   it('supports the details tab search and show-empty-fields control', async () => {

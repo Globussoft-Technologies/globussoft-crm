@@ -18,7 +18,7 @@ test.beforeAll(async () => {
   const { PrismaClient } = backendRequire('@prisma/client');
   const jwt = backendRequire('jsonwebtoken');
   prisma = new PrismaClient();
-  for (const [key, vertical] of [['a', 'travel'], ['b', 'travel'], ['generic', 'generic'], ['wellness', 'wellness']]) {
+  for (const [key, vertical] of [['a', 'travel'], ['b', 'travel'], ['generic', 'generic'], ['wellness', 'wellness'], ['hidden', 'generic']]) {
     const tenant = await prisma.tenant.create({ data: { name: `${tag}-${key}`, slug: `${tag}-${key}`, vertical } });
     tenants.push(tenant.id);
     const admin = await prisma.user.create({ data: {
@@ -31,6 +31,16 @@ test.beforeAll(async () => {
       userType: 'STAFF', isOwner: false, sessionVersion: user.sessionVersion,
     }, process.env.JWT_SECRET, { expiresIn: '10m' });
     identities[key] = { id: admin.id, token: sign(admin) };
+    if (key === 'hidden') {
+      const { getTenantPageVisibilityCatalog } = backendRequire('./lib/tenantPageVisibility');
+      const hiddenPaths = getTenantPageVisibilityCatalog(vertical)
+        .filter((page) => page.requiredPermissions?.some((permission) => ['contacts', 'leads'].includes(permission.module)))
+        .map((page) => page.path);
+      await prisma.tenantSetting.create({ data: {
+        tenantId: tenant.id, key: 'navigation.hiddenPages', value: JSON.stringify(hiddenPaths), category: 'feature-flag',
+      } });
+      identities.hidden.tenantId = tenant.id;
+    }
     if (key === 'a') {
       const reader = await prisma.user.create({ data: {
         tenantId: tenant.id, name: `${tag}-reader`, email: `${tag}-reader@example.test`,
@@ -61,6 +71,25 @@ test.afterAll(async () => {
 
 const get = (request, key) => request.get(`${BASE_URL}/api/contacts/assignees`, {
   headers: { Authorization: `Bearer ${identities[key].token}` },
+});
+test('hidden contact modules block direct API reads and OR-gated mutations without affecting other tenants', async ({ request }) => {
+  const identity = identities.hidden;
+  const contact = await prisma.contact.create({ data: {
+    tenantId: identity.tenantId, name: `${tag}-hidden-contact`, status: 'Lead', assignedToId: identity.id,
+  } });
+  const headers = { Authorization: `Bearer ${identity.token}` };
+  try {
+    for (const method of ['put', 'patch']) {
+      const response = await request[method](`${BASE_URL}/api/contacts/${contact.id}`, { headers, data: { name: 'must not save' } });
+      expect(response.status()).toBe(403);
+      expect((await response.json()).code).toBe('TENANT_PAGE_DISABLED');
+    }
+    const response = await get(request, 'hidden');
+    expect(response.status()).toBe(403);
+    expect((await response.json()).code).toBe('TENANT_PAGE_DISABLED');
+    expect((await get(request, 'a')).status()).toBe(200);
+    expect((await prisma.contact.findUnique({ where: { id: contact.id } })).name).toBe(`${tag}-hidden-contact`);
+  } finally { await prisma.contact.delete({ where: { id: contact.id } }); }
 });
 test('requires authentication', async ({ request }) => {
   expect((await request.get(`${BASE_URL}/api/contacts/assignees`)).status()).toBe(401);

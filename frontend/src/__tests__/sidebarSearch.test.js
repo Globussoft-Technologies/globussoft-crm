@@ -6,10 +6,32 @@ import {
   getGenericAccessByPath,
   getGenericAccessForLocation,
   getGenericSidebarPages,
+  isTenantPageHidden,
   TRAVEL_SIDEBAR_PAGE_SPECS,
 } from '../utils/sidebarSearch';
 
 describe('filterSidebarPages', () => {
+  it('filters tenant-hidden pages and their descendants from navigation search', () => {
+    expect(isTenantPageHidden('/travel/tally/company-setup', ['/travel/tally'])).toBe(true);
+    expect(filterSidebarPages([
+      { path: '/contacts', label: 'Contacts' },
+      { path: '/settings', label: 'Settings' },
+      { path: '/travel/tally/company-setup', label: 'Company Setup' },
+    ], { vertical: 'generic', hiddenPagePaths: ['/contacts', '/travel/tally'] }))
+      .toEqual([{ path: '/settings', label: 'Settings' }]);
+  });
+
+  it('does not surface a hidden generic page in the local sidebar search catalogue', () => {
+    const pages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => true,
+      hiddenPagePaths: ['/marketing'],
+    });
+    expect(pages.some((page) => page.path === '/marketing')).toBe(false);
+  });
+
   it('uses one access contract for routes, sidebar search, and tours', () => {
     expect(getGenericAccessByPath('/settings')).toMatchObject({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/settings')).toEqual({ requiredPermission: { module: 'settings', action: 'read' } });

@@ -311,12 +311,21 @@ const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
   '/gmail',
 ]);
 
+export function isTenantPageHidden(path, hiddenPagePaths = []) {
+  if (!path || !Array.isArray(hiddenPagePaths)) return false;
+  return hiddenPagePaths.some(
+    (hiddenPath) => path === hiddenPath || path.startsWith(`${hiddenPath}/`),
+  );
+}
+
 export function canUseGenericSidebarPage(page, {
   isAdmin = false,
   isManager = false,
   permissionsReady = false,
   hasPermission = () => false,
+  hiddenPagePaths = [],
 } = {}) {
+  if (isTenantPageHidden(page?.path, hiddenPagePaths)) return false;
   const fallbackPermission = page.path ? GENERIC_PAGE_PERMISSION_FALLBACK[page.path] : null;
   const requiredPermission = page.requiredPermission || (fallbackPermission
     ? { module: fallbackPermission[0], action: fallbackPermission[1] }
@@ -381,14 +390,15 @@ function normalizeSubBrandAccess(value) {
 
 export function filterSidebarPages(
   pages,
-  { vertical = null, activeSubBrand = null, subBrandAccess = null } = {},
+  { vertical = null, activeSubBrand = null, subBrandAccess = null, hiddenPagePaths = [] } = {},
 ) {
   if (!Array.isArray(pages)) return [];
-  if (vertical !== 'travel') return pages.slice();
+  const tenantVisiblePages = pages.filter((page) => !isTenantPageHidden(page?.path, hiddenPagePaths));
+  if (vertical !== 'travel') return tenantVisiblePages;
 
   const normalizedSubBrandAccess = normalizeSubBrandAccess(subBrandAccess);
   const filtered = [];
-  for (const page of pages) {
+  for (const page of tenantVisiblePages) {
     const spec = TRAVEL_SIDEBAR_PAGE_MAP.get(page?.path);
     if (!spec) continue;
     // Mirror the travel sidebar's conditional links. TMC has no web

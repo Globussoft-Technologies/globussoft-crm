@@ -17,6 +17,14 @@ const {
 const landingFormConfig = require("../lib/landingFormConfig");
 const emailOtp = require("../lib/emailOtp");
 const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
+const {
+  SETTING_KEY: PAGE_VISIBILITY_SETTING_KEY,
+  SETTING_CATEGORY: PAGE_VISIBILITY_SETTING_CATEGORY,
+  getTenantPageVisibility,
+  getTenantPageVisibilityCatalog,
+  normalizeHiddenPaths,
+  clearTenantPageVisibilityCache,
+} = require("../lib/tenantPageVisibility");
 
 function validatePasswordComplexity(password) {
   if (!password || typeof password !== "string") return "Password is required";
@@ -267,6 +275,95 @@ router.put("/tenants/:tenantId/role-limit", async (req, res) => {
         ? 400
         : 500;
     res.status(status).json({ error: err.message || "Failed to update custom role limit", code: err.code || "ROLE_LIMIT_UPDATE_FAILED" });
+  }
+});
+
+// Per-tenant page availability. An absent setting means all pages in the
+// tenant's vertical are enabled, preserving the behaviour of existing and
+// newly-created organizations. RolePermission rows are not deleted when a
+// page is hidden; the tenant availability layer simply takes precedence and
+// makes re-enabling a page reversible.
+router.get("/tenants/:tenantId/page-visibility", async (req, res) => {
+  try {
+    const tenantId = Number(req.params.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "Invalid tenant id", code: "INVALID_TENANT_ID" });
+    }
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true, slug: true, vertical: true, isActive: true },
+    });
+    if (!tenant) return res.status(404).json({ error: "Tenant not found", code: "TENANT_NOT_FOUND" });
+
+    const visibility = await getTenantPageVisibility(tenant.id, { vertical: tenant.vertical || "generic" });
+    const pages = getTenantPageVisibilityCatalog(visibility.vertical).map((page) => ({
+      ...page,
+      enabled: !visibility.hiddenPaths.includes(page.path),
+    }));
+    res.json({ tenant, vertical: visibility.vertical, pages, hiddenPaths: visibility.hiddenPaths });
+  } catch (err) {
+    console.error("[super-admin-tenant-management] page visibility load error:", err.message);
+    res.status(500).json({ error: "Failed to load tenant page visibility", code: "PAGE_VISIBILITY_LOAD_FAILED" });
+  }
+});
+
+router.put("/tenants/:tenantId/page-visibility", async (req, res) => {
+  try {
+    const tenantId = Number(req.params.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "Invalid tenant id", code: "INVALID_TENANT_ID" });
+    }
+    if (!Array.isArray(req.body?.hiddenPaths)) {
+      return res.status(400).json({ error: "hiddenPaths must be an array", code: "HIDDEN_PATHS_REQUIRED" });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true, slug: true, vertical: true, isActive: true },
+    });
+    if (!tenant) return res.status(404).json({ error: "Tenant not found", code: "TENANT_NOT_FOUND" });
+
+    const vertical = tenant.vertical || "generic";
+    const hiddenPaths = normalizeHiddenPaths(req.body.hiddenPaths, vertical);
+    const invalidPaths = req.body.hiddenPaths.filter((path) => {
+      const normalized = typeof path === "string" ? path.trim() : "";
+      return normalized && !getTenantPageVisibilityCatalog(vertical).some((page) => page.path === normalized);
+    });
+    if (invalidPaths.length > 0) {
+      return res.status(400).json({
+        error: `Unknown page path: ${invalidPaths[0]}`,
+        code: "INVALID_PAGE_PATH",
+        invalidPaths,
+      });
+    }
+
+    await prisma.tenantSetting.upsert({
+      where: { tenantId_key: { tenantId, key: PAGE_VISIBILITY_SETTING_KEY } },
+      create: {
+        tenantId,
+        key: PAGE_VISIBILITY_SETTING_KEY,
+        value: JSON.stringify({
+          version: 1,
+          hiddenPaths,
+          updatedBySuperAdmin: req.superAdmin.username,
+        }),
+        category: PAGE_VISIBILITY_SETTING_CATEGORY,
+      },
+      update: {
+        value: JSON.stringify({
+          version: 1,
+          hiddenPaths,
+          updatedBySuperAdmin: req.superAdmin.username,
+        }),
+        category: PAGE_VISIBILITY_SETTING_CATEGORY,
+      },
+    });
+    clearTenantPageVisibilityCache(tenantId);
+
+    res.json({ tenant, vertical, hiddenPaths, updatedBy: req.superAdmin.username });
+  } catch (err) {
+    console.error("[super-admin-tenant-management] page visibility update error:", err.message);
+    res.status(500).json({ error: "Failed to update tenant page visibility", code: "PAGE_VISIBILITY_UPDATE_FAILED" });
   }
 });
 

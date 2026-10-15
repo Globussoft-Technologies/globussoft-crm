@@ -28,6 +28,7 @@ const requireCJS = createRequire(import.meta.url);
 // affect the closure, so we replace the module-cache entry's compiled
 // function reference instead.
 const permMod = requireCJS('../../middleware/requirePermission');
+const visibility = requireCJS('../../lib/tenantPageVisibility');
 
 // Re-bind the module's internal getUserPermissions reference. The
 // helper is defined inside the module so reassigning here doesn't
@@ -42,9 +43,12 @@ prisma.userRole = prisma.userRole || {};
 prisma.userRole.findMany = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.tenantSetting.findUnique = vi.fn();
 
 beforeEach(() => {
   permMod.clearAllCache();
+  visibility.clearTenantPageVisibilityCache(11);
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.userRole.findMany.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
 });
@@ -128,6 +132,33 @@ describe('requireAnyPermission — short-circuits', () => {
 });
 
 describe('requireAnyPermission — perm match semantics', () => {
+  test('hidden modules cannot authorize mutations or satisfy an OR alternative', async () => {
+    const hiddenPaths = visibility.getTenantPageVisibilityCatalog('generic')
+      .filter(page => page.requiredPermissions?.some(permission => permission.module === 'contacts'))
+      .map(page => page.path);
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify(hiddenPaths) });
+    const context = makeReqRes({
+      user: { userId: 1, tenantId: 11, userType: 'STAFF' },
+      perms: ['contacts.update'],
+    });
+    await permMod.requireAnyPermission([{ module: 'contacts', action: 'update' }])(
+      context.req, context.res, context.next,
+    );
+    expect(context.res._body.code).toBe('TENANT_PAGE_DISABLED');
+    expect(context.next).not.toHaveBeenCalled();
+
+    const mixed = makeReqRes({
+      user: { userId: 1, tenantId: 11, userType: 'STAFF' },
+      perms: ['contacts.update'],
+    });
+    await permMod.requireAnyPermission([
+      { module: 'contacts', action: 'update' },
+      { module: 'settings', action: 'manage' },
+    ])(mixed.req, mixed.res, mixed.next);
+    expect(mixed.res._body.code).toBe('RBAC_DENIED');
+    expect(mixed.next).not.toHaveBeenCalled();
+  });
+
   test('user with first perm only → passes', async () => {
     const mw = permMod.requireAnyPermission([
       { module: 'roles', action: 'read' },

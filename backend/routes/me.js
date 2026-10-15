@@ -28,9 +28,19 @@ const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
 const { getUserPermissions } = require('../middleware/requirePermission');
 const { resolvePrimaryRole } = require('../lib/roleResolution');
-const { getCatalog: getPageCatalog, getAccessiblePages } = require('../lib/pageCatalog');
 const {
-  getCatalogForVertical,
+  getCatalogForVertical: getPageCatalogForVertical,
+  getAccessiblePages,
+} = require('../lib/pageCatalog');
+const {
+  getTenantPageVisibility,
+  filterPagesByTenantVisibility,
+  filterPermissionCatalogForTenant,
+  getUnavailablePermissionModulesForTenant,
+  filterPermissionDomainsForTenant,
+} = require('../lib/tenantPageVisibility');
+const {
+  getCatalogForVertical: getPermissionCatalogForVertical,
   getGroupedCatalogForVertical,
 } = require('../lib/permissionCatalog');
 const { resolveTenantVertical } = require('../lib/tenantVertical');
@@ -61,6 +71,8 @@ router.get('/', verifyToken, async (req, res) => {
     // shouldn't break — return `isOwner: true` so the frontend can treat
     // any hasPermission() call as `true`.
     if (req.user.isOwner) {
+      const vertical = user.tenant?.vertical || 'generic';
+      const visibility = await getTenantPageVisibility(req.user.tenantId, { vertical });
       return res.json({
         user: { ...user, password: undefined, tenantId: undefined },
         isOwner: true,
@@ -68,7 +80,8 @@ router.get('/', verifyToken, async (req, res) => {
         effectivePermissions: [],
         primaryRole: null,
         landingPath: '/dashboard',
-        nav: getPageCatalog(),
+        nav: filterPagesByTenantVisibility(getPageCatalogForVertical(vertical), visibility),
+        hiddenPagePaths: visibility.hiddenPaths,
         widgets: [],
       });
     }
@@ -92,10 +105,13 @@ router.get('/', verifyToken, async (req, res) => {
     // Nav = accessible pages intersected with effective permissions. The
     // sidebar already consumes /api/pages/me with the same logic; this
     // is the same shape so the frontend can use either endpoint.
-    const nav = getAccessiblePages(permSet, {
+    const visibility = await getTenantPageVisibility(req.user.tenantId, {
+      vertical: user.tenant?.vertical || 'generic',
+    });
+    const nav = filterPagesByTenantVisibility(getAccessiblePages(permSet, {
       isOwner: false,
       vertical: user.tenant?.vertical,
-    });
+    }), visibility);
 
     // Widgets — UNION across all roles the user holds, per SPEC §B4.
     // De-dup by widgetKey, preferring the lowest position so the home
@@ -131,6 +147,7 @@ router.get('/', verifyToken, async (req, res) => {
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
       nav,
+      hiddenPagePaths: visibility.hiddenPaths,
       widgets,
     });
   } catch (err) {
@@ -152,13 +169,26 @@ permissionsRouter.get('/', verifyToken, async (req, res) => {
       code: 'TENANT_VERTICAL_UNAVAILABLE',
     });
   }
-  const catalog = getCatalogForVertical(vertical);
+  const visibility = await getTenantPageVisibility(req.user.tenantId, { vertical });
+  const catalog = filterPermissionCatalogForTenant(
+    getPermissionCatalogForVertical(vertical),
+    vertical,
+    visibility.hiddenPaths,
+  );
+  const hiddenModules = getUnavailablePermissionModulesForTenant(
+    getPermissionCatalogForVertical(vertical),
+    vertical,
+    visibility.hiddenPaths,
+  );
   const modules = Object.entries(catalog).map(([module, actions]) => ({
     module,
     actions,
   }));
-  const domains = getGroupedCatalogForVertical(vertical);
-  res.json({ catalog, modules, domains, vertical });
+  const domains = filterPermissionDomainsForTenant(
+    getGroupedCatalogForVertical(vertical),
+    catalog,
+  );
+  res.json({ catalog, modules, domains, vertical, hiddenPaths: visibility.hiddenPaths, hiddenModules });
 });
 
 // Two-router export: keeps the SPEC §C3 endpoint surface (/api/me and

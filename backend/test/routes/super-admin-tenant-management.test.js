@@ -430,3 +430,55 @@ describe('GET /revenue/summary', () => {
     expect(res.status).toBe(500);
   });
 });
+
+describe('tenant page visibility', () => {
+  beforeEach(() => {
+    prisma.tenant.findUnique.mockResolvedValue({
+      id: 7,
+      name: 'Acme Wellness',
+      slug: 'acme-wellness',
+      vertical: 'wellness',
+      isActive: true,
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ hiddenPaths: ['/wellness/patients'] }),
+    });
+  });
+
+  test('returns the full vertical catalog with enabled state', async () => {
+    const res = await request(makeApp()).get('/api/super-admin/tenant-management/tenants/7/page-visibility');
+
+    expect(res.status).toBe(200);
+    expect(res.body.vertical).toBe('wellness');
+    expect(res.body.hiddenPaths).toEqual(['/wellness/patients']);
+    expect(res.body.pages.find((page) => page.path === '/wellness/patients').enabled).toBe(false);
+    expect(res.body.pages.find((page) => page.path === '/wellness/calendar').enabled).toBe(true);
+  });
+
+  test('stores hidden paths and records the Super Admin username', async () => {
+    prisma.tenantSetting.upsert.mockResolvedValue({ id: 99 });
+    const res = await request(makeApp({ username: 'ops_bob' }))
+      .put('/api/super-admin/tenant-management/tenants/7/page-visibility')
+      .send({ hiddenPaths: ['/wellness/patients'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.hiddenPaths).toEqual(['/wellness/patients']);
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_key: { tenantId: 7, key: 'navigation.hiddenPages' } },
+      create: expect.objectContaining({
+        tenantId: 7,
+        category: 'feature-flag',
+        value: expect.stringContaining('ops_bob'),
+      }),
+    }));
+  });
+
+  test('rejects a page from another vertical', async () => {
+    const res = await request(makeApp())
+      .put('/api/super-admin/tenant-management/tenants/7/page-visibility')
+      .send({ hiddenPaths: ['/travel/trips'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PAGE_PATH');
+  });
+});

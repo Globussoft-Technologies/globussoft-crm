@@ -9,6 +9,10 @@ const {
   getSubBrandAccessSet,
   narrowWhereBySubBrand,
 } = require("../middleware/travelGuards");
+const {
+  getTenantPageVisibility,
+  isPathHidden,
+} = require("../lib/tenantPageVisibility");
 
 const router = express.Router();
 
@@ -52,6 +56,39 @@ const searchContains = (value) => ({
 
 const TRAVEL_SEARCH_RESULT_LIMIT = 5;
 const TRAVEL_SEARCH_ORDER = [{ updatedAt: "desc" }, { id: "desc" }];
+
+// Search results navigate to these SPA surfaces. Keep entity discovery under
+// the same tenant page-availability policy as the sidebar and page search.
+// Shared data remains searchable when another visible page is the result's
+// legitimate destination; entity-specific links use their exact destination.
+const SEARCH_ENTITY_PAGE_PATHS = {
+  contacts: ["/contacts"],
+  deals: ["/pipeline"],
+  sequences: ["/sequences"],
+  campaigns: ["/marketing"],
+  invoices: ["/invoices", "/wellness/invoices"],
+  tickets: ["/tickets"],
+  tasks: ["/tasks"],
+  projects: ["/projects"],
+  surveys: ["/surveys"],
+  contracts: ["/contracts"],
+  estimates: ["/estimates"],
+  emails: ["/inbox"],
+  whatsappMessages: ["/wellness/whatsapp", "/whatsapp"],
+  patients: ["/wellness/patients"],
+  kbArticles: ["/knowledge-base"],
+  itineraries: ["/travel/itineraries"],
+  travelQuotes: ["/travel/quotes-admin", "/travel/quotes/builder"],
+  travelInvoices: ["/travel/invoices-admin"],
+  travelSuppliers: ["/travel/suppliers-admin"],
+  tmcTrips: ["/travel/trips"],
+};
+
+function isSearchEntityAvailable(entityKey, visibility) {
+  const paths = SEARCH_ENTITY_PAGE_PATHS[entityKey];
+  if (!paths || paths.length === 0) return true;
+  return paths.some((path) => !isPathHidden(path, visibility?.hiddenPaths));
+}
 
 function normalizeSearchText(value) {
   return String(value || "")
@@ -140,6 +177,7 @@ function extractTravelRecordId(query, prefix) {
 
 async function searchTravelEntities(req, query) {
   const tenantId = req.user.tenantId;
+  const visibility = await getTenantPageVisibility(tenantId, { vertical: "travel" });
   const requestedSubBrand = String(req.query.subBrand || "").trim().toLowerCase();
   if (requestedSubBrand && !VALID_SUB_BRANDS.includes(requestedSubBrand)) {
     const error = new Error("Invalid travel sub-brand");
@@ -171,7 +209,8 @@ async function searchTravelEntities(req, query) {
       : await getUserPermissions(req.user.tenantId, req.user.userId);
   const permissionEntries = permissionPairs.map(([key, module]) => [
     key,
-    effectivePermissions === null || effectivePermissions.has(`${module}.read`),
+    (effectivePermissions === null || effectivePermissions.has(`${module}.read`))
+      && isSearchEntityAvailable(key, visibility),
   ]);
   const canSearch = Object.fromEntries(permissionEntries);
   const tripVisible = canSearch.tmcTrips
@@ -314,6 +353,7 @@ router.get("/", verifyToken, async (req, res) => {
     }
 
     const canAccessConditional = await canAccessConditionalEntities(req);
+    const visibility = await getTenantPageVisibility(tenantId, { vertical });
     const searchFilter = searchContains(query);
 
     // Always use all searchable entities and filter visibility per vertical + access level
@@ -329,6 +369,11 @@ router.get("/", verifyToken, async (req, res) => {
 
       // Check if user can access conditional entities
       if (entity.conditional && !canAccessConditional) {
+        queryPromises[entity.key] = Promise.resolve([]);
+        continue;
+      }
+
+      if (!isSearchEntityAvailable(entity.key, visibility)) {
         queryPromises[entity.key] = Promise.resolve([]);
         continue;
       }

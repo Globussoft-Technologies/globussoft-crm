@@ -33,6 +33,10 @@
  */
 const { test, expect } = require('@playwright/test');
 
+// Invoice IDs and the contact fixture are shared by this file. Do not let
+// fullyParallel run its lifecycle against multiple independent workers.
+test.describe.configure({ mode: 'serial' });
+
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
 const REQUEST_TIMEOUT = 60000;
@@ -86,18 +90,20 @@ function yesterdayISO() {
   return d.toISOString();
 }
 
-test.beforeAll(async ({ request }) => {
+test.beforeAll(async ({ request }, workerInfo) => {
   token = await login(request);
   if (!token) return;
-  // Pick any seeded contact on the generic tenant. Required for the
-  // POST /api/billing contactId field. Skipping if none exists rather
-  // than minting one — the seed always provides at least 10.
-  const r = await authGet(request, '/api/contacts?limit=10');
-  if (r.ok()) {
-    const body = await r.json();
-    const list = Array.isArray(body) ? body : (body.contacts || body.data || []);
-    seedContactId = list[0]?.id ?? null;
-  }
+  // Never borrow a shared/list-selected contact: other API specs may delete
+  // it between validation and invoice insertion (observed FK failure in
+  // deploy run 38727673952). Own the full fixture lifetime instead.
+  const marker = `E2E_BILLING_${Date.now()}_${process.pid}_${workerInfo.workerIndex}`;
+  const response = await authPost(request, '/api/contacts', {
+    name: marker, email: `${marker.toLowerCase()}@example.test`,
+  });
+  expect(response.status(), `contact fixture creation failed: ${await response.text()}`).toBe(201);
+  const contact = await response.json();
+  seedContactId = contact.id;
+  expect(Number.isInteger(seedContactId)).toBe(true);
 });
 
 test.afterAll(async ({ request }) => {
@@ -106,6 +112,9 @@ test.afterAll(async ({ request }) => {
   if (!token) return;
   for (const id of created) {
     await authPost(request, `/api/billing/${id}/void`, { reason: 'E2E cleanup' }).catch(() => {});
+  }
+  if (seedContactId) {
+    await authDelete(request, `/api/contacts/${seedContactId}`).catch(() => {});
   }
 });
 

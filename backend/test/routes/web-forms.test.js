@@ -187,6 +187,10 @@ describe('web-form embed sizing', () => {
     expect(code).toContain('source!=="gbs-web-form"');
     expect(code).toContain('type:"responsive-device"');
     expect(code).toContain('window.innerWidth');
+    expect(code).toContain('Max-Age="+maxAge');
+    expect(code).toContain('attribution:savedAttribution');
+    expect(code).toContain('"utm_source"');
+    expect(code).toContain('"hsa_ver"');
   });
 
   test('uses the configured frontend base when no origin is supplied', () => {
@@ -204,6 +208,14 @@ describe('web-form embed sizing', () => {
       if (previousPublicBaseUrl === undefined) delete process.env.PUBLIC_BASE_URL;
       else process.env.PUBLIC_BASE_URL = previousPublicBaseUrl;
     }
+  });
+
+  test('keeps host attribution cookies scoped to Generic CRM forms', () => {
+    const code = buildEmbedCode({ id: 8, name: 'Travel Enquiry', slug: 'travel-enquiry', scope: 'travel' }, 'https://crm.example.com');
+
+    expect(code).not.toContain('Max-Age="+maxAge');
+    expect(code).not.toContain('attribution:savedAttribution');
+    expect(code).toContain('type:"responsive-device"');
   });
 });
 

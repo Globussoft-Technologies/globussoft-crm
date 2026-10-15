@@ -62,11 +62,36 @@ const Profile = () => {
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteCode, setDeleteCode] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [successorAdmins, setSuccessorAdmins] = useState([]);
+  const [successorAdminId, setSuccessorAdminId] = useState('');
+  const [loadingSuccessorAdmins, setLoadingSuccessorAdmins] = useState(false);
 
   useEffect(() => {
     loadProfile();
     loadInvoices();
   }, []);
+
+  useEffect(() => {
+    if (!deleteArmed || profile?.role !== 'ADMIN') return undefined;
+    let active = true;
+    setLoadingSuccessorAdmins(true);
+    fetchApi('/api/staff?fields=summary', { silent: true })
+      .then((result) => {
+        if (!active) return;
+        const rows = Array.isArray(result) ? result : result?.users || [];
+        const admins = rows.filter((row) =>
+          row.role === 'ADMIN' && !row.deactivatedAt && Number(row.id) !== Number(profile.id));
+        setSuccessorAdmins(admins);
+        setSuccessorAdminId((current) => current || (admins.length === 1 ? String(admins[0].id) : ''));
+      })
+      .catch(() => {
+        if (active) setSuccessorAdmins([]);
+      })
+      .finally(() => {
+        if (active) setLoadingSuccessorAdmins(false);
+      });
+    return () => { active = false; };
+  }, [deleteArmed, profile?.id, profile?.role]);
 
   const loadInvoices = async () => {
     try {
@@ -289,10 +314,17 @@ const Profile = () => {
       notify.error('Enter your two-factor verification code to delete your account.');
       return;
     }
+    if (profile?.role === 'ADMIN' && !successorAdminId) {
+      notify.error('Create or promote another active admin, then select that admin to receive your assigned data.');
+      return;
+    }
 
+    const successor = successorAdmins.find((admin) => String(admin.id) === String(successorAdminId));
     const ok = await notify.confirm({
       title: 'Delete your account?',
-      message: 'This action is irreversible. Your account and all data associated with it will be permanently deleted, and you will be signed out immediately.',
+      message: profile?.role === 'ADMIN'
+        ? `This action is irreversible. Your ADMIN permissions and assigned CRM data will be transferred to ${successor?.name || 'the selected admin'}. Only your user account will be permanently deleted; the organization and its shared data will remain.`
+        : 'This action is irreversible. Your user account will be permanently deleted, the organization and its shared data will remain, and you will be signed out immediately.',
       confirmText: 'Delete my account',
       cancelText: 'Cancel',
       destructive: true,
@@ -307,6 +339,7 @@ const Profile = () => {
           confirmDestructive: true,
           ...(profile?.ssoProvider ? {} : { password: deletePassword }),
           ...(profile?.twoFactorEnabled ? { code: deleteCode.trim() } : {}),
+          ...(profile?.role === 'ADMIN' ? { successorAdminId: Number(successorAdminId) } : {}),
         }),
       });
       // The server already revoked the session jti and dropped the auth
@@ -779,8 +812,8 @@ const Profile = () => {
           <AlertTriangle size={18} /> Danger Zone
         </h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-          Permanently delete your account. This action is irreversible - your account and all data
-          associated with it will be deleted, and you will be signed out immediately.
+          Permanently delete your user account. The organization and its shared data will remain.
+          {profile?.role === 'ADMIN' ? ' You must add and select another active admin to receive your permissions and assigned CRM data before deleting this account.' : ''}
         </p>
 
         {!deleteArmed ? (
@@ -797,15 +830,64 @@ const Profile = () => {
           <div data-testid="profile-delete-account-confirm">
             {!profile?.ssoProvider && (
               <div style={{ marginBottom: '1rem' }}>
+                {/* Give password managers an explicit username target for this
+                    credential section. Without it, Chrome can mistake the
+                    unrelated global CRM search input for the username field
+                    and autofill the user's email into the search filter. */}
+                <input
+                  type="email"
+                  name="delete-account-username"
+                  value={profile?.email || ''}
+                  readOnly
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  autoComplete="section-delete-account username"
+                  style={{
+                    position: 'absolute',
+                    width: 1,
+                    height: 1,
+                    padding: 0,
+                    margin: -1,
+                    overflow: 'hidden',
+                    clip: 'rect(0, 0, 0, 0)',
+                    whiteSpace: 'nowrap',
+                    border: 0,
+                  }}
+                />
                 <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   Confirm with your current password
                 </label>
                 <PasswordInput
+                  name="delete-account-current-password"
                   value={deletePassword}
                   onChange={(e) => setDeletePassword(e.target.value)}
                   placeholder="Current password"
-                  autoComplete="current-password"
+                  autoComplete="section-delete-account current-password"
                 />
+              </div>
+            )}
+            {profile?.role === 'ADMIN' && (
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Transfer permissions and assigned data to
+                </label>
+                <select
+                  className="input-field"
+                  value={successorAdminId}
+                  onChange={(e) => setSuccessorAdminId(e.target.value)}
+                  disabled={loadingSuccessorAdmins}
+                  aria-label="Successor admin"
+                >
+                  <option value="">{loadingSuccessorAdmins ? 'Loading active admins...' : 'Select another active admin'}</option>
+                  {successorAdmins.map((admin) => (
+                    <option key={admin.id} value={admin.id}>{admin.name} ({admin.email})</option>
+                  ))}
+                </select>
+                {!loadingSuccessorAdmins && successorAdmins.length === 0 ? (
+                  <p role="alert" style={{ margin: '0.5rem 0 0', color: 'var(--danger-color, #ef4444)', fontSize: '0.82rem' }}>
+                    Create or promote another active admin before deleting your account.
+                  </p>
+                ) : null}
               </div>
             )}
             {profile?.twoFactorEnabled && (
@@ -843,6 +925,8 @@ const Profile = () => {
                   setDeleteArmed(false);
                   setDeletePassword('');
                   setDeleteCode('');
+                  setSuccessorAdmins([]);
+                  setSuccessorAdminId('');
                 }}
                 disabled={deleting}
               >

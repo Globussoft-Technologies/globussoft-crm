@@ -11,16 +11,16 @@
  *   - 400 PASSWORD_REQUIRED when a password account omits the password
  *   - 400 PASSWORD_INCORRECT on bcrypt mismatch
  *   - 400 TOTP_REQUIRED when 2FA is enabled and no/invalid code supplied
- *   - 409 LAST_ADMIN when other members exist but no other active admin
+ *   - admin deletion requires a selected active successor admin
+ *   - admin-owned operational records transfer before account deletion
  *   - 200 user-scope happy path: audit BEFORE delete, prisma.user.delete,
  *     jti revoked with reason 'account_deleted', { ok:true, deleted:'user' }
- *   - 200 tenant-scope when the caller is the tenant's sole user:
- *     prisma.tenant.delete (cascade wipes the workspace), deleted:'tenant'
+ *   - tenant data is never deleted by self-service account deletion
  *   - 200 SSO account: no password required (unusable random hash —
  *     see routes/sso.js), confirmDestructive is the bar
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import speakeasy from 'speakeasy';
@@ -35,6 +35,7 @@ prisma.user = {
   count: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  updateMany: vi.fn().mockResolvedValue({ count: 0 }),
   delete: vi.fn().mockResolvedValue({}),
 };
 prisma.tenant = {
@@ -61,6 +62,7 @@ prisma.userRole = {
   findFirst: vi.fn().mockResolvedValue(null),
   findMany: vi.fn().mockResolvedValue([]),
   create: vi.fn().mockResolvedValue({}),
+  upsert: vi.fn().mockResolvedValue({}),
 };
 prisma.role = {
   findFirst: vi.fn().mockResolvedValue({ id: 999 }),
@@ -73,6 +75,18 @@ prisma.rolePermission = {
 prisma.roleWidget = {
   create: vi.fn().mockResolvedValue({}),
 };
+for (const model of [
+  'contact', 'webForm', 'savedContactView', 'deal', 'ticket', 'task',
+  'expense', 'project', 'reportSchedule', 'whatsAppThread', 'landingPage',
+  'travelQuote', 'salesTeam',
+]) {
+  prisma[model] = { updateMany: vi.fn().mockResolvedValue({ count: 0 }) };
+}
+prisma.salesTeamMember = {
+  findMany: vi.fn().mockResolvedValue([]),
+  createMany: vi.fn().mockResolvedValue({ count: 0 }),
+};
+prisma.$transaction = vi.fn();
 
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -125,6 +139,13 @@ describe('DELETE /api/auth/me/account', () => {
     prisma.auditLog.create.mockResolvedValue({});
     prisma.user.delete.mockResolvedValue({});
     prisma.tenant.delete.mockResolvedValue({});
+    prisma.$transaction.mockImplementation(async (callback) => callback(prisma));
+  });
+
+  afterEach(() => {
+    // Self-service account deletion must never remove the organization,
+    // regardless of success, validation failure, role, or tenant size.
+    expect(prisma.tenant.delete).not.toHaveBeenCalled();
   });
 
   test('401 without Authorization header', async () => {
@@ -187,8 +208,6 @@ describe('DELETE /api/auth/me/account', () => {
     prisma.user.findFirst.mockResolvedValue(
       baseUser({ twoFactorEnabled: true, twoFactorSecret: secret }),
     );
-    // first count → other users exist (user scope), no admin check (role USER)
-    prisma.user.count.mockResolvedValueOnce(3);
     const code = speakeasy.totp({ secret, encoding: 'base32' });
     const res = await request(makeApp())
       .delete('/api/auth/me/account')
@@ -199,24 +218,20 @@ describe('DELETE /api/auth/me/account', () => {
     expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 7 } });
   });
 
-  test('409 LAST_ADMIN when other members exist but no other active admin', async () => {
+  test('400 SUCCESSOR_ADMIN_REQUIRED when an admin does not select a successor', async () => {
     prisma.user.findFirst.mockResolvedValue(baseUser({ role: 'ADMIN' }));
-    prisma.user.count
-      .mockResolvedValueOnce(4) // other users in tenant
-      .mockResolvedValueOnce(0); // other active admins
     const res = await request(makeApp())
       .delete('/api/auth/me/account')
       .set('Authorization', bearer({ role: 'ADMIN' }))
       .send({ confirmDestructive: true, password: PASSWORD });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('LAST_ADMIN');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('SUCCESSOR_ADMIN_REQUIRED');
     expect(prisma.user.delete).not.toHaveBeenCalled();
     expect(prisma.tenant.delete).not.toHaveBeenCalled();
   });
 
   test('200 user-scope happy path: audit + delete + jti revocation', async () => {
     prisma.user.findFirst.mockResolvedValue(baseUser());
-    prisma.user.count.mockResolvedValueOnce(2); // other users → user scope
     const res = await request(makeApp())
       .delete('/api/auth/me/account')
       .set('Authorization', bearer({ jti: 'jti-del-1' }))
@@ -237,25 +252,88 @@ describe('DELETE /api/auth/me/account', () => {
     );
   });
 
-  test('200 tenant-scope when caller is the sole user of the tenant', async () => {
-    prisma.user.findFirst.mockResolvedValue(baseUser({ role: 'ADMIN' }));
-    prisma.user.count.mockResolvedValueOnce(0); // no other users → tenant scope
+  test('409 SUCCESSOR_ADMIN_INVALID when the selected user is not another active admin', async () => {
+    prisma.user.findFirst
+      .mockResolvedValueOnce(baseUser({ role: 'ADMIN' }))
+      .mockResolvedValueOnce(null);
     const res = await request(makeApp())
       .delete('/api/auth/me/account')
       .set('Authorization', bearer({ role: 'ADMIN' }))
-      .send({ confirmDestructive: true, password: PASSWORD });
+      .send({ confirmDestructive: true, password: PASSWORD, successorAdminId: 8 });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SUCCESSOR_ADMIN_INVALID');
+    expect(res.body.error).toContain('selected successor');
+    expect(prisma.tenant.delete).not.toHaveBeenCalled();
+    expect(prisma.user.delete).not.toHaveBeenCalled();
+  });
+
+  test('200 transfers admin permissions and assigned data to the selected successor', async () => {
+    prisma.user.findFirst
+      .mockResolvedValueOnce(baseUser({ role: 'ADMIN' }))
+      .mockResolvedValueOnce({ id: 8, name: 'Successor', email: 'successor@acme.test' });
+    prisma.contact.updateMany.mockResolvedValueOnce({ count: 3 });
+    prisma.deal.updateMany.mockResolvedValueOnce({ count: 2 });
+    prisma.salesTeamMember.findMany.mockResolvedValueOnce([
+      { teamId: 21 },
+      { teamId: 22 },
+    ]);
+    const res = await request(makeApp())
+      .delete('/api/auth/me/account')
+      .set('Authorization', bearer({ role: 'ADMIN' }))
+      .send({ confirmDestructive: true, password: PASSWORD, successorAdminId: 8 });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, deleted: 'tenant' });
-    expect(prisma.tenant.delete).toHaveBeenCalledWith({ where: { id: 1 } });
+    expect(res.body).toEqual({
+      ok: true,
+      deleted: 'user',
+      successorAdminId: 8,
+      transferredRecords: 5,
+    });
+    expect(prisma.userRole.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: { userId: 8, roleId: 999 },
+    }));
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, assignedToId: 7 },
+      data: { assignedToId: 8 },
+    });
+    expect(prisma.deal.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, ownerId: 7 },
+      data: { ownerId: 8 },
+    });
+    expect(prisma.salesTeamMember.createMany).toHaveBeenCalledWith({
+      data: [
+        { tenantId: 1, teamId: 21, userId: 8 },
+        { tenantId: 1, teamId: 22, userId: 8 },
+      ],
+      skipDuplicates: true,
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 7 } });
+    expect(prisma.tenant.delete).not.toHaveBeenCalled();
+  });
+
+  test('500 leaves the admin undeleted when successor data transfer fails', async () => {
+    prisma.user.findFirst
+      .mockResolvedValueOnce(baseUser({ role: 'ADMIN' }))
+      .mockResolvedValueOnce({ id: 8, name: 'Successor', email: 'successor@acme.test' });
+    prisma.$transaction.mockRejectedValueOnce(new Error('transfer failed'));
+
+    const res = await request(makeApp())
+      .delete('/api/auth/me/account')
+      .set('Authorization', bearer({ role: 'ADMIN' }))
+      .send({ confirmDestructive: true, password: PASSWORD, successorAdminId: 8 });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to delete account' });
     expect(prisma.user.delete).not.toHaveBeenCalled();
+    expect(prisma.revokedToken.upsert).not.toHaveBeenCalled();
   });
 
   test('200 SSO account deletes without a password', async () => {
     prisma.user.findFirst.mockResolvedValue(
       baseUser({ ssoProvider: 'google', password: 'unusable-random-hash' }),
     );
-    prisma.user.count.mockResolvedValueOnce(5); // other users → user scope
     const res = await request(makeApp())
       .delete('/api/auth/me/account')
       .set('Authorization', bearer())

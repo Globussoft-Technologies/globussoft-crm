@@ -961,6 +961,7 @@ export default function Omnibar() {
           aria-controls="omnibar-results"
           aria-expanded={showDropdown}
           aria-activedescendant={activeOptionId}
+          autoComplete="off"
           style={{
             flex: 1,
             background: "transparent",

@@ -99,11 +99,15 @@ const portalInteractionStyles = `
   @media (max-width: 820px) {
     [data-tmc-teacher-portal="true"] {
       display: block !important;
+      width: 100% !important;
+      height: auto !important;
+      min-height: 100vh !important;
+      overflow: visible !important;
     }
 
     [data-tmc-teacher-portal="true"] aside {
       position: static !important;
-      width: auto !important;
+      width: 100% !important;
       height: auto !important;
       min-height: auto !important;
       border-right: 0 !important;
@@ -111,27 +115,117 @@ const portalInteractionStyles = `
       padding: 14px !important;
     }
 
+    [data-tmc-teacher-portal="true"] aside > div:nth-child(2) {
+      margin: 12px 0 !important;
+    }
+
     [data-tmc-teacher-portal="true"] aside nav {
-      display: flex !important;
-      overflow-x: auto;
+      display: grid !important;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      overflow: visible;
     }
 
     [data-tmc-teacher-portal="true"] aside nav button {
+      width: auto !important;
+      min-width: 0;
+      box-sizing: border-box;
       white-space: nowrap;
+    }
+
+    [data-tmc-teacher-portal="true"] aside > div:last-child {
+      display: none !important;
     }
 
     [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] {
       height: auto !important;
       min-height: 100vh !important;
       margin-left: 0 !important;
-      display: flex !important;
+      width: 100% !important;
+      display: block !important;
       overflow: visible !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] header {
+      min-height: 72px !important;
+      padding: 12px 20px !important;
     }
 
     [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] main,
     [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] main > div {
+      width: 100% !important;
       height: auto !important;
       overflow: visible !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] main > div {
+      padding: 20px !important;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-trip-grid,
+    [data-tmc-teacher-portal="true"] .tmc-teacher-review-select {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-title-row {
+      flex-wrap: wrap;
+    }
+  }
+
+  @media (max-width: 520px) {
+    [data-tmc-teacher-portal="true"] aside nav {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] header {
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px 16px !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] header > div:last-child {
+      margin-left: auto;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-shell="true"] main > div {
+      padding: 16px !important;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-dashboard-hero,
+    [data-tmc-teacher-portal="true"] .tmc-teacher-landing-summary {
+      flex-wrap: wrap;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-header-profile span:nth-child(2) {
+      display: none;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-notification-panel {
+      position: fixed !important;
+      left: 16px !important;
+      right: 16px !important;
+      top: var(--tmc-notification-top) !important;
+      width: auto !important;
+      max-width: none !important;
+      max-height: min(420px, calc(100dvh - var(--tmc-notification-top) - 16px)) !important;
+      box-sizing: border-box;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-dashboard-hero h2 {
+      font-size: 24px !important;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-metrics {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    [data-tmc-teacher-portal="true"] .tmc-teacher-dashboard-hero > div:first-child {
+      min-width: 0;
+    }
+  }
+
+  @media (max-width: 360px) {
+    [data-tmc-teacher-portal="true"] .tmc-teacher-metrics {
+      grid-template-columns: minmax(0, 1fr) !important;
     }
   }
 `;
@@ -246,8 +340,15 @@ export default function TmcTeacherPortal() {
   }, [themeMode]);
 
   useEffect(() => {
-    persistTmcPortalView(activeView, TEACHER_PORTAL_VIEWS);
-  }, [activeView]);
+    const restoreView = () => setActiveView(readTmcPortalView(TEACHER_PORTAL_VIEWS));
+    window.addEventListener("popstate", restoreView);
+    return () => window.removeEventListener("popstate", restoreView);
+  }, []);
+
+  const openView = (view) => {
+    persistTmcPortalView(view, TEACHER_PORTAL_VIEWS, "dashboard", "push");
+    setActiveView(view);
+  };
 
   const toggleTheme = useCallback(() => {
     setThemeMode((current) => (current === "dark" ? "light" : "dark"));
@@ -268,6 +369,7 @@ export default function TmcTeacherPortal() {
     setDiagnosticReports([]);
     setTeacherReviews([]);
     setReviewSaving(false);
+    persistTmcPortalView("dashboard", TEACHER_PORTAL_VIEWS);
     setActiveView("dashboard");
     setError(message);
   }, []);
@@ -423,10 +525,10 @@ export default function TmcTeacherPortal() {
           <div style={styles.profileText}><strong>{contact?.name || "Teacher"}</strong><span>{contact?.email || ""}</span></div>
         </div>
         <nav style={styles.sidebarNav} aria-label="Teacher portal sections">
-          <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => setActiveView("dashboard")} />
-          <PortalNavButton icon={ClipboardCheck} label="Diagnostic" active={activeView === "diagnostic"} onClick={() => setActiveView("diagnostic")} />
-          <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => setActiveView("trips")} />
-          <PortalNavButton icon={Clipboard} label="Trip review" active={activeView === "reviews"} onClick={() => setActiveView("reviews")} />
+          <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => openView("dashboard")} />
+          <PortalNavButton icon={ClipboardCheck} label="Diagnostic" active={activeView === "diagnostic"} onClick={() => openView("diagnostic")} />
+          <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => openView("trips")} />
+          <PortalNavButton icon={Clipboard} label="Trip review" active={activeView === "reviews"} onClick={() => openView("reviews")} />
         </nav>
         <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, view assigned trips, submit trip reports, and review trip landing pages.</div>
       </aside>
@@ -437,12 +539,13 @@ export default function TmcTeacherPortal() {
           <div style={styles.headerActions}>
             <TeacherNotificationBell
               token={token}
-              onNavigate={(view) => setActiveView(view)}
+              onNavigate={openView}
             />
             <ThemeToggleButton theme={themeMode} onToggle={toggleTheme} />
             <button
               type="button"
-              onClick={() => setActiveView("profile")}
+              onClick={() => openView("profile")}
+              className="tmc-teacher-header-profile"
               title="View your profile"
               aria-label="View your profile"
               style={{ ...styles.profilePill, ...(activeView === "profile" ? styles.profilePillActive : {}) }}
@@ -463,10 +566,15 @@ export default function TmcTeacherPortal() {
               diagnosticReports={diagnosticReports}
               teacherReviews={teacherReviews}
               loading={loading}
-              onOpenDiagnostic={() => setActiveView("diagnostic")}
-              onOpenTrips={() => setActiveView("trips")}
-              onOpenReviews={() => setActiveView("reviews")}
-              onOpenTrip={(trip) => { setActiveView("trips"); openTrip(trip); }}
+              onOpenDiagnostic={() => openView("diagnostic")}
+              onOpenTrips={() => openView("trips")}
+              onOpenParticipants={() => {
+                const trip = trips.find((item) => item._count?.participants > 0);
+                openView("trips");
+                if (trip) openTrip(trip);
+              }}
+              onOpenReviews={() => openView("reviews")}
+              onOpenTrip={(trip) => { openView("trips"); openTrip(trip); }}
             />}
             {activeView === "diagnostic" && <TmcTeacherDiagnostics token={token} tenantSlug={tenant?.slug} contact={contact} onSessionExpired={(message) => logout(message || "Your teacher session is no longer available. Please sign in again.")} />}
             {activeView === "trips" && <TripsView
@@ -482,7 +590,7 @@ export default function TmcTeacherPortal() {
               onOpenTrip={openTrip}
               onOpenLandingPage={openLandingPage}
               onSelectTripTab={setTripTab}
-              onOpenReviews={() => setActiveView("reviews")}
+              onOpenReviews={() => openView("reviews")}
             />}
             {activeView === "reviews" && <TeacherReviewView
               reviewTrips={teacherReviews}
@@ -521,6 +629,7 @@ function ThemeToggleButton({ theme, onToggle }) {
 
 function TeacherNotificationBell({ token, onNavigate }) {
   const [open, setOpen] = useState(false);
+  const [panelTop, setPanelTop] = useState(0);
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
 
@@ -576,7 +685,11 @@ function TeacherNotificationBell({ token, onNavigate }) {
     <div style={styles.notificationWrap}>
       <button
         type="button"
-        onClick={() => { setOpen((current) => !current); load(); }}
+        onClick={(event) => {
+          setPanelTop(Math.round(event.currentTarget.getBoundingClientRect().bottom + 8));
+          setOpen((current) => !current);
+          load();
+        }}
         style={styles.iconButton}
         title="Notifications"
         aria-label={`Notifications${unread ? ` (${unread} unread)` : ""}`}
@@ -588,7 +701,7 @@ function TeacherNotificationBell({ token, onNavigate }) {
       {open && (
         <>
           <button type="button" onClick={() => setOpen(false)} style={styles.notificationBackdrop} data-tmc-no-hover aria-label="Close notifications" />
-          <div role="dialog" aria-label="Notifications" style={styles.notificationPanel}>
+          <div role="dialog" aria-label="Notifications" className="tmc-teacher-notification-panel" style={{ ...styles.notificationPanel, "--tmc-notification-top": `${panelTop}px` }}>
             <div style={styles.notificationHeader}>
               <strong>Notifications</strong>
               {unread > 0 && <button type="button" onClick={markAllRead} style={styles.markRead}>Mark all read</button>}
@@ -619,7 +732,7 @@ function TeacherNotificationBell({ token, onNavigate }) {
 function TeacherProfileView({ contact }) {
   return (
     <div style={styles.profilePage}>
-      <div style={styles.titleRow}>
+      <div className="tmc-teacher-title-row" style={styles.titleRow}>
         <div>
           <h2 style={styles.title}>My Profile</h2>
           <p style={styles.muted}>View the account details linked to your teacher portal.</p>
@@ -644,13 +757,13 @@ function TeacherProfileView({ contact }) {
   );
 }
 
-function TeacherDashboard({ contact, trips, diagnosticReports, teacherReviews, loading, onOpenDiagnostic, onOpenTrips, onOpenReviews, onOpenTrip }) {
+function TeacherDashboard({ contact, trips, diagnosticReports, teacherReviews, loading, onOpenDiagnostic, onOpenTrips, onOpenParticipants, onOpenReviews, onOpenTrip }) {
   const studentCount = trips.reduce((total, trip) => total + (trip._count?.participants || 0), 0);
   const latestReports = diagnosticReports.slice(0, 3);
   const submittedReviewCount = teacherReviews.filter((trip) => trip.reviewSubmitted).length;
 
   return <div style={styles.dashboard}>
-    <section style={styles.dashboardHero}>
+    <section className="tmc-teacher-dashboard-hero" style={styles.dashboardHero}>
       <div>
         <span style={styles.eyebrow}>TMC teacher workspace</span>
         <h2 style={styles.dashboardWelcome}>Welcome{contact?.name ? `, ${contact.name}` : ""}!</h2>
@@ -659,11 +772,11 @@ function TeacherDashboard({ contact, trips, diagnosticReports, teacherReviews, l
       <div style={styles.heroBadge}><ShieldCheck size={18} /><span>Teacher account</span></div>
     </section>
 
-    <section style={styles.metricGrid} aria-label="Teacher overview">
-      <MetricCard icon={Map} label="Assigned trips" value={trips.length} detail="Finalized trips" />
-      <MetricCard icon={Users} label="Participants" value={studentCount} detail="Currently registered" />
-      <MetricCard icon={FileText} label="Diagnostic reports" value={diagnosticReports.length} detail={diagnosticReports.length ? "Reports available" : "Not completed yet"} />
-      <MetricCard icon={Clipboard} label="Trip reports" value={submittedReviewCount} detail={`${teacherReviews.length} completed trip${teacherReviews.length === 1 ? "" : "s"} eligible`} />
+    <section className="tmc-teacher-metrics" style={styles.metricGrid} aria-label="Teacher overview">
+      <MetricCard icon={Map} label="Assigned trips" value={trips.length} detail="Finalized trips" onClick={onOpenTrips} />
+      <MetricCard icon={Users} label="Participants" value={studentCount} detail="Currently registered" onClick={onOpenParticipants} />
+      <MetricCard icon={FileText} label="Diagnostic reports" value={diagnosticReports.length} detail={diagnosticReports.length ? "Reports available" : "Not completed yet"} onClick={onOpenDiagnostic} />
+      <MetricCard icon={Clipboard} label="Trip reports" value={submittedReviewCount} detail={`${teacherReviews.length} completed trip${teacherReviews.length === 1 ? "" : "s"} eligible`} onClick={onOpenReviews} />
     </section>
 
     <section style={styles.actionGrid} aria-label="Teacher actions">
@@ -692,8 +805,8 @@ function TeacherDashboard({ contact, trips, diagnosticReports, teacherReviews, l
   </div>;
 }
 
-function MetricCard({ icon: Icon, label, value, detail }) {
-  return <article style={styles.metricCard}><div style={styles.metricIcon}><Icon size={18} /></div><div style={styles.metricValue}>{value}</div><div style={styles.metricLabel}>{label}</div><div style={styles.metricDetail}>{detail}</div></article>;
+function MetricCard({ icon: Icon, label, value, detail, onClick }) {
+  return <button type="button" onClick={onClick} aria-label={label} data-tmc-hover-card="true" style={styles.metricCard}><div style={styles.metricIcon}><Icon size={18} /></div><div style={styles.metricValue}>{value}</div><div style={styles.metricLabel}>{label}</div><div style={styles.metricDetail}>{detail}</div></button>;
 }
 
 function QuickAction({ icon: Icon, title, description, action, onClick }) {
@@ -800,7 +913,7 @@ function TeacherReviewView({ reviewTrips, loading, saving, onRefresh, onSubmit }
       <CheckCircle2 size={18} aria-hidden />
       <span>{message}</span>
     </div>}
-    <div style={styles.titleRow}>
+    <div className="tmc-teacher-title-row" style={styles.titleRow}>
       <div>
         <h2 style={styles.title}>Trip review</h2>
         <p style={styles.muted}>Submit a tour report for a completed trip. The travel team can review your feedback from the admin portal.</p>
@@ -813,7 +926,7 @@ function TeacherReviewView({ reviewTrips, loading, saving, onRefresh, onSubmit }
         <div style={styles.empty}>No completed trips are ready for a review yet. A report becomes available after your assigned trip is marked completed.</div>
       </section>
     ) : <>
-      <section style={styles.reviewSelectCard} aria-labelledby="teacher-review-trip-heading">
+      <section className="tmc-teacher-review-select" style={styles.reviewSelectCard} aria-labelledby="teacher-review-trip-heading">
         <div>
           <span style={styles.eyebrow}>Completed trips</span>
           <h3 id="teacher-review-trip-heading" style={styles.sectionTitle}>Choose a trip to review</h3>
@@ -898,14 +1011,14 @@ function TripsView({ trips, loading, selectedTrip, tripTab, participants, landin
     : trips;
 
   return <>
-    <div style={styles.titleRow}>
+    <div className="tmc-teacher-title-row" style={styles.titleRow}>
       <div><h2 style={styles.title}>Trips finalized with your travel team</h2><p style={styles.muted}>Open a trip to view its participants and landing page.</p></div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button type="button" onClick={onOpenReviews} style={styles.secondary}><Clipboard size={15} /> Review a completed trip</button>
         <button type="button" onClick={onRefresh} style={styles.secondary}><RefreshCw size={15} /> Refresh</button>
       </div>
     </div>
-    <div style={styles.grid}>
+    <div className="tmc-teacher-trip-grid" style={styles.grid}>
       <section style={styles.card} aria-label="Assigned trips">
         <div style={styles.cardHeading}><Map size={18} color="var(--tmc-primary)" /><h3 style={styles.sectionTitle}>Assigned trips</h3></div>
         <label style={styles.tripSearch}>
@@ -958,7 +1071,7 @@ function TripLandingPageView({ landingPage, loading, error }) {
   if (!landingPage?.publicUrl) return <div style={styles.landingEmpty}><strong>No landing page available</strong><span>The travel team has not published a landing page for this trip yet.</span></div>;
 
   return <div style={styles.landingView}>
-    <div style={styles.landingSummary}>
+    <div className="tmc-teacher-landing-summary" style={styles.landingSummary}>
       <div>
         <div style={styles.landingStatus}><span style={styles.badge}>Published</span></div>
         <h4 style={styles.landingTitle}>{landingPage.title || "Trip landing page"}</h4>
@@ -1036,7 +1149,7 @@ const styles = {
   dashboardSubtitle: { margin: 0, color: "var(--tmc-muted)", fontSize: 14 },
   heroBadge: { display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 12px", borderRadius: 999, background: "var(--tmc-success-bg)", color: "var(--tmc-success-text)", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" },
   metricGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))", gap: 12 },
-  metricCard: { minWidth: 0, padding: 17, border: "1px solid var(--tmc-border)", borderRadius: 12, background: "var(--tmc-surface)" },
+  metricCard: { minWidth: 0, width: "100%", padding: 17, border: "1px solid var(--tmc-border)", borderRadius: 12, background: "var(--tmc-surface)", textAlign: "left", font: "inherit", cursor: "pointer" },
   metricIcon: { display: "grid", placeItems: "center", width: 34, height: 34, marginBottom: 12, borderRadius: 9, background: "var(--tmc-profile-bg)", color: "var(--tmc-primary)" },
   metricValue: { color: "var(--tmc-heading)", fontSize: 25, fontWeight: 750, lineHeight: 1 },
   metricLabel: { marginTop: 8, color: "var(--tmc-subtle-text)", fontSize: 13, fontWeight: 700 },
@@ -1057,8 +1170,8 @@ const styles = {
   dashboardTripMeta: { display: "inline-flex", alignItems: "center", gap: 7, color: "var(--tmc-muted)", fontSize: 12, whiteSpace: "nowrap" },
   reportSummary: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 0", borderTop: "1px solid var(--tmc-border-light)" },
   reportLink: { color: "var(--tmc-link)", fontSize: 12, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap", border: 0, background: "transparent", padding: 0, cursor: "pointer", font: "inherit" },
-  authPage: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 24, background: "var(--tmc-bg)" },
-  authCard: { width: "min(100%, 430px)", display: "grid", gap: 14, padding: 32, borderRadius: 16, background: "var(--tmc-surface)", border: "1px solid var(--tmc-border)", boxShadow: "var(--tmc-shadow)" },
+  authPage: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 24, boxSizing: "border-box", background: "var(--tmc-bg)" },
+  authCard: { width: "min(100%, 430px)", display: "grid", gap: 14, padding: 32, boxSizing: "border-box", borderRadius: 16, background: "var(--tmc-surface)", border: "1px solid var(--tmc-border)", boxShadow: "var(--tmc-shadow)" },
   authTitle: { margin: 0, color: "var(--tmc-heading)", fontSize: 27 },
   titleRow: { display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 22 },
   title: { margin: 0, color: "var(--tmc-heading)", fontSize: 25 },

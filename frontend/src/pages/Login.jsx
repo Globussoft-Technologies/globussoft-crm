@@ -358,7 +358,7 @@ const Login = () => {
           isTmcTeacher ? "tmcTeacherPortalToken" : "tmcParentPortalToken",
           data.token,
         );
-        navigate(isTmcTeacher ? "/tmc/teacher-portal" : "/tmc/parent-portal");
+        navigate(isTmcTeacher ? "/tmc/teacher-portal" : "/tmc/parent-portal", { replace: isTmcTeacher });
       } else {
         localStorage.setItem("portalToken", data.token);
         localStorage.setItem("portalContact", JSON.stringify(contact));

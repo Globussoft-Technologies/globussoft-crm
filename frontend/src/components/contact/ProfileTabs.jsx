@@ -10,8 +10,8 @@ import {
   updateDeal, uploadContactFiles,
 } from './contactActions';
 import { DEAL_STAGES } from './contactProfileConfig';
-import { FormRow, Stars } from './ProfileWidgets';
-import { RichText } from '../../utils/richText';
+import { FormRow, Modal, Stars } from './ProfileWidgets';
+import { isRichTextMarkup, richTextToPlainText, RichText } from '../../utils/richText';
 import RichTextNotePreview from './RichTextNotePreview';
 
 export function DetailsTab({ contact, staff, refresh }) {
@@ -88,6 +88,7 @@ export function DetailsTab({ contact, staff, refresh }) {
 
 export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = false, richText = false }) {
   const [filter, setFilter] = useState('all');
+  const [openedEmail, setOpenedEmail] = useState(null);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -108,6 +109,7 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
             id: `email-${m.id}`, channel: 'email', direction: m.direction || 'OUTBOUND',
             body: m.body || m.snippet || '', subject: m.subject || t.subject,
             personName: m.contactName || m.name || contact.name,
+            from: m.from, to: m.to,
             createdAt: m.createdAt || t.lastAt,
           });
         }
@@ -179,7 +181,13 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', fontWeight: 700, margin: '0.65rem 0 0.4rem' }}>
                   {dateLabel(date)}
                 </div>
-                {records.map((m) => (
+                {records.map((m) => richText && m.channel === 'email' ? (
+                  <button key={m.id} type="button" className="cp-email-row" onClick={() => setOpenedEmail(m)} aria-label={`Open email: ${m.subject || '(No subject)'}`}>
+                    <span className="cp-email-row-head"><strong>{m.from || m.personName || contact.name}</strong><time>{formatDateTime(m.createdAt)}</time></span>
+                    <strong className="cp-email-row-subject">{m.subject || '(No subject)'}</strong>
+                    <span className="cp-email-row-preview">{(isRichTextMarkup(m.body) ? richTextToPlainText(m.body.replace(/<\/(?:p|div|li|blockquote)>/gi, ' ').replace(/<br\s*\/?\s*>/gi, ' ')) : m.body || '').replace(/\s+/g, ' ').trim() || '(empty body)'}</span>
+                  </button>
+                ) : (
                   <div key={m.id} className={`cp-msg ${m.direction === 'OUTBOUND' ? 'out' : 'in'}`}>
                     <div className="cp-msg-subject">{m.personName || contact.name}</div>
                     <div className="cp-msg-meta">
@@ -187,7 +195,7 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
                       {m.participant ? ` • ${m.direction === 'INBOUND' ? 'From' : 'To'} ${m.participant}` : ''}
                     </div>
                     {m.subject && <div className="cp-msg-subject">{m.subject}</div>}
-                    {richText && m.channel === 'email' ? <RichText value={m.body || '—'} /> : <div>{m.body || '—'}</div>}
+                    <div>{m.body || '—'}</div>
                   </div>
                 ))}
               </div>
@@ -198,6 +206,14 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
           </div>
         </>
       )}
+      {openedEmail && <Modal title="Email" wide onClose={() => setOpenedEmail(null)}>
+        <div className="cp-email-detail">
+          <div className="cp-email-detail-address"><strong>{openedEmail.from || openedEmail.personName || contact.name}</strong>{openedEmail.to && <span>to {openedEmail.to}</span>}</div>
+          <h4>{openedEmail.subject || '(No subject)'}</h4>
+          <time>{formatDateTime(openedEmail.createdAt)}</time>
+          <div className="cp-email-detail-body">{isRichTextMarkup(openedEmail.body) ? <RichText value={openedEmail.body} /> : openedEmail.body || '(empty body)'}</div>
+        </div>
+      </Modal>}
     </div>
   );
 }

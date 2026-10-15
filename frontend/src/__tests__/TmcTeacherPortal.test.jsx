@@ -163,6 +163,30 @@ describe("TmcTeacherPortal", () => {
     expect(document.querySelector('[data-tmc-teacher-shell="true"]')).toHaveStyle({ marginLeft: "250px" });
   });
 
+  it.each([
+    ["Assigned trips", "Your trips"],
+    ["Diagnostic reports", "Teacher diagnostic"],
+    ["Trip reports", "Trip review"],
+  ])("opens the %s card's page", async (card, heading) => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: card }));
+
+    expect((await screen.findAllByRole("heading", { name: heading })).length).toBeGreaterThan(0);
+  });
+
+  it("opens a trip's participants from the Participants card", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Participants" }));
+
+    expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
+    expect(await screen.findByText("Manish")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Participants" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("opens the authenticated native diagnostic from a dashboard report", async () => {
     render(<TmcTeacherPortal />);
 
@@ -265,6 +289,35 @@ describe("TmcTeacherPortal", () => {
     render(<TmcTeacherPortal />);
 
     expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
+  });
+
+  it("restores previously visited sections when browser history changes", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    const startingHistoryLength = window.history.length;
+    fireEvent.click(screen.getByRole("button", { name: "Assigned trips" }));
+    expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
+    expect(window.location.search).toBe("?view=trips");
+    expect(window.history.length).toBe(startingHistoryLength + 1);
+
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Teacher portal sections" })).getByRole("button", { name: "Diagnostic" }));
+    expect(await screen.findByRole("heading", { name: "Teacher diagnostic" })).toBeInTheDocument();
+    expect(window.history.length).toBe(startingHistoryLength + 2);
+
+    window.history.replaceState({}, "", "/tmc/teacher-portal?view=trips");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Your trips" })).toBeInTheDocument());
+    expect(window.location.search).toBe("?view=trips");
+
+    window.history.replaceState({}, "", "/tmc/teacher-portal");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument());
+    expect(window.location.search).toBe("");
+
+    window.history.replaceState({}, "", "/tmc/teacher-portal?view=trips");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Your trips" })).toBeInTheDocument());
   });
 
   it("opens the review page from the trips screen", async () => {

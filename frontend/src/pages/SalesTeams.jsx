@@ -19,6 +19,7 @@ export default function SalesTeams() {
   const [users, setUsers] = useState([]);
   const [editor, setEditor] = useState(null);
   const [name, setName] = useState("");
+  const [managerId, setManagerId] = useState("");
   const [memberIds, setMemberIds] = useState([]);
 
   const load = async () => {
@@ -26,9 +27,9 @@ export default function SalesTeams() {
     catch (error) { notify.error(error.message || "Failed to load teams"); }
   };
   useEffect(() => { load(); }, []);
-  const openCreate = async () => { const data = await fetchApi("/api/staff?fields=summary", { silent: true }); setUsers(Array.isArray(data) ? data : data?.users || []); setEditor({ id: null }); setName(""); setMemberIds([]); };
-  const openEdit = async (team) => { const data = await fetchApi("/api/staff?fields=summary", { silent: true }); setEditor(team); setName(text(team.name)); setMemberIds((team.members || []).map((m) => m.user?.id).filter(Boolean)); setUsers(Array.isArray(data) ? data : data?.users || []); };
-  const save = async (event) => { event.preventDefault(); try { await fetchApi(editor.id ? `/api/sales-teams/${editor.id}` : "/api/sales-teams", { method: editor.id ? "PUT" : "POST", body: JSON.stringify({ name: name.trim(), memberIds }) }); await load(); notify.success("Team saved successfully"); setEditor(null); } catch (error) { notify.error(error.message || "Failed to save team"); } };
+  const openCreate = async () => { const data = await fetchApi("/api/staff?fields=summary", { silent: true }); setUsers(Array.isArray(data) ? data : data?.users || []); setEditor({ id: null }); setName(""); setManagerId(""); setMemberIds([]); };
+  const openEdit = async (team) => { const data = await fetchApi("/api/staff?fields=summary", { silent: true }); setEditor(team); setName(text(team.name)); setManagerId(String(team.managerId || team.manager?.id || "")); setMemberIds((team.members || []).map((m) => m.user?.id).filter(Boolean)); setUsers(Array.isArray(data) ? data : data?.users || []); };
+  const save = async (event) => { event.preventDefault(); try { await fetchApi(editor.id ? `/api/sales-teams/${editor.id}` : "/api/sales-teams", { method: editor.id ? "PUT" : "POST", body: JSON.stringify({ name: name.trim(), managerId: managerId ? Number(managerId) : null, memberIds }) }); await load(); notify.success("Team saved successfully"); setEditor(null); } catch (error) { notify.error(error.message || "Failed to save team"); } };
   const remove = async (team) => { try { await fetchApi(`/api/sales-teams/${team.id}`, { method: "DELETE" }); await load(); notify.success("Team deleted"); } catch (error) { notify.error(error.message || "Failed to delete team"); } };
   return <main
     className="sales-teams-page"
@@ -60,14 +61,14 @@ export default function SalesTeams() {
     </section>
     <section className="card sales-teams-table" data-testid="sales-teams-table" style={{ padding: 0, width: "100%", minWidth: 0, maxWidth: "100%", overflowX: "hidden", overflowY: "hidden" }}>
       <table className="stable-table" style={{ width: "100%", maxWidth: "100%", tableLayout: "fixed", borderCollapse: "collapse", minWidth: 0 }}>
-        <thead><tr>{["Team name", "Team manager(s)", "Users", "Created by", "Updated by", "Actions"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "14px 20px", borderBottom: "1px solid var(--border-color)", fontSize: 12, textTransform: "uppercase", letterSpacing: ".02em" }}>{heading}</th>)}</tr></thead>
+        <thead><tr>{["Team name", "Team manager(s)", "Team members", "Created by", "Updated by", "Actions"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "14px 20px", borderBottom: "1px solid var(--border-color)", fontSize: 12, textTransform: "uppercase", letterSpacing: ".02em" }}>{heading}</th>)}</tr></thead>
         <tbody>{teams.length ? teams.map((team) => {
           const members = team.members || [];
           const people = members.map((member) => member.user).filter(Boolean);
           const managers = team.managers || team.manager ? (team.managers || [team.manager]) : [];
           return <tr key={team.id}>
             <td style={{ padding: "18px 20px", borderBottom: "1px solid var(--border-color)" }}><button type="button" onClick={() => openEdit(team)} style={{ border: 0, background: "none", padding: 0, color: "var(--accent-color, #4f46e5)", cursor: "pointer", fontWeight: 600 }}>{text(team.name, "Unnamed team")}</button></td>
-            <td style={{ padding: "18px 20px", borderBottom: "1px solid var(--border-color)" }}>{managers.length ? managers.map(personLabel).join(", ") : "—"}</td>
+            <td style={{ padding: "18px 20px", borderBottom: "1px solid var(--border-color)" }}>{managers.length ? managers.map(personLabel).join(", ") : "None"}</td>
             <td style={{ padding: "18px 20px", borderBottom: "1px solid var(--border-color)" }}>{people.length ? people.map(personLabel).join(", ") : `${members.length} members`}</td>
             <td style={{ padding: "18px 20px", borderBottom: "1px solid var(--border-color)" }}>{personLabel(team.createdBy)}<small style={{ display: "block", color: "var(--text-muted, #64748b)" }}>{dateLabel(team.createdAt)}</small></td>
             <td style={{ padding: "18px 20px", borderBottom: "1px solid var(--border-color)" }}>{personLabel(team.updatedBy)}<small style={{ display: "block", color: "var(--text-muted, #64748b)" }}>{dateLabel(team.updatedAt)}</small></td>
@@ -87,10 +88,16 @@ export default function SalesTeams() {
           <label style={{ display: "grid", gap: 8, fontWeight: 600 }}>Team name *
             <input className="input-field" required value={name} onChange={(e) => setName(e.target.value)} style={{ boxSizing: "border-box", width: "100%", background: "var(--input-bg)", color: "var(--text-primary)" }} />
           </label>
+          <label style={{ display: "grid", gap: 8, fontWeight: 600, marginTop: 22 }}>Team manager
+            <select className="input-field" value={managerId} onChange={(e) => setManagerId(e.target.value)} style={{ boxSizing: "border-box", width: "100%", background: "var(--input-bg)", color: "var(--text-primary)" }}>
+              <option value="">Select a team manager</option>
+              {users.filter((user) => !user.deactivatedAt && (user.role === "ADMIN" || user.role === "MANAGER")).map((user) => <option key={user.id} value={user.id}>{text(user.name || user.email)}</option>)}
+            </select>
+          </label>
           <h3 style={{ margin: "22px 0 12px", fontSize: "1rem" }}>Team members</h3>
           <select className="input-field" value="" aria-label="Select a member to add" onChange={(e) => { const id = Number(e.target.value); if (id && !memberIds.includes(id)) setMemberIds((ids) => [...ids, id]); }} style={{ boxSizing: "border-box", width: "100%", background: "var(--input-bg)", color: "var(--text-primary)" }}>
             <option value="">Select a member to add</option>
-            {users.filter((user) => !memberIds.includes(user.id)).map((user) => <option key={user.id} value={user.id}>{text(user.name || user.email)}</option>)}
+            {users.filter((user) => user.role === "USER" && !memberIds.includes(user.id)).map((user) => <option key={user.id} value={user.id}>{text(user.name || user.email)}</option>)}
           </select>
           <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
             {memberIds.map((id) => {

@@ -693,6 +693,7 @@ model User {
   pushSubscriptions  PushSubscription[]
   landingPages       LandingPage[]
   teamMemberships    SalesTeamMember[]
+  salesTeamsManaged   SalesTeam[]         @relation("SalesTeamManager")
   salesTeamsCreated  SalesTeam[]         @relation("SalesTeamCreator")
   salesTeamsUpdated  SalesTeam[]         @relation("SalesTeamUpdater")
 
@@ -11544,15 +11545,18 @@ model SalesTeam {
   tenantId    Int               @default(1)
   tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
+  managerId   Int?
   createdById Int?
   updatedById Int?
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   members     SalesTeamMember[]
+  manager     User?             @relation("SalesTeamManager", fields: [managerId], references: [id], onDelete: SetNull)
   createdBy   User?             @relation("SalesTeamCreator", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy   User?             @relation("SalesTeamUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
+  @@index([managerId])
 }
 
 model SalesTeamMember {

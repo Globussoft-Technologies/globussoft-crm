@@ -52,13 +52,6 @@ const Login = () => {
   const [loginPending, setLoginPending] = useState(false);
   const [tenantChoices, setTenantChoices] = useState([]);
   const [loginTenantId, setLoginTenantId] = useState("");
-  const [existingTeacherSession] = useState(() => {
-    try {
-      return Boolean(localStorage.getItem("tmcTeacherPortalToken"));
-    } catch {
-      return false;
-    }
-  });
   const loginPendingRef = useRef(false);
   const loginRequestRef = useRef(0);
 
@@ -82,10 +75,6 @@ const Login = () => {
   const { theme, setTheme = () => {} } = themeContext;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-
-  useEffect(() => {
-    if (existingTeacherSession) navigate("/tmc/teacher-portal", { replace: true });
-  }, [existingTeacherSession, navigate]);
 
   // Handoff params from the external Dr. Haror's marketing site:
   //   ?next=/wellness/book-appointment?... — post-login landing path
@@ -500,8 +489,6 @@ const Login = () => {
     setTwoFactorCode("");
     setError("");
   };
-
-  if (existingTeacherSession) return null;
 
   return (
     <div

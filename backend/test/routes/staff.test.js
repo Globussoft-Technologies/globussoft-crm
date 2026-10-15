@@ -184,6 +184,43 @@ describe('POST / — generic CSV import', () => {
   });
 });
 
+describe('Travel admin limit', () => {
+  test('allows a third active admin to be created', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.count.mockResolvedValue(2);
+    prisma.user.create.mockResolvedValue({
+      id: 44, name: 'Third Admin', email: 'third@example.com',
+      role: 'ADMIN', wellnessRole: null, subBrandAccess: null,
+      createdAt: new Date('2026-10-15'), deactivatedAt: null,
+    });
+
+    const res = await request(makeApp()).post('/api/staff').send({
+      name: 'Third Admin', email: 'third@example.com', password: 'TestPass123!', role: 'ADMIN',
+    });
+
+    expect(res.status).toBe(201);
+    expect(prisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ tenantId: 1, role: 'ADMIN' }),
+    }));
+  });
+
+  test('rejects a fourth active admin', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.count.mockResolvedValue(3);
+
+    const res = await request(makeApp()).post('/api/staff').send({
+      name: 'Fourth Admin', email: 'fourth@example.com', password: 'TestPass123!', role: 'ADMIN',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'ADMIN_LIMIT_REACHED' });
+    expect(res.body.error).toMatch(/maximum of 3 active Admin users/);
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+});
+
 // ── PUT /:id — edit user fields (#618) ─────────────────────────────
 
 describe('PUT /:id — edit', () => {

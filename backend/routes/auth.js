@@ -2719,6 +2719,10 @@ async function transferAdminOwnedData(tx, { tenantId, fromUserId, toUserId }) {
     tx.travelQuote.updateMany({ where: { tenantId, assignedToUserId: fromUserId }, data: { assignedToUserId: toUserId } }),
     tx.salesTeam.updateMany({ where: { tenantId, createdById: fromUserId }, data: { createdById: toUserId } }),
     tx.salesTeam.updateMany({ where: { tenantId, updatedById: fromUserId }, data: { updatedById: toUserId } }),
+    // Preserve organization integrations and financial history: these owner
+    // relations cascade on User deletion (including a shift's petty cash).
+    tx.webhookCredential.updateMany({ where: { tenantId, createdById: fromUserId }, data: { createdById: toUserId } }),
+    tx.shift.updateMany({ where: { tenantId, userId: fromUserId }, data: { userId: toUserId } }),
   ]);
 
   const memberships = await tx.salesTeamMember.findMany({
@@ -2860,6 +2864,23 @@ router.delete("/me/account", verifyToken, async (req, res) => {
     let transferredRecords = 0;
     if (successorAdmin) {
       transferredRecords = await prisma.$transaction(async (tx) => {
+        // Serialize self-service admin deletions within the organization.
+        // Lock both users as well so concurrent demotion/deactivation cannot
+        // invalidate the successor between this check and commit. Locking
+        // reads see current committed state, not an earlier RR snapshot.
+        await tx.$queryRaw`SELECT id FROM Tenant WHERE id = ${req.user.tenantId} FOR UPDATE`;
+        const lockedUsers = await tx.$queryRaw`
+          SELECT id, role, deactivatedAt FROM User
+          WHERE tenantId = ${req.user.tenantId}
+            AND id IN (${user.id}, ${successorAdmin.id})
+          ORDER BY id FOR UPDATE`;
+        const validAdmin = (id) => lockedUsers.some((row) =>
+          row.id === id && row.role === "ADMIN" && row.deactivatedAt === null);
+        if (!validAdmin(user.id) || !validAdmin(successorAdmin.id)) {
+          const conflict = new Error("The deleting account and successor must still be active admins. Refresh and select another active admin.");
+          conflict.code = "SUCCESSOR_ADMIN_INVALID";
+          throw conflict;
+        }
         const count = await transferAdminOwnedData(tx, {
           tenantId: req.user.tenantId,
           fromUserId: user.id,
@@ -2908,6 +2929,9 @@ router.delete("/me/account", verifyToken, async (req, res) => {
     });
   } catch (err) {
     console.error("[auth/me/account] delete error:", err && err.message);
+    if (err.code === "SUCCESSOR_ADMIN_INVALID") {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     res.status(500).json({ error: "Failed to delete account" });
   }
 });

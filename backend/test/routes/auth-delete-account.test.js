@@ -78,7 +78,7 @@ prisma.roleWidget = {
 for (const model of [
   'contact', 'webForm', 'savedContactView', 'deal', 'ticket', 'task',
   'expense', 'project', 'reportSchedule', 'whatsAppThread', 'landingPage',
-  'travelQuote', 'salesTeam',
+  'travelQuote', 'salesTeam', 'webhookCredential', 'shift',
 ]) {
   prisma[model] = { updateMany: vi.fn().mockResolvedValue({ count: 0 }) };
 }
@@ -87,6 +87,7 @@ prisma.salesTeamMember = {
   createMany: vi.fn().mockResolvedValue({ count: 0 }),
 };
 prisma.$transaction = vi.fn();
+prisma.$queryRaw = vi.fn();
 
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -140,6 +141,10 @@ describe('DELETE /api/auth/me/account', () => {
     prisma.user.delete.mockResolvedValue({});
     prisma.tenant.delete.mockResolvedValue({});
     prisma.$transaction.mockImplementation(async (callback) => callback(prisma));
+    prisma.$queryRaw.mockReset().mockResolvedValue([
+      { id: 7, role: 'ADMIN', deactivatedAt: null },
+      { id: 8, role: 'ADMIN', deactivatedAt: null },
+    ]);
   });
 
   afterEach(() => {
@@ -309,8 +314,36 @@ describe('DELETE /api/auth/me/account', () => {
       skipDuplicates: true,
     });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(prisma.webhookCredential.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, createdById: 7 }, data: { createdById: 8 },
+    });
+    expect(prisma.shift.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, userId: 7 }, data: { userId: 8 },
+    });
     expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 7 } });
     expect(prisma.tenant.delete).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { successors: [] },
+    { successors: [{ id: 8, role: 'USER', deactivatedAt: null }] },
+    { successors: [{ id: 8, role: 'ADMIN', deactivatedAt: new Date() }] },
+  ])('409 rejects a successor changed after initial validation (%j)', async ({ successors }) => {
+    prisma.user.findFirst
+      .mockResolvedValueOnce(baseUser({ role: 'ADMIN' }))
+      .mockResolvedValueOnce({ id: 8, name: 'Successor', email: 'successor@acme.test' });
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 1 }]).mockResolvedValueOnce([
+      { id: 7, role: 'ADMIN', deactivatedAt: null }, ...successors,
+    ]);
+    const res = await request(makeApp()).delete('/api/auth/me/account')
+      .set('Authorization', bearer({ role: 'ADMIN' }))
+      .send({ confirmDestructive: true, password: PASSWORD, successorAdminId: 8 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SUCCESSOR_ADMIN_INVALID');
+    expect(prisma.user.delete).not.toHaveBeenCalled();
+    expect(prisma.shift.updateMany).not.toHaveBeenCalled();
+    expect(prisma.webhookCredential.updateMany).not.toHaveBeenCalled();
   });
 
   test('500 leaves the admin undeleted when successor data transfer fails', async () => {

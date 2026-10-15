@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import SuperAdminPageVisibility from "../pages/superadmin/SuperAdminPageVisibility";
 import { superAdminFetch } from "../utils/superAdminApi";
@@ -34,6 +34,28 @@ beforeEach(() => {
 });
 
 describe("SuperAdminPageVisibility", () => {
+  test('ignores a late organization response and saves only the selected organization state', async () => {
+    let resolveFirst;
+    const second = { ...visibilityResponse, tenant: { id: 2, name: 'Second Org' }, hiddenPaths: ['/marketing'] };
+    superAdminFetch.mockImplementation((path, options) => {
+      if (options?.method === 'PUT') return Promise.resolve(second);
+      if (path.endsWith('/1/page-visibility')) return new Promise((resolve) => { resolveFirst = resolve; });
+      if (path.endsWith('/2/page-visibility')) return Promise.resolve(second);
+      return Promise.resolve({ tenants: [...tenantsResponse.tenants, { tenantId: 2, organization: 'Second Org', vertical: 'generic' }] });
+    });
+    render(<SuperAdminPageVisibility />);
+    await waitFor(() => expect(resolveFirst).toBeTypeOf('function'));
+    expect(screen.getByRole('button', { name: /Save visibility/ })).toBeDisabled();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save visibility/ })).not.toBeDisabled());
+    await act(async () => { resolveFirst({ ...visibilityResponse, hiddenPaths: ['/contacts'] }); });
+    expect(screen.getByRole('button', { name: /Contacts/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /Marketing/ })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: /Save visibility/ }));
+    await waitFor(() => expect(superAdminFetch).toHaveBeenCalledWith('/tenant-management/tenants/2/page-visibility',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ hiddenPaths: ['/marketing'] }) })));
+  });
+
   test("loads an organization catalog and saves a tenant-specific hidden page", async () => {
     render(<SuperAdminPageVisibility />);
 

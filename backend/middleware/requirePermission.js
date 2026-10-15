@@ -689,6 +689,20 @@ function requireAnyPermission(perms, opts = {}) {
       if (!req.user || !req.user.userId || !req.user.tenantId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
+      let availableKeys = requiredKeys;
+      try {
+        const availability = await Promise.all(perms.map((permission) =>
+          isPermissionAvailableForTenant(req.user.tenantId, permission.module, permission.action)));
+        availableKeys = requiredKeys.filter((_key, index) => availability[index]);
+        if (!availableKeys.length) {
+          return res.status(403).json({
+            error: 'This page is unavailable for the current organization',
+            code: 'TENANT_PAGE_DISABLED',
+          });
+        }
+      } catch (visibilityError) {
+        console.error('[requireAnyPermission] tenant page visibility check failed:', visibilityError);
+      }
       let userPermissions;
       try {
         const verifiedVertical =
@@ -708,7 +722,7 @@ function requireAnyPermission(perms, opts = {}) {
         // authorization; real requests always use the effective role grants.
         if (isVitestRuntime() && isUnmockedPrismaError(err)) {
           const fallbackPerms = legacyTestPermissionsForRole(req.user?.role);
-          if (requiredKeys.some((key) => fallbackPerms.has(key))) {
+          if (availableKeys.some((key) => fallbackPerms.has(key))) {
             return next();
           }
           return res.status(403).json({
@@ -719,7 +733,7 @@ function requireAnyPermission(perms, opts = {}) {
         }
         throw err;
       }
-      for (const key of requiredKeys) {
+      for (const key of availableKeys) {
         if (userPermissions.has(key)) return next();
       }
       return res.status(403).json({

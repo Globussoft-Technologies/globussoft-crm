@@ -312,7 +312,8 @@ function filterPermissionDomainsForTenant(domains, catalog) {
   return (Array.isArray(domains) ? domains : [])
     .map((domain) => ({
       ...domain,
-      modules: (domain.modules || []).filter((module) => allowedModules.has(module)),
+      modules: (domain.modules || []).filter((module) =>
+        allowedModules.has(typeof module === 'string' ? module : module?.module)),
     }))
     .filter((domain) => domain.modules.length > 0);
 }
@@ -323,12 +324,14 @@ function filterPermissionDomainsForTenant(domains, catalog) {
  * is unavailable for the tenant even when stale RolePermission rows remain.
  * Shared permissions stay usable for the tenant's still-visible pages.
  */
-async function isPermissionAvailableForTenant(tenantId, module, action) {
+async function isPermissionAvailableForTenant(tenantId, module, _action) {
   const visibility = await getTenantPageVisibility(tenantId);
   const pages = getTenantPageVisibilityCatalog(visibility.vertical);
   const matchingPages = pages.filter((page) =>
     (page.requiredPermissions || []).some(
-      (permission) => permission.module === module && permission.action === action,
+      // Availability is a module-wide ceiling, including mutations. Catalog
+      // pages often declare only read; hidden pages must not leave update open.
+      (permission) => permission.module === module,
     ),
   );
   if (matchingPages.length === 0) return true;

@@ -114,5 +114,25 @@ describe('tenant page visibility resolution', () => {
     });
     await expect(visibility.isPermissionAvailableForTenant(77, 'patients', 'read')).resolves.toBe(false);
   });
-});
 
+  it.each(['generic', 'travel', 'wellness'])('preserves structured permission groups for %s', (vertical) => {
+    const { getGroupedCatalogForVertical, getCatalogForVertical } = require('../../lib/permissionCatalog');
+    const domains = getGroupedCatalogForVertical(vertical);
+    expect(visibility.filterPermissionDomainsForTenant(domains, getCatalogForVertical(vertical))).toEqual(domains);
+  });
+
+  it('filters both string and structured modules without dropping enabled actions', () => {
+    expect(visibility.filterPermissionDomainsForTenant([
+      { domain: 'CRM', modules: ['contacts', { module: 'leads', actions: ['read'] }, { module: 'reports', actions: ['read'] }] },
+    ], { contacts: ['read'], leads: ['read'] })).toEqual([
+      { domain: 'CRM', modules: ['contacts', { module: 'leads', actions: ['read'] }] },
+    ]);
+  });
+
+  it('blocks mutation actions when all pages of the module are hidden', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({ value: JSON.stringify(['/wellness/patients']) });
+    await expect(visibility.isPermissionAvailableForTenant(77, 'patients', 'update')).resolves.toBe(false);
+    await expect(visibility.isPermissionAvailableForTenant(77, 'patients', 'delete')).resolves.toBe(false);
+  });
+});

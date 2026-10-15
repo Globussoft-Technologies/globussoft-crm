@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Building2, Check, Eye, EyeOff, RefreshCw, Save, Search, ShieldCheck } from "lucide-react";
 import { superAdminFetch } from "../../utils/superAdminApi";
 import "./super-admin.css";
@@ -45,6 +45,9 @@ export default function SuperAdminPageVisibility() {
   const [loadingVisibility, setLoadingVisibility] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const selectedTenantRef = useRef(tenantId);
+  selectedTenantRef.current = tenantId;
+  const visibilityRequest = useRef(0);
 
   const loadTenants = async () => {
     setLoadingTenants(true);
@@ -61,23 +64,28 @@ export default function SuperAdminPageVisibility() {
   };
 
   const loadVisibility = async (nextTenantId = tenantId) => {
+    const requestId = ++visibilityRequest.current;
     if (!nextTenantId) {
       setVisibility(null);
       setHiddenPaths(new Set());
       return;
     }
     setLoadingVisibility(true);
+    setVisibility(null);
+    setHiddenPaths(new Set());
     setMessage("");
     try {
       const result = await superAdminFetch(`/tenant-management/tenants/${nextTenantId}/page-visibility`);
+      if (requestId !== visibilityRequest.current || String(nextTenantId) !== String(selectedTenantRef.current)) return;
       setVisibility(result);
       setHiddenPaths(new Set(Array.isArray(result?.hiddenPaths) ? result.hiddenPaths : []));
     } catch (err) {
+      if (requestId !== visibilityRequest.current || String(nextTenantId) !== String(selectedTenantRef.current)) return;
       setMessage(err.message || "Failed to load page visibility.");
       setVisibility(null);
       setHiddenPaths(new Set());
     } finally {
-      setLoadingVisibility(false);
+      if (requestId === visibilityRequest.current && String(nextTenantId) === String(selectedTenantRef.current)) setLoadingVisibility(false);
     }
   };
 
@@ -87,6 +95,7 @@ export default function SuperAdminPageVisibility() {
 
   useEffect(() => {
     loadVisibility();
+    return () => { visibilityRequest.current += 1; };
     // The selected tenant is the only dependency; the initial load chooses it
     // asynchronously from the organization overview response.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -132,7 +141,8 @@ export default function SuperAdminPageVisibility() {
   };
 
   const save = async () => {
-    if (!tenantId) return;
+    if (!tenantId || saving || loadingVisibility || String(visibility?.tenant?.id) !== String(tenantId)) return;
+    const savedTenantId = tenantId;
     setSaving(true);
     setMessage("");
     try {
@@ -140,6 +150,7 @@ export default function SuperAdminPageVisibility() {
         method: "PUT",
         body: JSON.stringify({ hiddenPaths: Array.from(hiddenPaths) }),
       });
+      if (String(selectedTenantRef.current) !== String(savedTenantId)) return;
       setMessage(`Page visibility updated for ${visibility?.tenant?.name || selectedTenant?.organization || "the organization"}.`);
       await loadVisibility(tenantId);
       // The regular CRM session listens for this event when this screen is
@@ -186,7 +197,7 @@ export default function SuperAdminPageVisibility() {
           <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--text-secondary, #aab5ca)" }}>Organization</span>
           <span style={{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
             <Building2 size={17} color="var(--accent-color, #8aa8ff)" aria-hidden="true" />
-            <select className="input-field" value={tenantId} onChange={(event) => setTenantId(event.target.value)} disabled={loadingTenants || !tenants.length} style={{ flex: 1 }}>
+            <select className="input-field" value={tenantId} onChange={(event) => setTenantId(event.target.value)} disabled={saving || loadingTenants || !tenants.length} style={{ flex: 1 }}>
               {!tenants.length && <option value="">No organizations found</option>}
               {tenants.map((tenant) => <option key={tenant.tenantId} value={tenant.tenantId}>{tenant.organization} · {verticalLabel(tenant.vertical)}</option>)}
             </select>
@@ -196,7 +207,7 @@ export default function SuperAdminPageVisibility() {
           <div style={{ color: "var(--text-secondary, #aab5ca)", fontSize: "0.84rem" }}>
             {visibility ? <><strong style={{ color: "var(--text-primary)" }}>{enabledCount}</strong> of {pages.length} pages enabled for {visibility.tenant?.name || selectedTenant?.organization}.</> : "Select an organization to configure its pages."}
           </div>
-          <button type="button" className="btn-primary" onClick={save} disabled={!visibility || loadingVisibility || saving}>
+          <button type="button" className="btn-primary" onClick={save} disabled={!visibility || String(visibility?.tenant?.id) !== String(tenantId) || loadingVisibility || saving}>
             <Save size={15} /> {saving ? "Saving..." : "Save visibility"}
           </button>
         </div>
@@ -266,4 +277,3 @@ export default function SuperAdminPageVisibility() {
     </div>
   );
 }
-

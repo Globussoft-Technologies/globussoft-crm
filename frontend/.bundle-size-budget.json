@@ -62,7 +62,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 9200,
+    "all-js-maxKB": 9250,
+    "//pr1569-total-bump": "9200 → 9250 KB: PR #1569 adds the lazy-loaded Super Admin page-visibility screen and tenant-aware access/sidebar controls without new runtime dependencies. Deploy run 38687218544 compiled successfully at 9210.0 KB total JS; every individual chunk and CSS budget passed. Retain 40 KB total headroom; entry, vendor, page and CSS caps remain unchanged.",
     "//pr1557-total-bump": "9175 → 9200 KB: PR #1557 adds RBAC guards plus Leads/Staff actions and embedded-form host viewport messaging. Run 38412233558 measured 9181.4 KB. CSS and vendor/page caps remain unchanged; the size gate stays enforced.",
     "//pr1552-total-bump": "9150 → 9175 KB JS and 360 → 365 KB CSS: PR #1552 adds Generic Leads filtering/density UI and web-form field controls without new dependencies. Run 38380368904 compiled successfully but measured 9150.3 KB JS and 360.8 KB CSS. Small total-only headroom; individual chunk caps and the gate remain unchanged.",
     "//pr1540-total-bump": "9100 → 9150 KB: Generic Leads pickup/status controls and customer-workflow history paging. Run 38241443364 compiled successfully at 9110.5 KB. Individual chunk caps remain unchanged.",

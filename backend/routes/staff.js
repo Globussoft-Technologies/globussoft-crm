@@ -37,19 +37,19 @@ const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
 // Legacy whitelist — used only when the caller's tenant is non-wellness.
 // Wellness tenants consult the WellnessRoleType catalog instead.
 
-const GENERIC_ADMIN_LIMIT = 3;
+const ADMIN_LIMIT = 3;
 
 async function tenantAdminLimitReached(tenantId, vertical) {
   const count = await prisma.user.count({
     where: { role: "ADMIN", tenantId, deactivatedAt: null },
   });
-  return count >= (vertical === "generic" ? GENERIC_ADMIN_LIMIT : 1);
+  return count >= (["generic", "travel"].includes(vertical) ? ADMIN_LIMIT : 1);
 }
 
 function adminLimitError(res, vertical) {
-  if (vertical === "generic") {
+  if (["generic", "travel"].includes(vertical)) {
     return res.status(409).json({
-      error: `Generic CRM allows a maximum of ${GENERIC_ADMIN_LIMIT} active Admin users per organization.`,
+      error: `This organization allows a maximum of ${ADMIN_LIMIT} active Admin users.`,
       code: "ADMIN_LIMIT_REACHED",
     });
   }

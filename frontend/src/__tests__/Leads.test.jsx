@@ -572,6 +572,26 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(tableShell).toHaveStyle({ flex: '1 1 auto' });
   });
 
+  it('keeps secondary lead actions available in the mobile disclosure', async () => {
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+
+    const toggle = screen.getByRole('button', { name: /More actions/i });
+    const actions = container.querySelector('#leads-secondary-actions');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(actions).toBeInTheDocument();
+    expect(actions).toContainElement(screen.getByRole('button', { name: /^Refresh$/i }));
+    expect(actions).toContainElement(screen.getByRole('button', { name: /Export Leads/i }));
+    expect(actions).toContainElement(screen.getByRole('button', { name: /^Import contacts$/i }));
+    expect(actions).toContainElement(screen.getByRole('button', { name: /Bulk actions/i }));
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(container.querySelector('.leads-generic-actions-host')).toHaveClass('leads-generic-actions-host--open');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('switches and persists table density for Generic CRM leads', async () => {
     const firstRender = renderLeads(authValue);
     await screen.findByText('Alice Lead');

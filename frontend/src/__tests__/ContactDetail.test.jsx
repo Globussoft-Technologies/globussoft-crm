@@ -233,6 +233,28 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.queryByRole('button', { name: /WhatsApp/i })).toBeNull();
   });
 
+  it('shows inbox-style email previews and opens the complete message', async () => {
+    const body = 'Hello Laura,\n\nThis is a long email that belongs in the reader.\nSecond paragraph.';
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      emailThreads: { kind: 'ok', data: [{ subject: 'Follow-up', messages: [{ id: 702, contactId: 42, body, direction: 'INBOUND', from: 'laura@example.com', to: BASE_CONTACT.email, createdAt: '2026-05-22T10:00:00.000Z' }] }] },
+    }));
+    renderPage();
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Conversation' }));
+    const preview = await profile.findByRole('button', { name: 'Open email: Follow-up' });
+    expect(preview).toHaveClass('cp-email-row');
+    expect(preview).toHaveTextContent('laura@example.com');
+    expect(preview).toHaveTextContent('Follow-up');
+    expect(preview).toHaveTextContent('Hello Laura, This is a long email');
+    expect(profile.queryByRole('dialog')).toBeNull();
+    fireEvent.click(preview);
+    const reader = profile.getByRole('dialog');
+    expect(reader.querySelector('.cp-email-detail-body').textContent).toBe(body);
+    expect(reader).toHaveTextContent(`to ${BASE_CONTACT.email}`);
+    fireEvent.click(within(reader).getByRole('button', { name: 'Close' }));
+    expect(profile.queryByRole('dialog')).toBeNull();
+  });
+
   it('keeps activities separate and paginated from conversations', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();

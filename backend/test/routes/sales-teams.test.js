@@ -21,6 +21,7 @@ prisma.salesTeam.deleteMany = vi.fn();
 prisma.salesTeamMember.deleteMany = vi.fn();
 prisma.salesTeamMember.createMany = vi.fn();
 prisma.user.findMany = vi.fn();
+prisma.user.findFirst = vi.fn();
 
 const salesTeamsRouter = requireCJS('../../routes/sales_teams');
 const TENANT_ID = 11;
@@ -42,6 +43,7 @@ beforeEach(() => {
   }
   prisma.salesTeam.findMany.mockResolvedValue([]);
   prisma.user.findMany.mockResolvedValue([]);
+  prisma.user.findFirst.mockResolvedValue(null);
 });
 
 describe('sales teams authorization and tenant isolation', () => {
@@ -74,6 +76,40 @@ describe('sales teams authorization and tenant isolation', () => {
     expect(prisma.salesTeam.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ tenantId: TENANT_ID, members: { create: [{ userId: 2, tenantId: TENANT_ID }] } }),
     }));
+  });
+
+  test('saves an active admin or manager from the same tenant as team manager', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 3 });
+    prisma.salesTeam.create.mockResolvedValue({ id: 8, name: 'East', managerId: 3, manager: { id: 3, role: 'MANAGER' }, members: [] });
+    const res = await request(makeApp()).post('/api/sales-teams').send({ name: 'East', managerId: 3 });
+    expect(res.status).toBe(201);
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { id: 3, tenantId: TENANT_ID, role: { in: ['ADMIN', 'MANAGER'] }, deactivatedAt: null },
+      select: { id: true },
+    });
+    expect(prisma.salesTeam.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ managerId: 3 }),
+    }));
+  });
+
+  test('rejects a manager outside the tenant or without an eligible role', async () => {
+    const res = await request(makeApp()).post('/api/sales-teams').send({ name: 'East', managerId: 3 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TEAM_MANAGER_INVALID');
+    expect(prisma.salesTeam.create).not.toHaveBeenCalled();
+  });
+
+  test('updates and clears the assigned manager', async () => {
+    prisma.salesTeam.findFirst.mockResolvedValue({ id: 8, managerId: 3 });
+    prisma.user.findFirst.mockResolvedValue({ id: 4 });
+    prisma.salesTeam.update.mockResolvedValue({ id: 8, managerId: 4 });
+    const updated = await request(makeApp()).put('/api/sales-teams/8').send({ name: 'East', managerId: 4 });
+    expect(updated.status).toBe(200);
+    expect(prisma.salesTeam.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ managerId: 4 }) }));
+
+    const cleared = await request(makeApp()).put('/api/sales-teams/8').send({ name: 'East', managerId: null });
+    expect(cleared.status).toBe(200);
+    expect(prisma.salesTeam.update).toHaveBeenLastCalledWith(expect.objectContaining({ data: expect.objectContaining({ managerId: null }) }));
   });
 
   test('returns 404 instead of updating a team from another tenant', async () => {

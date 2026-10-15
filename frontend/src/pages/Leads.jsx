@@ -2123,6 +2123,7 @@ const Leads = () => {
   const [pickupLocationOptions, setPickupLocationOptions] = useState([]);
   const [genericActionsToolbarHost, setGenericActionsToolbarHost] =
     useState(null);
+  const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
   const staffRequestId = useRef(0);
@@ -7296,6 +7297,7 @@ const Leads = () => {
       </header>
       <PortalWhenReady enabled={isGeneric} target={genericActionsToolbarHost}>
         <div
+          id={isGeneric ? "leads-secondary-actions" : undefined}
           className={
             isGeneric
               ? "leads-actions-toolbar"
@@ -9661,13 +9663,24 @@ const Leads = () => {
           {isGeneric && (
             <div
               ref={setGenericActionsToolbarHost}
-              className="leads-generic-actions-host"
+              className={`leads-generic-actions-host${mobileLeadActionsOpen ? " leads-generic-actions-host--open" : ""}`}
               style={{
                 order: 3,
                 flex: "1 1 100%",
                 minWidth: 0,
               }}
-            />
+            >
+              <button
+                type="button"
+                className="btn-secondary leads-mobile-actions-toggle"
+                aria-expanded={mobileLeadActionsOpen}
+                aria-controls="leads-secondary-actions"
+                onClick={() => setMobileLeadActionsOpen((open) => !open)}
+              >
+                More actions
+                {mobileLeadActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+            </div>
           )}
         </div>
         <div

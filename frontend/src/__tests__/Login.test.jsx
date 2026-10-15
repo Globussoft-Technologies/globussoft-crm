@@ -130,6 +130,7 @@ describe('<Login /> — page surface', () => {
   let originalFetch;
   let originalLocation;
   beforeEach(() => {
+    localStorage.clear();
     navigateMock.mockClear();
     setUserMock.mockClear();
     setTokenMock.mockClear();
@@ -255,6 +256,8 @@ describe('<Login /> — page surface', () => {
   it.skip('renders SSO buttons for Google and Microsoft — gated behind SHOW_SSO', () => {});
 
   it('successful login POSTs /api/auth/login and navigates to /dashboard for generic tenant', async () => {
+    // A separate teacher session must not prevent staff authentication.
+    localStorage.setItem('tmcTeacherPortalToken', 'saved-teacher-session');
     global.fetch.mockImplementation((url) => {
       if (url === '/api/auth/login') {
         return fetchResponse({
@@ -511,9 +514,18 @@ describe('<Login /> — page surface', () => {
     fillCredentials('teacher@example.com');
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/tmc/teacher-portal'));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/tmc/teacher-portal', { replace: true }));
     expect(localStorage.getItem('tmcTeacherPortalToken')).toBe('teacher-portal-jwt');
     expect(localStorage.getItem('portalToken')).toBeNull();
+  });
+
+  it.each(['teacher-portal-jwt', 'expired-or-invalid-token'])('keeps shared CRM login available with a saved teacher token (%s)', async (token) => {
+    localStorage.setItem('tmcTeacherPortalToken', token);
+    renderLogin();
+
+    expect(screen.getByRole('button', { name: /Sign In$/i })).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(localStorage.getItem('tmcTeacherPortalToken')).toBe(token);
   });
 
   it('shows the error when BOTH staff and portal login fail', async () => {

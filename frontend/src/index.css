@@ -2959,6 +2959,16 @@ table.stable-table td {
    the desktop table inside its card so long names/member lists cannot create
    an empty horizontal scroll tail after the last action column. Narrow
    screens opt back into a bounded 760px table viewport below. */
+.sales-teams-page > .card::before {
+  display: none;
+}
+
+.sales-teams-page > .card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
 .sales-teams-table {
   width: 100%;
   min-width: 0;
@@ -3924,6 +3934,10 @@ table.leads-table thead th {
   padding-top: 0.6rem !important;
 }
 
+.leads-page-root--generic .leads-mobile-actions-toggle {
+  display: none;
+}
+
 .leads-page-root--generic .leads-actions-toolbar :is(button, .btn-primary, .btn-secondary),
 .leads-page-root--generic .leads-toolbar-shell :is(button, .btn-primary, .btn-secondary) {
   min-height: 34px;
@@ -4372,7 +4386,7 @@ table.leads-table thead th {
   }
 
   .leads-page-root--generic .leads-toolbar-shell > div:first-child,
-  .leads-page-root--generic .leads-toolbar-shell > div:last-child {
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) {
     width: 100%;
     min-width: 0;
   }
@@ -4389,13 +4403,13 @@ table.leads-table thead th {
     box-sizing: border-box;
   }
 
-  .leads-page-root--generic .leads-toolbar-shell > div:last-child {
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) {
     justify-content: flex-start;
   }
 
-  .leads-page-root--generic .leads-toolbar-shell > div:last-child > button,
-  .leads-page-root--generic .leads-toolbar-shell > div:last-child > :is(.column-picker, [data-testid*="column"]),
-  .leads-page-root--generic .leads-toolbar-shell > div:last-child > .btn-secondary {
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) > button,
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) > :is(.column-picker, [data-testid*="column"]),
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) > .btn-secondary {
     min-width: 0;
   }
 
@@ -4438,8 +4452,9 @@ table.leads-table thead th {
   }
 
   .leads-page-root--generic .leads-toolbar-shell > div:first-child {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: stretch !important;
-    flex-direction: column;
     gap: 0.45rem !important;
     flex: 0 0 auto !important;
   }
@@ -4449,18 +4464,71 @@ table.leads-table thead th {
     padding: 0.65rem !important;
   }
 
-  .leads-page-root--generic .leads-toolbar-shell > div:first-child > div:first-child,
-  .leads-page-root--generic .leads-toolbar-shell > div:first-child > button {
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > div:first-child {
+    grid-column: 1 / -1;
     width: 100% !important;
-    flex: 1 1 auto;
   }
 
-  .leads-page-root--generic .leads-toolbar-shell > div:last-child {
-    gap: 0.4rem;
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > :not(:first-child),
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > :not(:first-child) > button {
+    width: 100%;
+    min-width: 0;
   }
 
-  .leads-page-root--generic .leads-toolbar-shell > div:last-child > * {
-    flex: 1 1 auto;
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > :nth-child(2) > div,
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child > :nth-child(2) > div > button {
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) > * {
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) > div,
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) > div > button {
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) :is(button, .btn-secondary) {
+    font-size: 0.75rem;
+    padding-inline: 0.4rem;
+  }
+
+  .leads-page-root--generic .leads-mobile-actions-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-generic-actions-host:not(.leads-generic-actions-host--open) .leads-actions-toolbar {
+    display: none !important;
+  }
+
+  .leads-page-root--generic .leads-generic-actions-host--open .leads-actions-toolbar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 0.5rem;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar > span[aria-hidden="true"] {
+    display: none;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar > div:first-of-type {
+    grid-column: 1 / -1;
   }
 
   .leads-page-root--generic .leads-pagination-controls {

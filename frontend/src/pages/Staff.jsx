@@ -2483,22 +2483,23 @@ export default function Staff() {
             background: "rgba(0,0,0,0.5)",
             display: "flex",
             alignItems: "center",
-            justifyContent: "flex-end",
+            justifyContent: "center",
             overflow: "hidden",
             zIndex: 1000,
+            padding: "1rem",
+            boxSizing: "border-box",
           }}
         >
           <div
             className="card"
             style={{
               width: "min(720px, 100%)",
-              height: !isTravel && !isWellness ? "100vh" : "auto",
-              maxHeight: "100vh",
+              maxHeight: "calc(100vh - 2rem)",
               overflowY: "auto",
               padding: "2rem 2.25rem",
-              borderRadius: "16px 0 0 16px",
+              borderRadius: 16,
               boxSizing: "border-box",
-              boxShadow: "-12px 0 36px rgba(15, 23, 42, 0.18)",
+              boxShadow: "0 16px 36px rgba(15, 23, 42, 0.18)",
             }}
           >
             <div

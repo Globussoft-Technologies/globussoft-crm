@@ -1196,6 +1196,12 @@ test('Changing folder views closes and resets the new folder editor', async () =
   expect(screen.getByText('Campaigns')).toBeInTheDocument();
 });
 
+function dragOverAt(target, dataTransfer, clientY) {
+  const event = new Event('dragover', { bubbles: true, cancelable: true });
+  Object.defineProperties(event, { clientY: { value: clientY }, dataTransfer: { value: dataTransfer } });
+  fireEvent(target, event);
+}
+
 test('Generic forms can be filed into a manually created folder', async () => {
   installFetchMock();
   const baseFetch = fetchApiMock.getMockImplementation();
@@ -1244,7 +1250,11 @@ test('Generic forms can be filed into a manually created folder', async () => {
   expect(dragPreview).toHaveTextContent('Moving form');
   expect(dragPreview).toHaveTextContent('Brand intake');
   expect(dragPreview.querySelector('svg')).toBeInTheDocument();
-  fireEvent.dragOver(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'true');
+  dragOverAt(screen.getByRole('button', { name: 'All Folders' }), dataTransfer, 300);
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('textbox', { name: 'Search folders' })).not.toHaveFocus();
+  dragOverAt(screen.getByRole('button', { name: /Campaigns.*0/ }), dataTransfer, 300);
   expect(screen.getByRole('button', { name: /Campaigns.*0/ })).toHaveClass('wf-folder-drop-target');
   fireEvent.drop(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });
   await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/forms/101/folder' && opts?.method === 'PUT').length).toBe(moveCallsBeforeDrop + 1));
@@ -1254,6 +1264,111 @@ test('Generic forms can be filed into a manually created folder', async () => {
   await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: null }) })));
   await waitFor(() => expect(screen.queryByText('Folder: Campaigns')).toBeNull());
 }, 15000);
+
+test.each([1, 5, 22, 50, 101])('all %i form cards can start a drag, including the final row', async (count) => {
+  const forms = Array.from({ length: count }, (_, index) => ({ ...FORM_FIXTURE, id: 101 + index, name: `Form ${index + 1}`, slug: `form-${index + 1}` }));
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms' && !opts) return Promise.resolve(forms);
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([{ id: 9, name: 'Campaigns' }]);
+    if (url.endsWith('/folder') && opts?.method === 'PUT') return Promise.resolve({});
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText(`Form ${count}`);
+  const cards = document.querySelectorAll('.wf-library-card');
+  expect(cards).toHaveLength(count);
+  for (const card of cards) expect(card).toHaveAttribute('draggable', 'true');
+  for (const index of [...new Set([0, Math.floor(count / 2), count - 1])]) {
+    const form = forms[index];
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => String(form.id)), setDragImage: vi.fn(), effectAllowed: '', dropEffect: '' };
+    fireEvent.dragStart(cards[index], { dataTransfer });
+    expect(dataTransfer.setData).toHaveBeenCalledWith('application/x-webform-id', String(form.id));
+    expect(cards[index]).toHaveClass('dragging');
+    if (count === 22 && index === Math.floor(count / 2)) {
+      const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+      dragOverAt(document.body, dataTransfer, 24);
+      expect(scrollBy).toHaveBeenCalledWith(0, -18);
+      scrollBy.mockRestore();
+    }
+    dragOverAt(document.querySelector('.wf-folder-picker > button'), dataTransfer, 300);
+    const folder = document.querySelector('.wf-folder-picker-list button');
+    if (count === 22 && index === Math.floor(count / 2)) {
+      const list = document.querySelector('.wf-folder-picker-list');
+      vi.spyOn(list, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 260, height: 260 });
+      dragOverAt(list, dataTransfer, 250);
+      expect(list.scrollTop).toBe(18);
+    }
+    dragOverAt(folder, dataTransfer, 300);
+    fireEvent.drop(folder, { dataTransfer });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(`/api/forms/${form.id}/folder`, expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: 9 }) })));
+    fireEvent.dragEnd(cards[index], { dataTransfer });
+    expect(cards[index].querySelector('h4')).toHaveTextContent(form.name);
+  }
+}, 60000);
+
+test('cancelled and failed folder drags leave the form in its original folder', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([{ id: 9, name: 'Campaigns' }]);
+    if (url === '/api/forms/101/folder' && opts?.method === 'PUT') return Promise.reject(new Error('Move failed'));
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  const card = (await screen.findByText('Brand intake')).closest('article');
+  const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => '101'), setDragImage: vi.fn(), effectAllowed: '', dropEffect: '' };
+  fireEvent.dragStart(card, { dataTransfer });
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'true');
+  fireEvent.dragEnd(card, { dataTransfer });
+  expect(fetchApiMock).not.toHaveBeenCalledWith('/api/forms/101/folder', expect.anything());
+  expect(card).not.toHaveClass('dragging');
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.dragStart(card, { dataTransfer });
+  dragOverAt(screen.getByRole('button', { name: 'All Folders' }), dataTransfer, 300);
+  const folder = screen.getByRole('button', { name: /Campaigns/ });
+  fireEvent.drop(folder, { dataTransfer });
+  await waitFor(() => expect(notifyError).toHaveBeenCalledWith('Move failed'));
+  expect(screen.getByText('Brand intake').closest('article')).toBeInTheDocument();
+  expect(screen.queryByText('Folder: Campaigns')).toBeNull();
+});
+
+test('a long press can move a form into a folder on touch devices', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([{ id: 9, name: 'Campaigns' }]);
+    if (url === '/api/forms/101/folder' && opts?.method === 'PUT') return Promise.resolve({});
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  const card = (await screen.findByText('Brand intake')).closest('article');
+  const originalElementFromPoint = document.elementFromPoint;
+  const originalScrollBy = window.scrollBy;
+  window.scrollBy = vi.fn();
+  vi.useFakeTimers();
+  try {
+    fireEvent.touchStart(card, { touches: [{ clientX: 20, clientY: 300 }] });
+    act(() => vi.advanceTimersByTime(250));
+    expect(card).toHaveClass('dragging');
+    expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelector('.wf-form-drag-preview')).toHaveTextContent('Brand intake');
+    const hitTest = vi.fn(() => screen.getByRole('button', { name: 'All Folders' }));
+    document.elementFromPoint = hitTest;
+    fireEvent.touchMove(document, { touches: [{ clientX: 25, clientY: 50 }] });
+    expect(document.querySelector('.wf-form-drag-preview')).toHaveStyle({ left: '5px', top: '30px' });
+    expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'true');
+    hitTest.mockReturnValue(screen.getByRole('button', { name: /Campaigns/ }));
+    fireEvent.touchEnd(document, { changedTouches: [{ clientX: 25, clientY: 50 }] });
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: 9 }) }));
+    expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'false');
+  } finally {
+    vi.useRealTimers();
+    document.elementFromPoint = originalElementFromPoint;
+    window.scrollBy = originalScrollBy;
+  }
+});
 
 test('Travel forms do not show folder controls', async () => {
   renderTravelPage();

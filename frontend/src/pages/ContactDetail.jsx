@@ -278,7 +278,6 @@ export default function ContactDetail() {
   const [overviewEditOpen, setOverviewEditOpen] = useState(false);
   const [overviewEdit, setOverviewEdit] = useState({ lifecycle: 'Lead', status: 'Lead' });
   const [overviewEditSaving, setOverviewEditSaving] = useState(false);
-  const [navExpanded, setNavExpanded] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [seqPicker, setSeqPicker] = useState(false);
   const [sequences, setSequences] = useState([]);
@@ -1242,15 +1241,7 @@ export default function ContactDetail() {
       </div>
 
       <div className="cp-layout">
-        <nav
-          className={`cp-side${navExpanded ? ' expanded' : ''}`}
-          aria-label="Contact sections"
-          aria-expanded={navExpanded}
-          onMouseEnter={() => setNavExpanded(true)}
-          onMouseLeave={() => setNavExpanded(false)}
-          onFocus={() => setNavExpanded(true)}
-          onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setNavExpanded(false); }}
-        >
+        <nav className="cp-side" aria-label="Contact sections">
           {PROFILE_TABS.map((t) => {
             const Icon = t.icon;
             const tabLabel = isWellness && t.key === 'details'
@@ -1263,7 +1254,7 @@ export default function ContactDetail() {
                 key={t.key}
                 type="button"
                 className={`cp-nav-item${activeTab === t.key ? ' active' : ''}`}
-                onClick={(e) => { setActiveTab(t.key); setNavExpanded(false); e.currentTarget.blur(); }}
+                onClick={() => setActiveTab(t.key)}
                 title={tabLabel}
               >
                 <Icon size={15} /> <span className="cp-nav-label">{tabLabel}</span>

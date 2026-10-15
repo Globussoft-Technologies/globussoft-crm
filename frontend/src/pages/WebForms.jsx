@@ -7196,15 +7196,41 @@ function RoutedWebFormsContent({ scope }) {
   return <WebFormsContent scope={scope} formLocation={formLocation} navigateForm={navigateForm} />;
 }
 
-function setFormDragImage(event, formName) {
+function createFormDragPreview(formName) {
   const preview = document.createElement("div");
   preview.className = "wf-form-drag-preview";
   preview.setAttribute("aria-hidden", "true");
   preview.innerHTML = '<span class="wf-form-drag-preview-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg></span><span class="wf-form-drag-preview-copy"><small>Moving form</small><strong></strong></span>';
   preview.querySelector("strong").textContent = formName;
   document.body.appendChild(preview);
+  return preview;
+}
+
+function setFormDragImage(event, formName) {
+  const preview = createFormDragPreview(formName);
   event.dataTransfer.setDragImage(preview, 20, 20);
   window.setTimeout(() => preview.remove(), 0);
+}
+
+function scrollFormDragPage(clientY, card) {
+  let container = card?.parentElement;
+  while (container && container !== document.body) {
+    const overflow = getComputedStyle(container).overflowY;
+    if (/(auto|scroll)/.test(overflow) && container.scrollHeight > container.clientHeight) break;
+    container = container.parentElement;
+  }
+  const top = container && container !== document.body ? container.getBoundingClientRect().top : 0;
+  if (clientY < top || clientY > top + 72) return;
+  if (container && container !== document.body) container.scrollTop -= 18;
+  else window.scrollBy(0, -18);
+}
+
+function scrollFormFolderList(list, clientY) {
+  if (!list) return;
+  const bounds = list.getBoundingClientRect();
+  const edge = Math.min(48, bounds.height / 3);
+  if (clientY < bounds.top + edge) list.scrollTop -= 18;
+  else if (clientY > bounds.bottom - edge) list.scrollTop += 18;
 }
 
 function UnsavedChangesGuard({ active, notifyRef, onDiscard, bypassRef }) {
@@ -7364,16 +7390,87 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
   const [draggingFormId, setDraggingFormId] = useState(null);
   const [dropFolderId, setDropFolderId] = useState(null);
   const folderPickerListRef = useRef(null);
+  const touchDragRef = useRef(null);
+
+  useEffect(() => () => {
+    touchDragRef.current?.cleanup?.();
+    touchDragRef.current?.preview?.remove();
+  }, []);
+
+  const startTouchFormDrag = (event, form) => {
+    if (!canViewFormLeads || !folders.length || movingFormId === form.id || event.touches.length !== 1 || event.target.closest('button, input, label, a')) return;
+    const touch = event.touches[0];
+    const drag = { form, card: event.currentTarget, startX: touch.clientX, startY: touch.clientY, preview: null, timer: null };
+    touchDragRef.current = drag;
+    const finish = (endEvent) => {
+      if (touchDragRef.current !== drag) return;
+      clearTimeout(drag.timer);
+      const point = endEvent.changedTouches?.[0];
+      const target = drag.preview && point && document.elementFromPoint(point.clientX, point.clientY);
+      const folderButton = target?.closest('.wf-folder-picker-list button');
+      const folder = endEvent.type !== 'touchcancel' && folderButton && folders.find((item) => String(item.id) === folderButton.dataset.folderId);
+      if (drag.preview) {
+        endEvent.preventDefault();
+        drag.preview.remove();
+        setDraggingFormId(null);
+        setDropFolderId(null);
+        setFolderListOpen(false);
+        if (folder) moveForm(form, String(folder.id));
+      }
+      drag.cleanup();
+      touchDragRef.current = null;
+    };
+    const move = (moveEvent) => {
+      const point = moveEvent.touches[0];
+      if (!point || touchDragRef.current !== drag) return;
+      if (!drag.preview) {
+        if (Math.hypot(point.clientX - drag.startX, point.clientY - drag.startY) > 8) finish(moveEvent);
+        return;
+      }
+      moveEvent.preventDefault();
+      drag.preview.style.left = `${point.clientX - 20}px`;
+      drag.preview.style.top = `${point.clientY - 20}px`;
+      const target = document.elementFromPoint(point.clientX, point.clientY);
+      if (target?.closest('.wf-folder-picker > button')) setFolderListOpen(true);
+      const folderButton = target?.closest('.wf-folder-picker-list button');
+      setDropFolderId(folderButton?.dataset.folderId || null);
+      if (folderPickerListRef.current?.contains(target)) scrollFormFolderList(folderPickerListRef.current, point.clientY);
+      else scrollFormDragPage(point.clientY, drag.card);
+    };
+    drag.timer = window.setTimeout(() => {
+      if (touchDragRef.current !== drag) return;
+      drag.preview = createFormDragPreview(form.name);
+      drag.preview.style.left = `${drag.startX - 20}px`;
+      drag.preview.style.top = `${drag.startY - 20}px`;
+      setDraggingFormId(form.id);
+      setFolderListOpen(true);
+      setOpenFormMenuId(null);
+    }, 250);
+    drag.cleanup = () => {
+      clearTimeout(drag.timer);
+      document.removeEventListener('touchmove', move);
+      document.removeEventListener('touchend', finish);
+      document.removeEventListener('touchcancel', finish);
+    };
+    document.addEventListener('touchmove', move, { passive: false });
+    document.addEventListener('touchend', finish);
+    document.addEventListener('touchcancel', finish);
+  };
+
+  useEffect(() => {
+    if (draggingFormId == null) return undefined;
+    const scrollTowardTop = (event) => {
+      if (folderPickerListRef.current?.contains(event.target)) return;
+      const card = document.querySelector('.wf-library-card.dragging');
+      scrollFormDragPage(event.clientY, card);
+    };
+    document.addEventListener('dragover', scrollTowardTop);
+    return () => document.removeEventListener('dragover', scrollTowardTop);
+  }, [draggingFormId]);
 
   const autoScrollFolderList = useCallback((event) => {
     if (draggingFormId == null || !folderPickerListRef.current) return;
-    const list = folderPickerListRef.current;
-    const bounds = list.getBoundingClientRect();
-    const edge = Math.min(48, bounds.height / 3);
-    let delta = 0;
-    if (event.clientY < bounds.top + edge) delta = -18;
-    else if (event.clientY > bounds.bottom - edge) delta = 18;
-    if (delta) list.scrollTop += delta;
+    scrollFormFolderList(folderPickerListRef.current, event.clientY);
   }, [draggingFormId]);
 
   useEffect(() => {
@@ -20138,13 +20235,13 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                 <button type="button" className={`btn-secondary ${activeFolderId === "all" ? "wf-folder-active" : ""}`} onClick={() => { setActiveFolderId("all"); setFolderEditor(null); setFolderName(""); setFolderListOpen(false); setFolderSearch(""); }}>All Forms <span className="wf-folder-count">({forms.length})</span></button>
                 <button type="button" className="btn-secondary" onClick={() => { setFolderEditor({}); setFolderName(""); setFolderListOpen(false); setFolderSearch(""); }}><FolderPlus size={15} aria-hidden="true" />New Folder</button>
                 <div className="wf-folder-picker" onKeyDown={(event) => { if (event.key === "Escape") { setFolderListOpen(false); setFolderSearch(""); } }}>
-                  <button type="button" className={`btn-secondary ${activeFolderId !== "all" ? "wf-folder-active" : ""}`} aria-expanded={folderListOpen} aria-controls="wf-folder-picker-panel" onClick={() => { setFolderEditor(null); setFolderName(""); setFolderListOpen((open) => !open); setFolderSearch(""); }}><Folder size={15} aria-hidden="true" />All Folders<ChevronDown size={14} aria-hidden="true" /></button>
+                  <button type="button" className={`btn-secondary ${activeFolderId !== "all" ? "wf-folder-active" : ""}`} aria-expanded={folderListOpen} aria-controls="wf-folder-picker-panel" onClick={() => { setFolderEditor(null); setFolderName(""); setFolderListOpen((open) => !open); setFolderSearch(""); }} onDragEnter={() => { if (draggingFormId != null) setFolderListOpen(true); }} onDragOver={(event) => { if (draggingFormId != null) { event.preventDefault(); setFolderListOpen(true); } }}><Folder size={15} aria-hidden="true" />All Folders<ChevronDown size={14} aria-hidden="true" /></button>
                   {folderListOpen && (
                     <div id="wf-folder-picker-panel" className="wf-folder-picker-panel" aria-label="Folder list">
-                      <input className="input-field" autoFocus aria-label="Search folders" placeholder="Search folders" value={folderSearch} onChange={(event) => setFolderSearch(event.target.value)} />
+                      <input className="input-field" autoFocus={draggingFormId == null} aria-label="Search folders" placeholder="Search folders" value={folderSearch} onChange={(event) => setFolderSearch(event.target.value)} />
                       <div ref={folderPickerListRef} className="wf-folder-picker-list" onDragOver={autoScrollFolderList}>
                         {folders.filter((folder) => folder.name.toLowerCase().includes(folderSearch.trim().toLowerCase())).map((folder) => (
-                          <button key={folder.id} type="button" className={`${activeFolderId === String(folder.id) ? "wf-folder-active" : ""} ${dropFolderId === String(folder.id) ? "wf-folder-drop-target" : ""}`} aria-current={activeFolderId === String(folder.id) ? "true" : undefined} onClick={() => { setActiveFolderId(String(folder.id)); setFolderEditor(null); setFolderName(""); setFolderListOpen(false); setFolderSearch(""); }} onDragOver={(event) => { if (draggingFormId == null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropFolderId(String(folder.id)); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropFolderId(null); }} onDrop={(event) => { dropFormIntoFolder(event, folder); setFolderListOpen(false); setFolderSearch(""); }}>
+                          <button key={folder.id} data-folder-id={folder.id} type="button" className={`${activeFolderId === String(folder.id) ? "wf-folder-active" : ""} ${dropFolderId === String(folder.id) ? "wf-folder-drop-target" : ""}`} aria-current={activeFolderId === String(folder.id) ? "true" : undefined} onClick={() => { setActiveFolderId(String(folder.id)); setFolderEditor(null); setFolderName(""); setFolderListOpen(false); setFolderSearch(""); }} onDragOver={(event) => { if (draggingFormId == null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropFolderId(String(folder.id)); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropFolderId(null); }} onDrop={(event) => { dropFormIntoFolder(event, folder); setFolderListOpen(false); setFolderSearch(""); }}>
                             <Folder size={15} aria-hidden="true" /><span>{folder.name}</span><small>({forms.filter((form) => form.folderId === folder.id).length})</small>
                           </button>
                         ))}
@@ -20182,7 +20279,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           ) : (
             <div className="wf-library-grid">
               {displayedForms.map((form) => (
-                <article key={form.id} className={`wf-library-card${String(selectedForm?.id) === String(form.id) ? " active" : ""}${openFormMenuId === form.id ? " menu-open" : ""}${draggingFormId === form.id ? " dragging" : ""}`} draggable={canViewFormLeads && folders.length > 0 && movingFormId !== form.id} onDragStart={(event) => { event.dataTransfer.setData("application/x-webform-id", String(form.id)); event.dataTransfer.effectAllowed = "move"; setFormDragImage(event, form.name); setDraggingFormId(form.id); setFolderListOpen(true); setOpenFormMenuId(null); }} onDragEnd={() => { setDraggingFormId(null); setDropFolderId(null); setFolderListOpen(false); }}>
+                <article key={form.id} className={`wf-library-card${String(selectedForm?.id) === String(form.id) ? " active" : ""}${openFormMenuId === form.id ? " menu-open" : ""}${draggingFormId === form.id ? " dragging" : ""}`} draggable={canViewFormLeads && folders.length > 0 && movingFormId !== form.id} onTouchStart={(event) => startTouchFormDrag(event, form)} onDragStart={(event) => { if (touchDragRef.current?.preview) { event.preventDefault(); return; } event.dataTransfer.setData("application/x-webform-id", String(form.id)); event.dataTransfer.effectAllowed = "move"; setFormDragImage(event, form.name); setDraggingFormId(form.id); setFolderListOpen(true); setOpenFormMenuId(null); }} onDragEnd={() => { if (touchDragRef.current?.preview) return; setDraggingFormId(null); setDropFolderId(null); setFolderListOpen(false); }}>
                   <div className="wf-library-card-top">
                     <div>
                       <h4>{form.name}</h4>

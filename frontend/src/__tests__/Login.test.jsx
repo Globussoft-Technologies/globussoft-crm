@@ -130,6 +130,7 @@ describe('<Login /> — page surface', () => {
   let originalFetch;
   let originalLocation;
   beforeEach(() => {
+    localStorage.clear();
     navigateMock.mockClear();
     setUserMock.mockClear();
     setTokenMock.mockClear();
@@ -511,9 +512,17 @@ describe('<Login /> — page surface', () => {
     fillCredentials('teacher@example.com');
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/tmc/teacher-portal'));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/tmc/teacher-portal', { replace: true }));
     expect(localStorage.getItem('tmcTeacherPortalToken')).toBe('teacher-portal-jwt');
     expect(localStorage.getItem('portalToken')).toBeNull();
+  });
+
+  it('redirects an already signed-in teacher away from Login', async () => {
+    localStorage.setItem('tmcTeacherPortalToken', 'teacher-portal-jwt');
+    renderLogin();
+
+    expect(screen.queryByRole('button', { name: /Sign In$/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/tmc/teacher-portal', { replace: true }));
   });
 
   it('shows the error when BOTH staff and portal login fail', async () => {

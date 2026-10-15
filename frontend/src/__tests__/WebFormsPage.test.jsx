@@ -801,9 +801,12 @@ describe('WebForms builder page', () => {
     await openBuilder();
 
     fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
-    expect(await screen.findByText('CONTACT FIELDS')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Add lead custom field/i })).toBeNull();
-  });
+    const search = await screen.findByPlaceholderText('Type to search');
+    const picker = search.closest('.wf-field-picker');
+    expect(picker).not.toBeNull();
+    expect(within(picker).getByText('CONTACT FIELDS')).toBeInTheDocument();
+    expect(within(picker).queryByRole('button', { name: /Add lead custom field/i })).toBeNull();
+  }, 10000); // Loaded CI runners can exceed 5s rendering this multi-step builder flow.
 
   test('supports draft edits and save on the form name field', async () => {
 

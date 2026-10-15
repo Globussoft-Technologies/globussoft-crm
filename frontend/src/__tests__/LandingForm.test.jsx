@@ -17,7 +17,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Landing from '../pages/Landing';
-import { heroFormEmbedSrc, injectHeroForm, resizeHeroFormFrame } from '../utils/landingHeroForm';
+import {
+  heroFormEmbedSrc,
+  injectHeroForm,
+  resizeHeroFormFrame,
+  responsiveFormDevice,
+  sendHeroFormContext,
+} from '../utils/landingHeroForm';
 
 function renderLanding() {
   return render(
@@ -37,6 +43,38 @@ describe('heroFormEmbedSrc', () => {
   });
 });
 
+describe('responsiveFormDevice', () => {
+  it('uses the host page viewport instead of the iframe column width', () => {
+    expect(responsiveFormDevice(1280)).toBe('desktop');
+    expect(responsiveFormDevice(768)).toBe('tablet');
+    expect(responsiveFormDevice(390)).toBe('mobile');
+  });
+});
+
+describe('sendHeroFormContext', () => {
+  it('forwards the landing-page URL and title to the embedded form', () => {
+    const postMessage = vi.fn();
+    const frame = { contentWindow: { postMessage } };
+
+    expect(sendHeroFormContext(
+      frame,
+      'https://example.com/?utm_source=adwords&utm_medium=ppc',
+      'Campaign page',
+      'https://example.com',
+    )).toBe(true);
+    expect(postMessage).toHaveBeenCalledWith({
+      source: 'gbs-web-form-host',
+      type: 'context',
+      pageUrl: 'https://example.com/?utm_source=adwords&utm_medium=ppc',
+      pageTitle: 'Campaign page',
+    }, 'https://example.com');
+  });
+
+  it('does nothing when the embedded frame is unavailable', () => {
+    expect(sendHeroFormContext(null)).toBe(false);
+  });
+});
+
 describe('injectHeroForm', () => {
   it('injects the iframe into a closed shadow root', () => {
     const mount = document.createElement('div');
@@ -45,6 +83,7 @@ describe('injectHeroForm', () => {
       const frame = injectHeroForm(mount, 11);
       expect(frame).toBeTruthy();
       expect(frame.getAttribute('src')).toBe('/embed/web-form.html?id=11');
+      expect(frame.getAttribute('allow')).toBe('geolocation *');
       expect(frame.style.height).toBe('auto');
       expect(frame.style.minHeight).toBe('0px');
       expect(mount.shadowRoot).toBeNull();

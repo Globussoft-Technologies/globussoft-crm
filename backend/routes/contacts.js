@@ -5,6 +5,10 @@ const {
   RBAC_DENIED_MESSAGE,
   RBAC_DENIED_CODE,
 } = require("../middleware/auth");
+const {
+  requirePermission,
+  requireAnyPermission,
+} = require("../middleware/requirePermission");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
@@ -18,6 +22,7 @@ const {
   httpFromPrismaError,
 } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { matchingContactIds, distinctValues } = require("../lib/leadDerivedFilters");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const {
   normalizePhone,
@@ -544,12 +549,24 @@ function canReassignLead(req, contact) {
 //              (SCORE_BUCKETS), so both surfaces offer the same choices.
 const FILTERABLE_FIELDS = {
   name: { column: "name", kind: "text", label: "Name", required: true },
+  firstName: { column: "name", kind: "text", label: "First Name", required: true, verticals: ["generic"], namePart: "first" },
+  lastName: { column: "name", kind: "text", label: "Last Name", required: true, verticals: ["generic"], namePart: "last" },
   email: { column: "email", kind: "text", label: "Email" },
   phone: { column: "phone", kind: "text", label: "Phone" },
   whatsappPhone: { column: "whatsappPhone", kind: "text", label: "WhatsApp Number", verticals: ["generic"] },
   company: { column: "company", kind: "text", label: "Company" },
+  title: { column: "title", kind: "text", label: "Job Title", verticals: ["generic"] },
+  website: { column: "website", kind: "text", label: "Website URL", verticals: ["generic"] },
+  linkedin: { column: "linkedin", kind: "text", label: "LinkedIn", verticals: ["generic"] },
+  industry: { column: "industry", kind: "text", label: "Service Type", verticals: ["generic"] },
+  companySize: { column: "companySize", kind: "text", label: "No Of Employee", verticals: ["generic"] },
+  description: { column: "description", kind: "text", label: "Note", verticals: ["generic"] },
+  stateCode: { column: "stateCode", kind: "text", label: "State", verticals: ["generic"] },
   status: { column: "status", kind: "text", label: "Status", required: true },
   source: { column: "source", kind: "text", label: "Source" },
+  medium: { column: "medium", kind: "text", label: "Medium", verticals: ["generic"] },
+  firstTouchSource: { column: "firstTouchSource", kind: "text", label: "First Touch Source", verticals: ["generic"] },
+  lastTouchSource: { column: "lastTouchSource", kind: "text", label: "Last Touch Source", verticals: ["generic"] },
   callifiedCampaignId: {
     column: "callifiedCampaignId",
     kind: "id",
@@ -596,8 +613,48 @@ const FILTERABLE_FIELDS = {
     label: "Created",
     required: true,
   },
+  updatedAt: {
+    column: "updatedAt",
+    kind: "date",
+    label: "Last Updated",
+    required: true,
+    verticals: ["generic"],
+  },
+  treatmentOfInterest: { column: "treatmentOfInterest", kind: "text", label: "Treatment Of Interest", verticals: ["generic"] },
+  birthDate: { column: "birthDate", kind: "date", label: "Birth Date", verticals: ["generic"] },
+  anniversary: { column: "anniversary", kind: "date", label: "Anniversary", verticals: ["generic"] },
+  gst: { column: "gst", kind: "text", label: "GSTIN", verticals: ["generic"] },
+  billingStateCode: { column: "billingStateCode", kind: "text", label: "Billing State Code", verticals: ["generic"] },
   assignedToId: { column: "assignedToId", kind: "id", label: "Sales Owner" },
 };
+
+// Generic web-form tracking columns are displayed by the Leads table from
+// WebFormSubmission.payloadJson._meta.tracking rather than Contact columns.
+// Keeping their metadata together lets the field list, value list and query
+// builder share the same allowlist without trusting an arbitrary JSON key.
+const TRACKING_FILTER_FIELDS = Object.freeze({
+  pageUrl: { label: "Page URL", kind: "text" },
+  pageTitle: { label: "Page Title", kind: "text" },
+  pageSource: { label: "Page Source", kind: "text" },
+  referrerUrl: { label: "Referrer URL", kind: "text" },
+  landingPageUrl: { label: "Landing Page URL", kind: "text" },
+  currentDomain: { label: "Current Domain", kind: "text" },
+  formName: { label: "Form Name / ID", kind: "text" },
+  location: { label: "Location", kind: "text" },
+  utm_source: { label: "UTM Source", kind: "text" },
+  utm_medium: { label: "UTM Medium", kind: "text" },
+  utm_campaign: { label: "UTM Campaign", kind: "text" },
+  utm_term: { label: "UTM Term", kind: "text" },
+  utm_content: { label: "UTM Content", kind: "text" },
+  gclid: { label: "Google Click ID", kind: "text" },
+  fbclid: { label: "Meta Click ID", kind: "text" },
+  fbc: { label: "Meta Click Cookie", kind: "text" },
+  fbp: { label: "Meta Browser ID", kind: "text" },
+  submittedAt: { label: "Submission Timestamp", kind: "date" },
+  browser: { label: "Browser", kind: "text" },
+  operatingSystem: { label: "Operating System", kind: "text" },
+  deviceType: { label: "Device Type", kind: "text" },
+});
 
 const CALL_STATUS_LABELS = {
   [CALL_STATUS.YET_TO_CALL]: "Yet to Call",
@@ -932,6 +989,15 @@ function buildWebFormClause(operator, values) {
     };
   }
   return { webFormSubmissions: { some: { webForm: { name: { in: list } } } } };
+}
+
+function buildTrackingFilterClause(field, operator, values) {
+  if (field !== "submittedAt") return null;
+  if (operator === "is_empty") return { webFormSubmissions: { none: {} } };
+  if (operator === "is_not_empty") return { webFormSubmissions: { some: {} } };
+  if (operator !== "between") return null;
+  const range = betweenRange((values || [])[0], (values || [])[1]);
+  return range ? { webFormSubmissions: { some: { submittedAt: range } } } : null;
 }
 
 function canAccessLead(req, contact) {
@@ -1319,6 +1385,31 @@ async function writeLeadCustomFieldValues(contactId, tenantId, customFields) {
 router.use(verifyToken);
 router.get("/by-status", audienceController.getContactsByStatus);
 
+// Travel agents need real staff IDs for the assignment picker. The general
+// staff directory deliberately masks those IDs for low-trust viewers.
+router.get("/assignees", requireAnyPermission([
+  { module: "contacts", action: "update" },
+  { module: "leads", action: "update" },
+]), async (req, res) => {
+  if (req.user.vertical !== "travel") return res.status(404).json({ error: "Not found" });
+  try {
+    const where = {
+      tenantId: req.user.tenantId,
+      userType: { in: ["STAFF", "OWNER"] },
+      role: req.user.role === "ADMIN" ? { not: "CUSTOMER" } : { notIn: ["ADMIN", "CUSTOMER"] },
+      deactivatedAt: null,
+    };
+    const users = await prisma.user.findMany({
+      where,
+      select: { id: true, name: true, role: true, subBrandAccess: true },
+      orderBy: { name: "asc" },
+    });
+    return res.json(users);
+  } catch (_err) {
+    return res.status(500).json({ error: "Failed to fetch assignees" });
+  }
+});
+
 router.get("/", async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
@@ -1542,7 +1633,14 @@ router.get("/", async (req, res) => {
       // when the payload actually references a `verticals`-gated field, to
       // avoid the extra round-trip on the common (ungated-fields-only) case.
       let vertical = null;
-      if (parsed.some((f) => f && FILTERABLE_FIELDS[f.field]?.verticals)) {
+      if (
+        parsed.some(
+          (f) =>
+            f &&
+            (FILTERABLE_FIELDS[f.field]?.verticals ||
+              TRACKING_FILTER_FIELDS[f.field]),
+        )
+      ) {
         const tenant = await prisma.tenant.findUnique({
           where: { id: req.user.tenantId },
           select: { vertical: true },
@@ -1586,10 +1684,38 @@ router.get("/", async (req, res) => {
           if (clause) clauses.push(clause);
           continue;
         }
+        if (TRACKING_FILTER_FIELDS[f.field]) {
+          if (vertical !== "generic") continue;
+          if (f.field !== "submittedAt") {
+            const ids = await matchingContactIds({
+              tenantId: req.user.tenantId, status: where.status,
+              assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+              trackingField: f.field, operator: f.operator, values: rawValues,
+            });
+            if (ids !== null) clauses.push({ id: { in: ids } });
+            continue;
+          }
+          const clause = buildTrackingFilterClause(
+            f.field,
+            f.operator,
+            rawValues,
+          );
+          if (clause) clauses.push(clause);
+          continue;
+        }
         const fieldDef = FILTERABLE_FIELDS[f.field];
         if (!fieldDef) continue;
         if (fieldDef.verticals && !fieldDef.verticals.includes(vertical))
           continue;
+        if (fieldDef.namePart) {
+          const ids = await matchingContactIds({
+            tenantId: req.user.tenantId, status: where.status,
+            assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+            namePart: fieldDef.namePart, operator: f.operator, values: rawValues,
+          });
+          if (ids !== null) clauses.push({ id: { in: ids } });
+          continue;
+        }
         const clause = buildFilterClause(fieldDef, f.operator, rawValues);
         if (clause) clauses.push(clause);
       }
@@ -1767,6 +1893,14 @@ router.get("/filter-fields", async (req, res) => {
       vertical === "generic"
         ? [{ field: "webForm", label: "Web Form", kind: "text" }]
         : [];
+    const trackingFields =
+      vertical === "generic"
+        ? Object.entries(TRACKING_FILTER_FIELDS).map(([field, def]) => ({
+            field,
+            label: def.label,
+            kind: def.kind,
+          }))
+        : [];
     const customDefs = await prisma.leadCustomFieldDefinition.findMany({
       where: { tenantId },
       orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
@@ -1792,7 +1926,7 @@ router.get("/filter-fields", async (req, res) => {
       0,
       ...webFormField,
     );
-    res.json({ fields: [...fields, ...customFields] });
+    res.json({ fields: [...fields, ...trackingFields, ...customFields] });
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch filter fields" });
   }
@@ -1823,6 +1957,8 @@ router.get("/filter-values/:field", async (req, res) => {
       typeof req.query.status === "string" && req.query.status
         ? req.query.status
         : null;
+    const valueSearch =
+      typeof req.query.q === "string" ? req.query.q.trim().slice(0, 191) : "";
     const scopeWhere = statusScope ? { status: statusScope } : {};
     if (isCustomField(req.params.field)) {
       const defId = customFieldDefIdFromKey(req.params.field);
@@ -1853,7 +1989,9 @@ router.get("/filter-values/:field", async (req, res) => {
         where: {
           fieldId: defId,
           tenantId,
-          valueText: { not: null },
+          valueText: valueSearch
+            ? { contains: valueSearch }
+            : { not: null },
           ...(statusScope
             ? { contact: { status: statusScope, deletedAt: null } }
             : {}),
@@ -1906,6 +2044,23 @@ router.get("/filter-values/:field", async (req, res) => {
       values.sort((a, b) => a.label.localeCompare(b.label));
       return res.json({ values });
     }
+    if (TRACKING_FILTER_FIELDS[req.params.field]) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { vertical: true },
+      });
+      if ((tenant?.vertical || "generic") !== "generic") {
+        return res
+          .status(404)
+          .json({ error: "Unknown filter field", code: "UNKNOWN_FIELD" });
+      }
+      const values = await distinctValues({
+        tenantId, status: statusScope,
+        assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+        trackingField: req.params.field, search: valueSearch,
+      });
+      return res.json({ values });
+    }
     const fieldDef = FILTERABLE_FIELDS[req.params.field];
     if (!fieldDef)
       return res
@@ -1928,6 +2083,14 @@ router.get("/filter-values/:field", async (req, res) => {
           .status(404)
           .json({ error: "Unknown filter field", code: "UNKNOWN_FIELD" });
       }
+    }
+    if (fieldDef.namePart) {
+      const values = await distinctValues({
+        tenantId, status: statusScope,
+        assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+        namePart: fieldDef.namePart, search: valueSearch,
+      });
+      return res.json({ values });
     }
     if (req.params.field === "assignedToId") {
       const users = await prisma.user.findMany({
@@ -2079,9 +2242,12 @@ router.get("/filter-values/:field", async (req, res) => {
     // check above (querying /filter-values/status?status=Lead would spread
     // `status: 'Lead'` then `status: {not: ''}`, silently dropping one) —
     // AND-combine instead of a flat spread so both always apply.
-    const columnPredicate = notNullFilter
-      ? { [fieldDef.column]: notNullFilter }
-      : {};
+    const columnPredicate =
+      valueSearch && fieldDef.kind === "text"
+        ? { [fieldDef.column]: { contains: valueSearch } }
+        : notNullFilter
+          ? { [fieldDef.column]: notNullFilter }
+          : {};
     const rows = await prisma.contact.findMany({
       where: { tenantId, deletedAt: null, AND: [scopeWhere, columnPredicate] },
       select: { [fieldDef.column]: true },
@@ -2252,6 +2418,13 @@ router.get("/:id", async (req, res) => {
         tasks: true,
         deals: true,
         assignedTo: { select: { id: true, name: true, email: true } },
+        ...(isGenericCrmRequest(req) ? {
+          webFormSubmissions: {
+            select: { id: true, payloadJson: true, submittedAt: true },
+            orderBy: { submittedAt: "desc" },
+            take: 1,
+          },
+        } : {}),
       },
     });
     if (!contact) return res.status(404).json({ error: "Contact not found" });
@@ -2634,9 +2807,15 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Bulk assign agent to multiple contacts (must be before /:id routes)
-// Restricted to ADMIN only — only admins may reassign leads between staff.
-router.put("/bulk-assign", verifyRole(["ADMIN"]), async (req, res) => {
+// Bulk assign agent to multiple contacts (must be before /:id routes).
+// The shared endpoint accepts the Contacts or Leads update grant.
+router.put(
+  "/bulk-assign",
+  requireAnyPermission([
+    { module: "contacts", action: "update" },
+    { module: "leads", action: "update" },
+  ]),
+  async (req, res) => {
   try {
     const { contactIds, assignedToId } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -2720,7 +2899,10 @@ router.put("/bulk-assign", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-router.put("/bulk-assign-campaign", verifyRole(["ADMIN"]), async (req, res) => {
+router.put(
+  "/bulk-assign-campaign",
+  requirePermission("leads", "update"),
+  async (req, res) => {
   try {
     const { contactIds, callifiedCampaignId } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -2752,7 +2934,13 @@ router.put("/bulk-assign-campaign", verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // Bulk hard-delete multiple contacts (must stay before /:id routes).
-router.delete("/bulk-delete", verifyRole(["ADMIN"]), async (req, res) => {
+router.delete(
+  "/bulk-delete",
+  requireAnyPermission([
+    { module: "contacts", action: "delete" },
+    { module: "leads", action: "delete" },
+  ]),
+  async (req, res) => {
   try {
     const { contactIds } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -3300,8 +3488,12 @@ const updateContactById = async (req, res) => {
   }
 };
 
-router.put("/:id", updateContactById);
-router.patch("/:id", updateContactById);
+const requireContactOrLeadUpdate = requireAnyPermission([
+  { module: "contacts", action: "update" },
+  { module: "leads", action: "update" },
+]);
+router.put("/:id", requireContactOrLeadUpdate, updateContactById);
+router.patch("/:id", requireContactOrLeadUpdate, updateContactById);
 
 // CSV Import — accepts pre-parsed rows
 // #154: validation hardening
@@ -3457,7 +3649,7 @@ router.post("/import-csv", async (req, res) => {
 // The dropdowns on the travel pages are filtered to non-admin staff, and
 // this route keeps the validation in place so a forged request can't assign
 // a lead to an admin.
-router.put("/:id/assign", async (req, res) => {
+router.put("/:id/assign", requireContactOrLeadUpdate, async (req, res) => {
   try {
     const { assignedToId } = req.body;
     const existing = await prisma.contact.findFirst({
@@ -3480,6 +3672,9 @@ router.put("/:id/assign", async (req, res) => {
       return res
         .status(400)
         .json({ error: "Invalid staff member", code: "INVALID_ASSIGNEE" });
+    }
+    if (nextAssignedToId !== null && nextAssignedToId === existing.assignedToId) {
+      return res.status(409).json({ error: "Lead is already assigned to this staff member", code: "ALREADY_ASSIGNED" });
     }
     const targetUser =
       nextAssignedToId !== null

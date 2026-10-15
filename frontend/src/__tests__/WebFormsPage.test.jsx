@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { AuthContext } from '../App';
 
 import WebForms from '../pages/WebForms';
+import { confirmActiveFormExit } from '../utils/formNavigationGuard';
 
 
 
@@ -219,9 +220,10 @@ function installFetchMock(form = FORM_FIXTURE, leadFields = [
 
 
 
-function renderPage(form = FORM_FIXTURE, leadFields, authValue = { user: { id: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }) {
+function renderPage(form = FORM_FIXTURE, leadFields, authValue = { user: { id: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }, configureFetch) {
 
   installFetchMock(form, leadFields);
+  configureFetch?.(fetchApiMock.getMockImplementation());
 
   return render(
 
@@ -253,10 +255,13 @@ function renderTravelPage(form = FORM_FIXTURE) {
 
 function NavigationProbe() {
   const location = useLocation();
+  const navigate = useNavigate();
   return (
     <>
       <a href="/dashboard">Leave Web Forms</a>
-      <span data-testid="navigation-probe-path">{location.pathname}</span>
+      <button type="button" onClick={() => navigate(-1)}>Browser back</button>
+      <button type="button" onClick={() => navigate(1)}>Browser forward</button>
+      <span data-testid="navigation-probe-path">{location.pathname}{location.search}</span>
     </>
   );
 }
@@ -290,6 +295,24 @@ async function openBuilder(formName = 'Brand intake') {
   fireEvent.click(screen.getByRole('button', { name: /Open builder/i }));
   await screen.findAllByDisplayValue(formName);
 }
+
+test('browser Back returns from a form builder to the forms list', async () => {
+  renderRoutedPage();
+  await openBuilder();
+  expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/forms?form=101');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Browser back' }));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'All web forms' })).toBeInTheDocument());
+  expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/forms');
+  expect(screen.queryByRole('button', { name: 'Back to all forms' })).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Browser forward' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Back to all forms' })).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back to all forms' }));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'All web forms' })).toBeInTheDocument());
+  expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/forms');
+});
 
 beforeEach(() => {
 
@@ -344,6 +367,36 @@ describe('WebForms builder page', () => {
     await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url]) => url === '/api/forms').length).toBeGreaterThan(1));
     expect(screen.queryByDisplayValue('Tenant fourteen draft')).not.toBeInTheDocument();
     expect(window.sessionStorage.getItem('globuscrm:web-form-draft:generic:15:9')).toBeNull();
+  });
+
+  test('pins the selected landing-page form first without reordering the other forms', async () => {
+    const firstForm = { ...FORM_FIXTURE, id: 201, name: 'First form', slug: 'first-form' };
+    const landingForm = { ...FORM_FIXTURE, id: 202, name: 'Landing form', slug: 'landing-form' };
+    const thirdForm = { ...FORM_FIXTURE, id: 203, name: 'Third form', slug: 'third-form' };
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/forms' && method === 'GET') {
+        return Promise.resolve([firstForm, landingForm, thirdForm]);
+      }
+      if (url === '/api/lead-custom-fields' && method === 'GET') return Promise.resolve([]);
+      if (url === '/api/landing-form-config/access') return Promise.resolve({ canManage: true });
+      if (url === '/api/landing-form-config/mine') return Promise.resolve({ webFormId: landingForm.id });
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(
+      <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical: 'generic' } }}>
+        <WebForms />
+      </AuthContext.Provider>,
+    );
+
+    await screen.findByText('Landing form');
+    await waitFor(() => {
+      const cardNames = Array.from(container.querySelectorAll('.wf-library-card h4'))
+        .map((heading) => heading.textContent);
+      expect(cardNames).toEqual(['Landing form', 'First form', 'Third form']);
+    });
   });
 
   test('persists Generic multi-page definitions and field assignment', async () => {
@@ -403,6 +456,26 @@ describe('WebForms builder page', () => {
     expect(childCard.querySelector('.wf-conditional-config')).toBeNull();
   });
 
+  test('preserves comma separators while editing conditional flow options', async () => {
+    const conditionalForm = {
+      ...FORM_FIXTURE,
+      scope: 'generic',
+      fields: [{
+        id: 'root-question', sourceKind: 'custom', sourceKey: 'root-question', fieldType: 'dropdown',
+        label: 'Interested in', optionsText: 'sea', options: ['sea'],
+        required: false, hidden: false, showWhen: null,
+      }],
+    };
+
+    renderPage(conditionalForm);
+    await openBuilder();
+
+    const options = screen.getByDisplayValue('sea');
+    fireEvent.change(options, { target: { value: 'sea,' } });
+
+    expect(options).toHaveValue('sea,');
+  });
+
   test('restores unsaved changes after refresh without a native unload alert', async () => {
     const firstRender = renderPage();
     await openBuilder();
@@ -423,7 +496,7 @@ describe('WebForms builder page', () => {
 
     expect(await screen.findByDisplayValue('Changed name')).toBeInTheDocument();
     expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Unsaved changes restored',
+      title: 'Unsaved changes',
       message: expect.stringContaining('continue editing'),
       confirmText: 'Continue editing',
       cancelText: 'Discard changes',
@@ -439,13 +512,42 @@ describe('WebForms builder page', () => {
 
     await waitFor(() => {
       expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
-        title: 'Unsaved changes',
-        message: expect.stringContaining('will be lost'),
-        confirmText: 'Continue',
-        cancelText: 'Stay',
+        title: 'Leave this form?',
+        message: expect.stringContaining('will discard them'),
+        confirmText: 'Continue editing',
+        cancelText: 'Discard changes',
+        confirmValue: false,
+        cancelValue: true,
+        dismissValue: false,
       }));
     });
     await waitFor(() => expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/dashboard'));
+  });
+
+  test('offers one form-specific sign-out decision and preserves edits when cancelled', async () => {
+    renderRoutedPage();
+    await openBuilder();
+    expect(await confirmActiveFormExit()).toBeNull();
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: 'Changed name' } });
+    const draftKey = 'globuscrm:web-form-draft:generic:14:1';
+    await waitFor(() => expect(window.sessionStorage.getItem(draftKey)).toContain('Changed name'));
+
+    notifyConfirm.mockResolvedValueOnce(false);
+    let canSignOut;
+    await act(async () => { canSignOut = await confirmActiveFormExit(); });
+    expect(canSignOut).toBe(false);
+    expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Unsaved changes',
+      confirmText: 'Discard & sign out',
+      cancelText: 'Continue editing',
+      destructive: true,
+    }));
+    expect(screen.getByDisplayValue('Changed name')).toBeInTheDocument();
+    expect(window.sessionStorage.getItem(draftKey)).toContain('Changed name');
+
+    await act(async () => { canSignOut = await confirmActiveFormExit(); });
+    expect(canSignOut).toBe(true);
+    expect(window.sessionStorage.getItem(draftKey)).toBeNull();
   });
 
   test('travel logo selection immediately sends a multipart upload request', async () => {
@@ -559,6 +661,43 @@ describe('WebForms builder page', () => {
 
 
 
+  test('locks Generic field types while keeping labels editable', async () => {
+    const fields = [
+      { ...FORM_FIXTURE.fields[0], id: 'name-field', sourceKey: 'name', label: 'Name', fieldType: 'number' },
+      { ...FORM_FIXTURE.fields[0], id: 'email-field', sourceKey: 'email', label: 'Email', fieldType: 'text' },
+      { ...FORM_FIXTURE.fields[0], id: 'phone-field', sourceKey: 'phone', label: 'Phone', fieldType: 'number' },
+    ];
+    renderPage({ ...FORM_FIXTURE, scope: 'generic', fields });
+    await openBuilder();
+
+    const nameType = screen.getByRole('combobox', { name: 'Field type for Name' });
+    const emailType = screen.getByRole('combobox', { name: 'Field type for Email' });
+    const phoneType = screen.getByRole('combobox', { name: 'Field type for Phone' });
+
+    expect(nameType).toBeDisabled();
+    expect(nameType).toHaveValue('text');
+    expect(emailType).toBeDisabled();
+    expect(emailType).toHaveValue('email');
+    expect(phoneType).toBeDisabled();
+    expect(phoneType).toHaveValue('tel');
+
+    const nameLabel = screen.getByDisplayValue('Name');
+    expect(nameLabel).not.toBeDisabled();
+    fireEvent.change(nameLabel, { target: { value: 'Full name' } });
+    expect(screen.getByDisplayValue('Full name')).toBeInTheDocument();
+  });
+
+  test('keeps Travel field types editable', async () => {
+    const phoneField = { ...FORM_FIXTURE.fields[0], sourceKey: 'phone', label: 'Phone', fieldType: 'number' };
+    renderTravelPage({ ...FORM_FIXTURE, scope: 'travel', fields: [phoneField] });
+    await openBuilder();
+
+    const phoneType = screen.getByRole('combobox', { name: 'Field type for Phone' });
+    expect(phoneType).not.toBeDisabled();
+    expect(phoneType).toHaveValue('number');
+    expect(within(phoneType).queryByRole('option', { name: 'Tel' })).toBeNull();
+  });
+
   test('opens contact picker with dynamic fields from Contacts and Leads pages', async () => {
 
     renderPage();
@@ -597,6 +736,73 @@ describe('WebForms builder page', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Business type.*custom/i }));
 
     expect(await screen.findByDisplayValue('SaaS, E-Commerce, Freelancer')).toBeInTheDocument();
+  });
+
+  test('creates a lead field from the Generic contact picker plus action', async () => {
+    let customFields = [
+      { id: 1, fieldKey: 'submit_source', label: 'Submit source', fieldType: 'text' },
+    ];
+    // Configure every response before mount so the initial effect cannot
+    // fetch a different field catalogue than the one this test owns.
+    renderPage(FORM_FIXTURE, customFields, undefined, (baseFetch) => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        const method = opts?.method || 'GET';
+        if (url === '/api/lead-custom-fields' && method === 'GET') {
+          return Promise.resolve(customFields);
+        }
+        if (url === '/api/lead-custom-fields' && method === 'POST') {
+          const body = JSON.parse(opts.body);
+          const created = { id: 91, fieldKey: 'referral_source', ...body };
+          customFields = [...customFields, created];
+          return Promise.resolve(created);
+        }
+        return baseFetch(url, opts);
+      });
+    });
+
+    await openBuilder();
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    const picker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+    fireEvent.click(within(picker).getByRole('button', { name: /Add lead custom field/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    expect(within(dialog).getByLabelText('Field Type')).not.toBeDisabled();
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Referral Source'), {
+      target: { value: 'Referral Source' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/lead-custom-fields',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            label: 'Referral Source',
+            fieldType: 'text',
+            isRequired: false,
+          }),
+        }),
+      );
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Field created');
+    expect(screen.queryByPlaceholderText('Type to search')).toBeNull();
+    expect(await screen.findByDisplayValue('Referral Source')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    const reopenedPicker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+    const addedItem = within(reopenedPicker).getByText('Referral Source').closest('.wf-field-picker-item');
+    expect(addedItem).toHaveAttribute('title', 'Already added to form');
+    expect(within(addedItem).getByText('Added')).toBeInTheDocument();
+  }, 10000); // Multi-dialog integration flow needs headroom on loaded CI runners.
+
+  test('does not show the lead-field plus action in the Travel form picker', async () => {
+    renderTravelPage();
+    await openBuilder();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    expect(await screen.findByText('CONTACT FIELDS')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add lead custom field/i })).toBeNull();
   });
 
   test('supports draft edits and save on the form name field', async () => {
@@ -959,9 +1165,152 @@ test.each(['generic', 'wellness', 'travel'])('View All Leads is available only f
   render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical } }}><WebForms /></AuthContext.Provider>);
   await screen.findByText('Brand intake');
   expect(screen.queryByRole('button', { name: 'View All Leads' }) !== null).toBe(vertical === 'generic');
+  expect(screen.queryByRole('button', { name: 'New Folder' }) !== null).toBe(vertical === 'generic');
   if (vertical === 'generic') {
     fireEvent.click(screen.getByRole('button', { name: 'View All Leads' }));
     expect(screen.getByRole('dialog', { name: /Leads .* Brand intake/ })).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Close dialog'));
+  }
+});
+
+test('Changing folder views closes and resets the new folder editor', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([{ id: 9, name: 'Campaigns' }]);
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+
+  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Folder name' }), { target: { value: 'Unused draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'All Forms (1)' }));
+  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
+  expect(screen.getByRole('textbox', { name: 'Folder name' })).toHaveValue('');
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*0/ }));
+  expect(screen.getByText('Campaigns')).toBeInTheDocument();
+});
+
+test('Generic forms can be filed into a manually created folder', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([]);
+    if (url === '/api/forms/folders' && opts?.method === 'POST') {
+      const name = JSON.parse(opts.body).name;
+      return Promise.resolve({ id: name === 'Campaigns' ? 9 : 10, name });
+    }
+    if (url === '/api/forms/101/folder' && opts?.method === 'PUT') return Promise.resolve({ id: 101, folderId: JSON.parse(opts.body).folderId });
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+  expect(screen.queryByRole('button', { name: /Unfiled/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Folder name' }), { target: { value: 'Campaigns' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create folder' }));
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(await screen.findByRole('button', { name: /Campaigns.*0/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'All Forms (1)' }));
+  expect(screen.queryByRole('combobox', { name: 'Folder for Brand intake' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Move Brand intake to folder' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Campaigns' }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: 9 }) })));
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(await screen.findByRole('button', { name: /Campaigns.*1/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(screen.getByText('Folder: Campaigns')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Move Brand intake to folder' }));
+  expect(screen.getByRole('menuitem', { name: 'Move to All Forms' })).toBeEnabled();
+  expect(screen.getByRole('menuitem', { name: 'Campaigns' })).toHaveAttribute('aria-current', 'true');
+  fireEvent.click(screen.getByRole('menuitem', { name: 'New Folder' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'New folder name for Brand intake' }), { target: { value: 'Projects' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create and move' }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: 10 }) })));
+  expect(await screen.findByText('Folder: Projects')).toBeInTheDocument();
+  const formCard = screen.getByText('Brand intake').closest('article');
+  const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => '101'), setDragImage: vi.fn(), effectAllowed: '', dropEffect: '' };
+  const moveCallsBeforeDrop = fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/forms/101/folder' && opts?.method === 'PUT').length;
+  fireEvent.dragStart(formCard, { dataTransfer });
+  expect(dataTransfer.setDragImage).toHaveBeenCalledOnce();
+  const [dragPreview] = dataTransfer.setDragImage.mock.calls[0];
+  expect(dragPreview).not.toBe(formCard);
+  expect(dragPreview).toHaveClass('wf-form-drag-preview');
+  expect(dragPreview).toHaveTextContent('Moving form');
+  expect(dragPreview).toHaveTextContent('Brand intake');
+  expect(dragPreview.querySelector('svg')).toBeInTheDocument();
+  fireEvent.dragOver(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });
+  expect(screen.getByRole('button', { name: /Campaigns.*0/ })).toHaveClass('wf-folder-drop-target');
+  fireEvent.drop(screen.getByRole('button', { name: /Campaigns.*0/ }), { dataTransfer });
+  await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/forms/101/folder' && opts?.method === 'PUT').length).toBe(moveCallsBeforeDrop + 1));
+  expect(await screen.findByText('Folder: Campaigns')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Move Brand intake to folder' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Move to All Forms' }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/101/folder', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ folderId: null }) })));
+  await waitFor(() => expect(screen.queryByText('Folder: Campaigns')).toBeNull());
+}, 15000);
+
+test('Travel forms do not show folder controls', async () => {
+  renderTravelPage();
+  await screen.findByText('Brand intake');
+  expect(screen.queryByRole('button', { name: 'New Folder' })).toBeNull();
+  expect(fetchApiMock).not.toHaveBeenCalledWith('/api/forms/folders');
+});
+
+test('All Folders searches folders without adding them to the toolbar', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([
+      { id: 9, name: 'Campaigns' },
+      { id: 10, name: 'Projects' },
+    ]);
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+  const toolbar = screen.getByLabelText('Form folders');
+  expect(toolbar.children).toHaveLength(3);
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Search folders' }), { target: { value: 'proj' } });
+  expect(screen.getByRole('button', { name: /Projects.*0/ })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Campaigns.*0/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Projects.*0/ }));
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveClass('wf-folder-active');
+  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
+  expect(screen.getByRole('textbox', { name: 'Search folders' })).toHaveValue('');
+  expect(screen.getByRole('button', { name: /Campaigns.*0/ })).toBeInTheDocument();
+});
+
+test.each([
+  [false, 'Delete folder only'],
+  [true, 'Delete folder and forms'],
+])('folder deletion offers whether to delete its forms (%s)', async (deleteForms, actionLabel) => {
+  installFetchMock({ ...FORM_FIXTURE, folderId: 9 });
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url === '/api/forms/folders' && !opts) return Promise.resolve([{ id: 9, name: 'Campaigns' }]);
+    if (url === '/api/forms/folders/9' && opts?.method === 'DELETE') return Promise.resolve({ success: true });
+    return baseFetch(url, opts);
+  });
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  fireEvent.click(await screen.findByRole('button', { name: 'All Folders' }));
+  await screen.findByRole('button', { name: /Campaigns.*1/ });
+  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*1/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Delete folder' }));
+  expect(screen.getByRole('dialog', { name: 'Delete folder?' })).toHaveTextContent('1 form');
+  fireEvent.click(screen.getByRole('button', { name: actionLabel }));
+  await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/folders/9', expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ deleteForms }) })));
+  if (deleteForms) {
+    await waitFor(() => expect(screen.queryByText('Brand intake')).toBeNull());
+  } else {
+    expect(await screen.findByText('Brand intake')).toBeInTheDocument();
+    expect(screen.queryByText('Folder: Campaigns')).toBeNull();
   }
 });

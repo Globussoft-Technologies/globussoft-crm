@@ -23,6 +23,7 @@ import { useNotify } from "../utils/notify";
 export default function ColumnPicker({
   tableKey,
   onColumnsChange,
+  onAvailableColumnsChange,
   deletableColumns = [],
   onFieldDeleted,
 }) {
@@ -71,7 +72,9 @@ export default function ColumnPicker({
         loadedOnce.current = true;
         return;
       }
-      setAvailable(Array.isArray(data.availableColumns) ? data.availableColumns : []);
+      const availableColumns = Array.isArray(data.availableColumns) ? data.availableColumns : [];
+      setAvailable(availableColumns);
+      onAvailableColumnsChange?.(availableColumns);
       setDraftVisible(data.visible);
       onColumnsChange?.(data.visible);
       loadedOnce.current = true;
@@ -120,13 +123,25 @@ export default function ColumnPicker({
     const trigger = triggerRef.current;
     if (!trigger) return null;
     const rect = trigger.getBoundingClientRect();
-    const vpH = window.innerHeight;
-    const spaceBelow = vpH - rect.bottom - 12;
+    const gutter = 12;
+    const gap = 6;
+    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(320, Math.max(0, viewportWidth - gutter * 2));
+    const preferredHeight = Math.min(420, Math.max(0, viewportHeight - gutter * 2));
+    const spaceBelow = viewportHeight - rect.bottom - gap - gutter;
+    const spaceAbove = rect.top - gap - gutter;
+    const minUsefulHeight = Math.min(240, preferredHeight);
+    const useViewport = Math.max(spaceAbove, spaceBelow) < minUsefulHeight;
+    const openAbove = !useViewport && spaceBelow < minUsefulHeight && spaceAbove > spaceBelow;
+    const maxHeight = useViewport ? preferredHeight : openAbove
+      ? Math.min(preferredHeight, spaceAbove)
+      : Math.min(preferredHeight, spaceBelow);
     return {
-      right: window.innerWidth - rect.right,
-      top: rect.bottom + 6,
-      width: 320,
-      maxHeight: Math.max(200, Math.min(spaceBelow, 420)),
+      left: Math.max(gutter, Math.min(rect.right - width, viewportWidth - width - gutter)),
+      top: useViewport ? gutter : openAbove ? rect.top - gap - maxHeight : rect.bottom + gap,
+      width,
+      maxHeight,
     };
   };
 
@@ -322,6 +337,7 @@ export default function ColumnPicker({
             boxShadow: "var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.25))",
             display: "flex",
             flexDirection: "column",
+            boxSizing: "border-box",
           }}
         >
           <div style={{ padding: "0.6rem 0.75rem", borderBottom: "1px solid var(--border-color)" }}>
@@ -333,7 +349,7 @@ export default function ColumnPicker({
                 placeholder="Search fields"
                 aria-label="Search columns"
                 className="input-field"
-                style={{ padding: "0.4rem 0.6rem 0.4rem 1.9rem", fontSize: "0.85rem" }}
+                style={{ width: "100%", minWidth: 0, boxSizing: "border-box", padding: "0.4rem 0.6rem 0.4rem 1.9rem", fontSize: "0.85rem" }}
               />
             </div>
           </div>

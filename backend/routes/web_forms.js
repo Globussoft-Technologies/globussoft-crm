@@ -142,6 +142,7 @@ function uploadLogoOrReject(req, res, next) {
 const FIELD_TYPES = new Set([
   "text",
   "email",
+  "tel",
   "textarea",
   "number",
   "dropdown",
@@ -154,6 +155,11 @@ const FIELD_TYPES = new Set([
 ]);
 
 const CHOICE_TYPES = new Set(["dropdown", "radio", "multiselect"]);
+const GENERIC_LOCKED_CONTACT_FIELD_TYPES = {
+  name: "text",
+  email: "email",
+  phone: "tel",
+};
 
 const FILE_FORMATS = new Set([
   "CSV",
@@ -440,7 +446,7 @@ function parseFileFormats(raw) {
   return clean.length ? clean.slice(0, 20) : DEFAULT_FILE_FORMATS;
 }
 
-function defaultFields() {
+function defaultFields(scope = "generic") {
   return [
     {
       id: "contact-name",
@@ -493,7 +499,7 @@ function defaultFields() {
 
       sourceKey: "phone",
 
-      fieldType: "text",
+      fieldType: scope === "generic" ? "tel" : "text",
 
       label: "Phone",
 
@@ -642,7 +648,7 @@ function defaultSettings() {
   };
 }
 
-function normalizeField(field, index, leadFieldDefinitions = []) {
+function normalizeField(field, index, scope = "generic", leadFieldDefinitions = []) {
   const sourceKind = ["contact", "lead_custom", "custom"].includes(
     field?.sourceKind,
   )
@@ -650,9 +656,12 @@ function normalizeField(field, index, leadFieldDefinitions = []) {
     : "custom";
 
   const sourceKey = textOr(field?.sourceKey, field?.key || `custom_${index}`);
-  const fieldType = sourceKind === "contact" && sourceKey === "email"
-    ? "email"
-    : FIELD_TYPES.has(field?.fieldType)
+  const lockedContactFieldType = scope === "generic" && sourceKind === "contact"
+    ? GENERIC_LOCKED_CONTACT_FIELD_TYPES[sourceKey]
+    : null;
+  const fieldType = lockedContactFieldType
+    ? lockedContactFieldType
+    : FIELD_TYPES.has(field?.fieldType) && (scope === "generic" || field?.fieldType !== "tel")
       ? field.fieldType
       : "text";
   const leadDefinition = sourceKind === "lead_custom"
@@ -711,9 +720,9 @@ function normalizeField(field, index, leadFieldDefinitions = []) {
 function normalizeFields(raw, scope = "generic", leadFieldDefinitions = []) {
   const parsed = parseJson(raw, null);
 
-  if (!Array.isArray(parsed) || parsed.length === 0) return defaultFields();
+  if (!Array.isArray(parsed) || parsed.length === 0) return defaultFields(scope);
 
-  const fields = parsed.map((field, index) => normalizeField(field, index, leadFieldDefinitions));
+  const fields = parsed.map((field, index) => normalizeField(field, index, scope, leadFieldDefinitions));
 
   if (!supportsAdvancedWebFormFeatures(scope)) return fields.map((field) => ({ ...field, showWhen: null }));
 
@@ -1003,6 +1012,22 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+const EMBED_ATTRIBUTION_QUERY_KEYS = [
+  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "gclid", "gbraid", "wbraid", "fbclid", "fbc", "fbp", "gad_source",
+  "gad_campaignid", "adgroup", "network", "device", "placement", "hsa_acc",
+  "hsa_cam", "hsa_grp", "hsa_ad", "hsa_src", "hsa_tgt", "hsa_kw", "hsa_mt",
+  "hsa_net", "hsa_ver",
+];
+
+function buildEmbedHostScript(enableAttribution) {
+  if (!enableAttribution) {
+    return '<script>(function(frame){if(!frame)return;var lastDevice="";function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>';
+  }
+  const keys = JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS);
+  return `<script>(function(frame){if(!frame)return;var keys=${keys},maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function remember(name,value){if(!value)return readCookie(name);var saved=readCookie(name);if(saved)return saved;try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}return value;}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}for(var i=0;i<keys.length;i++){var key=keys[i],value=query?query.get(key):"";value=remember("gbs_"+key,value||"");if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>`;
+}
+
 function buildEmbedCode(form, origin) {
   const configuredBase =
     origin || process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "https://globuscrm.com";
@@ -1022,7 +1047,7 @@ function buildEmbedCode(form, origin) {
     "<!-- Globussoft CRM web form -->",
 
     `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" allow="geolocation *" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
-    '<script>(function(frame){if(!frame)return;function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}}window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>',
+    buildEmbedHostScript(!form?.scope || form.scope === "generic"),
   ].join("\n");
 }
 
@@ -1366,14 +1391,22 @@ router.get("/public/:slug", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
     const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions);
-    if (supportsAdvancedWebFormFeatures(form.scope || "generic") && publicPayload.settings?.recaptchaEnabled) {
+    // The builder can enable reCAPTCHA in an unsaved preview draft. Return the
+    // public site key for advanced public forms even when the stored form has
+    // CAPTCHA disabled, so the preview can render the draft widget.
+    if (supportsAdvancedWebFormFeatures(form.scope || "generic")) {
       const recaptchaSiteKey = form.scope === "travel"
         ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
         : KEYS.GENERIC_RECAPTCHA_SITE_KEY;
       const recaptchaSiteFallback = form.scope === "travel"
         ? process.env.TRAVEL_RECAPTCHA_SITE_KEY || ""
         : process.env.RECAPTCHA_SITE_KEY || "";
-      publicPayload.settings.recaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, { coerce: String, fallback: recaptchaSiteFallback }));
+      const tenantRecaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, {
+        coerce: String,
+        fallback: recaptchaSiteFallback,
+      }));
+      // An empty tenant override should not mask a valid server-level key.
+      publicPayload.settings.recaptchaSiteKey = tenantRecaptchaSiteKey || recaptchaSiteFallback;
     }
     res.json(publicPayload);
   } catch (err) {
@@ -1455,7 +1488,8 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       const recaptchaSecretFallback = formScope === "travel"
         ? process.env.TRAVEL_RECAPTCHA_SECRET_KEY || ""
         : process.env.RECAPTCHA_SECRET_KEY || "";
-      const secret = textOr(await getSetting(form.tenantId, recaptchaSecretKey, { coerce: String, fallback: recaptchaSecretFallback }));
+      const tenantSecret = textOr(await getSetting(form.tenantId, recaptchaSecretKey, { coerce: String, fallback: recaptchaSecretFallback }));
+      const secret = tenantSecret || recaptchaSecretFallback;
       let verified = false;
       if (token && secret) {
         try {
@@ -2100,61 +2134,112 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
 // Authenticated CRUD -------------------------------------------------------
 
+router.get("/folders", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const folders = await prisma.webFormFolder.findMany({
+      where: { tenantId: req.user.tenantId, scope: requestedScope(req) },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
+    res.json(folders);
+  } catch (err) {
+    console.error("[web-forms] folder list error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to load folders" });
+  }
+});
+
+router.post("/folders", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const name = String(req.body?.name || "").trim();
+    if (!name || name.length > 100) return res.status(400).json({ error: "Folder name must be 1–100 characters", code: "INVALID_FOLDER_NAME" });
+    const folder = await prisma.webFormFolder.create({
+      data: { tenantId: req.user.tenantId, scope: requestedScope(req), name },
+    });
+    res.status(201).json(folder);
+  } catch (err) {
+    if (err.code === "P2002") return res.status(409).json({ error: "A folder with this name already exists", code: "FOLDER_EXISTS" });
+    console.error("[web-forms] folder create error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to create folder" });
+  }
+});
+
+router.put("/folders/:id", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const id = Number(req.params.id);
+    const scope = requestedScope(req);
+    const name = String(req.body?.name || "").trim();
+    if (!Number.isInteger(id) || id <= 0 || !name || name.length > 100) return res.status(400).json({ error: "Invalid folder", code: "INVALID_FOLDER" });
+    const existing = await prisma.webFormFolder.findFirst({ where: { id, tenantId: req.user.tenantId, scope } });
+    if (!existing) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    const folder = await prisma.webFormFolder.update({ where: { id }, data: { name } });
+    res.json(folder);
+  } catch (err) {
+    if (err.code === "P2002") return res.status(409).json({ error: "A folder with this name already exists", code: "FOLDER_EXISTS" });
+    console.error("[web-forms] folder update error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to rename folder" });
+  }
+});
+
+router.delete("/folders/:id", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const id = Number(req.params.id);
+    const scope = requestedScope(req);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid folder id", code: "INVALID_FOLDER_ID" });
+    const existing = await prisma.webFormFolder.findFirst({ where: { id, tenantId: req.user.tenantId, scope } });
+    if (!existing) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    if (req.body?.deleteForms === true) {
+      const deletedForms = await prisma.$transaction(async (tx) => {
+        const result = await tx.webForm.deleteMany({ where: { folderId: id, tenantId: req.user.tenantId, scope } });
+        await tx.webFormFolder.delete({ where: { id: existing.id } });
+        return result.count;
+      });
+      return res.json({ success: true, deletedForms });
+    }
+    await prisma.webFormFolder.delete({ where: { id } });
+    res.json({ success: true, deletedForms: 0 });
+  } catch (err) {
+    console.error("[web-forms] folder delete error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to delete folder" });
+  }
+});
+
+router.put("/:id/folder", verifyToken, async (req, res) => {
+  try {
+    if (req.user?.vertical && req.user.vertical !== "generic") return res.status(404).json({ error: "Folders are only available for Generic CRM" });
+    if (requestedScope(req) !== "generic") return res.status(404).json({ error: "Folders are only available for Generic forms" });
+    const id = Number(req.params.id);
+    const scope = requestedScope(req);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid form id", code: "INVALID_FORM_ID" });
+    const form = await prisma.webForm.findFirst({ where: { id, tenantId: req.user.tenantId, scope } });
+    if (!form) return res.status(404).json({ error: "Form not found", code: "FORM_NOT_FOUND" });
+    const folderId = req.body?.folderId == null ? null : Number(req.body.folderId);
+    if (folderId !== null) {
+      if (!Number.isInteger(folderId) || folderId <= 0) return res.status(400).json({ error: "Invalid folder id", code: "INVALID_FOLDER_ID" });
+      const folder = await prisma.webFormFolder.findFirst({ where: { id: folderId, tenantId: req.user.tenantId, scope } });
+      if (!folder) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    }
+    const updated = await prisma.webForm.update({ where: { id }, data: { folderId } });
+    res.json({ id: updated.id, folderId: updated.folderId });
+  } catch (err) {
+    console.error("[web-forms] move error:", err && err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to move form" });
+  }
+});
+
 router.get("/", verifyToken, async (req, res) => {
   try {
     const scope = requestedScope(req);
     // Web forms remain tenant-owned. Cross-organisation landing selection is
     // handled by landing-form-config and must never copy or expose another
     // organisation's forms in this tenant's CRUD list.
-    let forms = await listWithCounts(req.user.tenantId, scope);
-
-    if (forms.length === 0) {
-      const now = new Date();
-
-      const date = now.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      });
-
-      const time = now.toLocaleTimeString("en-GB", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-
-      const name = `Untitled form - ${date}, ${time}`;
-
-      const slug = await ensureUniqueSlug(name, scope);
-
-      const form = await prisma.webForm.create({
-        data: {
-          tenantId: req.user.tenantId,
-
-          scope,
-
-          createdByUserId: req.user.userId,
-
-          name,
-
-          slug,
-
-          description: "",
-
-          isActive: true,
-
-          fieldsJson: JSON.stringify(defaultFields()),
-
-          styleJson: JSON.stringify(defaultStyle()),
-
-          settingsJson: JSON.stringify(defaultSettings()),
-        },
-      });
-
-      forms = [shapeForm(form, 0, `${req.protocol}://${req.get("host")}`)];
-    }
-
-    res.json(forms);
+    res.json(await listWithCounts(req.user.tenantId, scope));
   } catch (err) {
     console.error("[web-forms] list error:", err && err.message);
 
@@ -2179,6 +2264,13 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const slug = await ensureUniqueSlug(body.slug || name, scope);
+    const folderId = body.folderId == null ? null : Number(body.folderId);
+    if ((scope !== "generic" || (req.user?.vertical && req.user.vertical !== "generic")) && folderId !== null) return res.status(400).json({ error: "Folders are only available for Generic CRM", code: "INVALID_FOLDER_SCOPE" });
+    if (folderId !== null) {
+      if (!Number.isInteger(folderId) || folderId <= 0) return res.status(400).json({ error: "Invalid folder id", code: "INVALID_FOLDER_ID" });
+      const folder = await prisma.webFormFolder.findFirst({ where: { id: folderId, tenantId: req.user.tenantId, scope } });
+      if (!folder) return res.status(404).json({ error: "Folder not found", code: "FOLDER_NOT_FOUND" });
+    }
     const leadFieldDefinitions = body.fields !== undefined
       ? await loadLeadFieldDefinitions(req.user.tenantId)
       : [];
@@ -2188,6 +2280,7 @@ router.post("/", verifyToken, async (req, res) => {
         tenantId: req.user.tenantId,
 
         scope,
+        folderId,
 
         createdByUserId: req.user.userId,
 

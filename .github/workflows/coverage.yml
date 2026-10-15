@@ -180,11 +180,14 @@ jobs:
             tests/travel-email-provider-api.spec.js \
             tests/travel-meeting-forms-api.spec.js \
             tests/web-form-leads-api.spec.js \
+            tests/web-form-folders-api.spec.js \
             tests/sales-teams-api.spec.js \
             tests/geocode-api.spec.js \
             tests/wellness-location-assignments-api.spec.js \
             tests/wellness-geofence-zones-api.spec.js \
             tests/contacts-api.spec.js \
+            tests/contact-assignees-api.spec.js \
+            tests/lead-derived-filters-api.spec.js \
             tests/deals-api.spec.js \
             tests/pipelines.spec.js \
             tests/surveys-api.spec.js \
@@ -340,6 +343,7 @@ jobs:
             tests/approvals-api.spec.js \
             tests/sso-api.spec.js \
             tests/auth-profile-picture-api.spec.js \
+            tests/auth-account-deletion-api.spec.js \
             tests/wellness-my-transactions-api.spec.js \
             tests/staff-api.spec.js \
             tests/portal-appointments-api.spec.js \

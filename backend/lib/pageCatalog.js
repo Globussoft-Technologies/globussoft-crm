@@ -1249,7 +1249,7 @@ const PAGE_CATALOG = [
     label: 'Currencies',
     description: 'Multi-currency configuration',
     category: 'Finance',
-    requiredPermissions: [{ module: 'settings', action: 'write' }],
+    requiredPermissions: [{ module: 'settings', action: 'manage' }],
   },
 
   //  Marketing & Analytics (missing routes) 
@@ -1313,7 +1313,7 @@ const PAGE_CATALOG = [
     label: 'Data Import/Export',
     description: 'Bulk CSV operations',
     category: 'Admin',
-    requiredPermissions: [{ module: 'settings', action: 'write' }],
+    requiredPermissions: [{ module: 'settings', action: 'manage' }],
   },
   {
     path: '/custom-reports',
@@ -1454,14 +1454,14 @@ const PAGE_CATALOG = [
     label: 'CSP Violations',
     description: 'Content security policy logs',
     category: 'Security',
-    requiredPermissions: [{ module: 'settings', action: 'write' }],
+    requiredPermissions: [{ module: 'settings', action: 'manage' }],
   },
   {
     path: '/admin/embed-allowlist',
     label: 'Embed Allowlist',
     description: 'iframe embed permissions',
     category: 'Security',
-    requiredPermissions: [{ module: 'settings', action: 'write' }],
+    requiredPermissions: [{ module: 'settings', action: 'manage' }],
   },
   //  Additional Generic Routes 
   {

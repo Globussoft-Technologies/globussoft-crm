@@ -1,0 +1,26 @@
+.web-form-builder-generic .wf-field-picker-heading-with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.web-form-builder-generic .wf-field-picker-add-lead-field {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-color);
+  color: var(--primary-color, var(--accent-color));
+  cursor: pointer;
+}
+
+.web-form-builder-generic .wf-field-picker-add-lead-field:hover,
+.web-form-builder-generic .wf-field-picker-add-lead-field:focus-visible {
+  border-color: var(--primary-color, var(--accent-color));
+  background: var(--surface-hover);
+}

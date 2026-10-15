@@ -13,10 +13,10 @@ const csstree = require("css-tree");
 function sanitizeCustomCss(value) {
   const css = String(value == null ? "" : value).slice(0, MAX_CUSTOM_CSS_LENGTH);
 
-  // Reject escaped identifiers rather than interpreting different spellings
-  // differently in the server and browser. Ordinary presentation CSS needs
-  // neither escapes nor HTML markup.
-  if (/[\\<>]/.test(css)) return "";
+  // Parse CSS before inspecting it so valid syntax such as child combinators,
+  // comments, and escaped identifiers is handled by the CSS parser rather
+  // than rejected by a raw-text heuristic. Unsafe resource-loading constructs
+  // are removed from the parsed AST below.
   try {
     const ast = csstree.parse(css, {
       positions: false, parseCustomProperty: true,

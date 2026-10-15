@@ -148,7 +148,7 @@ import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
-import { getGenericAccessByPath } from "../utils/sidebarSearch";
+import { getGenericAccessByPath, isTenantPageHidden } from "../utils/sidebarSearch";
 // Branding refactor (2026-07-08): the sidebar shows exactly ONE logo, driven
 // by the fallback-resolved effective brand for the active sub-brand  never
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
@@ -665,6 +665,7 @@ const Sidebar = ({
     matchPaths = [],
     end = false,
   }) => {
+    if (isTenantPageHidden(to, hiddenPagePaths)) return null;
     const canonicalAccess = !isTravel && !isWellness
       ? getGenericAccessByPath(to)
       : null;
@@ -673,8 +674,11 @@ const Sidebar = ({
     const requiredPermission = canonicalAccess?.requiredPermission || requestedPermission;
     if (canonicalAccess?.hideForAdmin && isAdmin) return null;
     if (canonicalAccess?.userOnly && isManager) return null;
-    if (adminOnly && !isAdmin) return null;
-    if (managerOnly && !isManager) return null;
+    // Explicit permission grants are authoritative. The role flags are kept
+    // only for legacy links that do not yet have a catalog permission.
+    const hasConfiguredPermission = Boolean(requiredPermission);
+    if (!hasConfiguredPermission && adminOnly && !isAdmin) return null;
+    if (!hasConfiguredPermission && managerOnly && !isManager) return null;
     // wellnessRoles gates a link to specific wellnessRole values. Managers
     // and admins always pass through (mirrors the server's verifyWellnessRole
     // gate which whitelists admin/manager alongside the named clinical roles).
@@ -797,13 +801,16 @@ const Sidebar = ({
   // useMemo identity-stability dance as Link so React doesn't unmount /
   // remount the subtree on every re-render.
   const wouldLinkRender = ({
+    to,
     adminOnly,
     managerOnly,
     wellnessRoles: linkWellnessRoles,
     requiredPermission,
   }) => {
-    if (adminOnly && !isAdmin) return false;
-    if (managerOnly && !isManager) return false;
+    if (isTenantPageHidden(to, hiddenPagePaths)) return false;
+    const hasConfiguredPermission = Boolean(requiredPermission);
+    if (!hasConfiguredPermission && adminOnly && !isAdmin) return false;
+    if (!hasConfiguredPermission && managerOnly && !isManager) return false;
     if (
       linkWellnessRoles &&
       !isManager &&
@@ -934,6 +941,7 @@ const Sidebar = ({
   //     (RolesAdmin, the assign-roles flow on Staff, etc.) and wants
   //     the sidebar to pick up the change immediately
   const [accessiblePages, setAccessiblePages] = useState([]);
+  const [hiddenPagePaths, setHiddenPagePaths] = useState([]);
   // Permissions from the shared usePermissions hook. Stable key avoids
   // re-fetching on every render  only when the actual permission set
   // changes (different membership, not same content).
@@ -945,10 +953,12 @@ const Sidebar = ({
         .then((res) => {
           if (cancelled) return;
           setAccessiblePages(Array.isArray(res?.pages) ? res.pages : []);
+          setHiddenPagePaths(Array.isArray(res?.hiddenPaths) ? res.hiddenPaths : []);
         })
         .catch(() => {
           if (cancelled) return;
           setAccessiblePages([]);
+          setHiddenPagePaths([]);
         });
     };
     refresh();
@@ -1288,6 +1298,7 @@ const Sidebar = ({
                 isMobileViewport,
                 openGenericGroup,
                 onOpenGenericGroup: setOpenGenericGroup,
+                hiddenPagePaths,
               })}
         </nav>
       </aside>
@@ -1774,6 +1785,7 @@ function renderWellnessNav({
   for (const page of accessiblePages) {
     if (!page || !page.category || !page.path) continue;
     if (hiddenSidebarPaths.has(page.path)) continue;
+    if (isCustomerTier && page.path === "/wellness/invoices") continue;
     if (page.hideForAdminTier && isAdmin) continue;
     // customerOnly pages (e.g. Buy Gift Cards storefront) only surface to
     // customer-tier roles (USER / CUSTOMER). Admin / manager / staff don't
@@ -2285,7 +2297,7 @@ function renderTravelNav({
 
       {group("Sales", ["/leads", "/travel/pipeline", "/contacts", "/travel/quotes-admin", "/travel/flights/quote", "/travel/quotes/builder", "/travel/quote-templates"], <>
         <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
-        <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+        {/* <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} /> */}
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         {activeSubBrand !== "tmc" && <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />}
         {activeSubBrand !== "tmc" && <Link to="/travel/flights/quote" icon={Plane} label="Flight Quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />}
@@ -2328,7 +2340,7 @@ function renderTravelNav({
       {group("Finance", ["/travel/invoices-admin", "/travel/tally", "/travel/milestones", "/travel/payables", "/payments", "/expenses", "/travel/cost-master", "/travel/pricing-rules"], <>
         <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
         <Link to="/travel/tally" icon={Calculator} label="Tally" requiredPermission={{ module: "invoices", action: "export" }} />
-        <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
+        {/* <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} /> */}
         <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
         <Link to="/payments" icon={IndianRupee} label="Payments Received" requiredPermission={{ module: "payments", action: "read" }} />
         <Link to="/expenses" icon={WalletIcon} label="Expense Management" requiredPermission={{ module: "expenses", action: "read" }} />
@@ -2336,10 +2348,11 @@ function renderTravelNav({
         <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" requiredPermission={{ module: "pricing", action: "manage" }} />
       </>)}
 
-      {group("Administration", ["/staff", "/settings/roles", "/audit-log"], <>
+      {group("Administration", ["/staff", "/settings/roles", "/audit-log", "/travel/reports"], <>
         <Link to="/staff" icon={UsersRound} label="Staff" requiredPermission={{ module: "staff", action: "read" }} />
         <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
         <Link to="/audit-log" icon={ScrollText} label="Audit Log" requiredPermission={{ module: "audit", action: "read" }} />
+        <Link to="/travel/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
       </>)}
 
       {group("Platform", ["/developer", "/privacy"], <>
@@ -2621,6 +2634,7 @@ function renderGenericNav({
   isMobileViewport = false,
   openGenericGroup = null,
   onOpenGenericGroup = () => { },
+  hiddenPagePaths = [],
 }) {
   const isTransportPerson = roles.some((value) => {
     const token = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2653,14 +2667,16 @@ function renderGenericNav({
     </>;
   }
   const canRenderLink = (props) => {
+    if (isTenantPageHidden(props.to, hiddenPagePaths)) return false;
     const canonical = getGenericAccessByPath(props.to);
     const adminOnly = canonical ? Boolean(canonical.adminOnly) : props.adminOnly;
     const managerOnly = canonical ? Boolean(canonical.managerOnly) : props.managerOnly;
     const requiredPermission = canonical?.requiredPermission || props.requiredPermission;
     if (canonical?.hideForAdmin && isAdmin) return false;
     if (canonical?.userOnly && isManager) return false;
-    if (adminOnly && !isAdmin) return false;
-    if (managerOnly && !isManager) return false;
+    const hasConfiguredPermission = Boolean(requiredPermission);
+    if (!hasConfiguredPermission && adminOnly && !isAdmin) return false;
+    if (!hasConfiguredPermission && managerOnly && !isManager) return false;
     if (
       requiredPermission &&
       (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
@@ -2710,7 +2726,7 @@ function renderGenericNav({
           their nav focused. Mirrors the catalog-level hideForAdminTier
           flag used by the wellness sidebar. */}
       {!isAdmin && <Link to="/home" end icon={LayoutDashboard} label="Home" />}
-      <Link to="/dashboard" end icon={LayoutDashboard} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
+      <Link to="/dashboard" end icon={LayoutDashboard} label="Dashboard" requiredPermission={{ module: "dashboards", action: "read" }} />
       {/* AdsGPT + Callified are marketing / call-centre integrations
           intended for ADMIN + MANAGER only. Mirrors the same gate in the
           wellness sidebar; keep both branches in sync. */}
@@ -2758,7 +2774,7 @@ function renderGenericNav({
         <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
         <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/marketing" icon={Send} label="Marketing Campaign" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
-        <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "sequences", action: "read" }} />
+        <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} />
         <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
         <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
@@ -2783,7 +2799,7 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Analytics & Reports", <>
-        <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
+        <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
         <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly requiredPermission={{ module: "pipeline", action: "read" }} />
         <Link to="/reports" icon={BarChart3} label="Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
         <Link to="/agent-reports" icon={Trophy} label="Agent Reports" managerOnly />

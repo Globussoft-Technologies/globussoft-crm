@@ -1,7 +1,7 @@
 export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel', label: 'Dashboard' },
   { path: '/leads', label: 'Leads' },
-  { path: '/travel/pipeline', label: 'Pipeline' },
+  // { path: '/travel/pipeline', label: 'Pipeline' },
   { path: '/contacts', label: 'Contacts' },
   { path: '/travel/diagnostics', label: 'Diagnostics' },
   { path: '/travel/trip-knowledge', label: 'Travel Knowledge', description: 'Travel knowledge base admin' },
@@ -38,7 +38,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/gmail', label: 'Gmail' },
   { path: '/travel/invoices-admin', label: 'Invoices' },
   { path: '/travel/tally', label: 'Tally', description: 'Tally accounting, XML and CA exports' },
-  { path: '/travel/milestones', label: 'Milestones' },
+  // { path: '/travel/milestones', label: 'Milestones' },
   { path: '/travel/payables', label: 'Payables' },
   { path: '/payments', label: 'Payments Received' },
   { path: '/expenses', label: 'Expense Management' },
@@ -114,7 +114,7 @@ const TRAVEL_PAGE_ALIASES = {
 
 export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/home', label: 'Home', description: 'Role-aware widget dashboard', hideForAdmin: true },
-  { path: '/dashboard', label: 'Dashboard', description: 'Enterprise overview', requiredPermission: { module: 'reports', action: 'read' } },
+  { path: '/dashboard', label: 'Dashboard', description: 'Enterprise overview', requiredPermission: { module: 'dashboards', action: 'read' } },
   { path: '/inbox', label: 'Inbox', description: 'Unified inbox', requiredPermission: { module: 'communications', action: 'read' } },
   { path: '/contacts', label: 'Contacts', description: 'Contact directory', requiredPermission: { module: 'contacts', action: 'read' } },
   { path: '/pipeline', label: 'Pipeline', description: 'Deal pipeline by stage', requiredPermission: { module: 'pipeline', action: 'read' } },
@@ -149,8 +149,8 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/custom-reports', label: 'Custom Reports', description: 'Build custom data reports', managerOnly: true },
   { path: '/approvals', label: 'Approvals', description: 'Pending approvals queue', managerOnly: true },
   { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
-  { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, parent: 'Team & Territories' },
-  { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, parent: 'Team & Territories' },
+  { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, requiredPermission: { module: 'territories', action: 'read' }, parent: 'Team & Territories' },
+  { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, requiredPermission: { module: 'staff', action: 'manage' }, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing', description: 'One-shot marketing campaigns', managerOnly: true },
   { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true },
   { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true },
@@ -163,30 +163,30 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/payments', label: 'Payments', description: 'Payment history + gateway transactions', managerOnly: true },
   { path: '/lead-scoring', label: 'Lead Scoring', description: 'Lead qualification engine', managerOnly: true },
   { path: '/cpq', label: 'CPQ', description: 'Configure price quote engine', managerOnly: true },
-  { path: '/staff', label: 'Staff', description: 'Team management', adminOnly: true },
+  { path: '/staff', label: 'Staff', description: 'Team management', adminOnly: true, requiredPermission: { module: 'staff', action: 'manage' } },
   { path: '/settings/roles', label: 'Roles', description: 'RBAC roles + permissions matrix', requiredPermission: { module: 'roles', action: 'read' } },
-  { path: '/audit-log', label: 'Audit Log', description: 'Compliance audit trail', adminOnly: true },
+  { path: '/audit-log', label: 'Audit Log', description: 'Compliance audit trail', adminOnly: true, requiredPermission: { module: 'audit', action: 'read' } },
   { path: '/pickup-plot-inventory', label: 'Pickup & Plot Inventory', description: 'Manage pickup locations and available plots or sites', adminOnly: true },
   { path: '/pickup-inventory', label: 'Pickup Inventory', description: 'View pickup-address capacity, assignments, dates, and map locations', adminOnly: true },
   { path: '/transport-persons', label: 'Transport Persons', description: 'Manage drivers, vehicles, and pickup-location assignments', adminOnly: true },
   { path: '/plot-brokers', label: 'Sales Executives', description: 'Manage sales executive contacts, commissions, site visits, and plot assignments', adminOnly: true },
   { path: '/billing-persons', label: 'Billing Persons', description: 'Manage billing staff, customers, and plot assignments', adminOnly: true },
   { path: '/pickup-customers', label: 'Customer Workflows', description: 'Track pickup and plot workflows including converted customers', adminOnly: true },
-  { path: '/privacy', label: 'Privacy', description: 'GDPR / DSAR retention controls', adminOnly: true },
-  { path: '/field-permissions', label: 'Field Permissions', description: 'Field-level access control', adminOnly: true },
-  { path: '/admin/csp-violations', label: 'CSP Violations', description: 'Content security policy logs', adminOnly: true },
-  { path: '/admin/embed-allowlist', label: 'Embed Allowlist', description: 'iframe embed permissions', adminOnly: true },
+  { path: '/privacy', label: 'Privacy', description: 'GDPR / DSAR retention controls', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
+  { path: '/field-permissions', label: 'Field Permissions', description: 'Field-level access control', adminOnly: true, requiredPermission: { module: 'field_permissions', action: 'read' } },
+  { path: '/admin/csp-violations', label: 'CSP Violations', description: 'Content security policy logs', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
+  { path: '/admin/embed-allowlist', label: 'Embed Allowlist', description: 'iframe embed permissions', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
   { path: '/admin/status', label: 'Status', description: 'Platform status admin', adminOnly: true },
-  { path: '/commission-profiles', label: 'Commission Profiles', description: 'Commission rule configuration', adminOnly: true },
-  { path: '/commission-data', label: 'Commission Data', description: 'Commission analytics', adminOnly: true },
+  { path: '/commission-profiles', label: 'Commission Profiles', description: 'Commission rule configuration', adminOnly: true, requiredPermission: { module: 'staff', action: 'manage' } },
+  { path: '/commission-data', label: 'Commission Data', description: 'Commission analytics', adminOnly: true, requiredPermission: { module: 'payments', action: 'read' } },
   { path: '/revenue-goals', label: 'Revenue Goals', description: 'Revenue target configuration' },
-  { path: '/channels', label: 'Channels', description: 'SMS, WhatsApp, and call channel config', adminOnly: true },
-  { path: '/industry-templates', label: 'Industry Templates', description: 'Pre-built workflow templates', adminOnly: true },
-  { path: '/sandbox', label: 'Sandbox', description: 'Testing + feature preview', adminOnly: true },
-  { path: '/objects', label: 'App Builder', description: 'Create custom data models', adminOnly: true },
-  { path: '/currencies', label: 'Currencies', description: 'Multi-currency configuration', adminOnly: true },
-  { path: '/zapier', label: 'Zapier', description: 'Third-party automation hub', adminOnly: true },
-  { path: '/developer', label: 'Developers', description: 'API + webhook console', adminOnly: true },
+  { path: '/channels', label: 'Channels', description: 'SMS, WhatsApp, and call channel config', adminOnly: true, requiredPermission: { module: 'integrations', action: 'manage' } },
+  { path: '/industry-templates', label: 'Industry Templates', description: 'Pre-built workflow templates', adminOnly: true, requiredPermission: { module: 'settings', action: 'read' } },
+  { path: '/sandbox', label: 'Sandbox', description: 'Testing + feature preview', adminOnly: true, requiredPermission: { module: 'sandbox', action: 'read' } },
+  { path: '/objects', label: 'App Builder', description: 'Create custom data models', adminOnly: true, requiredPermission: { module: 'custom_objects', action: 'read' } },
+  { path: '/currencies', label: 'Currencies', description: 'Multi-currency configuration', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
+  { path: '/zapier', label: 'Zapier', description: 'Third-party automation hub', adminOnly: true, requiredPermission: { module: 'integrations', action: 'read' } },
+  { path: '/developer', label: 'Developers', description: 'API + webhook console', adminOnly: true, requiredPermission: { module: 'developer', action: 'read' } },
   { path: '/data-import-export', label: 'Import / Export', description: 'Bulk CSV operations', managerOnly: true },
   { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', requiredPermission: { module: 'settings', action: 'read' } },
   { path: '/notification-settings', label: 'Notification Settings', description: 'Personal notification preferences', userOnly: true },
@@ -204,18 +204,18 @@ const GENERIC_PAGE_PERMISSION_FALLBACK = {
   '/pipelines': ['pipeline', 'write'],
   '/forecasting': ['forecasting', 'read'],
   '/quotas': ['quotas', 'read'],
-  '/win-loss': ['reports', 'read'],
+  '/win-loss': ['analytics', 'read'],
   '/funnel': ['pipeline', 'read'],
   '/reports': ['reports', 'read'],
   '/agent-reports': ['reports', 'read'],
   '/dashboards': ['dashboards', 'read'],
-  '/custom-reports': ['reports', 'read'],
+  '/custom-reports': ['reports', 'write'],
   '/approvals': ['staff', 'manage'],
   '/lead-routing': ['leads', 'read'],
   '/lead-scoring': ['lead_scoring', 'read'],
   '/lead-reports': ['reports', 'read'],
   '/marketing': ['marketing', 'read'],
-  '/sequences': ['sequences', 'read'],
+  '/sequences': ['marketing', 'read'],
   '/ab-tests': ['ab_tests', 'read'],
   '/web-visitors': ['analytics', 'read'],
   '/chatbots': ['chatbots', 'read'],
@@ -286,11 +286,14 @@ export function getGenericAccessForLocation(pathname) {
 export function genericRoleGuardProps(path) {
   const access = getGenericAccessByPath(path);
   if (!access) return {};
+  // A configured permission is the canonical access contract. Legacy role
+  // flags remain only for pages that have not yet been migrated to RBAC.
+  const hasConfiguredPermission = Boolean(access.requiredPermission);
   return {
-    ...(access.adminOnly ? { allow: ['ADMIN'] } : {}),
-    ...(access.managerOnly ? { allow: ['ADMIN', 'MANAGER'] } : {}),
-    ...(access.userOnly ? { allow: ['USER'] } : {}),
     ...(access.requiredPermission ? { requiredPermission: access.requiredPermission } : {}),
+    ...(!hasConfiguredPermission && access.adminOnly ? { allow: ['ADMIN'] } : {}),
+    ...(!hasConfiguredPermission && access.managerOnly ? { allow: ['ADMIN', 'MANAGER'] } : {}),
+    ...(!hasConfiguredPermission && access.userOnly ? { allow: ['USER'] } : {}),
   };
 }
 const TRAVEL_SIDEBAR_PAGE_MAP = new Map(
@@ -308,20 +311,30 @@ const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
   '/gmail',
 ]);
 
+export function isTenantPageHidden(path, hiddenPagePaths = []) {
+  if (!path || !Array.isArray(hiddenPagePaths)) return false;
+  return hiddenPagePaths.some(
+    (hiddenPath) => path === hiddenPath || path.startsWith(`${hiddenPath}/`),
+  );
+}
+
 export function canUseGenericSidebarPage(page, {
   isAdmin = false,
   isManager = false,
   permissionsReady = false,
   hasPermission = () => false,
+  hiddenPagePaths = [],
 } = {}) {
-  if (page.adminOnly && !isAdmin) return false;
-  if (page.managerOnly && !isManager) return false;
-  if (page.hideForAdmin && isAdmin) return false;
-  if (page.userOnly && (isAdmin || isManager)) return false;
+  if (isTenantPageHidden(page?.path, hiddenPagePaths)) return false;
   const fallbackPermission = page.path ? GENERIC_PAGE_PERMISSION_FALLBACK[page.path] : null;
   const requiredPermission = page.requiredPermission || (fallbackPermission
     ? { module: fallbackPermission[0], action: fallbackPermission[1] }
     : null);
+  const hasConfiguredPermission = Boolean(requiredPermission);
+  if (!hasConfiguredPermission && page.adminOnly && !isAdmin) return false;
+  if (!hasConfiguredPermission && page.managerOnly && !isManager) return false;
+  if (page.hideForAdmin && isAdmin) return false;
+  if (page.userOnly && (isAdmin || isManager)) return false;
   if (
     requiredPermission &&
     (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
@@ -377,14 +390,15 @@ function normalizeSubBrandAccess(value) {
 
 export function filterSidebarPages(
   pages,
-  { vertical = null, activeSubBrand = null, subBrandAccess = null } = {},
+  { vertical = null, activeSubBrand = null, subBrandAccess = null, hiddenPagePaths = [] } = {},
 ) {
   if (!Array.isArray(pages)) return [];
-  if (vertical !== 'travel') return pages.slice();
+  const tenantVisiblePages = pages.filter((page) => !isTenantPageHidden(page?.path, hiddenPagePaths));
+  if (vertical !== 'travel') return tenantVisiblePages;
 
   const normalizedSubBrandAccess = normalizeSubBrandAccess(subBrandAccess);
   const filtered = [];
-  for (const page of pages) {
+  for (const page of tenantVisiblePages) {
     const spec = TRAVEL_SIDEBAR_PAGE_MAP.get(page?.path);
     if (!spec) continue;
     // Mirror the travel sidebar's conditional links. TMC has no web

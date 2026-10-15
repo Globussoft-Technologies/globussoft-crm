@@ -14,6 +14,7 @@ import ScrollableSelect from '../components/ScrollableSelect';
 import InlineCellEditor from '../components/InlineCellEditor';
 import EditContactModal from '../components/EditContactModal';
 import { AuthContext } from '../App';
+import { usePermissions } from '../hooks/usePermissions';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
 
 const parseCSV = (text) => {
@@ -193,6 +194,9 @@ const Contacts = () => {
   const supportsLeadCustomFields = isGeneric || isTravel;
   const supportsColumnCustomization = isGeneric || isTravel;
   const isAdmin = user?.role === 'ADMIN';
+  const { hasPermission, isReady: permissionsReady } = usePermissions();
+  const canEditAssignedTo = permissionsReady &&
+    (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   // Bulk-select + bulk-assign — mirrors Leads.jsx exactly, same backend
   // endpoint (/api/contacts/bulk-assign), so this works unmodified across
   // all three verticals (generic/wellness/travel) with no gating beyond
@@ -231,7 +235,6 @@ const Contacts = () => {
       (s) => accessibleSubBrands(s).includes(contact.subBrand) || String(s.id) === String(contact.assignedToId),
     );
   };
-  const canEditAssignedTo = isAdmin || isTravel;
   const [rescoring, setRescoring] = useState(false);
   const [showDupes, setShowDupes] = useState(false);
   const [dupes, setDupes] = useState([]);
@@ -516,10 +519,16 @@ const Contacts = () => {
     fetchContacts();
   }, [fetchContacts]);
 
-  // Staff list is vertical-agnostic — fetch once on mount, not per page turn.
+  // Travel agents need real IDs to match the contact owner and submit a
+  // reassignment; the general staff directory masks IDs for their role.
   useEffect(() => {
-    fetchApi('/api/staff').then(data => setStaff(Array.isArray(data) ? data : [])).catch(() => {});
-  }, []);
+    let current = true;
+    const endpoint = isTravel && !isAdmin && canEditAssignedTo ? '/api/contacts/assignees' : '/api/staff';
+    fetchApi(endpoint)
+      .then(data => { if (current) setStaff(Array.isArray(data) ? data : []); })
+      .catch(() => { if (current) setStaff([]); });
+    return () => { current = false; };
+  }, [isTravel, isAdmin, canEditAssignedTo]);
 
   // If the total shrinks under the current page (records deleted elsewhere),
   // step back to the last valid page (mirrors Clients.jsx).
@@ -554,12 +563,23 @@ const Contacts = () => {
   }, [supportsLeadCustomFields]);
 
   const handleAssign = async (contactId, assignedToId) => {
-    await fetchApi(`/api/contacts/${contactId}/assign`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ assignedToId: assignedToId || null }),
-    });
-    fetchContacts();
+    try {
+      const updated = await fetchApi(`/api/contacts/${contactId}/assign`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignedToId: assignedToId || null }),
+      });
+      const ownerId = updated?.assignedToId ?? (assignedToId ? Number(assignedToId) : null);
+      const owner = updated?.assignedTo ?? staff.find((member) => String(member.id) === String(ownerId)) ?? null;
+      setContacts((rows) => rows.map((contact) => contact.id === contactId
+        ? { ...contact, assignedToId: ownerId, assignedTo: owner }
+        : contact));
+      notify.success(ownerId ? `Assigned to ${owner?.name || owner?.email || 'staff member'}` : 'Assignment cleared');
+      if (assignedToFilter) fetchContacts();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to assign contact');
+      fetchContacts();
+    }
   };
 
   const handleBulkAssign = async () => {
@@ -1285,6 +1305,11 @@ const Contacts = () => {
                 }}
               >
                 <option value="">Unassigned</option>
+                {contact.assignedToId && !assignableStaff(contact).some((s) => String(s.id) === String(contact.assignedToId)) && (
+                  <option value={contact.assignedToId}>
+                    {contact.assignedTo?.name || contact.assignedTo?.email || `Staff #${contact.assignedToId}`}
+                  </option>
+                )}
                 {assignableStaff(contact).map((s) => (
                   <option key={s.id} value={s.id}>
                     {staffOptionLabel(s)}

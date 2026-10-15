@@ -113,7 +113,13 @@ function renderSettings({ authValue } = {}) {
       <Settings />
     </MemoryRouter>
   );
-  return render(authValue ? <AuthContext.Provider value={authValue}>{page}</AuthContext.Provider> : page);
+  return render(
+    authValue ? (
+      <AuthContext.Provider value={authValue}>{page}</AuthContext.Provider>
+    ) : (
+      page
+    ),
+  );
 }
 
 const baseTenant = {
@@ -181,7 +187,15 @@ function buildDefaultFetch(overrides = {}) {
       return Promise.resolve(prefs);
     if (url === "/api/wellness/consent-templates") return Promise.resolve([]);
     if (url === "/api/travel/email-provider" && method === "GET")
-      return Promise.resolve({ configured: false, source: "backend", fallback: { configured: true, fromEmail: "noreply@crm.test", fromName: "" } });
+      return Promise.resolve({
+        configured: false,
+        source: "backend",
+        fallback: {
+          configured: true,
+          fromEmail: "noreply@crm.test",
+          fromName: "",
+        },
+      });
     return Promise.resolve([]);
   };
 }
@@ -227,6 +241,107 @@ describe("<Settings /> — page shell + representative card pin", () => {
     );
   });
 
+  it("lists the Generic CRM lead-tracking cookie keys below reCAPTCHA", async () => {
+    renderSettings({
+      authValue: {
+        tenant: baseTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+
+    const recaptchaHeading = await screen.findByRole("heading", {
+      name: "Web Form reCAPTCHA",
+    });
+    const trackingCard = screen.getByTestId(
+      "generic-web-form-automatic-tracking",
+    );
+    expect(trackingCard).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Cookie Setup Required" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/add these keys to the page url/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("utm_source")).toBeInTheDocument();
+    expect(screen.getByText("utm_medium")).toBeInTheDocument();
+    expect(screen.getByText("utm_campaign")).toBeInTheDocument();
+    expect(screen.getByText("utm_term")).toBeInTheDocument();
+    expect(screen.getByText("utm_content")).toBeInTheDocument();
+    expect(screen.getByText("gclid")).toBeInTheDocument();
+    expect(screen.getByText("fbclid")).toBeInTheDocument();
+    expect(screen.getByText("fbc")).toBeInTheDocument();
+    expect(screen.getByText("fbp")).toBeInTheDocument();
+    expect(screen.queryByText("gbs_utm_source")).not.toBeInTheDocument();
+    expect(screen.queryByText("gbs_landing_url")).not.toBeInTheDocument();
+    expect(screen.queryByText("gbs_landing_title")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/fetched automatically and do not need cookie keys/i),
+    ).toBeInTheDocument();
+    expect(
+      recaptchaHeading.closest(".card").compareDocumentPosition(trackingCard) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("does not show Generic CRM tracking cookie keys for travel tenants", async () => {
+    const travelTenant = { ...baseTenant, vertical: "travel" };
+    fetchApiMock.mockImplementation(
+      buildDefaultFetch({ tenant: travelTenant }),
+    );
+
+    renderSettings({
+      authValue: {
+        tenant: travelTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+
+    await screen.findByText(
+      /Configure Google reCAPTCHA v2 checkbox keys for Travel web forms/i,
+    );
+    expect(
+      screen.queryByTestId("generic-web-form-automatic-tracking"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the Generic WhatsApp configuration together as one settings card", async () => {
+    renderSettings({
+      authValue: {
+        tenant: baseTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+
+    const heading = await screen.findByRole("heading", {
+      name: /WhatsApp \/ Meta Configuration/i,
+    });
+    const card = heading.closest(".card");
+    expect(card).toBeInTheDocument();
+    expect(card?.parentElement).toHaveClass("settings-grid");
+  });
+
+  it("explains that web form reCAPTCHA requires a v2 checkbox key pair", () => {
+    renderSettings({
+      authValue: {
+        tenant: baseTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+
+    expect(
+      screen.getByText(/matching Site Key and Secret Key from the same/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /v3 score-based, invisible, Android, and Enterprise keys/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("keeps Callified fallback credentials blank and opts out of login autofill", async () => {
     const defaultFetch = buildDefaultFetch();
     fetchApiMock.mockImplementation((url, opts) => {
@@ -267,20 +382,31 @@ describe("<Settings /> — page shell + representative card pin", () => {
           baseUrl: "https://old.callified.example.com",
         });
       }
-      if (url === "/api/integrations/callified/config" && opts?.method === "PUT") {
+      if (
+        url === "/api/integrations/callified/config" &&
+        opts?.method === "PUT"
+      ) {
         return Promise.resolve({ success: true, isActive: true });
       }
       return defaultFetch(url, opts);
     });
 
     renderSettings();
-    const baseUrl = await screen.findByDisplayValue("https://old.callified.example.com");
-    fireEvent.change(baseUrl, { target: { value: "https://new.callified.example.com" } });
-    fireEvent.click(screen.getByRole("button", { name: /Update Configuration/i }));
+    const baseUrl = await screen.findByDisplayValue(
+      "https://old.callified.example.com",
+    );
+    fireEvent.change(baseUrl, {
+      target: { value: "https://new.callified.example.com" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Update Configuration/i }),
+    );
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === "/api/integrations/callified/config" && opts?.method === "PUT",
+        ([url, opts]) =>
+          url === "/api/integrations/callified/config" &&
+          opts?.method === "PUT",
       );
       expect(call).toBeDefined();
       const body = JSON.parse(call[1].body);
@@ -295,11 +421,21 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const travelTenant = { ...baseTenant, vertical: "travel" };
     const defaultFetch = buildDefaultFetch({ tenant: travelTenant });
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === "/api/travel/promotional-website" && (!opts || !opts.method || opts.method === "GET")) {
+      if (
+        url === "/api/travel/promotional-website" &&
+        (!opts || !opts.method || opts.method === "GET")
+      ) {
         return Promise.resolve({
           websiteUrl: "https://client.example.com",
           configured: true,
-          sftp: { protocol: "sftp", host: "sftp.client.example.com", port: 22, username: "deploy", hostKeyFingerprint: `SHA256:${"A".repeat(43)}`, remotePath: "/" },
+          sftp: {
+            protocol: "sftp",
+            host: "sftp.client.example.com",
+            port: 22,
+            username: "deploy",
+            hostKeyFingerprint: `SHA256:${"A".repeat(43)}`,
+            remotePath: "/",
+          },
         });
       }
       if (url === "/api/travel/promotional-website" && opts?.method === "PUT") {
@@ -314,42 +450,68 @@ describe("<Settings /> — page shell + representative card pin", () => {
     });
 
     renderSettings({
-      authValue: { tenant: travelTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+      authValue: {
+        tenant: travelTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
     });
 
-    await waitFor(() => expect(screen.getByTestId("travel-promotional-website-card")).toBeInTheDocument());
-    expect(screen.getByDisplayValue("https://client.example.com")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("travel-promotional-website-card"),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByDisplayValue("https://client.example.com"),
+    ).toBeInTheDocument();
     expect(screen.getByDisplayValue("/")).toBeInTheDocument();
     expect(screen.getByLabelText("Transfer protocol")).toHaveValue("sftp");
-    expect(screen.getByLabelText("SSH host key fingerprint")).toHaveValue(`SHA256:${"A".repeat(43)}`);
-    expect(screen.getByText(/New publishes will sync automatically/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("SSH host key fingerprint")).toHaveValue(
+      `SHA256:${"A".repeat(43)}`,
+    );
+    expect(
+      screen.getByText(/New publishes will sync automatically/i),
+    ).toBeInTheDocument();
 
     const host = screen.getByLabelText("Host");
     await user.clear(host);
     await user.type(host, "sftp.updated.example.com");
-    await user.click(screen.getByRole("button", { name: /Save Hosting Settings/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Save Hosting Settings/i }),
+    );
 
     await waitFor(() => {
       const save = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === "/api/travel/promotional-website" && opts?.method === "PUT",
+        ([url, opts]) =>
+          url === "/api/travel/promotional-website" && opts?.method === "PUT",
       );
       expect(save).toBeTruthy();
       expect(JSON.parse(save[1].body)).toMatchObject({
         websiteUrl: "https://client.example.com",
-        sftp: { protocol: "sftp", host: "sftp.updated.example.com", hostKeyFingerprint: `SHA256:${"A".repeat(43)}`, remotePath: "/" },
+        sftp: {
+          protocol: "sftp",
+          host: "sftp.updated.example.com",
+          hostKeyFingerprint: `SHA256:${"A".repeat(43)}`,
+          remotePath: "/",
+        },
       });
     });
 
-    await user.click(screen.getByRole("button", { name: /Test Transfer Connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Test Transfer Connection/i }),
+    );
     await waitFor(() => {
       const testCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === "/api/travel/promotional-website/test" && opts?.method === "POST",
+        ([url, opts]) =>
+          url === "/api/travel/promotional-website/test" &&
+          opts?.method === "POST",
       );
       expect(testCall).toBeTruthy();
       expect(JSON.parse(testCall[1].body).sftp).toMatchObject({
         protocol: "sftp",
         host: "sftp.updated.example.com",
-         remotePath: "/",
+        remotePath: "/",
       });
     });
   });
@@ -359,7 +521,10 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const travelTenant = { ...baseTenant, vertical: "travel" };
     const defaultFetch = buildDefaultFetch({ tenant: travelTenant });
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === "/api/travel/email-provider" && (!opts || !opts.method || opts.method === "GET")) {
+      if (
+        url === "/api/travel/email-provider" &&
+        (!opts || !opts.method || opts.method === "GET")
+      ) {
         return Promise.resolve({
           configured: true,
           source: "tenant",
@@ -371,29 +536,64 @@ describe("<Settings /> — page shell + representative card pin", () => {
       }
       if (url === "/api/travel/email-provider" && opts?.method === "PUT") {
         const body = JSON.parse(opts.body);
-        return Promise.resolve({ configured: true, source: "tenant", ...body, apiKeyLast4: "****5678" });
+        return Promise.resolve({
+          configured: true,
+          source: "tenant",
+          ...body,
+          apiKeyLast4: "****5678",
+        });
       }
       return defaultFetch(url, opts);
     });
 
-    renderSettings({ authValue: { tenant: travelTenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    renderSettings({
+      authValue: {
+        tenant: travelTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
 
-    await waitFor(() => expect(screen.getByTestId("travel-email-provider-card")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("travel-email-provider-card"),
+      ).toBeInTheDocument(),
+    );
     expect(screen.getByLabelText("SendGrid API key")).toHaveValue("");
-    expect(screen.getByLabelText("SendGrid API key")).toHaveAttribute("type", "password");
-    expect(screen.getByLabelText("Verified sender email")).toHaveValue("bookings@travel.test");
+    expect(screen.getByLabelText("SendGrid API key")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(screen.getByLabelText("Verified sender email")).toHaveValue(
+      "bookings@travel.test",
+    );
     expect(screen.getByLabelText("Sender name")).toHaveValue("Acme Travel");
 
-    await user.type(screen.getByLabelText("SendGrid API key"), "SG.updated.key5678");
+    await user.type(
+      screen.getByLabelText("SendGrid API key"),
+      "SG.updated.key5678",
+    );
     await user.clear(screen.getByLabelText("Verified sender email"));
-    await user.type(screen.getByLabelText("Verified sender email"), "hello@acmetrips.test");
+    await user.type(
+      screen.getByLabelText("Verified sender email"),
+      "hello@acmetrips.test",
+    );
     await user.click(screen.getByRole("button", { name: "Update SendGrid" }));
 
     await waitFor(() => {
-      const save = fetchApiMock.mock.calls.find(([url, opts]) => url === "/api/travel/email-provider" && opts?.method === "PUT");
-      expect(JSON.parse(save[1].body)).toEqual({ apiKey: "SG.updated.key5678", fromEmail: "hello@acmetrips.test", fromName: "Acme Travel" });
+      const save = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          url === "/api/travel/email-provider" && opts?.method === "PUT",
+      );
+      expect(JSON.parse(save[1].body)).toEqual({
+        apiKey: "SG.updated.key5678",
+        fromEmail: "hello@acmetrips.test",
+        fromName: "Acme Travel",
+      });
     });
-    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/Travel SendGrid settings saved/i));
+    expect(notifyObj.success).toHaveBeenCalledWith(
+      expect.stringMatching(/Travel SendGrid settings saved/i),
+    );
   });
 
   it("switches the transfer form to FTP and uses port 21", async () => {
@@ -401,23 +601,44 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const travelTenant = { ...baseTenant, vertical: "travel" };
     const defaultFetch = buildDefaultFetch({ tenant: travelTenant });
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === "/api/travel/promotional-website" && (!opts || !opts.method || opts.method === "GET")) {
-        return Promise.resolve({ websiteUrl: "", configured: false, sftp: { protocol: "sftp", port: 22, remotePath: "/" } });
+      if (
+        url === "/api/travel/promotional-website" &&
+        (!opts || !opts.method || opts.method === "GET")
+      ) {
+        return Promise.resolve({
+          websiteUrl: "",
+          configured: false,
+          sftp: { protocol: "sftp", port: 22, remotePath: "/" },
+        });
       }
       return defaultFetch(url, opts);
     });
 
     renderSettings({
-      authValue: { tenant: travelTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+      authValue: {
+        tenant: travelTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
     });
 
-    await waitFor(() => expect(screen.getByTestId("travel-promotional-website-card")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("travel-promotional-website-card"),
+      ).toBeInTheDocument(),
+    );
     await user.selectOptions(screen.getByLabelText("Transfer protocol"), "ftp");
     expect(screen.getByLabelText("Port")).toHaveValue(21);
-    expect(screen.queryByLabelText("Private key (optional)")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Existing website directory/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Private key (optional)"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(/Existing website directory/i),
+    ).not.toBeInTheDocument();
     expect(screen.getByText(/No remote path is used/i)).toBeInTheDocument();
-    expect(screen.getByText(/FTP sends credentials without TLS/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/FTP sends credentials without TLS/i),
+    ).toBeInTheDocument();
   });
 
   // 3 — Organization card renders inputs
@@ -466,17 +687,28 @@ describe("<Settings /> — page shell + representative card pin", () => {
 
   it("saves organization details when the blank review redirect has no override", async () => {
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === "/api/tenant-settings/travel.externalReviewUrl" && opts?.method === "DELETE") {
-        return Promise.reject(Object.assign(new Error("Tenant setting not found"), { status: 404 }));
+      if (
+        url === "/api/tenant-settings/travel.externalReviewUrl" &&
+        opts?.method === "DELETE"
+      ) {
+        return Promise.reject(
+          Object.assign(new Error("Tenant setting not found"), { status: 404 }),
+        );
       }
       return buildDefaultFetch()(url, opts);
     });
 
     renderSettings();
     await screen.findByDisplayValue("Acme Corp");
-    fireEvent.click(screen.getByRole("button", { name: /Save Organization Details/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Save Organization Details/i }),
+    );
 
-    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith("Organization details updated"));
+    await waitFor(() =>
+      expect(notifyObj.success).toHaveBeenCalledWith(
+        "Organization details updated",
+      ),
+    );
     expect(fetchApiMock).toHaveBeenCalledWith(
       "/api/tenant-settings/travel.externalReviewUrl",
       expect.objectContaining({ method: "DELETE", silent: true }),
@@ -488,8 +720,9 @@ describe("<Settings /> — page shell + representative card pin", () => {
   it("renders the three theme options under the Appearance card and clicking one calls setTheme + notify.success", async () => {
     const user = userEvent.setup();
     renderSettings();
-    expect(screen.getByRole("heading", { name: "Appearance" }).closest(".card"))
-      .toHaveAttribute("data-tour", "settings-appearance");
+    expect(
+      screen.getByRole("heading", { name: "Appearance" }).closest(".card"),
+    ).toHaveAttribute("data-tour", "settings-appearance");
     await waitFor(() =>
       expect(screen.getByText("Light mode")).toBeInTheDocument(),
     );
@@ -636,7 +869,9 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(screen.getByDisplayValue("Acme Corp")).toBeInTheDocument(),
     );
     expect(
-      screen.queryByRole("heading", { name: /WhatsApp \/ Meta Configuration/i }),
+      screen.queryByRole("heading", {
+        name: /WhatsApp \/ Meta Configuration/i,
+      }),
     ).not.toBeInTheDocument();
   });
 

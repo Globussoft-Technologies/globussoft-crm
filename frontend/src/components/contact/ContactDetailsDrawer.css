@@ -42,6 +42,13 @@
 .cd-toggle input:checked + span::after { transform: translateX(11px); }
 .cd-all-details { padding: 0 0 1rem; }
 .cd-all-details h4 { margin: 0 0 0.8rem; font-size: 0.85rem; }
+.cd-generic-sections { border-top: 1px solid var(--border-color); }
+.cd-detail-section { padding: 0 0.75rem; border-bottom: 1px solid var(--border-color); }
+.cd-detail-section.is-open { padding-bottom: 1rem; }
+.cd-detail-section > h4 { margin: 0 -0.75rem; background: var(--subtle-bg); color: var(--text-primary); font-size: 0.8rem; }
+.cd-detail-section.is-open > h4 { margin-bottom: 0.8rem; }
+.cd-detail-section-toggle { display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.7rem 0.75rem; border: none; background: transparent; color: inherit; cursor: pointer; text-align: left; font: inherit; font-weight: 600; }
+.cd-detail-section .cd-basic-grid { padding: 0.15rem 0; }
 .cd-tags { display: flex; align-items: center; gap: 0.45rem; color: var(--text-secondary); font-size: 0.75rem; }
 .cd-tag-values { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .cd-tag-manager { position: relative; align-items: flex-start; }

@@ -265,6 +265,39 @@ describe("Leads split-table surface contract", () => {
     expect(css).toMatch(/table\.leads-table\s*\{[^}]*background-color:\s*var\(--surface-color\)/s);
     expect(css).toMatch(/table\.leads-table\s+th,\s*table\.leads-table\s+td\s*\{[^}]*background-color:\s*var\(--surface-color\)/s);
   });
+
+  it("keeps Overall status actions visible in compact density", () => {
+    expect(css).toMatch(
+      /\.leads-split-table--density-compact\s+\.generic-overall-status-cell\s*\{[^}]*overflow:\s*visible\s*!important/s,
+    );
+    expect(css).toMatch(
+      /\.leads-split-table--density-compact\s+\.generic-overall-status-content\s*\{[^}]*display:\s*grid[^}]*grid-template-areas:[^}]*"status action"[^}]*"date action"[^}]*overflow:\s*visible/s,
+    );
+    expect(css).toMatch(
+      /\.leads-split-table--density-compact\s+\.generic-overall-status-action\s*\{[^}]*grid-area:\s*action/s,
+    );
+  });
+
+  it("does not clip Generic CRM Leads toolbar button highlights", () => {
+    expect(css).toMatch(
+      /\.leads-page-root--generic\s+\.leads-actions-toolbar\s+\.btn-secondary,\s*\.leads-page-root--generic\s+\.leads-toolbar-shell\s+\.btn-secondary\s*\{[^}]*clip-path:\s*none/s,
+    );
+  });
+
+  it("allows Generic CRM split rows to stay aligned at every density", () => {
+    const compactRowRule = css.match(
+      /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+table\.leads-table\s+tbody\s+tr\s*\{([^}]*)\}/s,
+    );
+    const comfortableRowRule = css.match(
+      /\.leads-page-root--generic\s+\.leads-split-table--density-comfortable\s+table\.leads-table\s+tbody\s+tr\s*\{([^}]*)\}/s,
+    );
+
+    expect(compactRowRule).not.toBeNull();
+    expect(comfortableRowRule).not.toBeNull();
+    expect(compactRowRule[1]).toMatch(/height:\s*40px\s*;/);
+    expect(compactRowRule[1]).not.toMatch(/height:\s*40px\s*!important/);
+    expect(comfortableRowRule[1]).not.toMatch(/height:[^;]*!important/);
+  });
 });
 
 describe("#633 — canonical tables adopt .stable-table className", () => {

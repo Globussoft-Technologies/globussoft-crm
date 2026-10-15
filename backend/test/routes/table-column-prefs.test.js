@@ -79,6 +79,10 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.visible).toContain('webForm');
+    expect(res.body.visible).toContain('location');
+    expect(res.body.availableColumns.find((c) => c.key === 'location')).toMatchObject({
+      label: 'Location',
+    });
   });
 
   test('an existing preference can intentionally keep Tags hidden', async () => {
@@ -190,6 +194,11 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.status).toBe(200);
     const keys = res.body.availableColumns.map((c) => c.key);
     expect(keys).toContain('cf_school');
+    expect(res.body.availableColumns.find((c) => c.key === 'cf_school')).toMatchObject({
+      label: 'School',
+      filterField: 'custom_91',
+      filterKind: 'text',
+    });
     expect(keys).toContain('email');
     for (const genericOnlyKey of [
       'webForm',

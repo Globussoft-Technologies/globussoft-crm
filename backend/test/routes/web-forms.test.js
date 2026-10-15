@@ -37,6 +37,9 @@ s3Service.isLocalUrl = vi.fn();
 
 
 prisma.webForm = prisma.webForm || {};
+prisma.webFormFolder = {
+  findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(),
+};
 
 prisma.webFormSubmission = prisma.webFormSubmission || {};
 
@@ -101,7 +104,7 @@ const TENANT_ID = 11;
 const USER_ID = 22;
 
 
-function makeApp(vertical = 'generic') {
+function makeApp(vertical = 'generic', tenantId = TENANT_ID) {
 
   const app = express();
 
@@ -109,7 +112,7 @@ function makeApp(vertical = 'generic') {
 
   app.use((/** @type {any} */ req, /** @type {import('express').Response} */ _res, /** @type {import('express').NextFunction} */ next) => {
 
-    req.user = { userId: USER_ID, tenantId: TENANT_ID, role: 'ADMIN', vertical };
+    req.user = { userId: USER_ID, tenantId, role: 'ADMIN', vertical };
 
     next();
 
@@ -123,6 +126,7 @@ function makeApp(vertical = 'generic') {
 
 
 beforeEach(() => {
+  Object.values(prisma.webFormFolder).forEach((mock) => mock.mockReset());
 
   for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue, prisma.tenant, prisma.tenantSetting, prisma.user]) {
 
@@ -181,6 +185,12 @@ describe('web-form embed sizing', () => {
     expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
     expect(code).not.toContain('min-height:760px');
     expect(code).toContain('source!=="gbs-web-form"');
+    expect(code).toContain('type:"responsive-device"');
+    expect(code).toContain('window.innerWidth');
+    expect(code).toContain('Max-Age="+maxAge');
+    expect(code).toContain('attribution:savedAttribution');
+    expect(code).toContain('"utm_source"');
+    expect(code).toContain('"hsa_ver"');
   });
 
   test('uses the configured frontend base when no origin is supplied', () => {
@@ -198,6 +208,36 @@ describe('web-form embed sizing', () => {
       if (previousPublicBaseUrl === undefined) delete process.env.PUBLIC_BASE_URL;
       else process.env.PUBLIC_BASE_URL = previousPublicBaseUrl;
     }
+  });
+
+  test('keeps host attribution cookies scoped to Generic CRM forms', () => {
+    const code = buildEmbedCode({ id: 8, name: 'Travel Enquiry', slug: 'travel-enquiry', scope: 'travel' }, 'https://crm.example.com');
+
+    expect(code).not.toContain('Max-Age="+maxAge');
+    expect(code).not.toContain('attribution:savedAttribution');
+    expect(code).toContain('type:"responsive-device"');
+  });
+});
+
+describe('web-form field types', () => {
+  test('pins Generic Name, Email, and Phone to their assigned input types', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { sourceKind: 'contact', sourceKey: 'name', fieldType: 'number' },
+      { sourceKind: 'contact', sourceKey: 'email', fieldType: 'text' },
+      { sourceKind: 'contact', sourceKey: 'phone', fieldType: 'number' },
+    ]), 'generic');
+
+    expect(fields.map((field) => field.fieldType)).toEqual(['text', 'email', 'tel']);
+  });
+
+  test('does not change Travel contact field types', () => {
+    const fields = normalizeFields(JSON.stringify([
+      { sourceKind: 'contact', sourceKey: 'phone', fieldType: 'number' },
+      { sourceKind: 'contact', sourceKey: 'phone', fieldType: 'tel' },
+    ]), 'travel');
+
+    expect(fields[0].fieldType).toBe('number');
+    expect(fields[1].fieldType).toBe('text');
   });
 });
 
@@ -336,6 +376,37 @@ describe('Generic conditional fields', () => {
 });
 
 
+describe('folder tenant isolation', () => {
+  test.each(['rename', 'delete', 'deleteForms', 'assign', 'create'])('rejects a foreign Generic tenant attempting %s', async (action) => {
+    const ownerTenant = 42;
+    prisma.webFormFolder.findFirst.mockImplementation(({ where }) => Promise.resolve(
+      where.id === 501 && (where.tenantId == null || where.tenantId === ownerTenant)
+        ? { id: 501, tenantId: ownerTenant, scope: 'generic' } : null,
+    ));
+    prisma.webForm.findFirst.mockImplementation(({ where }) => Promise.resolve(
+      where.id === 601 ? { id: 601, tenantId: TENANT_ID, scope: 'generic' } : null,
+    ));
+    const app = makeApp('generic', TENANT_ID);
+    let response;
+    if (action === 'rename') response = await request(app).put('/api/forms/folders/501').send({ name: 'Hijacked' });
+    if (action === 'delete' || action === 'deleteForms') response = await request(app).delete('/api/forms/folders/501').send({ deleteForms: action === 'deleteForms' });
+    if (action === 'assign') response = await request(app).put('/api/forms/601/folder').send({ folderId: 501 });
+    if (action === 'create') response = await request(app).post('/api/forms').send({ name: 'Foreign folder', folderId: 501 });
+    expect(response.status).toBe(404);
+    expect(prisma.webFormFolder.findFirst).toHaveBeenCalledWith({ where: { id: 501, tenantId: TENANT_ID, scope: 'generic' } });
+    expect(prisma.webFormFolder.delete).not.toHaveBeenCalled();
+    expect(prisma.webFormFolder.update).not.toHaveBeenCalled();
+    expect(prisma.webForm.update).not.toHaveBeenCalled();
+    expect(prisma.webForm.create).not.toHaveBeenCalled();
+  });
+
+  test('folder lists filter by both tenant and scope', async () => {
+    prisma.webFormFolder.findMany.mockResolvedValue([]);
+    expect((await request(makeApp()).get('/api/forms/folders')).status).toBe(200);
+    expect(prisma.webFormFolder.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: TENANT_ID, scope: 'generic' } }));
+  });
+});
+
 describe('GET /api/forms', () => {
 
   test('isolates travel forms from generic forms for authenticated users', async () => {
@@ -400,84 +471,14 @@ describe('GET /api/forms', () => {
   });
 
 
-  test('creates a starter form when the tenant has no forms', async () => {
-
+  test('returns an empty list without creating a form', async () => {
     prisma.webForm.findMany.mockResolvedValue([]);
-
-    prisma.webFormSubmission.groupBy.mockResolvedValue([]);
-
-    prisma.webForm.findFirst.mockResolvedValueOnce(null);
-
-    prisma.webForm.create.mockResolvedValueOnce({
-
-      id: 9,
-
-      tenantId: TENANT_ID,
-
-      createdByUserId: USER_ID,
-
-      name: 'Untitled form - 06 Aug 2026, 18:18',
-
-      slug: 'untitled-form-06-aug-2026-18-18',
-
-      description: '',
-
-      isActive: true,
-
-      fieldsJson: JSON.stringify([]),
-
-      styleJson: JSON.stringify({}),
-
-      settingsJson: JSON.stringify({}),
-
-    });
-
 
     const res = await request(makeApp()).get('/api/forms');
 
-
     expect(res.status).toBe(200);
-
-    expect(res.body).toHaveLength(1);
-
-    expect(res.body[0]).toMatchObject({
-
-      id: 9,
-
-      tenantId: TENANT_ID,
-
-      createdByUserId: USER_ID,
-
-      slug: 'untitled-form-06-aug-2026-18-18',
-
-      submissionCount: 0,
-
-    });
-
-    expect(prisma.webForm.create).toHaveBeenCalledTimes(1);
-
-    expect(prisma.webForm.create).toHaveBeenCalledWith({
-
-      data: expect.objectContaining({
-
-        tenantId: TENANT_ID,
-
-        createdByUserId: USER_ID,
-
-        description: '',
-
-        isActive: true,
-
-        fieldsJson: expect.any(String),
-
-        styleJson: expect.any(String),
-
-        settingsJson: expect.any(String),
-
-      }),
-
-    });
-
+    expect(res.body).toEqual([]);
+    expect(prisma.webForm.create).not.toHaveBeenCalled();
   });
 
 });
@@ -779,6 +780,59 @@ describe('PUT /api/forms/:id', () => {
 });
 
 describe('GET /api/forms/public/:slug', () => {
+  test('returns the configured site key for an enabled draft preview', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 7,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Protected intake',
+      slug: 'protected-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ recaptchaEnabled: false }),
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'tenant-public-site-key' });
+
+    const res = await request(makeApp()).get('/api/forms/public/protected-intake');
+
+    expect(res.status).toBe(200);
+    expect(res.body.settings.recaptchaEnabled).toBe(false);
+    expect(res.body.settings.recaptchaSiteKey).toBe('tenant-public-site-key');
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.webForm.recaptcha.siteKey' } },
+      select: { value: true },
+    });
+  });
+
+  test('falls back to the server site key when a tenant override is blank', async () => {
+    const originalSiteKey = process.env.RECAPTCHA_SITE_KEY;
+    process.env.RECAPTCHA_SITE_KEY = 'server-public-site-key';
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 8,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Protected intake',
+      slug: 'protected-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ recaptchaEnabled: true }),
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: '' });
+
+    try {
+      const res = await request(makeApp()).get('/api/forms/public/protected-intake');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.recaptchaSiteKey).toBe('server-public-site-key');
+    } finally {
+      if (originalSiteKey === undefined) delete process.env.RECAPTCHA_SITE_KEY;
+      else process.env.RECAPTCHA_SITE_KEY = originalSiteKey;
+    }
+  });
+
   test('includes current lead custom field options in the public form payload', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 3,
@@ -984,6 +1038,35 @@ describe('POST /api/forms/public/:slug/submit', () => {
       expect.stringContaining('secret=travel-server-only-secret'),
       expect.any(Object),
     );
+  });
+
+  test('falls back to the server secret when a tenant override is blank', async () => {
+    const originalSecret = process.env.RECAPTCHA_SECRET_KEY;
+    process.env.RECAPTCHA_SECRET_KEY = 'server-secret-key';
+    mockCaptchaForm();
+    prisma.tenantSetting.findUnique.mockImplementation((params) => (
+      params.where?.tenantId_key?.key === 'generic.webForm.recaptcha.secretKey'
+        ? { value: '' }
+        : null
+    ));
+    axios.post.mockResolvedValue({ data: { success: true } });
+
+    try {
+      const response = await request(makeApp())
+        .post('/api/forms/public/protected-form/submit?scope=generic')
+        .field('name', 'Protected Customer')
+        .field('recaptchaToken', 'browser-token');
+
+      expect(response.status).toBe(201);
+      expect(axios.post).toHaveBeenCalledWith(
+        'https://www.google.com/recaptcha/api/siteverify',
+        expect.stringContaining('secret=server-secret-key'),
+        expect.any(Object),
+      );
+    } finally {
+      if (originalSecret === undefined) delete process.env.RECAPTCHA_SECRET_KEY;
+      else process.env.RECAPTCHA_SECRET_KEY = originalSecret;
+    }
   });
 
   test('rejects invalid CAPTCHA before persisting uploaded files or CRM records', async () => {
@@ -1467,7 +1550,13 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
       .post('/api/forms/public/contact-us/submit')
 
-      .set('X-GBS-Tracking', JSON.stringify({ pageUrl: 'https://example.com/pricing', utm_source: 'newsletter' }))
+      .set('X-GBS-Tracking', JSON.stringify({
+        pageUrl: 'https://example.com/pricing',
+        utm_source: 'newsletter',
+        location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
+        locationLatitude: '12.935200',
+        locationLongitude: '77.624500',
+      }))
 
       .field('name', 'Jane Doe')
 
@@ -1502,6 +1591,9 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(JSON.parse(submissionArg.payloadJson)._meta.tracking).toEqual(expect.objectContaining({
       pageUrl: 'https://example.com/pricing',
       utm_source: 'newsletter',
+      location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
+      locationLatitude: '12.935200',
+      locationLongitude: '77.624500',
       formName: 'Contact Us',
       formId: '1',
     }));

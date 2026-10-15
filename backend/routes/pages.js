@@ -18,6 +18,10 @@ const { verifyToken } = require('../middleware/auth');
 const { getCatalogForVertical, getAccessiblePages } = require('../lib/pageCatalog');
 const { getUserPermissions } = require('../middleware/requirePermission');
 const { resolveTenantVertical } = require('../lib/tenantVertical');
+const {
+  getTenantPageVisibility,
+  filterPagesByTenantVisibility,
+} = require('../lib/tenantPageVisibility');
 
 function filterPageSearch(pages, rawQuery) {
   const query = String(rawQuery || '').trim().toLowerCase();
@@ -45,16 +49,25 @@ function filterPageSearch(pages, rawQuery) {
 // vertical-relevant. If the tenant vertical cannot be resolved, fail closed
 // rather than returning the union catalog to a different product vertical.
 router.get('/catalog', verifyToken, async (req, res) => {
-  const vertical = await resolveTenantVertical(req.user.tenantId);
-  if (!vertical) {
-    return res.status(503).json({
-      error: 'Tenant vertical is unavailable',
-      code: 'TENANT_VERTICAL_UNAVAILABLE',
-    });
+  try {
+    const vertical = await resolveTenantVertical(req.user.tenantId);
+    if (!vertical) {
+      return res.status(503).json({
+        error: 'Tenant vertical is unavailable',
+        code: 'TENANT_VERTICAL_UNAVAILABLE',
+      });
+    }
+    const visibility = await getTenantPageVisibility(req.user.tenantId, { vertical });
+    const catalog = filterPagesByTenantVisibility(
+      getCatalogForVertical(vertical),
+      visibility,
+    );
+    const categories = Array.from(new Set(catalog.map((p) => p.category)));
+    res.json({ catalog, categories, vertical, hiddenPaths: visibility.hiddenPaths });
+  } catch (err) {
+    console.error('[pages/catalog] error:', err);
+    res.status(500).json({ error: 'Failed to load page catalog' });
   }
-  const catalog = getCatalogForVertical(vertical);
-  const categories = Array.from(new Set(catalog.map((p) => p.category)));
-  res.json({ catalog, categories, vertical });
 });
 
 router.get('/me', verifyToken, async (req, res) => {
@@ -66,13 +79,26 @@ router.get('/me', verifyToken, async (req, res) => {
         code: 'TENANT_VERTICAL_UNAVAILABLE',
       });
     }
+    const visibility = await getTenantPageVisibility(req.user.tenantId, { vertical });
     if (req.user.isOwner) {
-      const catalogPages = getCatalogForVertical(vertical);
-      return res.json({ pages: vertical === 'generic' ? filterPageSearch(catalogPages, req.query.q) : catalogPages });
+      const catalogPages = filterPagesByTenantVisibility(
+        getCatalogForVertical(vertical),
+        visibility,
+      );
+      return res.json({
+        pages: vertical === 'generic' ? filterPageSearch(catalogPages, req.query.q) : catalogPages,
+        hiddenPaths: visibility.hiddenPaths,
+      });
     }
     const perms = await getUserPermissions(req.user.tenantId, req.user.userId);
-    const pages = getAccessiblePages(perms, { isOwner: false, vertical });
-    res.json({ pages: vertical === 'generic' ? filterPageSearch(pages, req.query.q) : pages });
+    const pages = filterPagesByTenantVisibility(
+      getAccessiblePages(perms, { isOwner: false, vertical }),
+      visibility,
+    );
+    res.json({
+      pages: vertical === 'generic' ? filterPageSearch(pages, req.query.q) : pages,
+      hiddenPaths: visibility.hiddenPaths,
+    });
   } catch (err) {
     console.error('[pages/me] error:', err);
     res.status(500).json({ error: 'Failed to load accessible pages' });

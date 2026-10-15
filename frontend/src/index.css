@@ -3787,13 +3787,12 @@ table.leads-table thead th {
   background-color: var(--modal-bg);
 }
 
-/* Let the generic table grow with the selected page size. Its inner
-   TopScrollSync owns horizontal scrolling; the Leads page owns vertical
-   scrolling so all rows on the current page remain in normal document flow. */
+/* Freshsales-style Generic CRM grid: the page chrome stays fixed while the
+   records own the available viewport and scroll inside their table shell. */
 .leads-split-table--no-topbar {
   max-height: none !important;
   overflow-x: clip !important;
-  overflow-y: visible !important;
+  overflow-y: auto !important;
 }
 
 .leads-page-root--generic {
@@ -3801,29 +3800,491 @@ table.leads-table thead th {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  padding: 1.25rem !important;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
+  background: var(--bg-color);
 }
 
 .leads-page-root--generic .leads-content-shell {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   min-height: 0;
+  gap: 0 !important;
+  overflow: hidden;
 }
 
 .leads-page-root--generic .leads-toolbar-shell {
   flex: 0 0 auto;
+  padding: 0.65rem 0.75rem !important;
+  gap: 0.55rem !important;
+  border-radius: 10px 10px 0 0 !important;
+  border-color: var(--border-color) !important;
+  background: color-mix(in srgb, var(--surface-hover) 86%, var(--surface-color)) !important;
+  box-shadow: none;
 }
 
 .leads-page-root--generic .leads-split-table--no-topbar {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   height: auto;
   min-height: 0;
   max-height: none !important;
   box-sizing: border-box;
+  border-radius: 0 !important;
+  border-top: 0 !important;
+  box-shadow: none;
+}
+
+/* Keep the single Generic CRM horizontal scrollbar at the bottom of the
+   fixed records viewport, including pages with fewer rows. */
+.leads-page-root--generic .leads-split-table--no-topbar {
+  align-items: stretch;
+}
+
+/* Below a partial page of Generic CRM leads, keep the unused fixed-height
+   viewport as one clean surface. The real Name-column border still ends with
+   the last lead row, without visually splitting the empty area in two. */
+.leads-page-root--generic
+  .leads-split-table--sparse:not(.leads-split-table--empty)
+  .leads-table-frozen-pane {
+  background-color: var(--modal-bg);
+  border-right-color: transparent;
+}
+
+/* A short result set leaves most of the fixed records viewport unused. Use
+   one opaque surface across both panes so the nested frozen pane does not
+   double-blend the translucent card color and appear as a different shade. */
+.leads-page-root--generic
+  .leads-split-table--sparse:not(.leads-split-table--empty),
+.leads-page-root--generic
+  .leads-split-table--sparse:not(.leads-split-table--empty)
+  .leads-table-scroll-pane,
+.leads-page-root--generic
+  .leads-split-table--sparse:not(.leads-split-table--empty)
+  .leads-table-scroll-pane
+  > .top-scroll-sync,
+.leads-page-root--generic
+  .leads-split-table--sparse:not(.leads-split-table--empty)
+  .leads-table-scroll-pane
+  .top-scroll-sync__bottom {
+  background-color: var(--modal-bg);
+}
+
+/* Generic CRM only: keep the zero-record message inside the visible table
+   viewport instead of centering it across the off-screen scroll width. */
+.leads-page-root--generic .leads-split-table--empty {
+  position: relative;
+}
+
+.leads-page-root--generic .leads-split-table--empty .leads-generic-empty-state {
+  position: absolute;
+  inset: 48px 0 16px;
+  z-index: 25;
+  display: grid;
+  place-items: center;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact.leads-split-table--empty
+  .leads-generic-empty-state {
+  top: 38px;
+}
+
+.leads-page-root--generic .leads-table-frozen-pane {
+  align-self: stretch;
+}
+
+.leads-page-root--generic .leads-table-scroll-pane,
+.leads-page-root--generic .leads-table-scroll-pane > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__bottom {
+  /* Grow to fill short pages, but never shrink below the table's natural
+     height on 15/25/50/100-row pages. Shrinking clipped the scrollable half
+     while the frozen Name pane continued rendering every row. */
+  flex: 1 0 auto;
+}
+
+.leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__sticky-bottom {
+  flex: 0 0 16px;
+}
+
+.leads-page-root--generic .leads-page-header {
+  margin-bottom: 0.75rem !important;
+}
+
+.leads-page-root--generic .leads-actions-toolbar {
+  gap: 0.35rem !important;
+  padding-top: 0.6rem !important;
+}
+
+.leads-page-root--generic .leads-actions-toolbar :is(button, .btn-primary, .btn-secondary),
+.leads-page-root--generic .leads-toolbar-shell :is(button, .btn-primary, .btn-secondary) {
+  min-height: 34px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+/* The shared secondary-button clip path trims external focus outlines down to
+   disconnected edge segments. Keep complete hover/focus highlights on the
+   Generic CRM Leads toolbars without changing buttons on other surfaces. */
+.leads-page-root--generic .leads-actions-toolbar .btn-secondary,
+.leads-page-root--generic .leads-toolbar-shell .btn-secondary {
+  clip-path: none;
+}
+
+.leads-page-root--generic .leads-toolbar-shell .crm-search-input {
+  height: 34px !important;
+  border-radius: 6px;
+  background: var(--surface-color) !important;
+}
+
+.leads-page-root--generic .leads-table-frozen-pane {
+  /* Match the reference grid's compact fixed Name pane while ensuring the
+     horizontally scrollable data columns remain visible beside it. */
+  width: var(--leads-name-pane-width, clamp(320px, 22%, 380px)) !important;
+  max-width: 80%;
+  /* Clip only horizontal paint. `overflow: hidden` also creates a vertical
+     scroll container, which causes the sticky Name header to scroll away. */
+  overflow-x: clip;
+  overflow-y: visible;
+  border-right: 1px solid var(--border-color);
+  box-shadow: none;
+}
+
+.leads-page-root--generic
+  .leads-table-frozen-pane
+  table.leads-table
+  thead
+  th {
+  padding-right: 0.75rem !important;
+}
+
+.leads-page-root--generic
+  .leads-table-frozen-pane
+  table.leads-table
+  thead
+  button[aria-label^="Open "] {
+  margin-right: 0;
+}
+
+.leads-page-root--generic .generic-lead-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #1f4f66;
+  background: #cceef4;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.leads-page-root--generic .leads-split-table table.leads-table thead tr {
+  height: 40px;
+}
+
+.leads-page-root--generic .leads-split-table table.leads-table tbody tr {
+  height: 40px;
+}
+
+/* Generic Leads density selector. These modifiers are only emitted by the
+   generic vertical; wellness and travel retain their established sizing. */
+.leads-page-root--generic .leads-split-table--density-comfortable table.leads-table thead tr {
+  height: 48px;
+}
+
+.leads-page-root--generic .leads-split-table--density-comfortable table.leads-table tbody tr {
+  height: 52px;
+}
+
+.leads-page-root--generic .leads-split-table--density-comfortable table.leads-table th,
+.leads-page-root--generic .leads-split-table--density-comfortable table.leads-table td {
+  padding-top: 0.65rem !important;
+  padding-bottom: 0.65rem !important;
+}
+
+/* Comfortable mode keeps the extra vertical breathing room without allowing
+   long headers, pickup addresses, or workflow details to create mismatched
+   row heights between the frozen and scrollable tables. */
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  table.leads-table
+  thead
+  th
+  > div
+  > span:first-of-type {
+  min-width: 0;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  :is(.generic-interested-plot-cell, .generic-pickup-location-cell, .generic-overall-status-cell) {
+  overflow: hidden !important;
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  [data-testid="generic-lead-pickup-location-content"] {
+  align-items: center !important;
+  max-height: 42px;
+  margin: 0 !important;
+  overflow: hidden;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  [data-testid="generic-lead-pickup-location-content"] span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  .generic-overall-status-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "status date action";
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  max-height: 42px;
+  overflow: hidden;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  .generic-overall-status-content > strong {
+  grid-area: status;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  .generic-overall-status-date {
+  grid-area: date;
+  min-width: 0;
+  margin-top: 0 !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-comfortable
+  .generic-overall-status-action {
+  grid-area: action;
+  margin-top: 0 !important;
+  white-space: nowrap;
+}
+
+.leads-page-root--generic .leads-split-table--density-compact table.leads-table thead tr {
+  height: 38px;
+}
+
+.leads-page-root--generic .leads-split-table--density-compact table.leads-table tbody tr {
+  height: 40px;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact.leads-split-table--sparse
+  table.leads-table
+  tbody
+  tr {
+  height: 48px;
+}
+
+.leads-page-root--generic .leads-split-table--density-compact table.leads-table th,
+.leads-page-root--generic .leads-split-table--density-compact table.leads-table td {
+  height: 40px !important;
+  padding-top: 0.3rem !important;
+  padding-bottom: 0.3rem !important;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  :is(.generic-interested-plot-cell, .generic-pickup-location-cell) {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis;
+}
+
+/* Overall status also contains an action, so it must never inherit the
+   text-only clipping above. Keep the status/date compact on the left and
+   reserve a visible column for the View status control. */
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .generic-overall-status-cell {
+  white-space: nowrap !important;
+  overflow: visible !important;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  [data-testid="generic-lead-pickup-location-content"] {
+  align-items: center !important;
+  max-height: 30px;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  [data-testid="generic-lead-pickup-location-content"] span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .generic-overall-status-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "status action"
+    "date action";
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  overflow: visible;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .generic-overall-status-content > strong {
+  grid-area: status;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .generic-overall-status-date {
+  grid-area: date;
+  min-width: 0;
+  margin-top: 0 !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .generic-overall-status-action {
+  grid-area: action;
+  min-height: 28px !important;
+  margin-top: 0 !important;
+  padding: 0.2rem 0.4rem !important;
+  white-space: nowrap;
+}
+
+/* Keep translated horizontal table content inside the scrolling pane. Without
+   a paint boundary, compact cells and pills can render across the frozen Name
+   seam while the bottom scrollbar is between column boundaries. */
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .leads-table-scroll-pane {
+  position: relative;
+  z-index: 1;
+  /* Clip translated columns only on the horizontal axis. A full clip-path
+     also cut off rows beyond the first viewport on 25/50-row pages. */
+  overflow-x: clip;
+  overflow-y: visible;
+  isolation: isolate;
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .leads-table-frozen-pane {
+  position: relative;
+  z-index: 2;
+  background: var(--modal-bg);
+}
+
+.leads-page-root--generic
+  .leads-split-table--density-compact
+  .leads-table-scroll-pane
+  table.leads-table
+  :is(th, td):first-child {
+  padding-left: 0.5rem !important;
+  border-left: 1px solid var(--border-color);
+}
+
+.leads-page-root--generic table.leads-table th,
+.leads-page-root--generic table.leads-table td {
+  padding-top: 0.3rem !important;
+  padding-bottom: 0.3rem !important;
+  font-size: 0.8125rem;
+}
+
+.leads-page-root--generic .leads-table-frozen-pane table.leads-table thead,
+.leads-page-root--generic .leads-table-scroll-pane table.leads-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--modal-bg);
+  isolation: isolate;
+}
+
+.leads-page-root--generic table.leads-table thead tr,
+.leads-page-root--generic table.leads-table thead th {
+  background-color: var(--modal-bg) !important;
+}
+
+.leads-page-root--generic table.leads-table thead th {
+  position: relative !important;
+  top: auto !important;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.leads-page-root--generic table.leads-table tbody .input-field {
+  min-height: 30px !important;
+  height: 30px;
+  padding-top: 0.25rem !important;
+  padding-bottom: 0.25rem !important;
+}
+
+.leads-page-root--generic table.leads-table tbody tr:hover td {
+  background: var(--surface-hover);
 }
 
 .leads-page-root--generic .leads-table-scroll-pane {
+  position: relative;
+  z-index: 1;
   min-height: 0;
+  overflow-x: clip;
+  overflow-y: visible;
+  isolation: isolate;
+}
+
+.leads-page-root--generic .leads-table-frozen-pane {
+  position: relative;
+  z-index: 2;
+  background: var(--modal-bg);
 }
 
 .leads-page-root--generic .leads-table-scroll-pane > .top-scroll-sync,
@@ -3831,16 +4292,23 @@ table.leads-table thead th {
   min-height: 0;
 }
 
-/* Allow direct touch, trackpad and mouse scrolling on the table itself.
-   The top bar remains synchronized through TopScrollSync. */
+/* Horizontal movement is handled by the single sticky scrollbar at the
+   bottom. Keeping this wrapper non-scrolling lets the table header remain
+   sticky against the outer records viewport. */
 .leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__bottom {
-  overflow-x: auto !important;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  clip-path: none !important;
 }
 
 .leads-page-root--generic .leads-pagination-footer {
   box-sizing: border-box;
+  flex: 0 0 auto;
+  margin: 0 !important;
+  padding: 0.6rem 1rem !important;
+  border-top: 0 !important;
+  border-radius: 0 0 10px 10px !important;
+  box-shadow: 0 -1px 0 var(--border-color);
 }
 
 @media (max-width: 899px) {
@@ -3852,6 +4320,24 @@ table.leads-table thead th {
     width: 100% !important;
     max-width: 100% !important;
     box-sizing: border-box;
+    overflow-y: auto !important;
+  }
+
+  .leads-page-root--generic .leads-content-shell {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .leads-page-root--generic .leads-split-table--no-topbar {
+    flex: 0 0 auto;
+    height: auto !important;
+    min-height: 300px !important;
+    overflow-y: visible !important;
+    touch-action: pan-y;
+  }
+
+  .leads-page-root--generic .leads-split-table--no-topbar .top-scroll-sync__sticky-bottom {
+    touch-action: pan-x;
   }
 
   .leads-page-root--generic .leads-page-header__actions {
@@ -3925,6 +4411,11 @@ table.leads-table thead th {
 }
 
 @media (max-width: 600px) {
+  .leads-page-root--generic .leads-table-frozen-pane {
+    width: clamp(145px, 42vw, 230px) !important;
+    max-width: 52%;
+  }
+
   .leads-page-root--generic .leads-page-header {
     gap: 0.6rem !important;
   }

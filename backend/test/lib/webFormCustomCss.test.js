@@ -53,6 +53,17 @@ describe("web form custom CSS", () => {
       .toContain("--space:12px;padding:var(--space)");
   });
 
+  test("preserves valid child combinators and CSS comments", () => {
+    const css = sanitizeCustomCss(`
+      /* Use a child selector for the form controls > inputs. */
+      .panel > input { color: red; }
+      .panel .phone-country-picker > input { background-color: #fff; }
+    `);
+
+    expect(css).toContain(".panel>input{color:red}");
+    expect(css).toContain(".panel .phone-country-picker>input{background-color:#fff}");
+  });
+
   test("fails closed on HTML and malformed input", () => {
     expect(sanitizeCustomCss("<style>.panel{color:red}</style>")).toBe("");
     expect(sanitizeCustomCss(".panel{color:/*")).not.toContain("color:");

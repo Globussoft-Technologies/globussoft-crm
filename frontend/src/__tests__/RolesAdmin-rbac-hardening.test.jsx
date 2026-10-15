@@ -159,6 +159,53 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
+describe('permission review', () => {
+  it('shows exact page impact, flags missing page grants, and filters changed permissions', async () => {
+    const role = {
+      ...ADMIN_ROLE,
+      permissions: ADMIN_ROLE.permissions.filter((permission) => permission.module !== 'contacts'),
+    };
+    renderPage([role], {
+      '/api/pages/catalog': {
+        catalog: [{
+          label: 'Contact workspace',
+          path: '/contacts',
+          requiredPermissions: [
+            { module: 'contacts', action: 'read' },
+            { module: 'contacts', action: 'write' },
+          ],
+        }],
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    const dialog = screen.getByRole('dialog', { name: /Permissions: Administrator/i });
+    expect(dialog.style.width).toBe('100vw');
+    expect(dialog.style.placeItems).toBe('center');
+    await within(dialog).findAllByText(/Required for: Contact workspace/);
+    const contactCard = within(dialog).getByText('contacts').closest('div[style*="border-radius"]');
+    const writeTooltip = within(contactCard).getByRole('checkbox', { name: /write/i }).closest('label').getAttribute('title');
+    expect(writeTooltip).toMatch(/contacts\.write: Create new records in this module/i);
+    expect(writeTooltip).toMatch(/People and companies stored in your CRM/i);
+    expect(writeTooltip).toMatch(/Required for: Contact workspace/i);
+    expect(writeTooltip).toMatch(/Create new records in this module/i);
+    const touchButton = within(contactCard).getByLabelText('Details for contacts.write', { selector: 'button' });
+    fireEvent.click(touchButton);
+    expect(touchButton.getAttribute('aria-expanded')).toBe('true');
+    expect(within(contactCard).getByRole('note').textContent).toContain(writeTooltip);
+    fireEvent.click(touchButton);
+    expect(within(contactCard).queryByRole('note')).toBeNull();
+    fireEvent.click(within(contactCard).getByRole('checkbox', { name: /write/i }));
+    expect(within(contactCard).getByText(/Contact workspace also needs/i)).toBeTruthy();
+    fireEvent.click(within(contactCard).getByRole('button', { name: 'contacts.read' }));
+    expect(within(contactCard).queryByText(/also needs/i)).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Changed \(2\)/i }));
+    expect(within(dialog).getByText('contacts')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Collapse all/i }));
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+  });
+});
+
 // ─────────── Phase 3 — Critical permission warning ───────────
 
 describe('Phase 3 — critical permission removal warning', () => {
@@ -638,6 +685,9 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
       await screen.findByText(/Customer \+ traveler invoice records/i),
     ).toBeTruthy();
     expect(screen.queryByText(/Patient \+ customer/i)).toBeNull();
+    const dialog = screen.getByRole('dialog', { name: /Permissions: Custom/i });
+    expect(within(dialog).getByText('invoices').closest('div[style*="border-radius"]').querySelector('[aria-describedby="perm-desc-invoices-read"]').closest('label').getAttribute('title'))
+      .toMatch(/invoices\.read:.*Customer \+ traveler invoice records/i);
   });
 
   it('wellness tenant keeps its existing wellness-flavoured invoices description', async () => {
@@ -660,6 +710,33 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
     ).toBeTruthy();
     expect(screen.queryByText(/Patient/i)).toBeNull();
     expect(screen.queryByText(/traveler/i)).toBeNull();
+  });
+});
+
+describe('tenant page visibility in the permission matrix', () => {
+  it('does not render a module whose page is disabled for the tenant', async () => {
+    const catalog = {
+      ...CATALOG,
+      modules: [
+        ...CATALOG.modules,
+        { module: 'lead_scoring', actions: ['read', 'write'] },
+      ],
+      catalog: {
+        ...CATALOG.catalog,
+        lead_scoring: ['read', 'write'],
+      },
+      domains: [
+        ...CATALOG.domains,
+        { domain: 'Generic CRM Pages', modules: [{ module: 'lead_scoring', actions: ['read', 'write'] }] },
+      ],
+      hiddenModules: ['lead_scoring'],
+    };
+
+    renderPage([ADMIN_ROLE], { '/api/roles/catalog': catalog });
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    await screen.findByText(/Permissions: Administrator/i);
+
+    expect(screen.queryByText('lead_scoring')).toBeNull();
   });
 });
 

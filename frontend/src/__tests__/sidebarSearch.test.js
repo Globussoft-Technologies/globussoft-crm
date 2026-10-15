@@ -6,15 +6,36 @@ import {
   getGenericAccessByPath,
   getGenericAccessForLocation,
   getGenericSidebarPages,
+  isTenantPageHidden,
   TRAVEL_SIDEBAR_PAGE_SPECS,
 } from '../utils/sidebarSearch';
 
 describe('filterSidebarPages', () => {
+  it('filters tenant-hidden pages and their descendants from navigation search', () => {
+    expect(isTenantPageHidden('/travel/tally/company-setup', ['/travel/tally'])).toBe(true);
+    expect(filterSidebarPages([
+      { path: '/contacts', label: 'Contacts' },
+      { path: '/settings', label: 'Settings' },
+      { path: '/travel/tally/company-setup', label: 'Company Setup' },
+    ], { vertical: 'generic', hiddenPagePaths: ['/contacts', '/travel/tally'] }))
+      .toEqual([{ path: '/settings', label: 'Settings' }]);
+  });
+
+  it('does not surface a hidden generic page in the local sidebar search catalogue', () => {
+    const pages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => true,
+      hiddenPagePaths: ['/marketing'],
+    });
+    expect(pages.some((page) => page.path === '/marketing')).toBe(false);
+  });
+
   it('uses one access contract for routes, sidebar search, and tours', () => {
     expect(getGenericAccessByPath('/settings')).toMatchObject({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/settings')).toEqual({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/data-import-export')).toEqual({
-      allow: ['ADMIN', 'MANAGER'],
       requiredPermission: { module: 'settings', action: 'manage' },
     });
     expect(genericRoleGuardProps('/revenue-goals')).toEqual({});
@@ -25,20 +46,20 @@ describe('filterSidebarPages', () => {
     const regular = getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission });
     const manager = getGenericSidebarPages({ isAdmin: false, isManager: true, permissionsReady: true, hasPermission });
     expect(regular.some((page) => page.path === '/revenue-goals')).toBe(true);
-    expect(regular.some((page) => page.path === '/data-import-export')).toBe(false);
+    expect(regular.some((page) => page.path === '/data-import-export')).toBe(true);
     expect(manager.some((page) => page.path === '/data-import-export')).toBe(true);
     expect(manager.some((page) => page.path === '/settings')).toBe(true);
   });
 
-  it('requires both the role tier and assigned permission for manager pages', () => {
+  it('lets an explicit permission grant override a legacy manager tier', () => {
     const page = getGenericAccessByPath('/cpq');
     expect(canUseGenericSidebarPage(page, {
-      isManager: true,
+      isManager: false,
       permissionsReady: true,
       hasPermission: () => false,
     })).toBe(false);
     expect(canUseGenericSidebarPage(page, {
-      isManager: true,
+      isManager: false,
       permissionsReady: true,
       hasPermission: (module, action) => module === 'cpq' && action === 'read',
     })).toBe(true);
@@ -176,7 +197,7 @@ describe('filterSidebarPages', () => {
     expect(TRAVEL_SIDEBAR_PAGE_SPECS.map((page) => page.path)).toEqual([
       '/travel',
       '/leads',
-      '/travel/pipeline',
+      // '/travel/pipeline',
       '/contacts',
       '/travel/diagnostics',
       '/travel/trip-knowledge',
@@ -212,7 +233,7 @@ describe('filterSidebarPages', () => {
       '/gmail',
       '/travel/invoices-admin',
       '/travel/tally',
-      '/travel/milestones',
+      // '/travel/milestones',
       '/travel/payables',
       '/payments',
       '/expenses',

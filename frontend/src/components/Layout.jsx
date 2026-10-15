@@ -5,7 +5,16 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2, Sun, Moon, Monitor, Info, CircleHelp } from "lucide-react";
+import {
+  LogOut,
+  Menu,
+  Building2,
+  Sun,
+  Moon,
+  Monitor,
+  Info,
+  CircleHelp,
+} from "lucide-react";
 import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
@@ -16,19 +25,17 @@ import TravelKeyboardShortcuts, {
 // Wellness Admin Support Chatbot — wellness-vertical counterpart to the
 // Softphone FAB (wellness hides the softphone; it gets the help widget).
 import SupportChatWidget from "./SupportChatWidget";
+import PageAccessGuard from "./PageAccessGuard";
 import NotificationBell from "./NotificationBell";
 import Avatar from "./Avatar";
-// SubscriptionExpiryModal removed — its dismissible "Remind Later" escape
-// violated the hard-paywall contract. Once the trial / subscription is
-// actually expired the new SubscriptionGate component takes over and the
-// user cannot dismiss it until they pay (or sign out).
-import SubscriptionGate from "./SubscriptionGate";
+import TenantPageGuard from "./TenantPageGuard";
 import { AuthContext, ThemeContext } from "../App";
 import { getDomainBranding } from "../utils/domainBranding";
 import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
+import { confirmActiveFormExit } from "../utils/formNavigationGuard";
 import { useProductTour } from "../tours/useProductTour";
 
 // #555 (HI-06) — Option C: lock to single tenant per session. The chip is
@@ -144,8 +151,7 @@ function TenantChip({ tenant }) {
 const DRAWER_BREAKPOINT_PX = 1440;
 
 const Layout = () => {
-  const { user, setUser, setToken, token, tenant } =
-    useContext(AuthContext);
+  const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
   // #862 — top-bar theme toggle. Cycles light → dark → system (matches the
   // /settings Appearance card's 3-option group). Discoverable from anywhere
   // in the app, addressing the QA observation that the only theme control
@@ -155,7 +161,12 @@ const Layout = () => {
   const notify = useNotify();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAvailable: toursAvailable, effectiveEnabled: toursEnabled, currentFeature, startCurrentTour } = useProductTour();
+  const {
+    isAvailable: toursAvailable,
+    effectiveEnabled: toursEnabled,
+    currentFeature,
+    startCurrentTour,
+  } = useProductTour();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
@@ -202,7 +213,10 @@ const Layout = () => {
   }, []);
 
   useEffect(() => {
-    if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+    if (
+      typeof document === "undefined" ||
+      typeof MutationObserver === "undefined"
+    ) {
       return undefined;
     }
 
@@ -215,7 +229,8 @@ const Layout = () => {
       ).some((el) => {
         if (!el.isConnected) return false;
         const style = window.getComputedStyle(el);
-        if (style.display === "none" || style.visibility === "hidden") return false;
+        if (style.display === "none" || style.visibility === "hidden")
+          return false;
         return el.getClientRects().length > 0;
       });
 
@@ -284,21 +299,27 @@ const Layout = () => {
   // tabs can pick out the CRM tab fast. Falls back to the app-wide brand.
   useEffect(() => {
     const branding = getDomainBranding();
-    document.title = branding.title !== "Globussoft CRM"
-      ? branding.title
-      : tenant?.name ? `${tenant.name} — CRM` : branding.title;
+    document.title =
+      branding.title !== "Globussoft CRM"
+        ? branding.title
+        : tenant?.name
+          ? `${tenant.name} — CRM`
+          : branding.title;
   }, [tenant?.name]);
 
   const handleLogout = async () => {
-    const confirmed = await notify.confirm({
-      title: "Sign out?",
-      message: "Are you sure you want to sign out of your account?",
-      confirmText: "Sign out",
-      cancelText: "Cancel",
-      destructive: true,
-    });
-
-    if (!confirmed) return;
+    const formExit = await confirmActiveFormExit();
+    if (formExit === false) return;
+    if (formExit === null) {
+      const confirmed = await notify.confirm({
+        title: "Sign out?",
+        message: "Are you sure you want to sign out of your account?",
+        confirmText: "Sign out",
+        cancelText: "Cancel",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
 
     // #528 (CRIT-03 fix): revoke the JWT SERVER-SIDE before clearing local
     // state. POST /api/auth/logout reads req.user.jti and adds it to the
@@ -429,38 +450,40 @@ const Layout = () => {
           >
             <Omnibar />
             {isTravelShortcutPath && (
-            <button
-              className="travel-shortcuts-button"
-              type="button"
-              onClick={() => {
-                window.dispatchEvent(new Event(TRAVEL_KEYBOARD_SHORTCUTS_EVENT));
-              }}
-              title="Show keyboard shortcuts. You can also press Ctrl+/."
-              aria-label="Show travel keyboard shortcuts"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "none",
-                border: "none",
-                flexShrink: 0,
-                cursor: "pointer",
-                color: "var(--text-secondary)",
-                padding: "6px 8px",
-                borderRadius: "6px",
-                transition: "all 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-                e.currentTarget.style.color = "var(--text-primary)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "none";
-                e.currentTarget.style.color = "var(--text-secondary)";
-              }}
-            >
-              <Info size={16} aria-hidden />
-            </button>
+              <button
+                className="travel-shortcuts-button"
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(
+                    new Event(TRAVEL_KEYBOARD_SHORTCUTS_EVENT),
+                  );
+                }}
+                title="Show keyboard shortcuts. You can also press Ctrl+/."
+                aria-label="Show travel keyboard shortcuts"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "none",
+                  border: "none",
+                  flexShrink: 0,
+                  cursor: "pointer",
+                  color: "var(--text-secondary)",
+                  padding: "6px 8px",
+                  borderRadius: "6px",
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+                  e.currentTarget.style.color = "var(--text-primary)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "none";
+                  e.currentTarget.style.color = "var(--text-secondary)";
+                }}
+              >
+                <Info size={16} aria-hidden />
+              </button>
             )}
           </div>
           <TenantChip tenant={tenant} />
@@ -524,7 +547,9 @@ const Layout = () => {
               roleBadge={user?.role || undefined}
               imageUrl={user?.profilePicture || undefined}
             />
-            <span className="app-profile-name">{user?.name || user?.email || "User"}</span>
+            <span className="app-profile-name">
+              {user?.name || user?.email || "User"}
+            </span>
           </button>
           {/* #862 — discoverable theme toggle button. Cycles
               light → dark → system and surfaces the active mode via icon
@@ -605,7 +630,8 @@ const Layout = () => {
             minWidth: 0,
             minHeight: 0,
             overflowX: "hidden",
-            overflowY: popupScrollLocked || isGenericLeadsPage ? "hidden" : "auto",
+            overflowY:
+              popupScrollLocked || isGenericLeadsPage ? "hidden" : "auto",
             padding: "0",
             backgroundColor: "transparent",
           }}
@@ -613,19 +639,20 @@ const Layout = () => {
           <TravelKeyboardShortcuts enabled={isTravelShortcutPath} />
           {isTravel ? (
             <div className="travel-content-frame">
-              <Outlet />
+              <TenantPageGuard>
+                <PageAccessGuard>
+                  <Outlet />
+                </PageAccessGuard>
+              </TenantPageGuard>
             </div>
           ) : (
-            <Outlet />
+            <TenantPageGuard>
+              <PageAccessGuard>
+                <Outlet />
+              </PageAccessGuard>
+            </TenantPageGuard>
           )}
         </main>
-        {/* Hard subscription paywall — renders a non-dismissable overlay
-            over the entire app when the trial has ended or the paid
-            subscription has expired/been cancelled. Mounted via position:
-            fixed + z-index, so it visually sits above header/sidebar/main.
-            Allow-listed routes (/pricing, /payment-success, /payment-failed)
-            render through it so the admin can actually complete checkout. */}
-        <SubscriptionGate />
         {/* #634: build identifier — small, low-contrast, app-shell footer.
             Version is sourced from backend/package.json at build time (see
             vite.config.js define block) so it stays aligned with /api/health.

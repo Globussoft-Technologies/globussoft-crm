@@ -572,6 +572,7 @@ export default function Omnibar() {
   const [searchError, setSearchError] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [pagesIndex, setPagesIndex] = useState([]);
+  const [hiddenPagePaths, setHiddenPagePaths] = useState([]);
   const [activeIndex, setActiveIndex] = useState(-1);
   const { query, setQuery, clearQuery } = useSearchQuery();
 
@@ -597,6 +598,7 @@ export default function Omnibar() {
       .then((res) => {
         if (cancelled) return;
         setPagesIndex(Array.isArray(res) ? res : (Array.isArray(res?.pages) ? res.pages : []));
+        setHiddenPagePaths(Array.isArray(res?.hiddenPaths) ? res.hiddenPaths : []);
       })
       .catch(() => {
         if (cancelled) return;
@@ -604,9 +606,10 @@ export default function Omnibar() {
       });
     const onInvalidate = () => {
       fetchApi("/api/pages/me", { silent: true })
-        .then((res) =>
-            setPagesIndex(Array.isArray(res) ? res : (Array.isArray(res?.pages) ? res.pages : [])),
-        )
+        .then((res) => {
+          setPagesIndex(Array.isArray(res) ? res : (Array.isArray(res?.pages) ? res.pages : []));
+          setHiddenPagePaths(Array.isArray(res?.hiddenPaths) ? res.hiddenPaths : []);
+        })
         .catch(() => {});
     };
     window.addEventListener("sidebar:pages-changed", onInvalidate);
@@ -624,7 +627,10 @@ export default function Omnibar() {
     let cancelled = false;
     fetchApi(`/api/pages/me?q=${encodeURIComponent(query.trim())}`, { silent: true })
       .then((res) => {
-        if (!cancelled && (Array.isArray(res) || Array.isArray(res?.pages))) setPagesIndex(Array.isArray(res) ? res : res.pages);
+        if (!cancelled && (Array.isArray(res) || Array.isArray(res?.pages))) {
+          setPagesIndex(Array.isArray(res) ? res : res.pages);
+          setHiddenPagePaths(Array.isArray(res?.hiddenPaths) ? res.hiddenPaths : []);
+        }
       })
       .catch(() => {});
     return () => {
@@ -738,6 +744,7 @@ export default function Omnibar() {
               isManager,
               permissionsReady,
               hasPermission,
+              hiddenPagePaths,
             })
           : [];
       // The API catalog is normally permission-filtered, but keep the client
@@ -752,6 +759,7 @@ export default function Omnibar() {
                 isManager,
                 permissionsReady,
                 hasPermission,
+                hiddenPagePaths,
               });
             })
           : pagesIndex;
@@ -760,10 +768,12 @@ export default function Omnibar() {
         vertical: tenant?.vertical || null,
         activeSubBrand,
         subBrandAccess: user?.subBrandAccess,
+        hiddenPagePaths,
       });
     },
     [
       pagesIndex,
+      hiddenPagePaths,
       tenant?.vertical,
       activeSubBrand,
       user?.subBrandAccess,
@@ -951,6 +961,7 @@ export default function Omnibar() {
           aria-controls="omnibar-results"
           aria-expanded={showDropdown}
           aria-activedescendant={activeOptionId}
+          autoComplete="off"
           style={{
             flex: 1,
             background: "transparent",

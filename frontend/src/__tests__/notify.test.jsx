@@ -334,6 +334,37 @@ describe('useNotify — toast TTL (#540) and stacking', () => {
 });
 
 describe('useNotify — confirm() custom labels + options-object form', () => {
+  it('keeps dismissal safe when the left action discards changes', async () => {
+    const user = userEvent.setup();
+    const apiRef = { current: null };
+    render(<NotifyProvider><Consumer apiRef={apiRef} /></NotifyProvider>);
+    const choices = [];
+    const open = () => {
+      act(() => {
+        apiRef.current.confirm({
+          title: 'Leave this form?',
+          confirmText: 'Continue editing',
+          cancelText: 'Discard changes',
+          confirmValue: false,
+          cancelValue: true,
+          dismissValue: false,
+        }).then((value) => choices.push(value));
+      });
+    };
+
+    open();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(choices).toEqual([false]));
+
+    open();
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(choices).toEqual([false, true]));
+
+    open();
+    await user.click(screen.getByRole('button', { name: 'Continue editing' }));
+    await waitFor(() => expect(choices).toEqual([false, true, false]));
+  });
+
   it('confirm({ title, confirmText, cancelText }) renders custom labels', async () => {
     const user = userEvent.setup();
     const apiRef = { current: null };

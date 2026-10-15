@@ -129,7 +129,7 @@ const GENERIC_BASE_PERMS = [
   'roles.read', 'roles.manage', 'staff.read', 'staff.manage',
   'audit.read', 'developer.read', 'settings.read', 'settings.manage',
   'contacts.read', 'deals.read', 'pipeline.read', 'tickets.read',
-  'reports.read', 'leads.read',
+  'reports.read', 'reports.write', 'leads.read',
   'communications.read', 'tasks.read', 'projects.read', 'whatsapp.read',
   'live_chat.read', 'deal_insights.read', 'playbooks.read',
   'booking_pages.read', 'web_forms.read', 'marketing.read',
@@ -142,7 +142,7 @@ const GENERIC_BASE_PERMS = [
 ];
 const GENERIC_USER_PERMS = [
   'contacts.read', 'deals.read', 'leads.read', 'tasks.read', 'projects.read',
-  'pipeline.read', 'reports.read', 'communications.read', 'tickets.read',
+  'pipeline.read', 'reports.read', 'reports.write', 'communications.read', 'tickets.read',
   'surveys.read', 'documents.read', 'contracts.read', 'estimates.read',
 ];
 function permsForRole(role, vertical) {
@@ -173,6 +173,7 @@ function permsForRole(role, vertical) {
 // impl, which handles their specific URL and returns [] for everything
 // else, including /api/pages/me, which is exactly what those tests want.
 let currentAccessiblePages = [];
+let currentHiddenPagePaths = [];
 const { fetchApiMock } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
 }));
@@ -220,6 +221,7 @@ function renderSidebar({
   accessiblePages = null, // null → empty catalog (back-compat default)
   permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
   userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
+  hiddenPagePaths = [],
   expandTravelGroups = true, // legacy fixture convenience; production defaults collapsed
 } = {}) {
   // Capture the catalog into a closure variable read by the default
@@ -227,6 +229,7 @@ function renderSidebar({
   // Counter badges) replace the impl entirely without losing the
   // wellness catalog seeding mechanism.
   currentAccessiblePages = accessiblePages || [];
+  currentHiddenPagePaths = hiddenPagePaths;
   // RBAC migration — every permission-gated <Link> consults
   // usePermissions().hasPermission. Capture the per-render permission
   // set so the closure-backed mock returns role-appropriate grants.
@@ -307,13 +310,14 @@ beforeEach(() => {
   // overrides return [] for /api/pages/me — which is fine since those
   // tests don't depend on the catalog.
   currentAccessiblePages = [];
+  currentHiddenPagePaths = [];
   window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
   window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
   window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/pages/me') {
-      return Promise.resolve({ pages: currentAccessiblePages });
+      return Promise.resolve({ pages: currentAccessiblePages, hiddenPaths: currentHiddenPagePaths });
     }
     return Promise.resolve([]);
   });
@@ -345,6 +349,17 @@ describe('Sidebar — load-bearing render surface', () => {
       const link = screen.getByText('Web Forms').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/forms');
+    });
+
+    it('hides legacy generic links when the tenant disables their page path', async () => {
+      renderSidebar({
+        vertical: 'generic',
+        role: 'ADMIN',
+        hiddenPagePaths: ['/lead-scoring', '/invoices'],
+      });
+
+      await waitFor(() => expect(screen.queryByText('Lead Scoring')).toBeNull());
+      expect(screen.queryByText('Invoices')).toBeNull();
     });
 
     it('shows Pickup & Plot as its own module only to generic CRM admins', () => {
@@ -705,6 +720,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(document.querySelector('a[href="/leads"]')).toBeNull();
     });
 
+    it('shows travel Reports inside Administration and opens that group on the reports route', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', path: '/travel/reports' });
+      const administration = screen.getByRole('button', { name: 'Administration' });
+      expect(administration).toHaveAttribute('aria-expanded', 'true');
+      const reportsLink = document.querySelector('#travel-nav-administration a[href="/travel/reports"]');
+      expect(reportsLink).toBeTruthy();
+      expect(reportsLink).toHaveTextContent('Reports');
+    });
+
     it('supports collapsing the travel sidebar chrome', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       const sidebar = document.querySelector('#app-sidebar');
@@ -891,11 +915,13 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Settings')).toBeTruthy();
     });
 
-    it('hides manager-only items (Forecasting, Quotas) for USER role under generic', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER' });
+    it('uses configured permissions instead of the legacy manager tier for generic reports', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', permissions: [...GENERIC_USER_PERMS, 'analytics.read'] });
       expect(screen.queryByText('Forecasting')).toBeNull();
       expect(screen.queryByText('Quotas')).toBeNull();
-      expect(screen.queryByText('Win/Loss')).toBeNull();
+      // USER's configured analytics.read grant is authoritative for this page,
+      // even though the legacy sidebar entry was managerOnly.
+      expect(screen.getByText('Win/Loss')).toBeTruthy();
     });
 
     it('shows manager-only items for MANAGER role but still hides admin-only', () => {
@@ -1603,17 +1629,16 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Funnel')).toBeTruthy();
     });
 
-    it('hides all five Reports cluster items for USER role under generic', () => {
+    it('shows only the Reports cluster items granted to USER under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
-      // Generic Reports cluster is uniformly managerOnly — USER should see
-      // zero of them.
-      expect(screen.queryByText('Agent Reports')).toBeNull();
+      // Permission grants are authoritative; this fixture grants
+      // reports.read, reports.write, pipeline.read, and reports.read-backed pages but not
+      // dashboards.read.
+      expect(screen.getByText('Agent Reports')).toBeTruthy();
       expect(screen.queryByText('Dashboards')).toBeNull();
-      expect(screen.queryByText('Custom Reports')).toBeNull();
-      expect(screen.queryByText('Funnel')).toBeNull();
-      // The bare "Reports" label is also managerOnly, so it should not
-      // appear for USER either.
-      expect(screen.queryByText('Reports')).toBeNull();
+      expect(screen.getByText('Custom Reports')).toBeTruthy();
+      expect(screen.getByText('Funnel')).toBeTruthy();
+      expect(screen.getByText('Reports')).toBeTruthy();
     });
   });
 
@@ -1644,11 +1669,11 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Territories')).toBeTruthy();
     });
 
-    it('hides Sequences / Marketing / Lead Routing for USER under generic', () => {
+    it('uses the configured permission for Lead Routing while hiding ungranted automation pages', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
       expect(screen.queryByText('Sequences')).toBeNull();
       expect(screen.queryByText('Marketing Campaign')).toBeNull();
-      expect(screen.queryByText('Lead Routing')).toBeNull();
+      expect(screen.getByText('Lead Routing')).toBeTruthy();
       expect(screen.queryByText('Territories')).toBeNull();
     });
   });
@@ -1681,9 +1706,9 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(devLink.getAttribute('href')).toBe('/developer');
     });
 
-    it('hides Zapier + Developers for MANAGER (admin-only integrations)', () => {
+    it('shows only explicitly granted integrations for MANAGER', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      expect(screen.queryByText('Zapier')).toBeNull();
+      expect(screen.getByText('Zapier')).toBeTruthy();
       expect(screen.queryByText('Developers')).toBeNull();
     });
   });
@@ -2027,6 +2052,22 @@ describe('Sidebar — load-bearing render surface', () => {
       // ONLY thing hidden, not the whole section).
       { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
     ];
+
+    it('shows Payments and My Transactions but hides the staff Invoices link for customers', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'CUSTOMER',
+        userType: 'CUSTOMER',
+        accessiblePages: [
+          { category: 'Finance', path: '/payments', label: 'Payments' },
+          { category: 'Finance', path: '/wellness/invoices', label: 'Invoices' },
+          ...CUSTOMER_PAGES,
+        ],
+      });
+      await screen.findByText('Payments');
+      expect(screen.getByText('My Transactions')).toBeTruthy();
+      expect(screen.queryByText('Invoices')).toBeNull();
+    });
 
     it('shows customerOnly pages for a USER-role account stamped CUSTOMER', async () => {
       // A legacy customer carries role USER with the customer userType — the

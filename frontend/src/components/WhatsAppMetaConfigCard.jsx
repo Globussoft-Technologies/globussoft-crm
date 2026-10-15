@@ -322,6 +322,7 @@ export default function WhatsAppMetaConfigCard() {
 
   return (
     <div
+      className="card"
       style={{
         border: `1px solid ${S.border}`,
         borderRadius: 10,

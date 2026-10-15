@@ -98,6 +98,7 @@ const samplePayments = [
 ];
 
 function defaultFetchMock(url) {
+  if (url.startsWith('/api/payments?')) return Promise.resolve({ data: samplePayments, total: 3, totalPages: 1, stats: { collected: 1500, pending: 1, failed: 1 } });
   if (url === '/api/payments') return Promise.resolve(samplePayments);
   if (url === '/api/payments/config') {
     return Promise.resolve({
@@ -128,6 +129,40 @@ function generatePayments(count) {
 }
 
 describe('<Payments /> — page surface', () => {
+  it('uses server totals and requests the next customer page beyond 200 payments', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/payments?')) {
+        const page = Number(new URL(url, 'http://localhost').searchParams.get('page'));
+        return Promise.resolve({ data: [{ ...samplePayments[0], id: page }], page, total: 205, totalPages: 21,
+          stats: { collected: 9999, pending: 30, failed: 20 } });
+      }
+      return defaultFetchMock(url);
+    });
+    renderPayments({ userId: 3, role: 'CUSTOMER', userType: 'CUSTOMER' });
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent('205 payments'));
+    expect(screen.getByText('$9999.00')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) => url.includes('/api/payments?page=2&limit=10'))).toBe(true));
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 2 of 21/));
+    expect(screen.getByText('$9999.00')).toBeInTheDocument();
+  });
+
+  it('ignores an older customer response after changing gateway filters', async () => {
+    let resolveOld;
+    fetchApiMock.mockImplementation((url) => {
+      if (!url.startsWith('/api/payments?')) return defaultFetchMock(url);
+      if (!url.includes('gateway=stripe')) return new Promise((resolve) => { resolveOld = resolve; });
+      return Promise.resolve({ data: [samplePayments[1]], page: 1, total: 1, totalPages: 1,
+        stats: { collected: 222, pending: 1, failed: 0 } });
+    });
+    renderPayments({ userId: 3, role: 'CUSTOMER', userType: 'CUSTOMER' });
+    await waitFor(() => expect(resolveOld).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: /^Stripe$/i }));
+    await screen.findByText('$222.00');
+    resolveOld({ data: [samplePayments[0]], total: 999, totalPages: 100, stats: { collected: 9999, pending: 0, failed: 0 } });
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent('1 payments'));
+    expect(screen.queryByText('$9999.00')).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -143,6 +178,14 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getByText(/Total Collected/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Pending/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Failed/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows a customer-facing payment ledger without loading gateway configuration', async () => {
+    renderPayments({ userId: 3, role: 'CUSTOMER', userType: 'CUSTOMER' });
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^Payments$/i })).toBeInTheDocument());
+    expect(screen.getByText(/Total Paid/i)).toBeInTheDocument();
+    expect(screen.getAllByText('You').length).toBeGreaterThan(0);
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/payments/config');
   });
 
   it('renders one row per payment with invoiceId, amount, and gateway+status badges', async () => {

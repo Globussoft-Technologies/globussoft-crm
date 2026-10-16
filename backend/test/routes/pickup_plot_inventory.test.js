@@ -1316,7 +1316,7 @@ describe('transport person mutations', () => {
     ]);
     expect(prisma.transportPerson.findMany.mock.calls[0][0].where).toEqual({
       tenantId: 7,
-      user: { is: { deactivatedAt: null } },
+      OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }],
     });
     expect(prisma.pickupLocation.findMany.mock.calls[0][0].where).toEqual({ tenantId: 7 });
     expect(prisma.customerPickup.findMany.mock.calls[0][0]).toEqual(expect.objectContaining({
@@ -2188,7 +2188,7 @@ describe('plot broker mutations', () => {
     expect(response.body.summary).toEqual({ total: 1, active: 1, linked: 1 });
     expect(prisma.billingPerson.findMany.mock.calls[0][0].where).toEqual({
       tenantId: 7,
-      user: { is: { deactivatedAt: null } },
+      OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }],
     });
   });
 
@@ -2239,7 +2239,7 @@ describe('plot broker mutations', () => {
     expect(response.body.brokers.find((row) => row.id === 52).customerIds).toEqual([]);
     expect(prisma.plotBroker.findMany.mock.calls[0][0].where).toEqual({
       tenantId: 7,
-      user: { is: { deactivatedAt: null } },
+      OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }],
     });
   });
 

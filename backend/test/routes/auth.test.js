@@ -984,6 +984,45 @@ describe('POST /api/auth/customer/register', () => {
 // ── POST /api/auth/check-email ───────────────────────────────────────
 
 describe('POST /api/auth/check-email', () => {
+  test('travel portal signup accepts an existing prospect without portal credentials', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue({ id: 115, status: 'Prospect', portalPasswordHash: null });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'deepak@replyloop.com', registrationTenantId: 3 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: false });
+  });
+
+  test('travel portal signup still blocks a contact with a portal password', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue({ id: 115, status: 'Prospect', portalPasswordHash: 'hash' });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'deepak@replyloop.com', registrationTenantId: 3 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+  });
+
+  test('other customer registration still blocks an existing prospect', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue({ id: 115, status: 'Prospect', portalPasswordHash: null });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'person@example.com', registrationTenantId: 2 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+  });
+
   test('registrationVertical scopes duplicate lookup to that CRM theme', async () => {
     prisma.user.findUnique.mockResolvedValue({ id: 501 });
 

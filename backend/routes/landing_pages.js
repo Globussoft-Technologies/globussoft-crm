@@ -17,6 +17,7 @@ const {
   applyLandingPagePaymentToTrip,
   ensureLandingPagePaymentRegistration,
   getLandingPagePaymentConfig,
+  getLandingPagePaymentBalance,
   resolveLandingPagePaymentSelection,
 } = require("../lib/landingPagePayments");
 const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
@@ -1426,6 +1427,38 @@ async function getTmcParentRegistrationUrl(page, req) {
     teacherContactId: trip.teacherContactId,
     tripId: page.tripId,
   });
+}
+
+async function getExistingParticipantPortalRedirect(page, req, { studentName, parentEmail, parentPhone }) {
+  const fullName = String(studentName || "").trim();
+  const email = String(parentEmail || "").trim().toLowerCase();
+  const phone = String(parentPhone || "").trim();
+  if (!page?.tripId || !fullName || (!email && !phone)) return null;
+  const parentMatches = [];
+  if (email) parentMatches.push({ parentEmail: email });
+  if (phone) parentMatches.push({ parentPhone: phone });
+  const participant = await prisma.tripParticipant.findFirst({
+    where: { tripId: Number(page.tripId), fullName, OR: parentMatches },
+    select: { id: true, parentEmail: true, applicationStatus: true },
+  });
+  if (!participant || String(participant.applicationStatus || "").toLowerCase() === "rejected") return null;
+  const contact = participant.parentEmail
+    ? await prisma.contact.findFirst({
+        where: { tenantId: Number(page.tenantId || 1), email: participant.parentEmail, deletedAt: null },
+        select: { portalRole: true, subBrand: true, portalPasswordHash: true },
+      })
+    : null;
+  if (!contact?.portalPasswordHash) {
+    const tmcRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
+    const origin = getFrontendUrlFromRequest(req).replace(/\/+$/, "");
+    const registrationUrl = tmcRegistrationUrl
+      || `${origin}/customer/register?email=${encodeURIComponent(email)}&next=${encodeURIComponent("/travel/portal")}`;
+    return { type: "customer-registration", url: registrationUrl };
+  }
+  const portalPath = contact?.subBrand === "tmc" && contact?.portalRole === "PARENT"
+    ? "/tmc/parent-portal" : "/travel/portal";
+  const origin = getFrontendUrlFromRequest(req).replace(/\/+$/, "");
+  return { type: "existing-participant", url: `${origin}${portalPath}` };
 }
 
 function shouldUseAbsolutePublicUrls(req) {
@@ -6076,7 +6109,27 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
       && Number(existing.tenantId) === Number(page.tenantId || 1)
       && Number(existing.tripId) === Number(page.tripId)
       && Number(existing.landingPageId) === Number(page.id);
+    // The original opaque draft token remains the proof of access for a
+    // converted registration. Reuse it for later installments; creating a
+    // second registration would duplicate the participant.
     const existingStatus = String(existing?.status || "DRAFT");
+    const sameStudent = studentName && studentName.toLowerCase() === String(existing?.studentName || "").trim().toLowerCase();
+    const sameParent = (parentEmail && parentEmail === String(existing?.parentEmail || "").trim().toLowerCase())
+      || (parentPhone && parentPhone.replace(/\D/g, "") === String(existing?.parentPhone || "").replace(/\D/g, ""));
+    if (existingBelongsToPage && existing.convertedToParticipantId
+      && ["CONVERTED", "PAYMENT_PENDING"].includes(existingStatus)
+      && new Date(existing.draftTokenExpiresAt) > new Date()
+      && sameStudent && sameParent) {
+      return res.status(200).json({ draftToken: existing.draftToken, draftId: existing.id });
+    }
+    const existingParticipantRedirect = await getExistingParticipantPortalRedirect(page, req, {
+      studentName: studentName || (existingBelongsToPage && existing.studentName),
+      parentEmail: parentEmail || (existingBelongsToPage && existing.parentEmail),
+      parentPhone: parentPhone || (existingBelongsToPage && existing.parentPhone),
+    });
+    if (existingParticipantRedirect) {
+      return res.status(200).json({ redirect: existingParticipantRedirect });
+    }
     const existingIsResumable = existingBelongsToPage
       && existing.draftTokenExpiresAt
       && new Date(existing.draftTokenExpiresAt) > new Date()
@@ -6185,6 +6238,36 @@ publicRouter.post("/:slug/registration-documents", (req, res, next) => {
   }
 });
 
+publicRouter.get("/:slug/payment-balance", async (req, res) => {
+  try {
+    const draftToken = String(req.query.draftToken || "").trim();
+    if (!draftToken) return res.status(400).json({ error: "Registration draft required", code: "INVALID_DRAFT" });
+    const page = await prisma.landingPage.findFirst({
+      where: { slug: String(req.params.slug || "").trim(), status: "PUBLISHED" },
+      select: { id: true, tenantId: true, tripId: true, content: true },
+    });
+    if (!page) return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
+    const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken } });
+    if (!draft || Number(draft.tenantId) !== Number(page.tenantId || 1)
+      || Number(draft.tripId) !== Number(page.tripId)
+      || Number(draft.landingPageId) !== Number(page.id)) {
+      return res.status(400).json({ error: "Registration draft does not belong to this trip", code: "INVALID_DRAFT" });
+    }
+    const config = getLandingPagePaymentConfig(page);
+    if (!config.enabled || !config.installments.length) {
+      return res.status(409).json({ error: "Payment is unavailable", code: "PAYMENT_UNAVAILABLE" });
+    }
+    const balance = await getLandingPagePaymentBalance({
+      tripId: page.tripId, draft, installments: config.installments, currency: config.currency,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.json(balance);
+  } catch (err) {
+    console.error("[LandingPage] payment-balance error:", err);
+    return res.status(500).json({ error: "Could not load payment balance", code: "PAYMENT_BALANCE_FAILED" });
+  }
+});
+
 publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
   try {
     const slug = String(req.params.slug || "").trim();
@@ -6215,7 +6298,7 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
     }
 
     const paymentFields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : req.body || {};
-    const selection = resolveLandingPagePaymentSelection(page, req.body || {});
+    let selection = resolveLandingPagePaymentSelection(page, req.body || {});
     const tenantId = page.tenantId || 1;
     const draftToken = String(req.body?.draftToken || "").trim();
     const paymentDraft = draftToken && prisma.pendingTripRegistration?.findUnique
@@ -6228,6 +6311,10 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       || Number(paymentDraft.tripId) !== Number(page.tripId)
       || Number(paymentDraft.landingPageId) !== Number(page.id))) {
       return res.status(400).json({ error: "Registration draft does not belong to this trip", code: "INVALID_DRAFT" });
+    }
+    const convertedPaymentDraft = paymentDraft.status === "CONVERTED" && !!paymentDraft.convertedToParticipantId;
+    if (convertedPaymentDraft && new Date(paymentDraft.draftTokenExpiresAt) <= new Date()) {
+      return res.status(400).json({ error: "Registration link has expired. Pay through the parent portal.", code: "DRAFT_EXPIRED" });
     }
     const existingPayment = await findPaidLandingPageSelection({
       page,
@@ -6242,6 +6329,35 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
         installmentIndex: selection.installmentIndex,
       });
     }
+    const pendingPayment = await findPendingLandingPageSelection({
+      page, tenantId, selection, draft: paymentDraft,
+    });
+    if (pendingPayment) {
+      return res.status(409).json({
+        error: "A payment is already in progress for this registration",
+        code: "PAYMENT_IN_PROGRESS",
+      });
+    }
+    const balance = await getLandingPagePaymentBalance({
+      tripId: page.tripId, draft: paymentDraft,
+      installments: paymentConfig.installments, currency: paymentConfig.currency,
+    });
+    const dueByIndex = new Map(balance.installments.map((row) => [row.index, row.duePaise]));
+    const unpaidIndexes = selection.installmentIndexes.filter((index) => (dueByIndex.get(index) || 0) > 0);
+    if (!unpaidIndexes.length) {
+      return res.status(409).json({
+        error: "This installment is already paid. No second payment is required.",
+        code: "ALREADY_PAID",
+        installmentIndex: selection.installmentIndex,
+      });
+    }
+    const amountPaise = unpaidIndexes.reduce((sum, index) => sum + dueByIndex.get(index), 0);
+    selection = {
+      ...selection,
+      installmentIndexes: unpaidIndexes,
+      amountPaise,
+      amountMajor: amountPaise / 100,
+    };
     const rp = await getTenantRazorpayClient(tenantId);
     if (!rp) {
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
@@ -6256,7 +6372,7 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
         tenantId,
         draftToken,
         ...(paymentDraft.updatedAt ? { updatedAt: paymentDraft.updatedAt } : {}),
-        status: { notIn: ["PAYMENT_PENDING", "CONVERTED", "REJECTED"] },
+        status: convertedPaymentDraft ? "CONVERTED" : { notIn: ["PAYMENT_PENDING", "CONVERTED", "REJECTED"] },
       },
       data: { status: "PAYMENT_PENDING" },
     });
@@ -6294,6 +6410,8 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       });
     }
 
+    let paymentOrderResponse;
+    try {
     const receipt = `lp_${page.id}_${selection.mode}_${selection.installmentIndex}_${Date.now()}`;
     const pickPaymentField = (...keys) => {
       for (const key of keys) {
@@ -6405,7 +6523,7 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       return "";
     };
 
-    return res.status(201).json({
+    paymentOrderResponse = {
       paymentId: payment.id,
       orderId: paymentLink.id,
       paymentUrl: paymentLink.short_url,
@@ -6431,7 +6549,19 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
         title: page.title,
         tripId: page.tripId,
       },
-    });
+    };
+    } finally {
+      // PAYMENT_PENDING is only a short atomic claim for an already converted
+      // participant. The registration must remain CONVERTED while the new
+      // hosted payment link awaits payment.
+      if (convertedPaymentDraft) {
+        await prisma.pendingTripRegistration.updateMany({
+          where: { id: paymentDraft.id, status: "PAYMENT_PENDING", convertedToParticipantId: paymentDraft.convertedToParticipantId },
+          data: { status: "CONVERTED" },
+        });
+      }
+    }
+    return res.status(201).json(paymentOrderResponse);
   } catch (err) {
     if (err.status) {
       return res.status(err.status).json({ error: err.message, code: err.code });
@@ -6488,10 +6618,12 @@ publicRouter.get("/:slug/payment-status", async (req, res) => {
       }
       return linked?.payment || refreshed;
     }));
-    const paid = refreshedPayments.some((payment) => ["SUCCESS", "CAPTURED", "PAID"].includes(String(payment.status || "").toUpperCase()));
+    const confirmedPaymentIndex = refreshedPayments.findIndex((payment) => ["SUCCESS", "CAPTURED", "PAID"].includes(String(payment.status || "").toUpperCase()));
+    const paid = confirmedPaymentIndex >= 0;
     const extras = safeJsonParse(draft.extrasJson, {});
     return res.json({
       paid,
+      paymentLinkId: paid ? matchingPayments[confirmedPaymentIndex]?.gatewayId || "" : "",
       documentsUploaded: Boolean(extras.documents && extras.documents.completedAt),
       fields: {
         student_name: draft.studentName || "",
@@ -7346,6 +7478,53 @@ async function refreshHostedPaymentStatus(paymentRecord, paymentLinkId, tenantId
   return prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
 }
 
+async function findPendingLandingPageSelection({ page, tenantId, selection, draft }) {
+  if (!prisma.payment?.findMany) return null;
+  const payments = await prisma.payment.findMany({
+    where: { tenantId, gateway: "razorpay", status: "PENDING",
+      metadata: { contains: `"tripId":${Number(page.tripId)}` } },
+    select: { id: true, status: true, gatewayId: true, metadata: true },
+  }) || [];
+  const student = String(draft.studentName || "").trim().toLowerCase();
+  const email = String(draft.parentEmail || "").trim().toLowerCase();
+  const phone = String(draft.parentPhone || "").replace(/\D/g, "");
+  for (const payment of payments) {
+    if (String(payment.status || "").toUpperCase() !== "PENDING") continue;
+    const metadata = safeJsonParse(payment.metadata, {});
+    if (metadata.kind !== "landing-page-registration"
+      || Number(metadata.tripId) !== Number(page.tripId)) continue;
+    const sameDraft = metadata.draftToken === draft.draftToken;
+    const paidStudent = String(metadata.studentName || metadata.registration?.studentName || "").trim().toLowerCase();
+    const paidEmail = String(metadata.parentEmail || metadata.registration?.parentEmail || "").trim().toLowerCase();
+    const paidPhone = String(metadata.parentPhone || metadata.registration?.parentPhone || "").replace(/\D/g, "");
+    const samePerson = student && student === paidStudent
+      && ((email && email === paidEmail) || (phone && phone === paidPhone));
+    if (!sameDraft && !samePerson) continue;
+    const indexes = Array.isArray(metadata.installmentIndexes)
+      ? metadata.installmentIndexes : [metadata.installmentIndex];
+    if (!indexes.some((index) => selection.installmentIndexes.includes(Number(index)))) continue;
+    let gatewayStatus = "";
+    let gatewayExpired = false;
+    try {
+      const gateway = await getTenantRazorpayClient(tenantId);
+      if (payment.gatewayId && gateway?.client?.paymentLink?.fetch) {
+        const link = await gateway.client.paymentLink.fetch(payment.gatewayId);
+        gatewayStatus = String(link?.status || "").toUpperCase();
+        gatewayExpired = Boolean(link?.expire_by && Number(link.expire_by) * 1000 <= Date.now());
+      }
+    } catch (err) {
+      console.warn("[LandingPage] pending payment refresh skipped:", err.message);
+    }
+    if (["PAID", "PARTIALLY_PAID"].includes(gatewayStatus)) {
+      await prisma.payment.update({ where: { id: payment.id }, data: { status: "SUCCESS", paidAt: new Date() } });
+      continue;
+    }
+    if (["CANCELLED", "EXPIRED"].includes(gatewayStatus) || gatewayExpired) continue;
+    return payment;
+  }
+  return null;
+}
+
 function landingPaymentCoversSelection(metadata, selection) {
   const indexes = Array.isArray(metadata?.installmentIndexes)
     ? metadata.installmentIndexes
@@ -7612,6 +7791,15 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   }
 
+  const existingParticipantRedirect = await getExistingParticipantPortalRedirect(page, req, {
+    studentName: resolvedStudentName,
+    parentEmail: resolvedParentEmail,
+    parentPhone: resolvedParentPhone,
+  });
+  if (existingParticipantRedirect) {
+    return res.status(200).json({ ok: true, redirect: existingParticipantRedirect });
+  }
+
 
 
   const draftToken = crypto.randomBytes(32).toString("hex");
@@ -7757,6 +7945,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   // Registration-draft submissions no longer wait for an operator decision.
   // Convert the staging row immediately so the participant and its payment
   // schedule are available to CRM and portal users without approval.
+  let completedDraftId = draft.id;
   if (!draft.convertedToParticipantId) {
     const participant = await createParticipantFromLeadSubmission(
       page.tripId,
@@ -7772,12 +7961,32 @@ async function handleRegistrationDraft(req, res, page, formProps) {
       { includePassportStatus: requiresPassport },
     );
     if (participant) {
-      await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
-      await createDraftInvoiceForParticipant({ db: prisma, tenantId, tripId: page.tripId, participantId: participant.id });
-      await prisma.pendingTripRegistration.update({
-        where: { id: draft.id },
-        data: { status: "CONVERTED", convertedToParticipantId: participant.id },
+      const findConvertedDraft = () => prisma.pendingTripRegistration.findFirst({
+        where: { tenantId, tripId: page.tripId, convertedToParticipantId: participant.id },
+        select: { id: true },
       });
+      let convertedDraft = await findConvertedDraft();
+      if (!convertedDraft) {
+        await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
+        await createDraftInvoiceForParticipant({ db: prisma, tenantId, tripId: page.tripId, participantId: participant.id });
+        try {
+          await prisma.pendingTripRegistration.update({
+            where: { id: draft.id },
+            data: { status: "CONVERTED", convertedToParticipantId: participant.id },
+          });
+        } catch (err) {
+          if (err.code !== "P2002" || !String(err.meta?.target || "").includes("convertedToParticipantId")) throw err;
+          convertedDraft = await findConvertedDraft();
+          if (!convertedDraft) throw err;
+        }
+      }
+      if (convertedDraft && convertedDraft.id !== draft.id) {
+        if (isResumedDraft) {
+          return res.status(409).json({ error: "This participant is already registered for the trip.", code: "REGISTRATION_ALREADY_EXISTS" });
+        }
+        await prisma.pendingTripRegistration.delete({ where: { id: draft.id } });
+        completedDraftId = convertedDraft.id;
+      }
     }
   }
 
@@ -7791,7 +8000,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   await prisma.landingPageAnalytics.create({
 
-    data: { landingPageId: page.id, eventType: "FORM_SUBMIT", visitorIp: req.ip, metadata: JSON.stringify({ kind: "registration-draft", draftId: draft.id }), tenantId },
+    data: { landingPageId: page.id, eventType: "FORM_SUBMIT", visitorIp: req.ip, metadata: JSON.stringify({ kind: "registration-draft", draftId: completedDraftId }), tenantId },
 
   });
 
@@ -7819,7 +8028,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
     ok: true,
 
-    draftId: draft.id,
+    draftId: completedDraftId,
 
     redirect: { type: "customer-registration", url: portalRedirect },
 

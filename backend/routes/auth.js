@@ -352,7 +352,7 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
 // that tenant and broaden the check to the CRM identity tables that represent
 // a person in this flow (User, Contact, Patient), so customer registration can
 // fail fast before OTP is sent.
-async function customerRegistrationEmailExists(email, tenantId) {
+async function customerRegistrationEmailExists(email, tenantId, { portalRegistration = false } = {}) {
   const [userCount, contact, patient] = await Promise.all([
     prisma.user.count({
       where: {
@@ -381,8 +381,12 @@ async function customerRegistrationEmailExists(email, tenantId) {
     }),
   ]);
 
-  const existingContactIdentity =
-    contact && (contact.status !== "Lead" || !!contact.portalPasswordHash);
+  // A travel portal signup claims the existing CRM contact, regardless of
+  // whether lead scoring has since changed its status to Prospect/Customer.
+  // Only an existing portal password means this email can already sign in.
+  const existingContactIdentity = contact && (portalRegistration
+    ? !!contact.portalPasswordHash
+    : (contact.status !== "Lead" || !!contact.portalPasswordHash));
   return userCount > 0 || !!existingContactIdentity || !!patient;
 }
 
@@ -409,7 +413,13 @@ router.post("/check-email", async (req, res) => {
     let exists = false;
     if (email && email.includes("@")) {
       if (scopedTenantId) {
-        exists = await customerRegistrationEmailExists(email, scopedTenantId);
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: scopedTenantId },
+          select: { vertical: true },
+        });
+        exists = await customerRegistrationEmailExists(email, scopedTenantId, {
+          portalRegistration: tenant?.vertical === "travel",
+        });
       } else if (registrationVertical) {
         exists = !!(await prisma.user.findFirst({
           where: {

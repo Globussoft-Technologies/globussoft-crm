@@ -3144,7 +3144,7 @@ html[data-theme="dark"] [data-tour-surface="true"] {
 /* The multicolumn minimum is useful on desktop but overflows the app content
    area in a local browser or narrow laptop window. Stack cards before the two
    360px columns can force horizontal clipping. */
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .settings-grid {
     columns: 1;
   }
@@ -5444,7 +5444,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   overflow: hidden;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 899px) {
   .converted-leads__overview-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5458,7 +5458,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 899px) {
   .converted-leads__controls-row {
     grid-template-columns: 1fr;
   }
@@ -5537,7 +5537,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 899px) {
   .reports-page__overview {
     grid-template-columns: 1fr;
   }
@@ -6541,7 +6541,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 .workflow-webhook-footer > span {
   flex: 1;
 }
-@media (max-width: 1000px) {
+@media (max-width: 899px) {
   .workflow-layout {
     grid-template-columns: 230px minmax(0, 1fr);
   }
@@ -6559,7 +6559,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
     justify-self: end;
   }
 }
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .workflow-history-panel {
     width: 100%;
   }
@@ -7616,7 +7616,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   white-space: nowrap;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .lead-reports-page {
     padding: 1.25rem;
   }

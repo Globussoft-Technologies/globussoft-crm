@@ -51,6 +51,7 @@ import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
 import CountBadge from "../../components/CountBadge";
+import SearchableSelect from "../../components/ui/SearchableSelect";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -287,6 +288,7 @@ const EXPOSURE_STATUS_STYLE = {
 // on submit (description + amount required, the rest optional).
 const EMPTY_PAYABLE_FORM = {
   quoteId: "",
+  tripId: "",
   description: "",
   amount: "",
   dueDate: "",
@@ -507,6 +509,8 @@ export default function SuppliersAdmin() {
   const [payablesLoadingBy, setPayablesLoadingBy] = useState({}); // { [supplierId]: bool }
   const [quotesBySubBrand, setQuotesBySubBrand] = useState({}); // { [subBrand]: quote rows }
   const [quotesLoadingBySubBrand, setQuotesLoadingBySubBrand] = useState({});
+  const [tmcTrips, setTmcTrips] = useState(null);
+  const [tmcTripsLoading, setTmcTripsLoading] = useState(false);
   const [payableForm, setPayableForm] = useState({}); // { [supplierId]: form }
   const [payableSaving, setPayableSaving] = useState({}); // { [supplierId]: bool }
   // Mark-as-paid confirmation dialog state.
@@ -933,6 +937,27 @@ export default function SuppliersAdmin() {
       });
   };
 
+  const loadTmcTrips = async () => {
+    if (tmcTrips !== null || tmcTripsLoading) return;
+    setTmcTripsLoading(true);
+    try {
+      const trips = [];
+      let total = Infinity;
+      while (trips.length < total) {
+        const result = await fetchApi(`/api/travel/trips?fields=summary&limit=200&offset=${trips.length}`);
+        const batch = Array.isArray(result?.trips) ? result.trips : [];
+        trips.push(...batch);
+        total = Number(result?.total) || trips.length;
+        if (batch.length === 0) break;
+      }
+      setTmcTrips(trips);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to load TMC trips");
+    } finally {
+      setTmcTripsLoading(false);
+    }
+  };
+
   const togglePayablesPanel = (supplierId) => {
     if (expandedSupplierId === supplierId) {
       setExpandedSupplierId(null);
@@ -940,7 +965,8 @@ export default function SuppliersAdmin() {
     }
     setExpandedSupplierId(supplierId);
     const supplier = suppliers.find((row) => row.id === supplierId);
-    loadQuotesForSubBrand(supplier?.subBrand);
+    if (supplier?.subBrand === "tmc") loadTmcTrips();
+    else loadQuotesForSubBrand(supplier?.subBrand);
     // Always re-fetch on open — payables state shifts often (mark-paid,
     // cancel, third-party reconciliation), so stale-while-revalidate would
     // mislead the operator. Fresh GET on every expand is the safe default.
@@ -985,6 +1011,7 @@ export default function SuppliersAdmin() {
         method: "POST",
         body: JSON.stringify({
           quoteId: quoteId ? quoteId.replace(/^QT-/i, "") : null,
+          tripId: f.tripId ? Number(f.tripId) : null,
           description: descTrimmed,
           amount: amountNum,
           dueDate: f.dueDate || null,
@@ -2174,6 +2201,9 @@ export default function SuppliersAdmin() {
               maxHeight: "calc(100vh - 360px)",
               overflowY: "auto",
               overflowX: "auto",
+              // The expanded row uses 100cqw so its form fits the visible
+              // scroller even when the supplier table is wider than it.
+              containerType: "inline-size",
             }}
           >
           <table style={{ width: "100%", minWidth: 1120, borderCollapse: "collapse" }}>
@@ -2370,26 +2400,36 @@ export default function SuppliersAdmin() {
                           background: "rgba(255,255,255,0.02)",
                         }}
                       >
-                        <td
-                          colSpan={canWrite ? 9 : 8}
-                          style={{ padding: "12px 16px" }}
-                        >
-                          {renderPayablesPanel({
-                            supplier: s,
-                            quotes: quotesBySubBrand[s.subBrand] || [],
-                            quotesLoading: !!quotesLoadingBySubBrand[s.subBrand],
-                            canWrite,
-                            loading: !!payablesLoadingBy[s.id],
-                            payables: payablesBySupplier[s.id] || [],
-                            form: payableForm[s.id] || EMPTY_PAYABLE_FORM,
-                            saving: !!payableSaving[s.id],
-                            onFormChange: (patch) =>
-                              updatePayableForm(s.id, patch),
-                            onSubmit: (e) => handleAddPayable(e, s.id),
-                            onMarkPaid: (p) => openMarkPaidDialog(s.id, p),
-                            onCancel: (p) => handleCancelPayable(s.id, p),
-                            onDelete: (p) => handleDeletePayable(s.id, p),
-                          })}
+                        <td colSpan={canWrite ? 9 : 8} style={{ padding: 0 }}>
+                          <div
+                            style={{
+                              position: "sticky",
+                              left: 0,
+                              width: "100cqw",
+                              maxWidth: "100%",
+                              minWidth: 0,
+                              boxSizing: "border-box",
+                              padding: "12px 16px",
+                            }}
+                          >
+                            {renderPayablesPanel({
+                              supplier: s,
+                              quotes: quotesBySubBrand[s.subBrand] || [],
+                              quotesLoading: !!quotesLoadingBySubBrand[s.subBrand],
+                              trips: tmcTrips || [],
+                              tripsLoading: tmcTripsLoading,
+                              canWrite,
+                              loading: !!payablesLoadingBy[s.id],
+                              payables: payablesBySupplier[s.id] || [],
+                              form: payableForm[s.id] || EMPTY_PAYABLE_FORM,
+                              saving: !!payableSaving[s.id],
+                              onFormChange: (patch) => updatePayableForm(s.id, patch),
+                              onSubmit: (e) => handleAddPayable(e, s.id),
+                              onMarkPaid: (p) => openMarkPaidDialog(s.id, p),
+                              onCancel: (p) => handleCancelPayable(s.id, p),
+                              onDelete: (p) => handleDeletePayable(s.id, p),
+                            })}
+                          </div>
                         </td>
                       </tr>
                     )}
@@ -2607,6 +2647,8 @@ function renderPayablesPanel({
   supplier,
   quotes,
   quotesLoading,
+  trips,
+  tripsLoading,
   canWrite,
   loading,
   payables,
@@ -2653,7 +2695,7 @@ function renderPayablesPanel({
         >
           <thead>
             <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-              <th style={{ ...payableTh }}>Quote ID</th>
+              <th style={{ ...payableTh }}>{supplier.subBrand === "tmc" ? "TMC trip" : "Quote ID"}</th>
               <th style={{ ...payableTh }}>Description</th>
               <th style={{ ...payableTh }}>Amount</th>
               <th style={{ ...payableTh }}>Due</th>
@@ -2688,7 +2730,9 @@ function renderPayablesPanel({
                     opacity: isCancelled ? 0.6 : 1,
                   }}
                 >
-                  <td style={payableTd}>{p.quoteId ? `QT-${String(p.quoteId).padStart(4, "0")}` : payableQuoteId(p.notes)}</td>
+                  <td style={payableTd}>{supplier.subBrand === "tmc" && p.tripId
+                    ? (trips.find((trip) => trip.id === p.tripId)?.tripCode || `Trip #${p.tripId}`)
+                    : (p.quoteId ? `QT-${String(p.quoteId).padStart(4, "0")}` : payableQuoteId(p.notes))}</td>
                   <td style={payableTd}>{p.description || "—"}</td>
                   <td style={payableTd}>
                     {amountDisplay} {currency}
@@ -2811,19 +2855,33 @@ function renderPayablesPanel({
             borderTop: "1px dashed var(--border-color)",
           }}
         >
-          <select
-            value={form.quoteId}
-            onChange={(e) => onFormChange({ quoteId: e.target.value })}
-            style={inputStyle}
-            aria-label={`Payable quote ID for ${supplier.name}`}
-          >
-            <option value="">{quotesLoading ? "Loading quotes…" : "Select Quote ID *"}</option>
-            {quotes.map((quote) => (
-              <option key={quote.id} value={`QT-${quote.id}`}>
-                QT-{String(quote.id).padStart(4, "0")} · {quote.contact?.name || "Unnamed customer"}
-              </option>
-            ))}
-          </select>
+          {supplier.subBrand === "tmc" ? (
+            <SearchableSelect
+              value={form.tripId}
+              onChange={(tripId) => onFormChange({ tripId })}
+              options={trips.map((trip) => ({
+                value: String(trip.id),
+                label: `${trip.tripCode} · ${trip.destination}`,
+              }))}
+              placeholder={tripsLoading ? "Loading TMC trips…" : "Select TMC trip"}
+              emptyLabel={tripsLoading ? "Loading TMC trips…" : "No matching TMC trips"}
+              style={inputStyle}
+              ariaLabel={`Payable TMC trip for ${supplier.name}`}
+            />
+          ) : (
+            <SearchableSelect
+              value={form.quoteId}
+              onChange={(quoteId) => onFormChange({ quoteId })}
+              options={quotes.map((quote) => ({
+                value: `QT-${quote.id}`,
+                label: `QT-${String(quote.id).padStart(4, "0")} · ${quote.contact?.name || "Unnamed customer"}`,
+              }))}
+              placeholder={quotesLoading ? "Loading quotes…" : "Select Quote ID"}
+              emptyLabel={quotesLoading ? "Loading quotes…" : "No matching quotes"}
+              style={inputStyle}
+              ariaLabel={`Payable quote ID for ${supplier.name}`}
+            />
+          )}
           <input
             placeholder="Description *"
             value={form.description}

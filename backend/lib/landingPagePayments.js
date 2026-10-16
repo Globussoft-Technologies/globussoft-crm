@@ -503,6 +503,110 @@ function resolveLandingPagePaymentSelection(page, selection = {}) {
   };
 }
 
+async function getLandingPagePaymentBalance({ db = prisma, tripId, draft, installments, currency = "INR" }) {
+  let participantId = Number(draft?.convertedToParticipantId) || null;
+  if (!participantId && draft?.studentName && (draft.parentEmail || draft.parentPhone)) {
+    const parentMatches = [];
+    if (draft.parentEmail) parentMatches.push({ parentEmail: draft.parentEmail });
+    if (draft.parentPhone) parentMatches.push({ parentPhone: draft.parentPhone });
+    const participant = await db.tripParticipant.findFirst({
+      where: { tripId: Number(tripId), fullName: draft.studentName, OR: parentMatches },
+      select: { id: true },
+    });
+    participantId = participant?.id || null;
+  }
+
+  const ledger = participantId
+    ? await db.tripInstalmentPayment.findMany({
+        where: { tripId: Number(tripId), participantId },
+        select: { instalmentIndex: true, amount: true, paidAmount: true, status: true },
+      })
+    : [];
+  const byIndex = new Map(ledger.map((row) => [Number(row.instalmentIndex), row]));
+  const amountByIndex = new Map(installments.map((installment) => {
+    const row = byIndex.get(installment.index);
+    return [installment.index, row && Number(row.amount) > 0
+      ? Math.round(Number(row.amount) * 100) : installment.amountPaise];
+  }));
+  // The ledger can lag a successful gateway callback. Count each confirmed
+  // payment link as well, including duplicate links created from fresh drafts.
+  const chargedByIndex = new Map();
+  let overflowPaise = 0;
+  const successfulPayments = draft?.tenantId && db.payment?.findMany
+    ? await db.payment.findMany({
+        where: {
+          tenantId: draft.tenantId,
+          status: { in: ["SUCCESS", "CAPTURED", "PAID"] },
+          metadata: { contains: `"tripId":${Number(tripId)}` },
+        },
+        select: { id: true, gatewayId: true, status: true, amount: true, metadata: true },
+      })
+    : [];
+  const seenGatewayPayments = new Set();
+  const matchesDraft = (metadata) => {
+    if (metadata.kind !== "landing-page-registration" || Number(metadata.tripId) !== Number(tripId)) return false;
+    if (participantId && metadata.participantId) return Number(metadata.participantId) === Number(participantId);
+    const student = String(metadata.studentName || metadata.registration?.studentName || "").trim().toLowerCase();
+    if (!student || student !== String(draft.studentName || "").trim().toLowerCase()) return false;
+    const email = String(metadata.parentEmail || metadata.registration?.parentEmail || "").trim().toLowerCase();
+    const phone = String(metadata.parentPhone || metadata.registration?.parentPhone || "").replace(/\D/g, "");
+    return Boolean((draft.parentEmail && email === String(draft.parentEmail).trim().toLowerCase())
+      || (draft.parentPhone && phone === String(draft.parentPhone).replace(/\D/g, "")));
+  };
+  for (const payment of successfulPayments) {
+    if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(payment.status || "").toUpperCase())) continue;
+    const key = payment.gatewayId || `payment:${payment.id}`;
+    if (seenGatewayPayments.has(key)) continue;
+    let metadata;
+    try { metadata = JSON.parse(payment.metadata || "{}"); } catch { continue; }
+    if (!matchesDraft(metadata)) continue;
+    seenGatewayPayments.add(key);
+    let remaining = Math.max(0, Math.round(Number(payment.amount || 0) * 100));
+    const indexes = Array.isArray(metadata.installmentIndexes)
+      ? metadata.installmentIndexes : [metadata.installmentIndex];
+    for (const rawIndex of indexes) {
+      const installment = installments.find((row) => row.index === Number(rawIndex));
+      if (!installment || remaining <= 0) continue;
+      const amount = Math.min(remaining, amountByIndex.get(installment.index));
+      chargedByIndex.set(installment.index, (chargedByIndex.get(installment.index) || 0) + amount);
+      remaining -= amount;
+    }
+    overflowPaise += remaining;
+  }
+
+  const balances = installments.map((installment) => {
+    const row = byIndex.get(installment.index);
+    const amountPaise = amountByIndex.get(installment.index);
+    const recordedPaidPaise = String(row?.status || "").toLowerCase() === "paid"
+      ? amountPaise
+      : Math.round(Number(row?.paidAmount || 0) * 100);
+    const chargedPaise = chargedByIndex.get(installment.index) || 0;
+    overflowPaise += Math.max(0, Math.max(recordedPaidPaise, chargedPaise) - amountPaise);
+    const paidPaise = Math.max(0, Math.min(amountPaise, Math.max(recordedPaidPaise, chargedPaise)));
+    return {
+      index: installment.index,
+      amountPaise,
+      paidPaise,
+      duePaise: amountPaise - paidPaise,
+    };
+  });
+  for (const balance of balances) {
+    const credit = Math.min(overflowPaise, balance.duePaise);
+    if (credit > 0) balance.creditPaise = credit;
+    balance.paidPaise += credit;
+    balance.duePaise -= credit;
+    overflowPaise -= credit;
+  }
+  return {
+    currency,
+    installments: balances,
+    overpaidPaise: overflowPaise,
+    totalPaise: balances.reduce((sum, row) => sum + row.amountPaise, 0),
+    paidPaise: balances.reduce((sum, row) => sum + row.paidPaise, 0),
+    remainingPaise: balances.reduce((sum, row) => sum + row.duePaise, 0),
+  };
+}
+
 async function applyLandingPagePaymentToTrip({
   db = prisma,
   tripId,
@@ -727,6 +831,7 @@ module.exports = {
   applyLandingPagePaymentToTrip,
   ensureLandingPagePaymentRegistration,
   getLandingPagePaymentConfig,
+  getLandingPagePaymentBalance,
   parseMoneyAmount,
   parsePageContent,
   resolveLandingPagePaymentSelection,

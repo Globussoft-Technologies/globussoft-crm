@@ -958,8 +958,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const bottomScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__bottom');
-    // Generic CRM mirrors Freshsales with one sticky scrollbar at the bottom
-    // of the records and no duplicate scrollbar above the header.
+    // Generic CRM keeps the horizontal scrollbar at the bottom of the grid.
     expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
     const topScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top');
     const stickyBottom = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom');
@@ -977,6 +976,34 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(filtersToolbar.style.height).toBe('');
     expect(filtersToolbar).toContainElement(actionsToolbar);
     expect(screen.queryByRole('button', { name: 'Go back' })).toBeNull();
+  });
+
+  it('lets the wheel move across columns when the short Generic grid has no rows to scroll', async () => {
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+
+    const grid = container.querySelector('.leads-split-table--no-topbar');
+    const scrollbar = grid.querySelector('.top-scroll-sync__sticky-bottom');
+    Object.defineProperties(scrollbar, {
+      clientWidth: { configurable: true, value: 400 },
+      scrollWidth: { configurable: true, value: 1200 },
+    });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 600 },
+    });
+
+    fireEvent.wheel(grid, { deltaY: 80 });
+    expect(scrollbar.scrollLeft).toBe(80);
+    fireEvent.scroll(scrollbar);
+    expect(grid.querySelector('.top-scroll-sync__bottom').firstElementChild.style.left).toBe('-80px');
+
+    Object.defineProperty(grid, 'scrollHeight', { configurable: true, value: 900 });
+    fireEvent.wheel(grid, { deltaY: 80 });
+    expect(scrollbar.scrollLeft).toBe(80);
+
+    fireEvent.wheel(grid, { deltaX: 40, deltaY: 80 });
+    expect(scrollbar.scrollLeft).toBe(120);
   });
 
   it('persists dragged column widths for the Leads table layout', async () => {
@@ -1164,7 +1191,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
         this.closest?.('tbody') &&
         this.closest?.('.leads-table-frozen-pane')
       ) {
-        return makeRect(42, 240);
+        return makeRect(this.dataset.leadRowId === '102' ? 75 : 42, 240);
       }
       if (
         this?.tagName === 'TR' &&
@@ -1174,6 +1201,12 @@ describe('Leads Freshsales-style list UI affordances', () => {
         return makeRect(66, 920);
       }
       return makeRect(0, 0);
+    });
+    const heightMock = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function () {
+      if (this?.tagName !== 'TR' || !this.closest?.('tbody')) return 0;
+      if (this.closest('.leads-table-frozen-pane')) return this.dataset.leadRowId === '102' ? 75 : 42;
+      if (this.closest('.leads-table-scroll-pane')) return 66;
+      return 0;
     });
 
     try {
@@ -1194,9 +1227,14 @@ describe('Leads Freshsales-style list UI affordances', () => {
         expect(scrollBody).toBeTruthy();
         expect(within(frozenPane).getByText('Name')).toBeInTheDocument();
         expect(within(container.querySelector('.leads-table-scroll-pane')).queryByText('Name')).toBeNull();
+        expect(frozenBody.style.height).toBe('66px');
+        expect(scrollBody.style.height).toBe('66px');
+        expect(frozenPane.querySelector('tr[data-lead-row-id="102"]').style.height).toBe('75px');
+        expect(container.querySelector('.leads-table-scroll-pane tr[data-lead-row-id="102"]').style.height).toBe('75px');
       });
     } finally {
       rectMock.mockRestore();
+      heightMock.mockRestore();
     }
   });
 });

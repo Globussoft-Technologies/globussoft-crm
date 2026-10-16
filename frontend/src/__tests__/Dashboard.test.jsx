@@ -103,7 +103,7 @@ describe('<Dashboard />', () => {
           { id: 2, title: 'Recent B', stage: 'contacted', amount: 2000, createdAt: new Date().toISOString() },
         ]);
       }
-      if (url.startsWith('/api/contacts')) return Promise.resolve([{ id: 1 }, { id: 2 }, { id: 3 }]);
+      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 3 });
       return Promise.resolve([]);
     });
 
@@ -124,6 +124,20 @@ describe('<Dashboard />', () => {
     expect(screen.getByText('7.0%')).toBeInTheDocument();
   });
 
+  it('shows the full contact count instead of the first 100 contacts', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deals/stats') return Promise.resolve({});
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 2105 });
+      return Promise.resolve([]);
+    });
+
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText('2,105')).toBeInTheDocument());
+    expect(fetchApi).toHaveBeenCalledWith('/api/contacts?count=1');
+    expect(fetchApi).not.toHaveBeenCalledWith('/api/contacts');
+  });
+
   it('Recent Deals widget reads from /api/deals?limit=10 (separate fetchApi call)', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/deals/stats')) {
@@ -138,7 +152,7 @@ describe('<Dashboard />', () => {
           { id: 101, title: 'Most-recent Y', stage: 'won', amount: 2000, createdAt: new Date().toISOString() },
         ]);
       }
-      if (url.startsWith('/api/contacts')) return Promise.resolve([]);
+      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 0 });
       return Promise.resolve([]);
     });
 
@@ -169,7 +183,7 @@ describe('<Dashboard />', () => {
         });
       }
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
-      if (url.startsWith('/api/contacts')) return Promise.resolve([]);
+      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 0 });
       return Promise.resolve([]);
     });
 
@@ -197,7 +211,7 @@ describe('<Dashboard />', () => {
         });
       }
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
-      if (url.startsWith('/api/contacts')) return Promise.resolve([]);
+      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 0 });
       return Promise.resolve([]);
     });
 

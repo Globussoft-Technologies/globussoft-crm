@@ -140,6 +140,9 @@ const GENERIC_BASE_PERMS = [
   'payments.read', 'lead_scoring.read', 'cpq.read', 'territories.read',
   'calendar.read',
 ];
+const GENERIC_ADMIN_WORKSPACE_PERMS = [
+  'transport_workspace.read', 'broker_workspace.read', 'billing_workspace.read',
+];
 const GENERIC_USER_PERMS = [
   'contacts.read', 'deals.read', 'leads.read', 'tasks.read', 'projects.read',
   'pipeline.read', 'reports.read', 'reports.write', 'communications.read', 'tickets.read',
@@ -148,7 +151,7 @@ const GENERIC_USER_PERMS = [
 function permsForRole(role, vertical) {
   if (vertical === 'generic' && role === 'USER') return new Set(GENERIC_USER_PERMS);
   if (role === 'ADMIN') {
-    return new Set([...GENERIC_BASE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_ADMIN_EXTRAS]);
+    return new Set([...GENERIC_BASE_PERMS, ...GENERIC_ADMIN_WORKSPACE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_ADMIN_EXTRAS]);
   }
   if (role === 'MANAGER') {
     return new Set([...GENERIC_BASE_PERMS.filter((k) => !k.startsWith('roles.') && !k.startsWith('staff.manage') && !k.startsWith('settings.manage') && !k.startsWith('audit.') && !k.startsWith('developer.')), ...TRAVEL_MANAGER_PERMS]);
@@ -369,9 +372,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/pickup-plot-inventory');
       expect(screen.getByText('Pickup Inventory').closest('a').getAttribute('href')).toBe('/pickup-inventory');
-      expect(screen.getByText('Transport Persons').closest('a').getAttribute('href')).toBe('/transport-persons');
+      const customerWorkflowsLink = screen.getByText('Customer Workflows').closest('a');
+      const transportPersonsLink = screen.getByText('Transport Persons').closest('a');
+      expect(transportPersonsLink.getAttribute('href')).toBe('/transport-persons');
+      expect(customerWorkflowsLink.compareDocumentPosition(transportPersonsLink) & 4).toBe(4);
       expect(screen.getByText('Sales Executives').closest('a').getAttribute('href')).toBe('/plot-brokers');
       expect(screen.getByText('Billing Persons').closest('a').getAttribute('href')).toBe('/billing-persons');
+      expect(screen.getByText('Transport Work').closest('a')).toHaveAttribute('href', '/transport-workspace');
+      expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
+      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/billing-workspace');
       expect(screen.queryByText('Customer Status')).toBeNull();
       generic.unmount();
 
@@ -379,25 +388,32 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByRole('button', { name: 'Pickup & Plot' })).toBeNull();
     });
 
-    it('shows only My Trips to a transport person', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['transport_person'] });
-      expect(screen.getByText('My Trips').closest('a')).toHaveAttribute('href', '/home');
-      expect(screen.queryByText('Dashboard')).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
+    it('shows transport work from permission, regardless of the role name', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['RENAMED_FIELD_TEAM'], permissions: ['transport_workspace.read'] });
+      fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
+      expect(screen.getByText('Transport Work').closest('a')).toHaveAttribute('href', '/transport-workspace');
+      expect(screen.queryByText('Site Visits')).toBeNull();
+      expect(screen.queryByText('Transport Persons')).toBeNull();
     });
 
-    it('shows only Site Visits to a sales executive with the legacy BROOKER spelling', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['BROOKER'] });
-      expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/home');
-      expect(screen.queryByText('Dashboard')).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
+    it('shows site-visit work from permission, regardless of the role name', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['CUSTOM_TEAM'], permissions: ['broker_workspace.read'] });
+      fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
+      expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
+      expect(screen.queryByText('Transport Work')).toBeNull();
     });
 
-    it('shows only the Billing Queue to billing department staff', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['BILLING'] });
-      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/home');
-      expect(screen.queryByText('Dashboard')).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Work Management' })).toBeNull();
+    it('shows billing work from permission, regardless of the role name', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['ACCOUNTS_TEAM'], permissions: ['billing_workspace.read'] });
+      fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
+      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/billing-workspace');
+      expect(screen.queryByText('Site Visits')).toBeNull();
+    });
+
+    it('hides a workspace when its permission is removed, even when the role name matches the work type', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['BROOKER'], permissions: [] });
+      expect(screen.queryByRole('button', { name: 'Pickup & Plot' })).toBeNull();
+      expect(screen.queryByText('Site Visits')).toBeNull();
     });
 
     it('does not expose Pickup & Plot in wellness or travel navigation', () => {

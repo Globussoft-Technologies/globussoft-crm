@@ -198,9 +198,9 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
   };
 
   // --- Load thread list --------------------------------------
-  const loadList = async () => {
+  const loadList = async ({ background = false } = {}) => {
     const gen = ++listGenRef.current;
-    setLoadingList(true);
+    if (!background) setLoadingList(true);
     try {
       // "Blocked" isn't a thread status — it lists the tenant's opt-out
       // (blocked) numbers. Fetch from /opt-outs and map each row into the
@@ -220,7 +220,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
           unreadCount: 0,
           _blocked: o,
         })));
-        setLoadingList(false);
+        if (!background) setLoadingList(false);
         return;
       }
 
@@ -254,10 +254,12 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       }
     } catch (err) {
       if (gen !== listGenRef.current) return;
-      notify.error(err.message || 'Failed to load threads.');
-      setThreads([]);
+      if (!background) {
+        notify.error(err.message || 'Failed to load threads.');
+        setThreads([]);
+      }
     }
-    if (gen === listGenRef.current) setLoadingList(false);
+    if (!background && gen === listGenRef.current) setLoadingList(false);
   };
 
   // Open the conversation behind a blocked number (rows in the Blocked list
@@ -324,7 +326,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
   // Cost: two lightweight GETs per user per 10s — negligible.
   useEffect(() => {
     const id = setInterval(() => {
-      loadList();
+      loadList({ background: isMeta });
       // Also refetch the currently-open detail so new bubbles appear
       // even without the socket event firing. The detail-fetch is
       // cheap (one thread + last 50 messages).
@@ -404,7 +406,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       if (!cancelled) setContactOptions(Array.from(seen.values()));
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [isMeta]);
 
   // --- Real-time Socket.IO push for inbound messages + delivery
   //     status updates. The backend's whatsapp_webhook handler emits to
@@ -694,17 +696,23 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
         outBody = `${quote}\n${outBody}`;
       }
       // Errors bubble to the outer catch below (CONTACT_OPTED_OUT handling).
-      await fetchApi(`${sendBase}/send`, {
+      const sendResult = await fetchApi(`${sendBase}/send`, {
         method: 'POST',
         body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
         silent: isMeta,
       });
       setReply('');
       setReplyToMsg(null);
-      // Reload detail
-      const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
-      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
-      loadList();
+      // Generic CRM may merge an old digits-only automation thread into its
+      // canonical E.164 thread during this send. Follow the returned id so the
+      // open pane stays on the surviving conversation without a page reload.
+      const refreshedThreadId = isMeta && sendResult?.threadId
+        ? Number(sendResult.threadId)
+        : selectedId;
+      if (refreshedThreadId !== selectedId) setSelectedId(refreshedThreadId);
+      const fresh = await fetchApi(`/api/whatsapp/threads/${refreshedThreadId}`);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, refreshedThreadId));
+      loadList({ background: isMeta });
     } catch (err) {
       const msg = explainWhatsAppSendError(err, isMeta);
       if (msg.includes('CONTACT_OPTED_OUT')) {
@@ -769,7 +777,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       setSelectedTemplateName('');
       setTemplateParams([]);
       setUseTemplate(false);
-      await loadList();
+      await loadList({ background: isMeta });
       // Meta's async send endpoint returns the created thread as a top-level
       // threadId (not resp.thread.id). Keep this scoped to the generic Meta
       // inbox; WhatsApp Web has its own transport and existing flow.

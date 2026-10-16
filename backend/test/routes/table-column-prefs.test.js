@@ -80,8 +80,13 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.status).toBe(200);
     expect(res.body.visible).toContain('webForm');
     expect(res.body.visible).toContain('location');
+    expect(res.body.visible).toContain('pickupLocation');
     expect(res.body.availableColumns.find((c) => c.key === 'location')).toMatchObject({
       label: 'Location',
+    });
+    expect(res.body.availableColumns.find((c) => c.key === 'pickupLocation')).toMatchObject({
+      label: 'Pickup Location',
+      lockedVisible: true,
     });
   });
 
@@ -93,7 +98,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 
     expect(res.status).toBe(200);
-    expect(res.body.visible).toEqual(['name', 'email', 'actions']);
+    expect(res.body.visible).toEqual(['name', 'email', 'pickupLocation', 'actions']);
     expect(res.body.visible).not.toContain('tags');
   });
 
@@ -174,7 +179,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
 
     expect(res.status).toBe(200);
     // Locked columns restored (name first, actions appended), known keys kept, unknown dropped.
-    expect(res.body.visible).toEqual(['name', 'status', 'title', 'website', 'actions']);
+    expect(res.body.visible).toEqual(['name', 'status', 'title', 'website', 'pickupLocation', 'actions']);
     expect(prisma.tableColumnPreference.upsert).toHaveBeenCalled();
   });
 

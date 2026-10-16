@@ -11,6 +11,10 @@ emailSender.sendEmail = vi.fn();
 const smsProvider = requireCJS('../../services/smsProvider');
 smsProvider.resolveProviderConfig = vi.fn();
 smsProvider.sendSms = vi.fn();
+const assignmentWhatsApp = requireCJS('../../lib/pickupPlotAssignmentWhatsApp');
+assignmentWhatsApp.safeNotifyCustomerPickupPlotAssignments = vi.fn();
+const paymentLink = requireCJS('../../lib/paymentLink');
+paymentLink.createInvoicePaymentLink = vi.fn();
 
 prisma.tenant = prisma.tenant || {};
 prisma.pickupLocation = prisma.pickupLocation || {};
@@ -48,13 +52,17 @@ prisma.transportPerson.findMany = vi.fn();
 prisma.transportPerson.create = vi.fn();
 prisma.transportPerson.update = vi.fn();
 prisma.transportPerson.updateMany = vi.fn();
+prisma.transportPerson.upsert = vi.fn();
 prisma.plotBroker.findMany = vi.fn();
 prisma.plotBroker.create = vi.fn();
 prisma.plotBroker.update = vi.fn();
 prisma.plotBroker.updateMany = vi.fn();
+prisma.plotBroker.upsert = vi.fn();
 prisma.billingPerson.findMany = vi.fn();
 prisma.billingPerson.create = vi.fn();
 prisma.billingPerson.update = vi.fn();
+prisma.billingPerson.updateMany = vi.fn();
+prisma.billingPerson.upsert = vi.fn();
 prisma.customerPickup.findMany = vi.fn();
 prisma.customerPickup.findUnique = vi.fn();
 prisma.customerPickup.upsert = vi.fn();
@@ -63,6 +71,7 @@ prisma.invoice.create = vi.fn();
 prisma.invoice.update = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.findFirst = vi.fn();
+prisma.payment.findMany = vi.fn();
 prisma.payment.update = vi.fn();
 prisma.plotBooking.findFirst = vi.fn();
 prisma.plotBooking.findMany = vi.fn();
@@ -82,7 +91,10 @@ function makeApp({ tenantId = 7, role = 'ADMIN' } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId: 3, tenantId, role, vertical: 'generic' };
+    // Route-behaviour suite: permission middleware is covered separately.
+    // Treat the fixture actor as an owner so workspace RBAC does not mask the
+    // workflow assertions below.
+    req.user = { userId: 3, tenantId, role, vertical: 'generic', isOwner: true };
     next();
   });
   app.use('/api/pickup-plot-inventory', router);
@@ -119,9 +131,14 @@ beforeEach(() => {
   prisma.plotWorkflowEvent.create.mockResolvedValue({ id: 111 });
   prisma.plotWorkflowEvent.findMany.mockResolvedValue([]);
   prisma.payment.findFirst.mockResolvedValue(null);
+  prisma.payment.findMany.mockResolvedValue([]);
   emailSender.sendEmail.mockResolvedValue({ sent: true });
   smsProvider.resolveProviderConfig.mockResolvedValue(null);
   smsProvider.sendSms.mockResolvedValue({ success: true });
+  assignmentWhatsApp.safeNotifyCustomerPickupPlotAssignments.mockResolvedValue({ sent: 0, code: 'NO_NEW_ASSIGNMENTS' });
+  paymentLink.createInvoicePaymentLink.mockResolvedValue({
+    url: 'https://pay.example.test/plot-booking', gateway: 'razorpay', paymentId: 801,
+  });
   prisma.user.findMany.mockResolvedValue([]);
   prisma.role.findMany.mockResolvedValue([]);
   prisma.pickupLocation.findFirst.mockResolvedValue(null);
@@ -131,6 +148,394 @@ beforeEach(() => {
   prisma.plotBooking.findFirst.mockResolvedValue(null);
   prisma.plotBooking.create.mockResolvedValue({ id: 91, bookingNumber: 'BOOK-ABC123', status: 'PLOT_RESERVED' });
   prisma.plotWorkflowEvent.findMany.mockResolvedValue([]);
+});
+
+describe('Generic CRM admin workspace overview', () => {
+  test('shows transport assignments across all linked staff profiles', async () => {
+    prisma.transportPerson.findMany.mockResolvedValue([
+      {
+        id: 41, userId: 21, name: 'Sant Kumar', isActive: true,
+        assignmentPairsJson: JSON.stringify([{ customerId: 61, plotSiteId: 30 }]),
+        pickupLocationIdsJson: JSON.stringify([4]), assignmentStatusJson: null,
+      },
+      {
+        id: 42, userId: 22, name: 'Harish Rao', isActive: true,
+        assignmentPairsJson: JSON.stringify([{ customerId: 62, plotSiteId: 31 }]),
+        pickupLocationIdsJson: JSON.stringify([5]), assignmentStatusJson: null,
+      },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 61, name: 'Priya Shah' }, { id: 62, name: 'Li Wei' },
+    ]);
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 30, name: 'Plot 30' }, { id: 31, name: 'Plot 31' },
+    ]);
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .get('/api/pickup-plot-inventory/transport-persons/me');
+
+    expect(response.status).toBe(200);
+    expect(response.body.isAdminOverview).toBe(true);
+    expect(response.body.transportPerson).toBeNull();
+    expect(response.body.assignments.map((row) => row.assignedStaff.name)).toEqual(['Sant Kumar', 'Harish Rao']);
+  });
+
+  test('updates the selected Transport profile from the admin overview', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, userId: 21, tenantId: 7, name: 'Sant Kumar', isActive: true,
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      pickupLocationIdsJson: '[4]', assignmentStatusJson: null,
+      updatedAt: new Date('2026-10-07T00:00:00Z'),
+    });
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61-plot-30/status?assignedProfileId=41')
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.transportPerson.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: 41, isActive: true },
+    });
+    expect(response.body.status).toBe('ACCEPTED');
+  });
+
+  test('shows only site-visit assignments with a live plot across linked sales executives', async () => {
+    prisma.plotBroker.findMany.mockResolvedValue([
+      {
+        id: 51, userId: 31, name: 'Sanjeev', isActive: true,
+        assignmentPairsJson: JSON.stringify([{ customerId: 61, plotSiteId: 30 }]),
+        workflowStatusJson: null,
+      },
+      {
+        id: 52, userId: 32, name: 'Anita', isActive: true,
+        customerIdsJson: JSON.stringify([62]), plotSiteIdsJson: null,
+        workflowStatusJson: null,
+      },
+    ]);
+    prisma.transportPerson.findMany.mockResolvedValue([]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 61, name: 'Priya Shah' }, { id: 62, name: 'Li Wei' },
+    ]);
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 30, name: 'Plot 30' }, { id: 31, name: 'Plot 31' },
+    ]);
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .get('/api/pickup-plot-inventory/brokers/me');
+
+    expect(response.status).toBe(200);
+    expect(response.body.isAdminOverview).toBe(true);
+    expect(response.body.broker).toBeNull();
+    expect(response.body.customers.map((row) => row.assignedStaff.name)).toEqual(['Sanjeev']);
+    expect(response.body.summary).toEqual({ total: 1, completed: 0, waiting: 1 });
+    expect(prisma.plotSite.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tenantId: 7,
+        isActive: true,
+        OR: expect.arrayContaining([{ availability: 'AVAILABLE' }, { id: { in: [30] } }]),
+      }),
+    }));
+  });
+
+  test('shows completed transport handoffs that still need a Sales Executive assignment', async () => {
+    prisma.plotBroker.findMany.mockResolvedValue([]);
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41, name: 'Sant Kumar', isActive: true,
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED","updatedAt":"2026-10-15T10:00:00.000Z"}}',
+    }]);
+    prisma.contact.findMany.mockResolvedValue([{ id: 61, name: 'Priya Shah' }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30, name: 'Plot 30' }]);
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .get('/api/pickup-plot-inventory/brokers/me');
+
+    expect(response.status).toBe(200);
+    expect(response.body.customers).toEqual([
+      expect.objectContaining({
+        id: 61,
+        tripCompleted: true,
+        awaitingAssignment: true,
+        assignedStaff: null,
+      }),
+    ]);
+  });
+
+  test('shows billing assignments across all linked billing staff', async () => {
+    prisma.billingPerson.findMany.mockResolvedValue([
+      {
+        id: 71, userId: 41, name: 'Bina', isActive: true,
+        assignmentPairsJson: JSON.stringify([{ customerId: 61, plotSiteId: 30 }]),
+      },
+      {
+        id: 72, userId: 42, name: 'Meera', isActive: true,
+        assignmentPairsJson: JSON.stringify([{ customerId: 62, plotSiteId: 31 }]),
+      },
+    ]);
+    prisma.plotBroker.findMany.mockResolvedValue([
+      {
+        id: 51, name: 'Sanjeev', isActive: true,
+        assignmentPairsJson: JSON.stringify([
+          { customerId: 61, plotSiteId: 30 }, { customerId: 62, plotSiteId: 31 },
+        ]),
+        workflowStatusJson: JSON.stringify({
+          'customer-61-plot-30': { status: 'PLOT_SELECTED', billingStatus: 'PLOT_RESERVED' },
+          'customer-62-plot-31': { status: 'PLOT_SELECTED', billingStatus: 'PLOT_RESERVED' },
+        }),
+      },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 61, name: 'Priya Shah' }, { id: 62, name: 'Li Wei' },
+    ]);
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 30, name: 'Plot 30' }, { id: 31, name: 'Plot 31' },
+    ]);
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .get('/api/pickup-plot-inventory/billing/me');
+
+    expect(response.status).toBe(200);
+    expect(response.body.isAdminOverview).toBe(true);
+    expect(response.body.billingUser).toBeNull();
+    expect(response.body.assignments.map((row) => row.assignedStaff.name)).toEqual(['Bina', 'Meera']);
+  });
+
+  test('shows Sales Executive handoffs that still need a Billing assignment', async () => {
+    prisma.billingPerson.findMany.mockResolvedValue([]);
+    prisma.plotBroker.findMany.mockResolvedValue([{
+      id: 51, name: 'Sanjeev', isActive: true,
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: '{"customer-61-plot-30":{"status":"PLOT_SELECTED","billingStatus":"PLOT_RESERVED"}}',
+    }]);
+    prisma.contact.findMany.mockResolvedValue([{ id: 61, name: 'Priya Shah' }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30, name: 'Plot 30' }]);
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .get('/api/pickup-plot-inventory/billing/me');
+
+    expect(response.status).toBe(200);
+    expect(response.body.assignments).toEqual([
+      expect.objectContaining({
+        customer: expect.objectContaining({ id: 61 }),
+        awaitingAssignment: true,
+        assignedStaff: null,
+      }),
+    ]);
+  });
+
+  test('assigns a completed transport handoff directly to a Sales Executive', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 31, tenantId: 7, name: 'Sanjeev', customerIdsJson: null,
+      plotSiteIdsJson: null, assignmentPairsJson: null, workflowStatusJson: null, isActive: true,
+    });
+    prisma.plotBroker.findMany.mockResolvedValue([]);
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41,
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED"}}',
+    }]);
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .patch('/api/pickup-plot-inventory/brokers/me/assignments/awaiting-broker-customer-61-plot-30/assign')
+      .send({ targetProfileId: 51 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.assignedStaff).toMatchObject({ profileId: 51, name: 'Sanjeev' });
+    expect(prisma.plotBroker.update).toHaveBeenCalledWith({
+      where: { id: 51 },
+      data: {
+        customerIdsJson: '[61]',
+        plotSiteIdsJson: '[30]',
+        assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      },
+    });
+  });
+
+  test('assigns a Sales Executive handoff directly to Billing staff', async () => {
+    prisma.billingPerson.findFirst.mockResolvedValue({
+      id: 71, userId: 41, tenantId: 7, name: 'Bina', customerIdsJson: null,
+      plotSiteIdsJson: null, assignmentPairsJson: null, isActive: true,
+    });
+    prisma.billingPerson.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, tenantId: 7, assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: '{"customer-61-plot-30":{"status":"PLOT_SELECTED","plotId":31}}',
+      isActive: true,
+    });
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .patch('/api/pickup-plot-inventory/billing/me/assignments/51-61-31/assign')
+      .send({ targetProfileId: 71 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.assignedStaff).toMatchObject({ profileId: 71, name: 'Bina' });
+    expect(prisma.billingPerson.update).toHaveBeenCalledWith({
+      where: { id: 71 },
+      data: {
+        customerIdsJson: '[61]',
+        plotSiteIdsJson: '[31]',
+        assignmentPairsJson: '[{"customerId":61,"plotSiteId":31}]',
+      },
+    });
+  });
+
+  test('updates the selected Sales Executive profile from the admin overview', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 31, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: '{"customer-61-plot-30":{"status":"VISIT_SCHEDULED"}}',
+      updatedAt: new Date('2026-10-07T00:00:00Z'), isActive: true,
+    });
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41, assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED"}}',
+    }]);
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .patch('/api/pickup-plot-inventory/brokers/me/assignments/customer-61-plot-30/workflow?assignedProfileId=51')
+      .send({ status: 'VISIT_CONFIRMED' });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.plotBroker.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: 51, isActive: true },
+    });
+    expect(response.body.status).toBe('VISIT_CONFIRMED');
+  });
+
+  test('updates the selected Billing profile from the admin overview', async () => {
+    prisma.billingPerson.findFirst.mockResolvedValue({
+      id: 71, userId: 41, tenantId: 7, name: 'Bina',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":31}]', isActive: true,
+    });
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, tenantId: 7, assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: '{"customer-61-plot-30":{"status":"PLOT_SELECTED","billingStatus":"PLOT_RESERVED","plotId":31}}',
+      updatedAt: new Date('2026-10-07T00:00:00Z'), isActive: true,
+    });
+
+    const response = await request(makeApp({ role: 'ADMIN' }))
+      .patch('/api/pickup-plot-inventory/billing/me/assignments/51-61-31/status?assignedProfileId=71')
+      .send({ status: 'BILLING' });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.billingPerson.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: 71, isActive: true },
+    });
+    expect(response.body.status).toBe('BILLING');
+  });
+});
+
+describe('combined staff work assignment', () => {
+  test('lists every active staff member with any existing work combination', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 12,
+        name: 'Asha Rao',
+        email: 'asha@example.com',
+        phone: '9000012345',
+        role: 'USER',
+        userType: 'STAFF',
+        userRoles: [{ role: { key: 'BROKER' } }],
+      },
+      {
+        id: 13,
+        name: 'Generic Manager',
+        email: 'manager@example.com',
+        phone: '9000012346',
+        role: 'MANAGER',
+        userType: 'STAFF',
+        userRoles: [{ role: { key: 'MANAGER' } }],
+      },
+      {
+        id: 14,
+        name: 'Tenant Admin',
+        email: 'admin@example.com',
+        phone: '9000012347',
+        role: 'ADMIN',
+        userType: 'STAFF',
+        userRoles: [{ role: { key: 'ADMIN' } }],
+      },
+      {
+        id: 15,
+        name: 'Legacy User',
+        email: 'user@example.com',
+        phone: '9000012348',
+        role: 'USER',
+        userType: 'STAFF',
+        userRoles: [],
+      },
+    ]);
+    prisma.transportPerson.findMany.mockResolvedValue([{ id: 21, userId: 12, isActive: true }]);
+    prisma.plotBroker.findMany.mockResolvedValue([{ id: 22, userId: 12, isActive: true }]);
+    prisma.billingPerson.findMany.mockResolvedValue([{ id: 23, userId: 12, isActive: false }]);
+
+    const response = await request(makeApp()).get('/api/pickup-plot-inventory/work-assignments');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.staff).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 12,
+        workTypes: ['transport', 'broker'],
+        profiles: { transport: 21, broker: 22, billing: 23 },
+      }),
+      expect.objectContaining({ id: 15 }),
+    ]));
+    expect(response.body.staff.map((row) => row.id)).not.toEqual(expect.arrayContaining([13, 14]));
+  });
+
+  test('assigns any combination without replacing the staff member role', async () => {
+    prisma.user.findFirst.mockResolvedValue({
+      id: 12,
+      tenantId: 7,
+      name: 'Asha Rao',
+      email: 'asha@example.com',
+      phone: '9000012345',
+      userType: 'STAFF',
+      role: 'USER',
+      userRoles: [{ role: { key: 'BROKER' } }],
+    });
+    prisma.transportPerson.upsert.mockResolvedValue({ id: 21 });
+    prisma.plotBroker.upsert.mockResolvedValue({ id: 22 });
+    prisma.billingPerson.updateMany.mockResolvedValue({ count: 0 });
+
+    const response = await request(makeApp())
+      .put('/api/pickup-plot-inventory/work-assignments')
+      .send({ targetUserId: 12, workTypes: ['transport', 'broker'] });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.workTypes).toEqual(['transport', 'broker']);
+    expect(prisma.transportPerson.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 12 },
+      update: { isActive: true },
+    }));
+    expect(prisma.plotBroker.upsert).toHaveBeenCalled();
+    expect(prisma.billingPerson.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, userId: 12 },
+      data: { isActive: false },
+    });
+    expect(prisma.userRole.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects Admin, Manager, Customer, and Owner roles', async () => {
+    prisma.user.findFirst.mockResolvedValue({
+      id: 14,
+      tenantId: 7,
+      name: 'Tenant Admin',
+      email: 'admin@example.com',
+      phone: '9000012347',
+      role: 'ADMIN',
+      userType: 'STAFF',
+      userRoles: [{ role: { key: 'ADMIN' } }],
+    });
+
+    const response = await request(makeApp())
+      .put('/api/pickup-plot-inventory/work-assignments')
+      .send({ targetUserId: 14, workTypes: ['transport'] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('STAFF_ROLE_NOT_ASSIGNABLE');
+    expect(prisma.transportPerson.upsert).not.toHaveBeenCalled();
+  });
 });
 
 describe('self-service work profile', () => {
@@ -563,6 +968,48 @@ describe('transport person mutations', () => {
     expect(response.body.summary).toEqual({ total: 1, active: 1, completed: 0 });
   });
 
+  test('hides assignments whose customer has been deleted', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, userId: 3, tenantId: 7, name: 'Sant', phone: '9000011111',
+      pickupLocationIdsJson: '[4]', plotSiteIdsJson: '[30]', customerIdsJson: '[61]',
+      assignmentStatusJson: null, isActive: true,
+    });
+    prisma.pickupLocation.findMany.mockResolvedValue([{ id: 4, name: 'North Gate', address: 'MG Road' }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30, name: 'Green Acres', address: 'Airport Road' }]);
+    // Soft-deleted contacts are excluded by the live-contact query.
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/transport-persons/me');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: { in: [61] }, deletedAt: null },
+      select: { id: true, name: true, phone: true, email: true, company: true },
+    });
+    expect(response.body.assignments).toEqual([]);
+    expect(response.body.summary).toEqual({ total: 0, active: 0, completed: 0 });
+  });
+
+  test('hides transport assignments whose plot is inactive or missing', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, userId: 3, tenantId: 7, name: 'Sant', phone: '9000011111',
+      pickupLocationIdsJson: '[4]', plotSiteIdsJson: '[30]', customerIdsJson: '[61]',
+      assignmentStatusJson: null, isActive: true,
+    });
+    prisma.contact.findMany.mockResolvedValue([{ id: 61, name: 'Priya Shah' }]);
+    prisma.plotSite.findMany.mockResolvedValue([]);
+
+    const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/transport-persons/me');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.plotSite.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: { in: [30] }, isActive: true },
+      select: { id: true, name: true, address: true, referenceCode: true },
+    });
+    expect(response.body.assignments).toEqual([]);
+    expect(response.body.summary).toEqual({ total: 0, active: 0, completed: 0 });
+  });
+
   test('rejects a stale driver update without overwriting another assignment', async () => {
     prisma.transportPerson.findFirst.mockResolvedValue({
       id: 41, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
@@ -708,6 +1155,10 @@ describe('transport person mutations', () => {
     }) }));
     expect(response.body).toMatchObject({ pickupLocationIds: [4, 5], plotSiteIds: [30, 31], customerIds: [61, 62] });
     expect(response.body.serviceAreas).toEqual([{ area: 'Koramangala', state: 'Karnataka', pincode: '560095' }]);
+    expect(assignmentWhatsApp.safeNotifyCustomerPickupPlotAssignments).toHaveBeenCalledWith({
+      tenantId: 7,
+      person: expect.objectContaining({ id: 41, phone: '9000011111' }),
+    });
   });
 
   test('rejects an invalid phone number', async () => {
@@ -731,8 +1182,12 @@ describe('transport person mutations', () => {
     expect(prisma.transportPerson.create).not.toHaveBeenCalled();
   });
 
-  test('creates a staff login with the Transport Person role from the transport page', async () => {
-    prisma.role.findMany.mockResolvedValue([{ id: 8, key: 'transport_person', name: 'Transport person' }]);
+  test('creates a staff login with a role granted Transport Workspace access', async () => {
+    prisma.role.findMany.mockResolvedValue([
+      { id: 1, key: 'ADMIN', name: 'Admin', permissions: [{ module: 'transport_workspace', action: 'read' }] },
+      { id: 3, key: 'USER', name: 'User', permissions: [{ module: 'transport_workspace', action: 'read' }] },
+      { id: 8, key: 'TRANSPORT_PERSON', name: 'Transport person', permissions: [{ module: 'transport_workspace', action: 'read' }] },
+    ]);
     prisma.user.findFirst.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({ id: 81 });
     prisma.userRole.create.mockResolvedValue({ id: 91 });
@@ -760,9 +1215,9 @@ describe('transport person mutations', () => {
     }));
   });
 
-  test('links an existing staff member with the Transport Person role', async () => {
+  test('links an existing staff member whose role has Transport Workspace access', async () => {
     prisma.user.findFirst.mockResolvedValue({
-      id: 82, tenantId: 7, userRoles: [{ role: { id: 8, key: 'transport_person', name: 'Transport person' } }],
+      id: 82, tenantId: 7, userRoles: [{ role: { id: 8, key: 'FIELD_TEAM', name: 'Field Team', permissions: [{ module: 'transport_workspace', action: 'read' }] } }],
     });
     prisma.transportPerson.findFirst.mockResolvedValue(null);
     prisma.transportPerson.create.mockResolvedValue({ id: 42, userId: 82, name: 'Mohan Das', phone: '9000022222' });
@@ -858,10 +1313,44 @@ describe('transport person mutations', () => {
     expect(response.body.customers).toEqual([
       expect.objectContaining({ id: 61, name: 'Priya Lead' }),
     ]);
-    expect(prisma.transportPerson.findMany.mock.calls[0][0].where).toEqual({ tenantId: 7 });
+    expect(prisma.transportPerson.findMany.mock.calls[0][0].where).toEqual({
+      tenantId: 7,
+      user: { is: { deactivatedAt: null } },
+    });
     expect(prisma.pickupLocation.findMany.mock.calls[0][0].where).toEqual({ tenantId: 7 });
     expect(prisma.customerPickup.findMany.mock.calls[0][0]).toEqual(expect.objectContaining({
       where: { tenantId: 7, contact: { deletedAt: null } },
+    }));
+  });
+
+  test('maps confirmed customers to matching pickup locations and their assigned plot name', async () => {
+    prisma.pickupLocation.findMany.mockResolvedValue([
+      { id: 4, name: 'Bangalore Palace', address: 'Bangalore Palace, Jayamahal Road', isActive: true },
+      { id: 5, name: 'South Gate', address: 'Brigade Road', isActive: true },
+    ]);
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 30, name: 'btm', plotNumber: '11', address: 'BTM Layout', availability: 'AVAILABLE', isActive: true },
+    ]);
+    prisma.customerPickup.findMany.mockResolvedValue([{
+      pickupAddress: 'Bangalore Palace, Jayamahal Road, Bengaluru',
+      contact: { id: 61, name: 'Priya Lead', phone: '9000011111', status: 'Lead' },
+    }]);
+    prisma.plotBooking.findMany.mockImplementation(({ where }) => Promise.resolve(
+      where.status === 'PLOT_ASSIGNED' ? [{ contactId: 61, plotSiteId: 30 }] : [],
+    ));
+
+    const response = await request(makeApp()).get('/api/pickup-plot-inventory/transport-persons');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.customers).toEqual([expect.objectContaining({
+      id: 61,
+      pickupLocationIds: [4],
+      assignedPlotSiteId: 30,
+      assignedPlotName: 'btm',
+      assignedPlots: [expect.objectContaining({ id: 30, name: 'btm', plotNumber: '11' })],
+    })]);
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, status: 'PLOT_ASSIGNED' },
     }));
   });
 
@@ -883,12 +1372,12 @@ describe('transport person mutations', () => {
     expect(JSON.stringify(response.body)).not.toContain('329');
   });
 
-  test('lists unlinked staff who have the Transport Person role', async () => {
+  test('lists unlinked staff whose role has Transport Workspace access', async () => {
     prisma.transportPerson.findMany.mockResolvedValue([{
       id: 41, name: 'Ravi Kumar', phone: '9000011111', userId: 81, isActive: true,
       user: { id: 81, name: 'Ravi Kumar', email: 'ravi@example.com', phone: '9000011111' },
     }]);
-    prisma.role.findMany.mockResolvedValue([{ id: 8, key: 'transport_person', name: 'Transport person' }]);
+    prisma.role.findMany.mockResolvedValue([{ id: 8, key: 'FIELD_TEAM', name: 'Field Team', permissions: [{ module: 'transport_workspace', action: 'read' }] }]);
     prisma.user.findMany.mockResolvedValue([
       { id: 81, name: 'Ravi Kumar', email: 'ravi@example.com', phone: '9000011111' },
       { id: 82, name: 'Sant Kumar', email: 'sant@example.com', phone: '9000099999' },
@@ -897,12 +1386,13 @@ describe('transport person mutations', () => {
     const response = await request(makeApp()).get('/api/pickup-plot-inventory/transport-persons');
 
     expect(response.status).toBe(200);
-    expect(response.body.transportRole).toMatchObject({ id: 8, name: 'Transport person' });
+    expect(response.body.transportRole).toMatchObject({ id: 8, name: 'Field Team' });
     expect(response.body.staffUsers).toEqual([
       { id: 82, name: 'Sant Kumar', email: 'sant@example.com', phone: '9000099999' },
     ]);
     expect(prisma.user.findMany.mock.calls[0][0].where).toMatchObject({
-      tenantId: 7, userRoles: { some: { roleId: 8 } },
+      tenantId: 7,
+      userRoles: { some: { role: { permissions: { some: { module: 'transport_workspace', action: 'read' } } } } },
     });
   });
 
@@ -1068,8 +1558,8 @@ describe('plot broker mutations', () => {
       { id: 62, name: 'Priyanka Mehta', phone: '9000033333', company: 'Acme India' },
     ]);
     prisma.plotSite.findMany.mockResolvedValue([
-      { id: 30, name: 'Plot 24', address: 'North Avenue' },
-      { id: 31, name: 'Plot 25', address: 'South Avenue' },
+      { id: 30, name: 'Plot 24', plotNumber: 'A-24', address: 'North Avenue', availability: 'AVAILABLE' },
+      { id: 31, name: 'Plot 25', plotNumber: 'B-25', address: 'South Avenue', availability: 'AVAILABLE' },
     ]);
     prisma.transportPerson.findMany.mockResolvedValue([{
       customerIdsJson: '[61,62]', plotSiteIdsJson: '[30,31]',
@@ -1083,12 +1573,35 @@ describe('plot broker mutations', () => {
     expect(response.body.customers).toEqual([
       expect.objectContaining({
         id: 61, tripCompleted: true, tripMessage: 'Trip completed', plot: expect.objectContaining({ id: 30 }),
+        plotOptions: expect.arrayContaining([
+          expect.objectContaining({ id: 30, plotNumber: 'A-24' }),
+          expect.objectContaining({ id: 31, plotNumber: 'B-25' }),
+        ]),
         brokerWorkflow: { status: 'VISIT_SCHEDULED', updatedAt: '2026-10-06T11:00:00.000Z', visitScheduledAt: '2026-10-07T10:00:00.000Z' },
       }),
       expect.objectContaining({ id: 62, tripCompleted: false, tripMessage: 'Trip not completed', plot: expect.objectContaining({ id: 31 }) }),
     ]);
     expect(response.body.customers[1]).not.toHaveProperty('status');
     expect(response.body.customers[1]).not.toHaveProperty('brokerWorkflow');
+  });
+
+  test('hides deleted customers from the Sales Executive workspace and its counts', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 3, tenantId: 7, name: 'Sanjeev',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: null, isActive: true,
+    });
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/brokers/me');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: { in: [61] }, deletedAt: null },
+      select: { id: true, name: true, phone: true, email: true, company: true },
+    });
+    expect(response.body.customers).toEqual([]);
+    expect(response.body.summary).toEqual({ total: 0, completed: 0, waiting: 0 });
   });
 
   test('advances a completed-trip customer through the broker workflow in order', async () => {
@@ -1252,6 +1765,32 @@ describe('plot broker mutations', () => {
     }));
   });
 
+  test('reserves the plot explicitly selected by the Sales Executive', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      workflowStatusJson: '{"customer-61":{"status":"PLOT_SHOWN"}}', isActive: true,
+    });
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41, customerIdsJson: '[61]', plotSiteIdsJson: '[30]', assignmentStatusJson: '{"customer-61":{"status":"COMPLETED"}}',
+    }]);
+    prisma.plotSite.findFirst.mockResolvedValue({
+      id: 31, name: 'Plot 25', plotNumber: 'B-25', availability: 'AVAILABLE', isActive: true,
+    });
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/brokers/me/customers/61/workflow')
+      .send({ status: 'PLOT_SELECTED', plotId: 31 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.plot).toMatchObject({ id: 31, plotNumber: 'B-25', availability: 'RESERVED' });
+    expect(prisma.plotSite.findFirst).toHaveBeenCalledWith({ where: { id: 31, tenantId: 7, isActive: true } });
+    expect(prisma.plotBooking.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ contactId: 61, plotSiteId: 31, transportPersonId: 41, plotBrokerId: 51 }),
+    }));
+    const savedStatus = JSON.parse(prisma.plotBroker.updateMany.mock.calls[0][0].data.workflowStatusJson);
+    expect(savedStatus['customer-61-plot-30'].plotId).toBe(31);
+  });
+
   test('only one concurrent reservation wins even when both reads see AVAILABLE', async () => {
     prisma.plotBroker.findFirst.mockResolvedValue({
       id: 51, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
@@ -1301,7 +1840,7 @@ describe('plot broker mutations', () => {
       isActive: true,
     }]);
     prisma.contact.findMany.mockResolvedValue([{ id: 61, name: 'Li Wei', email: 'li@example.com' }]);
-    prisma.plotSite.findMany.mockResolvedValue([{ id: 30, name: 'Plot 24', price: 250000 }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30, name: 'Plot 24', plotNumber: 'A-24', price: 250000 }]);
 
     const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/billing/me');
 
@@ -1309,9 +1848,29 @@ describe('plot broker mutations', () => {
     expect(response.body.assignments).toEqual([expect.objectContaining({
       assignmentKey: '51-61-30', status: 'INVOICE_CREATED',
       customer: expect.objectContaining({ name: 'Li Wei' }), broker: { id: 51, name: 'Sanjeev' },
+      plot: expect.objectContaining({ id: 30, plotNumber: 'A-24' }),
     })]);
     expect(response.body.waitingAssignments).toEqual([]);
     expect(response.body.summary).toEqual({ total: 1, waiting: 0, active: 1, completed: 0 });
+  });
+
+  test('hides deleted customers from the Billing workspace and its counts', async () => {
+    prisma.billingPerson.findFirst.mockResolvedValue({
+      id: 71, userId: 3, name: 'Bina',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]', isActive: true,
+    });
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/billing/me');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, id: { in: [61] }, deletedAt: null },
+      select: { id: true, name: true, phone: true, email: true, company: true },
+    });
+    expect(response.body.assignments).toEqual([]);
+    expect(response.body.waitingAssignments).toEqual([]);
+    expect(response.body.summary).toEqual({ total: 0, waiting: 0, active: 0, completed: 0 });
   });
 
   test('shows directly assigned billing customers while they await the sales handoff', async () => {
@@ -1599,8 +2158,8 @@ describe('plot broker mutations', () => {
     expect(prisma.plotSite.update).toHaveBeenCalledWith({ where: { id: 30 }, data: { availability: 'SOLD' } });
   });
 
-  test('lists billing persons and unlinked Billing-role staff', async () => {
-    prisma.role.findMany.mockResolvedValue([{ id: 10, key: 'BILLING', name: 'Billing Department' }]);
+  test('lists billing persons and unlinked staff with Billing Workspace access', async () => {
+    prisma.role.findMany.mockResolvedValue([{ id: 10, key: 'OPERATIONS', name: 'Operations', permissions: [{ module: 'billing_workspace', action: 'read' }] }]);
     prisma.billingPerson.findMany.mockResolvedValue([{
       id: 71, userId: 21, name: 'Bina Shah', phone: '9000011111', email: 'bina@example.com', isActive: true,
       customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
@@ -1626,6 +2185,10 @@ describe('plot broker mutations', () => {
     expect(response.body.plots).toEqual([expect.objectContaining({ id: 30 })]);
     expect(response.body.staffUsers).toEqual([expect.objectContaining({ id: 22 })]);
     expect(response.body.summary).toEqual({ total: 1, active: 1, linked: 1 });
+    expect(prisma.billingPerson.findMany.mock.calls[0][0].where).toEqual({
+      tenantId: 7,
+      user: { is: { deactivatedAt: null } },
+    });
   });
 
   test('shows a started transport customer only on the transport person who claimed it', async () => {
@@ -1673,6 +2236,10 @@ describe('plot broker mutations', () => {
     expect(response.body.customers).toEqual([expect.objectContaining({ id: 61, claimedByPersonId: 51 })]);
     expect(response.body.brokers.find((row) => row.id === 51).customerIds).toEqual([61]);
     expect(response.body.brokers.find((row) => row.id === 52).customerIds).toEqual([]);
+    expect(prisma.plotBroker.findMany.mock.calls[0][0].where).toEqual({
+      tenantId: 7,
+      user: { is: { deactivatedAt: null } },
+    });
   });
 
   test('shows a started billing customer only on the billing person who claimed it', async () => {
@@ -1695,10 +2262,27 @@ describe('plot broker mutations', () => {
     expect(response.body.billingPersons.find((row) => row.id === 72).customerIds).toEqual([]);
   });
 
-  test('links an existing Billing-role staff user to a billing person profile', async () => {
+  test('ignores billing claims left behind by deleted staff profiles', async () => {
+    prisma.billingPerson.findMany.mockResolvedValue([
+      { id: 72, userId: 22, name: 'Ravi', isActive: true, customerIdsJson: null, plotSiteIdsJson: null },
+    ]);
+    prisma.customerPickup.findMany.mockResolvedValue([{ contact: { id: 61, name: 'Muskan' } }]);
+    prisma.plotBooking.findMany.mockImplementation(({ where }) => Promise.resolve(
+      where.status === 'TRANSACTION_COMPLETED' ? [] : [{ contactId: 61, billingPersonId: 71 }],
+    ));
+
+    const response = await request(makeApp()).get('/api/pickup-plot-inventory/billing-persons');
+
+    expect(response.status).toBe(200);
+    expect(response.body.customers).toEqual([
+      expect.objectContaining({ id: 61, claimedByPersonId: null }),
+    ]);
+  });
+
+  test('links existing staff with Billing Workspace access to a billing person profile', async () => {
     prisma.user.findFirst.mockResolvedValue({
       id: 22, name: 'Ravi Billing', email: 'ravi@example.com', phone: '9000022222',
-      userRoles: [{ role: { key: 'BILLING', name: 'Billing Department' } }],
+      userRoles: [{ role: { key: 'OPERATIONS', name: 'Operations', permissions: [{ module: 'billing_workspace', action: 'read' }] } }],
     });
     prisma.billingPerson.findFirst.mockResolvedValue(null);
     prisma.contact.findMany.mockResolvedValue([{ id: 61 }]);
@@ -1725,6 +2309,29 @@ describe('plot broker mutations', () => {
     }));
   });
 
+  test('creates a billing staff login under the Billing role instead of Admin or User', async () => {
+    prisma.role.findMany.mockResolvedValue([
+      { id: 1, key: 'ADMIN', name: 'Admin', permissions: [{ module: 'billing_workspace', action: 'read' }] },
+      { id: 3, key: 'USER', name: 'User', permissions: [{ module: 'billing_workspace', action: 'read' }] },
+      { id: 9, key: 'BILLING', name: 'Billing Department', permissions: [{ module: 'billing_workspace', action: 'read' }] },
+    ]);
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({ id: 23 });
+    prisma.billingPerson.create.mockResolvedValue({
+      id: 73, userId: 23, name: 'Meera Billing', phone: '9000066666',
+      email: 'meera@example.com', isActive: true,
+    });
+
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/billing-persons').send({
+      name: 'Meera Billing', phone: '9000066666', email: 'meera@example.com', password: 'secret123',
+    });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(prisma.userRole.create).toHaveBeenCalledWith({
+      data: { userId: 23, roleId: 9, assignedById: 3 },
+    });
+  });
+
   test('does not let an unlinked user open a broker workspace', async () => {
     prisma.plotBroker.findFirst.mockResolvedValue(null);
     const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/brokers/me');
@@ -1732,8 +2339,8 @@ describe('plot broker mutations', () => {
     expect(response.body.code).toBe('BROKER_PROFILE_NOT_LINKED');
   });
 
-  test('lists unlinked staff with either Broker or BROOKER role spelling', async () => {
-    prisma.role.findMany.mockResolvedValue([{ id: 8, key: 'BROOKER', name: 'BROOKER' }]);
+  test('lists unlinked staff with Site Visits Workspace access regardless of role name', async () => {
+    prisma.role.findMany.mockResolvedValue([{ id: 8, key: 'CUSTOM_FIELD_TEAM', name: 'Customer Field Team', permissions: [{ module: 'broker_workspace', action: 'read' }] }]);
     prisma.plotBroker.findMany.mockResolvedValue([{
       id: 51, userId: 17, name: 'Asha Rao', phone: '9000022222', isActive: true,
       plotSiteIdsJson: null, customerIdsJson: null,
@@ -1749,7 +2356,7 @@ describe('plot broker mutations', () => {
     const response = await request(makeApp()).get('/api/pickup-plot-inventory/brokers');
 
     expect(response.status).toBe(200);
-    expect(response.body.staffRole).toMatchObject({ id: 8, key: 'BROOKER' });
+    expect(response.body.staffRole).toMatchObject({ id: 8, key: 'CUSTOM_FIELD_TEAM' });
     expect(response.body.staffUsers).toEqual([
       expect.objectContaining({ id: 18, email: 'sanjeev@example.com' }),
     ]);
@@ -1757,14 +2364,14 @@ describe('plot broker mutations', () => {
       expect.objectContaining({ id: 61, name: 'Priya Lead' }),
     ]);
     expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tenantId: 7, userRoles: { some: { roleId: 8 } } }),
+      where: expect.objectContaining({ tenantId: 7, userRoles: { some: { role: { permissions: { some: { module: 'broker_workspace', action: 'read' } } } } } }),
     }));
   });
 
-  test('links an existing Broker staff user to a new broker profile', async () => {
+  test('links existing staff with Site Visits Workspace access to a broker profile', async () => {
     prisma.user.findFirst.mockResolvedValue({
       id: 18, name: 'Sanjeev Rao', email: 'sanjeev@example.com', phone: '9000033333',
-      userRoles: [{ role: { id: 8, key: 'BROOKER', name: 'BROOKER' } }],
+      userRoles: [{ role: { id: 8, key: 'FIELD_TEAM', name: 'Field Team', permissions: [{ module: 'broker_workspace', action: 'read' }] } }],
     });
     prisma.plotBroker.findFirst.mockResolvedValue(null);
     prisma.plotBroker.create.mockResolvedValue({
@@ -1783,7 +2390,11 @@ describe('plot broker mutations', () => {
   });
 
   test('creates a broker staff login and profile together with a password', async () => {
-    prisma.role.findMany.mockResolvedValue([{ id: 8, key: 'BROKER', name: 'Broker' }]);
+    prisma.role.findMany.mockResolvedValue([
+      { id: 1, key: 'ADMIN', name: 'Admin', permissions: [{ module: 'broker_workspace', action: 'read' }] },
+      { id: 3, key: 'USER', name: 'User', permissions: [{ module: 'broker_workspace', action: 'read' }] },
+      { id: 8, key: 'BROOKER', name: 'BROOKER', permissions: [{ module: 'broker_workspace', action: 'read' }] },
+    ]);
     prisma.user.findFirst.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({ id: 19 });
     prisma.plotBroker.create.mockResolvedValue({
@@ -1996,6 +2607,63 @@ describe('plot/site mutations', () => {
     }) });
   });
 
+  test('rejects a duplicate plot number under the same plot name', async () => {
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 29 });
+
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
+      ...requiredPlotFields,
+      name: 'Plot A-1',
+      plotNumber: 'A-1',
+      block: 'A',
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'DUPLICATE_PLOT_NUMBER' });
+    expect(prisma.plotSite.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 7, name: 'Plot A-1', plotNumber: 'A-1' },
+      select: { id: true },
+    });
+    expect(prisma.plotSite.create).not.toHaveBeenCalled();
+  });
+
+  test('allows the same plot name and block when the plot number is different', async () => {
+    prisma.plotSite.findFirst.mockResolvedValue(null);
+    prisma.plotSite.create.mockImplementation(async ({ data }) => ({ id: 31, ...data }));
+
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
+      ...requiredPlotFields,
+      name: 'Plot A-1',
+      plotNumber: 'A-2',
+      block: 'A',
+    });
+
+    expect(response.status).toBe(201);
+    expect(prisma.plotSite.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'Plot A-1', plotNumber: 'A-2', block: 'A' }),
+    });
+  });
+
+  test('rejects changing a plot to another row\'s number under the same plot name', async () => {
+    prisma.plotSite.findFirst
+      .mockResolvedValueOnce({ id: 30, tenantId: 7, isActive: true })
+      .mockResolvedValueOnce({ id: 29 });
+
+    const response = await request(makeApp()).put('/api/pickup-plot-inventory/plots/30').send({
+      ...requiredPlotFields,
+      name: 'Plot A-1',
+      plotNumber: 'A-2',
+      block: 'A',
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'DUPLICATE_PLOT_NUMBER' });
+    expect(prisma.plotSite.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { tenantId: 7, name: 'Plot A-1', plotNumber: 'A-2', id: { not: 30 } },
+      select: { id: true },
+    });
+    expect(prisma.plotSite.update).not.toHaveBeenCalled();
+  });
+
   test('stores interactive master-plan plot details and the new availability values', async () => {
     prisma.plotSite.create.mockImplementation(async ({ data }) => ({ id: 32, ...data }));
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots').send({
@@ -2088,6 +2756,10 @@ describe('customer pickup status', () => {
       }),
     }));
     expect(response.body.status).toBe('PICKUP_LOCATION_CAPTURED');
+    expect(assignmentWhatsApp.safeNotifyCustomerPickupPlotAssignments).toHaveBeenCalledWith({
+      tenantId: 7,
+      contactId: 61,
+    });
   });
 
   test('prevents a USER from changing another user\'s pickup location', async () => {
@@ -2102,6 +2774,249 @@ describe('customer pickup status', () => {
       where: { id: 61, tenantId: 7, deletedAt: null, assignedToId: 3 }, select: { id: true },
     });
     expect(prisma.customerPickup.upsert).not.toHaveBeenCalled();
+  });
+
+  test('assigns multiple available plots to one customer atomically', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.customerPickup.findUnique.mockResolvedValue({ id: 91 });
+    prisma.plotSite.findMany
+      .mockResolvedValueOnce([
+        { id: 31, name: 'North Avenue', plotNumber: '25', price: 4200000, availability: 'AVAILABLE' },
+        { id: 32, name: 'North Avenue', plotNumber: '107', price: 5100000, availability: 'AVAILABLE' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 30, name: 'North Avenue', plotNumber: '24' },
+      ]);
+    prisma.plotBooking.findMany.mockResolvedValue([
+      { id: 501, plotSiteId: 30, bookingNumber: 'BOOK-501', status: 'PLOT_RESERVED' },
+    ]);
+    prisma.plotBooking.create
+      .mockResolvedValueOnce({ id: 502, plotSiteId: 31, bookingNumber: 'BOOK-502', status: 'PLOT_ASSIGNED' })
+      .mockResolvedValueOnce({ id: 503, plotSiteId: 32, bookingNumber: 'BOOK-503', status: 'PLOT_ASSIGNED' });
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/plots')
+      .send({ plotSiteIds: [31, 32, 32] });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(response.body).toMatchObject({
+      contactId: 61,
+      assignedPlotIds: [30, 31, 32],
+      bookingsCreated: 2,
+    });
+    expect(prisma.plotSite.updateMany).not.toHaveBeenCalled();
+    expect(prisma.plotBooking.create).toHaveBeenCalledTimes(2);
+    expect(prisma.plotBooking.create).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({
+        tenantId: 7, contactId: 61, customerPickupId: 91, plotSiteId: 31,
+        status: 'PLOT_ASSIGNED', paymentStatus: 'UNPAID', totalAmount: 4200000, balance: 4200000,
+      }),
+    });
+    expect(prisma.plotWorkflowEvent.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('allows choosing any plot name before selecting its different plot numbers', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.customerPickup.findUnique.mockResolvedValue({ id: 91 });
+    prisma.plotSite.findMany
+      .mockResolvedValueOnce([
+        { id: 41, name: 'Lake View', plotNumber: '8', price: 3900000, availability: 'AVAILABLE' },
+        { id: 42, name: 'Lake View', plotNumber: '9', price: 4100000, availability: 'AVAILABLE' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 30, name: 'North Avenue', plotNumber: '24' },
+      ]);
+    prisma.plotBooking.findMany.mockResolvedValue([
+      { id: 501, plotSiteId: 30, bookingNumber: 'BOOK-501', status: 'PLOT_RESERVED' },
+    ]);
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/plots')
+      .send({ plotSiteIds: [41, 42] });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(response.body).toMatchObject({ bookingsCreated: 2, assignedPlotIds: [30, 41, 42] });
+    expect(prisma.plotBooking.create).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not assign a plot that is unavailable to this customer', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.customerPickup.findUnique.mockResolvedValue({ id: 91 });
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 33, name: 'Garden Road', plotNumber: '9', price: 3900000, availability: 'SOLD' },
+    ]);
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/plots')
+      .send({ plotSiteIds: [33] });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PLOT_NOT_AVAILABLE');
+    expect(prisma.plotBooking.create).not.toHaveBeenCalled();
+  });
+
+  test('requires multiple selections to use one plot name and different plot numbers', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.customerPickup.findUnique.mockResolvedValue({ id: 91 });
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 31, name: 'North Avenue', plotNumber: '25', price: 4200000, availability: 'AVAILABLE' },
+      { id: 32, name: 'Lake View', plotNumber: '25', price: 5100000, availability: 'AVAILABLE' },
+    ]);
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/plots')
+      .send({ plotSiteIds: [31, 32] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('PLOT_NAME_MISMATCH');
+    expect(prisma.plotBooking.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects duplicate plot numbers under the same plot name', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.customerPickup.findUnique.mockResolvedValue({ id: 91 });
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 31, name: 'North Avenue', plotNumber: '25', price: 4200000, availability: 'AVAILABLE' },
+      { id: 34, name: 'North Avenue', plotNumber: '25', price: 4100000, availability: 'AVAILABLE' },
+    ]);
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/plots')
+      .send({ plotSiteIds: [31, 34] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('DUPLICATE_PLOT_NUMBER');
+    expect(prisma.plotBooking.create).not.toHaveBeenCalled();
+  });
+
+  test('records a dated initial UPI payment and updates the booking balance', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Priya Shah' });
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, bookingNumber: 'BOOK-501', tenantId: 7, contactId: 61,
+      plotSiteId: 30, totalAmount: 4500000, amountPaid: 0, balance: 4500000,
+    });
+    prisma.payment.create.mockResolvedValue({
+      id: 701, amount: 500000, currency: 'INR', gateway: 'upi', gatewayId: 'UTR-NEW',
+      status: 'SUCCESS', paidAt: new Date('2026-10-15T06:30:00.000Z'), createdAt: new Date(),
+    });
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment')
+      .send({ amount: 500000, method: 'upi', paidAt: '2026-10-15T06:30:00.000Z', transactionRef: 'UTR-NEW' });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.payment.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        contactId: 61, amount: 500000, currency: 'INR', gateway: 'upi',
+        plotPaymentReference: 'UTR-NEW', status: 'SUCCESS', tenantId: 7,
+      }),
+    });
+    expect(prisma.plotBooking.update).toHaveBeenCalledWith({
+      where: { id: 501 },
+      data: { amountPaid: 500000, balance: 4000000, paymentStatus: 'PARTIAL' },
+    });
+    expect(response.body).toMatchObject({
+      mode: 'recorded', booking: { id: 501, amountPaid: 500000, balance: 4000000 },
+    });
+  });
+
+  test('generates an online initial-payment link for UPI, card, and net banking', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Priya Shah', email: 'priya@example.com', phone: '9000022222' });
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, bookingNumber: 'BOOK-501', tenantId: 7, contactId: 61,
+      plotSiteId: 30, totalAmount: 4500000, amountPaid: 0, balance: 4500000,
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ name: 'NovaCrest Technologies', vertical: 'generic' });
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment')
+      .send({ amount: 500000, method: 'payment_link', plotBookingId: 501 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(paymentLink.createInvoicePaymentLink).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 7,
+      invoice: { id: 501, invoiceNum: 'BOOK-501', amount: 500000 },
+      contactId: 61,
+      currency: 'INR',
+      gatewayPref: 'razorpay',
+      travelContext: { kind: 'plot-booking-payment', plotBookingId: 501 },
+    }));
+    expect(prisma.plotBooking.findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 7,
+        contactId: 61,
+        id: 501,
+        status: { notIn: ['CANCELLED', 'PLOT_ASSIGNED'] },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    expect(response.body).toMatchObject({
+      mode: 'payment_link', url: 'https://pay.example.test/plot-booking', gateway: 'razorpay',
+      payment: { id: 801, amount: 500000, status: 'PENDING' },
+    });
+  });
+
+  test('requires a selected plot booking before generating an initial payment', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Priya Shah' });
+    prisma.plotBooking.findFirst.mockResolvedValue(null);
+
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment')
+      .send({ amount: 500000, method: 'upi', transactionRef: 'UTR-NEW' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PLOT_BOOKING_REQUIRED');
+    expect(prisma.plotBooking.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 7, contactId: 61, status: { notIn: ['CANCELLED', 'PLOT_ASSIGNED'] } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+  });
+
+  test('keeps an admin-assigned plot available until the customer selects it', async () => {
+    prisma.customerPickup.findMany.mockResolvedValue([{
+      id: 91, tenantId: 7, contactId: 61, pickupAddress: '42 Lake View Road, Bengaluru',
+      contact: { id: 61, name: 'Priya Shah' },
+    }]);
+    prisma.plotSite.findMany.mockResolvedValue([{
+      id: 31, name: 'North Avenue', plotNumber: '25', availability: 'AVAILABLE', isActive: true,
+    }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{
+      id: 502, bookingNumber: 'BOOK-502', contactId: 61, plotSiteId: 31,
+      status: 'PLOT_ASSIGNED', paymentStatus: 'UNPAID', totalAmount: 4200000,
+      amountPaid: 0, balance: 4200000,
+    }]);
+
+    const response = await request(makeApp()).get('/api/pickup-plot-inventory/customer-pickups');
+
+    expect(response.status).toBe(200);
+    expect(prisma.customerPickup.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, contact: { deletedAt: null } },
+    }));
+    expect(response.body.customers[0]).toMatchObject({
+      assignedPlot: { id: 31, plotNumber: '25', availability: 'AVAILABLE' },
+      assignedPlots: [{ id: 31, plotNumber: '25', availability: 'AVAILABLE' }],
+      selectedPlot: null,
+      booking: null,
+      payments: [],
+    });
+    expect(response.body.plots).toEqual([
+      expect.objectContaining({ id: 31, availability: 'AVAILABLE' }),
+    ]);
+  });
+
+  test('lists active available plots when imported availability casing differs', async () => {
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 31, name: 'Koramangala', plotNumber: '42', availability: ' available ', isActive: true },
+      { id: 32, name: 'Koramangala', plotNumber: '43', availability: 'RESERVED', isActive: true },
+    ]);
+
+    const response = await request(makeApp()).get('/api/pickup-plot-inventory/customer-pickups');
+
+    expect(response.status).toBe(200);
+    expect(response.body.plots).toEqual([
+      expect.objectContaining({ id: 31, plotNumber: '42' }),
+    ]);
   });
 
   test('lists the live transport status for captured customer pickup locations', async () => {
@@ -2123,6 +3038,16 @@ describe('customer pickup status', () => {
       id: 51, name: 'Sanjeev', phone: '9000044444', customerIdsJson: '[61]',
       workflowStatusJson: '{"customer-61":{"status":"INTEREST_CONFIRMED","updatedAt":"2026-10-06T12:00:00.000Z","billingStatus":"INVOICE_SENT","billingUpdatedAt":"2026-10-06T13:00:00.000Z"}}',
     }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{
+      id: 501, bookingNumber: 'BOOK-501', contactId: 61, plotSiteId: 30,
+      invoiceId: 601, status: 'PAYMENT_RECEIVED', paymentStatus: 'RECEIVED',
+      totalAmount: 4500000, amountPaid: 1000000, balance: 3500000,
+    }]);
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 701, invoiceId: 601, contactId: 61, amount: 1000000, currency: 'INR',
+      gateway: 'upi', gatewayId: 'UTR-ONE', status: 'SUCCESS',
+      paidAt: new Date('2026-10-07T10:00:00.000Z'),
+    }]);
 
     const response = await request(makeApp()).get('/api/pickup-plot-inventory/customer-pickups');
 
@@ -2137,7 +3062,19 @@ describe('customer pickup status', () => {
         broker: { status: 'PLOT_SELECTED', assignee: { id: 51, name: 'Sanjeev' } },
         billing: { status: 'INVOICE_SENT' },
       },
+      booking: { id: 501, bookingNumber: 'BOOK-501', balance: 3500000 },
+      payments: [{ id: 701, gatewayId: 'UTR-ONE', status: 'SUCCESS' }],
     });
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 7 } }));
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        tenantId: 7,
+        OR: [
+          { invoiceId: { not: null } },
+          { metadata: { contains: '"kind":"plot-booking-payment"' } },
+        ],
+      },
+    }));
     expect(response.body.summary).toEqual({ total: 1, awaitingAssignment: 0, activeTrips: 1, completed: 0 });
   });
 
@@ -2171,6 +3108,7 @@ describe('customer pickup status', () => {
         expect.objectContaining({ id: 2, stage: 'PAYMENT', label: 'Payment received' }),
       ],
     });
+    expect(response.body.summary).toEqual({ total: 1, awaitingAssignment: 0, activeTrips: 1, completed: 0 });
   });
 
   test('projects pickup workflow data for the requested Generic Leads page', async () => {

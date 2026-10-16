@@ -120,6 +120,9 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
               ...(travelContext.tripId != null
                 ? { tripId: String(travelContext.tripId) }
                 : {}),
+              ...(travelContext.plotBookingId != null
+                ? { plotBookingId: String(travelContext.plotBookingId) }
+                : {}),
             }
           : { tenantId: String(tenantId), invoiceId: String(invoice.id) },
         callback_url: callbackUrl,
@@ -162,6 +165,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
                   ...(travelContext.instalmentId != null ? { instalmentId: travelContext.instalmentId } : {}),
                   ...(travelContext.participantId != null ? { participantId: travelContext.participantId } : {}),
                   ...(travelContext.tripId != null ? { tripId: travelContext.tripId } : {}),
+                  ...(travelContext.plotBookingId != null ? { plotBookingId: travelContext.plotBookingId } : {}),
                 }
               : { mode: "payment_link", url: link.short_url, plinkId: link.id },
           ),
@@ -186,7 +190,15 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
       ],
       success_url: `${frontendBase}/invoices?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${frontendBase}/invoices?stripe=cancel`,
-      metadata: { tenantId: String(tenantId), invoiceId: String(invoice.id) },
+      metadata: travelContext
+        ? {
+            tenantId: String(tenantId),
+            kind: travelContext.kind || "travel-milestone",
+            ...(travelContext.plotBookingId != null
+              ? { plotBookingId: String(travelContext.plotBookingId) }
+              : {}),
+          }
+        : { tenantId: String(tenantId), invoiceId: String(invoice.id) },
     });
     const payment = await prisma.payment.create({
       data: {
@@ -199,7 +211,16 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
         gatewayId: session.id, // matched by the checkout.session.completed webhook
         status: "PENDING",
         tenantId,
-        metadata: JSON.stringify({ mode: "checkout", sessionUrl: session.url }),
+          metadata: JSON.stringify({
+            mode: "checkout",
+            sessionUrl: session.url,
+            ...(travelContext
+              ? {
+                  kind: travelContext.kind || "travel-milestone",
+                  ...(travelContext.plotBookingId != null ? { plotBookingId: travelContext.plotBookingId } : {}),
+                }
+              : {}),
+          }),
       },
     });
     return { url: session.url, gateway: "stripe", paymentId: payment.id };

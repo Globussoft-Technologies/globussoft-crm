@@ -26,10 +26,36 @@ beforeEach(() => {
 });
 
 describe('<TransportDriverWorkspace />', () => {
+  it('shows all assigned staff data read-only for a Generic CRM admin', async () => {
+    fetchApi
+      .mockResolvedValueOnce({
+        ...driverData,
+        isAdminOverview: true,
+        transportPerson: null,
+        assignments: driverData.assignments.map((assignment) => ({
+          ...assignment, assignedStaff: { id: 21, profileId: 41, name: 'Sant Kumar' },
+        })),
+      })
+      .mockResolvedValueOnce({
+        assignmentKey: 'customer-61', status: 'ACCEPTED', statusUpdatedAt: '2026-10-06T10:00:00.000Z',
+      });
+    render(<TransportDriverWorkspace />);
+    expect(await screen.findByText('Assigned to Sant Kumar')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('All pickup & drop trips')).toBeNull());
+    expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /accept trip/i }));
+    await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
+      '/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61/status?assignedProfileId=41',
+      { method: 'PATCH', body: JSON.stringify({ status: 'ACCEPTED' }) },
+    ));
+  });
+
   it('shows the assigned customer, pickup, drop, navigation and call actions', async () => {
     fetchApi.mockResolvedValueOnce(driverData);
     render(<TransportDriverWorkspace />);
     expect((await screen.findAllByText('Priya Shah')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('My pickup & drop trips')).toBeNull();
+    expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
     expect(screen.getByText('North Gate')).toBeInTheDocument();
     expect(screen.getByText('Green Acres')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /call priya shah/i })).toHaveAttribute('href', 'tel:9000022222');

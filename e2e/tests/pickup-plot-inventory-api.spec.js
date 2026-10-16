@@ -58,6 +58,40 @@ test('non-admin cannot manage billing persons', async ({ request }) => {
   expect(response.status()).toBe(403);
 });
 
+test('staff work assignment directory includes User staff but excludes elevated system roles', async ({ request }) => {
+  const [adminResponse, userResponse] = await Promise.all([
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/work-assignments`, {
+      headers: headers(adminToken),
+    }),
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/work-assignments`, {
+      headers: headers(userToken),
+    }),
+  ]);
+  expect(adminResponse.status()).toBe(200);
+  const body = await adminResponse.json();
+  expect(body.staff).toEqual(expect.any(Array));
+  expect(body.staff.every((person) => !Object.prototype.hasOwnProperty.call(person, 'role'))).toBeTruthy();
+  expect(body.staff.some((person) => String(person.email || '').toLowerCase() === 'user@crm.com')).toBeTruthy();
+  expect(body.staff.some((person) => ['admin@globussoft.com', 'manager@crm.com']
+    .includes(String(person.email || '').toLowerCase()))).toBeFalsy();
+  expect(userResponse.status()).toBe(403);
+});
+
+test('direct Sales Executive and Billing handoff assignment is admin-only', async ({ request }) => {
+  const brokerPath = `${BASE_URL}/api/pickup-plot-inventory/brokers/me/assignments/awaiting-broker-customer-1-plot-1/assign`;
+  const billingPath = `${BASE_URL}/api/pickup-plot-inventory/billing/me/assignments/1-1-1/assign`;
+  const [adminBroker, adminBilling, userBroker, userBilling] = await Promise.all([
+    request.patch(brokerPath, { headers: headers(adminToken), data: { targetProfileId: 0 } }),
+    request.patch(billingPath, { headers: headers(adminToken), data: { targetProfileId: 0 } }),
+    request.patch(brokerPath, { headers: headers(userToken), data: { targetProfileId: 1 } }),
+    request.patch(billingPath, { headers: headers(userToken), data: { targetProfileId: 1 } }),
+  ]);
+  expect(adminBroker.status()).toBe(400);
+  expect(adminBilling.status()).toBe(400);
+  expect(userBroker.status()).toBe(403);
+  expect(userBilling.status()).toBe(403);
+});
+
 test('customer pickup status directory is tenant-admin only', async ({ request }) => {
   const [adminResponse, userResponse] = await Promise.all([
     request.get(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups`, { headers: headers(adminToken) }),
@@ -66,6 +100,30 @@ test('customer pickup status directory is tenant-admin only', async ({ request }
   expect(adminResponse.status()).toBe(200);
   expect(await adminResponse.json()).toMatchObject({ customers: expect.any(Array), summary: expect.any(Object) });
   expect(userResponse.status()).toBe(403);
+});
+
+test('only an admin can generate or record a plot initial payment', async ({ request }) => {
+  const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/initial-payment`, {
+    headers: headers(userToken),
+    data: { amount: 1000, method: 'upi', transactionRef: `${RUN_TAG}_FORBIDDEN` },
+  });
+  expect(response.status()).toBe(403);
+});
+
+test('multi-plot customer assignment is admin-only and validates the selection', async ({ request }) => {
+  const [userResponse, invalidAdminResponse] = await Promise.all([
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/plots`, {
+      headers: headers(userToken),
+      data: { plotSiteIds: [1, 2] },
+    }),
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/plots`, {
+      headers: headers(adminToken),
+      data: { plotSiteIds: [] },
+    }),
+  ]);
+  expect(userResponse.status()).toBe(403);
+  expect(invalidAdminResponse.status()).toBe(400);
+  expect((await invalidAdminResponse.json()).code).toBe('INVALID_PLOT_IDS');
 });
 
 test('generic lead users can read only the scoped pickup workflow projection', async ({ request }) => {

@@ -55,6 +55,7 @@ export default function ColumnPicker({
     "createdAt",
     "lastUpdated",
     "companySize",
+    "pickupLocation",
     "actions",
   ];
 

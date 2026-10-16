@@ -40,6 +40,7 @@ export function serviceAreaFromPlot(plot, suggestion = null) {
   return {
     plotSiteId: Number(plot?.id),
     plotName: clean(plot?.name),
+    plotNumber: clean(plot?.plotNumber),
     address,
     area,
     state,

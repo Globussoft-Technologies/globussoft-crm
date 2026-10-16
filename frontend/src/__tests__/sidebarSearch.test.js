@@ -75,6 +75,15 @@ describe('filterSidebarPages', () => {
     expect(genericRoleGuardProps('/document-templates')).toEqual({
       requiredPermission: { module: 'document_templates', action: 'read' },
     });
+    expect(genericRoleGuardProps('/transport-workspace')).toEqual({
+      requiredPermission: { module: 'transport_workspace', action: 'read' },
+    });
+    expect(genericRoleGuardProps('/sales-workspace')).toEqual({
+      requiredPermission: { module: 'broker_workspace', action: 'read' },
+    });
+    expect(genericRoleGuardProps('/billing-workspace')).toEqual({
+      requiredPermission: { module: 'billing_workspace', action: 'read' },
+    });
   });
 
   it('includes navigable pages and external launchers in the searchable catalogue', () => {

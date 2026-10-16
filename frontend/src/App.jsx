@@ -307,6 +307,10 @@ const TransportPersons = lazy(() => import("./pages/TransportPersons"));
 const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
 const BillingPersons = lazy(() => import("./pages/BillingPersons"));
 const PickupCustomers = lazy(() => import("./pages/PickupCustomers"));
+const PickupPlotWorkAssignments = lazy(() => import("./pages/PickupPlotWorkAssignments"));
+const TransportDriverWorkspace = lazy(() => import("./components/TransportDriverWorkspace"));
+const BrokerCustomerWorkspace = lazy(() => import("./components/BrokerCustomerWorkspace"));
+const BillingWorkspace = lazy(() => import("./components/BillingWorkspace"));
 const Quotas = lazy(() => import("./pages/Quotas"));
 const WinLoss = lazy(() => import("./pages/WinLoss"));
 const AbTests = lazy(() => import("./pages/AbTests"));
@@ -3182,6 +3186,40 @@ export default function App() {
                       <Route
                         path="pickup-customers"
                         element={<GenericOnly><RoleGuard allow={["ADMIN"]}><PickupCustomers /></RoleGuard></GenericOnly>}
+                      />
+                      <Route
+                        path="pickup-work-assignments"
+                        element={<GenericOnly><RoleGuard allow={["ADMIN"]}><PickupPlotWorkAssignments /></RoleGuard></GenericOnly>}
+                      />
+                      <Route
+                        path="transport-workspace"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard requiredPermission={{ module: "transport_workspace", action: "read" }}>
+                              <TransportDriverWorkspace />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="sales-workspace"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard requiredPermission={{ module: "broker_workspace", action: "read" }}>
+                              <BrokerCustomerWorkspace />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="billing-workspace"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard requiredPermission={{ module: "billing_workspace", action: "read" }}>
+                              <BillingWorkspace />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
                       />
                       <Route
                         path="quotas"

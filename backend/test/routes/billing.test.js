@@ -113,6 +113,9 @@ prisma.payment = {
 prisma.paymentGatewayConfig = {
   findFirst: vi.fn(),
 };
+prisma.plotBooking = prisma.plotBooking || {};
+prisma.plotBooking.findFirst = vi.fn().mockResolvedValue(null);
+prisma.plotBooking.update = vi.fn().mockResolvedValue({});
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.tenantSetting = {
@@ -196,6 +199,8 @@ beforeEach(() => {
   prisma.payment.findMany.mockReset();
   prisma.payment.aggregate.mockReset();
   prisma.paymentGatewayConfig.findFirst.mockReset();
+  prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotBooking.update.mockReset().mockResolvedValue({});
   prisma.tenant.findUnique.mockReset();
   prisma.tenantSetting.findMany.mockReset().mockResolvedValue([]);
   prisma.location.findFirst.mockReset().mockResolvedValue(null);
@@ -298,6 +303,67 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
 });
 
 describe("POST /api/billing/public/confirm-payment - payment-link statuses", () => {
+  test("reconciles a successful plot payment and returns the remaining installment balance", async () => {
+    const payment = {
+      id: 900,
+      tenantId: 1,
+      invoiceId: null,
+      gateway: "razorpay",
+      gatewayId: "plink_plot_501",
+      status: "PENDING",
+      amount: 1,
+      currency: "INR",
+      metadata: JSON.stringify({
+        kind: "plot-booking-payment",
+        plotBookingId: 501,
+        plinkId: "plink_plot_501",
+      }),
+    };
+    prisma.payment.findFirst
+      .mockResolvedValueOnce(payment)
+      .mockResolvedValueOnce({
+        amount: 1,
+        currency: "INR",
+        metadata: payment.metadata,
+      });
+    prisma.payment.update.mockResolvedValue({ ...payment, status: "SUCCESS" });
+    prisma.payment.findMany.mockResolvedValue([{ amount: 1 }]);
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501,
+      tenantId: 1,
+      totalAmount: 200000,
+      amountPaid: 0,
+      balance: 200000,
+      paymentStatus: "UNPAID",
+    });
+
+    const res = await request(makeApp())
+      .post("/api/billing/public/confirm-payment")
+      .send({
+        razorpay_payment_link_id: "plink_plot_501",
+        razorpay_payment_link_reference_id: "plot-booking-501",
+        razorpay_payment_link_status: "paid",
+        razorpay_payment_id: "pay_plot_501",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      amountPaid: 1,
+      totalDue: 200000,
+      balanceDue: 199999,
+      currency: "INR",
+    });
+    expect(prisma.plotBooking.update).toHaveBeenCalledWith({
+      where: { id: 501 },
+      data: {
+        amountPaid: 1,
+        balance: 199999,
+        paymentStatus: "PARTIAL",
+      },
+    });
+  });
+
   test("Razorpay partially_paid callback is reconciled as a successful payment", async () => {
     const payment = {
       id: 901,

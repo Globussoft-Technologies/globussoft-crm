@@ -323,6 +323,45 @@ async function markInvoicePaid(invoiceId, tenantId, options = {}) {
   }
 }
 
+// Plot-booking payment links deliberately leave invoiceId null because an
+// initial deposit may be smaller than the full plot value. Recompute the
+// booking ledger from successful tagged payments so webhook retries stay
+// idempotent and never double-add the same payment.
+async function reconcilePlotBookingPayment(payment) {
+  const metadata = safeJsonParse(payment?.metadata, {});
+  const plotBookingId = Number(metadata.plotBookingId);
+  if (metadata.kind !== "plot-booking-payment" || !Number.isInteger(plotBookingId)) return null;
+
+  const booking = await prisma.plotBooking.findFirst({
+    where: { id: plotBookingId, tenantId: payment.tenantId },
+  });
+  if (!booking) return null;
+
+  // Tenant-safe: tenantId comes from the already-resolved, signed gateway Payment row.
+  const successfulPayments = await prisma.payment.findMany({
+    where: {
+      tenantId: payment.tenantId,
+      status: "SUCCESS",
+      metadata: { contains: `"plotBookingId":${plotBookingId}` },
+    },
+    select: { amount: true },
+  });
+  const totalAmount = Number(booking.totalAmount || 0);
+  const amountPaid = Math.min(
+    totalAmount,
+    successfulPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+  );
+  const balance = Math.max(0, totalAmount - amountPaid);
+  return prisma.plotBooking.update({
+    where: { id: booking.id },
+    data: {
+      amountPaid,
+      balance,
+      paymentStatus: balance === 0 ? "PAID" : "PARTIAL",
+    },
+  });
+}
+
 // Reconcile a TRAVEL milestone payment-link back to its TravelPaymentSchedule
 // + parent TravelInvoice (the travel-vertical equivalent of markInvoicePaid).
 // Driven by the link's notes.kind='travel-milestone' tag. Marks the milestone
@@ -529,6 +568,7 @@ router.post(
             paidAt,
           });
           emitPaymentCollected(updated);
+          await reconcilePlotBookingPayment(updated);
         }
       } else if (event.type === "payment_intent.payment_failed") {
         const intent = event.data.object;
@@ -568,6 +608,7 @@ router.post(
               paidAt,
             });
             emitPaymentCollected(updated);
+            await reconcilePlotBookingPayment(updated);
 
             // Dynamic TMC checkout payments arrive as payment.captured. The
             // generic Payment row is updated above, but the installment ledger
@@ -716,6 +757,7 @@ router.post(
               paidAt: capturedAt,
             });
             emitPaymentCollected(updated);
+            await reconcilePlotBookingPayment(updated);
 
             // Razorpay order payments used by the customer portal are not
             // payment links, so they never reach the payment_link.paid branch
@@ -1071,6 +1113,7 @@ router.post(
                 paidAt: capturedAt,
               });
               emitPaymentCollected(updated);
+              await reconcilePlotBookingPayment(updated);
             }
 
             const paymentMeta = safeJsonParse(updated.metadata || payment.metadata, {});
@@ -2081,6 +2124,7 @@ router.post("/confirm-razorpay", paymentLimiter, async (req, res) => {
 
     await markInvoicePaid(payment.invoiceId, tenantId);
     emitPaymentCollected(updated);
+    await reconcilePlotBookingPayment(updated);
 
     res.json({ success: true, payment: serialize(updated) });
   } catch (err) {
@@ -2147,6 +2191,7 @@ router.post("/confirm-stripe-session", paymentLimiter, async (req, res) => {
 
     await markInvoicePaid(payment.invoiceId, tenantId);
     emitPaymentCollected(updated);
+    await reconcilePlotBookingPayment(updated);
 
     res.json({ success: true, paid: true, payment: serialize(updated) });
   } catch (err) {

@@ -222,6 +222,9 @@ const MODULE_DESCRIPTIONS = {
   ab_tests:            'Marketing A/B tests and experiment results.',
   booking_pages:       'Public booking pages and appointment capture.',
   web_forms:           'Embedded lead-capture forms and submissions.',
+  transport_workspace: 'Assigned pickup and drop-off trips. Grant this to any generic CRM role that performs transport work.',
+  broker_workspace:    'Assigned customer site visits and plot-selection work. Independent of the role name.',
+  billing_workspace:   'Assigned billing, invoice, and payment queue. Independent of the role name.',
 };
 
 // Per-vertical description overrides for COMMON modules where the

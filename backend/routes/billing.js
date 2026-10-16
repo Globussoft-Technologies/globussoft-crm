@@ -2089,6 +2089,56 @@ router.post("/public/confirm-payment", async (req, res) => {
     // Skip for tmc-instalment payments — those have a travelInvoiceId in metadata
     // (the instalment's invoiceId FK) but must not reconcile as a TravelInvoice
     // payment; the tmc-instalment block above handles them.
+    // Plot-booking payment links do not have an invoiceId because the first
+    // payment can be smaller than the plot price. The webhook normally
+    // reconciles the booking, but localhost payment links return through this
+    // callback instead. Rebuild totals from successful payments so retries are
+    // idempotent and the remaining installment balance is correct.
+    let plotBookingSummary = null;
+    if (existingMeta.kind === "plot-booking-payment") {
+      const plotBookingId = Number(existingMeta.plotBookingId);
+      if (Number.isInteger(plotBookingId)) {
+        try {
+          const booking = await prisma.plotBooking.findFirst({
+            where: { id: plotBookingId, tenantId: payment.tenantId },
+          });
+          if (booking) {
+            const successfulPayments = await prisma.payment.findMany({
+              where: {
+                tenantId: payment.tenantId,
+                status: "SUCCESS",
+                metadata: { contains: `"plotBookingId":${plotBookingId}` },
+              },
+              select: { amount: true },
+            });
+            const totalDue = Number(booking.totalAmount || 0);
+            const totalPaid = Math.min(
+              totalDue,
+              successfulPayments.reduce(
+                (sum, row) => sum + Number(row.amount || 0),
+                0,
+              ),
+            );
+            const balanceDue = Math.max(0, totalDue - totalPaid);
+            await prisma.plotBooking.update({
+              where: { id: booking.id },
+              data: {
+                amountPaid: totalPaid,
+                balance: balanceDue,
+                paymentStatus: balanceDue === 0 ? "PAID" : "PARTIAL",
+              },
+            });
+            plotBookingSummary = { totalDue, balanceDue };
+          }
+        } catch (e) {
+          console.error(
+            "[PublicConfirmPayment] plot booking reconcile failed (non-fatal):",
+            e.message,
+          );
+        }
+      }
+    }
+
     const travelInvoiceId = Number(existingMeta.travelInvoiceId);
     if (
       Number.isFinite(travelInvoiceId) &&
@@ -2485,6 +2535,10 @@ router.post("/public/confirm-payment", async (req, res) => {
       if (refreshed) {
         summary.amountPaid = Number(refreshed.amount || 0);
         summary.currency = refreshed.currency || "INR";
+        if (plotBookingSummary) {
+          summary.totalDue = plotBookingSummary.totalDue;
+          summary.balanceDue = plotBookingSummary.balanceDue;
+        }
         let finalMeta = {};
         try {
           finalMeta = JSON.parse(refreshed.metadata || "{}");

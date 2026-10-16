@@ -21,7 +21,10 @@ describe('<TransportPersons />', () => {
     fetchApiMock.mockResolvedValue({
       transportPersons: [{
         id: 1, name: 'Ravi Kumar', phone: '9000011111', isActive: true,
-        plots: [{ id: 9, name: 'Plot A-9', address: 'Koramangala, Bengaluru' }],
+        plots: [
+          { id: 9, name: 'Koramangala', plotNumber: '9', address: 'Koramangala, Bengaluru' },
+          { id: 10, name: 'Koramangala', plotNumber: '10', address: 'Koramangala, Bengaluru' },
+        ],
         pickupLocations: [
           { id: 4, name: 'North Gate', address: 'MG Road, Bengaluru' },
           { id: 5, name: 'South Gate', address: 'Brigade Road, Bengaluru' },
@@ -35,7 +38,8 @@ describe('<TransportPersons />', () => {
     expect(screen.getByRole('combobox', { name: 'Filter by status' })).toHaveStyle({ height: '44px', boxSizing: 'border-box' });
     expect(screen.getByRole('combobox', { name: 'Filter by assignment' })).toHaveStyle({ height: '44px', boxSizing: 'border-box' });
 
-    expect(screen.getByRole('link', { name: 'Open Plot A-9 address in Google Maps' })).toHaveAttribute(
+    expect(screen.getAllByRole('link', { name: 'Open Koramangala address in Google Maps' })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Open Koramangala address in Google Maps' })).toHaveAttribute(
       'href',
       'https://www.google.com/maps/search/?api=1&query=Koramangala%2C%20Bengaluru',
     );
@@ -75,17 +79,23 @@ describe('<TransportPersons />', () => {
         name: 'Ravi Kumar',
         phone: '9000011111',
         isActive: true,
+        customerIds: [21],
+        pickupLocationIds: [4],
         plotSiteIds: [9],
         serviceAreas: [{ plotSiteId: 9, area: 'Koramangala', state: '', pincode: '560095' }],
       }],
-      pickupLocations: [],
+      pickupLocations: [{ id: 4, name: 'North Gate', address: 'MG Road, Bengaluru' }],
       plots: [{
         id: 9,
         name: 'plot-1',
+        plotNumber: '11',
         address: 'CA-17, 6th Cross, 6th Block, Koramangala, Banglore - 560095',
         availability: 'AVAILABLE',
       }],
-      customers: [],
+      customers: [{
+        id: 21, name: 'Muskan', pickupLocationIds: [4], assignedPlotSiteId: 9,
+        assignedPlotName: 'plot-1', assignedPlots: [{ id: 9, name: 'plot-1', plotNumber: '11' }],
+      }],
       summary: { total: 1, active: 1, assigned: 1 },
     });
 
@@ -95,6 +105,7 @@ describe('<TransportPersons />', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View all service areas (1)' }));
 
     const dialog = screen.getByRole('dialog', { name: 'All service areas (1)' });
+    expect(within(dialog).getByText('plot-1 · Plot 11')).toBeInTheDocument();
     expect(within(dialog).getByText('Karnataka')).toBeInTheDocument();
     expect(within(dialog).queryByText('Not available in plot address')).toBeNull();
   });
@@ -103,23 +114,26 @@ describe('<TransportPersons />', () => {
     fetchApiMock.mockResolvedValue({
       transportPersons: [{
         id: 1, name: 'Sant Kumar', phone: '9000011111', isActive: true,
-        customerIds: [21], plotSiteIds: [9],
+        customerIds: [21], pickupLocationIds: [4], plotSiteIds: [9],
         assignments: [{ customerId: 21, plotSiteId: 9, status: 'ACCEPTED', plotLocked: true }],
       }],
-      pickupLocations: [],
+      pickupLocations: [{ id: 4, name: 'North Gate' }],
       plots: [
         { id: 9, name: 'Plot A-9', address: 'Koramangala, Karnataka 560095', availability: 'AVAILABLE' },
         { id: 10, name: 'Plot B-10', address: 'Indiranagar, Karnataka 560038', availability: 'AVAILABLE' },
       ],
-      customers: [{ id: 21, name: 'Muskan', claimedByPersonId: 1 }],
+      customers: [{
+        id: 21, name: 'Muskan', claimedByPersonId: 1, pickupLocationIds: [4],
+        assignedPlotSiteId: 9, assignedPlotName: 'Plot A-9',
+      }],
       summary: {},
     });
 
     render(<TransportPersons />);
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Sant Kumar' }));
 
-    expect(screen.getByRole('combobox', { name: 'Plot for Muskan' })).toBeDisabled();
-    expect(screen.getByRole('combobox', { name: 'Plot for Muskan' })).toHaveValue('9');
+    expect(screen.getByLabelText('Plot for Muskan')).toHaveTextContent('Plot A-9');
+    expect(screen.queryByRole('combobox', { name: 'Plot for Muskan' })).toBeNull();
   });
 
   it('hides completed trips and submits only the active transport assignments', async () => {
@@ -127,17 +141,17 @@ describe('<TransportPersons />', () => {
       if (url === '/api/pickup-plot-inventory/transport-persons' && !options) return Promise.resolve({
         transportPersons: [{
           id: 1, name: 'Sant Kumar', phone: '9000011111', vehicleType: 'Van', vehicleNumber: 'KA 01 AB 1234', isActive: true,
-          customerIds: [21, 22], plotSiteIds: [9],
+          customerIds: [21, 22], pickupLocationIds: [4], plotSiteIds: [9],
           assignments: [
             { customerId: 21, plotSiteId: 9, status: 'COMPLETED', plotLocked: true },
             { customerId: 22, plotSiteId: 9, status: 'ACCEPTED', plotLocked: true },
           ],
         }],
-        pickupLocations: [],
+        pickupLocations: [{ id: 4, name: 'North Gate' }],
         plots: [{ id: 9, name: 'Plot A-9', address: 'Koramangala, Karnataka 560095', availability: 'AVAILABLE' }],
         customers: [
-          { id: 21, name: 'Muskan', claimedByPersonId: 1 },
-          { id: 22, name: 'Arjun Patel', claimedByPersonId: 1 },
+          { id: 21, name: 'Muskan', claimedByPersonId: 1, pickupLocationIds: [4], assignedPlotSiteId: 9, assignedPlotName: 'Plot A-9' },
+          { id: 22, name: 'Arjun Patel', claimedByPersonId: 1, pickupLocationIds: [4], assignedPlotSiteId: 9, assignedPlotName: 'Plot A-9' },
         ],
         summary: {},
       });
@@ -147,8 +161,8 @@ describe('<TransportPersons />', () => {
     render(<TransportPersons />);
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Sant Kumar' }));
 
-    expect(screen.queryByRole('combobox', { name: 'Plot for Muskan' })).toBeNull();
-    expect(screen.getByRole('combobox', { name: 'Plot for Arjun Patel' })).toBeDisabled();
+    expect(screen.queryByLabelText('Plot for Muskan')).toBeNull();
+    expect(screen.getByLabelText('Plot for Arjun Patel')).toHaveTextContent('Plot A-9');
     expect(screen.getByRole('button', { name: 'Customers (select multiple)' })).toHaveTextContent('Arjun Patel');
 
     fireEvent.click(screen.getByRole('button', { name: 'Customers (select multiple)' }));
@@ -170,18 +184,18 @@ describe('<TransportPersons />', () => {
     });
   });
 
-  it('uses a plot dropdown and derives service areas from selected plot addresses', async () => {
+  it('filters customers by pickup location and automatically uses their assigned plot name', async () => {
     fetchApiMock.mockImplementation((url, options) => {
       if (url === '/api/pickup-plot-inventory/transport-persons' && !options) return Promise.resolve({
         transportPersons: [{ id: 1, name: 'Ravi Kumar', phone: '9000011111', vehicleType: 'Mini truck', vehicleNumber: 'KA 01 AB 1234', isActive: true, pickupLocationId: 4, pickupLocation: { id: 4, name: 'North Gate' } }],
         pickupLocations: [{ id: 4, name: 'North Gate' }, { id: 5, name: 'South Gate' }],
         plots: [
-          { id: 9, name: 'Plot A-9', address: 'CA-17, 6th Cross, 6th Block, Koramangala, Bangalore - 560095', availability: 'AVAILABLE' },
-          { id: 10, name: 'Plot B-10', address: '100 Feet Rd, Indiranagar, Bengaluru, Karnataka 560038', availability: 'AVAILABLE' },
+          { id: 9, name: 'btm', plotNumber: '11', address: 'CA-17, 6th Cross, 6th Block, Koramangala, Bangalore - 560095', availability: 'AVAILABLE' },
+          { id: 10, name: 'btm', plotNumber: '12', address: '100 Feet Rd, Indiranagar, Bengaluru, Karnataka 560038', availability: 'AVAILABLE' },
         ],
         customers: [
-          { id: 21, name: 'Priya Sharma', company: 'Aster Homes', phone: '9000066666' },
-          { id: 22, name: 'Arjun Patel', email: 'arjun@example.com' },
+          { id: 21, name: 'Priya Sharma', company: 'Aster Homes', phone: '9000066666', pickupLocationIds: [4], assignedPlotSiteId: 9, assignedPlotName: 'btm' },
+          { id: 22, name: 'Arjun Patel', email: 'arjun@example.com', pickupLocationIds: [5], assignedPlotSiteId: 10, assignedPlotName: 'btm' },
         ],
         summary: { total: 1, active: 1, assigned: 1 },
       });
@@ -212,7 +226,11 @@ describe('<TransportPersons />', () => {
     fireEvent.change(screen.getByLabelText('Password *'), { target: { value: 'Secret123' } });
     expect(screen.getByRole('button', { name: /Pickup locations/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add service area' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /North Gate/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Customers (select multiple)' }));
+    expect(screen.queryByRole('checkbox', { name: /Arjun Patel/ })).toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Priya Sharma · Aster Homes · 9000066666' }));
     fireEvent.click(screen.getByRole('button', { name: 'View selected customers (1)' }));
     const customersDialog = screen.getByRole('dialog', { name: 'Selected customers (1)' });
@@ -220,23 +238,20 @@ describe('<TransportPersons />', () => {
     expect(within(customersDialog).getByText('Aster Homes')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close selected customers' }));
     expect(screen.queryByRole('dialog', { name: 'Selected customers (1)' })).toBeNull();
-    expect(screen.getByTestId('plots-field').style.gridColumn).toBe('');
     expect(screen.getByTestId('service-areas-field').style.gridColumn).toBe('');
-    expect(screen.getByTestId('plots-field').parentElement).toBe(screen.getByTestId('service-areas-field').parentElement);
-    fireEvent.click(screen.getByRole('button', { name: 'Plots / sites (select multiple)' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /^Plot A-9/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /^Plot B-10/i }));
+    expect(screen.queryByTestId('plots-field')).toBeNull();
+    expect(screen.getByLabelText('Plot for Priya Sharma')).toHaveTextContent('btm');
+    expect(screen.queryByRole('combobox', { name: 'Plot for Priya Sharma' })).toBeNull();
     expect(screen.queryByTestId('service-area-9')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'View all service areas (2)' }));
-    const serviceAreasDialog = screen.getByRole('dialog', { name: 'All service areas (2)' });
+    fireEvent.click(screen.getByRole('button', { name: 'View all service areas (1)' }));
+    const serviceAreasDialog = screen.getByRole('dialog', { name: 'All service areas (1)' });
     expect(screen.getByTestId('service-areas-list')).toHaveStyle({ overflowY: 'auto', maxHeight: 'calc(82vh - 80px)' });
-    expect(within(serviceAreasDialog).getByText('2 selected plot areas')).toBeInTheDocument();
+    expect(within(serviceAreasDialog).getByText('1 selected plot area')).toBeInTheDocument();
     expect(within(screen.getByTestId('service-area-9')).getByText('Koramangala')).toBeInTheDocument();
     expect(within(screen.getByTestId('service-area-9')).getByText('Karnataka')).toBeInTheDocument();
     expect(within(screen.getByTestId('service-area-9')).getByText('560095')).toBeInTheDocument();
-    expect(within(screen.getByTestId('service-area-10')).getByText('Indiranagar')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close service areas' }));
-    expect(screen.queryByRole('dialog', { name: 'All service areas (2)' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'All service areas (1)' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
       '/api/pickup-plot-inventory/transport-persons',
@@ -246,11 +261,10 @@ describe('<TransportPersons />', () => {
     const requestBody = JSON.parse(call[1].body);
     expect(requestBody).toMatchObject({
       name: 'Mohan', phone: '9000033333', email: 'mohan@example.com', password: 'Secret123',
-      pickupLocationIds: [], plotSiteIds: [9, 10], customerIds: [21],
+      pickupLocationIds: [4], plotSiteIds: [9], customerIds: [21],
       assignments: [{ customerId: 21, plotSiteId: 9 }],
       serviceAreas: [
         { plotSiteId: 9, area: 'Koramangala', state: 'Karnataka', pincode: '560095' },
-        { plotSiteId: 10, area: 'Indiranagar', state: 'Karnataka', pincode: '560038' },
       ],
     });
   });
@@ -306,8 +320,13 @@ describe('<TransportPersons />', () => {
     fetchApiMock
       .mockResolvedValueOnce({ transportPersons: [], plots: [], customers: [], summary: {} })
       .mockResolvedValueOnce({
-        transportPersons: [], plots: [],
-        customers: [{ id: 21, name: 'Priya Sharma', phone: '9000066666' }],
+        transportPersons: [],
+        pickupLocations: [{ id: 4, name: 'North Gate' }],
+        plots: [{ id: 9, name: 'btm', plotNumber: '11', availability: 'AVAILABLE' }],
+        customers: [{
+          id: 21, name: 'Priya Sharma', phone: '9000066666', pickupLocationIds: [4],
+          assignedPlotSiteId: 9, assignedPlotName: 'btm',
+        }],
         summary: {},
       });
     render(<TransportPersons />);
@@ -316,34 +335,35 @@ describe('<TransportPersons />', () => {
     fireEvent.focus(window);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: 'Add Transport Person' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /North Gate/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Customers (select multiple)' }));
     expect(screen.getByRole('checkbox', { name: /Priya Sharma/ })).toBeInTheDocument();
   });
 
-  it('allows plots and customers to be shared by every transport person', async () => {
+  it('shows only customers sharing a selected pickup location and an assigned plot', async () => {
     const plots = [
-      { id: 9, name: 'Plot A-9', address: 'Koramangala, Karnataka 560095', availability: 'AVAILABLE' },
-      { id: 10, name: 'Plot B-10', address: 'Indiranagar, Karnataka 560038', availability: 'AVAILABLE' },
-      { id: 11, name: 'Plot C-11', address: 'Jayanagar, Karnataka 560041', availability: 'AVAILABLE' },
-      { id: 12, name: 'Booked Plot', availability: 'BOOKED' },
-      { id: 13, name: 'Reserved Plot', availability: 'RESERVED' },
-      { id: 14, name: 'Sold Plot', availability: 'SOLD' },
+      { id: 9, name: 'btm', plotNumber: '11', address: 'Koramangala, Karnataka 560095', availability: 'AVAILABLE' },
+      { id: 10, name: 'btm', plotNumber: '12', address: 'Indiranagar, Karnataka 560038', availability: 'AVAILABLE' },
     ];
     const customers = [
-      { id: 21, name: 'Priya Sharma', phone: '9000066666' },
-      { id: 22, name: 'Arjun Patel', phone: '9000077777' },
-      { id: 23, name: 'Meera Rao', phone: '9000088888' },
+      { id: 21, name: 'Priya Sharma', phone: '9000066666', pickupLocationIds: [4], assignedPlotSiteId: 9, assignedPlotName: 'btm' },
+      { id: 22, name: 'Arjun Patel', phone: '9000077777', pickupLocationIds: [5], assignedPlotSiteId: 10, assignedPlotName: 'btm' },
+      { id: 23, name: 'Meera Rao', phone: '9000088888', pickupLocationIds: [4] },
     ];
     fetchApiMock.mockImplementation((url, options) => {
       if (url === '/api/pickup-plot-inventory/transport-persons' && !options) return Promise.resolve({
         transportPersons: [
           {
             id: 1, name: 'Ravi Kumar', phone: '9000011111', isActive: true,
-            plotSiteIds: [9], customerIds: [21],
+            plotSiteIds: [9], customerIds: [21], pickupLocationIds: [4],
           },
           { id: 2, name: 'Mohan Das', phone: '9000022222', isActive: true, plotSiteIds: [10], customerIds: [22] },
         ],
-        plots, customers, pickupLocations: [], summary: { total: 2, active: 2, assigned: 2 },
+        plots, customers,
+        pickupLocations: [{ id: 4, name: 'North Gate' }, { id: 5, name: 'South Gate' }],
+        summary: { total: 2, active: 2, assigned: 2 },
       });
       return Promise.resolve({});
     });
@@ -352,32 +372,34 @@ describe('<TransportPersons />', () => {
     await screen.findByText('Ravi Kumar');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add Transport Person' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /North Gate/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Customers (select multiple)' }));
     expect(screen.getByRole('checkbox', { name: /Priya Sharma/ })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Arjun Patel/ })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Meera Rao/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Plots / sites (select multiple)' }));
-    expect(screen.getByRole('checkbox', { name: /Plot A-9/ })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Plot B-10/ })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Plot C-11/ })).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /Booked Plot/ })).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: /Reserved Plot/ })).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: /Sold Plot/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Arjun Patel/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Meera Rao/ })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Priya Sharma/ }));
+    expect(screen.queryByTestId('plots-field')).toBeNull();
   });
 
   it('hides a customer claimed by another transport person from a new assignment', async () => {
     fetchApiMock.mockResolvedValue({
       transportPersons: [{ id: 1, name: 'Ravi Kumar', phone: '9000011111', isActive: true }],
-      pickupLocations: [], plots: [],
+      pickupLocations: [{ id: 4, name: 'North Gate' }],
+      plots: [{ id: 9, name: 'btm', plotNumber: '11', availability: 'AVAILABLE' }],
       customers: [
-        { id: 21, name: 'Claimed Customer', claimedByPersonId: 1 },
-        { id: 22, name: 'Available Customer', claimedByPersonId: null },
+        { id: 21, name: 'Claimed Customer', claimedByPersonId: 1, pickupLocationIds: [4], assignedPlotSiteId: 9, assignedPlotName: 'btm' },
+        { id: 22, name: 'Available Customer', claimedByPersonId: null, pickupLocationIds: [4], assignedPlotSiteId: 9, assignedPlotName: 'btm' },
       ],
       summary: {},
     });
     render(<TransportPersons />);
     await screen.findByText('Ravi Kumar');
     fireEvent.click(screen.getByRole('button', { name: 'Add Transport Person' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /North Gate/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup locations (select multiple)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Customers (select multiple)' }));
 
     expect(screen.queryByRole('checkbox', { name: /Claimed Customer/ })).toBeNull();
@@ -428,6 +450,40 @@ describe('<PlotBrokers />', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Customers (select multiple)' }));
     expect(screen.getByRole('checkbox', { name: /Priya Sharma/ })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /Arjun Patel/ })).toBeNull();
+  });
+
+  it('groups plot numbers with the same plot name into one Sales Executive option', async () => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/brokers' && !options) return Promise.resolve({
+        brokers: [],
+        plots: [
+          { id: 9, name: 'Koramangala', plotNumber: '10', address: 'Koramangala, Bengaluru', availability: 'AVAILABLE' },
+          { id: 10, name: 'Koramangala', plotNumber: '11', address: 'Koramangala, Bengaluru', availability: 'AVAILABLE' },
+        ],
+        customers: [], summary: {},
+      });
+      return Promise.resolve({});
+    });
+    render(<PlotBrokers />);
+    await screen.findByRole('button', { name: 'Add Sales Executive' });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Sales Executive' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Vikram' } });
+    fireEvent.change(screen.getByLabelText('Phone *'), { target: { value: '9000044444' } });
+    fireEvent.change(screen.getByLabelText('Work email *'), { target: { value: 'vikram@example.com' } });
+    fireEvent.change(screen.getByLabelText('Password *'), { target: { value: 'secret123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sales Executive plots / sites (select multiple)' }));
+
+    const groupedOptions = screen.getAllByRole('checkbox', { name: /Koramangala/ });
+    expect(groupedOptions).toHaveLength(1);
+    fireEvent.click(groupedOptions[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/brokers',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    const createCall = fetchApiMock.mock.calls.find(([url, options]) => url.endsWith('/brokers') && options?.method === 'POST');
+    expect(JSON.parse(createCall[1].body).plotSiteIds).toEqual([9, 10]);
   });
 
   it('hides a customer once another broker has started work', async () => {
@@ -556,7 +612,6 @@ describe('<PlotBrokers />', () => {
     expect(within(plotAreasDialog).getByText('Koramangala')).toBeInTheDocument();
     expect(within(plotAreasDialog).getByText('Indiranagar')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close service areas' }));
-    fireEvent.change(screen.getByLabelText('Commission (%)'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Customers (select multiple)' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Priya Sharma · Aster Homes · 9000066666' }));
     expect(screen.getByRole('combobox', { name: 'Plot for Priya Sharma' })).toHaveValue('9');
@@ -573,7 +628,7 @@ describe('<PlotBrokers />', () => {
     const requestBody = JSON.parse(call[1].body);
     expect(requestBody).toMatchObject({
       name: 'Vikram', email: 'vikram@example.com', password: 'secret123',
-      plotSiteIds: [9, 10], commissionPercent: '3', customerIds: [21],
+      plotSiteIds: [9, 10], commissionPercent: '', customerIds: [21],
       assignments: [{ customerId: 21, plotSiteId: 9 }],
     });
   });

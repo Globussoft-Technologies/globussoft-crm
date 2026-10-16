@@ -113,6 +113,35 @@ describe('<BillingPersons />', () => {
     });
   });
 
+  it('groups plot numbers with the same plot name into one billing option', async () => {
+    fetchApi
+      .mockResolvedValueOnce({
+        ...payload,
+        plots: [
+          ...payload.plots,
+          { id: 31, name: 'Koramangala', plotNumber: '10', address: 'Koramangala, Bengaluru', availability: 'AVAILABLE' },
+          { id: 32, name: 'Koramangala', plotNumber: '11', address: 'Koramangala, Bengaluru', availability: 'AVAILABLE' },
+        ],
+      })
+      .mockResolvedValueOnce({ id: 71 })
+      .mockResolvedValueOnce(payload);
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Bina Shah' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Billing plots / sites (select multiple)' }));
+
+    const groupedOptions = screen.getAllByRole('checkbox', { name: /Koramangala/ });
+    expect(groupedOptions).toHaveLength(1);
+    fireEvent.click(groupedOptions[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/billing-persons/71',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const updateCall = fetchApi.mock.calls.find(([url, options]) => url.endsWith('/billing-persons/71') && options?.method === 'PUT');
+    expect(JSON.parse(updateCall[1].body).plotSiteIds).toEqual([30, 31, 32]);
+  });
+
   it('hides booked, reserved, and sold plots from billing assignment options', async () => {
     fetchApi.mockResolvedValueOnce({
       ...payload,

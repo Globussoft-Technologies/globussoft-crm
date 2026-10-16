@@ -147,6 +147,9 @@ prisma.travelPaymentSchedule = prisma.travelPaymentSchedule || {};
 prisma.travelPaymentSchedule.findFirst = vi.fn().mockResolvedValue(null);
 prisma.travelPaymentSchedule.update = vi.fn().mockResolvedValue({});
 prisma.travelPaymentSchedule.updateMany = vi.fn().mockResolvedValue({ count: 0 });
+prisma.plotBooking = prisma.plotBooking || {};
+prisma.plotBooking.findFirst = vi.fn().mockResolvedValue(null);
+prisma.plotBooking.update = vi.fn().mockResolvedValue({});
 
 import express from 'express';
 import request from 'supertest';
@@ -214,6 +217,8 @@ beforeEach(() => {
   prisma.travelPaymentSchedule.findFirst.mockReset().mockResolvedValue(null);
   prisma.travelPaymentSchedule.update.mockReset().mockResolvedValue({});
   prisma.travelPaymentSchedule.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotBooking.update.mockReset().mockResolvedValue({});
   prisma.visit.findFirst.mockReset().mockResolvedValue(null);
   prisma.visit.findMany.mockReset().mockResolvedValue([]);
   prisma.visit.update.mockReset().mockResolvedValue({});
@@ -1231,6 +1236,48 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
 // When a visit-linked payment link is paid, the Visit row must flip to
 // paymentStatus='paid' so the Log Visit UI disables the copy action.
 // ─────────────────────────────────────────────────────────────────────────
+
+describe('POST /webhook/razorpay — plot-booking payment reconciliation', () => {
+  test('updates paid amount and balance when an initial-payment link is paid', async () => {
+    const metadata = JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 501 });
+    prisma.payment.findFirst.mockResolvedValue({
+      id: 801, tenantId: 1, invoiceId: null, amount: 500000,
+      gateway: 'razorpay', gatewayId: 'plink_plot_501', status: 'PENDING', metadata,
+    });
+    prisma.payment.update.mockResolvedValue({
+      id: 801, tenantId: 1, invoiceId: null, amount: 500000,
+      gateway: 'razorpay', gatewayId: 'pay_plot_501', status: 'SUCCESS', metadata,
+    });
+    prisma.payment.findMany.mockResolvedValue([{ amount: 500000 }, { amount: 250000 }]);
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, tenantId: 1, totalAmount: 4500000 });
+
+    const eventObj = {
+      event: 'payment_link.paid',
+      payload: {
+        payment_link: { entity: { id: 'plink_plot_501', notes: { tenantId: '1', kind: 'plot-booking-payment', plotBookingId: '501' } } },
+        payment: { entity: { id: 'pay_plot_501', method: 'upi', captured_at: Math.floor(Date.now() / 1000) } },
+      },
+    };
+    const bodyStr = JSON.stringify(eventObj);
+    const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(bodyStr).digest('hex');
+
+    const response = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', signature)
+      .send(bodyStr);
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.payment.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, status: 'SUCCESS', metadata: { contains: '"plotBookingId":501' } },
+      select: { amount: true },
+    });
+    expect(prisma.plotBooking.update).toHaveBeenCalledWith({
+      where: { id: 501 },
+      data: { amountPaid: 750000, balance: 3750000, paymentStatus: 'PARTIAL' },
+    });
+  });
+});
 
 describe('POST /webhook/razorpay — payment_link.paid wellness-visit reconciliation', () => {
   function makePlinkPaidEvent(plinkId) {

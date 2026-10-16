@@ -78,10 +78,20 @@
  * DPDP opt-out reply lockout, Ctrl+Enter Send shortcut, 24h-window gate
  * etc.) and will be valuable when the SUT is re-pinned.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+
+const socketMock = {
+  emit: vi.fn(),
+  on: vi.fn(),
+  off: vi.fn(),
+  disconnect: vi.fn(),
+};
+vi.mock('socket.io-client', () => ({
+  io: () => socketMock,
+}));
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -103,6 +113,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import WhatsAppThreads from '../pages/wellness/WhatsAppThreads';
+import { AuthContext } from '../App';
 
 // jsdom doesn't ship scrollIntoView; the page calls it on a ref after each
 // detail load. Stub it once so the messages-end ref doesn't blow up.
@@ -285,12 +296,67 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
   notifyObj.prompt.mockReset();
   notifyObj.prompt.mockImplementation(() => Promise.resolve('4'));
+  Object.values(socketMock).forEach((mock) => mock.mockClear());
   fetchApiMock.mockImplementation(defaultFetch);
   // Seed localStorage with a logged-in user for assign-to-me.
   window.localStorage.setItem(
     'user',
     JSON.stringify({ id: 99, name: 'Demo Agent', email: 'agent@demo.com' })
   );
+});
+
+describe('<WhatsAppThreads /> — current Meta inbox contract', () => {
+  it('follows the canonical thread id returned after a Generic CRM reply', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/whatsapp/send' && opts?.method === 'POST') {
+        return Promise.resolve({ success: true, threadId: 99 });
+      }
+      if (url === '/api/whatsapp/threads/99') {
+        return Promise.resolve({
+          ...sampleDetailOpen,
+          thread: { ...sampleDetailOpen.thread, id: 99 },
+          messages: [
+            ...sampleDetailOpen.messages,
+            {
+              id: 1003,
+              direction: 'OUTBOUND',
+              body: 'Canonical thread reply',
+              status: 'QUEUED',
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+      if (url === '/api/whatsapp/config/status') {
+        return Promise.resolve({ status: { status: 'CONNECTED', label: 'Connected', severity: 'ok' } });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'USER' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByText('Rishu Goyal'));
+    const textarea = await screen.findByPlaceholderText('Type a message…');
+    await user.type(textarea, 'Canonical thread reply');
+    await user.click(screen.getByTitle('Send (Ctrl+Enter)'));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/send', {
+        method: 'POST',
+        body: JSON.stringify({ to: '+919876543210', body: 'Canonical thread reply' }),
+        silent: true,
+      });
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/threads/99');
+    });
+    expect(await screen.findByText('Canonical thread reply')).toBeInTheDocument();
+  });
 });
 
 describe.skip('<WhatsAppThreads /> — thread list rendering', () => {

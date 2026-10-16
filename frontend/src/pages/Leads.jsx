@@ -228,6 +228,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "webForm",
   "medium",
   "location",
+  "pickupLocation",
   "subBrand",
   "tags",
   "assignedTo",
@@ -2280,9 +2281,7 @@ const Leads = () => {
   }, [activeSubBrand, isTravel]);
   const [previewLead, setPreviewLead] = useState(null);
   const [viewingPickupStatus, setViewingPickupStatus] = useState(null);
-  const [editingPickupLocation, setEditingPickupLocation] = useState(null);
-  const [pickupLocationDraft, setPickupLocationDraft] = useState("");
-  const [savingPickupLocation, setSavingPickupLocation] = useState(false);
+  const [savingPickupLocationId, setSavingPickupLocationId] = useState(null);
   // Generic CRM Callified filters
   const [campaignFilter, setCampaignFilter] = useState("");
   const [leadStatusFilter, setLeadStatusFilter] = useState("");
@@ -2949,21 +2948,19 @@ const Leads = () => {
     [isGeneric, autoCampaignRulesEnabled, autoCampaignRules, notify],
   );
 
-  const saveLeadPickupLocation = async (event) => {
-    event.preventDefault();
-    if (!isGeneric || !editingPickupLocation) return;
-
+  const saveLeadPickupLocation = async (lead, pickupStatus, locationId) => {
+    if (!isGeneric) return;
     const selectedLocation = pickupLocationOptions.find(
-      (location) => String(location.id) === pickupLocationDraft,
+      (location) => String(location.id) === String(locationId),
     );
     if (!selectedLocation) {
       notify.error("Select a pickup location.");
       return;
     }
     const pickupAddress = selectedLocation.address.trim();
-    setSavingPickupLocation(true);
+    const contactId = Number(lead.id);
+    setSavingPickupLocationId(contactId);
     try {
-      const contactId = Number(editingPickupLocation.lead.id);
       const savedPickup = await fetchApi(
         `/api/pickup-plot-inventory/customer-pickups/${contactId}`,
         {
@@ -2971,9 +2968,9 @@ const Leads = () => {
           body: JSON.stringify({
             pickupAddress,
             sourceTranscriptId:
-              editingPickupLocation.pickupStatus?.sourceTranscriptId || null,
+              pickupStatus?.sourceTranscriptId || null,
             sourceExcerpt:
-              editingPickupLocation.pickupStatus?.sourceExcerpt || null,
+              pickupStatus?.sourceExcerpt || null,
           }),
         },
       );
@@ -2981,7 +2978,7 @@ const Leads = () => {
       setPickupPlotStatusByContact((current) => {
         const next = new Map(current);
         const existing =
-          next.get(contactId) || editingPickupLocation.pickupStatus;
+          next.get(contactId) || pickupStatus;
         next.set(
           contactId,
           existing
@@ -2998,13 +2995,13 @@ const Leads = () => {
                 currentStatusUpdatedAt: updatedAt,
                 contact: savedPickup?.contact || {
                   id: contactId,
-                  name: editingPickupLocation.lead.name,
-                  phone: editingPickupLocation.lead.phone,
-                  email: editingPickupLocation.lead.email,
-                  company: editingPickupLocation.lead.company,
-                  status: editingPickupLocation.lead.status,
+                  name: lead.name,
+                  phone: lead.phone,
+                  email: lead.email,
+                  company: lead.company,
+                  status: lead.status,
                   interestedPlotArea:
-                    editingPickupLocation.lead.interestedPlotArea,
+                    lead.interestedPlotArea,
                 },
                 workflow: {},
                 workflowHistory: [],
@@ -3013,8 +3010,6 @@ const Leads = () => {
         return next;
       });
       notify.success("Pickup location updated.");
-      setEditingPickupLocation(null);
-      setPickupLocationDraft("");
     } catch (error) {
       notify.error(
         error?.body?.error ||
@@ -3022,7 +3017,7 @@ const Leads = () => {
           "Could not update the pickup location.",
       );
     } finally {
-      setSavingPickupLocation(false);
+      setSavingPickupLocationId(null);
     }
   };
 
@@ -10300,7 +10295,7 @@ const Leads = () => {
                                       data-testid="generic-lead-pickup-location-content"
                                       style={{
                                         display: "flex",
-                                        alignItems: "flex-start",
+                                        alignItems: "center",
                                         gap: 7,
                                         minWidth: 0,
                                         margin: ".25rem .5rem .25rem 0",
@@ -10308,7 +10303,41 @@ const Leads = () => {
                                         boxSizing: "border-box",
                                       }}
                                     >
-                                      {pickupAddress ? (
+                                      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                                        {pickupAddress ? (
+                                          <span
+                                            title={pickupAddress}
+                                            style={{
+                                              display: "block",
+                                              overflowWrap: "anywhere",
+                                              lineHeight: 1.35,
+                                              fontWeight: 600,
+                                            }}
+                                          >
+                                            {pickupAddress}
+                                          </span>
+                                        ) : (
+                                          <PickupLocationSelect
+                                            compact
+                                            ariaLabel={`Pickup location for ${lead.name || "lead"}`}
+                                            value=""
+                                            disabled={
+                                              pickupLocationOptions.length === 0 ||
+                                              savingPickupLocationId ===
+                                                Number(lead.id)
+                                            }
+                                            onChange={(locationId) =>
+                                              saveLeadPickupLocation(
+                                                lead,
+                                                pickupStatus,
+                                                locationId,
+                                              )
+                                            }
+                                            options={pickupLocationOptions}
+                                          />
+                                        )}
+                                      </div>
+                                      {pickupAddress && (
                                         <a
                                           href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pickupAddress)}`}
                                           target="_blank"
@@ -10316,75 +10345,21 @@ const Leads = () => {
                                           aria-label={`Open pickup location for ${lead.name || "lead"} in Google Maps`}
                                           title="Open pickup location in Google Maps"
                                           style={{
-                                            display: "flex",
-                                            flex: "1 1 auto",
-                                            alignItems: "flex-start",
-                                            gap: 6,
-                                            minWidth: 0,
-                                            color: "inherit",
-                                            fontWeight: 700,
-                                            textDecoration: "none",
+                                            ...actionIconBtn,
+                                            display: "grid",
+                                            placeItems: "center",
+                                            flex: "0 0 auto",
+                                            color:
+                                              "var(--primary-color, var(--accent-color))",
                                           }}
                                         >
                                           <MapPin
                                             size={15}
                                             aria-hidden="true"
-                                            style={{
-                                              marginTop: 2,
-                                              flex: "0 0 auto",
-                                              color:
-                                                "var(--primary-color, var(--accent-color))",
-                                            }}
+                                            style={{ flex: "0 0 auto" }}
                                           />
-                                          <span
-                                            style={{
-                                              minWidth: 0,
-                                              overflowWrap: "anywhere",
-                                            }}
-                                          >
-                                            {pickupAddress}
-                                          </span>
                                         </a>
-                                      ) : (
-                                        <span
-                                          style={{
-                                            flex: 1,
-                                            color: "var(--text-secondary)",
-                                          }}
-                                        >
-                                          Not captured
-                                        </span>
                                       )}
-                                      <button
-                                        type="button"
-                                        aria-label={`Edit pickup location for ${lead.name || "lead"}`}
-                                        title="Edit pickup location"
-                                        onClick={() => {
-                                          setEditingPickupLocation({
-                                            lead,
-                                            pickupStatus,
-                                          });
-                                          const selectedLocation =
-                                            pickupLocationOptions.find(
-                                              (location) =>
-                                                location.address?.trim() ===
-                                                pickupAddress,
-                                            );
-                                          setPickupLocationDraft(
-                                            selectedLocation
-                                              ? String(selectedLocation.id)
-                                              : "",
-                                          );
-                                        }}
-                                        style={{
-                                          ...actionIconBtn,
-                                          flex: "0 0 auto",
-                                          color:
-                                            "var(--primary-color, var(--accent-color))",
-                                        }}
-                                      >
-                                        <Pencil size={14} />
-                                      </button>
                                     </div>
                                   </td>
                                 )}
@@ -10905,116 +10880,6 @@ const Leads = () => {
             </div>
           )}
         </div>
-        {isGeneric && editingPickupLocation && (
-          <div
-            role="presentation"
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 1000,
-              background: "rgba(15,23,42,.48)",
-              display: "grid",
-              placeItems: "center",
-              padding: 16,
-            }}
-          >
-            <form
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="edit-lead-pickup-title"
-              className="card"
-              onSubmit={saveLeadPickupLocation}
-              style={{
-                width: "min(520px, 100%)",
-                padding: "1.25rem",
-                opacity: 1,
-                background: "var(--popover-bg, #fff)",
-                backdropFilter: "none",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                }}
-              >
-                <h2
-                  id="edit-lead-pickup-title"
-                  style={{
-                    margin: 0,
-                    fontSize: "1.2rem",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                >
-                  <MapPin size={19} /> Edit pickup location
-                </h2>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  aria-label="Close edit pickup location"
-                  onClick={() => setEditingPickupLocation(null)}
-                  disabled={savingPickupLocation}
-                  style={{ padding: ".4rem" }}
-                >
-                  <X size={17} />
-                </button>
-              </div>
-              <p style={{ color: "var(--text-secondary)" }}>
-                {editingPickupLocation.lead.name || "Lead"}
-              </p>
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Pickup location
-                <PickupLocationSelect
-                  value={pickupLocationDraft}
-                  onChange={setPickupLocationDraft}
-                  options={pickupLocationOptions}
-                  disabled={pickupLocationOptions.length === 0}
-                />
-              </label>
-              {pickupLocationOptions.length === 0 && (
-                <p
-                  role="status"
-                  style={{
-                    margin: "8px 0 0",
-                    color: "var(--text-secondary)",
-                    fontSize: ".82rem",
-                  }}
-                >
-                  No active pickup locations are configured. Add one in Pickup
-                  Inventory first.
-                </p>
-              )}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  gap: 8,
-                  marginTop: 16,
-                }}
-              >
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setEditingPickupLocation(null)}
-                  disabled={savingPickupLocation}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={savingPickupLocation || !pickupLocationDraft}
-                >
-                  {savingPickupLocation ? "Saving..." : "Save changes"}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
         {isGeneric && (
           <PickupCustomerStatusDialog
             customer={viewingPickupStatus}

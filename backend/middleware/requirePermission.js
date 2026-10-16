@@ -306,6 +306,7 @@ async function loadUserPermissions(tenantId, userId, vertical = null) {
         permSet.add(`${perm.module}.${perm.action}`);
       }
     }
+    const rolePermissionCount = permSet.size;
 
     // Self-heal path for legacy-ADMIN users whose tenant pre-dates the
     // signup-time RBAC provisioning fix. Symptom: a user signed up via
@@ -328,7 +329,7 @@ async function loadUserPermissions(tenantId, userId, vertical = null) {
     //     they never reach this branch.
     //   - Any failure is logged + returns the empty set so the caller
     //     fails-closed naturally; the heal never blocks a legit request.
-    if (permSet.size === 0) {
+    if (rolePermissionCount === 0) {
       const healed = await maybeSelfHealAdminPermissions(tenantId, userId, vertical);
       if (healed) return healed;
     }

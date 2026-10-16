@@ -1870,8 +1870,8 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     });
     expect(await screen.findByTestId('pending-registrations-list')).toBeInTheDocument();
     expect(screen.getByText('Aarav Iyer')).toBeInTheDocument();
-    expect(screen.getByText('Registered')).toBeInTheDocument();
-    expect(screen.getByText('Registered participants').parentElement.parentElement).toHaveStyle({
+    expect(screen.getByText('Verified')).toBeInTheDocument();
+    expect(screen.getByText('Pending registrations').parentElement.parentElement).toHaveStyle({
       background: 'var(--surface-hover, var(--subtle-bg))',
       color: 'var(--text-primary)',
     });
@@ -1905,17 +1905,18 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Sara');
-    expect(screen.getByText('Registered')).toBeInTheDocument();
-    expect(screen.getByText('Registered automatically')).toBeInTheDocument();
+    expect(screen.getByText('Draft')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting completion')).toBeInTheDocument();
     expect(screen.queryByTestId('approve-registration-9003')).not.toBeInTheDocument();
     expect(screen.queryByTestId('reject-registration-9003')).not.toBeInTheDocument();
   });
 
-  it('CONVERTED registrations remain visible in the unified registration list', async () => {
+  it('shows converted registration documents on the participant without a second row', async () => {
     installFetchMock({
+      trip: makeTrip({ participants: [{ id: 555, fullName: 'AlreadyConverted' }] }),
       pendingRegs: [
         makePendingReg({ id: 9001, status: 'OTP_VERIFIED', studentName: 'StillPending' }),
-        makePendingReg({ id: 9002, status: 'CONVERTED', studentName: 'AlreadyConverted', convertedToParticipantId: 555 }),
+        makePendingReg({ id: 9002, status: 'CONVERTED', studentName: 'AlreadyConverted', convertedToParticipantId: 555, extrasJson: JSON.stringify({ documents: { passport: 'stored' } }) }),
       ],
     });
     renderPage();
@@ -1923,7 +1924,47 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('StillPending');
     expect(screen.getByText('AlreadyConverted')).toBeInTheDocument();
-    expect(screen.getByTestId('pending-reg-row-9002')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-reg-row-9002')).not.toBeInTheDocument();
+    expect(screen.getByTestId('view-participant-registration-passport-555')).toBeInTheDocument();
+    expect(screen.getByTestId('pending-regs-count')).toHaveTextContent('1 pending registration');
+  });
+
+  it('does not show a later draft for someone already in the participant list', async () => {
+    installFetchMock({
+      trip: makeTrip({ participants: [{ id: 19, fullName: 'Ritu',
+        parentEmail: 'laura@temptami.com', parentPhone: '6789451234' }] }),
+      pendingRegs: [
+        makePendingReg({ id: 13, status: 'CONVERTED', studentName: 'Ritu',
+          parentEmail: 'laura@temptami.com', parentPhone: '6789451234', convertedToParticipantId: 19 }),
+        makePendingReg({ id: 14, status: 'DRAFT', studentName: 'Ritu',
+          parentEmail: 'laura@temptami.com', parentPhone: '6789451234' }),
+      ],
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Ritu');
+    expect(screen.queryByTestId('pending-reg-row-14')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
+  });
+
+  it('does not count rejected duplicates or converted records as pending', async () => {
+    installFetchMock({
+      trip: makeTrip({ participants: [{ id: 14, fullName: 'Jas' }] }),
+      pendingRegs: [
+        makePendingReg({ id: 1, status: 'CONVERTED', studentName: 'Jas', convertedToParticipantId: 14 }),
+        makePendingReg({ id: 2, status: 'REJECTED', studentName: 'Jas' }),
+        makePendingReg({ id: 3, status: 'REJECTED', studentName: 'Jas' }),
+      ],
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Jas');
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/trips/101/registrations'));
+    expect(screen.getAllByText('Jas')).toHaveLength(1);
+    expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-registrations-list')).not.toBeInTheDocument();
   });
 
   it.skip('legacy Approve endpoint remains available for old records', async () => {

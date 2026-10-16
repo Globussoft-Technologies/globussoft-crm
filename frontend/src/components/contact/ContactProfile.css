@@ -85,7 +85,7 @@
 .cp-task-input-icon svg { position: absolute; right: 0.65rem; color: var(--text-secondary); pointer-events: none; }
 .cp-task-chip { display: inline-flex; align-items: center; gap: 0.3rem; width: fit-content; padding: 0.25rem 0.5rem; border-radius: 999px; background: rgba(59,130,246,0.1); color: var(--primary-color, var(--accent-color)); font-size: 0.72rem; }
 .cp-task-chip button { display: inline-flex; padding: 0; border: none; background: none; color: inherit; cursor: pointer; }
-@media (max-width: 900px) { .cp-task-drawer { width: 82vw; min-width: 0; } .cp-task-columns { grid-template-columns: 1fr; } .cp-task-side { border-left: none; border-top: 1px solid var(--border-color); padding: 1.25rem 0 0; } }
+@media (max-width: 899px) { .cp-task-drawer { width: 82vw; min-width: 0; } .cp-task-columns { grid-template-columns: 1fr; } .cp-task-side { border-left: none; border-top: 1px solid var(--border-color); padding: 1.25rem 0 0; } }
 @media (max-width: 560px) { .cp-task-drawer { width: 100vw; } .cp-task-body { padding: 1rem; } .cp-task-date-row { grid-template-columns: 1fr; gap: 0; } }
 .cp-meeting-overlay { position: fixed; inset: 0; z-index: 10000; background: rgba(15, 23, 42, 0.42); display: flex; justify-content: flex-end; }
 .cp-meeting-drawer { width: 60vw; max-width: 960px; min-width: 620px; height: 100vh; background: #fff; display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(15, 23, 42, 0.2); animation: cp-task-slide-in 0.25s ease-out; }
@@ -111,7 +111,7 @@
   background: var(--modal-bg, var(--surface-color)) !important;
   color: var(--text-primary);
 }
-@media (max-width: 900px) { .cp-meeting-drawer { width: 82vw; min-width: 0; } .cp-meeting-columns { grid-template-columns: 1fr; } .cp-meeting-columns .cp-task-side { border-left: none; border-top: 1px solid var(--border-color); padding: 1.25rem 0 0; } }
+@media (max-width: 899px) { .cp-meeting-drawer { width: 82vw; min-width: 0; } .cp-meeting-columns { grid-template-columns: 1fr; } .cp-meeting-columns .cp-task-side { border-left: none; border-top: 1px solid var(--border-color); padding: 1.25rem 0 0; } }
 @media (max-width: 560px) { .cp-meeting-drawer { width: 100vw; } .cp-meeting-footer { flex-direction: column; } }
 .cp-row { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.45rem 0; border-top: 1px solid var(--subtle-bg); font-size: 0.82rem; }
 .cp-row:first-of-type { border-top: none; }
@@ -295,7 +295,7 @@ a.cp-soc:hover { border-color: currentColor; }
 .cp-deal-footer .cf-save { min-height: 36px; box-sizing: border-box; white-space: nowrap; }
 .cp-deal-footer .cp-generic-show-all { background: var(--primary-color, var(--accent-color)); border-color: var(--primary-color, var(--accent-color)); color: #fff; }
 .cp-deal-footer .cp-generic-show-all:hover { filter: brightness(1.08); color: #fff; }
-@media (max-width: 900px) { .cp-deal-drawer { width: 92vw; min-width: 0; } .cp-deal-split, .cp-deal-split-label { grid-template-columns: 1fr; gap: 0.35rem; } .cp-deal-prod-row { grid-template-columns: minmax(0, 1fr) 70px 100px 28px; } }
+@media (max-width: 899px) { .cp-deal-drawer { width: 92vw; min-width: 0; } .cp-deal-split, .cp-deal-split-label { grid-template-columns: 1fr; gap: 0.35rem; } .cp-deal-prod-row { grid-template-columns: minmax(0, 1fr) 70px 100px 28px; } }
 .cp-filters { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.85rem; }
 .cp-filter { border: 1px solid var(--border-color); background: #fff; border-radius: 999px; padding: 0.25rem 0.75rem; font-size: 0.75rem; cursor: pointer; color: var(--text-secondary); }
 .cp-filter.active { background: var(--primary-color, var(--accent-color)); border-color: transparent; color: #fff; font-weight: 600; }
@@ -330,7 +330,7 @@ a.cp-soc:hover { border-color: currentColor; }
 .cp-generic-note-full img { max-width: 100%; height: auto; }
 .cp-call-number { font-size: 1.3rem; font-weight: 700; text-align: center; padding: 0.5rem 0; }
 .cp-stage-select { width: auto; padding: 0.3rem 0.5rem; font-size: 0.75rem; }
-@media (max-width: 1024px) {
+@media (max-width: 899px) {
   .cp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cp-panels { grid-template-columns: 1fr; }
   .cp-form-grid { grid-template-columns: 1fr; }

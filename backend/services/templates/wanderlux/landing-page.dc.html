@@ -535,19 +535,28 @@
                     </div>
                   </div>
 
+                  <sc-if value="{{ regPaymentBalanceLoaded }}"><p style="font-size:12px;color:var(--c-text2);margin:0">Paid toward trip: {{ regPaymentPaidLabel }} · Remaining payable: {{ regPaymentRemainingLabel }}</p></sc-if>
+                  <sc-if value="{{ regPaymentHasOverpayment }}"><p style="font-size:12px;color:var(--c-brand);margin:0">Additional payment recorded: {{ regPaymentOverpaidLabel }}. Please contact the trip organiser about this credit.</p></sc-if>
                   <sc-if value="{{ regPaymentShowInstallmentSelect }}">
                   <div>
                     <label style="display:block;font-size:12px;font-weight:600;color:var(--c-text);margin-bottom:8px">Choose instalment</label>
                     <select onChange="{{ regChoosePaymentInstallmentIndex }}" value="{{ regPaymentInstallmentIndex }}" aria-label="Choose payment instalment" style="width:100%;padding:13px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:15px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
                       <sc-for list="{{ regPaymentInstallmentOptions }}" as="opt">
-                        <option value="{{ opt.index }}">{{ opt.label }} — {{ opt.amountLabel }}</option>
+                        <option value="{{ opt.index }}" disabled="{{ opt.paid }}">{{ opt.label }} — {{ opt.amountLabel }}</option>
                       </sc-for>
                     </select>
                   </div>
                   </sc-if>
 
                   <p style="font-size:12px;color:var(--c-text2);margin:0">Payment opens securely in Razorpay after you continue.</p>
+                  <sc-if value="{{ regPaymentError }}"><p role="alert" style="font-size:12px;color:var(--c-brand);margin:0">{{ regPaymentError }}</p></sc-if>
                 </div>
+                <sc-if value="{{ regPortalHandoffVisible }}">
+                  <div style="display:flex;flex-direction:column;gap:10px;padding:14px 16px;background:var(--c-panel);border:1px solid var(--c-border);border-radius:8px">
+                    <p style="font-size:13px;line-height:1.5;color:var(--c-text);margin:0">Payment confirmed. You can continue to the parent portal now and pay the remaining instalments there later.</p>
+                    <button type="button" onClick="{{ regContinueToPortal }}" disabled="{{ regSending }}" style="width:100%;background:var(--c-brand);color:#fff;border:none;padding:13px;border-radius:4px;font-size:13px;font-weight:600;font-family:var(--c-sans);cursor:pointer">{{ regPortalHandoffLabel }}</button>
+                  </div>
+                </sc-if>
               </div>
               </sc-if>
 
@@ -555,7 +564,7 @@
                 <sc-if value="{{ regShowBack }}">
                   <button type="button" onClick="{{ regPrev }}" style="flex:0 0 auto;background:transparent;color:var(--c-text2);border:1px solid var(--c-border);padding:15px 20px;border-radius:4px;font-size:13px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer" style-hover="border-color:var(--c-text2)">Back</button>
                 </sc-if>
-                <button type="button" onClick="{{ regPrimary }}" disabled="{{ regPaymentLoading }}" style="flex:1;background:var(--c-brand);color:#fff;border:none;padding:15px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer;opacity:{{ regPrimaryButtonOpacity }}" style-hover="background:var(--c-dark)">{{ regPrimaryButtonLabel }}</button>
+                <button type="button" onClick="{{ regPrimary }}" disabled="{{ regPaymentActionDisabled }}" style="flex:1;background:var(--c-brand);color:#fff;border:none;padding:15px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer;opacity:{{ regPrimaryButtonOpacity }}" style-hover="background:var(--c-dark)">{{ regPrimaryButtonLabel }}</button>
               </div>
               <p style="font-size:12px;color:var(--c-text2);text-align:center;margin:4px 0 0">🔒 Your data is secure. No card details are collected here.</p>
             </div>
@@ -1029,7 +1038,7 @@ class Component extends DCLogic {
   state = {
     now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
     regStep:0, regValues:{}, regDraftToken:'', regError:'', regSubmitted:false, regSending:false,
-    regPaymentMode:'installment', regPaymentInstallmentIndex:0, regPaymentLoading:false, regPaymentError:'', regPaymentCompleted:false, regPaymentLinkId:'',
+    regPaymentMode:'installment', regPaymentInstallmentIndex:0, regPaymentLoading:false, regPaymentError:'', regPaymentCompleted:false, regPaymentLinkId:'', regPaymentBalance:null,
     brValues:{}, brError:'', brSubmitted:false, brSending:false,
     toast: null,
     /* Preview banner can be dismissed by the operator. Persists for
@@ -1052,19 +1061,24 @@ class Component extends DCLogic {
           draftToken = saved.regDraftToken || '';
         }
         let pageSlug = '';
+        let paymentOrderEndpoint = '';
         try {
           const injected = (this.props && this.props.config) || window.__PAGE_CONFIG || {};
           pageSlug = injected.meta && injected.meta.slug ? String(injected.meta.slug).trim() : '';
+          paymentOrderEndpoint = injected.investment && injected.investment.payment
+            ? String(injected.investment.payment.orderEndpoint || '') : '';
         } catch(_err) { /* use the pathname fallback below */ }
         const slug = encodeURIComponent(pageSlug || window.location.pathname.split('/').filter(Boolean).pop() || '');
+        if (draftToken && paymentOrderEndpoint) this.loadRegistrationPaymentBalance(paymentOrderEndpoint, draftToken).catch(() => {});
         if (draftToken && slug) fetch('/p/' + slug + '/payment-status?draftToken=' + encodeURIComponent(draftToken))
           .then((response) => response.ok ? response.json() : null)
           .then((status) => {
             if (!status) return;
             const next = {};
             if (status.fields && typeof status.fields === 'object') next.regValues = Object.assign({}, this.state.regValues, status.fields);
-            if (status.paid) { next.regPaymentCompleted = true; next.regPaymentError = ''; }
+            if (status.paid) { next.regPaymentCompleted = true; next.regPaymentError = ''; next.regPaymentLinkId = status.paymentLinkId || this.state.regPaymentLinkId || ''; }
             if (Object.keys(next).length) this.setState(next);
+            if (status.paid && paymentOrderEndpoint) this.loadRegistrationPaymentBalance(paymentOrderEndpoint, draftToken).catch(() => {});
           })
           .catch(() => {});
       }, 0);
@@ -1177,9 +1191,14 @@ class Component extends DCLogic {
         return result;
       })
       .then((result) => {
+        if(result && result.redirect && (result.redirect.type === 'existing-participant' || result.redirect.type === 'customer-registration') && result.redirect.url){
+          this.setState({ regPaymentLoading: false });
+          window.location.assign(result.redirect.url);
+          return null;
+        }
         const draftToken = String(result && result.draftToken || '').trim();
         if(!draftToken) throw new Error('Could not start registration.');
-        this.setState({ regDraftToken: draftToken });
+        this.setState({ regDraftToken: draftToken, ...(draftToken !== currentDraftToken ? { regPaymentCompleted: false, regPaymentLinkId: '' } : {}) });
         this.saveRegistrationDraft({
           regStep: this.state.regStep,
           regValues: this.state.regValues,
@@ -1187,10 +1206,34 @@ class Component extends DCLogic {
           regPaymentMode: this.state.regPaymentMode,
           regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex
         });
-        return draftToken;
+        return this.loadRegistrationPaymentBalance(endpoint, draftToken).then(() => draftToken);
       })
       .finally(() => { this._registrationDraftPromise = null; });
     return this._registrationDraftPromise;
+  }
+
+  loadRegistrationPaymentBalance(paymentOrderEndpoint, draftToken){
+    const endpoint = String(paymentOrderEndpoint || '').replace(/\/payment-order\/?$/, '/payment-balance');
+    if(!endpoint || endpoint === paymentOrderEndpoint) return Promise.reject(new Error('Payment balance is unavailable.'));
+    this.setState({ regPaymentBalance: null });
+    return fetch(endpoint + '?draftToken=' + encodeURIComponent(draftToken))
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if(!response.ok) throw new Error(result.error || 'Could not load payment balance.');
+        return result;
+      })
+      .then((balance) => {
+        this.setState((state) => {
+          const chosen = (balance.installments || []).find((row) => row.index === Number(state.regPaymentInstallmentIndex));
+          const firstUnpaid = (balance.installments || []).find((row) => row.duePaise > 0);
+          return {
+            regPaymentBalance: balance,
+            regPaymentInstallmentIndex: chosen && chosen.duePaise > 0
+              ? chosen.index : firstUnpaid ? firstUnpaid.index : state.regPaymentInstallmentIndex,
+          };
+        });
+        return balance;
+      });
   }
 
   _startAutoplay(){
@@ -1250,7 +1293,7 @@ class Component extends DCLogic {
 
   /* generic input/select setter for a given state bag + field name */
   setField(bag, name){
-    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = { regError: bag === 'regValues' ? '' : st.regError }; patch[bag] = next; if(bag === 'regValues') this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return patch; }); };
+    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = { regError: bag === 'regValues' ? '' : st.regError }; patch[bag] = next; if(bag === 'regValues') { patch.regPaymentBalance = null; this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); } return patch; }); };
   }
 
   showToast(message, tone){
@@ -1314,7 +1357,7 @@ class Component extends DCLogic {
            fall back to the toast + done-state (existing lead-capture
            behaviour). */
         const redirect = body && body.redirect;
-        if(redirect && redirect.type === 'customer-registration' && redirect.url){
+        if(redirect && (redirect.type === 'customer-registration' || redirect.type === 'existing-participant') && redirect.url){
           window.location.assign(redirect.url);
           return;
         }
@@ -1505,17 +1548,26 @@ class Component extends DCLogic {
       return Number.isFinite(parsed) ? parsed : null;
     };
     const paymentCfg = inv.payment || {};
+    const paymentBalance = this.state.regPaymentBalance;
+    const balanceByIndex = new Map((paymentBalance && paymentBalance.installments || []).map((row) => [row.index, row]));
     const paymentInstallments = (inv.installments || []).map((ins, i) => {
       const amountMajor = parseMoney(ins.amount);
       if (!(amountMajor > 0)) return null;
+      const balanceRow = balanceByIndex.get(i);
+      const dueMajor = balanceRow ? balanceRow.duePaise / 100 : amountMajor;
       return {
         index: i,
         label: ins.tag || ins.title || ('Instalment ' + (i + 1)),
         title: ins.title || ins.tag || ('Instalment ' + (i + 1)),
         sub: ins.sub || '',
         date: ins.date || '',
-        amountMajor,
-        amountLabel: typeof ins.amount === 'string' && ins.amount.trim()
+        amountMajor: dueMajor,
+        paid: !!balanceRow && balanceRow.duePaise <= 0,
+        amountLabel: balanceRow
+          ? balanceRow.duePaise <= 0
+            ? balanceRow.creditPaise > 0 ? 'Covered by prior payment' : 'Paid'
+            : this.formatMoney(dueMajor, paymentCfg.currency || 'INR')
+          : typeof ins.amount === 'string' && ins.amount.trim()
           ? ins.amount.trim()
           : this.formatMoney(amountMajor, paymentCfg.currency || 'INR'),
       };
@@ -1527,9 +1579,10 @@ class Component extends DCLogic {
     const paymentInstallmentIndex = Number.isFinite(Number(this.state.regPaymentInstallmentIndex))
       ? Number(this.state.regPaymentInstallmentIndex)
       : 0;
-    const selectedPaymentInstallment = paymentInstallments.find((row) => row.index === paymentInstallmentIndex) || paymentInstallments[0] || null;
+    const selectedPaymentInstallment = paymentInstallments.find((row) => row.index === paymentInstallmentIndex && !row.paid)
+      || paymentInstallments.find((row) => !row.paid) || paymentInstallments[0] || null;
     const paymentAmountMajor = paymentMode === 'complete'
-      ? paymentInstallments.reduce((sum, row) => sum + Number(row.amountMajor || 0), 0)
+      ? paymentBalance ? paymentBalance.remainingPaise / 100 : paymentInstallments.reduce((sum, row) => sum + Number(row.amountMajor || 0), 0)
       : Number(selectedPaymentInstallment && selectedPaymentInstallment.amountMajor ? selectedPaymentInstallment.amountMajor : 0);
     const paymentOrderEndpoint = safeHref((paymentCfg && paymentCfg.orderEndpoint) || reg.paymentOrderEndpoint || '');
     const paymentSubmitEndpoint = safeHref(reg.endpoint || '');
@@ -1578,7 +1631,7 @@ class Component extends DCLogic {
     });
     // Documents are collected in the parent portal after registration. The
     // payment tab must not be gated by passport status or document upload.
-    const rsteps = baseSteps.length
+    const rsteps = baseSteps.length && paymentEnabled
       ? baseSteps.concat([{ title:'Step ' + (baseSteps.length + 1) + ': Payment', fields:[] }])
       : baseSteps;
     out.regMultiStep = rsteps.length > 1;
@@ -1600,10 +1653,16 @@ class Component extends DCLogic {
     out.regPaymentIsComplete = paymentMode === 'complete';
     out.regPaymentInstallmentIndex = paymentInstallmentIndex;
     out.regPaymentInstallmentOptions = paymentInstallments;
+    out.regPaymentBalanceLoaded = !!paymentBalance;
+    out.regPaymentPaidLabel = paymentBalance ? this.formatMoney(paymentBalance.paidPaise / 100, paymentBalance.currency || 'INR') : '';
+    out.regPaymentRemainingLabel = paymentBalance ? this.formatMoney(paymentBalance.remainingPaise / 100, paymentBalance.currency || 'INR') : '';
+    out.regPaymentHasOverpayment = !!paymentBalance && paymentBalance.overpaidPaise > 0;
+    out.regPaymentOverpaidLabel = out.regPaymentHasOverpayment ? this.formatMoney(paymentBalance.overpaidPaise / 100, paymentBalance.currency || 'INR') : '';
     out.regPaymentAmountLabel = this.formatMoney(paymentAmountMajor, paymentCfg.currency || 'INR');
     out.regPaymentStepTitle = paymentStepTitle;
     out.regPaymentIntro = paymentIntro;
-    out.regPaymentCompleted = this.state.regPaymentCompleted || hostedPaymentReturn;
+    out.regPaymentCompleted = (this.state.regPaymentCompleted || hostedPaymentReturn)
+      && (!paymentBalance || paymentBalance.remainingPaise <= 0);
     out.regPaymentLinkId = this.state.regPaymentLinkId || hostedPaymentLinkId;
     out.regPaymentButtonLabel = out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'));
     out.regPaymentInstallmentLabel = paymentInstallmentLabel;
@@ -1613,20 +1672,36 @@ class Component extends DCLogic {
     out.regPaymentSelectedLabel = selectedPaymentInstallment ? selectedPaymentInstallment.label : '';
     out.regPaymentSelectedAmountLabel = selectedPaymentInstallment ? selectedPaymentInstallment.amountLabel : '';
     out.regPaymentSummaryLabel = paymentMode === 'complete' ? paymentCompleteLabel : paymentInstallmentLabel;
-    out.regPaymentSummaryAmountLabel = paymentMode === 'complete'
+    out.regPaymentSummaryAmountLabel = out.regPaymentEnabled && !paymentBalance ? 'Checking balance...'
+      : paymentMode === 'complete'
       ? out.regPaymentAmountLabel
       : (selectedPaymentInstallment ? selectedPaymentInstallment.amountLabel : out.regPaymentAmountLabel);
     out.regPaymentLoading = this.state.regPaymentLoading;
     out.regPaymentError = this.state.regPaymentError;
+    out.regSending = this.state.regSending;
+    out.regPortalHandoffVisible = out.regPaymentEnabled && !out.regPaymentCompleted
+      && (this.state.regPaymentCompleted || hostedPaymentReturn);
+    out.regPortalHandoffLabel = reg.submitLabel || 'Reserve Orientation Seat';
+    out.regContinueToPortal = () => {
+      if (this.state.regSending || !out.regPortalHandoffVisible) return;
+      this.submitForm({ bag:'regValues', endpoint: reg.endpoint, type:'registration', cfg:cfg,
+        payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId },
+        doneKey:'regSubmitted', sendingKey:'regSending' });
+    };
     out.regPaymentShowInstallmentSelect = out.regPaymentEnabled && paymentMode === 'installment' && paymentInstallments.length > 1;
     out.regPaymentShowCompleteOption = out.regPaymentEnabled && out.regPaymentAllowComplete;
     out.regPaymentInstallmentBorder = paymentMode === 'installment' ? 'var(--c-brand)' : 'var(--c-border)';
     out.regPaymentInstallmentBackground = paymentMode === 'installment' ? 'color-mix(in srgb,var(--c-brand) 8%,var(--c-light))' : 'var(--c-panel)';
     out.regPaymentCompleteBorder = paymentMode === 'complete' ? 'var(--c-brand)' : 'var(--c-border)';
     out.regPaymentCompleteBackground = paymentMode === 'complete' ? 'color-mix(in srgb,var(--c-brand) 8%,var(--c-light))' : 'var(--c-panel)';
-    out.regPaymentSelectedSummary = paymentMode === 'complete' ? 'All instalments' : (selectedPaymentInstallment ? selectedPaymentInstallment.label : '');
+    out.regPaymentSelectedSummary = paymentMode === 'complete' ? 'Remaining instalments' : (selectedPaymentInstallment ? selectedPaymentInstallment.label : '');
     out.regPrimaryLabel = out.regIsLast ? (out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'))) : 'Next';
-    out.regPrimaryButtonLabel = this.state.regPaymentLoading ? 'Opening Razorpay...' : out.regPrimaryLabel;
+    out.regPrimaryButtonLabel = this.state.regPaymentLoading ? 'Opening Razorpay...'
+      : out.regPaymentEnabled && !out.regPaymentCompleted && !paymentBalance ? 'Check balance & continue'
+      : out.regPaymentEnabled && !out.regPaymentCompleted && paymentAmountMajor <= 0 ? 'Paid in full'
+      : out.regPrimaryLabel;
+    out.regPaymentActionDisabled = this.state.regPaymentLoading
+      || (out.regPaymentEnabled && !out.regPaymentCompleted && !!paymentBalance && paymentAmountMajor <= 0);
     out.regPrimaryButtonOpacity = this.state.regPaymentLoading ? 0.78 : 1;
     out.regError = this.state.regError;
     out.hpSetter = this.setField('regValues', '_hp');
@@ -1641,7 +1716,15 @@ class Component extends DCLogic {
         const fields = (steps[idx] && steps[idx].fields) || [];
         for(const f of fields){ const err = validateField(f, this.state.regValues[f.name]); if(err){ this.setState({ regError: err }); return; } }
         this.setState({ regError:'' });
-        if(idx < steps.length - 1){ this.setState(st => ({ regStep: st.regStep + 1, regError:'' })); return; }
+        if(idx < steps.length - 1){
+          this.setState(st => ({ regStep: st.regStep + 1, regError:'' }));
+          if(idx + 1 === steps.length - 1 && paymentEnabled && paymentOrderEndpoint && paymentOrderEndpoint !== '#'){
+            this.ensureRegistrationDraft(paymentOrderEndpoint).catch((err) => {
+              this.setState({ regPaymentError: (err && err.message) || 'Could not load payment balance.' });
+            });
+          }
+          return;
+        }
         if(out.regPaymentCompleted){
           this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId }, doneKey:'regSubmitted', sendingKey:'regSending' });
           return;
@@ -1659,9 +1742,7 @@ class Component extends DCLogic {
         const currentPaymentMode = (this.state.regPaymentMode || paymentCfg.defaultMode || 'installment').toLowerCase() === 'complete'
           ? 'complete'
           : 'installment';
-        const currentInstallmentIndex = Number.isFinite(Number(this.state.regPaymentInstallmentIndex))
-          ? Number(this.state.regPaymentInstallmentIndex)
-          : 0;
+        const currentInstallmentIndex = selectedPaymentInstallment ? selectedPaymentInstallment.index : 0;
         const paymentPayload = {
           mode: currentPaymentMode,
           installmentIndex: currentInstallmentIndex,
@@ -1674,17 +1755,20 @@ class Component extends DCLogic {
         };
         this.ensureRegistrationDraft(paymentOrderEndpoint)
           .then((draftToken) => {
+            if(!draftToken) return null;
             const payload = Object.assign({}, paymentPayload, { draftToken });
             this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: draftToken, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
             return fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
           })
           .then(async (r) => {
+            if(!r) return null;
             const result = await r.json().catch(() => ({}));
             if(!r.ok) throw new Error((result && result.error) || 'Could not start payment.');
             return result;
           })
           .then(async (order) => {
-            if(!order || !order.paymentUrl) throw new Error((order && order.error) || 'Could not start payment.');
+            if(!order) return;
+            if(!order.paymentUrl) throw new Error(order.error || 'Could not start payment.');
             this.setState({ regPaymentLoading: false });
             window.location.href = order.paymentUrl;
             return;

@@ -110,6 +110,8 @@ function renderLayoutAtRoute(initialRoute, args = {}) {
 
 describe('Layout', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1440 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 900 });
     setupPushMock.mockClear();
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation((url) => Promise.resolve(url === '/api/subscriptions/access'
@@ -132,10 +134,11 @@ describe('Layout', () => {
   });
 
   it.each(['generic', 'travel', 'wellness'])(
-    'uses the drawer at compact laptop widths for %s',
+    'keeps the desktop sidebar and scales the frame at compact laptop widths for %s',
     async (vertical) => {
+      window.innerWidth = 1024;
       const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
-        matches: query === '(max-width: 1439px)',
+        matches: false,
         media: query,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
@@ -143,13 +146,46 @@ describe('Layout', () => {
 
       try {
         renderLayout({ tenant: { vertical } });
-        await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'true'));
-        expect(matchMedia).toHaveBeenCalledWith('(max-width: 1439px)');
+        await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'false'));
+        expect(matchMedia).toHaveBeenCalledWith('(max-width: 899px)');
+        const shell = document.querySelector('.app-shell');
+        expect(shell).toHaveClass('app-shell--scaled');
+        expect(shell).toHaveStyle({ width: '1440px', height: '1265.625px', transform: `scale(${1024 / 1440})` });
       } finally {
         matchMedia.mockRestore();
       }
     },
   );
+
+  it('updates desktop scale when a laptop window is resized', () => {
+    window.innerWidth = 1024;
+    renderLayout();
+    const shell = document.querySelector('.app-shell');
+    window.innerWidth = 1280;
+    fireEvent.resize(window);
+    expect(shell).toHaveStyle({ transform: `scale(${1280 / 1440})`, width: '1440px' });
+    window.innerWidth = 1440;
+    fireEvent.resize(window);
+    expect(shell).not.toHaveClass('app-shell--scaled');
+    expect(shell).toHaveStyle({ inset: '0' });
+  });
+
+  it('keeps the drawer layout below the desktop threshold', async () => {
+    window.innerWidth = 899;
+    const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      matches: query === '(max-width: 899px)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    try {
+      renderLayout();
+      expect(document.querySelector('.app-shell')).not.toHaveClass('app-shell--scaled');
+      await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'true'));
+    } finally {
+      matchMedia.mockRestore();
+    }
+  });
 
   it('keeps the shell viewport-sized and confines scrolling to the main region', () => {
     renderTravelLayout();

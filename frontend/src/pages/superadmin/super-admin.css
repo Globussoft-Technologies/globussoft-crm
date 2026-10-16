@@ -714,7 +714,7 @@
   color: var(--role-limit-placeholder);
 }
 
-@media (max-width: 1220px) {
+@media (max-width: 899px) {
   .role-limit-filter-panel {
     grid-template-columns: minmax(220px, 1fr) minmax(260px, 1fr);
   }

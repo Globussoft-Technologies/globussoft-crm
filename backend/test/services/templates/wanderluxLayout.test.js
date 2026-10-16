@@ -25,12 +25,61 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import vm from 'node:vm';
 
 const composer = require('../../../services/templates/wanderlux/layoutComposer');
 const wanderlux = require('../../../services/templates/wanderlux');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', '..', 'services', 'templates', 'wanderlux', 'landing-page.dc.html');
 const TEMPLATE_HTML = fs.readFileSync(TEMPLATE_PATH, 'utf8');
+
+test('a partial payment offers the parent portal handoff and leaves later instalments payable', () => {
+  const script = TEMPLATE_HTML.match(/<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/)?.[1];
+  const context = { DCLogic: class {}, window: { location: { search: '' } }, URLSearchParams };
+  vm.runInNewContext(`${script}\nglobalThis.PageComponent = Component;`, context);
+  const page = new context.PageComponent();
+  page.props = { config: {
+    register: { deadline: null, submitLabel: 'Reserve Orientation Seat', endpoint: '/p/trip/submit',
+      steps: [{ title: 'Student' }, { title: 'Parent' }, { title: 'Payment' }] },
+    investment: { payment: { enabled: true, orderEndpoint: '/p/trip/payment-order' },
+      installments: [{ amount: '10000' }, { amount: '10000' }] },
+  } };
+  page.state = { ...page.state, regStep: 2, regPaymentCompleted: true,
+    regPaymentLinkId: 'plink_first', regPaymentBalance: { currency: 'INR',
+      paidPaise: 1000000, remainingPaise: 1000000, installments: [
+        { index: 0, amountPaise: 1000000, paidPaise: 1000000, duePaise: 0 },
+        { index: 1, amountPaise: 1000000, paidPaise: 0, duePaise: 1000000 },
+      ] } };
+  let submission;
+  page.submitForm = (options) => { submission = options; };
+
+  const view = page.renderVals();
+  expect(view.regPaymentEnabled).toBe(true);
+  expect(view.regPortalHandoffVisible).toBe(true);
+  expect(view.regPortalHandoffLabel).toBe('Reserve Orientation Seat');
+  expect(view.regPrimaryButtonLabel).toBe('Pay & continue');
+  expect(view.regPaymentSelectedSummary).toBe('Instalment 2');
+  view.regContinueToPortal();
+  expect(submission).toMatchObject({ type: 'registration', endpoint: '/p/trip/submit',
+    payment: { hostedPaymentLink: true, paymentLinkId: 'plink_first' } });
+});
+
+test('a page without payment collection finishes on the parent information step', () => {
+  const script = TEMPLATE_HTML.match(/<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/)?.[1];
+  const context = { DCLogic: class {}, window: { location: { search: '' } }, URLSearchParams };
+  vm.runInNewContext(`${script}\nglobalThis.PageComponent = Component;`, context);
+  const page = new context.PageComponent();
+  page.props = { config: { register: { deadline: null, submitLabel: 'Reserve Orientation Seat',
+    steps: [{ title: 'Student', fields: [{ name: 'student_name' }] },
+      { title: 'Parent', fields: [{ name: 'name' }] }] },
+  investment: { payment: { enabled: false }, installments: [{ amount: '8000' }] } } };
+  page.state = { ...page.state, regStep: 2 };
+
+  const view = page.renderVals();
+  expect(view.regStepTitle).toBe('Parent');
+  expect(view.regPaymentEnabled).toBe(false);
+  expect(view.regPrimaryButtonLabel).toBe('Reserve Orientation Seat');
+});
 
 beforeEach(() => {
   composer._resetCache();

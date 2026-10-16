@@ -1,5 +1,8 @@
 const { test, expect } = require('@playwright/test');
 
+// This request-only suite authenticates explicitly; it must not depend on
+// the browser setup project's saved session when run by itself.
+test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5000';
@@ -150,37 +153,37 @@ test('generic lead users can read only the scoped pickup workflow projection', a
   expect(await userResponse.json()).toMatchObject({ customers: expect.any(Array) });
 });
 
-test('an unlinked user cannot read another driver assignment workspace', async ({ request }) => {
+test('a user without transport workspace permission is denied before profile lookup', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/transport-persons/me`, {
     headers: headers(userToken),
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('TRANSPORT_PROFILE_NOT_LINKED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
-test('an unlinked user cannot read another broker customer workspace', async ({ request }) => {
+test('a user without site visit workspace permission is denied before profile lookup', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/brokers/me`, {
     headers: headers(userToken),
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('BROKER_PROFILE_NOT_LINKED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
-test('an unlinked user cannot advance another broker customer workflow', async ({ request }) => {
+test('a user without site visit update permission cannot advance a workflow', async ({ request }) => {
   const response = await request.patch(`${BASE_URL}/api/pickup-plot-inventory/brokers/me/customers/1/workflow`, {
     headers: headers(userToken),
     data: { status: 'EXPLANATION_STARTED' },
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('BROKER_PROFILE_NOT_LINKED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
-test('a user without the Billing role cannot access the billing queue', async ({ request }) => {
+test('a user without billing workspace permission cannot access the billing queue', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/billing/me`, {
     headers: headers(userToken),
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('BILLING_ROLE_REQUIRED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
 test('an unlinked user cannot read or update another staff work profile', async ({ request }) => {

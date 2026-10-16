@@ -165,16 +165,16 @@ describe('<Profile /> - practitioner section gating (#641)', () => {
   });
 });
 
-describe('<Profile /> - functional staff role label', () => {
+describe('<Profile /> - tenant-defined staff role label', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
 
   it.each([
-    [{ key: 'TRANSPORT_PERSON', name: 'Transport Person' }, 'Transport'],
-    [{ key: 'BROOKER', name: 'BROOKER' }, 'Sales Executive'],
-    [{ key: 'BILLING', name: 'Billing Department' }, 'Billing'],
-  ])('shows %s instead of the legacy USER access level', async (primaryRole, expectedLabel) => {
+    [{ key: 'FIELD_OPERATIONS', name: 'Field Operations' }, 'Field Operations'],
+    [{ key: 'CUSTOM_SALES', name: 'Customer Advisors' }, 'Customer Advisors'],
+    [{ key: 'ACCOUNTS_TEAM', name: 'Accounts Team' }, 'Accounts Team'],
+  ])('shows the configured %s name instead of inferring work from it', async (primaryRole, expectedLabel) => {
     renderProfile({
       id: 120, name: 'Operations Staff', email: 'staff@example.com',
       role: 'USER', primaryRole, wellnessRole: null, createdAt: '2026-01-01T00:00:00Z',

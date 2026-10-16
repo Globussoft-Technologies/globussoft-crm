@@ -52,8 +52,25 @@ function normalizeGenericCrmPhone(value, phoneCountry = "") {
   return digits;
 }
 
+/**
+ * Canonical phone key shared by the Generic CRM WhatsApp automation and the
+ * operator inbox. WhatsApp accepts digits on the wire, but thread identity is
+ * stored as E.164 so automatic and manual sends cannot create parallel chats.
+ */
+function normalizeGenericWhatsAppThreadPhone(value) {
+  const normalized = normalizeGenericCrmPhone(value);
+  if (!normalized) return "";
+
+  const digits = normalized.replace(/\D/g, "");
+  if (!digits || digits.length < 10 || digits.length > 15) return "";
+  if (normalized.startsWith("+")) return `+${digits}`;
+  if (digits.length === 10 && /^[6-9]/.test(digits)) return `+91${digits}`;
+  return `+${digits}`;
+}
+
 module.exports = {
   expandScientificNotation,
   normalizePhoneValue,
   normalizeGenericCrmPhone,
+  normalizeGenericWhatsAppThreadPhone,
 };

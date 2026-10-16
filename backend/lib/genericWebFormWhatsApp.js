@@ -1,4 +1,5 @@
 const prisma = require("./prisma");
+const { normalizeGenericWhatsAppThreadPhone } = require("./phoneFormatting");
 
 const TEMPLATE_SETTING_KEY = "generic.webForm.whatsappTemplate";
 const DEFAULT_TEMPLATE = "Hi {{lead.firstName}}, thank you for contacting {{organization.name}}. We have received your enquiry through {{form.name}} and our team will contact you shortly.";
@@ -55,6 +56,49 @@ function leadStatusKey(contact, isNewContact) {
   return "existingLead";
 }
 
+async function upsertGenericWhatsAppThread({ db = prisma, tenantId, phone, data = {} }) {
+  const contactPhone = normalizeGenericWhatsAppThreadPhone(phone);
+  if (!contactPhone) return null;
+
+  const now = data.lastMessageAt || new Date();
+  let thread = await db.whatsAppThread.upsert({
+    where: { tenantId_contactPhone: { tenantId, contactPhone } },
+    create: { tenantId, contactPhone, status: "OPEN", ...data, lastMessageAt: now },
+    update: { ...data, lastMessageAt: now },
+  });
+
+  // Releases before v3.9.4 stored automatic-send keys without the leading
+  // plus. Merge those legacy rows lazily when this contact is next messaged,
+  // preserving the complete history while avoiding a risky global migration.
+  const legacyPhone = contactPhone.slice(1);
+  const legacyThreads = await db.whatsAppThread.findMany({
+    where: { tenantId, contactPhone: legacyPhone, id: { not: thread.id } },
+  });
+  if (legacyThreads.length > 0) {
+    const legacyIds = legacyThreads.map((item) => item.id);
+    await db.whatsAppMessage.updateMany({
+      where: { tenantId, threadId: { in: legacyIds } },
+      data: { threadId: thread.id },
+    });
+    await db.whatsAppThread.deleteMany({
+      where: { tenantId, id: { in: legacyIds } },
+    });
+
+    const legacy = legacyThreads[0];
+    thread = await db.whatsAppThread.update({
+      where: { id: thread.id },
+      data: {
+        contactName: data.contactName || thread.contactName || legacy.contactName || undefined,
+        contactId: data.contactId || thread.contactId || legacy.contactId || undefined,
+        lastInboundAt: thread.lastInboundAt || legacy.lastInboundAt || undefined,
+        unreadCount: (thread.unreadCount || 0) + legacyThreads.reduce((sum, item) => sum + (item.unreadCount || 0), 0),
+      },
+    });
+  }
+
+  return thread;
+}
+
 async function sendGenericWebFormWhatsApp({
   form,
   contact,
@@ -66,9 +110,10 @@ async function sendGenericWebFormWhatsApp({
 }) {
   const rawRecipientPhone = contact?.whatsappPhone || contact?.phone;
   // The Create Lead form stores a display-formatted value such as
-  // "+1 1234567890". Meta Cloud API requires the international number as
-  // digits, so normalize it before using it for the thread and outbound job.
-  const recipientPhone = String(rawRecipientPhone || "").replace(/\D/g, "");
+  // "+1 1234567890". Keep one E.164 key for the thread, while retaining the
+  // digits-only recipient shape expected by the Meta outbound worker.
+  const recipientPhone = normalizeGenericWhatsAppThreadPhone(rawRecipientPhone);
+  const providerPhone = recipientPhone.replace(/\D/g, "");
   if (!form || form.scope !== "generic" || !recipientPhone) {
     return { sent: false, code: rawRecipientPhone ? "NOT_GENERIC" : "LEAD_PHONE_MISSING" };
   }
@@ -118,17 +163,18 @@ async function sendGenericWebFormWhatsApp({
   });
   if (duplicate) return { sent: false, code: "DUPLICATE" };
 
-  const thread = await db.whatsAppThread.upsert({
-    where: { tenantId_contactPhone: { tenantId: form.tenantId, contactPhone: recipientPhone } },
-    create: { tenantId: form.tenantId, contactPhone: recipientPhone, contactName: contact.name, contactId: contact.id, lastMessageAt: new Date() },
-    update: { contactName: contact.name, contactId: contact.id, lastMessageAt: new Date() },
+  const thread = await upsertGenericWhatsAppThread({
+    db,
+    tenantId: form.tenantId,
+    phone: recipientPhone,
+    data: { contactName: contact.name, contactId: contact.id },
   });
   const message = await db.whatsAppMessage.create({
     // Only approved Meta templates must be sent through the template API.
     // When no status template is selected, keep the fallback as plain text;
     // using a synthetic template name makes the outbound worker call Meta with
     // a template that does not exist.
-    data: { to: recipientPhone, from: config.phoneNumberId, body, direction: "OUTBOUND", status: "QUEUED", templateName: approvedTemplate?.name || null, contactId: contact.id, tenantId: form.tenantId, threadId: thread.id, interactiveJson: messageMetadata },
+    data: { to: providerPhone, from: config.phoneNumberId, body, direction: "OUTBOUND", status: "QUEUED", templateName: approvedTemplate?.name || null, contactId: contact.id, tenantId: form.tenantId, threadId: thread.id, interactiveJson: messageMetadata },
   });
   await require("./whatsappQueue").getQueue().enqueueSend({ messageId: message.id, tenantId: form.tenantId, ...(db !== prisma ? { db } : {}) });
   return { sent: true, messageId: message.id };
@@ -150,4 +196,5 @@ module.exports = {
   templateParameters,
   leadStatusKey,
   queueGenericBulkContact,
+  upsertGenericWhatsAppThread,
 };

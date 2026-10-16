@@ -6,11 +6,9 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock3,
-  Handshake,
   Mail,
   MapPin,
   Phone,
-  RefreshCw,
   Search,
   UserCheck,
   UserX,
@@ -39,6 +37,12 @@ const workflowIndex = (status) => ['NO_SHOW', 'VISIT_RESCHEDULED'].includes(stat
   ? 3
   : Math.max(0, BROKER_STEPS.findIndex((step) => step.key === status));
 
+const plotLabel = (plot) => {
+  const plotNumber = plot?.plotNumber || plot?.referenceCode;
+  if (!plotNumber) return plot?.name || 'Plot number not available';
+  return `${plot.name || 'Plot'} — Plot No. ${plotNumber}`;
+};
+
 export default function BrokerCustomerWorkspace() {
   const notify = useNotify();
   const [data, setData] = useState(null);
@@ -47,6 +51,7 @@ export default function BrokerCustomerWorkspace() {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [updating, setUpdating] = useState(null);
+  const [assigning, setAssigning] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,11 +76,12 @@ export default function BrokerCustomerWorkspace() {
   const visibleCustomers = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return customers.filter((customer) => {
-      if (['PLOT_SELECTED', 'CLOSED_NO_INTEREST'].includes(customer.brokerWorkflow?.status)) return false;
+      if (customer.brokerWorkflow?.status === 'CLOSED_NO_INTEREST') return false;
+      if (filter === 'history' && customer.brokerWorkflow?.status !== 'PLOT_SELECTED') return false;
       if (filter === 'completed' && !customer.tripCompleted) return false;
       if (filter === 'waiting' && customer.tripCompleted) return false;
       if (!needle) return true;
-      return [customer.name, customer.company, customer.phone, customer.email, customer.plot?.name]
+      return [customer.name, customer.company, customer.phone, customer.email, customer.plot?.name, customer.plot?.plotNumber, customer.plot?.referenceCode]
         .some((value) => String(value || '').toLowerCase().includes(needle));
     });
   }, [customers, filter, search]);
@@ -86,15 +92,22 @@ export default function BrokerCustomerWorkspace() {
     setUpdating(customer.assignmentKey);
     setError('');
     try {
+      const profileQuery = data?.isAdminOverview && customer.assignedStaff?.profileId
+        ? `?assignedProfileId=${encodeURIComponent(customer.assignedStaff.profileId)}`
+        : '';
       const result = await fetchApi(
-        `/api/pickup-plot-inventory/brokers/me/assignments/${encodeURIComponent(customer.assignmentKey)}/workflow`,
+        `/api/pickup-plot-inventory/brokers/me/assignments/${encodeURIComponent(customer.assignmentKey)}/workflow${profileQuery}`,
         { method: 'PATCH', body: JSON.stringify({ status: requestedStatus, ...details }) },
       );
       setData((current) => ({
         ...current,
         customers: current.customers.map((row) => (
           row.assignmentKey === customer.assignmentKey
-            ? { ...row, brokerWorkflow: { status: result.status, updatedAt: result.statusUpdatedAt, visitScheduledAt: result.visitScheduledAt } }
+            ? {
+              ...row,
+              plot: result.plot || row.plot,
+              brokerWorkflow: { status: result.status, updatedAt: result.statusUpdatedAt, visitScheduledAt: result.visitScheduledAt },
+            }
             : row
         )),
       }));
@@ -111,26 +124,26 @@ export default function BrokerCustomerWorkspace() {
     }
   };
 
+  const assignSalesExecutive = async (customer, targetProfileId) => {
+    if (!data?.isAdminOverview || !targetProfileId) return;
+    setAssigning(customer.assignmentKey);
+    setError('');
+    try {
+      const result = await fetchApi(
+        `/api/pickup-plot-inventory/brokers/me/assignments/${encodeURIComponent(customer.assignmentKey)}/assign`,
+        { method: 'PATCH', body: JSON.stringify({ targetProfileId: Number(targetProfileId) }) },
+      );
+      notify.success(`${customer.name} assigned to ${result.assignedStaff?.name || 'Sales Executive'}.`);
+      await load();
+    } catch (err) {
+      setError(err?.message || 'Could not assign the Sales Executive.');
+    } finally {
+      setAssigning(null);
+    }
+  };
+
   return (
     <main className="transport-workspace" data-testid="broker-customer-workspace">
-      <section className="transport-hero">
-        <div>
-          <span className="transport-eyebrow"><Handshake size={15} /> Sales Executive workspace</span>
-          <h1>Site Visit Management</h1>
-          <p>Schedule and manage customer site visits after transport drop-off is completed.</p>
-        </div>
-        <button type="button" className="transport-refresh" onClick={load} disabled={loading}>
-          <RefreshCw size={16} className={loading ? 'is-spinning' : ''} /> Refresh
-        </button>
-        {data?.broker && (
-          <div className="transport-driver-strip">
-            <span className="transport-avatar"><Handshake size={19} /></span>
-            <span><strong>{data.broker.name}</strong><small>{data.broker.agency || 'Independent sales executive'}</small></span>
-            {data.broker.commissionPercent != null && <span className="transport-vehicle-number">{Number(data.broker.commissionPercent)}% commission</span>}
-          </div>
-        )}
-      </section>
-
       <section className="transport-summary" aria-label="Customer summary">
         <div><span className="transport-summary-icon total"><Users size={18} /></span><span><strong>{summary.total}</strong><small>All customers</small></span></div>
         <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Ready for visit</small></span></div>
@@ -140,7 +153,7 @@ export default function BrokerCustomerWorkspace() {
       <div className="transport-toolbar" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div className="transport-tabs" role="tablist" aria-label="Customer filters">
           {[
-            ['all', 'All'], ['completed', 'Trip completed'], ['waiting', 'Not completed'],
+            ['all', 'All'], ['completed', 'Trip completed'], ['waiting', 'Not completed'], ['history', 'History'],
           ].map(([key, label]) => (
             <button key={key} type="button" role="tab" aria-selected={filter === key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}</button>
           ))}
@@ -167,7 +180,11 @@ export default function BrokerCustomerWorkspace() {
             key={customer.assignmentKey}
             customer={customer}
             updating={updating === customer.assignmentKey}
+            assigning={assigning === customer.assignmentKey}
+            adminOverview={Boolean(data?.isAdminOverview)}
+            assignmentOptions={data?.assignmentOptions || []}
             onAdvance={(status, details) => advanceWorkflow(customer, status, details)}
+            onAssign={(targetProfileId) => assignSalesExecutive(customer, targetProfileId)}
           />
         ))}
       </section>
@@ -175,14 +192,17 @@ export default function BrokerCustomerWorkspace() {
   );
 }
 
-function CustomerCard({ customer, updating, onAdvance }) {
+function CustomerCard({ customer, updating, assigning, adminOverview, assignmentOptions, onAdvance, onAssign }) {
   const [visitScheduledAt, setVisitScheduledAt] = useState('');
+  const [selectedPlotId, setSelectedPlotId] = useState(String(customer.plot?.id || ''));
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
   const initials = String(customer.name || '?').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const workflowStatus = customer.brokerWorkflow?.status;
   const index = workflowIndex(workflowStatus);
   const currentStep = SPECIAL_STEPS[workflowStatus] || BROKER_STEPS[index];
   const needsSchedule = ['READY_TO_SCHEDULE', 'NO_SHOW'].includes(workflowStatus);
   const needsAttendance = workflowStatus === 'REMINDER_SENT';
+  const needsPlotSelection = workflowStatus === 'PLOT_SHOWN';
   const handedToBilling = workflowStatus === 'PLOT_SELECTED';
   const noShow = workflowStatus === 'NO_SHOW';
 
@@ -202,8 +222,14 @@ function CustomerCard({ customer, updating, onAdvance }) {
         </span>
       </header>
 
+      {adminOverview && (
+        <span className="transport-next-badge">
+          {customer.awaitingAssignment ? 'Awaiting Sales Executive assignment' : `Assigned to ${customer.assignedStaff?.name || 'staff'}`}
+        </span>
+      )}
+
       <div style={{ display: 'grid', gap: 9, color: 'var(--text-secondary)', fontSize: '.82rem' }}>
-        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><MapPin size={15} /> {customer.plot?.name || 'Plot not assigned'}</span>
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><MapPin size={15} /> {customer.plot ? plotLabel(customer.plot) : 'Plot not assigned'}</span>
         {customer.plot?.address && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Building2 size={15} /> {customer.plot.address}</span>}
         {customer.brokerWorkflow?.visitScheduledAt && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><CalendarClock size={15} /> {new Date(customer.brokerWorkflow.visitScheduledAt).toLocaleString()}</span>}
       </div>
@@ -229,7 +255,7 @@ function CustomerCard({ customer, updating, onAdvance }) {
         </section>
       )}
 
-      {customer.tripCompleted && needsSchedule && (
+      {customer.tripCompleted && needsSchedule && !customer.awaitingAssignment && (
         <div style={{ display: 'grid', gap: 8 }}>
           <label style={{ display: 'grid', gap: 5, color: 'var(--text-secondary)', fontSize: '.75rem', fontWeight: 700 }}>
             Visit date and time
@@ -240,7 +266,7 @@ function CustomerCard({ customer, updating, onAdvance }) {
           </button>
         </div>
       )}
-      {customer.tripCompleted && needsAttendance && (
+      {customer.tripCompleted && needsAttendance && !customer.awaitingAssignment && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <button type="button" className="transport-map-button" onClick={() => onAdvance('NO_SHOW')} disabled={updating}>
             <UserX size={16} /> No-show
@@ -250,7 +276,34 @@ function CustomerCard({ customer, updating, onAdvance }) {
           </button>
         </div>
       )}
-      {customer.tripCompleted && currentStep?.next && !needsSchedule && !needsAttendance && !handedToBilling && (
+      {customer.tripCompleted && needsPlotSelection && !customer.awaitingAssignment && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <label style={{ display: 'grid', gap: 5, color: 'var(--text-secondary)', fontSize: '.75rem', fontWeight: 700 }}>
+            Select the customer&apos;s plot
+            <select
+              className="input-field"
+              aria-label={`Selected plot for ${customer.name}`}
+              value={selectedPlotId}
+              onChange={(event) => setSelectedPlotId(event.target.value)}
+            >
+              <option value="">Choose plot number</option>
+              {(customer.plotOptions || []).map((plot) => (
+                <option key={plot.id} value={plot.id}>{plotLabel(plot)}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="transport-primary-button"
+            onClick={() => onAdvance('PLOT_SELECTED', { plotId: Number(selectedPlotId) })}
+            disabled={updating || !selectedPlotId}
+            style={{ width: '100%' }}
+          >
+            {updating ? 'Updatingâ€¦' : currentStep.action}<ArrowRight size={16} />
+          </button>
+        </div>
+      )}
+      {customer.tripCompleted && currentStep?.next && !needsSchedule && !needsAttendance && !needsPlotSelection && !handedToBilling && !customer.awaitingAssignment && (
         <button type="button" className="transport-primary-button" onClick={() => onAdvance(currentStep.next)} disabled={updating} style={{ width: '100%' }}>
           {workflowStatus === 'VISIT_CONFIRMED' && <Bell size={16} />}
           {updating ? 'Updating…' : currentStep.action}<ArrowRight size={16} />
@@ -258,6 +311,31 @@ function CustomerCard({ customer, updating, onAdvance }) {
       )}
       {customer.tripCompleted && handedToBilling && (
         <span className="transport-complete-label" style={{ justifyContent: 'center' }}><CheckCircle2 size={16} /> Selected plot sent to Billing Department</span>
+      )}
+      {customer.awaitingAssignment && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <label style={{ display: 'grid', gap: 5, color: 'var(--text-secondary)', fontSize: '.75rem', fontWeight: 700 }}>
+            Assign Sales Executive
+            <select
+              className="input-field"
+              aria-label={`Assign Sales Executive for ${customer.name}`}
+              value={selectedAssigneeId}
+              onChange={(event) => setSelectedAssigneeId(event.target.value)}
+            >
+              <option value="">Choose Sales Executive</option>
+              {assignmentOptions.map((person) => <option key={person.profileId} value={person.profileId}>{person.name}</option>)}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="transport-primary-button"
+            onClick={() => onAssign(selectedAssigneeId)}
+            disabled={assigning || !selectedAssigneeId}
+            style={{ width: '100%' }}
+          >
+            <Users size={16} /> {assigning ? 'Assigningâ€¦' : 'Assign Sales Executive'}
+          </button>
+        </div>
       )}
 
       <footer style={{ marginTop: 'auto' }}>

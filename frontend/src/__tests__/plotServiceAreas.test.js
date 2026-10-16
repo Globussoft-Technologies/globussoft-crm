@@ -38,4 +38,17 @@ describe('serviceAreaFromPlot', () => {
       pincode: '560095',
     });
   });
+
+  it('preserves the plot number used by assignment selectors', () => {
+    expect(serviceAreaFromPlot({
+      id: '12',
+      name: 'Green Acres',
+      plotNumber: ' A-24 ',
+      address: 'Indiranagar, Bengaluru 560038',
+    })).toMatchObject({
+      plotSiteId: 12,
+      plotName: 'Green Acres',
+      plotNumber: 'A-24',
+    });
+  });
 });

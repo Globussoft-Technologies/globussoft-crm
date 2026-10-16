@@ -1540,6 +1540,17 @@ router.get("/", async (req, res) => {
     // from a larger unfiltered page. Keep this separate from the existing
     // cross-vertical `source` prefix contract.
     if ((req.user.vertical || "generic") === "generic") {
+      if (req.query.nameStartsWith !== undefined) {
+        const nameStartsWith = String(req.query.nameStartsWith).trim();
+        if (nameStartsWith.length < 1 || nameStartsWith.length > 100) {
+          return res.status(400).json({
+            error: "nameStartsWith must be a non-empty string <=100 chars",
+            code: "INVALID_NAME_PREFIX",
+            field: "nameStartsWith",
+          });
+        }
+        where.name = { startsWith: nameStartsWith };
+      }
       if (req.query.leadSource !== undefined) {
         const leadSource = String(req.query.leadSource);
         if (leadSource.length < 1 || leadSource.length > 128) {

@@ -892,6 +892,7 @@ const inventoryRoutes = require("./routes/inventory");
 // + ticket creation at /api/support-chat; BYOK provider config under
 // /api/wellness/ai-provider-config.
 const supportChatRoutes = require("./routes/support_chat");
+const genericLeadsAssistantRoutes = require("./routes/generic_leads_assistant");
 const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
 // Wellness ↔ Callified calling — AI dial + human browser (agent bridge) calls
 // from the Appointments page. Thin wellness-shaped entry point over the SAME
@@ -1576,6 +1577,9 @@ app.use("/api/wellness", wellnessRoutes);
 // Wellness Admin Support Chatbot — AI chat turns + ticket creation
 // (wellness-tenant gated inside the router).
 app.use("/api/support-chat", supportChatRoutes);
+// Generic CRM Leads assistant. The router gates the tenant vertical and keeps
+// all LLM work behind the tenant-scoped CRM tool executor.
+app.use("/api/leads-assistant", genericLeadsAssistantRoutes);
 // BYOK provider config for the chatbot. Mounted on /api/wellness so it
 // sits beside the other wellness admin surfaces; declares only
 // /ai-provider-config paths that wellness.js does NOT own.

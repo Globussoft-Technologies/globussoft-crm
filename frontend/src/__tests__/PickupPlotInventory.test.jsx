@@ -252,6 +252,33 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.queryByTestId('boundary-editor')).toBeNull();
   });
 
+  it('warns immediately while typing a duplicate plot number for the same plot name', async () => {
+    renderPage();
+    await screen.findByText('Plot A-9');
+    fireEvent.click(screen.getByRole('button', { name: /Add Plot \/ Site/i }));
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name *' }), { target: { value: '  plot a-9  ' } });
+    const plotNumberInput = screen.getByRole('textbox', { name: 'Plot number *' });
+    fireEvent.change(plotNumberInput, { target: { value: ' a-9 ' } });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('This plot number already exists');
+    expect(plotNumberInput).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: /^Save$/i })).toBeDisabled();
+
+    fireEvent.change(plotNumberInput, { target: { value: 'A-10' } });
+    expect(screen.queryByText(/This plot number already exists/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^Save$/i })).toBeEnabled();
+  });
+
+  it('allows the current plot number when editing that same inventory row', async () => {
+    renderPage();
+    await screen.findByText('Plot A-9');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Plot A-9' }));
+
+    expect(screen.queryByText(/This plot number already exists/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^Save$/i })).toBeEnabled();
+  });
+
   it('only selects locations already added in Pickup Inventory', async () => {
     renderPage();
     await screen.findByText('Plot A-9');

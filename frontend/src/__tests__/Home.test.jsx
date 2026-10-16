@@ -87,35 +87,11 @@ beforeEach(() => {
 });
 
 describe('<Home /> — empty / loading / error states', () => {
-  it('replaces the empty widget dashboard with the transport driver workspace', async () => {
-    fetchApi
-      .mockResolvedValueOnce({ widgets: [], role: { id: 8, key: 'transport_person', name: 'Transport person' } })
-      .mockResolvedValueOnce({ transportPerson: { id: 41, name: 'Sant' }, assignments: [], summary: { total: 0, active: 0, completed: 0 } });
+  it('does not select a workspace from the role name', async () => {
+    fetchApi.mockResolvedValueOnce({ widgets: [], role: { id: 8, key: 'transport_person', name: 'Transport person' } });
     renderHome({ user: { id: 3, name: 'Sant', role: 'USER' }, tenant: { id: 1, vertical: 'generic', name: 'NovaCrest' } });
-    expect(await screen.findByTestId('transport-driver-workspace')).toBeInTheDocument();
-    expect(screen.queryByText(/No personalised cards yet/i)).not.toBeInTheDocument();
-  });
-
-  it('replaces the empty widget dashboard with the broker customer workspace', async () => {
-    fetchApi
-      .mockResolvedValueOnce({ widgets: [], role: { id: 9, key: 'BROOKER', name: 'Brooker' } })
-      .mockResolvedValueOnce({
-        broker: { id: 51, name: 'Sanjeev' },
-        customers: [],
-        summary: { total: 0, completed: 0, waiting: 0 },
-      });
-    renderHome({ user: { id: 4, name: 'Sanjeev', role: 'USER' }, tenant: { id: 1, vertical: 'generic', name: 'NovaCrest' } });
-    expect(await screen.findByTestId('broker-customer-workspace')).toBeInTheDocument();
-    expect(screen.queryByText(/No personalised cards yet/i)).not.toBeInTheDocument();
-  });
-
-  it('replaces the empty widget dashboard with the billing workspace', async () => {
-    fetchApi
-      .mockResolvedValueOnce({ widgets: [], role: { id: 10, key: 'BILLING', name: 'Billing Department' } })
-      .mockResolvedValueOnce({ billingUser: { id: 4, name: 'Bina' }, assignments: [] });
-    renderHome({ user: { id: 4, name: 'Bina', role: 'USER' }, tenant: { id: 1, vertical: 'generic', name: 'NovaCrest' } });
-    expect(await screen.findByTestId('billing-workspace')).toBeInTheDocument();
-    expect(screen.queryByText(/No personalised cards yet/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/No personalised cards yet/i)).toBeInTheDocument();
+    expect(fetchApi).toHaveBeenCalledTimes(1);
   });
 
   it('renders the greeting header with the user first name', async () => {

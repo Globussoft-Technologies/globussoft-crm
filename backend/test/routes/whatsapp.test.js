@@ -112,10 +112,15 @@ providerMod.verifyWebhook = vi.fn().mockImplementation((req) => {
 const auditMod = requireCJS('../../lib/audit');
 auditMod.writeAudit = vi.fn().mockResolvedValue({ id: 9999 });
 
+// Keep successful /send tests inside the process: the route only needs to
+// prove that it enqueues the persisted message, not exercise the queue engine.
+const queueMod = requireCJS('../../lib/whatsappQueue');
+const enqueueSend = vi.fn().mockResolvedValue({ jobId: 123, status: 'PENDING' });
+queueMod.getQueue = () => ({ enqueueSend });
+
 // Mock credentialMasking decryptCredential to passthrough so the route doesn't
 // hit the AES helper. encryptCredential too (route uses it on PUT /config).
 const credMaskMod = requireCJS('../../lib/credentialMasking');
-const origMaskConfigRow = credMaskMod.maskConfigRow;
 // Keep maskConfigRow REAL — we want to assert it produces the masked shape.
 // decryptCredential / encryptCredential become identity functions for the
 // duration of these tests so credentials round-trip predictably.
@@ -169,6 +174,8 @@ prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.user = prisma.user || {};
 prisma.user.findFirst = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -201,6 +208,8 @@ beforeEach(() => {
   }
   prisma.contact.findFirst.mockReset();
   prisma.user.findFirst.mockReset();
+  prisma.tenant.findUnique.mockReset();
+  enqueueSend.mockReset();
   providerMod.sendTemplate.mockClear();
   providerMod.sendText.mockClear();
   providerMod.verifyWebhook.mockClear();
@@ -221,6 +230,8 @@ beforeEach(() => {
   prisma.whatsAppThread.updateMany.mockResolvedValue({ count: 0 });
   prisma.whatsAppOptOut.findUnique.mockResolvedValue(null);
   prisma.whatsAppOptOut.findMany.mockResolvedValue([]);
+  prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+  enqueueSend.mockResolvedValue({ jobId: 123, status: 'PENDING' });
 });
 
 // ─── POST /send — validation + opt-out + 24h-window gates ───────────────────
@@ -284,6 +295,54 @@ describe('POST /send — validation', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/No active WhatsApp provider configured/i);
     expect(providerMod.sendTemplate).not.toHaveBeenCalled();
+  });
+
+  test('Generic CRM sends reconcile to the canonical E.164 thread and return its id', async () => {
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({ phoneNumberId: 'meta-number-1' });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.whatsAppThread.upsert.mockResolvedValue({
+      id: 71,
+      contactPhone: '+919876543210',
+      status: 'OPEN',
+      unreadCount: 0,
+    });
+    prisma.whatsAppThread.findMany.mockResolvedValue([]);
+    prisma.whatsAppMessage.create.mockResolvedValue({ id: 81 });
+
+    const res = await request(makeApp({ tenantId: 1, userId: 7 }))
+      .post('/api/whatsapp/send')
+      .send({ to: '98765 43210', body: 'hello', contactId: 22 });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ success: true, messageId: 81, threadId: 71 });
+    expect(prisma.whatsAppThread.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_contactPhone: { tenantId: 1, contactPhone: '+919876543210' } },
+    }));
+    expect(prisma.whatsAppThread.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, contactPhone: '919876543210', id: { not: 71 } },
+    });
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ threadId: 71, contactId: 22, status: 'QUEUED' }),
+    });
+    expect(enqueueSend).toHaveBeenCalledWith({ messageId: 81, tenantId: 1 });
+  });
+
+  test('non-Generic sends preserve the existing direct thread upsert path', async () => {
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({ phoneNumberId: 'meta-number-2' });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    prisma.whatsAppThread.upsert.mockResolvedValue({ id: 72, status: 'OPEN' });
+    prisma.whatsAppMessage.create.mockResolvedValue({ id: 82 });
+
+    const res = await request(makeApp({ tenantId: 2, userId: 8 }))
+      .post('/api/whatsapp/send')
+      .send({ to: '+919876543210', body: 'hello' });
+
+    expect(res.status).toBe(202);
+    expect(res.body.threadId).toBe(72);
+    expect(prisma.whatsAppThread.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_contactPhone: { tenantId: 2, contactPhone: '+919876543210' } },
+    }));
+    expect(prisma.whatsAppThread.findMany).not.toHaveBeenCalled();
   });
 });
 

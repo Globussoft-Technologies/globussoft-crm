@@ -6,7 +6,12 @@ import MultiSelectDropdown from '../components/MultiSelectDropdown';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
 import { validatePersonName, validatePhoneNumber } from '../utils/pickupPlotValidation';
-import { isAssignablePlot } from '../utils/plotAvailability';
+import {
+  expandPlotGroupKeys,
+  groupPlotsByName,
+  isAssignablePlot,
+  selectedPlotGroupKeys,
+} from '../utils/plotAvailability';
 
 const emptyForm = {
   name: '', phone: '', email: '', password: '', notes: '', isActive: true,
@@ -35,7 +40,8 @@ function mapUrl(plot) {
 
 function PlotAssignmentsCell({ plots }) {
   if (!Array.isArray(plots) || plots.length === 0) return 'Not assigned';
-  return <div style={{ display: 'grid', gap: 6, maxHeight: 112, overflowY: 'auto', paddingRight: 4 }}>{plots.map((plot) => <div key={plot.id} style={{ minWidth: 0 }}>
+  const groupedPlots = groupPlotsByName(plots).map((group) => group.representative);
+  return <div style={{ display: 'grid', gap: 6, maxHeight: 112, overflowY: 'auto', paddingRight: 4 }}>{groupedPlots.map((plot) => <div key={plot.id} style={{ minWidth: 0 }}>
     <strong style={{ display: 'block', overflowWrap: 'anywhere' }}>{plot.name}</strong>
     {plot.address ? <a
       href={mapUrl(plot)}
@@ -229,6 +235,9 @@ function BillingPersonModal({ form, setForm, editing, staffUsers, customerOption
   const field = { width: '100%', marginTop: 5, boxSizing: 'border-box' };
   const selectedPlots = new Set(form.plotSiteIds.map(Number));
   const assignablePlotOptions = plotOptions.filter(isAssignablePlot);
+  const assignablePlotGroups = groupPlotsByName(assignablePlotOptions);
+  const assignablePlotIds = new Set(assignablePlotOptions.map((plot) => Number(plot.id)));
+  const selectedPlotGroups = selectedPlotGroupKeys(assignablePlotGroups, form.plotSiteIds);
   const assignableCustomerOptions = customerOptions.filter((customer) => (
     selectedPlots.has(Number(customer.transportPlotSiteId))
     && (!customer.claimedByPersonId || Number(customer.claimedByPersonId) === Number(editing?.id))
@@ -237,8 +246,8 @@ function BillingPersonModal({ form, setForm, editing, staffUsers, customerOption
     <div role="dialog" aria-modal="true" aria-label={`${editing.id ? 'Edit' : 'Add'} Billing Person`} className="card" style={{ width: 'min(620px,100%)', padding: '1.5rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between' }}><h2 style={{ margin: 0 }}>{editing.id ? 'Edit' : 'Add'} Billing Person</h2><button type="button" aria-label="Close dialog" onClick={onClose} style={{ border: 0, background: 'transparent' }}><X size={21} /></button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,220px),1fr))', gap: 14, marginTop: 20 }}>
-        {!editing.id && <label>Login account<select className="input-field" aria-label="Billing login setup" style={field} value={form.accountMode} onChange={(event) => setForm({ ...form, accountMode: event.target.value, staffUserId: '', email: '', password: '' })}><option value="create">Create a new billing login</option><option value="existing">Assign existing Billing staff</option></select></label>}
-        {!editing.id && form.accountMode === 'existing' && <label>Existing Billing staff<select className="input-field" aria-label="Existing billing staff" style={field} value={form.staffUserId} onChange={(event) => { const user = staffUsers.find((row) => String(row.id) === event.target.value); setForm({ ...form, staffUserId: event.target.value, name: user?.name || '', phone: user?.phone || '', email: user?.email || '' }); }}><option value="">Select staff member</option>{staffUsers.map((user) => <option key={user.id} value={user.id}>{user.name} ({user.email})</option>)}</select></label>}
+        {!editing.id && <label>Login account<select className="input-field" aria-label="Billing login setup" style={field} value={form.accountMode} onChange={(event) => setForm({ ...form, accountMode: event.target.value, staffUserId: '', email: '', password: '' })}><option value="create">Create a new billing login</option><option value="existing">Assign existing staff with workspace access</option></select></label>}
+        {!editing.id && form.accountMode === 'existing' && <label>Existing staff with workspace access<select className="input-field" aria-label="Existing billing staff" style={field} value={form.staffUserId} onChange={(event) => { const user = staffUsers.find((row) => String(row.id) === event.target.value); setForm({ ...form, staffUserId: event.target.value, name: user?.name || '', phone: user?.phone || '', email: user?.email || '' }); }}><option value="">Select staff member</option>{staffUsers.map((user) => <option key={user.id} value={user.id}>{user.name} ({user.email})</option>)}</select></label>}
         <label>Name *<input className="input-field" style={field} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
         <label>Phone *<input className="input-field" type="tel" style={field} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
         {!editing.id && form.accountMode === 'create' && <><label>Work email *<input className="input-field" type="email" style={field} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label><label>Password *<input className="input-field" type="password" style={field} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label></>}
@@ -266,9 +275,14 @@ function BillingPersonModal({ form, setForm, editing, staffUsers, customerOption
           <MultiSelectDropdown
             ariaLabel="Billing plots / sites (select multiple)"
             searchable
-            options={assignablePlotOptions.map((plot) => ({ value: Number(plot.id), label: plotOptionLabel(plot) }))}
-            selected={form.plotSiteIds.map(Number)}
-            onChange={(plotSiteIds) => {
+            options={assignablePlotGroups.map((group) => ({ value: group.key, label: plotOptionLabel(group.representative) }))}
+            selected={selectedPlotGroups}
+            onChange={(plotGroupKeys) => {
+              const preservedPlotIds = form.plotSiteIds.map(Number).filter((id) => !assignablePlotIds.has(id));
+              const plotSiteIds = [...new Set([
+                ...preservedPlotIds,
+                ...expandPlotGroupKeys(assignablePlotGroups, plotGroupKeys),
+              ])];
               const nextPlots = new Set(plotSiteIds.map(Number));
               const customerIds = form.customerIds.filter((customerId) => {
                 const customer = customerOptions.find((row) => Number(row.id) === Number(customerId));

@@ -1,5 +1,8 @@
 const { test, expect } = require('@playwright/test');
 
+// This request-only suite authenticates explicitly; it must not depend on
+// the browser setup project's saved session when run by itself.
+test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5000';
@@ -58,6 +61,40 @@ test('non-admin cannot manage billing persons', async ({ request }) => {
   expect(response.status()).toBe(403);
 });
 
+test('staff work assignment directory includes User staff but excludes elevated system roles', async ({ request }) => {
+  const [adminResponse, userResponse] = await Promise.all([
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/work-assignments`, {
+      headers: headers(adminToken),
+    }),
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/work-assignments`, {
+      headers: headers(userToken),
+    }),
+  ]);
+  expect(adminResponse.status()).toBe(200);
+  const body = await adminResponse.json();
+  expect(body.staff).toEqual(expect.any(Array));
+  expect(body.staff.every((person) => !Object.prototype.hasOwnProperty.call(person, 'role'))).toBeTruthy();
+  expect(body.staff.some((person) => String(person.email || '').toLowerCase() === 'user@crm.com')).toBeTruthy();
+  expect(body.staff.some((person) => ['admin@globussoft.com', 'manager@crm.com']
+    .includes(String(person.email || '').toLowerCase()))).toBeFalsy();
+  expect(userResponse.status()).toBe(403);
+});
+
+test('direct Sales Executive and Billing handoff assignment is admin-only', async ({ request }) => {
+  const brokerPath = `${BASE_URL}/api/pickup-plot-inventory/brokers/me/assignments/awaiting-broker-customer-1-plot-1/assign`;
+  const billingPath = `${BASE_URL}/api/pickup-plot-inventory/billing/me/assignments/1-1-1/assign`;
+  const [adminBroker, adminBilling, userBroker, userBilling] = await Promise.all([
+    request.patch(brokerPath, { headers: headers(adminToken), data: { targetProfileId: 0 } }),
+    request.patch(billingPath, { headers: headers(adminToken), data: { targetProfileId: 0 } }),
+    request.patch(brokerPath, { headers: headers(userToken), data: { targetProfileId: 1 } }),
+    request.patch(billingPath, { headers: headers(userToken), data: { targetProfileId: 1 } }),
+  ]);
+  expect(adminBroker.status()).toBe(400);
+  expect(adminBilling.status()).toBe(400);
+  expect(userBroker.status()).toBe(403);
+  expect(userBilling.status()).toBe(403);
+});
+
 test('customer pickup status directory is tenant-admin only', async ({ request }) => {
   const [adminResponse, userResponse] = await Promise.all([
     request.get(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups`, { headers: headers(adminToken) }),
@@ -66,6 +103,30 @@ test('customer pickup status directory is tenant-admin only', async ({ request }
   expect(adminResponse.status()).toBe(200);
   expect(await adminResponse.json()).toMatchObject({ customers: expect.any(Array), summary: expect.any(Object) });
   expect(userResponse.status()).toBe(403);
+});
+
+test('only an admin can generate or record a plot initial payment', async ({ request }) => {
+  const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/initial-payment`, {
+    headers: headers(userToken),
+    data: { amount: 1000, method: 'upi', transactionRef: `${RUN_TAG}_FORBIDDEN` },
+  });
+  expect(response.status()).toBe(403);
+});
+
+test('multi-plot customer assignment is admin-only and validates the selection', async ({ request }) => {
+  const [userResponse, invalidAdminResponse] = await Promise.all([
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/plots`, {
+      headers: headers(userToken),
+      data: { plotSiteIds: [1, 2] },
+    }),
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/plots`, {
+      headers: headers(adminToken),
+      data: { plotSiteIds: [] },
+    }),
+  ]);
+  expect(userResponse.status()).toBe(403);
+  expect(invalidAdminResponse.status()).toBe(400);
+  expect((await invalidAdminResponse.json()).code).toBe('INVALID_PLOT_IDS');
 });
 
 test('generic lead users can read only the scoped pickup workflow projection', async ({ request }) => {
@@ -92,37 +153,37 @@ test('generic lead users can read only the scoped pickup workflow projection', a
   expect(await userResponse.json()).toMatchObject({ customers: expect.any(Array) });
 });
 
-test('an unlinked user cannot read another driver assignment workspace', async ({ request }) => {
+test('a user without transport workspace permission is denied before profile lookup', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/transport-persons/me`, {
     headers: headers(userToken),
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('TRANSPORT_PROFILE_NOT_LINKED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
-test('an unlinked user cannot read another broker customer workspace', async ({ request }) => {
+test('a user without site visit workspace permission is denied before profile lookup', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/brokers/me`, {
     headers: headers(userToken),
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('BROKER_PROFILE_NOT_LINKED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
-test('an unlinked user cannot advance another broker customer workflow', async ({ request }) => {
+test('a user without site visit update permission cannot advance a workflow', async ({ request }) => {
   const response = await request.patch(`${BASE_URL}/api/pickup-plot-inventory/brokers/me/customers/1/workflow`, {
     headers: headers(userToken),
     data: { status: 'EXPLANATION_STARTED' },
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('BROKER_PROFILE_NOT_LINKED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
-test('a user without the Billing role cannot access the billing queue', async ({ request }) => {
+test('a user without billing workspace permission cannot access the billing queue', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/billing/me`, {
     headers: headers(userToken),
   });
   expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('BILLING_ROLE_REQUIRED');
+  expect((await response.json()).code).toBe('RBAC_DENIED');
 });
 
 test('an unlinked user cannot read or update another staff work profile', async ({ request }) => {
@@ -237,15 +298,19 @@ test('admin creates a broker assigned to a plot', async ({ request }) => {
   expect(body.plotSiteId).toBe(plotId);
 });
 
-test('people directories return the newly created tenant-scoped records', async ({ request }) => {
+test('people directories retain tenant-scoped legacy profiles without staff logins', async ({ request }) => {
   const [transportResponse, brokerResponse] = await Promise.all([
     request.get(`${BASE_URL}/api/pickup-plot-inventory/transport-persons`, { headers: headers(adminToken) }),
     request.get(`${BASE_URL}/api/pickup-plot-inventory/brokers`, { headers: headers(adminToken) }),
   ]);
   expect(transportResponse.status()).toBe(200);
   expect(brokerResponse.status()).toBe(200);
-  expect((await transportResponse.json()).transportPersons.some((row) => row.id === transportPersonId)).toBeTruthy();
-  expect((await brokerResponse.json()).brokers.some((row) => row.id === brokerId)).toBeTruthy();
+  expect((await transportResponse.json()).transportPersons).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: transportPersonId, userId: null }),
+  ]));
+  expect((await brokerResponse.json()).brokers).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: brokerId, userId: null }),
+  ]));
 });
 
 test('admin can deactivate a pickup location and plot/site', async ({ request }) => {

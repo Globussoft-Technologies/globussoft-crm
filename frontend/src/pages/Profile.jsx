@@ -23,12 +23,6 @@ function isPractitioner(profile) {
 
 function profileRoleLabel(profile) {
   const primaryRole = profile?.primaryRole;
-  const roleText = `${primaryRole?.key || ''} ${primaryRole?.name || ''}`
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-  if (roleText.includes('transportperson') || roleText === 'transport') return 'Transport';
-  if (['broker', 'brooker', 'plotbroker', 'plotbrooker'].some((token) => roleText.includes(token))) return 'Sales Executive';
-  if (roleText.includes('billing')) return 'Billing';
   return primaryRole?.name || primaryRole?.key || profile?.role || '';
 }
 

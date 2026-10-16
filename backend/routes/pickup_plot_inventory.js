@@ -5,8 +5,11 @@ const prisma = require("../lib/prisma");
 const { Prisma } = require("@prisma/client");
 const { sendEmail } = require("../lib/emailSender");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission, clearUserCache } = require("../middleware/requirePermission");
 const { sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const { cleanPickupAddress } = require("../lib/callifiedPickup");
+const { safeNotifyCustomerPickupPlotAssignments } = require("../lib/pickupPlotAssignmentWhatsApp");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const {
   normalizeBoundary,
   calculateBoundaryAreaSqFt,
@@ -203,6 +206,27 @@ function assignmentPairs(person) {
   }));
 }
 
+function appendPersonAssignment(person, customerId, plotSiteId) {
+  const nextPair = { customerId: Number(customerId), plotSiteId: Number(plotSiteId) };
+  const pairs = [
+    ...assignmentPairs(person).filter((pair) => pair.customerId !== nextPair.customerId),
+    nextPair,
+  ];
+  const customerIds = [...new Set([
+    ...parseStoredArray(person.customerIdsJson).map(Number).filter(Number.isInteger),
+    nextPair.customerId,
+  ])];
+  const plotSiteIds = [...new Set([
+    ...parseStoredArray(person.plotSiteIdsJson).map(Number).filter(Number.isInteger),
+    nextPair.plotSiteId,
+  ])];
+  return {
+    customerIdsJson: sanitizeJsonForStringColumn(customerIds),
+    plotSiteIdsJson: sanitizeJsonForStringColumn(plotSiteIds),
+    assignmentPairsJson: sanitizeJsonForStringColumn(pairs),
+  };
+}
+
 function removeCustomerFromPerson(person, customerId, statusField = null) {
   const remainingCustomerIds = parseStoredArray(person.customerIdsJson)
     .map(Number)
@@ -392,10 +416,27 @@ function attachTransportPlots(customers, transportPeople) {
 }
 
 function billingCanAccess(person, customerId, plotSiteId) {
-  return assignmentPairs(person).some((pair) => (
-    pair.customerId === Number(customerId)
-    && (pair.plotSiteId === null || pair.plotSiteId === Number(plotSiteId))
-  ));
+  return assignmentPairs(person).some((pair) => pair.customerId === Number(customerId));
+}
+
+function isAdminWorkspaceOverview(req) {
+  return req.user.role === "ADMIN";
+}
+
+function assignedStaff(person) {
+  return {
+    id: person.userId || null,
+    profileId: person.id,
+    name: person.name || "Assigned staff",
+    email: person.email || null,
+    phone: person.phone || null,
+  };
+}
+
+function adminAssignedProfileId(req) {
+  if (!isAdminWorkspaceOverview(req)) return null;
+  const profileId = Number(req.query.assignedProfileId);
+  return Number.isInteger(profileId) && profileId > 0 ? profileId : null;
 }
 
 async function saveWorkflowOptimistically(model, record, field, statuses, tenantId) {
@@ -444,7 +485,7 @@ async function findActivePlotBooking(client, tenantId, contactId, plotSiteId) {
       tenantId,
       contactId: Number(contactId),
       plotSiteId: Number(plotSiteId),
-      status: { not: "CANCELLED" },
+      status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -533,27 +574,20 @@ function normalizeBillingWorkflowStatus(saved) {
   return saved?.status === "BILLED" ? "TRANSACTION_COMPLETED" : BILLING_WORKFLOW[0];
 }
 
-function hasBillingRole(user) {
-  return (user?.userRoles || []).some(({ role }) => isBillingRole(role));
-}
-
 async function requireBillingProfile(req, res) {
-  const user = await prisma.user.findFirst({
-    where: { id: req.user.userId, tenantId: req.user.tenantId, deactivatedAt: null },
-    include: { userRoles: { include: { role: true } } },
-  });
-  if (!user || !hasBillingRole(user)) {
-    res.status(403).json({ error: "A Billing role is required for this workspace", code: "BILLING_ROLE_REQUIRED" });
-    return null;
-  }
+  const assignedProfileId = adminAssignedProfileId(req);
   const billingPerson = await prisma.billingPerson.findFirst({
-    where: { tenantId: req.user.tenantId, userId: req.user.userId, isActive: true },
+    where: {
+      tenantId: req.user.tenantId,
+      ...(assignedProfileId ? { id: assignedProfileId } : { userId: req.user.userId }),
+      isActive: true,
+    },
   });
   if (!billingPerson) {
     res.status(403).json({ error: "No active billing person profile is linked to this login", code: "BILLING_PROFILE_NOT_LINKED" });
     return null;
   }
-  return { ...user, billingPerson };
+  return { id: req.user.userId, billingPerson };
 }
 
 function parseIdList(value, label) {
@@ -672,7 +706,14 @@ function serializeTransportPerson(person, pickupLocationMap = new Map(), plotSit
   };
 }
 
-function buildTransportAssignments(person, pickupLocations, plots, customers, customerPickupMap = new Map()) {
+function buildTransportAssignments(
+  person,
+  pickupLocations,
+  plots,
+  customers,
+  customerPickupMap = new Map(),
+  filterMissingReferences = false,
+) {
   const pickupLocationIds = parseStoredArray(person.pickupLocationIdsJson).map(Number).filter(Number.isInteger);
   if (pickupLocationIds.length === 0 && person.pickupLocationId) pickupLocationIds.push(person.pickupLocationId);
   const statuses = parseStoredObject(person.assignmentStatusJson);
@@ -700,7 +741,9 @@ function buildTransportAssignments(person, pickupLocations, plots, customers, cu
       } : pickupLocationId ? pickupMap.get(pickupLocationId) || null : null,
       drop: plotSiteId ? plotMap.get(plotSiteId) || null : null,
     };
-  });
+  }).filter((assignment) => (
+    !filterMissingReferences || (assignment.customer && assignment.drop)
+  ));
 }
 
 function findCustomerTransportStatus(customerId, transportPeople) {
@@ -755,7 +798,7 @@ function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMa
 
   return {
     ...transport,
-    assignedPlot: plotMap.get(Number(transportPair?.plotSiteId || brokerPair?.plotSiteId)) || null,
+    assignedPlot: plotMap.get(Number(saved?.plotId || transportPair?.plotSiteId || brokerPair?.plotSiteId)) || null,
     currentStage,
     currentStatus,
     currentStatusUpdatedAt,
@@ -776,6 +819,12 @@ function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMa
       },
     },
   };
+}
+
+function customerJourneyBucket(customer) {
+  if (customer.currentStatus === "TRANSACTION_COMPLETED") return "completed";
+  if (customer.currentStage === "transport" && customer.currentStatus === "PICKUP_LOCATION_CAPTURED") return "waiting";
+  return "active";
 }
 
 function serializePlotBroker(broker, customerMap = new Map(), plotSiteMap = new Map(), pickupLocationMap = new Map(), filterMissingCustomers = false) {
@@ -799,46 +848,47 @@ function serializePlotBroker(broker, customerMap = new Map(), plotSiteMap = new 
   };
 }
 
-function isTransportRole(role) {
-  const tokens = [role?.key, role?.name]
-    .map((value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, ""));
-  return tokens.includes("transportperson") || tokens.includes("transport");
+function roleHasWorkspacePermission(role, module, action = "read") {
+  return (role?.permissions || []).some((permission) => (
+    permission.module === module && permission.action === action
+  ));
 }
 
-function isBrokerRole(role) {
-  const tokens = [role?.key, role?.name]
-    .map((value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, ""));
-  return tokens.some((token) => ["broker", "brooker", "plotbroker", "plotbrooker"].includes(token));
+function userHasWorkspacePermission(user, module, action = "read") {
+  return (user?.userRoles || []).some(({ role }) => roleHasWorkspacePermission(role, module, action));
 }
 
-function isBillingRole(role) {
-  const token = String(role?.key || role?.name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  return token === "billing" || token === "billingdepartment";
-}
+const NON_ASSIGNABLE_STAFF_ROLE_KEYS = new Set(["CUSTOMER", "MANAGER", "ADMIN", "OWNER"]);
 
-async function findTransportRole(tenantId, client = prisma) {
+async function findWorkspaceRole(tenantId, module, preferredKeys = [], client = prisma) {
   const roles = await client.role.findMany({
     where: { tenantId, userType: "STAFF", isActive: true },
-    select: { id: true, key: true, name: true },
+    select: {
+      id: true,
+      key: true,
+      name: true,
+      permissions: { where: { module, action: "read" }, select: { module: true, action: true } },
+    },
+    orderBy: { id: "asc" },
   });
-  return roles.find(isTransportRole) || null;
+  const eligible = roles.filter((role) => roleHasWorkspacePermission(role, module));
+  const normalizedPreferredKeys = preferredKeys.map((key) => String(key).toUpperCase());
+  return normalizedPreferredKeys
+    .map((key) => eligible.find((role) => String(role.key || "").toUpperCase() === key))
+    .find(Boolean)
+    || eligible.find((role) => !NON_ASSIGNABLE_STAFF_ROLE_KEYS.has(String(role.key || "").toUpperCase()))
+    || null;
 }
 
-async function findBrokerRole(tenantId, client = prisma) {
-  const roles = await client.role.findMany({
-    where: { tenantId, userType: "STAFF", isActive: true },
-    select: { id: true, key: true, name: true },
-  });
-  return roles.find(isBrokerRole) || null;
-}
-
-async function findBillingRole(tenantId, client = prisma) {
-  const roles = await client.role.findMany({
-    where: { tenantId, userType: "STAFF", isActive: true },
-    select: { id: true, key: true, name: true },
-  });
-  return roles.find(isBillingRole) || null;
-}
+const findTransportRole = (tenantId, client = prisma) => findWorkspaceRole(
+  tenantId, "transport_workspace", ["TRANSPORT_PERSON", "TRANSPORT"], client,
+);
+const findBrokerRole = (tenantId, client = prisma) => findWorkspaceRole(
+  tenantId, "broker_workspace", ["BROOKER", "BROKER"], client,
+);
+const findBillingRole = (tenantId, client = prisma) => findWorkspaceRole(
+  tenantId, "billing_workspace", ["BILLING"], client,
+);
 
 async function findConfirmedPickupCustomers(tenantId) {
   const [pickups, completedCustomerIds] = await Promise.all([
@@ -846,13 +896,17 @@ async function findConfirmedPickupCustomers(tenantId) {
       where: { tenantId, contact: { deletedAt: null } },
       orderBy: { updatedAt: "desc" },
       select: {
+        pickupAddress: true,
         contact: { select: { id: true, name: true, phone: true, email: true, company: true } },
       },
     }),
     findCompletedCustomerIds(tenantId),
   ]);
   return pickups
-    .map((pickup) => pickup.contact)
+    .map((pickup) => pickup.contact ? {
+      ...pickup.contact,
+      pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
+    } : null)
     .filter((contact) => contact && !completedCustomerIds.has(Number(contact.id)))
     .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
 }
@@ -864,10 +918,10 @@ async function validateAssignableTransportUser(tenantId, staffUserId, excludeTra
   }
   const user = await prisma.user.findFirst({
     where: { id: userId, tenantId, deactivatedAt: null, userType: { in: ["STAFF", "OWNER"] } },
-    include: { userRoles: { include: { role: true } } },
+    include: { userRoles: { include: { role: { include: { permissions: true } } } } },
   });
-  if (!user || !(user.userRoles || []).some(({ role }) => isTransportRole(role))) {
-    return { error: "The selected staff member does not have the Transport Person role.", code: "INVALID_TRANSPORT_USER" };
+  if (!user || !userHasWorkspacePermission(user, "transport_workspace")) {
+    return { error: "The selected staff member does not have Transport Workspace access.", code: "INVALID_TRANSPORT_USER" };
   }
   const linked = await prisma.transportPerson.findFirst({ where: { userId, tenantId } });
   if (linked && Number(linked.id) !== Number(excludeTransportPersonId)) {
@@ -883,10 +937,10 @@ async function validateAssignableBrokerUser(tenantId, staffUserId, excludeBroker
   }
   const user = await prisma.user.findFirst({
     where: { id: userId, tenantId, deactivatedAt: null, userType: { in: ["STAFF", "OWNER"] } },
-    include: { userRoles: { include: { role: true } } },
+    include: { userRoles: { include: { role: { include: { permissions: true } } } } },
   });
-  if (!user || !(user.userRoles || []).some(({ role }) => isBrokerRole(role))) {
-    return { error: "The selected staff member does not have the Broker role.", code: "INVALID_BROKER_USER" };
+  if (!user || !userHasWorkspacePermission(user, "broker_workspace")) {
+    return { error: "The selected staff member does not have Site Visits Workspace access.", code: "INVALID_BROKER_USER" };
   }
   const linked = await prisma.plotBroker.findFirst({ where: { userId, tenantId } });
   if (linked && Number(linked.id) !== Number(excludeBrokerId)) {
@@ -902,10 +956,10 @@ async function validateAssignableBillingUser(tenantId, staffUserId, excludeBilli
   }
   const user = await prisma.user.findFirst({
     where: { id: userId, tenantId, deactivatedAt: null, userType: { in: ["STAFF", "OWNER"] } },
-    include: { userRoles: { include: { role: true } } },
+    include: { userRoles: { include: { role: { include: { permissions: true } } } } },
   });
-  if (!user || !hasBillingRole(user)) {
-    return { error: "The selected staff member does not have the Billing role.", code: "INVALID_BILLING_USER" };
+  if (!user || !userHasWorkspacePermission(user, "billing_workspace")) {
+    return { error: "The selected staff member does not have Billing Workspace access.", code: "INVALID_BILLING_USER" };
   }
   const linked = await prisma.billingPerson.findFirst({ where: { userId, tenantId } });
   if (linked && Number(linked.id) !== Number(excludeBillingPersonId)) {
@@ -933,6 +987,176 @@ async function requireGenericTenant(req, res, next) {
 }
 
 router.use(verifyToken, requireGenericTenant);
+
+const WORKSPACE_ASSIGNMENT_TYPES = Object.freeze({
+  transport: {
+    module: "transport_workspace",
+    model: "transportPerson",
+  },
+  broker: {
+    module: "broker_workspace",
+    model: "plotBroker",
+  },
+  billing: {
+    module: "billing_workspace",
+    model: "billingPerson",
+  },
+});
+function isAssignableOperationalStaff(user) {
+  if (user?.userType !== "STAFF" || user?.deactivatedAt) return false;
+  const assignedRoleKeys = (user?.userRoles || [])
+    .map(({ role }) => String(role?.key || "").trim().toUpperCase())
+    .filter(Boolean);
+  const effectiveRoleKeys = assignedRoleKeys.length
+    ? assignedRoleKeys
+    : [String(user?.role || "").trim().toUpperCase()].filter(Boolean);
+  return effectiveRoleKeys.length > 0
+    && effectiveRoleKeys.every((key) => !NON_ASSIGNABLE_STAFF_ROLE_KEYS.has(key));
+}
+
+function operationalProfileData(type, user, tenantId) {
+  const shared = {
+    name: user.name,
+    phone: user.phone || "",
+    userId: user.id,
+    tenantId,
+    isActive: true,
+  };
+  if (type === "transport") return shared;
+  return { ...shared, email: user.email };
+}
+
+// One admin surface for assigning any combination of operational work to an
+// existing staff member. The person's normal RBAC role is retained; workspace
+// permissions are additive capabilities, while these linked profiles decide
+// which queues actually contain work for that login.
+router.get("/work-assignments", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const [users, transportPeople, brokers, billingPeople] = await Promise.all([
+      prisma.user.findMany({
+        where: {
+          tenantId,
+          deactivatedAt: null,
+          userType: "STAFF",
+        },
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          role: true,
+          userType: true,
+          deactivatedAt: true,
+          userRoles: {
+            select: { role: { select: { key: true } } },
+          },
+        },
+      }),
+      prisma.transportPerson.findMany({
+        where: { tenantId },
+        select: { id: true, userId: true, isActive: true },
+      }),
+      prisma.plotBroker.findMany({
+        where: { tenantId },
+        select: { id: true, userId: true, isActive: true },
+      }),
+      prisma.billingPerson.findMany({
+        where: { tenantId },
+        select: { id: true, userId: true, isActive: true },
+      }),
+    ]);
+    const byUser = (rows) => new Map(rows.filter((row) => row.userId).map((row) => [Number(row.userId), row]));
+    const transportByUser = byUser(transportPeople);
+    const brokerByUser = byUser(brokers);
+    const billingByUser = byUser(billingPeople);
+    return res.json({
+      staff: users.filter(isAssignableOperationalStaff).map((user) => ({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        workTypes: [
+          ...(transportByUser.get(user.id)?.isActive ? ["transport"] : []),
+          ...(brokerByUser.get(user.id)?.isActive ? ["broker"] : []),
+          ...(billingByUser.get(user.id)?.isActive ? ["billing"] : []),
+        ],
+        profiles: {
+          transport: transportByUser.get(user.id)?.id || null,
+          broker: brokerByUser.get(user.id)?.id || null,
+          billing: billingByUser.get(user.id)?.id || null,
+        },
+      })),
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory GET /work-assignments error:", error);
+    return res.status(500).json({ error: "Failed to load staff work assignments", code: "WORK_ASSIGNMENTS_LOAD_FAILED" });
+  }
+});
+
+router.put("/work-assignments", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const targetUserId = Number(req.body?.targetUserId);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ error: "Select a valid staff member.", code: "INVALID_STAFF_USER" });
+    }
+    if (!Array.isArray(req.body?.workTypes)) {
+      return res.status(400).json({ error: "workTypes must be an array.", code: "INVALID_WORK_TYPES" });
+    }
+    const requested = [...new Set(req.body.workTypes.map((value) => String(value || "").trim().toLowerCase()))];
+    if (requested.some((type) => !WORKSPACE_ASSIGNMENT_TYPES[type])) {
+      return res.status(400).json({ error: "Choose only Transport, Site Visits, or Billing work.", code: "INVALID_WORK_TYPES" });
+    }
+    const user = await prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        tenantId,
+        deactivatedAt: null,
+        userType: "STAFF",
+      },
+      include: { userRoles: { select: { role: { select: { key: true } } } } },
+    });
+    if (!user) {
+      return res.status(404).json({ error: "Staff member not found.", code: "STAFF_USER_NOT_FOUND" });
+    }
+    if (!isAssignableOperationalStaff(user)) {
+      return res.status(400).json({
+        error: "Admin, Manager, Customer, and Owner accounts cannot receive operational work here.",
+        code: "STAFF_ROLE_NOT_ASSIGNABLE",
+      });
+    }
+    await prisma.$transaction(async (tx) => {
+      for (const [type, config] of Object.entries(WORKSPACE_ASSIGNMENT_TYPES)) {
+        const enabled = requested.includes(type);
+        if (enabled) {
+          await tx[config.model].upsert({
+            where: { userId: targetUserId },
+            create: operationalProfileData(type, user, tenantId),
+            update: { isActive: true },
+          });
+        } else {
+          await tx[config.model].updateMany({
+            where: { tenantId, userId: targetUserId },
+            data: { isActive: false },
+          });
+        }
+      }
+    });
+    clearUserCache(targetUserId, tenantId);
+    return res.json({
+      targetUserId,
+      workTypes: requested,
+      message: requested.length
+        ? "Staff work assignments updated."
+        : "Operational work removed from this staff member.",
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory PUT /work-assignments error:", error);
+    return res.status(500).json({ error: "Failed to update staff work assignments", code: "WORK_ASSIGNMENTS_UPDATE_FAILED" });
+  }
+});
 
 function selfOperationalProfile(
   person,
@@ -1306,34 +1530,40 @@ router.put("/people/me", async (req, res) => {
   }
 });
 
-router.get("/transport-persons/me", async (req, res) => {
+router.get("/transport-persons/me", requirePermission("transport_workspace", "read"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const person = await prisma.transportPerson.findFirst({
-      where: { tenantId, userId: req.user.userId, isActive: true },
-    });
-    if (!person) {
+    const adminOverview = isAdminWorkspaceOverview(req);
+    const people = adminOverview
+      ? await prisma.transportPerson.findMany({ where: { tenantId, isActive: true }, orderBy: { name: "asc" } })
+      : [await prisma.transportPerson.findFirst({
+          where: { tenantId, userId: req.user.userId, isActive: true },
+        })].filter(Boolean);
+    if (people.length === 0 && !adminOverview) {
       return res.status(403).json({
         error: "No active transport profile is linked to this login",
         code: "TRANSPORT_PROFILE_NOT_LINKED",
       });
     }
-    const pickupLocationIds = parseStoredArray(person.pickupLocationIdsJson).map(Number).filter(Number.isInteger);
-    if (pickupLocationIds.length === 0 && person.pickupLocationId) pickupLocationIds.push(person.pickupLocationId);
-    const pairs = assignmentPairs(person);
-    const plotSiteIds = [...new Set(pairs.map((row) => row.plotSiteId))];
-    const customerIds = [...new Set(pairs.map((row) => row.customerId))];
+    const pickupLocationIds = [...new Set(people.flatMap((person) => {
+      const ids = parseStoredArray(person.pickupLocationIdsJson).map(Number).filter(Number.isInteger);
+      if (ids.length === 0 && person.pickupLocationId) ids.push(person.pickupLocationId);
+      return ids;
+    }))];
+    const pairs = people.flatMap(assignmentPairs);
+    const plotSiteIds = [...new Set(pairs.map((row) => row.plotSiteId).filter(Number.isInteger))];
+    const customerIds = [...new Set(pairs.map((row) => row.customerId).filter(Number.isInteger))];
     const [pickupLocations, plots, customers, customerPickups] = await Promise.all([
       pickupLocationIds.length ? prisma.pickupLocation.findMany({
         where: { tenantId, id: { in: pickupLocationIds } },
         select: { id: true, name: true, address: true, googleMapsLink: true },
       }) : [],
       plotSiteIds.length ? prisma.plotSite.findMany({
-        where: { tenantId, id: { in: plotSiteIds } },
+        where: { tenantId, id: { in: plotSiteIds }, isActive: true },
         select: { id: true, name: true, address: true, referenceCode: true },
       }) : [],
       customerIds.length ? prisma.contact.findMany({
-        where: { tenantId, id: { in: customerIds } },
+        where: { tenantId, id: { in: customerIds }, deletedAt: null },
         select: { id: true, name: true, phone: true, email: true, company: true },
       }) : [],
       customerIds.length ? prisma.customerPickup.findMany({
@@ -1342,9 +1572,13 @@ router.get("/transport-persons/me", async (req, res) => {
       }) : [],
     ]);
     const customerPickupMap = new Map(customerPickups.map((row) => [row.contactId, row]));
-    const assignments = buildTransportAssignments(person, pickupLocations, plots, customers, customerPickupMap);
+    const assignments = people.flatMap((person) => buildTransportAssignments(
+      person, pickupLocations, plots, customers, customerPickupMap, true,
+    ).map((assignment) => ({ ...assignment, assignedStaff: assignedStaff(person) })));
+    const person = people[0] || null;
     return res.json({
-      transportPerson: {
+      isAdminOverview: adminOverview,
+      transportPerson: adminOverview || !person ? null : {
         id: person.id,
         name: person.name,
         phone: person.phone,
@@ -1364,11 +1598,16 @@ router.get("/transport-persons/me", async (req, res) => {
   }
 });
 
-router.patch("/transport-persons/me/assignments/:assignmentKey/status", async (req, res) => {
+router.patch("/transport-persons/me/assignments/:assignmentKey/status", requirePermission("transport_workspace", "update"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const assignedProfileId = adminAssignedProfileId(req);
     const person = await prisma.transportPerson.findFirst({
-      where: { tenantId, userId: req.user.userId, isActive: true },
+      where: {
+        tenantId,
+        ...(assignedProfileId ? { id: assignedProfileId } : { userId: req.user.userId }),
+        isActive: true,
+      },
     });
     if (!person) {
       return res.status(403).json({ error: "No active transport profile is linked to this login", code: "TRANSPORT_PROFILE_NOT_LINKED" });
@@ -1431,63 +1670,106 @@ router.patch("/transport-persons/me/assignments/:assignmentKey/status", async (r
   }
 });
 
-router.get("/brokers/me", async (req, res) => {
+router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const broker = await prisma.plotBroker.findFirst({
-      where: { tenantId, userId: req.user.userId, isActive: true },
-    });
-    if (!broker) {
+    const adminOverview = isAdminWorkspaceOverview(req);
+    const brokers = adminOverview
+      ? await prisma.plotBroker.findMany({ where: { tenantId, isActive: true }, orderBy: { name: "asc" } })
+      : [await prisma.plotBroker.findFirst({
+          where: { tenantId, userId: req.user.userId, isActive: true },
+        })].filter(Boolean);
+    if (brokers.length === 0 && !adminOverview) {
       return res.status(403).json({
         error: "No active Sales Executive profile is linked to this login",
         code: "BROKER_PROFILE_NOT_LINKED",
       });
     }
-    const pairs = assignmentPairs(broker);
+    const brokerPairs = brokers.flatMap(assignmentPairs);
+    const brokerPairKeys = new Set(brokerPairs.map((row) => assignmentKey(row.customerId, row.plotSiteId)));
+    const transportPeople = (adminOverview || brokerPairs.length) ? await prisma.transportPerson.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, assignmentStatusJson: true },
+    }) : [];
+    const completedTrips = completedTransportTrips(transportPeople);
+    const awaitingBrokerPairs = adminOverview
+      ? transportPeople.flatMap(assignmentPairs).filter((pair) => (
+          completedTrips.has(assignmentKey(pair.customerId, pair.plotSiteId))
+          && !brokerPairKeys.has(assignmentKey(pair.customerId, pair.plotSiteId))
+        ))
+      : [];
+    const pairs = [...brokerPairs, ...awaitingBrokerPairs];
     const customerIds = [...new Set(pairs.map((row) => row.customerId))];
-    const plotSiteIds = [...new Set(pairs.map((row) => row.plotSiteId))];
-    const [customers, plots, transportPeople] = await Promise.all([
+    const plotSiteIds = [...new Set(pairs.map((row) => row.plotSiteId).filter(Number.isInteger))];
+    const [customers, plots] = await Promise.all([
       customerIds.length ? prisma.contact.findMany({
-        where: { tenantId, id: { in: customerIds } },
+        where: { tenantId, id: { in: customerIds }, deletedAt: null },
         select: { id: true, name: true, phone: true, email: true, company: true },
       }) : [],
-      plotSiteIds.length ? prisma.plotSite.findMany({
-        where: { tenantId, id: { in: plotSiteIds } },
-        select: { id: true, name: true, address: true, referenceCode: true, availability: true },
-      }) : [],
-      customerIds.length ? prisma.transportPerson.findMany({
-        where: { tenantId, isActive: true },
-        select: { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, assignmentStatusJson: true },
-      }) : [],
+      prisma.plotSite.findMany({
+        where: {
+          tenantId,
+          isActive: true,
+          OR: [
+            { availability: "AVAILABLE" },
+            ...(plotSiteIds.length ? [{ id: { in: plotSiteIds } }] : []),
+          ],
+        },
+        select: { id: true, name: true, plotNumber: true, address: true, referenceCode: true, availability: true },
+        orderBy: [{ plotNumber: "asc" }, { name: "asc" }],
+      }),
     ]);
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const plotMap = new Map(plots.map((row) => [row.id, row]));
-    const completedTrips = completedTransportTrips(transportPeople);
-    const brokerStatuses = parseStoredObject(broker.workflowStatusJson);
-    const rows = pairs.map(({ customerId, plotSiteId }) => {
+    const plotOptions = plots.filter((row) => row.availability === "AVAILABLE");
+    const rows = brokers.flatMap((broker) => {
+      const brokerStatuses = parseStoredObject(broker.workflowStatusJson);
+      return assignmentPairs(broker).map(({ customerId, plotSiteId }) => {
+        const customer = customerMap.get(customerId);
+        const key = assignmentKey(customerId, plotSiteId);
+        const tripCompleted = completedTrips.has(key);
+        const brokerWorkflow = brokerStatuses[key] || brokerStatuses[`customer-${customerId}`];
+        const plot = plotMap.get(Number(brokerWorkflow?.plotId || plotSiteId)) || null;
+        if (!customer || !plot) return null;
+        return {
+          ...customer,
+          assignmentKey: key,
+          assignedStaff: assignedStaff(broker),
+          plot,
+          plotOptions,
+          tripCompleted,
+          tripCompletedAt: tripCompleted ? completedTrips.get(key)?.updatedAt || null : null,
+          tripMessage: tripCompleted ? "Trip completed" : "Trip not completed",
+          ...(tripCompleted ? {
+            brokerWorkflow: {
+              status: normalizeBrokerWorkflowStatus(brokerWorkflow),
+              updatedAt: brokerWorkflow?.updatedAt || null,
+              visitScheduledAt: brokerWorkflow?.visitScheduledAt || null,
+            },
+          } : {}),
+        };
+      }).filter(Boolean);
+    });
+    for (const { customerId, plotSiteId } of awaitingBrokerPairs) {
       const customer = customerMap.get(customerId);
-      if (!customer) return null;
+      const plot = plotMap.get(plotSiteId) || null;
+      if (!customer || !plot) continue;
       const key = assignmentKey(customerId, plotSiteId);
-      const tripCompleted = completedTrips.has(key);
-      const brokerWorkflow = brokerStatuses[key] || brokerStatuses[`customer-${customerId}`];
-      return {
+      rows.push({
         ...customer,
-        assignmentKey: key,
-        plot: plotMap.get(plotSiteId) || null,
-        tripCompleted,
-        tripCompletedAt: tripCompleted ? completedTrips.get(key)?.updatedAt || null : null,
-        tripMessage: tripCompleted ? "Trip completed" : "Trip not completed",
-        ...(tripCompleted ? {
-          brokerWorkflow: {
-            status: normalizeBrokerWorkflowStatus(brokerWorkflow),
-            updatedAt: brokerWorkflow?.updatedAt || null,
-            visitScheduledAt: brokerWorkflow?.visitScheduledAt || null,
-          },
-        } : {}),
-      };
-    }).filter(Boolean);
+        assignmentKey: `awaiting-broker-${key}`,
+        assignedStaff: null,
+        awaitingAssignment: true,
+        plot,
+        tripCompleted: true,
+        tripCompletedAt: completedTrips.get(key)?.updatedAt || null,
+        tripMessage: "Trip completed",
+      });
+    }
+    const broker = brokers[0] || null;
     return res.json({
-      broker: {
+      isAdminOverview: adminOverview,
+      broker: adminOverview || !broker ? null : {
         id: broker.id,
         name: broker.name,
         phone: broker.phone,
@@ -1496,6 +1778,7 @@ router.get("/brokers/me", async (req, res) => {
         commissionPercent: broker.commissionPercent,
       },
       customers: rows,
+      assignmentOptions: brokers.filter((row) => row.userId).map(assignedStaff),
       summary: {
         total: rows.length,
         completed: rows.filter((row) => row.tripCompleted).length,
@@ -1508,7 +1791,58 @@ router.get("/brokers/me", async (req, res) => {
   }
 });
 
-router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignments/:assignmentKey/workflow"], async (req, res) => {
+router.patch("/brokers/me/assignments/:assignmentKey/assign", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const match = String(req.params.assignmentKey).match(/^awaiting-broker-customer-(\d+)-plot-(\d+)$/);
+    const customerId = Number(match?.[1]);
+    const plotSiteId = Number(match?.[2]);
+    const targetProfileId = Number(req.body?.targetProfileId);
+    if (![customerId, plotSiteId, targetProfileId].every((value) => Number.isInteger(value) && value > 0)) {
+      return res.status(400).json({ error: "Choose a valid Sales Executive.", code: "INVALID_BROKER_ASSIGNMENT" });
+    }
+    const [target, transportPeople, brokers] = await Promise.all([
+      prisma.plotBroker.findFirst({ where: { id: targetProfileId, tenantId, isActive: true, userId: { not: null } } }),
+      prisma.transportPerson.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, assignmentStatusJson: true },
+      }),
+      prisma.plotBroker.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
+      }),
+    ]);
+    if (!target) {
+      return res.status(404).json({ error: "Sales Executive not found.", code: "BROKER_PROFILE_NOT_FOUND" });
+    }
+    if (!completedTransportTrips(transportPeople).has(assignmentKey(customerId, plotSiteId))) {
+      return res.status(409).json({ error: "Complete the transport trip before assigning a Sales Executive.", code: "TRIP_NOT_COMPLETED" });
+    }
+    if (brokers.some((broker) => assignmentPairs(broker).some((pair) => pair.customerId === customerId))) {
+      return res.status(409).json({ error: "This customer already has a Sales Executive.", code: "BROKER_ALREADY_ASSIGNED" });
+    }
+    await prisma.$transaction(async (tx) => {
+      await claimCustomerForPerson(tx, {
+        modelName: "plotBroker", tenantId, claimantId: target.id, customerId,
+        roleType: "broker", statusField: "workflowStatusJson",
+      });
+      await tx.plotBroker.update({
+        where: { id: target.id },
+        data: appendPersonAssignment(target, customerId, plotSiteId),
+      });
+    });
+    return res.json({
+      assignmentKey: assignmentKey(customerId, plotSiteId),
+      assignedStaff: assignedStaff(target),
+    });
+  } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
+    console.error("pickup-plot-inventory PATCH /brokers/me/assignments/:assignmentKey/assign error:", error);
+    return res.status(500).json({ error: "Failed to assign Sales Executive", code: "BROKER_ASSIGNMENT_FAILED" });
+  }
+});
+
+router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignments/:assignmentKey/workflow"], requirePermission("broker_workspace", "update"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const keyMatch = req.params.assignmentKey?.match(/^customer-(\d+)-plot-(\d+)$/);
@@ -1517,8 +1851,13 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
     if (!Number.isInteger(customerId) || customerId <= 0) {
       return res.status(400).json({ error: "Invalid customer id", code: "INVALID_ID" });
     }
+    const assignedProfileId = adminAssignedProfileId(req);
     const broker = await prisma.plotBroker.findFirst({
-      where: { tenantId, userId: req.user.userId, isActive: true },
+      where: {
+        tenantId,
+        ...(assignedProfileId ? { id: assignedProfileId } : { userId: req.user.userId }),
+        isActive: true,
+      },
     });
     if (!broker) {
       return res.status(403).json({ error: "No active Sales Executive profile is linked to this login", code: "BROKER_PROFILE_NOT_LINKED" });
@@ -1579,7 +1918,13 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
     let reservedPlot = null;
     let booking = null;
     if (requestedStatus === "PLOT_SELECTED") {
-      const plotId = pair.plotSiteId;
+      const submittedPlotId = req.body?.plotId;
+      const plotId = submittedPlotId === undefined || submittedPlotId === null || submittedPlotId === ""
+        ? pair.plotSiteId
+        : Number(submittedPlotId);
+      if (!Number.isInteger(plotId) || plotId <= 0) {
+        return res.status(400).json({ error: "Choose a valid plot.", code: "INVALID_PLOT_ID" });
+      }
       if (!plotId) {
         return res.status(409).json({
           error: "Assign a plot to this customer before marking it selected.",
@@ -1700,11 +2045,21 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
   }
 });
 
-router.get("/billing/me", async (req, res) => {
+router.get("/billing/me", requirePermission("billing_workspace", "read"), async (req, res) => {
   try {
-    const billingUser = await requireBillingProfile(req, res);
-    if (!billingUser) return undefined;
     const tenantId = req.user.tenantId;
+    const adminOverview = isAdminWorkspaceOverview(req);
+    const billingPeople = adminOverview
+      ? await prisma.billingPerson.findMany({ where: { tenantId, isActive: true }, orderBy: { name: "asc" } })
+      : [await prisma.billingPerson.findFirst({
+          where: { tenantId, userId: req.user.userId, isActive: true },
+        })].filter(Boolean);
+    if (billingPeople.length === 0 && !adminOverview) {
+      return res.status(403).json({
+        error: "No active billing person profile is linked to this login",
+        code: "BILLING_PROFILE_NOT_LINKED",
+      });
+    }
     const brokers = await prisma.plotBroker.findMany({ where: { tenantId, isActive: true } });
     const queue = [];
     const brokerAssignments = new Map();
@@ -1738,10 +2093,21 @@ router.get("/billing/me", async (req, res) => {
         });
       });
     }
-    const visibleQueue = queue.filter((row) => billingCanAccess(billingUser.billingPerson, row.customerId, row.plotId));
-    const readyPairKeys = new Set(visibleQueue.map((row) => assignmentKey(row.customerId, row.plotId)));
-    const waitingQueue = assignmentPairs(billingUser.billingPerson)
-      .filter((row) => !readyPairKeys.has(assignmentKey(row.customerId, row.plotSiteId)));
+    const visibleQueue = billingPeople.flatMap((billingPerson) => queue
+      .filter((row) => billingCanAccess(billingPerson, row.customerId, row.plotId))
+      .map((row) => ({ ...row, billingPerson })));
+    if (adminOverview) {
+      const assignedQueueKeys = new Set(visibleQueue.map((row) => assignmentKey(row.customerId, row.plotId)));
+      visibleQueue.push(...queue
+        .filter((row) => !assignedQueueKeys.has(assignmentKey(row.customerId, row.plotId)))
+        .map((row) => ({ ...row, billingPerson: null })));
+    }
+    const readyPairKeys = new Set(visibleQueue.filter((row) => row.billingPerson).map((row) => (
+      `${row.billingPerson.id}:${assignmentKey(row.customerId, row.plotId)}`
+    )));
+    const waitingQueue = billingPeople.flatMap((billingPerson) => assignmentPairs(billingPerson)
+      .filter((row) => !readyPairKeys.has(`${billingPerson.id}:${assignmentKey(row.customerId, row.plotSiteId)}`))
+      .map((row) => ({ ...row, billingPerson })));
     const customerIds = [...new Set([
       ...visibleQueue.map((row) => row.customerId),
       ...waitingQueue.map((row) => row.customerId),
@@ -1752,18 +2118,20 @@ router.get("/billing/me", async (req, res) => {
     ].filter(Boolean))];
     const [customers, plots] = await Promise.all([
       customerIds.length ? prisma.contact.findMany({
-        where: { tenantId, id: { in: customerIds } },
+        where: { tenantId, id: { in: customerIds }, deletedAt: null },
         select: { id: true, name: true, phone: true, email: true, company: true },
       }) : [],
       plotIds.length ? prisma.plotSite.findMany({
-        where: { tenantId, id: { in: plotIds } },
-        select: { id: true, name: true, address: true, referenceCode: true, price: true },
+        where: { tenantId, id: { in: plotIds }, isActive: true },
+        select: { id: true, name: true, plotNumber: true, address: true, referenceCode: true, price: true },
       }) : [],
     ]);
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const plotMap = new Map(plots.map((row) => [row.id, row]));
     const assignments = visibleQueue.map((row) => ({
       assignmentKey: `${row.brokerId}-${row.customerId}-${row.plotId}`,
+      assignedStaff: row.billingPerson ? assignedStaff(row.billingPerson) : null,
+      awaitingAssignment: !row.billingPerson,
       broker: { id: row.brokerId, name: row.brokerName },
       customer: customerMap.get(row.customerId) || null,
       plot: row.plotId ? plotMap.get(row.plotId) || null : null,
@@ -1779,11 +2147,14 @@ router.get("/billing/me", async (req, res) => {
       paymentId: row.paymentId,
       paymentMethod: row.paymentMethod,
       transactionRef: row.transactionRef,
-    })).filter((row) => row.customer);
+    })).filter((row) => row.customer && row.plot);
     const waitingAssignments = waitingQueue.map((row) => {
       const brokerAssignment = brokerAssignments.get(assignmentKey(row.customerId, row.plotSiteId));
       return {
-        assignmentKey: `waiting-${row.customerId}-${row.plotSiteId || 0}`,
+        assignmentKey: adminOverview
+          ? `waiting-${row.billingPerson.id}-${row.customerId}-${row.plotSiteId || 0}`
+          : `waiting-${row.customerId}-${row.plotSiteId || 0}`,
+        assignedStaff: assignedStaff(row.billingPerson),
         broker: brokerAssignment?.broker || null,
         customer: customerMap.get(row.customerId) || null,
         plot: row.plotSiteId ? plotMap.get(row.plotSiteId) || null : null,
@@ -1791,11 +2162,15 @@ router.get("/billing/me", async (req, res) => {
         salesStatus: brokerAssignment?.status || null,
         statusUpdatedAt: null,
       };
-    }).filter((row) => row.customer);
+    }).filter((row) => row.customer && row.plot);
     return res.json({
-      billingUser: { id: billingUser.id, name: billingUser.name, email: billingUser.email },
+      isAdminOverview: adminOverview,
+      billingUser: adminOverview || !billingPeople[0]
+        ? null
+        : assignedStaff(billingPeople[0]),
       assignments,
       waitingAssignments,
+      assignmentOptions: billingPeople.filter((row) => row.userId).map(assignedStaff),
       summary: {
         total: assignments.length + waitingAssignments.length,
         waiting: waitingAssignments.length,
@@ -1809,7 +2184,54 @@ router.get("/billing/me", async (req, res) => {
   }
 });
 
-router.patch("/billing/me/assignments/:assignmentKey/status", async (req, res) => {
+router.patch("/billing/me/assignments/:assignmentKey/assign", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const [brokerId, customerId, plotSiteId] = String(req.params.assignmentKey).split("-").map(Number);
+    const targetProfileId = Number(req.body?.targetProfileId);
+    if (![brokerId, customerId, plotSiteId, targetProfileId].every((value) => Number.isInteger(value) && value > 0)) {
+      return res.status(400).json({ error: "Choose valid Billing staff.", code: "INVALID_BILLING_ASSIGNMENT" });
+    }
+    const [target, broker, billingPeople] = await Promise.all([
+      prisma.billingPerson.findFirst({ where: { id: targetProfileId, tenantId, isActive: true, userId: { not: null } } }),
+      prisma.plotBroker.findFirst({ where: { id: brokerId, tenantId, isActive: true } }),
+      prisma.billingPerson.findMany({ where: { tenantId, isActive: true } }),
+    ]);
+    if (!target) {
+      return res.status(404).json({ error: "Billing staff not found.", code: "BILLING_PROFILE_NOT_FOUND" });
+    }
+    const pair = broker && assignmentPairs(broker).find((row) => row.customerId === customerId);
+    const statuses = parseStoredObject(broker?.workflowStatusJson);
+    const saved = pair && (statuses[assignmentKey(customerId, pair.plotSiteId)] || statuses[`customer-${customerId}`]);
+    if (!pair || normalizeBrokerWorkflowStatus(saved) !== "PLOT_SELECTED" || Number(saved?.plotId || pair.plotSiteId) !== plotSiteId) {
+      return res.status(409).json({ error: "Customer has not been handed to Billing.", code: "CUSTOMER_NOT_READY_FOR_BILLING" });
+    }
+    if (billingPeople.some((person) => billingCanAccess(person, customerId, plotSiteId))) {
+      return res.status(409).json({ error: "This customer already has Billing staff.", code: "BILLING_ALREADY_ASSIGNED" });
+    }
+    const claimError = await validateRoleClaims(tenantId, [customerId], "billing", target.id);
+    if (claimError) return res.status(claimError.status || 409).json(claimError);
+    await prisma.$transaction(async (tx) => {
+      await claimCustomerForPerson(tx, {
+        modelName: "billingPerson", tenantId, claimantId: target.id, customerId, roleType: "billing",
+      });
+      await tx.billingPerson.update({
+        where: { id: target.id },
+        data: appendPersonAssignment(target, customerId, plotSiteId),
+      });
+    });
+    return res.json({
+      assignmentKey: `${brokerId}-${customerId}-${plotSiteId}`,
+      assignedStaff: assignedStaff(target),
+    });
+  } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
+    console.error("pickup-plot-inventory PATCH /billing/me/assignments/:assignmentKey/assign error:", error);
+    return res.status(500).json({ error: "Failed to assign Billing staff", code: "BILLING_ASSIGNMENT_FAILED" });
+  }
+});
+
+router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission("billing_workspace", "update"), async (req, res) => {
   try {
     const billingUser = await requireBillingProfile(req, res);
     if (!billingUser) return undefined;
@@ -1821,14 +2243,17 @@ router.patch("/billing/me/assignments/:assignmentKey/status", async (req, res) =
       return res.status(404).json({ error: "Billing assignment not found", code: "BILLING_ASSIGNMENT_NOT_FOUND" });
     }
     const broker = await prisma.plotBroker.findFirst({ where: { id: brokerId, tenantId: req.user.tenantId, isActive: true } });
-    const pair = broker && assignmentPairs(broker).find((row) => row.customerId === customerId && row.plotSiteId === requestedPlotId);
+    const pair = broker && assignmentPairs(broker).find((row) => row.customerId === customerId);
     if (!broker || !pair) {
       return res.status(404).json({ error: "Billing assignment not found", code: "BILLING_ASSIGNMENT_NOT_FOUND" });
     }
-    const key = assignmentKey(customerId, requestedPlotId);
     const statuses = parseStoredObject(broker.workflowStatusJson);
     const legacyKey = `customer-${customerId}`;
-    if (!statuses[key] && statuses[legacyKey]) statuses[key] = { ...statuses[legacyKey], plotId: requestedPlotId };
+    const key = assignmentKey(customerId, pair.plotSiteId);
+    if (!statuses[key] && statuses[legacyKey]) statuses[key] = { ...statuses[legacyKey] };
+    if (Number(statuses[key]?.plotId || pair.plotSiteId) !== requestedPlotId) {
+      return res.status(404).json({ error: "Billing assignment not found", code: "BILLING_ASSIGNMENT_NOT_FOUND" });
+    }
     if (normalizeBrokerWorkflowStatus(statuses[key]) !== "PLOT_SELECTED") {
       return res.status(409).json({ error: "Customer has not been handed to Billing", code: "CUSTOMER_NOT_READY_FOR_BILLING" });
     }
@@ -2227,10 +2652,19 @@ router.get("/lead-status", async (req, res) => {
         return { contactId, events: events.slice(0, 50).reverse(), hasMore: events.length > 50 };
       })),
     ]);
-    const plotIds = [...new Set([...transportPeople, ...brokers].flatMap((person) =>
-      assignmentPairs(person).filter((pair) => visibleContactIds.includes(pair.customerId))
-        .map((pair) => pair.plotSiteId),
-    ).filter((id) => Number.isInteger(id) && id > 0))];
+    const selectedPlotIds = brokers.flatMap((broker) => {
+      const statuses = parseStoredObject(broker.workflowStatusJson);
+      return assignmentPairs(broker)
+        .filter((pair) => visibleContactIds.includes(pair.customerId))
+        .map((pair) => Number((statuses[assignmentKey(pair.customerId, pair.plotSiteId)]
+          || statuses[`customer-${pair.customerId}`])?.plotId));
+    });
+    const plotIds = [...new Set([
+      ...[...transportPeople, ...brokers].flatMap((person) =>
+        assignmentPairs(person).filter((pair) => visibleContactIds.includes(pair.customerId))
+          .map((pair) => pair.plotSiteId)),
+      ...selectedPlotIds,
+    ].filter((id) => Number.isInteger(id) && id > 0))];
     if (plotIds.length > 200) {
       const error = new Error("Too many plot assignments. Request fewer contacts.");
       error.code = "WORKFLOW_PROJECTION_TOO_LARGE";
@@ -2238,7 +2672,7 @@ router.get("/lead-status", async (req, res) => {
     }
     const plots = plotIds.length ? await prisma.plotSite.findMany({
       where: { tenantId, id: { in: plotIds } },
-      select: { id: true, name: true, address: true, area: true, availability: true },
+      select: { id: true, name: true, plotNumber: true, referenceCode: true, address: true, area: true, availability: true },
     }) : [];
     const workflowEvents = eventPages.flatMap((page) => page.events);
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
@@ -2273,12 +2707,327 @@ router.get("/lead-status", async (req, res) => {
   }
 });
 
+router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = Number(req.params.contactId);
+    if (!Number.isInteger(contactId) || contactId <= 0) {
+      return res.status(400).json({ error: "Invalid customer id", code: "INVALID_ID" });
+    }
+    if (!Array.isArray(req.body?.plotSiteIds)) {
+      return res.status(400).json({ error: "plotSiteIds must be an array.", code: "INVALID_PLOT_IDS" });
+    }
+    const plotSiteIds = [...new Set(req.body.plotSiteIds.map(Number))];
+    if (plotSiteIds.length < 1 || plotSiteIds.length > 50 || plotSiteIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+      return res.status(400).json({ error: "Select between 1 and 50 valid plots.", code: "INVALID_PLOT_IDS" });
+    }
+
+    const [contact, customerPickup, plots, existingBookings] = await Promise.all([
+      prisma.contact.findFirst({
+        where: { id: contactId, tenantId, deletedAt: null },
+        select: { id: true },
+      }),
+      prisma.customerPickup.findUnique({
+        where: { tenantId_contactId: { tenantId, contactId } },
+        select: { id: true },
+      }),
+      prisma.plotSite.findMany({
+        where: { tenantId, id: { in: plotSiteIds }, isActive: true },
+        select: { id: true, name: true, plotNumber: true, price: true, availability: true },
+      }),
+      prisma.plotBooking.findMany({
+        where: { tenantId, contactId, status: { not: "CANCELLED" } },
+        select: { id: true, plotSiteId: true, bookingNumber: true, status: true },
+      }),
+    ]);
+    if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
+    if (!customerPickup) {
+      return res.status(409).json({
+        error: "Capture the customer's pickup location before assigning plots.",
+        code: "PICKUP_LOCATION_REQUIRED",
+      });
+    }
+    if (plots.length !== plotSiteIds.length) {
+      return res.status(400).json({ error: "One or more selected plots are not active.", code: "INVALID_PLOT_IDS" });
+    }
+
+    const existingPlotIds = new Set(existingBookings.map((booking) => Number(booking.plotSiteId)));
+    const newPlots = plots.filter((plot) => !existingPlotIds.has(Number(plot.id)));
+    const unavailablePlot = newPlots.find((plot) => (
+      String(plot.availability || "").trim().toUpperCase() !== "AVAILABLE"
+    ));
+    if (unavailablePlot) {
+      return res.status(409).json({
+        error: `${unavailablePlot.plotNumber || unavailablePlot.name} is already ${String(unavailablePlot.availability || "unavailable").toLowerCase()}.`,
+        code: "PLOT_NOT_AVAILABLE",
+      });
+    }
+    const normalizePlotName = (value) => String(value || "").trim().toLowerCase();
+    const normalizePlotNumber = (value) => String(value || "").trim().toLowerCase();
+    const selectedPlotNames = new Set(newPlots.map((plot) => normalizePlotName(plot.name)).filter(Boolean));
+    const selectedPlotNumbers = newPlots.map((plot) => normalizePlotNumber(plot.plotNumber));
+    if (newPlots.length && selectedPlotNames.size !== 1) {
+      return res.status(400).json({
+        error: "Select plot numbers from the same Plot / Site name.",
+        code: "PLOT_NAME_MISMATCH",
+      });
+    }
+    if (selectedPlotNumbers.some((number) => !number) || new Set(selectedPlotNumbers).size !== selectedPlotNumbers.length) {
+      return res.status(400).json({
+        error: "Each selected plot must have a different plot number.",
+        code: "DUPLICATE_PLOT_NUMBER",
+      });
+    }
+    const existingPlots = existingPlotIds.size ? await prisma.plotSite.findMany({
+      where: { tenantId, id: { in: [...existingPlotIds] } },
+      select: { id: true, name: true, plotNumber: true },
+    }) : [];
+    const selectedPlotName = [...selectedPlotNames][0] || "";
+    const existingNumbers = new Set(existingPlots
+      .filter((plot) => normalizePlotName(plot.name) === selectedPlotName)
+      .map((plot) => normalizePlotNumber(plot.plotNumber))
+      .filter(Boolean));
+    if (selectedPlotNumbers.some((number) => existingNumbers.has(number))) {
+      return res.status(400).json({
+        error: "Choose a different plot number from those already assigned.",
+        code: "DUPLICATE_PLOT_NUMBER",
+      });
+    }
+
+    const createdBookings = [];
+    await prisma.$transaction(async (tx) => {
+      for (const plot of newPlots) {
+        const booking = await tx.plotBooking.create({
+          data: {
+            bookingNumber: `BOOK-${crypto.randomBytes(5).toString("hex").toUpperCase()}`,
+            tenantId,
+            contactId,
+            customerPickupId: customerPickup.id,
+            plotSiteId: plot.id,
+            status: "PLOT_ASSIGNED",
+            paymentStatus: "UNPAID",
+            totalAmount: Number(plot.price || 0),
+            balance: Number(plot.price || 0),
+          },
+        });
+        createdBookings.push(booking);
+        await appendWorkflowEvent(tx, req, {
+          bookingId: booking.id,
+          contactId,
+          plotSiteId: plot.id,
+          stage: "PLOT",
+          eventType: "PLOT_ASSIGNED",
+          label: "Plot assigned",
+          fromStatus: "AVAILABLE",
+          toStatus: "PLOT_ASSIGNED",
+          metadata: { assignedByAdmin: true },
+        });
+      }
+    });
+
+    return res.status(createdBookings.length ? 201 : 200).json({
+      contactId,
+      assignedPlotIds: [...new Set([...existingBookings.map((row) => Number(row.plotSiteId)), ...plotSiteIds])],
+      bookingsCreated: createdBookings.length,
+      bookings: createdBookings,
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory POST /customer-pickups/:contactId/plots error:", error);
+    if (error.code === "PLOT_NOT_AVAILABLE") {
+      return res.status(error.statusCode || 409).json({ error: error.message, code: error.code });
+    }
+    return res.status(500).json({ error: "Failed to assign plots", code: "PLOT_ASSIGNMENT_FAILED" });
+  }
+});
+
+router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = Number(req.params.contactId);
+    if (!Number.isInteger(contactId) || contactId <= 0) {
+      return res.status(400).json({ error: "Invalid customer id", code: "INVALID_ID" });
+    }
+
+    const method = text(req.body?.method, 40)?.toLowerCase();
+    const allowedMethods = new Set(["payment_link", "upi", "cash", "card", "bank_transfer", "cheque"]);
+    if (!allowedMethods.has(method)) {
+      return res.status(400).json({ error: "Choose a valid payment method.", code: "INVALID_PAYMENT_METHOD" });
+    }
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Enter a valid payment amount.", code: "INVALID_PAYMENT_AMOUNT" });
+    }
+    const submittedBookingId = req.body?.plotBookingId;
+    const plotBookingId = submittedBookingId === undefined || submittedBookingId === null || submittedBookingId === ""
+      ? null
+      : Number(submittedBookingId);
+    if (plotBookingId !== null && (!Number.isInteger(plotBookingId) || plotBookingId <= 0)) {
+      return res.status(400).json({ error: "Choose a valid plot booking.", code: "INVALID_PLOT_BOOKING_ID" });
+    }
+
+    const [contact, booking] = await Promise.all([
+      prisma.contact.findFirst({
+        where: { id: contactId, tenantId, deletedAt: null },
+        select: { id: true, name: true, email: true, phone: true },
+      }),
+      prisma.plotBooking.findFirst({
+        where: {
+          tenantId,
+          contactId,
+          ...(plotBookingId === null ? {} : { id: plotBookingId }),
+          status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] },
+        },
+        orderBy: { updatedAt: "desc" },
+      }),
+    ]);
+    if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
+    if (!booking) {
+      return res.status(409).json({ error: "Select a plot before generating an initial payment.", code: "PLOT_BOOKING_REQUIRED" });
+    }
+    const balance = Number(booking.balance ?? booking.totalAmount ?? 0);
+    if (amount > balance) {
+      return res.status(400).json({
+        error: "Payment amount cannot exceed the outstanding booking balance.",
+        code: "PAYMENT_EXCEEDS_BALANCE",
+        balance,
+      });
+    }
+
+    if (method === "payment_link") {
+      const { createInvoicePaymentLink } = require("../lib/paymentLink");
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+      const result = await createInvoicePaymentLink({
+        tenantId,
+        invoice: { id: booking.id, invoiceNum: booking.bookingNumber, amount },
+        contact,
+        contactId,
+        currency: "INR",
+        gatewayPref: "razorpay",
+        tenantName: tenant?.name || undefined,
+        baseUrl: getFrontendUrlFromRequest(req),
+        travelContext: { kind: "plot-booking-payment", plotBookingId: booking.id },
+        description: `Initial payment for plot booking ${booking.bookingNumber}`,
+      });
+      if (result.error) {
+        return res.status(502).json({ error: result.error, code: result.code || "PAYMENT_LINK_FAILED" });
+      }
+      return res.json({
+        mode: "payment_link",
+        url: result.url,
+        gateway: result.gateway,
+        payment: { id: result.paymentId, amount, status: "PENDING", createdAt: new Date().toISOString() },
+      });
+    }
+
+    const transactionRef = text(req.body?.transactionRef, 128);
+    if (!transactionRef) {
+      return res.status(400).json({ error: "Transaction reference is required.", code: "PAYMENT_REFERENCE_REQUIRED" });
+    }
+    const paidAt = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
+    if (Number.isNaN(paidAt.getTime())) {
+      return res.status(400).json({ error: "Choose a valid payment date.", code: "INVALID_PAYMENT_DATE" });
+    }
+    const duplicatePayment = await prisma.payment.findFirst({
+      where: { tenantId, plotPaymentReference: transactionRef },
+      select: { id: true },
+    });
+    if (duplicatePayment) {
+      return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });
+    }
+
+    let payment;
+    let nextAmountPaid;
+    let nextBalance;
+    await prisma.$transaction(async (tx) => {
+      await require("../lib/plotBookingPayments").lockBooking(tx, tenantId, booking.id);
+      const current = await tx.plotBooking.findFirst({
+        where: { id: booking.id, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
+      });
+      // A gateway may have committed a SUCCESS payment while its booking
+      // reconciliation is still waiting for this lock. Include that ledger
+      // amount as well as legacy booked totals before accepting more cash.
+      const ledgerPaid = current
+        ? await require("../lib/plotBookingPayments").successfulPaymentTotal(tx, tenantId, booking.id)
+        : 0;
+      const accountedPaid = Math.max(Number(current?.amountPaid || 0), ledgerPaid);
+      const remaining = Math.min(
+        Number(current?.balance ?? current?.totalAmount ?? 0),
+        Math.max(0, Number(current?.totalAmount || 0) - accountedPaid),
+      );
+      if (!current || amount > remaining) {
+        const error = new Error("Payment amount exceeds the current outstanding booking balance.");
+        error.code = "PAYMENT_EXCEEDS_BALANCE";
+        throw error;
+      }
+      nextAmountPaid = accountedPaid + amount;
+      nextBalance = Math.max(0, Number(current.totalAmount || 0) - nextAmountPaid);
+      payment = await tx.payment.create({
+        data: {
+          contactId,
+          description: `Initial payment for plot booking ${booking.bookingNumber}`,
+          amount,
+          currency: "INR",
+          gateway: method,
+          gatewayId: transactionRef,
+          plotPaymentReference: transactionRef,
+          status: "SUCCESS",
+          paidAt,
+          tenantId,
+          metadata: JSON.stringify({ kind: "plot-booking-payment", plotBookingId: booking.id, mode: "manual" }),
+        },
+      });
+      await tx.plotBooking.update({
+        where: { id: booking.id },
+        data: {
+          amountPaid: nextAmountPaid,
+          balance: nextBalance,
+          paymentStatus: nextBalance === 0 ? "PAID" : "PARTIAL",
+        },
+      });
+      await appendWorkflowEvent(tx, req, {
+        bookingId: booking.id,
+        contactId,
+        plotSiteId: booking.plotSiteId,
+        stage: "PAYMENT",
+        eventType: "INITIAL_PAYMENT_RECORDED",
+        label: "Initial payment recorded",
+        toStatus: nextBalance === 0 ? "PAID" : "PARTIAL",
+        occurredAt: paidAt.toISOString(),
+        metadata: { paymentId: payment.id, amount, method, transactionRef },
+      });
+    });
+    return res.json({
+      mode: "recorded",
+      payment: {
+        id: payment.id,
+        amount: payment.amount,
+        currency: payment.currency,
+        gateway: payment.gateway,
+        gatewayId: payment.gatewayId,
+        status: payment.status,
+        paidAt: payment.paidAt,
+        createdAt: payment.createdAt,
+      },
+      booking: { id: booking.id, amountPaid: nextAmountPaid, balance: nextBalance },
+    });
+  } catch (error) {
+    if (error.code === "PAYMENT_EXCEEDS_BALANCE") {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    console.error("pickup-plot-inventory POST /customer-pickups/:contactId/initial-payment error:", error);
+    if (error.code === "P2002" && String(error.meta?.target || "").includes("plotPaymentReference")) {
+      return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });
+    }
+    return res.status(500).json({ error: "Failed to generate initial payment", code: "INITIAL_PAYMENT_FAILED" });
+  }
+});
+
 router.get("/customer-pickups", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const [pickups, transportPeople, brokers, workflowEvents, plots] = await Promise.all([
+    const [pickups, transportPeople, brokers, workflowEvents, plots, bookings, plotPayments] = await Promise.all([
       prisma.customerPickup.findMany({
-        where: { tenantId },
+        where: { tenantId, contact: { deletedAt: null } },
         orderBy: { updatedAt: "desc" },
         include: {
           contact: { select: { id: true, name: true, phone: true, email: true, company: true, status: true, interestedPlotArea: true } },
@@ -2298,7 +3047,36 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
       }),
       prisma.plotSite.findMany({
         where: { tenantId },
-        select: { id: true, name: true, address: true, area: true, availability: true },
+        select: {
+          id: true, name: true, plotNumber: true, block: true, address: true,
+          referenceCode: true, area: true, areaUnit: true, roadWidth: true,
+          facing: true, propertyType: true, price: true, availability: true, isActive: true,
+        },
+      }),
+      prisma.plotBooking.findMany({
+        where: { tenantId },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true, bookingNumber: true, contactId: true, plotSiteId: true,
+          invoiceId: true, status: true, paymentStatus: true, totalAmount: true,
+          amountPaid: true, balance: true, reservedAt: true, soldAt: true,
+          completedAt: true, createdAt: true, updatedAt: true,
+        },
+      }),
+      prisma.payment.findMany({
+        where: {
+          tenantId,
+          OR: [
+            { invoiceId: { not: null } },
+            { metadata: { contains: '"kind":"plot-booking-payment"' } },
+          ],
+        },
+        orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
+        select: {
+          id: true, invoiceId: true, contactId: true, description: true,
+          amount: true, currency: true, gateway: true, gatewayId: true,
+          status: true, paidAt: true, createdAt: true, metadata: true,
+        },
       }),
     ]);
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
@@ -2320,20 +3098,51 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
     }
     const customers = pickups.map((pickup) => {
       const workflowStatus = findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap);
+      const customerBookings = bookings.filter((row) => (
+        Number(row.contactId) === Number(pickup.contactId) && row.status !== "CANCELLED"
+      ));
+      const financialBookings = customerBookings.filter((row) => row.status !== "PLOT_ASSIGNED");
+      const assignedPlotIds = [...new Set([
+        workflowStatus.assignedPlot?.id,
+        ...customerBookings.map((row) => Number(row.plotSiteId)),
+      ].filter((id) => Number.isInteger(Number(id)) && Number(id) > 0).map(Number))];
+      const assignedPlots = assignedPlotIds.map((id) => plotMap.get(id)).filter(Boolean);
+      const assignedPlot = workflowStatus.assignedPlot || assignedPlots[0] || null;
+      const booking = financialBookings.find((row) => (
+        Number(row.contactId) === Number(pickup.contactId)
+        && (!assignedPlot?.id || Number(row.plotSiteId) === Number(assignedPlot.id))
+      )) || financialBookings[0] || null;
+      const selectedPlot = booking ? plotMap.get(Number(booking.plotSiteId)) || null : null;
+      const payments = plotPayments.filter((payment) => {
+        let metadata = {};
+        try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_error) {}
+        const matchesBooking = booking && Number(metadata.plotBookingId) === Number(booking.id);
+        const matchesInvoice = booking?.invoiceId && Number(payment.invoiceId) === Number(booking.invoiceId);
+        return Number(payment.contactId) === Number(pickup.contactId) && (matchesBooking || matchesInvoice);
+      }).map(({ metadata: _metadata, ...payment }) => payment);
       return {
         ...pickup,
         pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
         ...workflowStatus,
+        assignedPlot,
+        assignedPlots,
+        selectedPlot,
+        customerAssignedPlotIds: customerBookings.map((row) => Number(row.plotSiteId)).filter((id) => Number.isInteger(id) && id > 0),
+        booking,
+        payments,
         workflowHistory: historyByCustomer.get(pickup.contactId) || [],
       };
     });
     return res.json({
       customers,
+      plots: plots.filter((plot) => (
+        plot.isActive && String(plot.availability || "").trim().toUpperCase() === "AVAILABLE"
+      )),
       summary: {
         total: customers.length,
-        awaitingAssignment: customers.filter((row) => row.status === "PICKUP_LOCATION_CAPTURED").length,
-        activeTrips: customers.filter((row) => !["PICKUP_LOCATION_CAPTURED", "COMPLETED"].includes(row.status)).length,
-        completed: customers.filter((row) => row.status === "COMPLETED").length,
+        awaitingAssignment: customers.filter((row) => customerJourneyBucket(row) === "waiting").length,
+        activeTrips: customers.filter((row) => customerJourneyBucket(row) === "active").length,
+        completed: customers.filter((row) => customerJourneyBucket(row) === "completed").length,
       },
     });
   } catch (error) {
@@ -2406,6 +3215,7 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
         req.io,
       ).catch((error) => console.error("[GenericCampaign] pickup point event failed:", error.message));
     }
+    await safeNotifyCustomerPickupPlotAssignments({ tenantId, contactId });
     return res.json({ ...pickup, status: "PICKUP_LOCATION_CAPTURED" });
   } catch (error) {
     console.error("pickup-plot-inventory PUT /customer-pickups/:contactId error:", error);
@@ -2611,6 +3421,20 @@ router.post("/plots", adminOnly, async (req, res) => {
     if (pickupLocationIds === false) {
       return res.status(400).json({ error: "Pickup location was not found", code: "INVALID_PICKUP_LOCATION" });
     }
+    const duplicatePlot = await prisma.plotSite.findFirst({
+      where: {
+        tenantId: req.user.tenantId,
+        name,
+        plotNumber: text(req.body?.plotNumber, 100),
+      },
+      select: { id: true },
+    });
+    if (duplicatePlot) {
+      return res.status(409).json({
+        error: "This plot number already exists for the same plot or site name. Enter a different plot number.",
+        code: "DUPLICATE_PLOT_NUMBER",
+      });
+    }
     const plot = await prisma.plotSite.create({
       data: {
         name,
@@ -2687,6 +3511,21 @@ router.put("/plots/:id", adminOnly, async (req, res) => {
     if (pickupLocationIds === false) {
       return res.status(400).json({ error: "Pickup location was not found", code: "INVALID_PICKUP_LOCATION" });
     }
+    const duplicatePlot = await prisma.plotSite.findFirst({
+      where: {
+        tenantId: req.user.tenantId,
+        name,
+        plotNumber: text(req.body?.plotNumber, 100),
+        id: { not: id },
+      },
+      select: { id: true },
+    });
+    if (duplicatePlot) {
+      return res.status(409).json({
+        error: "This plot number already exists for the same plot or site name. Enter a different plot number.",
+        code: "DUPLICATE_PLOT_NUMBER",
+      });
+    }
     let boundary = {};
     if (req.body?.boundary !== undefined) {
       try {
@@ -2747,9 +3586,9 @@ router.patch("/plots/:id/status", adminOnly, async (req, res) => {
 router.get("/transport-persons", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const [transportPersons, pickupLocations, plots, confirmedPickups, transportRole] = await Promise.all([
+    const [transportPersons, pickupLocations, plots, confirmedPickups, transportRole, customerPlotAssignments] = await Promise.all([
       prisma.transportPerson.findMany({
-        where: { tenantId },
+        where: { tenantId, OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }] },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: {
           pickupLocation: { select: { id: true, name: true, isActive: true } },
@@ -2764,26 +3603,57 @@ router.get("/transport-persons", adminOnly, async (req, res) => {
       prisma.plotSite.findMany({
         where: { tenantId },
         orderBy: { name: "asc" },
-        select: { id: true, name: true, address: true, availability: true, isActive: true },
+        select: { id: true, name: true, plotNumber: true, address: true, availability: true, isActive: true },
       }),
       findConfirmedPickupCustomers(tenantId),
       findTransportRole(tenantId),
+      prisma.plotBooking.findMany({
+        where: { tenantId, status: "PLOT_ASSIGNED" },
+        orderBy: { createdAt: "asc" },
+        select: { contactId: true, plotSiteId: true },
+      }),
     ]);
     const claimOwners = startedCustomerOwners(transportPersons, "transport", "assignmentStatusJson");
-    const customers = markClaimedCustomers(confirmedPickups, claimOwners);
+    const normalizeLocation = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const plotSiteMap = new Map(plots.map((row) => [row.id, row]));
+    const assignedPlotIdsByCustomer = new Map();
+    for (const assignment of customerPlotAssignments) {
+      const ids = assignedPlotIdsByCustomer.get(Number(assignment.contactId)) || [];
+      if (!ids.includes(Number(assignment.plotSiteId))) ids.push(Number(assignment.plotSiteId));
+      assignedPlotIdsByCustomer.set(Number(assignment.contactId), ids);
+    }
+    const customers = markClaimedCustomers(confirmedPickups.map((customer) => {
+      const pickupAddress = normalizeLocation(customer.pickupAddress);
+      const pickupLocationIds = pickupLocations.filter((location) => {
+        const address = normalizeLocation(location.address);
+        const name = normalizeLocation(location.name);
+        return Boolean(pickupAddress) && (
+          (address && (pickupAddress === address || pickupAddress.includes(address) || address.includes(pickupAddress)))
+          || (name.length >= 5 && pickupAddress.includes(name))
+        );
+      }).map((location) => location.id);
+      const assignedPlotIds = assignedPlotIdsByCustomer.get(Number(customer.id)) || [];
+      const assignedPlots = assignedPlotIds.map((id) => plotSiteMap.get(id)).filter(Boolean);
+      return {
+        ...customer,
+        pickupLocationIds,
+        assignedPlots,
+        assignedPlotSiteId: assignedPlots[0]?.id || null,
+        assignedPlotName: assignedPlots[0]?.name || null,
+      };
+    }), claimOwners);
     const linkedUserIds = new Set(transportPersons.map((person) => Number(person.userId)).filter(Number.isInteger));
     const staffUsers = transportRole ? await prisma.user.findMany({
       where: {
         tenantId,
         deactivatedAt: null,
         userType: { in: ["STAFF", "OWNER"] },
-        userRoles: { some: { roleId: transportRole.id } },
+        userRoles: { some: { role: { permissions: { some: { module: "transport_workspace", action: "read" } } } } },
       },
       orderBy: { name: "asc" },
       select: { id: true, name: true, email: true, phone: true },
     }) : [];
     const pickupLocationMap = new Map(pickupLocations.map((row) => [row.id, row]));
-    const plotSiteMap = new Map(plots.map((row) => [row.id, row]));
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const rows = transportPersons.map((person) => keepOnlyOwnedClaims(serializeTransportPerson(
       person, pickupLocationMap, plotSiteMap, customerMap, true,
@@ -2915,7 +3785,7 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
       ]);
       if (!role) {
         return res.status(409).json({
-          error: "Create an active Transport Person role in Team & Access before adding a transport login.",
+          error: "Grant Transport Workspace access to an active staff role before adding a transport login.",
           code: "TRANSPORT_ROLE_NOT_CONFIGURED",
         });
       }
@@ -2955,6 +3825,10 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
         include: { pickupLocation: { select: { id: true, name: true, isActive: true } } },
       });
     }
+    await safeNotifyCustomerPickupPlotAssignments({
+      tenantId: req.user.tenantId,
+      person,
+    });
     return res.status(201).json(serializeTransportPerson(person));
   } catch (error) {
     console.error("pickup-plot-inventory POST /transport-persons error:", error);
@@ -2988,6 +3862,11 @@ router.put("/transport-persons/:id", adminOnly, async (req, res) => {
       });
       return updateTransportPerson(tx);
     }) : await updateTransportPerson(prisma);
+    await safeNotifyCustomerPickupPlotAssignments({
+      tenantId: req.user.tenantId,
+      person,
+      previousPerson: existing,
+    });
     return res.json(serializeTransportPerson(person));
   } catch (error) {
     console.error("pickup-plot-inventory PUT /transport-persons/:id error:", error);
@@ -3016,7 +3895,7 @@ router.get("/brokers", adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const [brokers, plots, pickupLocations, rawCustomers, brokerRole, transportPeople] = await Promise.all([
       prisma.plotBroker.findMany({
-        where: { tenantId },
+        where: { tenantId, OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }] },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: {
           plotSite: { select: { id: true, name: true, availability: true, isActive: true } },
@@ -3036,7 +3915,7 @@ router.get("/brokers", adminOnly, async (req, res) => {
       findConfirmedPickupCustomers(tenantId),
       findBrokerRole(tenantId),
       prisma.transportPerson.findMany({
-        where: { tenantId, isActive: true },
+        where: { tenantId, isActive: true, user: { is: { deactivatedAt: null } } },
         orderBy: { updatedAt: "desc" },
         select: { assignmentPairsJson: true, customerIdsJson: true, plotSiteIdsJson: true },
       }),
@@ -3049,7 +3928,7 @@ router.get("/brokers", adminOnly, async (req, res) => {
         tenantId,
         deactivatedAt: null,
         userType: { in: ["STAFF", "OWNER"] },
-        userRoles: { some: { roleId: brokerRole.id } },
+        userRoles: { some: { role: { permissions: { some: { module: "broker_workspace", action: "read" } } } } },
       },
       orderBy: { name: "asc" },
       select: { id: true, name: true, email: true, phone: true },
@@ -3169,7 +4048,7 @@ router.post("/brokers", adminOnly, async (req, res) => {
       ]);
       if (!role) {
         return res.status(409).json({
-          error: "Create an active Broker role in Team & Access before adding a broker login.",
+          error: "Grant Site Visits Workspace access to an active staff role before adding a sales login.",
           code: "BROKER_ROLE_NOT_CONFIGURED",
         });
       }
@@ -3262,7 +4141,7 @@ router.get("/billing-persons", adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const [billingPersons, billingRole, plots, pickupLocations, rawCustomers, transportPeople, claimedBookings] = await Promise.all([
       prisma.billingPerson.findMany({
-        where: { tenantId },
+        where: { tenantId, OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }] },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: { user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } } },
       }),
@@ -3279,7 +4158,7 @@ router.get("/billing-persons", adminOnly, async (req, res) => {
       }),
       findConfirmedPickupCustomers(tenantId),
       prisma.transportPerson.findMany({
-        where: { tenantId, isActive: true },
+        where: { tenantId, isActive: true, user: { is: { deactivatedAt: null } } },
         orderBy: { updatedAt: "desc" },
         select: { assignmentPairsJson: true, customerIdsJson: true, plotSiteIdsJson: true },
       }),
@@ -3288,7 +4167,10 @@ router.get("/billing-persons", adminOnly, async (req, res) => {
         select: { contactId: true, billingPersonId: true },
       }),
     ]);
-    const claimOwners = billingCustomerOwners(claimedBookings);
+    const visibleBillingPersonIds = new Set(billingPersons.map((person) => Number(person.id)));
+    const claimOwners = billingCustomerOwners(
+      claimedBookings.filter((booking) => visibleBillingPersonIds.has(Number(booking.billingPersonId))),
+    );
     const customers = markClaimedCustomers(attachTransportPlots(rawCustomers, transportPeople), claimOwners);
     const linkedUserIds = new Set(billingPersons.map((person) => Number(person.userId)).filter(Number.isInteger));
     const staffUsers = billingRole ? await prisma.user.findMany({
@@ -3296,7 +4178,7 @@ router.get("/billing-persons", adminOnly, async (req, res) => {
         tenantId,
         deactivatedAt: null,
         userType: { in: ["STAFF", "OWNER"] },
-        userRoles: { some: { roleId: billingRole.id } },
+        userRoles: { some: { role: { permissions: { some: { module: "billing_workspace", action: "read" } } } } },
       },
       orderBy: { name: "asc" },
       select: { id: true, name: true, email: true, phone: true },
@@ -3413,7 +4295,7 @@ router.post("/billing-persons", adminOnly, async (req, res) => {
         prisma.user.findFirst({ where: { email, tenantId: req.user.tenantId } }),
       ]);
       if (!role) {
-        return res.status(409).json({ error: "Create an active Billing role in Team & Access before adding a billing login.", code: "BILLING_ROLE_NOT_CONFIGURED" });
+        return res.status(409).json({ error: "Grant Billing Workspace access to an active staff role before adding a billing login.", code: "BILLING_ROLE_NOT_CONFIGURED" });
       }
       if (existingUser) {
         return res.status(409).json({ error: "A staff user with that email already exists.", code: "EMAIL_ALREADY_EXISTS" });

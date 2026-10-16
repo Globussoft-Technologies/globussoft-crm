@@ -298,15 +298,19 @@ test('admin creates a broker assigned to a plot', async ({ request }) => {
   expect(body.plotSiteId).toBe(plotId);
 });
 
-test('people directories return the newly created tenant-scoped records', async ({ request }) => {
+test('people directories retain tenant-scoped legacy profiles without staff logins', async ({ request }) => {
   const [transportResponse, brokerResponse] = await Promise.all([
     request.get(`${BASE_URL}/api/pickup-plot-inventory/transport-persons`, { headers: headers(adminToken) }),
     request.get(`${BASE_URL}/api/pickup-plot-inventory/brokers`, { headers: headers(adminToken) }),
   ]);
   expect(transportResponse.status()).toBe(200);
   expect(brokerResponse.status()).toBe(200);
-  expect((await transportResponse.json()).transportPersons.some((row) => row.id === transportPersonId)).toBeTruthy();
-  expect((await brokerResponse.json()).brokers.some((row) => row.id === brokerId)).toBeTruthy();
+  expect((await transportResponse.json()).transportPersons).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: transportPersonId, userId: null }),
+  ]));
+  expect((await brokerResponse.json()).brokers).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: brokerId, userId: null }),
+  ]));
 });
 
 test('admin can deactivate a pickup location and plot/site', async ({ request }) => {

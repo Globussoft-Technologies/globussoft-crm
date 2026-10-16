@@ -3588,7 +3588,7 @@ router.get("/transport-persons", adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const [transportPersons, pickupLocations, plots, confirmedPickups, transportRole, customerPlotAssignments] = await Promise.all([
       prisma.transportPerson.findMany({
-        where: { tenantId, user: { is: { deactivatedAt: null } } },
+        where: { tenantId, OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }] },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: {
           pickupLocation: { select: { id: true, name: true, isActive: true } },
@@ -3895,7 +3895,7 @@ router.get("/brokers", adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const [brokers, plots, pickupLocations, rawCustomers, brokerRole, transportPeople] = await Promise.all([
       prisma.plotBroker.findMany({
-        where: { tenantId, user: { is: { deactivatedAt: null } } },
+        where: { tenantId, OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }] },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: {
           plotSite: { select: { id: true, name: true, availability: true, isActive: true } },
@@ -4141,7 +4141,7 @@ router.get("/billing-persons", adminOnly, async (req, res) => {
     const tenantId = req.user.tenantId;
     const [billingPersons, billingRole, plots, pickupLocations, rawCustomers, transportPeople, claimedBookings] = await Promise.all([
       prisma.billingPerson.findMany({
-        where: { tenantId, user: { is: { deactivatedAt: null } } },
+        where: { tenantId, OR: [{ userId: null }, { user: { is: { deactivatedAt: null } } }] },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: { user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } } },
       }),

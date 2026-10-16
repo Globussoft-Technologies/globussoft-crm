@@ -12,7 +12,7 @@ const payload = {
       assignmentKey: '51-61-30', status: 'PLOT_RESERVED', statusUpdatedAt: null,
       broker: { id: 51, name: 'Sanjeev' },
       customer: { id: 61, name: 'Li Wei', email: 'li@example.com', phone: '9000022222', company: 'Shenzhen Micro Ltd' },
-      plot: { id: 30, name: 'Plot 24', price: 250000 },
+      plot: { id: 30, name: 'Plot 24', plotNumber: 'A-24', price: 250000 },
     },
     {
       assignmentKey: '51-62-31', status: 'TRANSACTION_COMPLETED', statusUpdatedAt: '2026-10-06T12:00:00.000Z',
@@ -34,11 +34,71 @@ const payload = {
 beforeEach(() => fetchApi.mockReset());
 
 describe('<BillingWorkspace />', () => {
+  it('shows Sales Executive handoffs awaiting a Billing assignment to admins', async () => {
+    const awaitingPayload = {
+      isAdminOverview: true,
+      billingUser: null,
+      assignmentOptions: [{ profileId: 71, id: 41, name: 'Bina' }],
+      assignments: [{
+        assignmentKey: '51-63-30',
+        status: 'PLOT_RESERVED',
+        broker: { id: 51, name: 'Sanjeev' },
+        customer: { id: 63, name: 'Ritu Pillai' },
+        plot: { id: 30, name: 'Plot 30' },
+        awaitingAssignment: true,
+        assignedStaff: null,
+      }],
+      waitingAssignments: [],
+    };
+    fetchApi
+      .mockResolvedValueOnce(awaitingPayload)
+      .mockResolvedValueOnce({ assignedStaff: { profileId: 71, name: 'Bina' } })
+      .mockResolvedValueOnce({ ...awaitingPayload, assignments: [] });
+    render(<BillingWorkspace />);
+    expect(await screen.findByText('Ritu Pillai')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting Billing assignment')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Assign Billing staff for Ritu Pillai'), { target: { value: '71' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Assign Billing staff$/i }));
+    expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/billing/me/assignments/51-63-30/assign',
+      { method: 'PATCH', body: JSON.stringify({ targetProfileId: 71 }) },
+    );
+    expect(screen.queryByRole('button', { name: /start billing/i })).toBeNull();
+  });
+
+  it('shows all assigned staff data read-only for a Generic CRM admin', async () => {
+    fetchApi
+      .mockResolvedValueOnce({
+        ...payload,
+        isAdminOverview: true,
+        billingUser: null,
+        assignments: payload.assignments.map((assignment) => ({
+          ...assignment, assignedStaff: { id: 41, profileId: 71, name: 'Bina' },
+        })),
+        waitingAssignments: payload.waitingAssignments.map((assignment) => ({
+          ...assignment, assignedStaff: { id: 41, profileId: 71, name: 'Bina' },
+        })),
+      })
+      .mockResolvedValueOnce({ assignmentKey: '51-61-30', status: 'BILLING', statusUpdatedAt: '2026-10-06T13:00:00.000Z' });
+    render(<BillingWorkspace />);
+    expect((await screen.findAllByText('Assigned to Bina')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Interested customer billing')).toBeNull();
+    expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /start billing/i }));
+    expect(fetchApi).toHaveBeenLastCalledWith(
+      '/api/pickup-plot-inventory/billing/me/assignments/51-61-30/status?assignedProfileId=71',
+      { method: 'PATCH', body: JSON.stringify({ status: 'BILLING' }) },
+    );
+  });
+
   it('shows only interested customers in the active billing queue', async () => {
     fetchApi.mockResolvedValueOnce(payload);
     render(<BillingWorkspace />);
     expect(await screen.findByText('Li Wei')).toBeInTheDocument();
+    expect(screen.queryByText('Interested customer billing')).toBeNull();
+    expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
     expect(screen.getByText('Plot reserved')).toBeInTheDocument();
+    expect(screen.getByText(/Plot 24 — Plot No\. A-24/)).toBeInTheDocument();
     expect(screen.queryByText('Priyanka Mehta')).toBeNull();
   });
 

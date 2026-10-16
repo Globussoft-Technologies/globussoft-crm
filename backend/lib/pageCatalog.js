@@ -1465,6 +1465,30 @@ const PAGE_CATALOG = [
   },
   //  Additional Generic Routes 
   {
+    path: '/transport-workspace',
+    label: 'My Transport Work',
+    description: 'Assigned customer pickup and drop-off trips',
+    category: 'Pickup & Plot Work',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'transport_workspace', action: 'read' }],
+  },
+  {
+    path: '/sales-workspace',
+    label: 'My Site Visits',
+    description: 'Assigned customer site visits and plot selection',
+    category: 'Pickup & Plot Work',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'broker_workspace', action: 'read' }],
+  },
+  {
+    path: '/billing-workspace',
+    label: 'My Billing Queue',
+    description: 'Assigned customer billing and payment work',
+    category: 'Pickup & Plot Work',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'billing_workspace', action: 'read' }],
+  },
+  {
     path: '/ab-tests',
     label: 'A/B Tests',
     description: 'Marketing experiment builder',

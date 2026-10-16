@@ -323,6 +323,12 @@ async function markInvoicePaid(invoiceId, tenantId, options = {}) {
   }
 }
 
+// Plot-booking payment links deliberately leave invoiceId null because an
+// initial deposit may be smaller than the full plot value. Recompute the
+// booking ledger from successful tagged payments so webhook retries stay
+// idempotent and never double-add the same payment.
+const { reconcilePlotBookingPayment } = require("../lib/plotBookingPayments");
+
 // Reconcile a TRAVEL milestone payment-link back to its TravelPaymentSchedule
 // + parent TravelInvoice (the travel-vertical equivalent of markInvoicePaid).
 // Driven by the link's notes.kind='travel-milestone' tag. Marks the milestone
@@ -529,6 +535,7 @@ router.post(
             paidAt,
           });
           emitPaymentCollected(updated);
+          await reconcilePlotBookingPayment(updated);
         }
       } else if (event.type === "payment_intent.payment_failed") {
         const intent = event.data.object;
@@ -568,6 +575,7 @@ router.post(
               paidAt,
             });
             emitPaymentCollected(updated);
+            await reconcilePlotBookingPayment(updated);
 
             // Dynamic TMC checkout payments arrive as payment.captured. The
             // generic Payment row is updated above, but the installment ledger
@@ -716,6 +724,7 @@ router.post(
               paidAt: capturedAt,
             });
             emitPaymentCollected(updated);
+            await reconcilePlotBookingPayment(updated);
 
             // Razorpay order payments used by the customer portal are not
             // payment links, so they never reach the payment_link.paid branch
@@ -1071,6 +1080,7 @@ router.post(
                 paidAt: capturedAt,
               });
               emitPaymentCollected(updated);
+              await reconcilePlotBookingPayment(updated);
             }
 
             const paymentMeta = safeJsonParse(updated.metadata || payment.metadata, {});
@@ -2081,6 +2091,7 @@ router.post("/confirm-razorpay", paymentLimiter, async (req, res) => {
 
     await markInvoicePaid(payment.invoiceId, tenantId);
     emitPaymentCollected(updated);
+    await reconcilePlotBookingPayment(updated);
 
     res.json({ success: true, payment: serialize(updated) });
   } catch (err) {
@@ -2147,6 +2158,7 @@ router.post("/confirm-stripe-session", paymentLimiter, async (req, res) => {
 
     await markInvoicePaid(payment.invoiceId, tenantId);
     emitPaymentCollected(updated);
+    await reconcilePlotBookingPayment(updated);
 
     res.json({ success: true, paid: true, payment: serialize(updated) });
   } catch (err) {

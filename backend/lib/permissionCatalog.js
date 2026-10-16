@@ -104,6 +104,12 @@ const COMMON_MODULES = {
 // Keep this separate from COMMON_MODULES so adding a generic page never
 // changes another vertical's permission matrix.
 const GENERIC_MODULES = {
+  // Pickup/plot operational workspaces. These are deliberately independent
+  // of role keys/names: a tenant admin can grant any custom role one or more
+  // work queues without renaming the role.
+  transport_workspace: ['read', 'update'],
+  broker_workspace: ['read', 'update'],
+  billing_workspace: ['read', 'update'],
   cpq: ['read', 'write', 'update', 'delete'],
   playbooks: ['read', 'write', 'update', 'delete'],
   territories: ['read', 'write', 'update', 'delete'],

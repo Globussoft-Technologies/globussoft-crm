@@ -209,7 +209,7 @@ function StatusPill({ active, children }) {
   );
 }
 
-function Modal({ title, onClose, children, onSave, saving, wide = false }) {
+function Modal({ title, onClose, children, onSave, saving, saveDisabled = false, wide = false }) {
   return (
     <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 300, padding: '1rem', background: 'rgba(15,23,42,.62)', display: 'grid', placeItems: 'center' }}>
       <div role="dialog" aria-modal="true" aria-label={title} className="card" style={{ width: wide ? 'min(920px, 100%)' : 'min(620px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: '1.5rem', background: 'var(--modal-bg, #fff)', color: 'var(--text-primary)' }}>
@@ -220,7 +220,7 @@ function Modal({ title, onClose, children, onSave, saving, wide = false }) {
         {children}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: '1.4rem' }}>
           <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="button" className="btn-primary" onClick={onSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          <button type="button" className="btn-primary" onClick={onSave} disabled={saving || saveDisabled}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -277,6 +277,16 @@ export default function PickupPlotInventory() {
     const selectedIds = new Set((plotForm.pickupLocationIds || []).map(Number));
     return data.pickupLocations.filter((location) => selectedIds.has(Number(location.id)));
   }, [data.pickupLocations, plotForm.pickupLocationIds]);
+  const duplicatePlotNumber = useMemo(() => {
+    const name = plotForm.name.trim().toLocaleLowerCase();
+    const plotNumber = plotForm.plotNumber.trim().toLocaleLowerCase();
+    if (!name || !plotNumber) return false;
+    return data.plots.some((plot) => (
+      Number(plot.id) !== Number(plotDialog?.id)
+      && String(plot.name || '').trim().toLocaleLowerCase() === name
+      && String(plot.plotNumber || '').trim().toLocaleLowerCase() === plotNumber
+    ));
+  }, [data.plots, plotDialog?.id, plotForm.name, plotForm.plotNumber]);
 
   const loadInventory = useCallback(async () => {
     setLoading(true);
@@ -334,6 +344,10 @@ export default function PickupPlotInventory() {
   };
 
   const savePlot = async () => {
+    if (duplicatePlotNumber) {
+      notify.error('This plot number already exists for the same plot or site name. Enter a different plot number.');
+      return;
+    }
     const validationError = validatePlotForm(plotForm);
     if (validationError) {
       notify.error(validationError);
@@ -516,10 +530,23 @@ export default function PickupPlotInventory() {
         </div>
       )}
 
-      {plotDialog && <Modal title={plotDialog.id ? 'Edit Plot / Site' : 'Add Plot / Site'} onClose={() => setPlotDialog(null)} onSave={savePlot} saving={saving} wide>
+      {plotDialog && <Modal title={plotDialog.id ? 'Edit Plot / Site' : 'Add Plot / Site'} onClose={() => setPlotDialog(null)} onSave={savePlot} saving={saving} saveDisabled={duplicatePlotNumber} wide>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
           <label style={labelStyle}>Name *<input className="input-field" required minLength="2" maxLength="150" style={fieldStyle} value={plotForm.name} onChange={(event) => setPlotForm({ ...plotForm, name: event.target.value })} /></label>
-          <label style={labelStyle}>Plot number *<input className="input-field" required maxLength="100" style={fieldStyle} value={plotForm.plotNumber} onChange={(event) => setPlotForm({ ...plotForm, plotNumber: event.target.value })} /></label>
+          <label style={labelStyle}>
+            Plot number *
+            <input
+              className="input-field"
+              required
+              maxLength="100"
+              style={fieldStyle}
+              value={plotForm.plotNumber}
+              aria-invalid={duplicatePlotNumber || undefined}
+              aria-describedby={duplicatePlotNumber ? 'plot-number-error' : undefined}
+              onChange={(event) => setPlotForm({ ...plotForm, plotNumber: event.target.value })}
+            />
+            {duplicatePlotNumber && <span id="plot-number-error" role="alert" style={{ display: 'block', marginTop: 5, color: 'var(--danger-color, #dc2626)', fontSize: '.75rem', fontWeight: 600 }}>This plot number already exists for the same plot or site name. Enter a different plot number.</span>}
+          </label>
           <label style={labelStyle}>Block *<input className="input-field" required maxLength="100" style={fieldStyle} value={plotForm.block} onChange={(event) => setPlotForm({ ...plotForm, block: event.target.value })} /></label>
           <label style={labelStyle}>Availability *<select className="input-field" required style={fieldStyle} value={plotForm.availability} onChange={(event) => setPlotForm({ ...plotForm, availability: event.target.value })}>{AVAILABILITY.map((status) => <option key={status}>{status}</option>)}</select></label>
           <label style={labelStyle}>Area *<input className="input-field" required maxLength="100" placeholder="e.g. 1,200" style={fieldStyle} value={plotForm.area} onChange={(event) => setPlotForm({ ...plotForm, area: event.target.value })} /></label>

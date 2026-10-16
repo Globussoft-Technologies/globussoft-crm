@@ -7,7 +7,12 @@ import CompactPickupLocationCell from './CompactPickupLocationCell';
 import ResizableTableHeader from './ResizableTableHeader';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
 import { serviceAreasForPlots } from '../utils/plotServiceAreas';
-import { isAssignablePlot } from '../utils/plotAvailability';
+import {
+  expandPlotGroupKeys,
+  groupPlotsByName,
+  isAssignablePlot,
+  selectedPlotGroupKeys,
+} from '../utils/plotAvailability';
 import {
   validateBrokerForm,
   validatePersonName,
@@ -97,7 +102,8 @@ function PickupLocationsCell({ locations, contextLabel }) {
 
 function PlotAssignmentsCell({ plots }) {
   if (!Array.isArray(plots) || plots.length === 0) return 'Not assigned';
-  return <div style={{ display: 'grid', gap: 6, maxHeight: 112, overflowY: 'auto', paddingRight: 4 }}>{plots.map((plot) => <div key={plot.id} style={{ minWidth: 0 }}>
+  const groupedPlots = groupPlotsByName(plots).map((group) => group.representative);
+  return <div style={{ display: 'grid', gap: 6, maxHeight: 112, overflowY: 'auto', paddingRight: 4 }}>{groupedPlots.map((plot) => <div key={plot.id} style={{ minWidth: 0 }}>
     <strong style={{ display: 'block', overflowWrap: 'anywhere' }}>{plot.name}</strong>
     {plot.address ? <a
       href={mapUrl(plot)}
@@ -135,7 +141,23 @@ function transportAssignments(customerIds, customerOptions) {
   })).filter((row) => Number.isInteger(row.plotSiteId));
 }
 
-function ConnectedCustomerAssignments({ customerIds, assignments, customerOptions, plotOptions, plotSiteIds, onChange, locked = false, hideCompleted = false }) {
+function customerAssignedTransportPairs(customerIds, customerOptions, assignments = []) {
+  const existing = new Map(assignments.map((assignment) => [Number(assignment.customerId), assignment]));
+  return customerIds.map(Number).map((customerId) => {
+    const current = existing.get(customerId);
+    if (current?.plotLocked && Number.isInteger(Number(current.plotSiteId))) return current;
+    const customer = customerOptions.find((row) => Number(row.id) === customerId);
+    const plotSiteId = Number(customer?.assignedPlotSiteId);
+    if (!Number.isInteger(plotSiteId)) return null;
+    return {
+      customerId,
+      plotSiteId,
+      ...(current?.status ? { status: current.status } : {}),
+    };
+  }).filter(Boolean);
+}
+
+function ConnectedCustomerAssignments({ customerIds, assignments, customerOptions, plotOptions, plotSiteIds, onChange, locked = false, hideCompleted = false, automaticPlotName = false }) {
   const visibleAssignments = hideCompleted
     ? assignments.filter((assignment) => assignment.status !== 'COMPLETED')
     : assignments;
@@ -156,7 +178,13 @@ function ConnectedCustomerAssignments({ customerIds, assignments, customerOption
         return (
           <div key={assignment.customerId} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(180px, 1fr)', alignItems: 'center', gap: 12, marginTop: 8 }}>
             <strong style={{ overflowWrap: 'anywhere' }}>{customer.name}</strong>
-                <select
+            {automaticPlotName ? <div
+              className="input-field"
+              aria-label={`Plot for ${customer.name}`}
+              style={{ display: 'flex', alignItems: 'center', minHeight: 42, fontWeight: 700 }}
+            >
+              {plotOptions.find((plot) => Number(plot.id) === Number(assignment.plotSiteId))?.name || 'Assigned plot unavailable'}
+            </div> : <select
                   className="input-field"
                   aria-label={`Plot for ${customer.name}`}
                   value={assignment.plotSiteId}
@@ -167,7 +195,7 @@ function ConnectedCustomerAssignments({ customerIds, assignments, customerOption
               )))}
             >
               {selectedPlots.map((plot) => <option key={plot.id} value={plot.id}>{plotOptionLabel(plot)}</option>)}
-            </select>
+            </select>}
           </div>
         );
       })}
@@ -216,7 +244,7 @@ function Modal({ title, saving, onClose, onSave, children }) {
   );
 }
 
-function ServiceAreasDialog({ serviceAreas, onClose }) {
+function ServiceAreasDialog({ serviceAreas, plotOptions = [], onClose }) {
   return (
     <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 340, padding: '1rem', background: 'rgba(15,23,42,.68)', display: 'grid', placeItems: 'center' }}>
       <div role="dialog" aria-modal="true" aria-label={`All service areas (${serviceAreas.length})`} className="card" style={{ width: 'min(720px, 100%)', maxHeight: '82vh', display: 'flex', flexDirection: 'column', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none', color: 'var(--text-primary)' }}>
@@ -228,8 +256,10 @@ function ServiceAreasDialog({ serviceAreas, onClose }) {
           <button type="button" aria-label="Close service areas" onClick={onClose} style={{ border: 0, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={21} /></button>
         </div>
         <div data-testid="service-areas-list" style={{ minHeight: 0, maxHeight: 'calc(82vh - 80px)', overflowY: 'auto', display: 'grid', gap: 8, paddingRight: 4 }}>
-          {serviceAreas.map((serviceArea) => <div key={serviceArea.plotSiteId || serviceArea.plotName} data-testid={`service-area-${serviceArea.plotSiteId}`} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 9, background: 'var(--subtle-bg, rgba(148,163,184,.08))' }}>
-            <div style={{ fontWeight: 800, fontSize: '0.82rem', marginBottom: 4 }}>{serviceArea.plotName || 'Selected plot'}</div>
+          {serviceAreas.map((serviceArea) => {
+            const plotNumber = serviceArea.plotNumber || plotOptions.find((plot) => Number(plot.id) === Number(serviceArea.plotSiteId))?.plotNumber;
+            return <div key={serviceArea.plotSiteId || serviceArea.plotName} data-testid={`service-area-${serviceArea.plotSiteId}`} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 9, background: 'var(--subtle-bg, rgba(148,163,184,.08))' }}>
+            <div style={{ fontWeight: 800, fontSize: '0.82rem', marginBottom: 4 }}>{serviceArea.plotName || 'Selected plot'}{plotNumber ? ` · Plot ${plotNumber}` : ''}</div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: 8 }}>{serviceArea.address || 'No stored plot address'}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: 8 }}>
               {[['Area', serviceArea.area], ['State', serviceArea.state], ['PIN code', serviceArea.pincode]].map(([label, value]) => <div key={label}>
@@ -237,7 +267,8 @@ function ServiceAreasDialog({ serviceAreas, onClose }) {
                 <div style={{ marginTop: 2, fontSize: '0.82rem', overflowWrap: 'anywhere' }}>{value || 'Not available in plot address'}</div>
               </div>)}
             </div>
-          </div>)}
+          </div>;
+          })}
         </div>
       </div>
     </div>
@@ -381,7 +412,11 @@ export default function PickupPlotPeopleDirectory({ type }) {
     }
     nextForm.assignments = type === 'broker'
       ? transportAssignments(nextForm.customerIds, customerOptions)
-      : reconcileAssignments(nextForm.customerIds, nextForm.plotSiteIds, row.assignments || []);
+      : customerAssignedTransportPairs(nextForm.customerIds, customerOptions, row.assignments || []);
+    if (type === 'transport') {
+      nextForm.plotSiteIds = [...new Set(nextForm.assignments.map((assignment) => Number(assignment.plotSiteId)))];
+      nextForm.serviceAreas = serviceAreasForPlots(plotOptions, nextForm.plotSiteIds);
+    }
     setForm(nextForm);
   };
 
@@ -521,16 +556,30 @@ export default function PickupPlotPeopleDirectory({ type }) {
   ))), [rows]);
 
   const assignablePlotOptions = useMemo(() => plotOptions.filter(isAssignablePlot), [plotOptions]);
+  const assignablePlotGroups = useMemo(() => groupPlotsByName(assignablePlotOptions), [assignablePlotOptions]);
+  const assignablePlotIds = useMemo(() => new Set(assignablePlotOptions.map((plot) => Number(plot.id))), [assignablePlotOptions]);
+  const selectedPlotGroups = useMemo(
+    () => selectedPlotGroupKeys(assignablePlotGroups, form.plotSiteIds),
+    [assignablePlotGroups, form.plotSiteIds],
+  );
 
   const assignableCustomerOptions = useMemo(() => {
     const roleAvailableCustomers = customerOptions.filter((customer) => (
       (!customer.claimedByPersonId || Number(customer.claimedByPersonId) === Number(editing?.id))
       && (type !== 'transport' || !completedTransportCustomerIds.has(Number(customer.id)))
     ));
+    if (type === 'transport') {
+      const selectedPickupLocationIds = new Set((form.pickupLocationIds || []).map(Number));
+      if (selectedPickupLocationIds.size === 0) return [];
+      return roleAvailableCustomers.filter((customer) => (
+        Number.isInteger(Number(customer.assignedPlotSiteId))
+        && (customer.pickupLocationIds || []).some((id) => selectedPickupLocationIds.has(Number(id)))
+      ));
+    }
     if (type !== 'broker') return roleAvailableCustomers;
     const selectedPlots = new Set((form.plotSiteIds || []).map(Number));
     return roleAvailableCustomers.filter((customer) => selectedPlots.has(Number(customer.transportPlotSiteId)));
-  }, [completedTransportCustomerIds, customerOptions, editing?.id, form.plotSiteIds, type]);
+  }, [completedTransportCustomerIds, customerOptions, editing?.id, form.pickupLocationIds, form.plotSiteIds, type]);
 
   return (
     <div className="pickup-person-directory-page" data-testid={`${type}-directory-page`} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
@@ -624,10 +673,10 @@ export default function PickupPlotPeopleDirectory({ type }) {
               })}
             >
               <option value="create">Create a new {type === 'transport' ? 'transport' : 'sales executive'} login</option>
-              <option value="existing">Assign existing {type === 'transport' ? 'Transport Person' : 'Sales Executive'} staff</option>
+              <option value="existing">Assign existing staff with workspace access</option>
             </select>
           </Field>}
-          {!editing.id && form.accountMode === 'existing' && <Field label={`Existing ${type === 'transport' ? 'transport' : 'sales executive'} staff`}>
+          {!editing.id && form.accountMode === 'existing' && <Field label="Existing staff with workspace access">
             <select
               className="input-field"
               aria-label={`Existing ${type === 'transport' ? 'transport' : 'sales executive'} staff`}
@@ -647,7 +696,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
               <option value="">Select staff member</option>
               {staffUsers.map((user) => <option key={user.id} value={user.id}>{user.name} ({user.email})</option>)}
             </select>
-            {!staffRole && <span style={{ display: 'block', marginTop: 5, color: '#b45309', fontSize: '0.74rem' }}>No active {type === 'transport' ? 'Transport Person' : 'Sales Executive'} role is configured in Team &amp; Access.</span>}
+            {!staffRole && <span style={{ display: 'block', marginTop: 5, color: '#b45309', fontSize: '0.74rem' }}>No active staff role has this workspace permission. Grant it in Roles &amp; Permissions first.</span>}
           </Field>}
           <Field label="Name *" error={nameError} errorId={`${type}-name-error`}>
             <input
@@ -735,10 +784,14 @@ export default function PickupPlotPeopleDirectory({ type }) {
                         .filter((assignment) => assignment.plotLocked)
                         .map((assignment) => Number(assignment.customerId));
                       const nextCustomerIds = [...new Set([...customerIds.map(Number), ...lockedCustomerIds])];
+                      const assignments = customerAssignedTransportPairs(nextCustomerIds, customerOptions, form.assignments);
+                      const plotSiteIds = [...new Set(assignments.map((assignment) => Number(assignment.plotSiteId)))];
                       setForm({
                         ...form,
                         customerIds: nextCustomerIds,
-                        assignments: reconcileAssignments(nextCustomerIds, form.plotSiteIds, form.assignments),
+                        plotSiteIds,
+                        assignments,
+                        serviceAreas: serviceAreasForPlots(plotOptions, plotSiteIds),
                       });
                     }}
                     placeholder="Select customers"
@@ -748,28 +801,6 @@ export default function PickupPlotPeopleDirectory({ type }) {
                   <Eye size={14} /> View
                 </button>
               </div>
-            </div>
-            <div data-testid="plots-field" style={{ minWidth: 0 }}>
-              <div style={{ ...labelStyle, marginBottom: 5 }}>Plots / sites</div>
-              <MultiSelectDropdown
-                ariaLabel="Plots / sites (select multiple)"
-                searchable
-                options={assignablePlotOptions.map((option) => ({ value: Number(option.id), label: plotOptionLabel(option) }))}
-                selected={form.plotSiteIds.map(Number)}
-                onChange={(plotSiteIds) => {
-                  const lockedPlotIds = form.assignments
-                    .filter((assignment) => assignment.plotLocked)
-                    .map((assignment) => Number(assignment.plotSiteId));
-                  const nextPlotSiteIds = [...new Set([...plotSiteIds.map(Number), ...lockedPlotIds])];
-                  setForm({
-                    ...form,
-                    plotSiteIds: nextPlotSiteIds,
-                    assignments: reconcileAssignments(form.customerIds, nextPlotSiteIds, form.assignments),
-                    serviceAreas: serviceAreasForPlots(plotOptions, nextPlotSiteIds),
-                  });
-                }}
-                placeholder="Select plots or sites"
-              />
             </div>
             <div data-testid="pickup-locations-field" style={{ minWidth: 0 }}>
               <div style={{ ...labelStyle, marginBottom: 5 }}>Pickup locations</div>
@@ -781,7 +812,27 @@ export default function PickupPlotPeopleDirectory({ type }) {
                   label: [location.name, location.address].filter(Boolean).join(' · '),
                 }))}
                 selected={(form.pickupLocationIds || []).map(Number)}
-                onChange={(pickupLocationIds) => setForm({ ...form, pickupLocationIds })}
+                onChange={(pickupLocationIds) => {
+                  const selectedLocations = new Set(pickupLocationIds.map(Number));
+                  const lockedCustomerIds = form.assignments
+                    .filter((assignment) => assignment.plotLocked)
+                    .map((assignment) => Number(assignment.customerId));
+                  const customerIds = form.customerIds.filter((customerId) => {
+                    if (lockedCustomerIds.includes(Number(customerId))) return true;
+                    const customer = customerOptions.find((row) => Number(row.id) === Number(customerId));
+                    return (customer?.pickupLocationIds || []).some((id) => selectedLocations.has(Number(id)));
+                  });
+                  const assignments = customerAssignedTransportPairs(customerIds, customerOptions, form.assignments);
+                  const plotSiteIds = [...new Set(assignments.map((assignment) => Number(assignment.plotSiteId)))];
+                  setForm({
+                    ...form,
+                    pickupLocationIds,
+                    customerIds,
+                    assignments,
+                    plotSiteIds,
+                    serviceAreas: serviceAreasForPlots(plotOptions, plotSiteIds),
+                  });
+                }}
                 placeholder="Select pickup locations"
               />
             </div>
@@ -804,6 +855,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
               plotSiteIds={form.plotSiteIds}
               onChange={(assignments) => setForm({ ...form, assignments })}
               hideCompleted
+              automaticPlotName
             />
           </> : <>
             {editing.id && form.accountMode !== 'linked' && <Field label="Email"><input className="input-field" type="email" maxLength="320" style={fieldStyle} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></Field>}
@@ -813,9 +865,14 @@ export default function PickupPlotPeopleDirectory({ type }) {
               <MultiSelectDropdown
                 ariaLabel="Sales Executive plots / sites (select multiple)"
                 searchable
-                options={assignablePlotOptions.map((option) => ({ value: Number(option.id), label: plotOptionLabel(option) }))}
-                selected={form.plotSiteIds.map(Number)}
-                onChange={(plotSiteIds) => {
+                options={assignablePlotGroups.map((group) => ({ value: group.key, label: plotOptionLabel(group.representative) }))}
+                selected={selectedPlotGroups}
+                onChange={(plotGroupKeys) => {
+                  const preservedPlotIds = form.plotSiteIds.map(Number).filter((id) => !assignablePlotIds.has(id));
+                  const plotSiteIds = [...new Set([
+                    ...preservedPlotIds,
+                    ...expandPlotGroupKeys(assignablePlotGroups, plotGroupKeys),
+                  ])];
                   const selectedPlots = new Set(plotSiteIds.map(Number));
                   const customerIds = form.customerIds.filter((customerId) => {
                     const customer = customerOptions.find((row) => Number(row.id) === Number(customerId));
@@ -841,7 +898,6 @@ export default function PickupPlotPeopleDirectory({ type }) {
                 </div>
               ) : <div style={{ minHeight: 42, display: 'flex', alignItems: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Select plots to view their areas.</div>}
             </div>
-            <Field label="Commission (%)"><input className="input-field" type="number" min="0" max="100" step="0.01" style={fieldStyle} value={form.commissionPercent} onChange={(event) => setForm({ ...form, commissionPercent: event.target.value })} /></Field>
             <CustomerSelector customerOptions={assignableCustomerOptions} selectedIds={form.customerIds} onChange={(customerIds) => setForm({
               ...form,
               customerIds,
@@ -861,7 +917,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
           <label style={{ display: 'flex', gap: 8, alignItems: 'center', gridColumn: '1 / -1' }}><input type="checkbox" checked={form.isActive} onChange={(event) => setForm({ ...form, isActive: event.target.checked })} /> Active {config.singular}</label>
         </div>
       </Modal>}
-      {serviceAreasOpen && <ServiceAreasDialog serviceAreas={form.serviceAreas} onClose={() => setServiceAreasOpen(false)} />}
+      {serviceAreasOpen && <ServiceAreasDialog serviceAreas={form.serviceAreas} plotOptions={plotOptions} onClose={() => setServiceAreasOpen(false)} />}
       {selectedCustomersOpen && <SelectedCustomersDialog customers={selectedCustomers} onClose={() => setSelectedCustomersOpen(false)} />}
     </div>
   );

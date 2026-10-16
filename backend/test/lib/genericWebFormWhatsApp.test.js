@@ -11,7 +11,11 @@ prisma.tenantSetting.findUnique = vi.fn();
 prisma.whatsAppTemplate.findFirst = vi.fn();
 prisma.whatsAppMessage.findFirst = vi.fn();
 prisma.whatsAppMessage.create = vi.fn();
+prisma.whatsAppMessage.updateMany = vi.fn();
 prisma.whatsAppThread.upsert = vi.fn();
+prisma.whatsAppThread.findMany = vi.fn();
+prisma.whatsAppThread.deleteMany = vi.fn();
+prisma.whatsAppThread.update = vi.fn();
 prisma.$transaction = vi.fn();
 
 const queue = require('../../lib/whatsappQueue');
@@ -31,7 +35,11 @@ beforeEach(() => {
     prisma.whatsAppTemplate.findFirst,
     prisma.whatsAppMessage.findFirst,
     prisma.whatsAppMessage.create,
+    prisma.whatsAppMessage.updateMany,
     prisma.whatsAppThread.upsert,
+    prisma.whatsAppThread.findMany,
+    prisma.whatsAppThread.deleteMany,
+    prisma.whatsAppThread.update,
     enqueueSend,
   ]) fn.mockReset();
 
@@ -40,7 +48,11 @@ beforeEach(() => {
   prisma.tenantSetting.findUnique.mockResolvedValue(null);
   prisma.whatsAppTemplate.findFirst.mockResolvedValue(null);
   prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
-  prisma.whatsAppThread.upsert.mockResolvedValue({ id: 31 });
+  prisma.whatsAppThread.upsert.mockResolvedValue({ id: 31, contactPhone: '+919876543210', unreadCount: 0 });
+  prisma.whatsAppThread.findMany.mockResolvedValue([]);
+  prisma.whatsAppThread.deleteMany.mockResolvedValue({ count: 0 });
+  prisma.whatsAppThread.update.mockResolvedValue({ id: 31, contactPhone: '+919876543210', unreadCount: 0 });
+  prisma.whatsAppMessage.updateMany.mockResolvedValue({ count: 0 });
   prisma.whatsAppMessage.create.mockResolvedValue({ id: 41 });
   enqueueSend.mockResolvedValue({ jobId: 51, status: 'PENDING' });
 });
@@ -105,10 +117,30 @@ describe('generic web-form WhatsApp acknowledgement', () => {
 
     expect(result).toEqual({ sent: true, messageId: 41 });
     expect(prisma.whatsAppThread.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId_contactPhone: { tenantId: 11, contactPhone: '919123456789' } },
+      where: { tenantId_contactPhone: { tenantId: 11, contactPhone: '+919123456789' } },
     }));
     expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ to: '919123456789' }),
+    });
+  });
+
+  test('merges a legacy digits-only automatic thread into the canonical manual thread', async () => {
+    prisma.whatsAppThread.findMany.mockResolvedValue([
+      { id: 30, contactPhone: '919876543210', contactName: 'Jane Doe', contactId: 21, unreadCount: 2 },
+    ]);
+
+    await sendGenericWebFormWhatsApp({ form, contact, submissionId: 1005 });
+
+    expect(prisma.whatsAppMessage.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 11, threadId: { in: [30] } },
+      data: { threadId: 31 },
+    });
+    expect(prisma.whatsAppThread.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: 11, id: { in: [30] } },
+    });
+    expect(prisma.whatsAppThread.update).toHaveBeenCalledWith({
+      where: { id: 31 },
+      data: expect.objectContaining({ contactName: 'Jane Doe', contactId: 21, unreadCount: 2 }),
     });
   });
 

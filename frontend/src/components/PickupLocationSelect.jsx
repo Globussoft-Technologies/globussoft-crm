@@ -4,7 +4,14 @@ import { Check, ChevronDown, MapPin, Search } from 'lucide-react';
 
 const MENU_MAX_HEIGHT = 340;
 
-export default function PickupLocationSelect({ value, onChange, options, disabled = false }) {
+export default function PickupLocationSelect({
+  value,
+  onChange,
+  options,
+  disabled = false,
+  compact = false,
+  ariaLabel = 'Pickup location',
+}) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [position, setPosition] = useState(null);
@@ -30,9 +37,12 @@ export default function PickupLocationSelect({ value, onChange, options, disable
       const viewportPadding = 12;
       const availableBelow = window.innerHeight - rect.bottom - viewportPadding;
       const openUp = availableBelow < 260 && rect.top > availableBelow;
+      const menuWidth = compact
+        ? Math.min(Math.max(rect.width, 320), window.innerWidth - (viewportPadding * 2))
+        : rect.width;
       setPosition({
-        left: Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - rect.width - viewportPadding)),
-        width: rect.width,
+        left: Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - menuWidth - viewportPadding)),
+        width: menuWidth,
         top: openUp ? undefined : rect.bottom + 6,
         bottom: openUp ? window.innerHeight - rect.top + 6 : undefined,
       });
@@ -60,7 +70,7 @@ export default function PickupLocationSelect({ value, onChange, options, disable
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
     };
-  }, [open]);
+  }, [compact, open]);
 
   const chooseLocation = (location) => {
     onChange(String(location.id));
@@ -70,12 +80,12 @@ export default function PickupLocationSelect({ value, onChange, options, disable
   };
 
   return (
-    <div style={{ width: '100%' }}>
+    <div style={{ width: '100%', minWidth: 0 }}>
       <button
         ref={triggerRef}
         type="button"
         className="input-field"
-        aria-label="Pickup location"
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
@@ -86,28 +96,34 @@ export default function PickupLocationSelect({ value, onChange, options, disable
         }}
         style={{
           width: '100%',
-          minHeight: 58,
+          minHeight: compact ? 36 : 58,
           display: 'grid',
-          gridTemplateColumns: '32px minmax(0, 1fr) 20px',
+          gridTemplateColumns: compact ? 'minmax(0, 1fr) 18px' : '32px minmax(0, 1fr) 20px',
           alignItems: 'center',
-          gap: 10,
-          padding: '8px 12px',
+          gap: compact ? 6 : 10,
+          padding: compact ? '6px 8px' : '8px 12px',
           textAlign: 'left',
           cursor: disabled ? 'not-allowed' : 'pointer',
           borderColor: open ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)',
           boxShadow: open ? '0 0 0 3px color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, transparent)' : 'none',
         }}
       >
-        <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', color: 'var(--primary-color, var(--accent-color))', background: 'color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent)' }}>
-          <MapPin size={17} aria-hidden="true" />
-        </span>
-        <span style={{ minWidth: 0 }}>
-          <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: selected ? 'var(--text-primary)' : 'var(--text-secondary)', fontSize: '.88rem' }}>
-            {selected?.name || 'Select pickup location'}
-          </strong>
-          <span style={{ display: 'block', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '.75rem', fontWeight: 500 }}>
-            {selected?.address || 'Search by location name or address'}
+        {!compact && (
+          <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', color: 'var(--primary-color, var(--accent-color))', background: 'color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent)' }}>
+            <MapPin size={17} aria-hidden="true" />
           </span>
+        )}
+        <span style={{ minWidth: 0 }}>
+          <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: selected ? 'var(--text-primary)' : 'var(--text-secondary)', fontSize: compact ? '.78rem' : '.88rem', fontWeight: compact ? 500 : 700 }}>
+            {compact && selected
+              ? [selected.name, selected.address].filter(Boolean).join(' — ')
+              : selected?.name || 'Select pickup location'}
+          </strong>
+          {!compact && (
+            <span style={{ display: 'block', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '.75rem', fontWeight: 500 }}>
+              {selected?.address || 'Search by location name or address'}
+            </span>
+          )}
         </span>
         <ChevronDown size={17} aria-hidden="true" style={{ color: 'var(--text-secondary)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .18s ease' }} />
       </button>

@@ -55,6 +55,7 @@ const {
   leadStatusKey,
   TEMPLATE_SETTING_KEY,
   queueGenericBulkContact,
+  upsertGenericWhatsAppThread,
 } = require("../lib/genericWebFormWhatsApp");
 // Per-tenant manual Meta Cloud connect (validate-with-Meta-then-activate).
 // Companion to lib/whatsappOnboardingService.js, which owns the Embedded
@@ -149,7 +150,7 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
       }
     }
 
-    // Get active config for this tenant
+    // Get active config for this tenant.
     const config = await prisma.whatsAppConfig.findFirst({
       where: { isActive: true, tenantId: req.user.tenantId },
     });
@@ -158,32 +159,40 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
         .status(400)
         .json({ error: "No active WhatsApp provider configured" });
     }
+    // The vertical lookup keeps legacy thread reconciliation strictly scoped
+    // to Generic CRM and only runs after the existing configuration gate.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
 
     // Wave 2 Agent KK: upsert thread for the recipient phone so outbound
     // messages slot into the same conversation as inbound. lastMessageAt
     // bumped; unreadCount NOT bumped (outbound doesn't increment unread).
     let thread = null;
     if (normalizedTo) {
-      thread = await prisma.whatsAppThread.upsert({
-        where: {
-          tenantId_contactPhone: {
+      thread = tenant?.vertical === "generic"
+        ? await upsertGenericWhatsAppThread({
             tenantId: req.user.tenantId,
-            contactPhone: normalizedTo,
-          },
-        },
-        create: {
-          tenantId: req.user.tenantId,
-          contactPhone: normalizedTo,
-          status: "OPEN",
-          contactId: contactId || null,
-          lastMessageAt: new Date(),
-        },
-        update: {
-          lastMessageAt: new Date(),
-          // Reopen a CLOSED thread when the operator sends a new message.
-          ...undefined /* keep status as-is unless CLOSED */,
-        },
-      });
+            phone: normalizedTo,
+            data: { contactId: contactId || undefined },
+          })
+        : await prisma.whatsAppThread.upsert({
+            where: {
+              tenantId_contactPhone: {
+                tenantId: req.user.tenantId,
+                contactPhone: normalizedTo,
+              },
+            },
+            create: {
+              tenantId: req.user.tenantId,
+              contactPhone: normalizedTo,
+              status: "OPEN",
+              contactId: contactId || null,
+              lastMessageAt: new Date(),
+            },
+            update: { lastMessageAt: new Date() },
+          });
       // Re-open closed threads when an operator sends a new outbound.
       if (thread.status === "CLOSED") {
         thread = await prisma.whatsAppThread.update({

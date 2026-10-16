@@ -48,7 +48,7 @@ export const formatPickupStatusDate = (value) => value
   ? new Date(value).toLocaleString()
   : 'No update yet';
 
-export const pickupTripStatusStyle = (status) => status === 'COMPLETED'
+export const pickupTripStatusStyle = (status) => ['COMPLETED', 'TRANSACTION_COMPLETED'].includes(status)
   ? { color: '#047857', background: 'rgba(16,185,129,.14)' }
   : status === 'PICKUP_LOCATION_CAPTURED'
     ? { color: '#a16207', background: 'rgba(245,158,11,.14)' }

@@ -28,6 +28,9 @@ const originalTenantFindUnique = prisma.tenant.findUnique;
 const originalRoleFindFirst = prisma.role.findFirst;
 const originalUserRoleFindUnique = prisma.userRole.findUnique;
 const originalUserRoleCreate = prisma.userRole.create;
+const originalTransportPersonFindFirst = prisma.transportPerson.findFirst;
+const originalPlotBrokerFindFirst = prisma.plotBroker.findFirst;
+const originalBillingPersonFindFirst = prisma.billingPerson.findFirst;
 
 beforeEach(() => {
   clearAllCache();
@@ -40,10 +43,32 @@ afterEach(() => {
   prisma.role.findFirst = originalRoleFindFirst;
   prisma.userRole.findUnique = originalUserRoleFindUnique;
   prisma.userRole.create = originalUserRoleCreate;
+  prisma.transportPerson.findFirst = originalTransportPersonFindFirst;
+  prisma.plotBroker.findFirst = originalPlotBrokerFindFirst;
+  prisma.billingPerson.findFirst = originalBillingPersonFindFirst;
   clearAllCache();
 });
 
 describe('loadUserPermissions — matrix is authoritative', () => {
+  test('generic operational profiles do not bypass permissions removed from the assigned role', async () => {
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([{
+      role: { key: 'USER', permissions: [{ module: 'contacts', action: 'read' }] },
+    }]);
+    prisma.transportPerson.findFirst = vi.fn().mockResolvedValue({ id: 41 });
+    prisma.plotBroker.findFirst = vi.fn().mockResolvedValue(null);
+    prisma.billingPerson.findFirst = vi.fn().mockResolvedValue({ id: 71 });
+
+    const perms = await loadUserPermissions(7, 12, 'generic');
+
+    expect(prisma.transportPerson.findFirst).not.toHaveBeenCalled();
+    expect(prisma.plotBroker.findFirst).not.toHaveBeenCalled();
+    expect(prisma.billingPerson.findFirst).not.toHaveBeenCalled();
+    expect(perms).toEqual(new Set(['contacts.read']));
+    expect(perms.has('transport_workspace.read')).toBe(false);
+    expect(perms.has('billing_workspace.read')).toBe(false);
+    expect(perms.has('broker_workspace.read')).toBe(false);
+  });
+
   test('missing tenant vertical fails closed instead of returning the union', async () => {
     prisma.userRole.findMany = vi.fn().mockResolvedValue([
       {

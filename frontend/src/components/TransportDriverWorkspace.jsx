@@ -6,9 +6,7 @@ import {
   MapPin,
   Navigation,
   Phone,
-  RefreshCw,
   Route,
-  Truck,
   UserRound,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
@@ -86,8 +84,11 @@ export default function TransportDriverWorkspace() {
     setUpdating(assignment.assignmentKey);
     setError('');
     try {
+      const profileQuery = data?.isAdminOverview && assignment.assignedStaff?.profileId
+        ? `?assignedProfileId=${encodeURIComponent(assignment.assignedStaff.profileId)}`
+        : '';
       const result = await fetchApi(
-        `/api/pickup-plot-inventory/transport-persons/me/assignments/${encodeURIComponent(assignment.assignmentKey)}/status`,
+        `/api/pickup-plot-inventory/transport-persons/me/assignments/${encodeURIComponent(assignment.assignmentKey)}/status${profileQuery}`,
         { method: 'PATCH', body: JSON.stringify({ status: next.key }) },
       );
       setData((current) => ({
@@ -115,24 +116,6 @@ export default function TransportDriverWorkspace() {
 
   return (
     <main className="transport-workspace" data-testid="transport-driver-workspace">
-      <section className="transport-hero">
-        <div>
-          <span className="transport-eyebrow"><Truck size={15} /> Driver workspace</span>
-          <h1>My pickup &amp; drop trips</h1>
-          <p>Everything assigned to you is here. Update each trip as you move.</p>
-        </div>
-        <button type="button" className="transport-refresh" onClick={load} disabled={loading}>
-          <RefreshCw size={16} className={loading ? 'is-spinning' : ''} /> Refresh
-        </button>
-        {data?.transportPerson && (
-          <div className="transport-driver-strip">
-            <span className="transport-avatar"><UserRound size={19} /></span>
-            <span><strong>{data.transportPerson.name}</strong><small>{data.transportPerson.vehicleType || 'Transport vehicle'}</small></span>
-            <span className="transport-vehicle-number">{data.transportPerson.vehicleNumber || 'Vehicle number not added'}</span>
-          </div>
-        )}
-      </section>
-
       <section className="transport-summary" aria-label="Trip summary">
         <div><span className="transport-summary-icon active"><Route size={18} /></span><span><strong>{summary.active}</strong><small>Active trips</small></span></div>
         <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Completed</small></span></div>
@@ -167,6 +150,7 @@ export default function TransportDriverWorkspace() {
             assignment={assignment}
             featured={index === 0 && assignment.status !== 'COMPLETED'}
             updating={updating === assignment.assignmentKey}
+            adminOverview={Boolean(data?.isAdminOverview)}
             onAdvance={() => advance(assignment)}
           />
         ))}
@@ -175,7 +159,7 @@ export default function TransportDriverWorkspace() {
   );
 }
 
-function TripCard({ assignment, featured, updating, onAdvance }) {
+function TripCard({ assignment, featured, updating, adminOverview, onAdvance }) {
   const index = statusIndex(assignment.status);
   const current = STATUS_STEPS[index];
   const next = STATUS_STEPS[index + 1];
@@ -185,6 +169,7 @@ function TripCard({ assignment, featured, updating, onAdvance }) {
       <header>
         <div>
           {featured && <span className="transport-next-badge">Next trip</span>}
+          {adminOverview && <span className="transport-next-badge">Assigned to {assignment.assignedStaff?.name || 'staff'}</span>}
           <h2>{assignment.customer?.name || 'Assigned transport'}</h2>
           <p>{assignment.customer?.company || assignment.drop?.referenceCode || 'Pickup and drop assignment'}</p>
         </div>

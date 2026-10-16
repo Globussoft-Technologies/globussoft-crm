@@ -653,7 +653,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     ).toBeNull();
   });
 
-  it('shows the requested Pickup & Plot columns, edits the mapped location, and opens status details in Generic CRM', async () => {
+  it('shows a saved pickup address and only offers the selector to leads without one', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -678,20 +678,23 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(overallStatus.closest('td')).toHaveStyle({ paddingLeft: '1.5rem' });
     expect(screen.getByText('Overall status').closest('th')).toHaveStyle({ paddingLeft: '1.5rem' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit pickup location for Alice Lead' }));
-    const pickupInput = screen.getByRole('button', { name: 'Pickup location' });
-    expect(pickupInput).toHaveTextContent('Main Gate');
+    expect(screen.getByText('42 Lake View Road, Bengaluru')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pickup location for Alice Lead' })).not.toBeInTheDocument();
+
+    const pickupInput = screen.getByRole('button', { name: 'Pickup location for Bob Lead' });
+    expect(pickupInput).toHaveTextContent('Select pickup location');
     fireEvent.click(pickupInput);
+    expect(screen.getByRole('option', { name: 'Select Main Gate pickup location' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('option', { name: 'Select North Hub pickup location' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
-      '/api/pickup-plot-inventory/customer-pickups/101',
+      '/api/pickup-plot-inventory/customer-pickups/102',
       expect.objectContaining({
         method: 'PUT',
         body: expect.stringContaining('55 New Pickup Road, Bengaluru'),
       }),
     ));
     await screen.findByText('55 New Pickup Road, Bengaluru');
+    expect(screen.queryByRole('button', { name: 'Pickup location for Bob Lead' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'View all status for Alice Lead' }));
     expect(screen.getByRole('dialog', { name: 'All customer statuses' })).toBeInTheDocument();

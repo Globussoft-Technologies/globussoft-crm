@@ -2936,9 +2936,31 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
     }
 
     let payment;
-    const nextAmountPaid = Math.min(Number(booking.totalAmount || 0), Number(booking.amountPaid || 0) + amount);
-    const nextBalance = Math.max(0, Number(booking.totalAmount || 0) - nextAmountPaid);
+    let nextAmountPaid;
+    let nextBalance;
     await prisma.$transaction(async (tx) => {
+      await require("../lib/plotBookingPayments").lockBooking(tx, tenantId, booking.id);
+      const current = await tx.plotBooking.findFirst({
+        where: { id: booking.id, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
+      });
+      // A gateway may have committed a SUCCESS payment while its booking
+      // reconciliation is still waiting for this lock. Include that ledger
+      // amount as well as legacy booked totals before accepting more cash.
+      const ledgerPaid = current
+        ? await require("../lib/plotBookingPayments").successfulPaymentTotal(tx, tenantId, booking.id)
+        : 0;
+      const accountedPaid = Math.max(Number(current?.amountPaid || 0), ledgerPaid);
+      const remaining = Math.min(
+        Number(current?.balance ?? current?.totalAmount ?? 0),
+        Math.max(0, Number(current?.totalAmount || 0) - accountedPaid),
+      );
+      if (!current || amount > remaining) {
+        const error = new Error("Payment amount exceeds the current outstanding booking balance.");
+        error.code = "PAYMENT_EXCEEDS_BALANCE";
+        throw error;
+      }
+      nextAmountPaid = accountedPaid + amount;
+      nextBalance = Math.max(0, Number(current.totalAmount || 0) - nextAmountPaid);
       payment = await tx.payment.create({
         data: {
           contactId,
@@ -2989,6 +3011,9 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
       booking: { id: booking.id, amountPaid: nextAmountPaid, balance: nextBalance },
     });
   } catch (error) {
+    if (error.code === "PAYMENT_EXCEEDS_BALANCE") {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
     console.error("pickup-plot-inventory POST /customer-pickups/:contactId/initial-payment error:", error);
     if (error.code === "P2002" && String(error.meta?.target || "").includes("plotPaymentReference")) {
       return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });

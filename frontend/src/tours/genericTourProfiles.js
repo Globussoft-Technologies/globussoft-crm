@@ -1,6 +1,7 @@
 const PROFILE_GROUPS = {
   workspace: { create: true, edit: true, filter: true, export: true },
   queue: { edit: true, filter: true, export: true },
+  operational: { edit: true, filter: true },
   builder: { create: true, edit: true, filter: true, export: true, builder: true },
   analytics: { filter: true, export: true },
   admin: { create: true, edit: true, filter: true, admin: true },
@@ -18,6 +19,10 @@ const FEATURE_PROFILES = {
   "converted-leads": ["queue", "converted lead", "converted leads", "open the resulting customer"],
   clients: ["workspace", "company", "companies", "update company ownership and relationships"],
   tasks: ["workspace", "task", "tasks", "complete, reschedule, or reassign"],
+  "transport-workspace": ["operational", "transport assignment", "transport assignments", "progress pickup and drop-off statuses for your assigned customer and plot"],
+  "sales-workspace": ["operational", "site visit", "site visits", "update assigned visits and selected plots after transport completion"],
+  "billing-workspace": ["operational", "billing assignment", "billing assignments", "review assigned bookings, invoices, payment status, and balances"],
+  "pickup-work-assignments": ["admin", "staff work assignment", "staff work assignments", "assign or remove Transport, Site Visit, and Billing responsibilities while preserving the staff role"],
   tickets: ["workspace", "ticket", "tickets", "triage, assign, and resolve"],
   "calendar-sync": ["integration", "calendar connection", "calendar connections", "connect or reconnect"],
   "live-chat": ["queue", "chat session", "chat sessions", "reply, assign, or close"],

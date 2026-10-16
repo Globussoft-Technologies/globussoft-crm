@@ -327,40 +327,7 @@ async function markInvoicePaid(invoiceId, tenantId, options = {}) {
 // initial deposit may be smaller than the full plot value. Recompute the
 // booking ledger from successful tagged payments so webhook retries stay
 // idempotent and never double-add the same payment.
-async function reconcilePlotBookingPayment(payment) {
-  const metadata = safeJsonParse(payment?.metadata, {});
-  const plotBookingId = Number(metadata.plotBookingId);
-  if (metadata.kind !== "plot-booking-payment" || !Number.isInteger(plotBookingId)) return null;
-
-  const booking = await prisma.plotBooking.findFirst({
-    where: { id: plotBookingId, tenantId: payment.tenantId },
-  });
-  if (!booking) return null;
-
-  // Tenant-safe: tenantId comes from the already-resolved, signed gateway Payment row.
-  const successfulPayments = await prisma.payment.findMany({
-    where: {
-      tenantId: payment.tenantId,
-      status: "SUCCESS",
-      metadata: { contains: `"plotBookingId":${plotBookingId}` },
-    },
-    select: { amount: true },
-  });
-  const totalAmount = Number(booking.totalAmount || 0);
-  const amountPaid = Math.min(
-    totalAmount,
-    successfulPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0),
-  );
-  const balance = Math.max(0, totalAmount - amountPaid);
-  return prisma.plotBooking.update({
-    where: { id: booking.id },
-    data: {
-      amountPaid,
-      balance,
-      paymentStatus: balance === 0 ? "PAID" : "PARTIAL",
-    },
-  });
-}
+const { reconcilePlotBookingPayment } = require("../lib/plotBookingPayments");
 
 // Reconcile a TRAVEL milestone payment-link back to its TravelPaymentSchedule
 // + parent TravelInvoice (the travel-vertical equivalent of markInvoicePaid).

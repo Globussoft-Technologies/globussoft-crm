@@ -2096,46 +2096,11 @@ router.post("/public/confirm-payment", async (req, res) => {
     // idempotent and the remaining installment balance is correct.
     let plotBookingSummary = null;
     if (existingMeta.kind === "plot-booking-payment") {
-      const plotBookingId = Number(existingMeta.plotBookingId);
-      if (Number.isInteger(plotBookingId)) {
-        try {
-          const booking = await prisma.plotBooking.findFirst({
-            where: { id: plotBookingId, tenantId: payment.tenantId },
-          });
-          if (booking) {
-            const successfulPayments = await prisma.payment.findMany({
-              where: {
-                tenantId: payment.tenantId,
-                status: "SUCCESS",
-                metadata: { contains: `"plotBookingId":${plotBookingId}` },
-              },
-              select: { amount: true },
-            });
-            const totalDue = Number(booking.totalAmount || 0);
-            const totalPaid = Math.min(
-              totalDue,
-              successfulPayments.reduce(
-                (sum, row) => sum + Number(row.amount || 0),
-                0,
-              ),
-            );
-            const balanceDue = Math.max(0, totalDue - totalPaid);
-            await prisma.plotBooking.update({
-              where: { id: booking.id },
-              data: {
-                amountPaid: totalPaid,
-                balance: balanceDue,
-                paymentStatus: balanceDue === 0 ? "PAID" : "PARTIAL",
-              },
-            });
-            plotBookingSummary = { totalDue, balanceDue };
-          }
-        } catch (e) {
-          console.error(
-            "[PublicConfirmPayment] plot booking reconcile failed (non-fatal):",
-            e.message,
-          );
-        }
+      try {
+        const booking = await require("../lib/plotBookingPayments").reconcilePlotBookingPayment(payment);
+        if (booking) plotBookingSummary = { totalDue: booking.totalAmount, balanceDue: booking.balance };
+      } catch (e) {
+        console.error("[PublicConfirmPayment] plot booking reconcile failed (non-fatal):", e.message);
       }
     }
 

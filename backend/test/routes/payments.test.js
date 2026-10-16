@@ -97,6 +97,7 @@ prisma.payment.aggregate = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn();
 prisma.$queryRaw = vi.fn();
+prisma.$transaction = vi.fn(async callback => callback(prisma));
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.findMany = vi.fn();
@@ -1248,7 +1249,7 @@ describe('POST /webhook/razorpay — plot-booking payment reconciliation', () =>
       id: 801, tenantId: 1, invoiceId: null, amount: 500000,
       gateway: 'razorpay', gatewayId: 'pay_plot_501', status: 'SUCCESS', metadata,
     });
-    prisma.payment.findMany.mockResolvedValue([{ amount: 500000 }, { amount: 250000 }]);
+    prisma.$queryRaw.mockResolvedValue([{ amountPaid: 750000 }]);
     prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, tenantId: 1, totalAmount: 4500000 });
 
     const eventObj = {
@@ -1268,10 +1269,9 @@ describe('POST /webhook/razorpay — plot-booking payment reconciliation', () =>
       .send(bodyStr);
 
     expect(response.status, JSON.stringify(response.body)).toBe(200);
-    expect(prisma.payment.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 1, status: 'SUCCESS', metadata: { contains: '"plotBookingId":501' } },
-      select: { amount: true },
-    });
+    const aggregate = prisma.$queryRaw.mock.calls.find(([parts]) => parts.join('').includes('JSON_EXTRACT'));
+    expect(aggregate[0].join('')).toContain("'$.plotBookingId'");
+    expect(aggregate.slice(1)).toEqual([1, '501']);
     expect(prisma.plotBooking.update).toHaveBeenCalledWith({
       where: { id: 501 },
       data: { amountPaid: 750000, balance: 3750000, paymentStatus: 'PARTIAL' },

@@ -103,6 +103,7 @@ function makeApp({ tenantId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prisma.$transaction.mockImplementation(async callback => callback(prisma));
   prisma.$queryRaw.mockResolvedValue([{ id: 41 }]);
   prisma.plotSite.updateMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
@@ -2918,6 +2919,43 @@ describe('customer pickup status', () => {
     expect(response.body).toMatchObject({
       mode: 'recorded', booking: { id: 501, amountPaid: 500000, balance: 4000000 },
     });
+  });
+
+  test('serializes concurrent payments and rechecks the balance inside the booking lock', async () => {
+    const booking = { id: 501, tenantId: 7, contactId: 61, totalAmount: 100, amountPaid: 0, balance: 100 };
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Customer' });
+    prisma.plotBooking.findFirst.mockImplementation(async () => ({ ...booking }));
+    prisma.plotBooking.update.mockImplementation(async ({ data }) => Object.assign(booking, data));
+    prisma.payment.create.mockImplementation(async ({ data }) => ({ id: 701, ...data }));
+    let previous = Promise.resolve();
+    prisma.$transaction.mockImplementation(async callback => {
+      const wait = previous;
+      let release;
+      previous = new Promise(resolve => { release = resolve; });
+      await wait;
+      try { return await callback(prisma); } finally { release(); }
+    });
+    const responses = await Promise.all(['A', 'B'].map(transactionRef => request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment')
+      .send({ amount: 60, method: 'cash', transactionRef })));
+    expect(responses.map(res => res.status).sort()).toEqual([200, 400]);
+    expect(responses.find(res => res.status === 400).body.code).toBe('PAYMENT_EXCEEDS_BALANCE');
+    expect(prisma.payment.create).toHaveBeenCalledTimes(1);
+    expect(booking).toMatchObject({ amountPaid: 60, balance: 40 });
+    const lock = prisma.$queryRaw.mock.calls.find(([parts]) => parts.join('').includes('FOR UPDATE'));
+    expect(lock.slice(1)).toEqual([501, 7]);
+  });
+
+  test('includes gateway payments committed before booking reconciliation when checking the cash balance', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Customer' });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, totalAmount: 100, amountPaid: 0, balance: 100 });
+    prisma.$queryRaw.mockImplementation(async parts => parts.join('').includes('SUM(amount)') ? [{ amountPaid: 60 }] : [{ id: 501 }]);
+    const response = await request(makeApp())
+      .post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment')
+      .send({ amount: 60, method: 'cash', transactionRef: 'cash-after-gateway' });
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('PAYMENT_EXCEEDS_BALANCE');
+    expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 
   test('generates an online initial-payment link for UPI, card, and net banking', async () => {

@@ -9,6 +9,11 @@ const migrationPath = fileURLToPath(new URL(
 const sql = readFileSync(migrationPath, 'utf8');
 
 describe('pickup staff role repair migration', () => {
+  test('only replaces the tenant-owned built-in USER role on Generic tenants', () => {
+    expect(sql.match(/`current_role`\.`key` = 'USER' AND `current_role`\.`isCustom` = false/g)).toHaveLength(3);
+    expect(sql.match(/`current_role`\.`id` = `ur`\.`roleId` AND `current_role`\.`tenantId` = `u`\.`tenantId`/g)).toHaveLength(3);
+    expect(sql.match(/`tenant`\.`vertical` = 'generic'/g)).toHaveLength(3);
+  });
   test('maps each exclusive operational profile to its canonical role', () => {
     expect(sql).toContain("`target`.`key` = 'TRANSPORT_PERSON'");
     expect(sql).toContain("`target`.`key` IN ('BROOKER', 'BROKER')");

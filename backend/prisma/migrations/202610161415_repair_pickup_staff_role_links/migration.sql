@@ -8,6 +8,11 @@ UPDATE `UserRole` AS `ur`
 INNER JOIN `User` AS `u` ON `u`.`id` = `ur`.`userId`
 INNER JOIN `TransportPerson` AS `tp`
   ON `tp`.`userId` = `u`.`id` AND `tp`.`isActive` = true
+INNER JOIN `Role` AS `current_role`
+  ON `current_role`.`id` = `ur`.`roleId` AND `current_role`.`tenantId` = `u`.`tenantId`
+  AND `current_role`.`key` = 'USER' AND `current_role`.`isCustom` = false
+INNER JOIN `Tenant` AS `tenant`
+  ON `tenant`.`id` = `u`.`tenantId` AND `tenant`.`vertical` = 'generic'
 INNER JOIN `Role` AS `target`
   ON `target`.`tenantId` = `u`.`tenantId`
   AND `target`.`key` = 'TRANSPORT_PERSON'
@@ -27,6 +32,11 @@ UPDATE `UserRole` AS `ur`
 INNER JOIN `User` AS `u` ON `u`.`id` = `ur`.`userId`
 INNER JOIN `PlotBroker` AS `pb`
   ON `pb`.`userId` = `u`.`id` AND `pb`.`isActive` = true
+INNER JOIN `Role` AS `current_role`
+  ON `current_role`.`id` = `ur`.`roleId` AND `current_role`.`tenantId` = `u`.`tenantId`
+  AND `current_role`.`key` = 'USER' AND `current_role`.`isCustom` = false
+INNER JOIN `Tenant` AS `tenant`
+  ON `tenant`.`id` = `u`.`tenantId` AND `tenant`.`vertical` = 'generic'
 INNER JOIN `Role` AS `target`
   ON `target`.`tenantId` = `u`.`tenantId`
   AND `target`.`key` IN ('BROOKER', 'BROKER')
@@ -46,6 +56,11 @@ UPDATE `UserRole` AS `ur`
 INNER JOIN `User` AS `u` ON `u`.`id` = `ur`.`userId`
 INNER JOIN `BillingPerson` AS `bp`
   ON `bp`.`userId` = `u`.`id` AND `bp`.`isActive` = true
+INNER JOIN `Role` AS `current_role`
+  ON `current_role`.`id` = `ur`.`roleId` AND `current_role`.`tenantId` = `u`.`tenantId`
+  AND `current_role`.`key` = 'USER' AND `current_role`.`isCustom` = false
+INNER JOIN `Tenant` AS `tenant`
+  ON `tenant`.`id` = `u`.`tenantId` AND `tenant`.`vertical` = 'generic'
 INNER JOIN `Role` AS `target`
   ON `target`.`tenantId` = `u`.`tenantId`
   AND `target`.`key` = 'BILLING'

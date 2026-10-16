@@ -116,6 +116,8 @@ prisma.paymentGatewayConfig = {
 prisma.plotBooking = prisma.plotBooking || {};
 prisma.plotBooking.findFirst = vi.fn().mockResolvedValue(null);
 prisma.plotBooking.update = vi.fn().mockResolvedValue({});
+prisma.$transaction = vi.fn(async callback => callback(prisma));
+prisma.$queryRaw = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.tenantSetting = {
@@ -179,6 +181,7 @@ function makeApp({
 }
 
 beforeEach(() => {
+  prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.invoice.findMany.mockReset();
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.create.mockReset();
@@ -327,7 +330,7 @@ describe("POST /api/billing/public/confirm-payment - payment-link statuses", () 
         metadata: payment.metadata,
       });
     prisma.payment.update.mockResolvedValue({ ...payment, status: "SUCCESS" });
-    prisma.payment.findMany.mockResolvedValue([{ amount: 1 }]);
+    prisma.$queryRaw.mockResolvedValue([{ amountPaid: 1 }]);
     prisma.plotBooking.findFirst.mockResolvedValue({
       id: 501,
       tenantId: 1,
